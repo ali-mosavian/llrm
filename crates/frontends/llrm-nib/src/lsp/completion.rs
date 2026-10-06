@@ -57,7 +57,7 @@ fn members(documents: &Documents, path: &Path, position: Position) -> Vec<Comple
         return Vec::new();
     };
     let (typing, line, column) = typing(document, position);
-    let checked = check(&typing, &mut |name| documents.text(&module_path(path, name)));
+    let checked = check(&typing, &mut |name| documents.text(&module_path(path, name)), &documents.frontend.clone());
     let owner = checked.facts.iter().find_map(|fact| match &fact.known {
         Known::Member(owner) if fact.span.module == 0 && text::contains(fact.span, line, column) => Some(owner),
         _ => None,

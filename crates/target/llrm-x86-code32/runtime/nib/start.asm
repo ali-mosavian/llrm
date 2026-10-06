@@ -8,7 +8,7 @@
 extrn _main:near
 extrn N$OSLO:dword
 
-STACK_BYTES equ 16384
+; STACK_BYTES comes from nib.toml (assembler_defines).
 STACK_RESERVE equ 512
 
 .stack STACK_BYTES

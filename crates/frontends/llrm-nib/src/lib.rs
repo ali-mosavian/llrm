@@ -46,6 +46,11 @@ pub struct Frontend {
     pub slot: u32,
     /// The bits of the target's code (its `object.toml`): what inline assembly is assembled for.
     pub bits: u32,
+    /// The target's register file (`registers.regs`): which registers an inline block may name.
+    pub registers: Vec<llrm_target::registers::Register>,
+    /// The machine's physical addresses the target names (`PHYSICAL_TEXT_SCREEN`...), which every module
+    /// may use as constants.
+    pub physical: Vec<(String, u64)>,
     /// The calling conventions the target defines, the first its programs' own.
     pub conventions: Vec<String>,
     /// The target's OS layer under Nib's runtime.
@@ -60,14 +65,17 @@ pub struct Frontend {
     /// `usize` narrowed implicitly (`-Wno-target-width` turns both off, for the runtime, which writes
     /// `*far` for the targets that have one and counts in words).
     pub warn_target_width: bool,
-    /// What the last compile warned of, for the caller to print.
+    /// What the last compile warned of, by the module each span is in.
     pub warnings: std::rc::Rc<std::cell::RefCell<Vec<Diagnostic>>>,
+    /// What `compile_file` reports of it: each warning with the file it is in, and none of the
+    /// compiler's own modules (`std.*`, `abi.*`), which write for the targets that have what they name.
+    pub reported: std::rc::Rc<std::cell::RefCell<Vec<(std::path::PathBuf, Diagnostic)>>>,
 }
 
 impl Default for Frontend {
     /// For real mode, where the language began: a caller that knows its target sets `layout`.
     fn default() -> Self {
-        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default() }
+        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, registers: llrm_target::registers::parse(&llrm_target::Target::registers_text(&llrm_x86_code16::Code16)).expect("registers.regs parses"), physical: llrm_target::Target::physical_addresses(&llrm_x86_code16::Code16), conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default(), reported: Default::default() }
     }
 }
 
@@ -82,13 +90,42 @@ pub struct Os {
     pub stack_base: i64,
     /// Whether the start-up zeroes the far uninitialised data.
     pub far_bss: bool,
+    /// What the assembler is told of the description (`assembler_defines`): each symbol and the
+    /// value of the field it stands for, so the files that name no constant of their own.
+    pub defines: Vec<(String, i64)>,
     /// The directory the description is in, and the assembly files it names there.
     pub directory: String,
     pub start: String,
     pub dos: String,
 }
 
+impl Frontend {
+    /// The target's physical addresses as the constants `PHYSICAL_<NAME>` a module may name.
+    pub fn physical_constants(&self) -> std::collections::BTreeMap<String, syntax::Expr> {
+        self.physical.iter().map(|(name, address)| (format!("PHYSICAL_{}", name.to_uppercase()), syntax::Expr::Integer(*address as i64, syntax::Span::new(1, 1, 1)))).collect()
+    }
+
+    /// The frontend for `target`: its layout, slot, code bits, conventions and OS layer.
+    pub fn for_target(target: &dyn llrm_target::Target) -> Result<Self, String> {
+        Ok(Self {
+            layout: target.layout(),
+            slot: u32::try_from(target.stack_slot_bytes()).expect("a slot is positive"),
+            bits: target.object().bitness,
+            registers: llrm_target::registers::parse(&target.registers_text())?,
+            physical: target.physical_addresses(),
+            conventions: target.conventions().iter().map(|one| (*one).to_owned()).collect(),
+            os: Os::for_target(target)?,
+            ..Self::default()
+        })
+    }
+}
+
 impl Os {
+    /// What the target's OS layer says of Nib's runtime; a target without one is refused.
+    pub fn for_target(target: &dyn llrm_target::Target) -> Result<Self, String> {
+        Self::of(target.runtime("nib").ok_or_else(|| format!("target {} has no Nib runtime", target.name()))?)
+    }
+
     pub fn of(description: llrm_target::runtime::Description) -> Result<Self, String> {
         let table = description.table()?;
         let text = |key: &str| description.string(key);
@@ -99,6 +136,17 @@ impl Os {
             stack: llrm_core::hir::model::StackCheck::from_toml(&stack)?,
             stack_base: table.get("stack_base").and_then(|one| one.as_integer()).ok_or("stack_base is not an integer")?,
             far_bss: table.get("far_bss").and_then(|one| one.as_bool()).ok_or("far_bss is not a boolean")?,
+            defines: table
+                .get("assembler_defines")
+                .and_then(|one| one.as_array())
+                .into_iter()
+                .flatten()
+                .map(|entry| {
+                    let (field, symbol) = entry.as_str().and_then(|one| one.split_once(':')).ok_or("assembler_defines are \"field:SYMBOL\"")?;
+                    let value = table.get(field).and_then(|one| one.as_integer()).ok_or_else(|| format!("{field} is not an integer"))?;
+                    Ok((symbol.to_owned(), value))
+                })
+                .collect::<Result<_, String>>()?,
             directory: description.directory.to_owned(),
             start: text("start")?,
             dos: text("dos")?,
@@ -150,9 +198,17 @@ pub fn syntax_text(source: &str) -> Result<String, Diagnostic> {
 /// The program whose main module is the file `path`: its imports are the
 /// files under the same directory, `a.b` at `a/b.nib`.
 pub fn compile_file(path: &std::path::Path, frontend: &Frontend) -> Result<String, (std::path::PathBuf, Diagnostic)> {
-    let module = load_file(path, &frontend.os, frontend.sizes().near)?;
+    let module = load_file(path, &frontend.os, frontend.sizes().near, &frontend.physical_constants())?;
     let sources = module.sources.clone();
-    compile_module(module, module_name(path), frontend).map_err(|error| located(path, &sources, error))
+    let compiled = compile_module(module, module_name(path), frontend).map_err(|error| located(path, &sources, error))?;
+    *frontend.reported.borrow_mut() = frontend
+        .warnings
+        .borrow()
+        .iter()
+        .map(|warning| located(path, &sources, warning.clone()))
+        .filter(|(_, warning)| !sources.get(usize::from(warning.span.module)).is_some_and(|name| standard::supplied(name)))
+        .collect();
+    Ok(compiled)
 }
 
 /// The `.H`, `.BI` or `.INC` declarations of the program at `path`'s exports.
@@ -161,7 +217,7 @@ pub fn declare_file(
     language: declarations::Language,
     frontend: &Frontend,
 ) -> Result<String, (std::path::PathBuf, Diagnostic)> {
-    let module = load_file(path, &frontend.os, frontend.sizes().near)?;
+    let module = load_file(path, &frontend.os, frontend.sizes().near, &frontend.physical_constants())?;
     declarations::declarations_on(&module, module_name(path), language, frontend.sizes().segmented, frontend.slot).map_err(|error| located(path, &module.sources, error))
 }
 
@@ -193,7 +249,7 @@ pub fn module_path(path: &std::path::Path, name: &str) -> std::path::PathBuf {
     }
 }
 
-fn load_file(path: &std::path::Path, os: &Os, near_bytes: u32) -> Result<syntax::Module, (std::path::PathBuf, Diagnostic)> {
+fn load_file(path: &std::path::Path, os: &Os, near_bytes: u32, seeded: &std::collections::BTreeMap<String, syntax::Expr>) -> Result<syntax::Module, (std::path::PathBuf, Diagnostic)> {
     let source = std::fs::read_to_string(path).map_err(|error| {
         (
             path.to_path_buf(),
@@ -205,13 +261,13 @@ fn load_file(path: &std::path::Path, os: &Os, near_bytes: u32) -> Result<syntax:
             return Ok(os.module.clone());
         }
         std::fs::read_to_string(module_path(path, name)).map_err(|error| error.to_string())
-    }, near_bytes)
+    }, near_bytes, seeded)
     .map_err(|(name, error)| (module_path(path, &name), error))
 }
 
 /// Type-checks a parsed module and lowers it to HIR.
 pub fn compile_module(module: syntax::Module, module_name: &str, frontend: &Frontend) -> Result<String, Diagnostic> {
-    semantic::compile(&prepared(module)?, module_name, frontend)
+    semantic::compile(&prepared(module, frontend.sizes().near)?, module_name, frontend)
 }
 
 /// The program whose main module is `source`, `read` giving each module it
@@ -225,18 +281,18 @@ pub struct Checked {
     pub error: Option<modules::Located>,
 }
 
-pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>) -> Checked {
-    // An editor checks for the language's first target: `std.os` is its OS layer.
-    let mut read = |name: &str| if name == "std.os" { Ok(Frontend::default().os.module) } else { read(name) };
-    let loaded = match modules::read_all(source, &mut read) {
+pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>, frontend: &Frontend) -> Checked {
+    // An editor checks for its project's target: `std.os` is that target's OS layer.
+    let mut read = |name: &str| if name == "std.os" { Ok(frontend.os.module.clone()) } else { read(name) };
+    let loaded = match modules::read_all_for(source, &mut read, frontend.sizes().near, &frontend.physical_constants()) {
         Ok(loaded) => loaded,
         Err(error) => return Checked { loaded: None, facts: Vec::new(), error: Some(error) },
     };
     let sources = loaded.sources.clone();
-    let prepared = loaded.clone().linked().and_then(|module| prepared(module).map_err(|error| in_module(&sources, error)));
+    let prepared = loaded.clone().linked().and_then(|module| prepared(module, frontend.sizes().near).map_err(|error| in_module(&sources, error)));
     let (facts, error) = match prepared {
         Ok(module) => {
-            let (facts, checked) = semantic::check(&module);
+            let (facts, checked) = semantic::check(&module, frontend);
             (facts, checked.err().map(|error| in_module(&sources, error)))
         }
         Err(error) => (Vec::new(), Some(error)),
@@ -245,16 +301,16 @@ pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>)
 }
 
 /// A linked module with the prelude and library it is checked with, desugared.
-fn prepared(mut module: syntax::Module) -> Result<syntax::Module, Diagnostic> {
-    let prelude = parse(lex(include_str!("prelude.nib"))?)?;
+fn prepared(mut module: syntax::Module, near_bytes: u32) -> Result<syntax::Module, Diagnostic> {
+    let prelude = parser::parse_for(lex(include_str!("prelude.nib"))?, near_bytes)?;
     module.enums.extend(prelude.enums);
     // A module's own function or protocol of a prelude name is the one it names.
     let own: std::collections::BTreeSet<String> = module.functions.iter().map(|one| one.name.clone()).collect();
     module.functions.extend(prelude.functions.into_iter().filter(|one| !own.contains(&one.name)));
     let own: std::collections::BTreeSet<String> = module.protocols.iter().map(|one| one.name.clone()).collect();
     module.protocols.extend(prelude.protocols.into_iter().filter(|one| !own.contains(&one.name)));
-    module.library = library::functions()?;
-    module.library.extend(library::derived(&module)?);
+    module.library = library::functions(near_bytes)?;
+    module.library.extend(library::derived(&module, near_bytes)?);
     library::entry(&mut module)?;
     desugar::desugar(&mut module)?;
     Ok(module)

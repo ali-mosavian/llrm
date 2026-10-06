@@ -35,7 +35,19 @@ pub fn classes(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segmen
 /// edge's copy also join, and address classes are read through webs. An allocator cannot take that, the two sides being
 /// values of their own, and SsaSpill does not price it yet.
 pub fn classes_with(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, registers: &RegisterClasses, optimistic: bool) -> Classes {
-    collected(body, prefer_indexes, segments, registers, optimistic, &mut Vec::new())
+    collected(body, prefer_indexes, segments, registers, optimistic, None, None)
+}
+
+/// What a caller that has already found the body's intervals and clobber masks gives `classes`, which
+/// reads them for its `[word+word]` roles and would number the body and find both again.
+pub struct Found<'a> {
+    pub live: &'a IndexMap<u32, ranges::Interval>,
+    pub masks: &'a crate::backend::allocate::Masks,
+}
+
+/// `classes`, given the body's intervals and masks.
+pub fn classes_given(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, registers: &RegisterClasses, found: &Found) -> Classes {
+    collected(body, prefer_indexes, segments, registers, false, None, Some(found))
 }
 
 /// How an instruction names a value that confines it.
@@ -62,24 +74,28 @@ pub struct Use {
 /// share no register is one the classes leave with none.
 pub fn confining_uses(body: &LirBody, segments: &Segments, registers: &RegisterClasses) -> Vec<Use> {
     let mut uses = Vec::new();
-    collected(body, &BTreeSet::new(), segments, registers, false, &mut uses);
+    collected(body, &BTreeSet::new(), segments, registers, false, Some(&mut uses), None);
     uses
 }
 
-fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, registers: &RegisterClasses, optimistic: bool, uses: &mut Vec<Use>) -> Classes {
+fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments, registers: &RegisterClasses, optimistic: bool, mut uses: Option<&mut Vec<Use>>, found: Option<&Found>) -> Classes {
     let mut out: Classes = IndexMap::default();
     let mut selecting: BTreeSet<u32> = BTreeSet::new();
     let mut numeric: BTreeSet<u32> = BTreeSet::new();
     let mut word_pairs: Vec<(u32, u32)> = Vec::new();
     let bytes: BTreeSet<Register> = BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX]);
 
+    let _scan = llrm_support::debug::span("classes scan");
     for (at, block) in body.blocks.iter().enumerate() {
         for (position, one) in block.insns.iter().enumerate() {
             let Some(what) = &one.what else {
                 continue;
             };
             let mut restrict = |out: &mut Classes, value: u32, choices: &BTreeSet<Register>, role: Role, defining: bool| {
-                uses.push(Use { block: at, insn: position, value, class: choices.clone(), role, defining });
+                // The reads are kept only for a caller that asks for them.
+                if let Some(uses) = uses.as_deref_mut() {
+                    uses.push(Use { block: at, insn: position, value, class: choices.clone(), role, defining });
+                }
                 _restrict(out, value, choices);
             };
             // A string op's segment operands are selectors, as a far access's are.
@@ -140,6 +156,7 @@ fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments
             }
         }
     }
+    drop(_scan);
     let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
     for value in selecting.difference(&numeric) {
         _restrict(&mut out, *value, &selectors);
@@ -153,8 +170,8 @@ fn collected(body: &LirBody, prefer_indexes: &BTreeSet<u32>, segments: &Segments
             }
         }
     }
-    _word_address_roles(&word_pairs, &mut out, body, prefer_indexes, segments, registers);
-    _through_webs(body, &selecting, &numeric, &selectors, optimistic, &mut out);
+    llrm_support::debug::timed("classes word roles", || _word_address_roles(&word_pairs, &mut out, body, prefer_indexes, segments, registers, found));
+    llrm_support::debug::timed("classes webs", || _through_webs(body, &selecting, &numeric, &selectors, optimistic, &mut out));
     out
 }
 
@@ -226,16 +243,29 @@ fn _word_address_roles(
     prefer_indexes: &BTreeSet<u32>,
     segments: &Segments,
     registers: &RegisterClasses,
+    found: Option<&Found>,
 ) {
+    // No pair, no component: nothing below would run, and it numbers the body, finds every
+    // interval and builds the masks first.
+    if pairs.is_empty() {
+        return;
+    }
     let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
     for (base, index) in pairs {
         adjacent.entry(*base).or_default().insert(*index);
         adjacent.entry(*index).or_default().insert(*base);
     }
     let mut unseen: BTreeSet<u32> = adjacent.keys().copied().collect();
-    let numbered = ranges::indexed(body);
-    let live = ranges::intervals(body, Some(&numbered));
-    let masks = _masks(body, &numbered, segments);
+    let (own_live, own_masks);
+    let (live, masks) = match found {
+        Some(found) => (found.live, found.masks),
+        None => {
+            let numbered = ranges::indexed(body);
+            own_live = ranges::intervals(body, Some(&numbered));
+            own_masks = _masks(body, &numbered, segments);
+            (&own_live, &own_masks)
+        }
+    };
     let word_base = *registers.word_bases.iter().next().expect("one word base");
 
     let base_penalty = |values: &BTreeSet<u32>| -> i64 {

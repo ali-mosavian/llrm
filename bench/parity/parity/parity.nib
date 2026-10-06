@@ -1,9 +1,9 @@
-# link: ../../../tools/loops/runtime/ext.asm
+# link: @c-runtime
 struct Pair:
     mut x: i16
     mut y: i16
 
-@extern("cdecl16")
+@extern("c")
 fn keep(x: i16) -> i16  # opaque: the compiler cannot fold the kernel away
 
 fn bench_parity(seed: i16) -> i32:

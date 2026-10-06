@@ -151,9 +151,8 @@ pub fn recorded_for(source: &Path, includes: &[String], debug: bool, watcom: &[&
     // with no switch, since no other struct or call ABI exists here to match.
     let borland = format!("-fi={}", root.join("crates/frontends/llrm-c/src/borland.h").display());
     let medium = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
-    // Flat: the same switches but the model, packing and Borland's headers. Its structs
-    // are laid out as Watcom's 386 does at -zp4 (provisional until the C ABI is chosen
-    // with the extender), and cdecl as -ecc.
+    // Flat: the same switches but the model, packing and Borland's headers. Its C ABI is Open
+    // Watcom's 386 flat one (`calling.toml`): structs laid out at -zp4, cdecl as -ecc.
     let flat_header = format!("-fi={}", root.join("crates/frontends/llrm-c/src/flat.h").display());
     let flat_flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-ecc", "-s", "-zl", "-zq", flat_header.as_str()];
     let flags: &[&str] = if flat { &flat_flags } else { &medium };
@@ -239,7 +238,12 @@ pub fn main(argv: &[String]) -> i32 {
         let text = if args.source.extension().and_then(|one| one.to_str()) == Some("cgs") {
             fs::read_to_string(&args.source)?
         } else {
-            llrm_core::support::debug::timed("frontend wccq", || recorded_for(&args.source, &args.include, args.flags.debug, &args.watcom, args.codegen.arch.name() == "x86-code32"))?
+            llrm_core::support::debug::timed("frontend wccq", || {
+                // The target's physical addresses reach the program as `PHYSICAL_<NAME>`.
+                let defines: Vec<String> = args.codegen.arch.physical_addresses().iter().map(|(name, address)| format!("-dPHYSICAL_{}=0x{address:X}UL", name.to_uppercase())).collect();
+                let switches: Vec<&str> = args.watcom.iter().copied().chain(defines.iter().map(String::as_str)).collect();
+                recorded_for(&args.source, &args.include, args.flags.debug, &switches, args.codegen.arch.name() == "x86-code32")
+            })?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
         let module = args

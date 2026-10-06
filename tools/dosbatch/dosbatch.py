@@ -18,6 +18,7 @@ import threading
 import shutil
 import tomllib
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -115,7 +116,38 @@ def target_link(target: str) -> dict:
         return tomllib.load(text)["link"]
 
 
-def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = ()) -> tuple[Path, ...]:
+_ASSEMBLED: set[tuple[Path, tuple[str, ...]]] = set()
+
+
+def runtime_object(name: str, path: Path, defines: tuple[str, ...] = ()) -> Path:
+    """`path`, the object of the runtime file `name`, made once for this process however many builds ask: one
+    made with the description's defines is not dated by its source, so it is made on the first ask, and an
+    object built by another build is never rewritten under a linker reading it (it is made beside and renamed).
+    Builds run in threads; the others wait for the one that assembles."""
+    with _RUNTIME_LOCK:
+        if (path, defines) not in _ASSEMBLED:
+            if defines or not path.exists() or path.stat().st_mtime < (ROOT / name).stat().st_mtime:
+                made = path.with_name(f"{path.stem}.{os.getpid()}.tmp")
+                assemble(ROOT / name, made, *defines)
+                os.replace(made, path)
+            _ASSEMBLED.add((path, defines))
+    return path
+
+
+C_RUNTIME = "@c-runtime"
+
+
+def link_files(source: Path, names: Iterable[str], target: str) -> list[Path]:
+    """The files a `link:` header names for `target`: paths beside `source`, and `@c-runtime`, the target's own file of the
+    routines a program calls and does not define (its `[link] last`), which no program names a path of. Every reader of
+    a `link:` header resolves it here."""
+    out: list[Path] = []
+    for name in names:
+        out += [ROOT / one for one in target_link(target)["last"]] if name == C_RUNTIME else [source.parent / name]
+    return out
+
+
+def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = (), defines: tuple[str, ...] = ()) -> tuple[Path, ...]:
     """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline, linked as
     `target` says; the files its executable needs beside it (an extender's loader)."""
     link = target_link(target)
@@ -124,14 +156,7 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
     made.mkdir(exist_ok=True)
 
     def objects(names: list[str]) -> list[Path]:
-        out = []
-        for name in names:
-            path = made / (Path(name).stem.upper() + ".OBJ")
-            with _RUNTIME_LOCK:  # builds run in threads; one assembles the start-up, the others wait for it
-                if not path.exists() or path.stat().st_mtime < (ROOT / name).stat().st_mtime:
-                    assemble(ROOT / name, path)
-            out.append(path)
-        return out
+        return [runtime_object(name, made / (Path(name).stem.upper() + ".OBJ"), defines) for name in names]
 
     first, last, final = objects(runtime[0] if runtime else link["first"]), objects(runtime[1] if runtime else link["last"]), objects(link["final"])
     mapping = ["option", f"map={listing}"] if listing else []
@@ -153,7 +178,8 @@ def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level:
     runtime = work / (obj.stem + "R.obj")
     used = [word for one in (obj, *foreign) for word in ("--used-by", str(one))]
     _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), "--target", target, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used])
-    return link_target(target, obj, exe, work, runtime=([start], [dos]), objects_after=(runtime, *foreign))
+    defines = subprocess.run([str(BIN / "llrm-nib"), "--target", target, "--os-layer", "defines"], capture_output=True, text=True, check=True).stdout.split()
+    return link_target(target, obj, exe, work, runtime=([start], [dos]), objects_after=(runtime, *foreign), defines=tuple(defines))
 
 
 def link_c(obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = ()) -> None:

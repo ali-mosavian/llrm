@@ -235,7 +235,7 @@ pub enum Crossing {
 /// it enters (a copy into the piece) or leaves (a copy back). A piece that
 /// never writes the value still equals it, so leaving needs no copy.
 /// `carved` places these copies and `_benefit` prices them: one fact.
-pub fn crossings(body: &LirBody, value: u32, region: &Region, live_in: &allocate::Live, live_out: &allocate::Live) -> Vec<(Crossing, bool)> {
+pub fn crossings(body: &LirBody, value: u32, region: &Region, live: &dyn allocate::LiveAt) -> Vec<(Crossing, bool)> {
     let written = body.blocks.iter().any(|block| {
         region.spans.get(&block.at).is_some_and(|ranges| {
             ranges.iter().any(|(from, to)| block.insns[*from..*to].iter().any(|one| one.defines.contains(&value)))
@@ -244,7 +244,7 @@ pub fn crossings(body: &LirBody, value: u32, region: &Region, live_in: &allocate
     let mut out = Vec::new();
     for block in &body.blocks {
         if let Some(ranges) = region.spans.get(&block.at) {
-            let before = _live_before(block, value, live_out[&block.at].contains(&value));
+            let before = _live_before(block, value, live.live_out(block.at, value));
             for (from, to) in ranges {
                 if *from > 0 && before[*from] {
                     out.push((Crossing::Inside { block: block.at, position: *from }, true));
@@ -257,7 +257,7 @@ pub fn crossings(body: &LirBody, value: u32, region: &Region, live_in: &allocate
         let leaving = region.leaves(block);
         for next in &block.succ {
             let entering = region.enters(*next);
-            let across = live_in.get(next).is_some_and(|live| live.contains(&value))
+            let across = live.live_in(*next, value)
                 || body.blocks.iter().filter(|one| one.at == *next).flat_map(|one| &one.phis).any(|phi| phi.incoming.contains(&(block.at, value)));
             if leaving != entering && across && (entering || written) {
                 out.push((Crossing::Edge { from: block.at, to: *next }, entering));
@@ -265,7 +265,7 @@ pub fn crossings(body: &LirBody, value: u32, region: &Region, live_in: &allocate
         }
     }
     let entry = body.blocks.iter().find(|block| block.at == body.entry);
-    if region.enters(body.entry) && entry.is_some_and(|block| live_in[&block.at].contains(&value) && !block.arrives().contains(&value)) {
+    if region.enters(body.entry) && entry.is_some_and(|block| live.live_in(block.at, value) && !block.arrives().contains(&value)) {
         out.push((Crossing::Inside { block: body.entry, position: 0 }, true));
     }
     out
@@ -317,8 +317,9 @@ pub fn carved_moving(body: &LirBody, value: u32, fresh: u32, width: u32, region:
     if !referenced {
         return None;
     }
-    let (live_in, live_out) = allocate::live(body);
-    let found = crossings(body, value, &region, &live_in, &live_out);
+    // Only `value` is asked of: its liveness alone.
+    let live = allocate::live_rows_by(body, |one| one == value);
+    let found = crossings(body, value, &region, &live);
     let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
     for block in &body.blocks {
         for next in &block.succ {
@@ -505,15 +506,15 @@ fn _renamed(one: &Arc<Insn>, rename: &IndexMap<u32, u32>) -> Arc<Insn> {
 }
 
 pub fn _next_value(body: &LirBody) -> u32 {
-    let mut seen: BTreeSet<u32> = BTreeSet::from([0]);
+    // One more than the largest value the body names, or one: no set of them is built to find it.
+    let mut largest = 0;
     for block in &body.blocks {
-        seen.extend(block.arrives());
+        largest = block.phis.iter().map(|phi| phi.result).fold(largest, u32::max);
         for one in &block.insns {
-            seen.extend(one.defines.iter().copied());
-            seen.extend(one.uses.iter().copied());
+            largest = one.defines.iter().chain(&one.uses).copied().fold(largest, u32::max);
         }
     }
-    seen.last().copied().expect("seeded with zero") + 1
+    largest + 1
 }
 
 /// One block `value` is referenced in: LLVM's `SplitAnalysis::BlockInfo`.
@@ -535,16 +536,16 @@ struct Analysis {
 }
 
 /// LLVM's `countLiveBlocks`: the blocks `value` is named in or lives through.
-pub fn live_blocks(body: &LirBody, value: u32, live: (&allocate::Live, &allocate::Live)) -> usize {
-    let analysis = analysed(body, value, live.0, live.1);
+pub fn live_blocks(body: &LirBody, value: u32, live: &dyn allocate::LiveAt) -> usize {
+    let analysis = analysed(body, value, live);
     analysis.uses.len() + analysis.through.len()
 }
 
-fn analysed(body: &LirBody, value: u32, live_in: &allocate::Live, live_out: &allocate::Live) -> Analysis {
+fn analysed(body: &LirBody, value: u32, live: &dyn allocate::LiveAt) -> Analysis {
     let mut uses = Vec::new();
     let mut through = Vec::new();
     for block in &body.blocks {
-        let (entering, leaving) = (live_in[&block.at].contains(&value), live_out[&block.at].contains(&value));
+        let (entering, leaving) = (live.live_in(block.at, value), live.live_out(block.at, value));
         let arrives = block.arrives().contains(&value);
         let named: Vec<usize> = (0..block.insns.len())
             .filter(|at| block.insns[*at].defines.contains(&value) || block.insns[*at].uses.contains(&value))
@@ -759,7 +760,7 @@ fn _held(placement: &spillplacement::Placement, body: &LirBody, analysis: &Analy
 
 /// What holding `region` in a register saves: a memory operand per
 /// reference inside it, less every copy `crossings` says carving it adds.
-fn _benefit(body: &LirBody, value: u32, region: &Region, frequency: &IndexMap<i64, f64>, live: (&allocate::Live, &allocate::Live)) -> f64 {
+fn _benefit(body: &LirBody, value: u32, region: &Region, frequency: &IndexMap<i64, f64>, live: &dyn allocate::LiveAt) -> f64 {
     let saved: f64 = body
         .blocks
         .iter()
@@ -771,7 +772,7 @@ fn _benefit(body: &LirBody, value: u32, region: &Region, frequency: &IndexMap<i6
             covered as f64 * frequency[&block.at]
         })
         .sum();
-    let copies: f64 = crossings(body, value, region, live.0, live.1)
+    let copies: f64 = crossings(body, value, region, live)
         .iter()
         .map(|(at, _)| match at {
             Crossing::Inside { block, .. } => frequency[block],
@@ -783,16 +784,16 @@ fn _benefit(body: &LirBody, value: u32, region: &Region, frequency: &IndexMap<i6
 
 /// Whether holding `region` in a register saves more than its copies cost,
 /// weighing each block by its loop depth.
-pub fn pays(body: &LirBody, value: u32, region: &Region, live: (&allocate::Live, &allocate::Live)) -> bool {
+pub fn pays(body: &LirBody, value: u32, region: &Region, live: &dyn allocate::LiveAt) -> bool {
     let frequency: IndexMap<i64, f64> = ranges::depths(body).into_iter().map(|(at, depth)| (at, ranges::level(depth))).collect();
     _benefit(body, value, region, &frequency, live) > 0.0
 }
 
 /// Whether `region` holds all of `value`'s range.
-fn _whole_range(body: &LirBody, value: u32, region: &Region, live: (&allocate::Live, &allocate::Live)) -> bool {
+fn _whole_range(body: &LirBody, value: u32, region: &Region, live: &dyn allocate::LiveAt) -> bool {
     body.blocks.iter().all(|block| {
         let named = block.insns.iter().any(|one| one.defines.contains(&value) || one.uses.contains(&value));
-        let across = live.0[&block.at].contains(&value) || live.1[&block.at].contains(&value);
+        let across = live.live_in(block.at, value) || live.live_out(block.at, value);
         !(named || across) || region.spans.get(&block.at) == Some(&vec![(0, block.insns.len())])
     })
 }
@@ -807,13 +808,13 @@ pub fn placed(
     body: &LirBody,
     value: u32,
     index: &Indexes,
-    live: (&allocate::Live, &allocate::Live),
+    live: &dyn allocate::LiveAt,
     bundles: &spillplacement::Bundles,
     candidates: &[Register],
     occupied: &Occupied,
     width: u32,
 ) -> Vec<Region> {
-    let analysis = analysed(body, value, live.0, live.1);
+    let analysis = analysed(body, value, live);
     if analysis.uses.is_empty() {
         return Vec::new();
     }
@@ -868,8 +869,8 @@ pub fn placed(
 /// `tryLocalSplit`, for a value live in one block: the longest run of its
 /// references some candidate register is free across, when that is at
 /// least two and not all of them.
-pub fn local(body: &LirBody, value: u32, index: &Indexes, live: (&allocate::Live, &allocate::Live), candidates: &[Register], occupied: &Occupied, width: u32) -> Option<Region> {
-    let analysis = analysed(body, value, live.0, live.1);
+pub fn local(body: &LirBody, value: u32, index: &Indexes, live: &dyn allocate::LiveAt, candidates: &[Register], occupied: &Occupied, width: u32) -> Option<Region> {
+    let analysis = analysed(body, value, live);
     let [one] = analysis.uses.as_slice() else { return None };
     if one.live_in || one.live_out || !analysis.through.is_empty() {
         return None;
@@ -907,8 +908,8 @@ pub fn local(body: &LirBody, value: u32, index: &Indexes, live: (&allocate::Live
 
 /// `tryBlockSplit`: each block naming the value at least twice holds it
 /// from its first reference to its last; the rest spills.
-pub fn per_block(body: &LirBody, value: u32, live: (&allocate::Live, &allocate::Live)) -> Vec<Region> {
-    let analysis = analysed(body, value, live.0, live.1);
+pub fn per_block(body: &LirBody, value: u32, live: &dyn allocate::LiveAt) -> Vec<Region> {
+    let analysis = analysed(body, value, live);
     if analysis.uses.len() + analysis.through.len() < 2 {
         return Vec::new();
     }
@@ -1289,7 +1290,7 @@ mod tests {
         ];
         let masks = Vec::new();
         let occupied = super::Occupied { segments: IndexMap::from_iter([(Register::EAX, taken)]), masks: &masks };
-        let regions = super::placed(&body, 3, &index, (&live.0, &live.1), &bundles, &[Register::AX], &occupied, 2);
+        let regions = super::placed(&body, 3, &index, &(&live.0, &live.1), &bundles, &[Register::AX], &occupied, 2);
         let first = regions.first().expect("a region");
         assert_eq!(first.spans.get(&0x10), Some(&vec![(0, 3)]), "{regions:?}");
         assert_eq!(first.spans.get(&0x20), Some(&vec![(0, 1)]), "{regions:?}");
@@ -1309,7 +1310,7 @@ mod tests {
         let taken = vec![intervals::Segment { start: slot(3), end: slot(5) }];
         let masks = Vec::new();
         let occupied = super::Occupied { segments: IndexMap::from_iter([(Register::EAX, taken)]), masks: &masks };
-        let got = super::local(&body, 3, &index, (&live.0, &live.1), &[Register::AX], &occupied, 2).expect("a split");
+        let got = super::local(&body, 3, &index, &(&live.0, &live.1), &[Register::AX], &occupied, 2).expect("a split");
         assert_eq!(got.spans.get(&0), Some(&vec![(0, 3)]));
     }
 

@@ -7,27 +7,27 @@ struct Source:
 
 struct Scanner:
     src: &Source
-    mut at: u16
+    mut at: usize
 
 struct Tally:
-    mut words: u16
-    mut letters: u16
+    mut words: usize
+    mut letters: usize
 
 # The first index from `at` where blank-ness is not `blank`.
-fn run(self: &Source, at: u16, blank: bool) -> u16:
+fn run(self: &Source, at: usize, blank: bool) -> usize:
     let mut end = at
     while end < self.text.len && (self.text[end] == ' ') == blank:
         end += 1
     return end
 
-fn view(self: &Source, start: u16, end: u16) -> &string:
+fn view(self: &Source, start: usize, end: usize) -> &string:
     return &self.text[start:end]
 
 fn scan(src: &Source) -> Scanner:
     return Scanner(src=src, at=0)
 
 # Takes the scanner and gives it back, still borrowing the same source.
-fn skip(s: Scanner, count: u16) -> Scanner:
+fn skip(s: Scanner, count: usize) -> Scanner:
     let mut moved = s
     moved.at += count
     return moved

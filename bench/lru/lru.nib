@@ -1,3 +1,4 @@
+# targets: x86-code16   (a benchmark of far pointer fields)
 # Nib: far pointers are *far mut fields used in `unsafe`; no address-of in a var initializer, so the cache is a kernel local.
 struct Cache:
     mut bord: *far mut i16

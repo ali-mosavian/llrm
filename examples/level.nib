@@ -1,3 +1,4 @@
+# targets: x86-code16   (far pointers to locals: std.io reads and writes through *far)
 # A map saved as packed records, loaded back with raw reads, and walked:
 # which BSP leaf holds each point, and which faces its last split has.
 

@@ -317,7 +317,7 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
                 invalid!("{}: duplicate function {}", module.name, function.id);
             }
             function_ids.insert(function.id);
-            _function(module, function, &types)?;
+            _function(program.descriptor_word, module, function, &types)?;
         }
         _facts(module)?;
     }
@@ -325,6 +325,7 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
 }
 
 fn _function(
+    descriptor_word: i64,
     module: &model::Module,
     function: &model::Function,
     types: &IndexMap<i64, &model::Type>,
@@ -583,11 +584,12 @@ fn _function(
                 if asm.inputs.len() != operand_types.len() || asm.outputs.len() != result_types.len() {
                     invalid!("{prefix}: asm {} names a register for each operand and result", instruction.id);
                 }
-                // A register is its 16-bit whole; a frontend narrows or widens a part.
-                let word = |one: &i64| types[one].width == 2 && types[one].kind == model::TypeKind::Integer;
-                let near = |one: &i64| types[one].width == 2 && types[one].kind == model::TypeKind::Pointer;
+                // A register is a whole of 16 bits (real mode) or 32 (a flat target's e-register), which the code
+                // generator checks against the register it names; a frontend narrows or widens a part.
+                let word = |one: &i64| matches!(types[one].width, 2 | 4) && types[one].kind == model::TypeKind::Integer;
+                let near = |one: &i64| matches!(types[one].width, 2 | 4) && types[one].kind == model::TypeKind::Pointer;
                 if !operand_types.iter().all(|one| word(one) || near(one)) || !result_types.iter().all(word) {
-                    invalid!("{prefix}: asm {} moves only 16-bit integers and near pointers", instruction.id);
+                    invalid!("{prefix}: asm {} moves only 16-bit or 32-bit integers and near pointers", instruction.id);
                 }
             }
             if instruction.op == model::Op::Assume
@@ -785,8 +787,8 @@ fn _function(
                     {
                         invalid!("{prefix}: descriptor place needs a sequence pointer");
                     }
-                    if field.kind != model::TypeKind::Integer || !matches!(field.width, 2 | 4) || field.signed != Some(false) {
-                        invalid!("{prefix}: descriptor field is not an unsigned word (u16 or u32)");
+                    if field.kind != model::TypeKind::Integer || field.width != descriptor_word || field.signed != Some(false) {
+                        invalid!("{prefix}: descriptor field is not an unsigned word of the program's {} bytes", descriptor_word);
                     }
                 }
             }

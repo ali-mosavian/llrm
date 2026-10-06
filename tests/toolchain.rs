@@ -349,3 +349,128 @@ fn test_the_generated_header_is_far_only_where_far_code_is() {
     let flat = header(&["--target", "x86-code32"]);
     assert!(flat.contains("extern short __cdecl weight(short value);") && !flat.contains("__far"), "{flat}");
 }
+
+/// A flat target's block clears and copies are `rep stos`/`rep movs` on dwords through DS=ES, as code16's
+/// are through ES: the lowering took segment operands and 16-bit counts (a departure row), and a constant
+/// fill or copy on code32 was a loop. Neither sets a segment register here.
+#[test]
+fn test_code32_block_operations_are_rep_string_instructions_without_segments() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("m.c");
+    std::fs::write(&source, "char a[300], b[300];\nvoid clear(void) { unsigned i; for (i = 0; i < 300; i++) a[i] = 0; }\nvoid copy(void) { int i; for (i = 0; i < 300; i++) b[i] = a[i]; }\nint main(void) { clear(); copy(); return b[5]; }\n").unwrap();
+    let listing = |target: &str| {
+        let out = scratch.path().join(format!("{target}.asm"));
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-c")).arg(&source).args(["--target", target, "-O2", "-S", "-o", out.to_str().unwrap()]).output().unwrap();
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+        std::fs::read_to_string(out).unwrap()
+    };
+    let flat = listing("x86-code32");
+    assert!(flat.contains("rep stosd") && flat.contains("rep movsd"), "{flat}");
+    assert!(!flat.contains("DGROUP") && flat.lines().all(|line| !matches!(line.trim(), "pop es" | "push es") && !line.trim().ends_with(", es")), "{flat}");
+    let real = listing("x86-code16");
+    assert!(real.contains("rep stosd") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
+}
+
+/// A program the repository ships as an example or a benchmark compiles without a warning for each
+/// target it runs on (`# targets:` names the ones it does not): a warning there is a lesson the
+/// example teaches wrongly, and the flat targets' warnings (far and huge are near, usize narrowing)
+/// would otherwise go unseen in a corpus nobody reads the stderr of.
+#[test]
+fn test_the_examples_and_benchmarks_compile_without_warnings() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let mut files = Vec::new();
+    for source in ["examples", "bench"] {
+        let mut pending = vec![root.join(source)];
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(&directory).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|one| one == "nib") {
+                    files.push(path);
+                }
+            }
+        }
+    }
+    assert!(files.len() > 40, "{} programs found", files.len());
+    let warned = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|scope| {
+        for (at, file) in files.iter().enumerate() {
+            let (warned, object) = (&warned, scratch.path().join(format!("p{at}.obj")));
+            scope.spawn(move || {
+                let text = std::fs::read_to_string(file).unwrap();
+                let header = text.lines().take_while(|line| line.starts_with('#')).find_map(|line| line.trim_start_matches('#').trim().strip_prefix("targets:"));
+                let targets: Vec<&str> = header.map_or(vec!["x86-code16", "x86-code32"], |list| list.split_whitespace().take(1).collect());
+                for target in targets {
+                    let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).arg(file).args(["--target", target, "-O2", "-o", object.to_str().unwrap()]).output().unwrap();
+                    let stderr = String::from_utf8_lossy(&done.stderr);
+                    // A program that needs a library (link:) or refuses on a target is not this test's business.
+                    if done.status.success() && stderr.contains("warning") {
+                        warned.lock().unwrap().push(format!("{} [{target}]: {}", file.strip_prefix(root).unwrap().display(), stderr.lines().next().unwrap_or("")));
+                    }
+                }
+            });
+        }
+    });
+    let warned = warned.into_inner().unwrap();
+    assert!(warned.is_empty(), "{}", warned.join("\n"));
+}
+
+/// The Zed extension is built apart from the workspace, so nothing compiled it: a refactor moved its
+/// library path to a file that is not there, and it carries no way to name the project's target to nib-lsp.
+/// Its manifest's library exists, and it passes the `initialization_options` setting to the server.
+#[test]
+fn test_the_zed_extension_names_a_library_that_exists_and_passes_the_projects_target() {
+    let zed = Path::new(env!("CARGO_MANIFEST_DIR")).join("editors/zed");
+    let manifest = std::fs::read_to_string(zed.join("Cargo.toml")).unwrap();
+    let library = manifest.lines().find_map(|line| line.trim().strip_prefix("path = \"")).and_then(|rest| rest.strip_suffix('"')).expect("a library path");
+    let source = std::fs::read_to_string(zed.join(library)).unwrap_or_else(|_| panic!("{library} is not in editors/zed"));
+    assert!(source.contains("fn language_server_initialization_options") && source.contains("settings.initialization_options"));
+}
+
+/// The file calls' result was an `i32` on code16 and an `isize` on code32, so a program naming the type
+/// was written for one target; both OS layers declare the same one.
+#[test]
+fn test_both_targets_declare_the_same_file_call_result() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let results = |target: &str| -> Vec<String> {
+        let text = std::fs::read_to_string(root.join(format!("crates/target/llrm-{target}/runtime/nib/os.nib"))).unwrap();
+        ["pub fn read(", "pub fn write_file("].iter().map(|head| text.lines().find(|line| line.starts_with(head)).and_then(|line| line.rsplit_once("-> ")).map(|(_, result)| result.trim().to_owned()).expect("declared")).collect()
+    };
+    assert_eq!(results("x86-code16"), ["i32", "i32"]);
+    assert_eq!(results("x86-code32"), results("x86-code16"));
+}
+
+/// start.asm and dos.asm each named a constant of their own (the stack, the heap's arena) beside the
+/// description's; the assembler is now told the description's fields, and a target that lists none is told none.
+#[test]
+fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
+    let defines = |target: &str| {
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).args(["--target", target, "--os-layer", "defines"]).output().unwrap();
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+        String::from_utf8_lossy(&done.stdout).trim().to_owned()
+    };
+    assert_eq!(defines("x86-code32"), "STACK_BYTES=16384 HEAP_BYTES=16777216");
+    assert_eq!(defines("x86-code16"), "");
+}
+
+/// The identity gate is an instrument: a build compared with itself must say SAME of every
+/// program, and a build whose output differs must be reported DIFF with a failing exit, or a
+/// change that moved a target's code would pass the gate silently.
+#[test]
+fn test_the_identity_gate_passes_a_build_against_itself_and_fails_a_different_one() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let compiler = env!("CARGO_BIN_EXE_llrm-c");
+    let different = scratch.path().join("llrm-c-os");
+    std::fs::write(&different, format!("#!/bin/sh\nexec {compiler} \"$@\" -Os\n")).unwrap();
+    std::fs::set_permissions(&different, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let gate = |new: &Path| Command::new(root.join("tools/identity.sh")).args(["c", compiler, new.to_str().unwrap()]).env("TMPDIR", scratch.path()).output().unwrap();
+    let same = gate(Path::new(compiler));
+    let same_text = String::from_utf8_lossy(&same.stdout);
+    assert!(same.status.success() && same_text.contains("SAME") && !same_text.contains("DIFF"), "{same_text}");
+    let other = gate(&different);
+    let other_text = String::from_utf8_lossy(&other.stdout);
+    assert!(!other.status.success() && other_text.contains("DIFF "), "{other_text}");
+}

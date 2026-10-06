@@ -12,3 +12,7 @@ stack = "stack.toml"
 stack_base = 16384
 # There is no far data: the extender zero-fills the image's BSS, and no far BSS exists.
 far_bss = false
+# The most the heap grows to, taken from the extender (DPMI 0501h) the first time it is asked.
+heap_bytes = 16777216
+# Fields the assembler is told as `-DSYMBOL=value`: start.asm and dos.asm name no constant of their own.
+assembler_defines = ["stack_base:STACK_BYTES", "heap_bytes:HEAP_BYTES"]

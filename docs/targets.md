@@ -26,10 +26,6 @@ Known departures today, each to be removed:
 | `llrm-hir`, `llrm-mir`: the datalayout string, address-space numbers, `TargetProfile` variants | a target's layout in an IR crate | PR 14a, and the code32 session's HIR change (data layout and address spaces from the `Target`) |
 | `llrm-core` `select.rs`, `omfwrite.rs`: x86 instruction encoding and the OMF writer, in `llrm-core` and keyed by a described bitness (`At{ip,bits}`) | the encoder belongs in the x86 family layer | PR 5's encoder half (code32-prep, D) |
 | `llrm-core` `select.rs` encoder and `peephole::_register_effects`: x86 encoding, and register effects read by decoding the emitted bytes, in `llrm-core` | the encoder and the effects belong in the x86 family layer; the mode they run in is the body's (`LirBody::bits`, set by isel from the target's `object.bitness`) | the encoder PR (code32-prep, D); #581 |
-| `llrm-core` `flow.rs`: `LoopSlots` is dropped where `FrameRegisters.slot != 2` | its slots are words and it parks BP at word width | a `LoopSlots` that reads the slot width and frame register (code32 session, next) |
-| `llrm-nib` `Frontend::default()`, the LSP and `std.os` shown to an editor | they use code16's layout, conventions and OS layer | the editor learns the project's target |
-| `llrm-nib` heap and `os.more`: blocks under 64 KB on code32 | sizes are `u16` | a size type that is the target's (usize-like) |
-| `llrm-core` `isel.rs` string operations (`memcpy`/`memset` lowering): segment operands, 16-bit counts | code16-shaped lowering | code32's flat rows and the `segmented()`/`address_bytes()` reading (code32 session) |
 
 ## Principle: a target is description
 
@@ -136,10 +132,15 @@ i16 pairs), not a refactor, and is not part of this task.
 
 code32 runs under a DOS extender: OMF with USE32 segments and 32-bit records, linked by
 JWlink as an LE executable behind DOS/32A's stub (`object.toml`'s `[link]`; the start-up
-and `report` are `llrm-x86-code32/runtime`). Its C ABI is cdecl32 with `llrm-c`'s Borland
-rule for aggregate returns (1, 2 or 4 bytes in EAX, else a pointer pushed after the
-arguments and returned in EAX), not Open Watcom's static result area or Win32's: the
-rule is revisited if code32 links a libc that has one of those.
+and `report` are `llrm-x86-code32/runtime`). Its C ABI is cdecl32,
+`calling.toml`: Open Watcom's 386 flat ABI as `wccq -ecc -zp4` has it. Arguments are
+pushed right to left in dword slots and the caller removes them; symbols are `_name`;
+EBX, ESI, EDI and EBP are preserved, the direction flag is clear and the x87 stack empty
+on entry and return; results are in EAX, EDX:EAX for 64 bits and ST0 for floats; structs
+are packed to 4 bytes. One deliberate difference: a struct return of other than 1, 2 or 4
+bytes goes through a pointer pushed after the arguments and returned in EAX (reentrant),
+where Open Watcom's `-ecc` returns the address of one static area. A call into an Open
+Watcom object that returns such a struct is the one call that does not match.
 
 ## Measured state
 

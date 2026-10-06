@@ -92,18 +92,14 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.debug = flags.debug;
     frontend.checked_stack = flags.sanitize.stack;
     let bound = llrm_driver::target(&flags, None)?;
-    frontend.layout = bound.target.layout();
-    frontend.slot = u32::try_from(bound.target.stack_slot_bytes()).expect("a slot is positive");
-    frontend.bits = bound.target.object().bitness;
-    frontend.conventions = bound.target.conventions().iter().map(|one| (*one).to_owned()).collect();
-    frontend.os = nib_os(&*bound.target)?;
+    frontend = super::Frontend { debug: frontend.debug, checked_stack: frontend.checked_stack, unchecked_bounds: frontend.unchecked_bounds, warn_target_width: frontend.warn_target_width, ..super::Frontend::for_target(&*bound.target)? };
     let codegen = bound.options(&flags, flags.machine(nib::machine(&*bound.target, &frontend.os))?);
     Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen, os_layer, declare })
 }
 
 /// What the target's OS layer says of Nib's runtime; a target without one is refused.
 fn nib_os(target: &dyn llrm_target::Target) -> Result<super::Os, String> {
-    super::Os::of(target.runtime("nib").ok_or_else(|| format!("target {} has no Nib runtime", target.name()))?)
+    super::Os::for_target(target)
 }
 
 /// The symbols `objects` import.
@@ -131,8 +127,9 @@ pub fn main(argv: &[String]) -> i32 {
             "directory" => println!("{}", os.directory),
             "start" => println!("{}", os.start),
             "dos" => println!("{}", os.dos),
+            "defines" => println!("{}", os.defines.iter().map(|(symbol, value)| format!("{symbol}={value}")).collect::<Vec<_>>().join(" ")),
             _ => {
-                eprintln!("llrm-nib: error: --os-layer takes directory, start or dos");
+                eprintln!("llrm-nib: error: --os-layer takes directory, start, dos or defines");
                 return 2;
             }
         }
@@ -160,8 +157,8 @@ pub fn main(argv: &[String]) -> i32 {
             (None, Some(_)) => return Ok(()),
         };
         let mut program = llrm_core::support::debug::timed("frontend", || driver::parsed(&args.source, &args.frontend, None)).map_err(|error| error.0)?;
-        for warning in args.frontend.warnings.borrow().iter() {
-            eprintln!("{}", driver::refused(&args.source, warning).0);
+        for (file, warning) in args.frontend.reported.borrow().iter() {
+            eprintln!("{}", driver::refused(file, warning).0);
         }
         if !args.used_by.is_empty() {
             nib::keep_exports(&mut program, &used(&args.used_by)?);

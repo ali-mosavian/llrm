@@ -199,6 +199,8 @@ struct TypeRegistry {
     warnings: Option<std::rc::Rc<std::cell::RefCell<Vec<crate::Diagnostic>>>>,
     /// The bits of the target's code.
     code_bits: u32,
+    /// The target's register file: which registers an inline block may name.
+    registers: Vec<llrm_target::registers::Register>,
     /// The convention the language's own functions have here: the target's first.
     native: Abi,
     /// The names of the conventions the target defines: any other is refused.
@@ -311,6 +313,7 @@ impl TypeRegistry {
         Self {
             sizes,
             code_bits: bits,
+            registers: Vec::new(),
             native,
             conventions,
             warnings: None,
@@ -1401,9 +1404,9 @@ pub fn compile(module: &Module, module_name: &str, frontend: &super::Frontend) -
 
 /// Type-checks `module` as `compile` does: what the checker learned of the
 /// names it spells, and the first error.
-pub fn check(module: &Module) -> (Vec<Fact>, Result<(), Diagnostic>) {
+pub fn check(module: &Module, frontend: &super::Frontend) -> (Vec<Fact>, Result<(), Diagnostic>) {
     let facts = RefCell::new(Vec::new());
-    let checked = program(module, "", Some(&facts), &super::Frontend::default()).map(drop);
+    let checked = program(module, "", Some(&facts), frontend).map(drop);
     (facts.into_inner(), checked)
 }
 
@@ -1413,8 +1416,9 @@ fn program(
     facts: Option<&RefCell<Vec<Fact>>>,
     frontend: &super::Frontend,
 ) -> Result<hir::Program, Diagnostic> {
-let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.conventions.clone(), frontend.bits);
+    let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.conventions.clone(), frontend.bits);
     types.warnings = frontend.warn_target_width.then(|| frontend.warnings.clone());
+    types.registers = frontend.registers.clone();
     types.register_fixed_types(&module.fixed_types)?;
     types.register_aggregates(&module.structs, &module.enums)?;
     types.register_drops(&module.functions.iter().collect::<Vec<_>>())?;
@@ -1589,6 +1593,7 @@ let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.
         facts: stated.finish(),
         data: literals.data,
         debug,
+        descriptor_word: frontend.sizes().near,
     };
     Ok(program)
 }

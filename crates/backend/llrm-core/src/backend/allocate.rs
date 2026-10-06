@@ -166,6 +166,11 @@ impl LiveRows {
         self.values(&self.out, self.position[&at])
     }
 
+    fn holds(&self, rows: &[u64], block: i64, value: u32) -> bool {
+        let (Some(&at), Ok(bit)) = (self.position.get(&block), self.numbered.binary_search(&value)) else { return false };
+        rows[at * self.words + bit / 64] >> (bit % 64) & 1 == 1
+    }
+
     fn values<'a>(&'a self, rows: &'a [u64], block: usize) -> impl Iterator<Item = u32> + 'a {
         rows[block * self.words..(block + 1) * self.words]
             .iter()
@@ -178,15 +183,48 @@ impl LiveRows {
     }
 }
 
+/// Whether a value is live at the entry or exit of a block: what a caller that asks of one value at a time reads,
+/// whether it has the sets of every block (`Live`) or the rows.
+pub trait LiveAt {
+    fn live_in(&self, block: i64, value: u32) -> bool;
+    fn live_out(&self, block: i64, value: u32) -> bool;
+}
+
+impl LiveAt for LiveRows {
+    fn live_in(&self, block: i64, value: u32) -> bool {
+        self.holds(&self.into, block, value)
+    }
+
+    fn live_out(&self, block: i64, value: u32) -> bool {
+        self.holds(&self.out, block, value)
+    }
+}
+
+impl LiveAt for (&Live, &Live) {
+    fn live_in(&self, block: i64, value: u32) -> bool {
+        self.0.get(&block).is_some_and(|live| live.contains(&value))
+    }
+
+    fn live_out(&self, block: i64, value: u32) -> bool {
+        self.1.get(&block).is_some_and(|live| live.contains(&value))
+    }
+}
+
 /// `live`, as rows.
 pub fn live_rows(body: &LirBody) -> LiveRows {
+    live_rows_by(body, |_| true)
+}
+
+/// `live_rows` of the values `keep` says only: each is live where it is as in the whole, the others are
+/// not numbered, so a caller that asks of a few values pays for rows of those.
+pub fn live_rows_by(body: &LirBody, keep: impl Fn(u32) -> bool) -> LiveRows {
     // Every value the body names, numbered by order. Ids can be far apart, so the number of a value
     // is found by a table over the ids where they are dense enough, else by search.
     let mut numbered: Vec<u32> = Vec::new();
     for block in &body.blocks {
-        numbered.extend(block.phis.iter().flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value))));
+        numbered.extend(block.phis.iter().flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value))).filter(|value| keep(*value)));
         for one in &block.insns {
-            numbered.extend(one.defines.iter().chain(&one.uses).copied());
+            numbered.extend(one.defines.iter().chain(&one.uses).copied().filter(|value| keep(*value)));
         }
     }
     numbered.sort_unstable();
@@ -199,17 +237,21 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
         }
         table
     });
-    let number = |value: u32| -> usize {
-        match &table {
+    let number = |value: u32| -> Option<usize> {
+        if !keep(value) {
+            return None;
+        }
+        Some(match &table {
             Some(table) => table[value as usize] as usize,
             None => numbered.binary_search(&value).expect("every value is numbered"),
-        }
+        })
     };
     let words = numbered.len() / 64 + 1;
     let count = body.blocks.len();
     let set = |row: &mut [u64], value: u32| {
-        let at = number(value);
-        row[at / 64] |= 1 << (at % 64);
+        if let Some(at) = number(value) {
+            row[at / 64] |= 1 << (at % 64);
+        }
     };
     let position: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
     // Rows of `words` each, a block's at `block * words`.
@@ -245,8 +287,9 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
             let group = &block.insns[first..=index as usize];
             for item in group {
                 for value in &item.defines {
-                    let at = number(*value);
-                    alive[at / 64] &= !(1 << (at % 64));
+                    if let Some(at) = number(*value) {
+                        alive[at / 64] &= !(1 << (at % 64));
+                    }
                 }
             }
             for item in group {
@@ -257,8 +300,9 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
             index = first as i64 - 1;
         }
         for phi in &block.phis {
-            let at = number(phi.result);
-            alive[at / 64] &= !(1 << (at % 64));
+            if let Some(at) = number(phi.result) {
+                alive[at / 64] &= !(1 << (at % 64));
+            }
         }
         generated[row].copy_from_slice(&alive);
     }
@@ -718,8 +762,10 @@ struct Facts {
 impl Facts {
     fn of(body: &LirBody, profile: &Profile, segments: &Segments, registers: &RegisterClasses, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, busy: &Frequency) -> Self {
         let _span = llrm_support::debug::span("regalloc facts");
-        let index = ranges::indexed(body);
-        let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals_over(body, Some(&index), busy), busy), profile, busy);
+        let index = llrm_support::debug::timed("facts slots", || ranges::indexed(body));
+        let base = llrm_support::debug::timed("facts intervals", || ranges::intervals_over(body, Some(&index), busy));
+        let base = llrm_support::debug::timed("facts sibling prices", || _sibling_priced(body, base, busy));
+        let mut live = llrm_support::debug::timed("facts fold prices", || _fold_priced(body, base, profile, busy));
         // A spiller product lives for one use: a spill gains nothing.
         for one in unspillable {
             if let Some(interval) = live.get_mut(one) {
@@ -731,8 +777,18 @@ impl Facts {
                 interval.weight = INF;
             }
         }
-        let masks = _masks(body, &index, segments);
-        Self { index, live, masks, widths: _widest(body), confined: classes(body, protected, segments, registers), hints: _copy_hints(body) }
+        let masks = llrm_support::debug::timed("facts masks", || _masks(body, &index, segments));
+        let widths = llrm_support::debug::timed("facts widths", || _widest(body));
+        let confined = llrm_support::debug::timed("facts classes", || {
+            let given = crate::backend::regclass::Found { live: &live, masks: &masks };
+            let found = crate::backend::regclass::classes_given(body, protected, segments, registers, &given);
+            if std::env::var_os("LLRM_CHECK_CLASSES").is_some() {
+                assert!(found.iter().eq(classes(body, protected, segments, registers).iter()), "{}: classes from the given intervals differ from working them out", body.name);
+            }
+            found
+        });
+        let hints = llrm_support::debug::timed("facts hints", || _copy_hints(body));
+        Self { index, live, masks, widths, confined, hints }
     }
 }
 
@@ -785,7 +841,7 @@ fn _allocated(
     let mut fixed: IndexMap<u32, Register> = pinned.cloned().unwrap_or_default();
     // Values a split made or left behind, never split again: LLVM's `RS_Split2` and `RS_Spill`.
     let mut pieces: BTreeSet<u32> = BTreeSet::new();
-    let mut placing: Option<(spillplacement::Bundles, (Live, Live))> = None;
+    let mut placing: Option<(spillplacement::Bundles, LiveRows)> = None;
     let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
 
@@ -945,9 +1001,9 @@ fn _allocated(
         let mut rewritten: Option<Vec<u32>> = None;
         if splitting && at == Stage::Split && !pieces.contains(&value) && !bound {
             let _split = llrm_support::debug::span("regalloc split");
-            let (bundles, live_sets) = placing.get_or_insert_with(|| (spillplacement::bundles(&body), self::live(&body)));
-            let spread = splitkit::live_blocks(&body, value, (&live_sets.0, &live_sets.1));
-            let occupied = splitkit::Occupied {
+            let (bundles, live_sets) = placing.get_or_insert_with(|| llrm_support::debug::timed("split placing", || (spillplacement::bundles(&body), live_rows(&body))));
+            let spread = llrm_support::debug::timed("split spread", || splitkit::live_blocks(&body, value, &*live_sets));
+            let occupied = llrm_support::debug::timed("split occupied", || splitkit::Occupied {
                 segments: union
                     .iter()
                     .map(|(register, held)| {
@@ -955,24 +1011,25 @@ fn _allocated(
                     })
                     .collect(),
                 masks: &facts.masks,
-            };
-            let sets = (&live_sets.0, &live_sets.1);
+            });
+            let sets: &dyn LiveAt = &*live_sets;
             // A range in one block splits locally; any other by region, and
             // failing that block by block. Only a piece that pays is carved.
-            let regions: Vec<splitkit::Region> = match splitkit::local(&body, value, &facts.index, sets, &order, &occupied, width) {
+            let regions: Vec<splitkit::Region> = match llrm_support::debug::timed("split local", || splitkit::local(&body, value, &facts.index, sets, &order, &occupied, width)) {
                 Some(found) => vec![found],
                 None => {
-                    let placed = splitkit::placed(&body, value, &facts.index, sets, bundles, &order, &occupied, width);
-                    if placed.is_empty() { splitkit::per_block(&body, value, sets) } else { placed }
+                    let placed = llrm_support::debug::timed("split placed", || splitkit::placed(&body, value, &facts.index, sets, bundles, &order, &occupied, width));
+                    if placed.is_empty() { llrm_support::debug::timed("split per block", || splitkit::per_block(&body, value, sets)) } else { placed }
                 }
             };
-            let regions: Vec<splitkit::Region> = regions.into_iter().filter(|region| splitkit::pays(&body, value, region, sets)).collect();
+            let regions: Vec<splitkit::Region> = llrm_support::debug::timed("split pays", || regions.into_iter().filter(|region| splitkit::pays(&body, value, region, sets)).collect());
             for region in &regions {
                 llrm_support::debug!("split", "{}: split {value} at {:?}", body.name, region.spans);
             }
             let mut cut = body.clone();
             let mut moves: Vec<splitkit::Moved> = Vec::new();
             let mut made: Vec<u32> = Vec::new();
+            let _carving = llrm_support::debug::span("split carving");
             for region in regions {
                 let fresh = splitkit::_next_value(&cut).max(floor);
                 floor = fresh + 1;
@@ -986,8 +1043,10 @@ fn _allocated(
             if !made.is_empty() {
                 // As LLVM's RS_Split2: a piece splits again only while its
                 // live blocks strictly shrink, so splitting ends.
-                let after = self::live(&cut);
-                pieces.extend(made.iter().copied().filter(|one| splitkit::live_blocks(&cut, *one, (&after.0, &after.1)) >= spread));
+                drop(_carving);
+                // Only the pieces made are asked of.
+                let after = llrm_support::debug::timed("split after liveness", || live_rows_by(&cut, |one| made.contains(&one)));
+                pieces.extend(made.iter().copied().filter(|one| splitkit::live_blocks(&cut, *one, &after) >= spread));
                 pieces.insert(value);
                 body = cut;
                 for one in &made {
@@ -1072,7 +1131,7 @@ fn _allocated(
                     // since sharing the slot makes the copies between them free.
                     let mut chosen = BTreeSet::from([value]);
                     let settled: BTreeSet<u32> = fixed.keys().chain(protected.iter()).chain(unspillable.iter()).copied().collect();
-                    chosen.extend(spiller::siblings(&body, &chosen, Some(frame), &settled)?);
+                    chosen.extend(llrm_support::debug::timed("spill siblings", || spiller::siblings(&body, &chosen, Some(frame), &settled))?);
                     llrm_support::debug!("spill", "{}: spill {value} with {:?}", body.name, chosen);
                     for one in &chosen {
                         if let Some(register) = r#where.shift_remove(one) {
@@ -1102,7 +1161,9 @@ fn _allocated(
         // the change left sharing a register competes again.
         let Some(made) = rewritten else { continue };
         floor = floor.max(splitkit::_next_value(&body));
-        facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body));
+        facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &llrm_support::debug::timed("regalloc frequency", || Frequency::of(&body)));
+        // What is done of the rewrite besides its facts: the pins, the placed values it disturbs, the queue.
+        let _after = llrm_support::debug::span("regalloc after rewrite");
         placing = None;
         for (one, register) in constrain::required(&body, classes) {
             fixed.entry(one).or_insert(register);
@@ -1902,15 +1963,13 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>, busy: &Frequen
             *free.entry(value).or_insert(0.0) += each;
         }
     }
-    live.into_iter()
-        .map(|(value, one)| match free.get(&value) {
-            Some(found) => {
-                let weight = _max(0.0, one.weight - found / (one.size() + ranges::GRACE) as f64);
-                (value, Interval { weight, ..one })
-            }
-            None => (value, one),
-        })
-        .collect()
+    let mut live = live;
+    for (value, found) in &free {
+        if let Some(one) = live.get_mut(value) {
+            one.weight = _max(0.0, one.weight - found / (one.size() + ranges::GRACE) as f64);
+        }
+    }
+    live
 }
 
 /// Frame traffic inside loops by cause, weighted by loop depth: the spiller's
@@ -2007,8 +2066,51 @@ fn _scoped_foldable_indexes(body: &LirBody, bases: &BTreeSet<u32>) -> BTreeSet<u
     spiller::foldable_indexes(body, &indexes)
 }
 
-/// How much of a spilled read disappears when it becomes a memory operand.
-fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
+/// How much of a spilled read disappears when it becomes a memory operand, for each form an instruction
+/// can fold in: a profile's prices, looked up once for a rebuild and not once per instruction.
+struct FoldDiscounts {
+    alu: f64,
+    imul32: f64,
+}
+
+impl FoldDiscounts {
+    fn of(profile: &Profile) -> Self {
+        Self { alu: Self::form(profile, "alu_rr", "alu_rm"), imul32: Self::form(profile, "imul_r32", "imul_m32") }
+    }
+
+    fn form(profile: &Profile, register: &str, memory: &str) -> f64 {
+        if ![register, memory, "mov_rm"].iter().all(|form| profile.prices(form)) {
+            return 0.0;
+        }
+        let load = profile.cost("mov_rm").expect("priced above");
+        if load <= 0 {
+            return 0.0;
+        }
+        let remainder = 0.max(profile.cost(memory).expect("priced above") - profile.cost(register).expect("priced above"));
+        _max(0.0, _min(1.0, 1.0 - remainder as f64 / load as f64))
+    }
+
+    /// What `one` folds, by its form: nothing for one that has none.
+    fn of_insn(&self, one: &Insn) -> f64 {
+        let Some(what) = &one.what else {
+            return 0.0;
+        };
+        match (what.op, what.name.as_deref(), what.sources.as_slice()) {
+            (Operation::Binary | Operation::Compare, name, _) => {
+                if matches!(name, Some("add" | "sub" | "and" | "or" | "xor" | "cmp")) {
+                    self.alu
+                } else {
+                    0.0
+                }
+            }
+            (Operation::Multiply, Some("imul"), [Loc::Held(first), Loc::Held(second)]) if first.width == 4 && second.width == 4 => self.imul32,
+            _ => 0.0,
+        }
+    }
+}
+
+/// The old per-instruction form of `FoldDiscounts`, which `LLRM_CHECK_FOLDS=1` holds it to.
+pub(crate) fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
     let Some(what) = &one.what else {
         return 0.0;
     };
@@ -2038,31 +2140,36 @@ fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
 }
 
 /// Discount reads by the target-specific saving from folding them.
-fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile, busy: &Frequency) -> IndexMap<u32, Interval> {
+pub(crate) fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile, busy: &Frequency) -> IndexMap<u32, Interval> {
+    let discounts = FoldDiscounts::of(profile);
+    let check = std::env::var_os("LLRM_CHECK_FOLDS").is_some();
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = busy.block(block.at);
         for one in &block.insns {
-            let discount = _fold_discount(one, profile);
+            let discount = discounts.of_insn(one);
+            if check {
+                assert!(discount == _fold_discount(one, profile), "{}: a fold discount differs from the per-instruction lookup", body.name);
+            }
             if discount == 0.0 {
                 continue;
             }
+            // Only the second source of the pair can fold, once for each time the instruction reads it.
+            let Some((_, right)) = spiller::folded_pair(one, true) else { continue };
             for value in &one.uses {
-                if spiller::folded_source(one, &BTreeSet::from([*value])).is_some() {
+                if *value == right.value {
                     *free.entry(*value).or_insert(0.0) += each * discount;
                 }
             }
         }
     }
-    live.into_iter()
-        .map(|(value, one)| match free.get(&value) {
-            Some(found) if one.weight != INF => {
-                let weight = _max(0.0, one.weight - found / (one.size() + ranges::GRACE) as f64);
-                (value, Interval { weight, ..one })
-            }
-            _ => (value, one),
-        })
-        .collect()
+    let mut live = live;
+    for (value, found) in &free {
+        if let Some(one) = live.get_mut(value).filter(|one| one.weight != INF) {
+            one.weight = _max(0.0, one.weight - found / (one.size() + ranges::GRACE) as f64);
+        }
+    }
+    live
 }
 
 /// Python `format(value, "g")`.

@@ -79,24 +79,24 @@ impl Plan {
 /// `values` of `body` decided: how each is spilled, and the slots of those stored.
 pub fn planned(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame) -> Result<Plan, Error> {
     // A plain copy of a value made again is made again the same way.
-    let copies = _copies(body, values);
+    let copies = llrm_support::debug::timed("spill copies", || _copies(body, values));
     let wide: BTreeSet<u32> = values.iter().chain(copies.values()).copied().collect();
-    let constants = _through_copies(_constants(body, &wide), values, &copies);
-    let addresses = _through_copies(_addresses(body, &wide), values, &copies);
-    let extensions = _extensions(body, values);
-    let mut frame_loads = _stable_loads(body, values);
-    frame_loads.extend(_frame_loads(body, values));
+    let constants = _through_copies(llrm_support::debug::timed("spill constants", || _constants(body, &wide)), values, &copies);
+    let addresses = _through_copies(llrm_support::debug::timed("spill addresses", || _addresses(body, &wide)), values, &copies);
+    let extensions = llrm_support::debug::timed("spill extensions", || _extensions(body, values));
+    let mut frame_loads = llrm_support::debug::timed("spill stable loads", || _stable_loads(body, values));
+    frame_loads.extend(llrm_support::debug::timed("spill frame loads", || _frame_loads(body, values)));
     // A copy of a load is made again as that load, unless the value has a frame home of its own (an argument's slot).
     if !copies.is_empty() {
         let apart: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
-        let homed = _frame_homes(body, &apart);
-        let copied = _through_copies(_stable_loads_through(body, &wide, &copies), &apart.iter().copied().filter(|value| !homed.contains_key(value)).collect(), &copies);
+        let homed = llrm_support::debug::timed("spill frame homes", || _frame_homes(body, &apart));
+        let copied = _through_copies(llrm_support::debug::timed("spill stable loads", || _stable_loads_through(body, &wide, &copies)), &apart.iter().copied().filter(|value| !homed.contains_key(value)).collect(), &copies);
         for (value, cell) in copied {
             frame_loads.entry(value).or_insert(cell);
         }
     }
     let unloaded: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
-    let frame_homes = _frame_homes(body, &unloaded);
+    let frame_homes = llrm_support::debug::timed("spill frame homes", || _frame_homes(body, &unloaded));
     let mut rebuilt = frame_loads.clone();
     rebuilt.extend(frame_homes.iter().map(|(value, (home, _at))| (*value, home.clone())));
     let stored: BTreeSet<u32> = values
@@ -111,8 +111,8 @@ pub fn planned(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame) -> Res
         })
         .collect();
     // Before any cell names a slot.
-    _color_slots(body, &stored, &_widest(body, &stored), frame)?;
-    let narrow = _literals(body, &stored, true);
+    llrm_support::debug::timed("spill color slots", || _color_slots(body, &stored, &_widest(body, &stored), frame))?;
+    let narrow = llrm_support::debug::timed("spill literals", || _literals(body, &stored, true));
     Ok(Plan { constants, addresses, extensions, frame_loads, frame_homes, rebuilt, stored, narrow })
 }
 
@@ -147,15 +147,16 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
     let mut fresh = _next_value(body).max(floor);
     let mut made: BTreeSet<u32> = BTreeSet::new();
     let Plan { constants, addresses, extensions, frame_loads, frame_homes, rebuilt, stored, narrow } = plan;
-    let (body, next) = _short_update_runs(body, &stored, frame, fresh)?;
+    let (body, next) = llrm_support::debug::timed("spill short updates", || _short_update_runs(body, &stored, frame, fresh))?;
     fresh = next;
-    let (body, next) = _local_updates(&body, &stored, frame, fresh)?;
+    let (body, next) = llrm_support::debug::timed("spill local updates", || _local_updates(&body, &stored, frame, fresh))?;
     fresh = next;
     let mut abandoned: BTreeSet<usize> = BTreeSet::new();
     let mut rematerialized_definitions: BTreeSet<usize> = BTreeSet::new();
     let mut identities: BTreeSet<usize> = BTreeSet::new();
-    let body = _sunk_from_copies(&body, &addresses.keys().copied().collect());
-    let r#final = _final_uses(&body);
+    let body = llrm_support::debug::timed("spill sunk copies", || _sunk_from_copies(&body, &addresses.keys().copied().collect()));
+    let r#final = llrm_support::debug::timed("spill final uses", || _final_uses(&body));
+    let _rewrite = llrm_support::debug::span("spill rewrite");
     let rebuilt_values: BTreeSet<u32> = rebuilt.keys().copied().collect();
     let mut cells = _Cells::new(rebuilt.clone());
 
@@ -327,6 +328,8 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
         }
         blocks.push(block.with_insns(insns));
     }
+    drop(_rewrite);
+    let _cleanup = llrm_support::debug::span("spill cleanup");
     let mut result = body.with_blocks(blocks);
     let never = None::<fn(&Arc<Insn>) -> Arc<Insn>>;
     if !rematerialized_definitions.is_empty() {
@@ -583,6 +586,7 @@ pub fn siblings(
     if values.is_empty() {
         return Ok(BTreeSet::new());
     }
+    let adjacency = llrm_support::debug::span("siblings adjacency");
     let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         let Some(pair) = _plain_move(one) else {
@@ -597,12 +601,34 @@ pub fn siblings(
     if !values.iter().any(|one| adjacent.contains_key(one)) {
         return Ok(BTreeSet::new());
     }
+    drop(adjacency);
+    // Only the copy webs that hold a value of `values` are grown from: the others are asked of by no one.
+    let wanted: BTreeSet<u32> = {
+        let mut web: BTreeSet<u32> = values.iter().copied().filter(|one| adjacent.contains_key(one)).collect();
+        let mut work: Vec<u32> = web.iter().copied().collect();
+        while let Some(one) = work.pop() {
+            for next in &adjacent[&one] {
+                if web.insert(*next) {
+                    work.push(*next);
+                }
+            }
+        }
+        web
+    };
     // A shared slot holds each member at every width it is used, not just moved.
-    let widths = _widest(body, &adjacent.keys().copied().collect());
+    let widths = llrm_support::debug::timed("siblings widths", || _widest(body, &wanted));
 
-    let near = coalesce::_interference(body);
-    let deep = ranges::depths(body);
-    let wanted: BTreeSet<u32> = adjacent.keys().copied().collect();
+    // Only pairs among the values of those webs are asked of.
+    let near = llrm_support::debug::timed("siblings interference", || coalesce::_interference_among(body, Some(&wanted)));
+    if std::env::var_os("LLRM_CHECK_SIBLINGS").is_some() {
+        let whole = coalesce::_interference(body);
+        for value in &wanted {
+            let among = |graph: &coalesce::Graph| graph.get(value).map(|near| near.intersection(&wanted).copied().collect::<BTreeSet<u32>>()).unwrap_or_default();
+            assert!(among(&near) == among(&whole), "{}: the interference of value#{value} among its web differs from the whole graph's", body.name);
+        }
+    }
+    let deep = llrm_support::debug::timed("siblings depths", || ranges::depths(body));
+    let occurring = llrm_support::debug::span("siblings occurs");
     let mut occurs: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::default();
     for block in &body.blocks {
         let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
@@ -614,6 +640,7 @@ pub fn siblings(
         }
     }
 
+    drop(occurring);
     let worth = |candidate: u32, group: &PySet<i64>| -> bool {
         let (mut saved, mut cost) = (0.0, 0.0);
         for (each, one) in occurs.get(&candidate).into_iter().flatten() {
@@ -784,6 +811,21 @@ fn _copied_with(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Vec<Res
 /// negative; `u32` cannot say that, so they are numbered in the same order
 /// at the top of the range instead. Nothing compares them with a real value.
 fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<Interval>)>, IndexMap<u32, Interval>) {
+    let found = _existing_colors_by(body, frame, false);
+    if std::env::var_os("LLRM_CHECK_COLORS").is_some() {
+        let whole = _existing_colors_by(body, frame, true);
+        assert!(found.0 == whole.0, "{}: the slot colors differ from working them out whole", body.name);
+        // What is asked of a value is where it is live (`slots::fits` overlaps segments). Its weight is not read, and
+        // counts a value an instruction names twice once more than the body made of the homes does.
+        assert!(found.1.iter().all(|(value, interval)| whole.1.get(value).is_some_and(|other| other.segments == interval.segments)), "{}: where a value is live differs from working it out whole", body.name);
+        assert!(found.1.len() == whole.1.len(), "{}: a value has no interval where working it out whole gives one", body.name);
+    }
+    found
+}
+
+/// `_existing_colors`, with the intervals of the homes' pseudo-values found among themselves and the body's
+/// own remembered, or, `whole`, as the body with the homes in it is worked out at once.
+fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(i64, u32, Vec<Interval>)>, IndexMap<u32, Interval>) {
     let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
     homes.sort_unstable();
     if homes.is_empty() {
@@ -820,6 +862,8 @@ fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<In
         None
     };
 
+    // Only an instruction that names a home is made again with it among its values; the others are the body's.
+    let mut flipped = false;
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
@@ -830,16 +874,32 @@ fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<In
             };
             let defined: BTreeSet<u32> = what.dests.iter().filter_map(|operand| slot(operand, &mut capacities)).collect();
             let used: BTreeSet<u32> = what.sources.iter().filter_map(|operand| slot(operand, &mut capacities)).collect();
-            insns.push(_with(one, |made| {
+            if defined.is_empty() && used.is_empty() && !whole {
+                insns.push(Arc::clone(one));
+                continue;
+            }
+            let made = _with(one, |made| {
                 made.defines = one.defines.iter().copied().chain(defined).collect::<IndexSet<u32>>().into_iter().collect();
                 made.uses = one.uses.iter().copied().chain(used).collect::<IndexSet<u32>>().into_iter().collect();
-            }));
+            });
+            // A value changes whether an instruction is a mark, and with it the slots after it.
+            flipped |= made.is_meta() != one.is_meta();
+            insns.push(made);
         }
         blocks.push(block.with_insns(insns));
     }
     let tracked = body.with_blocks(blocks);
-    let live = ranges::intervals(&tracked, None);
-    let end = ranges::indexed(&tracked).span.values().map(|(_first, last)| *last).max().unwrap_or(1);
+    let index = ranges::indexed(&tracked);
+    let busy = crate::analysis::frequency::Frequency::of(&tracked);
+    let live = if whole || flipped {
+        ranges::intervals_over(&tracked, Some(&index), &busy)
+    } else {
+        let mut live = ranges::intervals(body, None);
+        let homes: BTreeSet<u32> = pseudo.values().copied().collect();
+        live.extend(ranges::intervals_among(&tracked, &index, &busy, &homes));
+        live
+    };
+    let end = index.span.values().map(|(_first, last)| *last).max().unwrap_or(1);
     let mut colors = Vec::new();
     for home in homes {
         let interval = live.get(&pseudo[&home]);
@@ -1461,13 +1521,14 @@ impl CellOf for _Cells {
 /// static uses cannot say so: sum_three's loop-invariant base had one use,
 /// inside the loop, and `add di,[slot]` moved it on every trip -- 330 for
 /// 1110.
-fn _final_uses(body: &LirBody) -> BTreeSet<(usize, u32)> {
+pub(crate) fn _final_uses(body: &LirBody) -> BTreeSet<(usize, u32)> {
     use crate::backend::allocate;
 
-    let (_live_in, live_out) = allocate::live(body);
+    // Only what leaves each block is read: rows, not the sets of every block's entry and exit.
+    let rows = allocate::live_rows(body);
     let mut out: BTreeSet<(usize, u32)> = BTreeSet::new();
     for block in &body.blocks {
-        let mut alive: BTreeSet<u32> = live_out[&block.at].clone();
+        let mut alive: BTreeSet<u32> = rows.leaving(block.at).collect();
         let mut index = block.insns.len() as i64 - 1;
         while index >= 0 {
             let one = &block.insns[index as usize];
@@ -1705,6 +1766,22 @@ pub fn folded_source(one: &Insn, values: &BTreeSet<u32>) -> Option<Held> {
 /// `folded_source`, for an instruction that `tied` writes the register of its first source (after
 /// two-address lowering) or, not tied, names its result apart (SSA).
 pub fn folded_source_in(one: &Insn, values: &BTreeSet<u32>, tied: bool) -> Option<Held> {
+    folded_source_among(one, &|value| values.contains(&value), tied)
+}
+
+/// `folded_source_in` for the values `among` says are spilled, so that a caller that asks of one value at
+/// a time builds no set to ask with.
+pub fn folded_source_among(one: &Insn, among: &dyn Fn(u32) -> bool, tied: bool) -> Option<Held> {
+    let (left, right) = folded_pair(one, tied)?;
+    if !among(right.value) || one.uses.iter().any(|value| among(*value) && *value != left.value && *value != right.value) {
+        return None;
+    }
+    Some(right)
+}
+
+/// The two values `one` could fold the second of into the first's operation, whichever are spilled: what
+/// `folded_source_among` finds before it asks which are. The second is the only value that can fold.
+pub fn folded_pair(one: &Insn, tied: bool) -> Option<(Held, Held)> {
     if one.group.is_some() || !one.requires.is_empty() || !one.delivers.is_empty() || !one.clobbers.is_empty() {
         return None;
     }
@@ -1731,16 +1808,10 @@ pub fn folded_source_in(one: &Insn, values: &BTreeSet<u32>, tied: bool) -> Optio
         }
         _ => return None,
     };
-    if !widths.contains(&left.width)
-        || right.width != left.width
-        || !values.contains(&right.value)
-        || left.value == right.value
-        || one.defines.contains(&right.value)
-        || one.uses.iter().any(|value| values.contains(value) && *value != left.value && *value != right.value)
-    {
+    if !widths.contains(&left.width) || right.width != left.width || left.value == right.value || one.defines.contains(&right.value) {
         return None;
     }
-    Some(right)
+    Some((left, right))
 }
 
 /// Fold one untied spill source into arithmetic or a comparison.
@@ -3061,6 +3132,43 @@ mod tests {
         let (first, _made) = spilled(&body, &set(&[1, 3]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         _color_slots(&first, &set(&[2]), &IndexMap::from_iter([(2, 2)]), &mut frame).expect("colors");
         assert_eq!(frame.slots[&slot(2)], frame.slots[&slot(1)]);
+    }
+
+    /// The interference of every value live together was built to ask of the pairs in the copy webs a
+    /// spilled value is in (14.8 s of compiling `d_faces`, #559). Another web is asked of by no one.
+    #[test]
+    fn test_siblings_ask_the_webs_of_the_spilled_values_only() {
+        let body = _body(vec![
+            _move(1, 10, None, 0x10),
+            _move(2, 1, None, 0x12),
+            _move(11, 20, None, 0x14),
+            _move(12, 11, None, 0x16),
+            _add(31, 2, 0x18),
+            _add(32, 12, 0x1a),
+        ]);
+        let mut frame = Frame::new(0);
+        super::siblings(&body, &set(&[1]), Some(&mut frame), &BTreeSet::new()).expect("sibling slots");
+        assert_eq!(crate::backend::coalesce::last_asked(), Some(3), "the other web's values were asked of");
+    }
+
+    /// Every spill made a body of every instruction with the slots in it as values, and numbered it and
+    /// found every interval again to colour the slots: 16 s of compiling `d_faces` (#559). The slots
+    /// are found among themselves and the body's own intervals are remembered; the answers are the same.
+    #[test]
+    fn test_the_slots_colors_are_the_same_found_among_themselves_as_found_whole() {
+        let body = _body(vec![
+            _move(3, 30, None, 0x10),
+            _move(1, 10, None, 0x12),
+            _add(31, 3, 0x14),
+            _move(2, 1, None, 0x16),
+            _add(21, 2, 0x18),
+        ]);
+        let mut frame = Frame::new(0);
+        let (spilt, _made) = spilled(&body, &set(&[1, 3]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
+        assert!(!frame.slots.is_empty(), "the body has homes to find");
+        let (among, whole) = (super::_existing_colors_by(&spilt, &mut frame, false), super::_existing_colors_by(&spilt, &mut frame, true));
+        assert_eq!(among.0, whole.0);
+        assert_eq!(among.1, whole.1);
     }
 
     #[test]

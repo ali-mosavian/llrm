@@ -113,6 +113,11 @@ def expected_output(directory: Path) -> list[str]:
     return run_tests.lines((directory / f"{directory.name}.out").read_text())
 
 
+def nib_extras(source: Path) -> list[str]:
+    """The files a Nib benchmark links, as nib-build.sh takes them (code16: the bench measures real mode)."""
+    return [str(one) for one in dosbatch.link_files(source, run_tests.header(source).get("link", "").split(), "x86-code16")]
+
+
 def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path] | str:
     """(exe, linker map) of the variant at -`opt`, or why it did not build. BASIC is only compiled here: LINK runs in DOSBox."""
     obj, listing = work / f"{stem}.obj", work / f"{stem}.map"
@@ -123,7 +128,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
     try:
         if variant.language == "nib":
             exe = work / f"{stem}.exe"
-            extras = [str(variant.source.parent / one) for one in run_tests.header(variant.source).get("link", "").split()]
+            extras = nib_extras(variant.source)
             done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], capture_output=True, text=True, timeout=300,
                                   env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", *more])})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]

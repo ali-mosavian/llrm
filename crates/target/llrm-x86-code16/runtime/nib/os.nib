@@ -1,14 +1,16 @@
 # The operating system: what only assembly reaches (dos.asm). A file call
-# returns what DOS does, or its error code negated.
+# returns what DOS does, or its error code negated; `read` and `write_file` return a byte count or the
+# negated error code as an i32 on every target (one call moves at most i32 max bytes), so a program
+# that names the type is portable.
 
 @extern("cdecl16", name="N$OOPN")
 pub fn open(name: *far char, mode: u8) -> i16
 @extern("cdecl16", name="N$OCRE")
 pub fn create(name: *far char) -> i16
 @extern("cdecl16", name="N$OREA")
-pub fn read(handle: i16, data: *far mut u8, count: usize) -> i16
+pub fn read(handle: i16, data: *far mut u8, count: usize) -> i32
 @extern("cdecl16", name="N$OWRI")
-pub fn write_file(handle: i16, data: *far u8, count: usize) -> i16
+pub fn write_file(handle: i16, data: *far u8, count: usize) -> i32
 @extern("cdecl16", name="N$OCLO")
 pub fn close(handle: i16) -> i16
 # Ends the program with `code`.
@@ -32,3 +34,13 @@ const STANDARD_OUTPUT: i16 = 1
 pub fn write(text: *far u8, length: usize) -> void:
     unsafe:
         write_file(STANDARD_OUTPUT, text, length)
+
+# The colour text screen: 80x25 cells of a character and an attribute, at the machine's physical
+# address (the target's description names it; this layer turns it into the far pointer real mode
+# reaches memory outside its data segment by: segment = address >> 4, offset = address & 15).
+const SCREEN_FAR = ((PHYSICAL_TEXT_SCREEN >> 4) << 16) | (PHYSICAL_TEXT_SCREEN & 15)
+
+pub fn text_screen() -> *far mut u8:
+    unsafe:
+        let screen: *far mut u8 = SCREEN_FAR
+        return screen

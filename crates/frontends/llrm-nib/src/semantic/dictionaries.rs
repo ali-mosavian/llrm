@@ -17,11 +17,11 @@ use crate::syntax::{Clause, Struct, StructField};
 /// Finds `KEY`'s slot in `SLOTS`: its own when `FOUND`, else the free one it
 /// would take. `KEY` hashes and compares by its `Hashable` methods.
 const PROBE: &str = "\
-let HASH: u16 = KEY.hash() | 1
-let mut AT: u16 = 0
+let HASH: usize = KEY.hash() | 1
+let mut AT: usize = 0
 let mut FOUND = false
 if SLOTS.len != 0:
-    let MASK: u16 = SLOTS.len - 1
+    let MASK: usize = SLOTS.len - 1
     AT = HASH & MASK
     while SLOTS[AT].hash != 0:
         if SLOTS[AT].hash == HASH && SLOTS[AT].key.eq(KEY):
@@ -48,7 +48,7 @@ impl TypeRegistry {
         let text = |one: ElementType| self.types[(one.id() - 1) as usize].name.clone();
         let name = format!("dict[{}, {}]", text(key), text(value));
         let entry_name = format!("{name}.entry");
-        let fields = [("hash", ElementType::Scalar(TypeName::U16)), ("key", key), ("value", value)]
+        let fields = [("hash", ElementType::Scalar(self.word())), ("key", key), ("value", value)]
             .into_iter()
             .map(|(field, element)| StructField { name: field.into(), mutable: true, type_spec: self.spec_of(element), dims: Vec::new(), span })
             .collect();
@@ -282,7 +282,7 @@ impl FunctionCompiler<'_> {
     /// renamed to what `probe` binds it to.
     fn generated(&self, source: &str, probe: &Probe) -> Result<Vec<Statement>, Diagnostic> {
         let indented: String = source.lines().map(|line| format!("    {line}\n")).collect();
-        let module = parse(lex(&format!("fn generated() -> void:\n{indented}"))?)?;
+        let module = crate::parser::parse_for(lex(&format!("fn generated() -> void:\n{indented}"))?, self.types.sizes.near)?;
         let mut body = module.functions.into_iter().next().expect("one function").body;
         let rename = |name: &mut String| {
             if let Some(renamed) = probe.names.get(name.as_str()) {

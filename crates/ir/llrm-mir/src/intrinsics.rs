@@ -478,7 +478,7 @@ impl Intrinsic {
         let Type::Function { returns, parameters, variadic } = types.get(function_type) else { unreachable!("a function's type") };
         if self == Intrinsic::Asm {
             let block = asm(name).ok_or("Inline assembly's name does not parse!")?;
-            let word = |ty: &TypeId| types.int_bits(*ty) == Some(16) || matches!(types.get(*ty), Type::Pointer(0));
+            let word = |ty: &TypeId| matches!(types.int_bits(*ty), Some(16 | 32)) || matches!(types.get(*ty), Type::Pointer(0));
             let answers = match &block.outputs[..] {
                 [] => types.is_void(*returns),
                 [_] => word(returns),

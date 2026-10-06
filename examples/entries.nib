@@ -7,15 +7,15 @@ import std.io as io
 enum LoadError:
     not_found
     unreadable
-    invalid(line: u16)
+    invalid(line: usize)
 
 struct Entry:
     name: string
     value: i16
 
 # `line` as `name=value`, the value a decimal integer.
-fn parse(line: &string, number: u16) -> Result[Entry, LoadError]:
-    let mut at: u16 = 0
+fn parse(line: &string, number: usize) -> Result[Entry, LoadError]:
+    let mut at: usize = 0
     while at < line.len && line[at] != '=':
         at += 1
     let negative = at + 1 < line.len && line[at + 1] == '-'
@@ -37,7 +37,7 @@ fn load_entries(path: &string) -> Result[vec[Entry], LoadError]:
         .ok(opened):
             let mut file = opened
             let mut entries: vec[Entry] = []
-            let mut number: u16 = 0
+            let mut number: usize = 0
             for line in file.lines():
                 number += 1
                 if !line.empty():
