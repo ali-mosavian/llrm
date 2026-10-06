@@ -23,6 +23,7 @@ use iced_x86::Register;
 
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops::{self, Loop};
+use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
 use crate::backend::{liveness, select, spiller};
@@ -39,11 +40,12 @@ pub struct LoopSlots {
     pub cpu: Profile,
     /// The bytes of a slot and of the register that stands for it: the target's stack slot.
     pub word: u32,
+    pub classes: Rc<RegisterClasses>,
 }
 
 impl LoopSlots {
-    pub fn new<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>, word: u32) -> Result<Self, String> {
-        Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), word })
+    pub fn new<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>, word: u32, classes: &Rc<RegisterClasses>) -> Result<Self, String> {
+        Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), word, classes: Rc::clone(classes) })
     }
 }
 
@@ -64,11 +66,9 @@ impl LIRTransform for LoopSlots {
         let spills = frame.borrow().capacities.iter().filter(|(_, width)| **width == i64::from(m)).map(|(at, _)| *at).collect();
         let park = self.cpu.cost("push_r")? + self.cpu.cost("pop_r")?;
         llrm_support::debug!("traffic", "{} {:?}", body.name, crate::backend::allocate::traffic_by_cause(&body));
-        Ok(promoted(m, &hoisted(m, &body, &spills), &spills, &self.cpu.operations, park))
+        Ok(promoted(m, &self.classes.available, &hoisted(m, &self.classes.available, &body, &spills), &spills, &self.cpu.operations, park))
     }
 }
-
-const ROOTS: [Register; 6] = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
 
 /// The slot `mem` names, when it is a whole frame cell.
 fn slot(mem: &Mem) -> Option<i64> {
@@ -270,6 +270,7 @@ enum Hold {
 /// Registers the loop leaves free, untouched ones first, parked ones last.
 fn free(
     m: u32,
+    roots: &[Register],
     body: &LirBody,
     one: &Loop,
     index: &BTreeMap<i64, usize>,
@@ -277,7 +278,7 @@ fn free(
     exits: &BTreeSet<i64>,
 ) -> Vec<(Register, Hold)> {
     let mut out = Vec::new();
-    'roots: for root in ROOTS {
+    'roots: for root in roots.iter().copied() {
         let lanes = _lanes(root);
         let through = [one.header].iter().chain(exits).any(|at| !live_into[at].is_disjoint(&lanes));
         let mut folded = Vec::new();
@@ -373,7 +374,7 @@ fn rewritten(m: u32, one: &Arc<Insn>, homes: &BTreeMap<i64, Loc>) -> Arc<Insn> {
 
 /// Whether `one` still encodes with slot `at` in a register: an x87 store
 /// or a far-pointer load takes only memory.
-fn registrable(m: u32, bits: u32, one: &Arc<Insn>, at: i64) -> bool {
+fn registrable(m: u32, bits: u32, home: Register, one: &Arc<Insn>, at: i64) -> bool {
     let touched = touch(m, one);
     if touched.reaches(at, false) || touched.reaches(at, true) {
         return false;
@@ -381,7 +382,7 @@ fn registrable(m: u32, bits: u32, one: &Arc<Insn>, at: i64) -> bool {
     if !touched.reads.contains(&at) && !touched.writes.contains(&at) {
         return true;
     }
-    let homes = BTreeMap::from([(at, word(m, Register::DI))]);
+    let homes = BTreeMap::from([(at, word(m, home))]);
     rewritten(m, one, &homes).what.as_ref().is_some_and(|what| select::emit_in(bits, what, 0, None, false, false, None).is_some())
 }
 
@@ -472,7 +473,7 @@ fn spares(m: u32, one: &Insn, at: i64) -> bool {
 }
 
 /// `body` with each loop-invariant reload moved to where its loop is entered.
-pub fn hoisted(m: u32, body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
+pub fn hoisted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
     let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
     let index = body.blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
@@ -489,7 +490,7 @@ pub fn hoisted(m: u32, body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
         if entries.is_empty() || !entries.iter().all(|at| body.blocks[index[at]].succ == [one.header]) {
             continue;
         }
-        let roots = ROOTS.iter().chain(target::SEGMENTS.iter().filter(|one| ![Register::CS, Register::SS].contains(one)));
+        let roots = available.iter().chain(target::SEGMENTS.iter().filter(|one| ![Register::CS, Register::SS].contains(one)));
         let moved = roots
             .filter_map(|root| invariant(m, body, one, &index, &live_into[&one.header], *root, spills).map(|at| (*root, at)))
             .collect::<Vec<_>>();
@@ -540,7 +541,7 @@ pub fn hoisted(m: u32, body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
 }
 
 /// `body` with each loop's spill slots in the registers it leaves free.
-pub fn promoted(m: u32, body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, park: i64) -> LirBody {
+pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, park: i64) -> LirBody {
     let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
     let mut found = loops::loops(graph, Some(body.entry));
@@ -580,7 +581,7 @@ pub fn promoted(m: u32, body: &LirBody, spills: &BTreeSet<i64>, costs: &Operatio
         {
             continue;
         }
-        let registers = free(m, body, one, &index, &live_into, &exits);
+        let registers = free(m, available, body, one, &index, &live_into, &exits);
         let reloads = registers
             .iter()
             .flat_map(|(_, hold)| folds(hold).iter().map(|(block, position, _)| (*block, *position)))
@@ -588,7 +589,7 @@ pub fn promoted(m: u32, body: &LirBody, spills: &BTreeSet<i64>, costs: &Operatio
         // Most saved first.
         let mut ranked = slots
             .iter()
-            .filter(|at| insns().all(|insn| registrable(m, body.bits, insn, **at)))
+            .filter(|at| insns().all(|insn| registrable(m, body.bits, *available.last().expect("a register to hold a slot"), insn, **at)))
             .map(|at| {
                 let mut saved = 0;
                 for block in &one.body {
@@ -795,7 +796,7 @@ mod tests {
             IndexMap::default(),
         );
         let costs = &crate::backend::cpu::profile("486").unwrap().operations;
-        let out = promoted(2, &body, &BTreeSet::from([-4]), costs, 2);
+        let out = promoted(2, &crate::backend::classes::RegisterClasses::code16().available, &body, &BTreeSet::from([-4]), costs, 2);
         let reloads = |body: &LirBody| body.insns().iter().filter(|one| one.defines.contains(&5)).count();
         assert_eq!(reloads(&body), 1);
         assert_eq!(reloads(&out), 0, "the reload stays: the test does not reach the fold");
@@ -837,7 +838,7 @@ mod tests {
             IndexMap::default(),
             IndexMap::default(),
         );
-        let out = super::hoisted(2, &body, &BTreeSet::new());
+        let out = super::hoisted(2, &crate::backend::classes::RegisterClasses::code16().available, &body, &BTreeSet::new());
         let in_loop = out.blocks.iter().find(|one| one.at == 0x10).expect("the loop");
         let sets = |register: Register| in_loop.insns.iter().any(|one| matches!(one.what.as_ref().map(|what| what.dests.as_slice()), Some([Loc::Reg(reg)]) if reg.register == register));
         assert!(!sets(Register::BX), "premise: an invariant constant leaves the loop");
@@ -871,7 +872,7 @@ mod tests {
             IndexMap::default(),
         );
         let costs = &crate::backend::cpu::profile("486").unwrap().operations;
-        let out = promoted(4, &body, &BTreeSet::from([-4]), costs, 2);
+        let out = promoted(4, &crate::backend::classes::RegisterClasses::code16().available, &body, &BTreeSet::from([-4]), costs, 2);
         let is_bp = |insn: &Arc<Insn>, op: Operation| insn.what.as_ref().is_some_and(|what| what.op == op && what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Reg(reg) if super::is_bp(reg.register))));
         let pushes = out.insns().iter().filter(|insn| is_bp(insn, Operation::Push)).count();
         let pops = out.insns().iter().filter(|insn| is_bp(insn, Operation::Pop)).count();
