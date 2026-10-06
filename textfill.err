@@ -1,5 +1,5 @@
-/home/alim/scratch/oslayer/bench/textfill/textfill.c(16): Error! E1011: Symbol 'PHYSICAL_TEXT_SCREEN' has not been declared
-/home/alim/scratch/oslayer/bench/textfill/textfill.c(16): Warning! W135: Shift amount too large
-/home/alim/scratch/oslayer/bench/textfill/textfill.c(17): Warning! W135: Shift amount too large
-/home/alim/scratch/oslayer/bench/textfill/textfill.c(27): Error! E1011: Symbol 'PHYSICAL_TEXT_SCREEN' has not been declared
-/home/alim/scratch/oslayer/bench/textfill/textfill.c(27): Warning! W135: Shift amount too large
+/home/alim/scratch/once/bench/textfill/textfill.c(16): Error! E1011: Symbol 'PHYSICAL_TEXT_SCREEN' has not been declared
+/home/alim/scratch/once/bench/textfill/textfill.c(16): Warning! W135: Shift amount too large
+/home/alim/scratch/once/bench/textfill/textfill.c(17): Warning! W135: Shift amount too large
+/home/alim/scratch/once/bench/textfill/textfill.c(27): Error! E1011: Symbol 'PHYSICAL_TEXT_SCREEN' has not been declared
+/home/alim/scratch/once/bench/textfill/textfill.c(27): Warning! W135: Shift amount too large
