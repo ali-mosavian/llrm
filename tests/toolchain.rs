@@ -82,7 +82,7 @@ fn test_nib_start_puts_the_stack_in_dgroup() {
     let run = |program: &Path, args: &[&str]| {
         assert!(Command::new(program).args(args).current_dir(dir).status().unwrap().success(), "{}", program.display());
     };
-    let runtime = root.join("crates/frontends/llrm-nib/src/runtime");
+    let runtime = root.join("crates/target/llrm-x86-code16/runtime/nib");
     for part in ["start", "dos"] {
         run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-Zg", "-omf", &format!("-Fo{part}.obj"), runtime.join(format!("{part}.asm")).to_str().unwrap()]);
     }
@@ -113,7 +113,7 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
     let run = |program: &Path, args: &[&str]| {
         assert!(Command::new(program).args(args).current_dir(dir).status().unwrap().success(), "{}", program.display());
     };
-    let runtime = root.join("crates/frontends/llrm-nib/src/runtime");
+    let runtime = root.join("crates/target/llrm-x86-code16/runtime/nib");
     for part in ["start", "dos"] {
         run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-Zg", "-omf", &format!("-Fo{part}.obj"), runtime.join(format!("{part}.asm")).to_str().unwrap()]);
     }
