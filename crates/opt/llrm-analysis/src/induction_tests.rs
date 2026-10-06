@@ -853,7 +853,7 @@ fn test_an_extension_of_a_counter_that_cannot_wrap_is_a_wide_recurrence() {
 /// C's `for (unsigned char i = 0; i < 9; ++i) a[i]`: the header reads `zext i`
 /// too, once more than the body, on the trip that leaves. It was refused
 /// whatever the count, so the address was no recurrence and a counted loop
-/// kept a conversion per trip on code32 (crc, 832 executed against 496).
+/// kept a conversion per trip on m32 (crc, 832 executed against 496).
 #[test]
 fn test_an_extension_in_the_header_is_a_recurrence_where_the_last_trip_fits() {
     for (start, bound, cast, fits) in [(0, 9, "zext", true), (0, 255, "zext", true), (1, 0, "zext", false)] {

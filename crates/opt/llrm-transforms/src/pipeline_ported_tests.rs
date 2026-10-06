@@ -11,7 +11,7 @@ use crate::testing::{parsed, printed, results};
 
 /// `module` through the pipeline the compilers run, for the DOS target.
 fn pipe(module: &mut Module) {
-    Program::lend(module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program: &mut Program| pipeline::applied(program, &Applied::default()))
+    Program::lend(module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| pipeline::applied(program, &Applied::default()))
         .and_then(|done| done)
         .expect("the pipeline runs");
 }

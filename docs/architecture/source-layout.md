@@ -7,7 +7,7 @@
 | `crates/ir/llrm-mir` | The rich portable MIR of `rich-mir.md`: types, verifier, text, interpreter |
 | `crates/opt/llrm-analysis` | MIR analyses, and `graph`: dominance and loops over any IR's blocks |
 | `crates/opt/llrm-transforms` | MIR to MIR passes and the pipeline |
-| `crates/target/llrm-x86-code16` | The 16-bit x86 target: the `Dos` cost model passes see as `llrm_mir::target::Machine`, and the machine description (`machine`) |
+| `crates/target/llrm-x86-m16` | The 16-bit x86 target: the `Dos` cost model passes see as `llrm_mir::target::Machine`, and the machine description (`machine`) |
 | `crates/target/llrm-omf` | OMF records, the code segment as a module, CodeView debug info |
 | `crates/backend/llrm-core` | The compile driver, instruction selection, the machine phases and object writing; the HIR interpreter |
 | `crates/bc/llrm-bcmachine` | BC objects: x86 decode, the instruction model and its classification (`model::ir::lift`), object reading, flags |

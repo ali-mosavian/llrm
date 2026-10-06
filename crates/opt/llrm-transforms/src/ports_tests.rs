@@ -34,7 +34,7 @@ fn test_a_port_call_is_narrowed_only_where_the_target_says_its_device_reaches_no
     let mut module = parsed(CALLS);
     let mut manager = PassManager::default();
     manager.add(Ports);
-    manager.run_module(&mut module, Rc::new(llrm_x86_code16::Dos::default())).unwrap();
+    manager.run_module(&mut module, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     let narrowed: Vec<bool> =
         printed(&module).lines().filter(|line| line.contains("call void")).map(|line| line.ends_with("memory(inaccessiblemem: readwrite)")).collect();
     assert_eq!(narrowed, [true, false, true, false]);

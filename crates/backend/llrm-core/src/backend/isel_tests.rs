@@ -16,7 +16,7 @@ fn parsed(text: &str) -> llrm_mir::Module {
 }
 
 fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
-    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::code16(), &llrm_x86_code16::Code16, false, 0)
+    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::m16(), &llrm_x86_m16::M16, false, 0)
 }
 
 /// The module's text, once its object is written: a listing that does not
@@ -3650,7 +3650,7 @@ fn test_a_fixed_address_pointer_selects_as_a_far_one() {
     let layout = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16\"\n";
     let listing = |space| {
         let module = llrm_mir::parse::module(&format!("{layout}{}", body(space))).expect("parses");
-        let chosen = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::code16(), &llrm_x86_code16::Code16, false, 0).expect("selected");
+        let chosen = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::m16(), &llrm_x86_m16::M16, false, 0).expect("selected");
         format!("{chosen:?}")
     };
     assert_eq!(listing(4), listing(1));
@@ -4019,7 +4019,7 @@ fn test_a_phi_stored_on_more_edges_than_its_block_runs_stays_in_a_register() {
     assert_eq!(with, without);
 }
 
-/// code16 is 386+ code under 66h/67h prefixes, not 8086 code: i32 is
+/// m16 is 386+ code under 66h/67h prefixes, not 8086 code: i32 is
 /// arithmetic in EAX..EDI, extends are `movsx`/`movzx` into 32-bit
 /// registers, a constant multiply is a 32-bit `lea`, a long copy is
 /// `rep movsd`, and on a 386 a scaled index is `[ebx+eax*2]` (the 486 prices
@@ -4027,7 +4027,7 @@ fn test_a_phi_stored_on_more_edges_than_its_block_runs_stays_in_a_register() {
 /// but narrows these to word pairs would lose what every program is priced on.
 /// There is no 286 profile yet: when there is, it asserts none of these.
 #[test]
-fn test_code16_emits_386_forms() {
+fn test_m16_emits_386_forms() {
     let arithmetic = listing("define i32 @f(i32 %a, i32 %b) addrspace(1) {\n  %c = add i32 %a, %b\n  %d = mul i32 %c, 3\n  ret i32 %d\n}\n", "f");
     assert!(arithmetic.contains(&"add ebx, dword ptr [bp+10]".to_owned()), "{arithmetic:?}");
     assert!(arithmetic.contains(&"lea eax, [ebx+ebx*2]".to_owned()), "{arithmetic:?}");
@@ -4058,10 +4058,10 @@ fn test_code16_emits_386_forms() {
 /// 16-bit one is there, a target nobody has described is not.
 #[test]
 fn test_a_selector_is_found_by_its_targets_name() {
-    let found = isel::selector("x86-code16").expect("the 16-bit x86 selector");
-    assert_eq!(found.name, "x86-code16");
-    assert!(std::ptr::eq(found, isel::code16()));
-    assert!(isel::selector("x86-code99").is_none());
+    let found = isel::selector("x86-m16").expect("the 16-bit x86 selector");
+    assert_eq!(found.name, "x86-m16");
+    assert!(std::ptr::eq(found, isel::m16()));
+    assert!(isel::selector("x86-m99").is_none());
 }
 
 /// A type's class, its register width and its size in memory are read off one
@@ -4099,7 +4099,7 @@ fn test_one_class_of_a_type_says_its_name_register_and_size() {
 fn test_a_dword_pointer_scales_its_index_in_the_access() {
     let text = "target datalayout = \"e-p:32:32-i32:32-i64:32\"\ndefine i32 @f(ptr %p, i32 %i) {\nentry:\n  %e = getelementptr inbounds i32, ptr %p, i32 %i\n  %v = load i32, ptr %e\n  ret i32 %v\n}\n";
     let module = llrm_mir::parse::module(text).expect("parses");
-    let selected = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::code16(), &llrm_x86_code16::Code16, false, 0).expect("selects");
+    let selected = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::m16(), &llrm_x86_m16::M16, false, 0).expect("selects");
     let insns: Vec<_> = selected.body.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|insn| insn.what.as_ref()).collect();
     assert!(!insns.iter().any(|what| what.name.as_deref() == Some("shl")), "{insns:?}");
     let scaled = insns.iter().any(|what| what.sources.iter().any(|one| matches!(one, crate::model::ir::Loc::Mem(cell) if cell.scale == 4 && cell.base.is_some() && cell.index.is_some())));

@@ -114,8 +114,8 @@ def expected_output(directory: Path) -> list[str]:
 
 
 def nib_extras(source: Path) -> list[str]:
-    """The files a Nib benchmark links, as nib-build.sh takes them (code16: the bench measures real mode)."""
-    return [str(one) for one in dosbatch.link_files(source, run_tests.header(source).get("link", "").split(), "x86-code16")]
+    """The files a Nib benchmark links, as nib-build.sh takes them (m16: the bench measures real mode)."""
+    return [str(one) for one in dosbatch.link_files(source, run_tests.header(source).get("link", "").split(), "x86-m16")]
 
 
 def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path] | str:

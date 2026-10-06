@@ -1,13 +1,13 @@
 # Targets
 
-llrm builds code for one target today, x86 real mode (`x86-code16`). This
+llrm builds code for one target today, x86 real mode (`x86-m16`). This
 document is the plan to make a target a crate plus descriptions: the inventory of
 what the shared code assumes, the interface that replaces the assumptions, what
 each crate owns, and the PR sequence. Optimization targets are in
 [measurement/targets.md](measurement/targets.md).
 
-Targets the design must fit: `x86-code16`, `x86-code32` (flat), `x86-code64`,
-`arm64`. Only code32 is built in this task.
+Targets the design must fit: `x86-m16`, `x86-m32` (flat), `x86-m64`,
+`arm64`. Only m32 is built in this task.
 
 ## First principle
 
@@ -16,16 +16,16 @@ target's descriptions and the machine model are the only specifics; everything e
 stays as it is. No enum variant, constant, default or branch for one target in an IR
 crate or a shared pass: what differs between targets reaches the pass as a parameter
 the driver (the one place that names targets) hands in. Review every PR, this
-plan's and code32's, against it.
+plan's and m32's, against it.
 
 Known departures today, each to be removed:
 
 | Where | What | Removed by |
 |---|---|---|
-| `llrm-core`: the `target.rs` statics, `select.rs` bases, `masm`/`sharedstores` register lists | code16's registers read directly | PR 19 (a register-class description the allocator receives) |
-| `llrm-hir`, `llrm-mir`: the datalayout string, address-space numbers, `TargetProfile` variants | a target's layout in an IR crate | PR 14a, and the code32 session's HIR change (data layout and address spaces from the `Target`) |
-| `llrm-core` `select.rs`, `objbuild.rs`: x86 instruction encoding and the layout of an object, in `llrm-core` and keyed by a described bitness (`At{ip,bits}`) | the encoder belongs in the x86 family layer | PR 5's encoder half (code32-prep, D) |
-| `llrm-core` `select.rs` encoder and `peephole::_register_effects`: x86 encoding, and register effects read by decoding the emitted bytes, in `llrm-core` | the encoder and the effects belong in the x86 family layer; the mode they run in is the body's (`LirBody::bits`, set by isel from the target's `object.bitness`) | the encoder PR (code32-prep, D); #581 |
+| `llrm-core`: the `target.rs` statics, `select.rs` bases, `masm`/`sharedstores` register lists | m16's registers read directly | PR 19 (a register-class description the allocator receives) |
+| `llrm-hir`, `llrm-mir`: the datalayout string, address-space numbers, `TargetProfile` variants | a target's layout in an IR crate | PR 14a, and the m32 session's HIR change (data layout and address spaces from the `Target`) |
+| `llrm-core` `select.rs`, `objbuild.rs`: x86 instruction encoding and the layout of an object, in `llrm-core` and keyed by a described bitness (`At{ip,bits}`) | the encoder belongs in the x86 family layer | PR 5's encoder half (m32-prep, D) |
+| `llrm-core` `select.rs` encoder and `peephole::_register_effects`: x86 encoding, and register effects read by decoding the emitted bytes, in `llrm-core` | the encoder and the effects belong in the x86 family layer; the mode they run in is the body's (`LirBody::bits`, set by isel from the target's `object.bitness`) | the encoder PR (m32-prep, D); #581 |
 
 ## Principle: a target is description
 
@@ -83,36 +83,36 @@ patterns or complex patterns, which stay named hooks. About half the steps are
 generic lowering or loops and stay Rust, behind the calling-convention and
 address-form descriptions.
 
-## Requirements on code16
+## Requirements on m16
 
 1. **Nothing is dropped from the 16-bit backend.** Far calls and returns,
    selectors and the selector register file, huge pointers, DGROUP, the
    interrupt frame, the 16-bit address forms, every CPU profile (386 to Core), every
    peephole rule and pattern, the QB, Nib and BC runtimes stay. A stage moves code
    to where a description or another crate owns it; it does not delete a
-   capability. Where a pass is keyed to "has segments", code16 has them.
+   capability. Where a pass is keyed to "has segments", m16 has them.
 2. **It produces exactly the code it produces today.** Byte-identical `.obj`
    and listings, not "equivalent": the gate on every PR.
-3. **code16 keeps its 386+ code generation** (next section).
+3. **m16 keeps its 386+ code generation** (next section).
 
 ## Axes: mode and CPU profile
 
 Two axes, not one.
 
-- **Mode** (code16, code32, code64) sets the default operand and address size,
+- **Mode** (m16, m32, m64) sets the default operand and address size,
   segmentation, pointer width, calling conventions and object format.
 - **CPU profile** (8086, 286, 386, 486, P5, ...) sets which instructions,
   registers and address forms exist, and their timings. The register
-  description has EAX..EDI in code16 too, gated by profile. Encodings are
+  description has EAX..EDI in m16 too, gated by profile. Encodings are
   shared; the prefixes (66h, 67h) follow from mode.
 - Legality is per (mode, profile). Address forms are per (mode, address size):
   the 16-bit forms (`{BX,BP}+{SI,DI}+disp16`) and the 32-bit forms (any GPR
-  base, any but ESP an index, scale 1/2/4/8, disp32; behind 67h in code16) are
+  base, any but ESP an index, scale 1/2/4/8, disp32; behind 67h in m16) are
   both described, each with its cost.
 
-**Requirement: code16 keeps its 386+ code generation.** code16 is 386 code under
+**Requirement: m16 keeps its 386+ code generation.** m16 is 386 code under
 prefixes today (32-bit registers and arithmetic, `[ebx+eax*2]`, `movsx`/`movzx`,
-`rep movsd`, `shld`; 486 is the default profile). `test_code16_emits_386_forms`
+`rep movsd`, `shld`; 486 is the default profile). `test_m16_emits_386_forms`
 (#502) pins it; no refactor may replace it with an "equivalent" narrowing.
 There is no 286 profile yet: `machine::CPUS` starts at 386 and the listing
 header is `.386`. A pre-386 profile would be legalizer rules (i32 narrowed to
@@ -123,16 +123,16 @@ i16 pairs), not a refactor, and is not part of this task.
 
 ## Target facts, in one line each
 
-- **code16**: real mode. Segments, selectors, far calls, 16-bit addressing
+- **m16**: real mode. Segments, selectors, far calls, 16-bit addressing
   (`bx/bp/si/di`), dword ops under a 66h prefix.
-- **code32**: CS = DS = SS, flat, base 0, 4 GB. One pointer type, `p:32:32`. No
+- **m32**: CS = DS = SS, flat, base 0, 4 GB. One pointer type, `p:32:32`. No
   selectors. ES = DS is a fact the description states, not an assumption: string
   ops read it or set ES. FS and GS are never assumed (TLS). Any GPR is a base,
   any but ESP an index. Word ops pay 66h.
 
-code32 runs under a DOS extender: OMF with USE32 segments and 32-bit records, linked by
+m32 runs under a DOS extender: OMF with USE32 segments and 32-bit records, linked by
 JWlink as an LE executable behind DOS/32A's stub (`object.toml`'s `[link]`; the start-up
-and `report` are `llrm-x86-code32/runtime`). Its C ABI is cdecl32,
+and `report` are `llrm-x86-m32/runtime`). Its C ABI is cdecl32,
 `calling.toml`: Open Watcom's 386 flat ABI as `wccq -ecc -zp4` has it. Arguments are
 pushed right to left in dword slots and the caller removes them; symbols are `_name`;
 EBX, ESI, EDI and EBP are preserved, the direction flag is clear and the x87 stack empty
@@ -144,12 +144,12 @@ Watcom object that returns such a struct is the one call that does not match.
 
 ## Measured state
 
-- `llrm_x86_code16` is named on 65 lines outside its crate: 20 in production
+- `llrm_x86_m16` is named on 65 lines outside its crate: 20 in production
   code, 45 in tests. The MIR crates use it in tests only, and already take it as a
   dev-dependency.
 - `llrm_mir::target::Machine` and `DataLayout` are the seam MIR passes read.
   Those passes name no register; what remains in them is address-space numbers
-  and 16-bit literals. `Machine` itself carries code16 notions
+  and 16-bit literals. `Machine` itself carries m16 notions
   (`far_access_registers`, `segment_registers`, `foreign_span(selectors, ..)`,
   `huge_window`, `OperationCosts.copy` as `rep movs`/ES, `carry`).
 - `llrm-c` does not use clang. It runs Open Watcom's 16-bit front end (`wccq`,
@@ -164,11 +164,11 @@ Watcom object that returns such a struct is the one call that does not match.
 - **T** target fact: registers, pointer width, legal integers, address spaces,
   calling conventions, costs, forms.
 - **O** object-format fact.
-- **S** x86 family: true for code16 and code32 (register id, lanes and
+- **S** x86 family: true for m16 and m32 (register id, lanes and
   subregisters, bitness are S).
-- **C** code16-only: segments, selectors, far calls, `les`, real-mode limits.
+- **C** m16-only: segments, selectors, far calls, `les`, real-mode limits.
 
-Out of scope and pinned to code16: the BASIC runtime, BC raise, Nib (~25k lines).
+Out of scope and pinned to m16: the BASIC runtime, BC raise, Nib (~25k lines).
 
 ## Inventory
 
@@ -177,7 +177,7 @@ Out of scope and pinned to code16: the BASIC runtime, BC raise, Nib (~25k lines)
 | Assumption | Anchor | Class | Becomes |
 |---|---|---|---|
 | LIR's operand model (`Reg`, `Mem`, `Loc`, `Operation`, `Semantics`, `Effects`) is defined in the BC lifter and typed with `iced_x86::Register` (722 non-test `Register::` in `llrm-core`, 110 in `llrm-bcmachine`) | `llrm-bcmachine/src/model/ir`, `llrm-core/src/model/mod.rs:3` | S | its own crate, `llrm-lir` |
-| `llrm-core` depends on `llrm-x86-code16`; the generators pull `parse.rs` in by `#[path]` | `llrm-core/Cargo.toml`, `build.rs`, `generator/mod.rs:17` | T | target crates depend on `llrm-core`, not the reverse |
+| `llrm-core` depends on `llrm-x86-m16`; the generators pull `parse.rs` in by `#[path]` | `llrm-core/Cargo.toml`, `build.rs`, `generator/mod.rs:17` | T | target crates depend on `llrm-core`, not the reverse |
 | `iced_x86` in `llrm-support` (`pyrepr.rs`, `pyset.rs`) and `llrm-omf` | | S | out of support |
 | `Profile::target()` builds `Dos`; CPU and target are one axis | `cpu.rs:51` | T | target x CPU (LLVM's subtarget) |
 
@@ -207,7 +207,7 @@ Out of scope and pinned to code16: the BASIC runtime, BC raise, Nib (~25k lines)
 | iced bitness literal 16 | `select.rs:164`, `declen.rs:15`, `peephole.rs:763`, `regthrash.rs:282`, `inline_asm.rs:449`, `cycles.rs:59` | `bitness()` |
 | 16-bit `Code::` names | `select.rs:339-1557` (~40) | `{w}` forms from the instruction table |
 | `int(16)` size, index and port types | `hir/mir.rs` (~60), `transforms/algebraic.rs:455`, `calleepop.rs:75`, `window.rs` | `DataLayout` index width, `largest_legal_integer` |
-| 66h/67h prefix rules, no single query (mode decides them) | `division.rs:91`, `isel.rs:313-514`, `select.rs:905`, `peephole.rs:1048`, `guards.rs:114`, `cpu.rs:15` | `operand_prefix_bytes(width)`, `address_prefix_bytes(form)`; code32 inverts them |
+| 66h/67h prefix rules, no single query (mode decides them) | `division.rs:91`, `isel.rs:313-514`, `select.rs:905`, `peephole.rs:1048`, `guards.rs:114`, `cpu.rs:15` | `operand_prefix_bytes(width)`, `address_prefix_bytes(form)`; m32 inverts them |
 | Interrupt frame (pushad, segment pushes) | `masm.rs:380-445`, `mir/opcode.rs:357` | calling-convention entry |
 | `lower_int64` helper blobs encoded for 16-bit mode | `lower_int64.rs:41-96` | per-target helper table |
 
@@ -224,7 +224,7 @@ De facto numbering: 0 near/DGROUP, 1 far (selector:offset), 2 selector only,
 | Datalayout string for the program | `hir/mir.rs:29` | target's datalayout (`p:32:32-n8:16:32`) |
 | Space numbers as literals | see above (~40) | `address_spaces()`: kind per space {Linear, Pair, SelectorOnly}, `near/stack/fixed` lookups |
 | `MemRef.segment/selector`, selector pairs | `analysis/memory.rs:604`, `ranges.rs`, `loopmotion.rs` (~40) | inert when no space is a pair |
-| `foreign_span(selectors, offsets)` | `mir/target.rs:13`, `regions.rs:89` | linear range; selector form is a code16 adapter |
+| `foreign_span(selectors, offsets)` | `mir/target.rs:13`, `regions.rs:89` | linear range; selector form is a m16 adapter |
 | Far loads `les/lds`, far call, `retf`, `farcall.rs`, `farload.rs`, `nearcode.rs`, `combined.rs` | `isel.rs` (~135 selector hits), `peephole.peep:49,209` | gated by `has_segments()` / `has_far_calls()` |
 | DGROUP, `datagroup.rs`, `stack_is_data`, `needs_data_group` | `datagroup.rs`, `target.rs:429-507`, `allocate.rs:650-1107` | `segments()` model, `None` when flat |
 | Huge pointers: `pointers.rs`, `window.rs`, `huge_shift` | `pointers.rs`, `isel.rs:1586`, `transforms/window.rs` | `huge_window()` is `None` (exists) |
@@ -236,7 +236,7 @@ De facto numbering: 0 near/DGROUP, 1 far (selector:offset), 2 selector only,
 | Assumption | Anchor | Class | Becomes |
 |---|---|---|---|
 | One `x86.instr`, `patterns.isel`, `peephole.peep`; paths hard-coded | `llrm-core/build.rs:9`, `isel/generator/mod.rs:17` | T | per-target definition directory |
-| `parse.rs` lives in the code16 crate | `instructions/parse.rs` | S | x86 family crate |
+| `parse.rs` lives in the m16 crate | `instructions/parse.rs` | S | x86 family crate |
 | `jcc/jmp/call` rel16, `call_far`, `les/lds/lfs/lgs` rows | `x86.instr` | C | overlay per target |
 | `push/pop` widths, `REGISTERS` list lacks e-registers | `x86.instr`, `parse.rs:63` | T | width-aware names |
 | Far, push-pair, `les` peephole rules | `peephole.peep:49,93,209,320` | C | rule sets per target |
@@ -267,8 +267,8 @@ and not a flag. A target without it has no rows, so its passes find nothing.
 | OMF 16 writer called directly | `compile.rs:220`, `nib/compile.rs:78`, `driver/basic.rs:362` | `ObjectWriter` |
 | OMF constants, DGROUP/STACK/`_TEXT` names, USE16 attributes | `llrm-omf/src/write.rs` | inside the OMF writer |
 | MASM header `.model medium`, `dd/dw` pointers, `proc far` | `masm.rs:166-217,535` | `Listing` syntax per target |
-| CodeView 16-bit records | `codeview.rs`, `cvwrite.rs` | debug writer per format; code32 refuses `-g` first |
-| Jump relaxation with rel8/rel16 reach | `objbuild.rs:673`, `jumps.rs:21` | `branch_forms()` |
+| CodeView 16-bit records | `codeview.rs`, `cvwrite.rs` | debug writer per format; m32 refuses `-g` first |
+| Jump relaxation with rel8/rel16 reach | `objbuild.rs`, `jumps.rs:21` | `branch_forms()` |
 | `Space::{Group,Segment,Far}` in the model the backend shares | `datagroup.rs`, `globals.rs`, `masm.rs` | relocation kinds the format interprets |
 
 ### Drivers and frontends
@@ -279,13 +279,13 @@ and not a flag. A target without it has no rows, so its passes find nothing.
 | `int`/pointer sizes, `medium_model()` clobbers | `raise_hir.rs:14-122` | target's type widths and ABI |
 | `far`, `huge`, `__based`, call distance in `llrm-c` | `hir.rs`, `translate.rs` (~90) | collapse; refuse `__based/__segment/__huge` |
 | Flags pick the machine: `-march`, `--machine` | `driver/flags.rs:163-230` | `-m16`/`-m32` select the `Target` by the number its `datalayout.toml` declares |
-| QB, BC | `llrm-qb`, `llrm-bc*` | pinned to code16 |
-| Nib | `llrm-nib` | code16 and code32: layout, conventions and OS layer come from the target (`runtime/shared/`, `runtime/nib/`) |
+| QB, BC | `llrm-qb`, `llrm-bc*` | pinned to m16 |
+| Nib | `llrm-nib` | m16 and m32: layout, conventions and OS layer come from the target (`runtime/shared/`, `runtime/nib/`) |
 
 ## Interface
 
 Names: `Target` (new), `CostModel` (today `llrm_mir::target::Machine`),
-`Platform` (today code16's `machine::Machine`, `dos.toml`). Renames land with
+`Platform` (today m16's `machine::Machine`, `dos.toml`). Renames land with
 the PR that touches each.
 
 ```
@@ -297,8 +297,8 @@ llrm-core       backend over LIR: allocator, spiller, frame, peephole runtime,
 llrm-iselgen    shared generators (isel, peephole): run by each target's build.rs
 llrm-x86        family: form schema and parser, condition codes, encoder,
                 x87 and i64 hooks, string-op shapes
-llrm-x86-code16 descriptions, hooks, generated selector, timings
-llrm-x86-code32 descriptions, hooks, generated selector, timings
+llrm-x86-m16 descriptions, hooks, generated selector, timings
+llrm-x86-m32 descriptions, hooks, generated selector, timings
 llrm-driver     the one place that names targets: match on -m
 llrm-omf        OMF 16 today; 32-bit records later
 ```
@@ -306,8 +306,8 @@ llrm-omf        OMF 16 today; 32-bit records later
 Dependencies point down: target crates depend on `llrm-core`, never the
 reverse; the driver depends on both. That is the end state (PR 19b): generated code
 lives in the target crate and only calls downward, so there is no cycle. Until
-`llrm-core` stops using code16 (PRs 5 to 19), the selectors are generated in
-`llrm-core` from each target's definition directory and bound by `llrm-driver`. Tests in `llrm-core` that need code16
+`llrm-core` stops using m16 (PRs 5 to 19), the selectors are generated in
+`llrm-core` from each target's definition directory and bound by `llrm-driver`. Tests in `llrm-core` that need m16
 move to the target crate.
 
 `Target` gives: `data_layout()`, `address_spaces()`, `registers()`,
@@ -347,23 +347,23 @@ of a value's uses). `select.rs` is the encoder after selection, not a selector.
 | `convention`, `passing`, `slot`, `returned` (:65-179), `call`, `called`, `ret` (:2539-2973) | IRTranslator (call lowering) | generic lowering reading the calling-convention description; `Abi` stays for QB's per-callee contracts |
 | `body`, phis, `switch`, frame layout with `hole`, `variadic`, interrupt `unsealed`, `lined`, `odds`, `pins`, `inputs` | IRTranslator | generic |
 | `width_of`, `size_of` | IRTranslator (type to low-level type) | datalayout |
-| `wide.rs` i64, `far_cast`, `float_cast`, `far_loaded`, `memcpy`/`memset` (:2974-3339), `divide`, `compare`, `division.rs`, `arithmetic.rs` | Legalizer | rules; helpers in the x86 family or code16 crate |
-| `Pointer`, `indexed`, `widened`, `carried`, `window`, `memory`, `folded` (:1487-2272) | address-mode selection; decided at the GEP from MIR analyses (`facts`, `exact`, `typed`) and edited afterwards by `promote` | for code16 an address-mode analysis on MIR feeding translation; complex patterns on generic LIR are for code32 and arm64 |
+| `wide.rs` i64, `far_cast`, `float_cast`, `far_loaded`, `memcpy`/`memset` (:2974-3339), `divide`, `compare`, `division.rs`, `arithmetic.rs` | Legalizer | rules; helpers in the x86 family or m16 crate |
+| `Pointer`, `indexed`, `widened`, `carried`, `window`, `memory`, `folded` (:1487-2272) | address-mode selection; decided at the GEP from MIR analyses (`facts`, `exact`, `typed`) and edited afterwards by `promote` | for m16 an address-mode analysis on MIR feeding translation; complex patterns on generic LIR are for m32 and arm64 |
 | `matcher.rs`, `patterns.isel`, generator | InstructionSelect | stays; gains the hooks' replacements |
-| post-passes in order: `unread_halves_dropped`, `combined` (`farload`, `comparefold`, `rmw`, peephole arguments, `dword_pairs`), `widen` (`exact_sums`, `addressforms::promote`, which allocates ids after `next`), `rooted` | after selection | stay x86 family; far parts code16 |
-| `farcall.rs` | first machine phase | code16 |
+| post-passes in order: `unread_halves_dropped`, `combined` (`farload`, `comparefold`, `rmw`, peephole arguments, `dword_pairs`), `widen` (`exact_sums`, `addressforms::promote`, which allocates ids after `next`), `rooted` | after selection | stay x86 family; far parts m16 |
+| `farcall.rs` | first machine phase | m16 |
 | `selects.rs`, `ehprepare.rs`, `nearcode.rs` | MIR pre-passes | stay MIR |
 | `unwind.rs`, `masm`, `frame`, `prologue`, `objbuild` | other | unchanged |
 | `lower_int64.rs` | data (helper blobs), name is stale | per-target helper table |
-| `pointers.rs` | dead (only its own tests use it) | left as is: nothing is dropped from code16 |
+| `pointers.rs` | dead (only its own tests use it) | left as is: nothing is dropped from m16 |
 
 ### The legalizer, as `wide.rs` does it
 
-On code16 with a 386+ profile i8, i16 and i32 are legal and i64 narrows to two
+On m16 with a 386+ profile i8, i16 and i32 are legal and i64 narrows to two
 dwords, low first. The key of a legality rule is the full type tuple (source and
 destination of a cast, shift amount, address space), with type ranges; decisions
 made on values (`sign_bits`, a constant count, a power of two) stay inside the
-named action. For code16 the table is mostly `custom(helper)`: the action emits
+named action. For m16 the table is mostly `custom(helper)`: the action emits
 target instructions directly, never generic ops that selection would re-select
 (`wide()` puts constant halves in registers; a generic `G_ADD` would select
 `add r, imm`). What it does today:
@@ -392,8 +392,8 @@ different table.
 
 | Phase | Hook steps | Form |
 |---|---|---|
-| IRTranslator | `call`, `ret`, `invoke`, `br`, `extractvalue` | generic lowering from the calling-convention description; inside `call`: memset/memcpy are legalizer rules, port in/out and float unary are patterns, ptrdiff/window are code16, va_start is the convention |
-| Legalizer | `wide_cast` (2), `wide_binary`, `float_cast` (2), `float_bits`, `far_load`, `far_store`, `far_cast` (2), `unselected_cast`, `divide`, `words` | rules. `far_*` are code16 rules; `float_bits` a generic lowering of a float-constant store; `words` a load-narrowing combine |
+| IRTranslator | `call`, `ret`, `invoke`, `br`, `extractvalue` | generic lowering from the calling-convention description; inside `call`: memset/memcpy are legalizer rules, port in/out and float unary are patterns, ptrdiff/window are m16, va_start is the convention |
+| Legalizer | `wide_cast` (2), `wide_binary`, `float_cast` (2), `float_bits`, `far_load`, `far_store`, `far_cast` (2), `unselected_cast`, `divide`, `words` | rules. `far_*` are m16 rules; `float_bits` a generic lowering of a float-constant store; `words` a load-narrowing combine |
 | InstructionSelect | `getelementptr`, `scaled`, `setcc` (5) | `getelementptr` per the address-mode row above; `scaled` a pattern in a cost `group` with a chain-generator hook; `setcc` patterns over a condition-code table |
 | other | `landing_pad` | runtime hook |
 
@@ -416,11 +416,11 @@ different table.
    elimination, which reads `halves` and `folded`.
 3. Rules replace the hooks one opcode family per PR, each behind the oracle,
    `wide.rs` first.
-4. Generic opcodes for code32 first (below); code16 stays on the fused selector
+4. Generic opcodes for m32 first (below); m16 stays on the fused selector
    behind the same interface and moves over family by family under the oracle.
-5. RegBankSelect: for code16 it declares GPR and x87 only and leaves GPR versus
+5. RegBankSelect: for m16 it declares GPR and x87 only and leaves GPR versus
    segment to the allocator (assigning segments early changes code). Its real use
-   is code32 and arm64.
+   is m32 and arm64.
 
 Hazards the oracle must cover: value ids are numbered lazily on first reference,
 in this order today: parameters in the prologue, `phis_from` in layout order
@@ -433,7 +433,7 @@ before the current instruction; `current` is `None` during `phis_from`, so a
 far-global phi input is refused today and must stay refused. `scratch` lives for one
 MIR instruction; calls and inline helpers are keyed by `at`, and a legalized
 result inherits its instruction's `at`. A canonical numbering would itself change
-code16's output, so the three stages never run as whole-function sweeps there.
+m16's output, so the three stages never run as whole-function sweeps there.
 
 ## End state: a generic machine instruction
 
@@ -469,7 +469,7 @@ pub struct Mem { at: AddressRef, info: MemInfo }              // hand-written Eq
 ```
 
 - The register id is the target's id from its register description, in iced
-  order for code16. Subregisters are ids with a root and a lane (`al` is a view of
+  order for m16. Subregisters are ids with a root and a lane (`al` is a view of
   `eax`). x87's stack is a register class with an operand kind the description
   names; `Loc::St` becomes a `Reg` in it.
 - The form table declares which `AddressRef` slots are legal; it does not decide
@@ -488,7 +488,7 @@ pub struct Mem { at: AddressRef, info: MemInfo }              // hand-written Eq
   identity on the ordinal.
 - Debt until `RegId`: LIR names the frame register BP and the stack pointer SP
   whatever the target, and `masm::listing()` spells them as the target's
-  `FrameRegisters` has them (EBP, ESP for code32). Object output must go through
+  `FrameRegisters` has them (EBP, ESP for m32). Object output must go through
   the same `listing()`; a pass that compares `through == BP` is reading a role.
 - `llrm_support::register::PhysicalRegister(u32)` exists and is unused: it
   becomes `RegId` or is deleted; never both.
@@ -519,19 +519,19 @@ conditional select.
 Each PR is behaviour neutral and gated on: bench 216 measurements, 0 problems,
 no `expected.toml` change; `tools/sizes.py` -O2/-Os equal; QCport's 65 modules
 byte-identical (`.obj` compared); workspace lib, `--test run`, `--test check`
-green. Each states the `llrm_x86_code16` uses outside the target crate and the
-code16-pinned frontends (production / total; 20 / 65 today), and the metric.
+green. Each states the `llrm_x86_m16` uses outside the target crate and the
+m16-pinned frontends (production / total; 20 / 65 today), and the metric.
 
 | # | PR | Moves |
 |---|---|---|
-| guard | #502 `test_code16_emits_386_forms` | none |
+| guard | #502 `test_m16_emits_386_forms` | none |
 | 0 | this document and the reviews | none |
-| 1 | withdrawn: the MIR crates already take code16 as a dev-dependency (manifests checked) | none |
-| 2 | `llrm-lir`: the operand model out of `llrm-bcmachine`, moved unchanged, with `Addr` (via `llrm-omf` for now), `Flag`, `root()` and the `Repr` impls | no code16 or iced in the BC lifter's model crate |
-| 3a | `llrm-target`: the platform description (`Machine`, its parser) out of code16, which keeps `dos.toml`, `BUILT_IN`, `BASIC`, `CPUS`; the BC crates stop depending on code16 | production uses 20 to 17 |
+| 1 | withdrawn: the MIR crates already take m16 as a dev-dependency (manifests checked) | none |
+| 2 | `llrm-lir`: the operand model out of `llrm-bcmachine`, moved unchanged, with `Addr` (via `llrm-omf` for now), `Flag`, `root()` and the `Repr` impls | no m16 or iced in the BC lifter's model crate |
+| 3a | `llrm-target`: the platform description (`Machine`, its parser) out of m16, which keeps `dos.toml`, `BUILT_IN`, `BASIC`, `CPUS`; the BC crates stop depending on m16 | production uses 20 to 17 |
 | 3b | the platform is flat-capable (`addressing = "flat"`, optional `[segments]`), `dos.toml` parses to an identical value; the PC ports in one shared file | `llrm-target` |
-| 3c | `llrm-driver`, `trait Target` (in `llrm-target`: `llrm-core` cannot be below code16 while `llrm-bcmachine` was above it), `-m16`/`-m32` (default code16), the target in `Options`; `llrm-core` stays on code16 for the statics that `allocate`, `regclass`, `constrain` and `ssaspill` read (until PR 19) and for the profile tables (until PR 5); metric baseline | about 12 uses in `llrm-core` left |
-| 4 | one selector per target definition directory: `build.rs` generates a `Compiled` for each `crates/target/<name>/src/isel/` (`patterns.isel`, forms in `src/instructions/x86.instr`), found by the directory's name; `llrm-driver` binds a target to its selector and hands it in through `Options`; code16's `patterns.isel` moved there. The generated code and its hooks stay in `llrm-core` until the inversion (after 19) | `build.rs`, `matcher.rs`, `isel.rs`, `assemble.rs` |
+| 3c | `llrm-driver`, `trait Target` (in `llrm-target`: `llrm-core` cannot be below m16 while `llrm-bcmachine` was above it), `-m16`/`-m32` (default m16), the target in `Options`; `llrm-core` stays on m16 for the statics that `allocate`, `regclass`, `constrain` and `ssaspill` read (until PR 19) and for the profile tables (until PR 5); metric baseline | about 12 uses in `llrm-core` left |
+| 4 | one selector per target definition directory: `build.rs` generates a `Compiled` for each `crates/target/<name>/src/isel/` (`patterns.isel`, forms in `src/instructions/x86.instr`), found by the directory's name; `llrm-driver` binds a target to its selector and hands it in through `Options`; m16's `patterns.isel` moved there. The generated code and its hooks stay in `llrm-core` until the inversion (after 19) | `build.rs`, `matcher.rs`, `isel.rs`, `assemble.rs` |
 | 4b | the same for the peephole rules (`peephole.peep`) | `build.rs`, `peep/` |
 | 4c | no default names a target in shared code: `Options`, `assemble`, `flow`, `Peephole`, `Profile` take the selector, rules and model from the driver; tests use a helper | `llrm-core`, `llrm-driver` |
 | 5 | `llrm-x86` family crate: schema, parser, condition codes, encoder; byte sizes from the encoder | `parse.rs`, `isel/matcher.rs:366` |
@@ -545,31 +545,31 @@ code16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | 13 | calling-convention description and generic call/ret lowering | `isel.rs:65-179`, `callregs.rs` |
 | 14a | address-space kinds replace the literals 0/1/2/4/5 in MIR and HIR; `foreign_span` linear | HIR, analysis, transforms |
 | 14b | the address-form table per (mode, address size) read by `Pointer`, `indexed`, `select.rs`, `affine.rs` | `isel.rs`, `select.rs` |
-| 14c | `CostModel`'s code16 notions behind space kinds | `llrm-mir` |
+| 14c | `CostModel`'s m16 notions behind space kinds | `llrm-mir` |
 | 15 | operand model, one PR each (own track, with 10 and 11): `name` to `OpcodeId` (351 sites); `Mem` to `AddressRef` + `MemInfo` (487); `Loc::St` to a `Reg` (47); `Loc::Address` reuses `AddressRef` | `llrm-lir`, every `Semantics` consumer |
 | 16 | segment and far passes keyed to pair-kind spaces | `farcall`, `farload`, `nearcode`, `datagroup`, far arms of `isel.rs` |
 | 17 | schema edits (four) and language features (i) to (v), one per PR, each deleting its hooks | `isel.rs`, `patterns.isel` |
 | 18 | `ObjectWriter` and listing syntax read from the object-format description | `compile.rs`, `basic.rs`, `masm.rs` header |
 | 19 | class routing in `regclass`, `allocate`, `ssaspill`, `constrain` | **after cost-spill lands, agreed with it first** |
-| 19b | the inversion: generated code and hooks move into the target crates, which then depend on `llrm-core`; nothing in `llrm-core` names code16 by then | `llrm-core/Cargo.toml`, `build.rs`, hooks |
-| 20 | owned by the code32 session: `llrm-x86-code32` skeleton, the first client of the generic pipeline (generic opcodes, legalizer table, complex patterns, RegBankSelect): descriptions, 32-bit `wccq`, HIR profile, `-m32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
+| 19b | the inversion: generated code and hooks move into the target crates, which then depend on `llrm-core`; nothing in `llrm-core` names m16 by then | `llrm-core/Cargo.toml`, `build.rs`, hooks |
+| 20 | owned by the m32 session: `llrm-x86-m32` skeleton, the first client of the generic pipeline (generic opcodes, legalizer table, complex patterns, RegBankSelect): descriptions, 32-bit `wccq`, HIR profile, `-m32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
 
 PRs 2 to 4 are the structural ones and go first: every later "where does this go"
-depends on them. code32 (20) has no baseline to match, so the generic pipeline is designed there;
-7 to 15 move code16 onto the same machinery under the oracle, and the skeleton adds
-descriptions, not code. Not in this task: running or linking code32, a 32-bit object
-writer, code64, arm64.
+depends on them. m32 (20) has no baseline to match, so the generic pipeline is designed there;
+7 to 15 move m16 onto the same machinery under the oracle, and the skeleton adds
+descriptions, not code. Not in this task: running or linking m32, a 32-bit object
+writer, m64, arm64.
 
-The code32 session also makes the shared edits its listing needs, each as a
-`Target` query whose code16 answer is today's literal (so byte-identical), one PR
+The m32 session also makes the shared edits its listing needs, each as a
+`Target` query whose m16 answer is today's literal (so byte-identical), one PR
 per row: A, `Options` carries the target, with `stack_slot_bytes`, `frame_register`,
 `first_argument_offset` and `returns`; B, `callee_saved`; C, the datalayout and HIR
 profile into HIR to MIR; D, `bitness` and the listing header and frame in `masm`;
 E, the width in `allocate.rs` (cost-spill's file: mechanical, agreed with it first);
-and PR 5's data half, the family/code16 split of `x86.instr`, after PR 4b.
+and PR 5's data half, the family/m16 split of `x86.instr`, after PR 4b.
 
-PRs 2 to 19 and code16's migration otherwise belong to the target-refactor session. The
-code32 session owns PR 20 and what follows: the crate and its descriptions, the
+PRs 2 to 19 and m16's migration otherwise belong to the target-refactor session. The
+m32 session owns PR 20 and what follows: the crate and its descriptions, the
 32-bit `wccq`, the 32-bit HIR profile, and the generic-pipeline pieces as its
 first client. Its crate stays out of the workspace until PR 3c, it edits no
 shared file, and hook requests go to the owner of PRs 2 to 19. It uses `Machine`
@@ -586,9 +586,9 @@ Per target, in tokens (rustfmt-proof), comments excluded:
 - **G**: tokens in the generators and `SelectCx`. A description language turning
   into a programming language shows up here.
 
-Gate: adding code32 changes no line in a shared crate. Success: R falls by more
+Gate: adding m32 changes no line in a shared crate. Success: R falls by more
 than G grows. Hook count and lines deleted from `llrm-core` are secondary
-evidence. Baseline, measured in PR 3 before any move; today code16 is 1,724 Rust
+evidence. Baseline, measured in PR 3 before any move; today m16 is 1,724 Rust
 lines in its crate and 837 description lines (`x86.instr` 88, `patterns.isel`
 380, `peephole.peep` 369), with 26 pattern hooks.
 
@@ -596,7 +596,7 @@ lines in its crate and 837 description lines (`x86.instr` 88, `patterns.isel`
 
 - Whether `llrm-lir` is the family crate or its own: proposed its own, so the BC
   lifter and the backend both depend on it.
-- code16's legalizer actions emit target instructions directly (custom). That
+- m16's legalizer actions emit target instructions directly (custom). That
   is what byte identity needs under the oracle, and it is debt against "a target
   is description". An action becomes generic ops plus patterns when the patterns
   reproduce its output: costs that keep a constant half in a register where

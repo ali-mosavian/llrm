@@ -177,8 +177,8 @@ dependencies = [
  "llrm-qb",
  "llrm-target",
  "llrm-x86",
- "llrm-x86-code16",
- "llrm-x86-code32",
+ "llrm-x86-m16",
+ "llrm-x86-m32",
  "regex",
  "serde_json",
  "tempfile",
@@ -192,7 +192,7 @@ dependencies = [
  "llrm-hir",
  "llrm-mir",
  "llrm-support",
- "llrm-x86-code16",
+ "llrm-x86-m16",
  "num-bigint",
  "num-traits",
 ]
@@ -209,7 +209,7 @@ dependencies = [
  "llrm-omf",
  "llrm-qbruntime",
  "llrm-target",
- "llrm-x86-code16",
+ "llrm-x86-m16",
 ]
 
 [[package]]
@@ -224,7 +224,7 @@ dependencies = [
  "llrm-mir",
  "llrm-omf",
  "llrm-transforms",
- "llrm-x86-code16",
+ "llrm-x86-m16",
 ]
 
 [[package]]
@@ -237,7 +237,7 @@ dependencies = [
  "llrm-qbruntime",
  "llrm-support",
  "llrm-target",
- "llrm-x86-code16",
+ "llrm-x86-m16",
  "toml",
 ]
 
@@ -252,8 +252,8 @@ dependencies = [
  "llrm-mir",
  "llrm-target",
  "llrm-transforms",
- "llrm-x86-code16",
- "llrm-x86-code32",
+ "llrm-x86-m16",
+ "llrm-x86-m32",
  "num-bigint",
  "num-traits",
  "regex",
@@ -283,7 +283,7 @@ dependencies = [
  "llrm-target",
  "llrm-transforms",
  "llrm-x86",
- "llrm-x86-code16",
+ "llrm-x86-m16",
  "num-bigint",
  "num-traits",
  "regex",
@@ -303,8 +303,8 @@ dependencies = [
  "llrm-core",
  "llrm-target",
  "llrm-x86",
- "llrm-x86-code16",
- "llrm-x86-code32",
+ "llrm-x86-m16",
+ "llrm-x86-m32",
 ]
 
 [[package]]
@@ -343,7 +343,7 @@ dependencies = [
  "llrm-mir",
  "llrm-target",
  "llrm-transforms",
- "llrm-x86-code16",
+ "llrm-x86-m16",
  "num-bigint",
  "num-traits",
  "regex",
@@ -389,7 +389,7 @@ dependencies = [
  "llrm-driver",
  "llrm-mir",
  "llrm-transforms",
- "llrm-x86-code16",
+ "llrm-x86-m16",
  "num-bigint",
  "num-traits",
  "qbfront",
@@ -440,7 +440,7 @@ dependencies = [
  "llrm-analysis",
  "llrm-mir",
  "llrm-support",
- "llrm-x86-code16",
+ "llrm-x86-m16",
  "num-bigint",
  "num-traits",
 ]
@@ -457,7 +457,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrm-x86-code16"
+name = "llrm-x86-m16"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
@@ -475,7 +475,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrm-x86-code32"
+name = "llrm-x86-m32"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
