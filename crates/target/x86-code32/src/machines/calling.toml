@@ -17,16 +17,23 @@ clobbered = ["eax", "ecx", "edx", "st0", "st1", "st2", "st3", "st4", "st5", "st6
 # Direction flag clear and the x87 stack empty on entry and on return.
 entry_state = ["df_clear", "x87_empty"]
 # Integers and pointers of at most 32 bits; i64 in edx:eax, low in eax;
-# floats in st(0). A struct is returned through a hidden first argument.
+# floats in st(0).
 [cdecl32.result]
 int = ["eax"]
 i64 = ["eax", "edx"]
 pointer = ["eax"]
 float = ["st0"]
+# Borland's rule, as llrm-c has it for code16 (`returned_as_integer`): a struct of
+# 1, 2 or 4 bytes is returned in AL, AX or EAX. Any other is written to caller
+# memory through a pointer pushed after every argument (so it is the lowest
+# slot), which the callee returns in EAX; the caller pops it. Open Watcom's own
+# -ecc rule is not used: measured with bwcc386 -ecc, it passes no pointer and
+# returns the address of one static result area in EAX (not reentrant).
 aggregate = "hidden-pointer"
-# UNDECIDED, to settle against what wccq emits for -ecc: whether the callee
-# returns the hidden pointer in eax and whether it pops it; whether a struct of
-# 1, 2, 4 or 8 bytes is returned in eax[:edx].
+aggregate_in_register_bytes = [1, 2, 4]
+aggregate_pointer = "after-arguments"
+aggregate_pointer_returned = "eax"
+aggregate_pointer_popped_by = "caller"
 # char and short arguments are widened to a slot.
 promotion = "slot"
 # i64 and double take two slots, low half first; a variadic float is a double.
