@@ -195,33 +195,8 @@ pub static NARROW: LazyLock<PySet<Register>> = LazyLock::new(|| llrm_x86::regist
 // byte of an array.
 pub static BYTE: LazyLock<PySet<Register>> = LazyLock::new(|| llrm_x86::registers::BYTES.into_iter().collect());
 
-// The width each register names, and the register file at each width.
-// Built from the three rows rather than from ir.ROOT, which has no
-// byte-wide entries.
-pub static WIDTHS: LazyLock<IndexMap<Register, i64>> = LazyLock::new(|| {
-    let mut widths = IndexMap::default();
-    for (_row, _size) in [(&*WIDE, 4), (&*NARROW, 2), (&*BYTE, 1)] {
-        for _one in _row.iter() {
-            widths.insert(*_one, _size);
-        }
-    }
-    widths
-});
-pub static AT_WIDTH: LazyLock<IndexMap<Register, IndexMap<i64, Register>>> = LazyLock::new(|| {
-    let mut at_width: IndexMap<Register, IndexMap<i64, Register>> = IndexMap::default();
-    for (_row, _size) in [(&*WIDE, 4), (&*NARROW, 2), (&*BYTE, 1)] {
-        for _one in _row.iter() {
-            // setdefault, not assignment: al and ah both root to eax, and
-            // the later one resolved a width-1 value to `ah`.
-            at_width
-                .entry(ir::root(*_one))
-                .or_default()
-                .entry(_size)
-                .or_insert(*_one);
-        }
-    }
-    at_width
-});
+// The width each register names, and the register file at each width: the architecture's.
+pub use llrm_x86::registers::{AT_WIDTH, WIDTHS};
 
 /// The same register named at the width an operand needs.
 pub fn named(register: Register, width: i64) -> Register {
@@ -783,4 +758,40 @@ mod tests {
         assert!(pins(&by(Loc::Imm(ir::Imm { value: 3, width: 1, address: None }))).is_empty());
     }
 
-}
+
+    // ----------------------------------------------- what a funnel shift and a sign extension pin
+
+    fn funnel_of(count: Loc, name: &str) -> Semantics {
+        let low = Loc::Reg(ir::Reg { register: Register::EAX, width: 4 });
+        Semantics { name: Some(name.to_owned()), dests: vec![low.clone()], sources: vec![low, Loc::Reg(ir::Reg { register: Register::EDX, width: 4 }), count], ..Semantics::new(Operation::Funnel) }
+    }
+
+    fn imm(value: i64, width: u32) -> Loc {
+        Loc::Imm(ir::Imm { value, width, address: None })
+    }
+
+    fn rg(register: Register, width: u32) -> Loc {
+        Loc::Reg(ir::Reg { register, width })
+    }
+
+    #[test]
+    fn test_a_funnel_shift_is_two_address_in_its_low_half() {
+        assert_eq!(tied(&funnel_of(imm(16, 1), "shrd")), Some(Register::EAX));
+    }
+
+    #[test]
+    fn test_a_funnel_shift_by_a_register_takes_its_count_in_cl() {
+        let dynamic = reads(&funnel_of(rg(Register::CL, 1), "shrd"), &RegisterClasses::code16());
+        assert!(dynamic.get(&Register::ECX).is_some_and(|need| need.fixed() == Some(Register::ECX)));
+        assert!(!reads(&funnel_of(imm(16, 1), "shrd"), &RegisterClasses::code16()).contains_key(&Register::EAX));
+        assert!(writes(&funnel_of(imm(16, 1), "shrd"), &RegisterClasses::code16()).is_empty(), "shrd writes only what it names");
+    }
+
+
+    /// A sign extension between explicit operands pins nothing.
+    #[test]
+    fn test_a_signed_word_extension_pins_no_register() {
+        let what = Semantics { name: Some("movsx".to_owned()), dests: vec![rg(Register::EBX, 4)], sources: vec![rg(Register::SI, 2)], ..Semantics::new(Operation::Extend) };
+        assert!(RegisterClasses::code16().requirements(&what).is_empty());
+    }
+    }
