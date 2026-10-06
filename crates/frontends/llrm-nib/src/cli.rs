@@ -92,18 +92,14 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.debug = flags.debug;
     frontend.checked_stack = flags.sanitize.stack;
     let bound = llrm_driver::target(&flags, None)?;
-    frontend.layout = bound.target.layout();
-    frontend.slot = u32::try_from(bound.target.stack_slot_bytes()).expect("a slot is positive");
-    frontend.bits = bound.target.object().bitness;
-    frontend.conventions = bound.target.conventions().iter().map(|one| (*one).to_owned()).collect();
-    frontend.os = nib_os(&*bound.target)?;
+    frontend = super::Frontend { debug: frontend.debug, checked_stack: frontend.checked_stack, unchecked_bounds: frontend.unchecked_bounds, warn_target_width: frontend.warn_target_width, ..super::Frontend::for_target(&*bound.target)? };
     let codegen = bound.options(&flags, flags.machine(nib::machine(&*bound.target, &frontend.os))?);
     Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen, os_layer, declare })
 }
 
 /// What the target's OS layer says of Nib's runtime; a target without one is refused.
 fn nib_os(target: &dyn llrm_target::Target) -> Result<super::Os, String> {
-    super::Os::of(target.runtime("nib").ok_or_else(|| format!("target {} has no Nib runtime", target.name()))?)
+    super::Os::for_target(target)
 }
 
 /// The symbols `objects` import.
