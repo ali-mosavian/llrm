@@ -1,5 +1,7 @@
 //! The tools build.rs puts beside llrm's binaries.
 
+mod common;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -27,7 +29,7 @@ fn os_layer_objects(bin: &Path, dir: &Path) {
     let defines: Vec<String> = layer("defines").split_whitespace().map(|one| format!("-D{one}")).collect();
     for (field, object) in [("start", "start.obj"), ("implementation", "os.obj"), ("language_file", "init.obj")] {
         let source = if field == "language_file" { layer(field) } else { format!("{directory}/{}", layer(field)) };
-        let done = Command::new(bin.join("jwasm")).args(["-q", "-c", "-Cp", "-Zg", "-omf"]).args(&defines).arg(format!("-Fo{object}")).arg(source).current_dir(dir).status().unwrap();
+        let done = Command::new(bin.join("jwasm")).args(["-q", "-c", "-Cp", "-Zg", common::assembler()]).args(&defines).arg(format!("-Fo{object}")).arg(source).current_dir(dir).status().unwrap();
         assert!(done.success(), "{field}");
     }
 }
@@ -49,8 +51,8 @@ fn test_a_jwlink_exe_runs_under_the_built_dosbox() {
     let run = |program: &str, args: &[&str]| {
         assert!(Command::new(bin.join(program)).args(args).current_dir(dir).status().unwrap().success(), "{program}");
     };
-    run("jwasm", &["-q", "-omf", "-FoHELLO.OBJ", "HELLO.ASM"]);
-    run("jwlink", &["format", "dos", "file", "HELLO.OBJ", "name", "HELLO.EXE", "op", "quiet"]);
+    run("jwasm", &["-q", common::assembler(), "-FoHELLO.OBJ", "HELLO.ASM"]);
+    run("jwlink", &common::jwlink(&["file", "HELLO.OBJ", "name", "HELLO.EXE", "op", "quiet"]));
     let conf = format!("[autoexec]\nmount c {}\nc:\nHELLO > OUT.TXT\nexit\n", dir.display());
     std::fs::write(dir.join("dosbox.conf"), conf).unwrap();
     let conf = dir.join("dosbox.conf");
@@ -95,11 +97,11 @@ fn test_nib_start_puts_the_stack_in_dgroup() {
     };
     os_layer_objects(&bin, dir);
     // The divide fault's handler, which runtime.nib otherwise supplies.
-    std::fs::write(dir.join("fault.asm"), ".model medium\n.code\npublic N$EDIV\nN$EDIV proc far\nmov ax, 4c63h\nint 21h\nN$EDIV endp\nend\n").unwrap();
-    run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-omf", "-Fofault.obj", "fault.asm"]);
+    std::fs::write(dir.join("fault.asm"), format!("{}.code\npublic N$EDIV\nN$EDIV proc far\nmov ax, 4c63h\nint 21h\nN$EDIV endp\nend\n", common::header())).unwrap();
+    run(&bin.join("jwasm"), &["-q", "-c", "-Cp", common::assembler(), "-Fofault.obj", "fault.asm"]);
     let slice = root.join("tests/fixtures/nib/port/c7e7588fa1/slice.nib");
     run(&bin.join("llrm-nib"), &[slice.to_str().unwrap(), "-o", "slice.obj"]);
-    run(&bin.join("jwlink"), &["format", "dos", "name", "SLICE.EXE", "file", "start.obj", "file", "init.obj", "file", "slice.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]);
+    run(&bin.join("jwlink"), &common::jwlink(&["name", "SLICE.EXE", "file", "start.obj", "file", "init.obj", "file", "slice.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]));
     let conf = format!(
         "[autoexec]\nmount c {}\nc:\nSLICE\nif errorlevel 6 goto other\nif errorlevel 5 goto five\n:other\necho other > OUT.TXT\ngoto end\n:five\necho 5 > OUT.TXT\n:end\nexit\n",
         dir.display()
@@ -122,8 +124,8 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
         assert!(Command::new(program).args(args).current_dir(dir).status().unwrap().success(), "{}", program.display());
     };
     os_layer_objects(&bin, dir);
-    std::fs::write(dir.join("fault.asm"), ".model medium\n.code\npublic N$EDIV\nN$EDIV proc far\nmov ax, 4c63h\nint 21h\nN$EDIV endp\nend\n").unwrap();
-    run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-omf", "-Fofault.obj", "fault.asm"]);
+    std::fs::write(dir.join("fault.asm"), format!("{}.code\npublic N$EDIV\nN$EDIV proc far\nmov ax, 4c63h\nint 21h\nN$EDIV endp\nend\n", common::header())).unwrap();
+    run(&bin.join("jwasm"), &["-q", "-c", "-Cp", common::assembler(), "-Fofault.obj", "fault.asm"]);
     std::fs::write(
         dir.join("frame.nib"),
         "var marker: u16 = 5\n\nfn main() -> i16:\n    let mut cells: u16[600] = [0] * 600\n    for at in 0..600:\n        cells[at] = u16(at)\n    \
@@ -131,7 +133,7 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
     )
     .unwrap();
     run(&bin.join("llrm-nib"), &["frame.nib", "-o", "frame.obj"]);
-    run(&bin.join("jwlink"), &["format", "dos", "name", "FRAME.EXE", "file", "start.obj", "file", "init.obj", "file", "frame.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]);
+    run(&bin.join("jwlink"), &common::jwlink(&["name", "FRAME.EXE", "file", "start.obj", "file", "init.obj", "file", "frame.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]));
     let conf = format!(
         "[autoexec]\nmount c {}\nc:\nFRAME\nif errorlevel 6 goto other\nif errorlevel 5 goto five\n:other\necho other > OUT.TXT\ngoto end\n:five\necho 5 > OUT.TXT\n:end\nexit\n",
         dir.display()
@@ -164,7 +166,7 @@ fn test_c_parity_fixtures_compute_their_expected_values() {
     let (layer, c) = (llrm_target::Target::os_layer(&target).unwrap(), llrm_target::Target::runtime(&target, "c").unwrap());
     let defines: Vec<String> = layer.defines().unwrap().into_iter().chain(c.defines().unwrap()).map(|(symbol, value)| format!("-D{symbol}={value}")).collect();
     let assemble = |source: String, object: &str| {
-        let mut args = vec!["-q".to_owned(), "-c".into(), "-Cp".into(), "-Zg".into(), "-omf".into(), format!("-Fo{object}")];
+        let mut args = vec!["-q".to_owned(), "-c".into(), "-Cp".into(), "-Zg".into(), common::assembler().into(), format!("-Fo{object}")];
         args.extend(defines.iter().cloned());
         args.push(source);
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -187,7 +189,7 @@ fn test_c_parity_fixtures_compute_their_expected_values() {
         let program = format!("P{number}");
         let source = parity.join(format!("{name}.cgs"));
         run("llrm-c", &[source.to_str().unwrap(), "-o", &format!("{program}.obj")]);
-        run("jwlink", &["format", "dos", "name", &format!("{program}.EXE"), "file", "layer_start.obj", "file", "c_init.obj", "file", &format!("{name}_m.obj"), "file", &format!("{program}.obj"), "file", "layer_os.obj", "op", "quiet"]);
+        run("jwlink", &common::jwlink(&["name", &format!("{program}.EXE"), "file", "layer_start.obj", "file", "c_init.obj", "file", &format!("{name}_m.obj"), "file", &format!("{program}.obj"), "file", "layer_os.obj", "op", "quiet"]));
         autoexec += &format!("del VALUE.BIN\n{program}\ncopy VALUE.BIN {program}.BIN\n");
         runs.push((name.clone(), program));
     }
@@ -207,15 +209,15 @@ fn linked_fixture(fixture: &str, entry: &str) -> Result<(), String> {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
-    std::fs::write(dir.join("START.ASM"), format!(".model medium\n.stack 256\nextrn {entry}:far\n.code\nstart: call far ptr {entry}\nmov ax, 4C00h\nint 21h\nend start\n")).unwrap();
+    std::fs::write(dir.join("START.ASM"), format!("{header}.stack 256\nextrn {entry}:far\n.code\nstart: call far ptr {entry}\nmov ax, 4C00h\nint 21h\nend start\n", header = common::header())).unwrap();
     let run = |program: &str, args: &[&str]| {
         let done = Command::new(bin.join(program)).args(args).current_dir(dir).output().unwrap();
         if done.status.success() { Ok(()) } else { Err(format!("{program}: {}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr))) }
     };
-    run("jwasm", &["-q", "-omf", "-FoSTART.OBJ", "START.ASM"])?;
+    run("jwasm", &["-q", common::assembler(), "-FoSTART.OBJ", "START.ASM"])?;
     let source = root.join(format!("tests/fixtures/c/{fixture}.cgs"));
     run("llrm-c", &[source.to_str().unwrap(), "-O2", "-march=i486", "-o", "P.OBJ"])?;
-    run("jwlink", &["format", "dos", "name", "P.EXE", "file", "START.OBJ", "file", "P.OBJ", "op", "quiet"])
+    run("jwlink", &common::jwlink(&["name", "P.EXE", "file", "START.OBJ", "file", "P.OBJ", "op", "quiet"]))
 }
 
 /// A far segment was word aligned: after `odd` (3 bytes) the next far
@@ -296,7 +298,7 @@ fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
     let routines = [("_hfill", 59_998), ("_hsumidx", 599_990_000), ("_hsumptr", 599_990_000), ("_hdiff", 19_989), ("_hmid", 51_001)];
-    let mut start = String::from(".model medium\n.386\n");
+    let mut start = common::header();
     for (name, _) in routines {
         start += &format!("extrn {name}:far\n");
     }
@@ -310,10 +312,10 @@ fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
         let done = Command::new(bin.join(program)).args(args).current_dir(dir).output().unwrap();
         assert!(done.status.success(), "{program}: {}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
     };
-    run("jwasm", &["-q", "-c", "-Cp", "-Zg", "-omf", "-FoSTART.OBJ", "START.ASM"]);
+    run("jwasm", &["-q", "-c", "-Cp", "-Zg", common::assembler(), "-FoSTART.OBJ", "START.ASM"]);
     let source = root.join("tests/fixtures/c/hugearray.cgs");
     run("llrm-c", &[source.to_str().unwrap(), "-O2", "-march=i486", "-o", "P.OBJ"]);
-    run("jwlink", &["format", "dos", "name", "P.EXE", "file", "START.OBJ", "file", "P.OBJ", "op", "quiet"]);
+    run("jwlink", &common::jwlink(&["name", "P.EXE", "file", "START.OBJ", "file", "P.OBJ", "op", "quiet"]));
     std::fs::write(dir.join("dosbox.conf"), format!("[autoexec]\nmount c {}\nc:\nP\nexit\n", dir.display())).unwrap();
     run("dosbox-x", &["-nolog", "-exit", "-conf", dir.join("dosbox.conf").to_str().unwrap()]);
     let bytes = std::fs::read(dir.join("VALUES.BIN")).unwrap_or_default();

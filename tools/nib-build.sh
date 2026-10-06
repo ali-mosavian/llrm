@@ -22,13 +22,15 @@ trap 'rm -rf "$work"' EXIT
 "$bin/llrm-nib" "$source" -o "$work/program.obj" "$level" --procedure-segments ${NIB_FLAGS:-} >/dev/null
 "$bin/nibfront" --declare h "$source" >"$work/$(basename "$source" .nib).h"
 defines=""
+recipe() { python3 "$root/tools/linkrecipe.py" x86-m16 "$1"; }
+omf=$(recipe assembler)
 for one in $("$bin/llrm-nib" --os-layer defines); do defines="$defines -D$one"; done
 objects=""
 used="--used-by $work/program.obj"
 for part in "$@"; do
     name=$(basename "$part")
     case $part in
-    *.asm) "$toolchain/jwasm" -q -c -Cp -Zg -omf $defines "-Fo$work/$name.obj" "$part" ;;
+    *.asm) "$toolchain/jwasm" -q -c -Cp -Zg $omf $defines "-Fo$work/$name.obj" "$part" ;;
     *) "$bin/llrm-c" "$part" -I "$work" -o "$work/$name.obj" "$level" >/dev/null ;;
     esac
     objects="$objects file $work/$name.obj"
@@ -38,13 +40,13 @@ layer=$("$bin/llrm-nib" --os-layer directory)
 for field in start implementation; do
     part=$("$bin/llrm-nib" --os-layer $field)
     # shellcheck disable=SC2086
-    "$toolchain/jwasm" -q -c -Cp -Zg -omf $defines "-Fo$work/$field.obj" "$layer/$part"
+    "$toolchain/jwasm" -q -c -Cp -Zg $omf $defines "-Fo$work/$field.obj" "$layer/$part"
     used="$used --used-by $work/$field.obj"
 done
 hook=$("$bin/llrm-nib" --os-layer language_file)
 if [ -n "$hook" ]; then
     # shellcheck disable=SC2086
-    "$toolchain/jwasm" -q -c -Cp -Zg -omf $defines "-Fo$work/hook.obj" "$hook"
+    "$toolchain/jwasm" -q -c -Cp -Zg $omf $defines "-Fo$work/hook.obj" "$hook"
     used="$used --used-by $work/hook.obj"
     hookobj="file $work/hook.obj"
 fi
@@ -52,7 +54,7 @@ fi
 # runtime keeps only the routines the other objects name.
 "$bin/llrm-nib" "$root/crates/frontends/llrm-nib/src/runtime/runtime.nib" -o "$work/runtime.obj" "$level" --procedure-segments $used >/dev/null
 objects="file $work/runtime.obj$objects"
-"$toolchain/jwlink" option quiet option eliminate ${NIB_MAP:+option map=$NIB_MAP} format dos name "$work/program.exe" \
+"$toolchain/jwlink" option quiet option eliminate ${NIB_MAP:+option map=$NIB_MAP} $(recipe format) name "$work/program.exe" \
     file "$work/start.obj" ${hookobj:-} file "$work/program.obj" $objects \
     file "$work/implementation.obj" >"$work/link.out" || {
     cat "$work/link.out" >&2
