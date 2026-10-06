@@ -207,7 +207,7 @@ pub struct Module {
 /// A foreign calling convention (section 15).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Abi {
-    /// `"c"`: the target's C convention, which its description names (cdecl16, cdecl32).
+    /// `"c"`: the convention of an unmarked C function, the target's native one (cdecl16, watcall32): `resolved` says which.
     C,
     Cdecl16,
     /// The same convention on the flat target: stack arguments in dwords, EAX results.

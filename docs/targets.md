@@ -132,15 +132,24 @@ i16 pairs), not a refactor, and is not part of this task.
 
 m32 runs under a DOS extender: OMF with USE32 segments and 32-bit records, linked by
 JWlink as an LE executable behind DOS/32A's stub (`object.toml`'s `[link]`; the start-up
-and `report` are `llrm-x86-m32/runtime`). Its C ABI is cdecl32,
-`calling.toml`: Open Watcom's 386 flat ABI as `wccq -ecc -zp4` has it. Arguments are
-pushed right to left in dword slots and the caller removes them; symbols are `_name`;
-EBX, ESI, EDI and EBP are preserved, the direction flag is clear and the x87 stack empty
-on entry and return; results are in EAX, EDX:EAX for 64 bits and ST0 for floats; structs
-are packed to 4 bytes. One deliberate difference: a struct return of other than 1, 2 or 4
-bytes goes through a pointer pushed after the arguments and returned in EAX (reentrant),
-where Open Watcom's `-ecc` returns the address of one static area. A call into an Open
-Watcom object that returns such a struct is the one call that does not match.
+and `report` are `llrm-x86-m32/runtime`). Its default convention is `watcall32`
+(`calling.toml`, its first entry): Open Watcom's register convention, read from
+`wcc386 -3r`'s own output. Arguments take EAX, EDX, EBX, ECX; an i64 takes EAX:EDX or
+EBX:ECX; the first argument that fits no register (a float, a struct of more than 4
+bytes, an i64 with no pair free) and every one after it goes on the stack, which the
+callee pops. A callee keeps every register but EAX, those its arguments arrive in, ESI
+for a struct result and EDX for an i64 one. A struct larger than a dword is written
+through the address in ESI, which comes back in EAX; one of 1, 2 or 4 bytes is a
+register argument and result. Symbols are `name_`. Variadic functions take the stack.
+`cdecl32` is the stack convention (`__cdecl`, `@extern("cdecl32")`): arguments pushed
+right to left in dword slots, the caller removes them, symbols `_name`, EBX, ESI, EDI and
+EBP preserved. The OS layer (`_llrm_os_*`) and `main` are cdecl32: the layer's assembly
+and the start-up call them with stack arguments whatever a language's default is. Nib's
+`"c"` is the convention of an unmarked C function, the target's default; the C test glue
+(`report`, `keep`, `input_read`) is written in it. The direction flag is clear and the
+x87 stack empty on entry and return; results are in EAX, EDX:EAX for 64 bits and ST0 for
+floats; structs are packed to 4 bytes. Where the C ABI differs from Open Watcom's: none
+now; `watcall32` returns a struct through ESI as `wcc386` does.
 
 ## Measured state
 

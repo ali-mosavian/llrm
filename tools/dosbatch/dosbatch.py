@@ -108,6 +108,16 @@ def ow_root() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "llrm" / f"open-watcom-v2-{commit}"
 
 
+def watcom_cc() -> Path:
+    """Open Watcom's own 386 compiler, built beside wccq in the same tree (`bwcc386`): the ground truth of its register convention."""
+    return ow_root() / "build" / "binbuild" / "bwcc386"
+
+
+def watcom_compile(source: Path, obj: Path) -> None:
+    """`source` compiled by Open Watcom's own wcc386: -3r, its default convention, no library calls, flat structs at -zp4."""
+    _host([str(watcom_cc()), "-zq", "-3r", "-s", "-zl", "-ox", "-zp4", f"-fo={obj}", str(source)])
+
+
 def target_modes() -> dict[str, int]:
     """Each target's gcc `-m` number, from its `datalayout.toml` (`mode`): the one place that says."""
     modes = {}

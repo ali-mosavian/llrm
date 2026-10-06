@@ -170,7 +170,9 @@ def data_files(program: Program) -> tuple[Path, ...]:
 
 
 def unavailable(program: Program) -> str | None:
-    """Why a program's corpus cannot be had, or None."""
+    """Why a program's corpus or Open Watcom's compiler cannot be had, or None."""
+    if any(one.endswith(".wc") for one in program.link) and not dosbatch.watcom_cc().exists():
+        return f"{dosbatch.watcom_cc()} is not built (toolchain/owshim/build.sh builds the tree)"
     for one in program.data:
         if one.startswith("@"):
             try:
@@ -241,8 +243,20 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
     if program.source.suffix == ".c":
         exe = work / f"{stem}.exe"
         target = dosbatch.target_of(program.flags, "x86-m16")
+        level = program.flags[0] if program.flags else "-O2"
         try:
-            loaders = dosbatch.link_target(target, obj, exe, work)
+            # Its own files, as Nib's: a C file by llrm-c, a `.wc` by Open Watcom's wcc386, an assembly file by jwasm.
+            others = []
+            for at, source in enumerate(one for one in linked(program, target) if one.name != Path(dosbatch.target_link(target)["last"][0]).name):
+                extra = work / f"{stem}F{at}.obj"
+                if source.suffix == ".wc":
+                    dosbatch.watcom_compile(source, extra)
+                elif source.suffix == ".asm":
+                    dosbatch.assemble(source, extra, *dosbatch.os_defines(target, "c"))
+                else:
+                    dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), level, "-o", str(extra)])
+                others.append(extra)
+            loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others))
             dosbatch.check_loads(exe)
         except (dosbatch.BuildError, dosbatch.TooBig) as error:
             return f"link: {error}"
