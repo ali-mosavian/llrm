@@ -239,6 +239,23 @@ pub struct Summary {
     pub captures: BTreeSet<Option<Identity>>,
     pub unknown_read: bool,
     pub unknown_write: bool,
+    /// The `!tbaa` access types of the writes `unknown_write` stands for, where
+    /// every one is a pointer no fact follows and has a type: a store of one type cannot land on a load of a
+    /// type apart from it, however unplaced its pointer. None: some has none.
+    pub unknown_write_types: Option<BTreeSet<Access>>,
+}
+
+/// An access type: its name and its ancestors', as `MemRef::typed` and `lineage`.
+pub type Access = (String, Vec<String>);
+
+/// The types of two writes' unplaced stores together.
+fn merged_types(one: (bool, &Option<BTreeSet<Access>>), other: (bool, &Option<BTreeSet<Access>>)) -> Option<BTreeSet<Access>> {
+    match (one, other) {
+        ((false, _), (_, types)) => types.clone(),
+        ((_, types), (false, _)) => types.clone(),
+        ((true, Some(one)), (true, Some(other))) => Some(one.union(other).cloned().collect()),
+        _ => None,
+    }
 }
 
 impl Summary {
@@ -272,6 +289,7 @@ impl Summary {
             captures: self.captures.clone(),
             unknown_read: self.unknown_read,
             unknown_write: self.unknown_write,
+            unknown_write_types: self.unknown_write_types.clone(),
         }
     }
 }
@@ -496,24 +514,58 @@ fn outlives(slice: &Slice) -> bool {
     !matches!(slice.object.kind, MemoryKind::Frame | MemoryKind::Stack)
 }
 
+/// Whether the address `inst` accesses is an integer made a pointer, moved by
+/// GEPs and casts: LLVM's `inttoptr`, which `_lost` publishes the escape of.
+fn from_integer(unit: &Unit, inst: InstId) -> bool {
+    let op = unit.function.instruction(inst);
+    let address = if matches!(op.opcode, Opcode::Store { .. }) { op.operands.get(1) } else { op.operands.first() };
+    let mut at = address.copied();
+    while let Some((_, def)) = at.and_then(|one| unit.defining(one)) {
+        match &def.opcode {
+            Opcode::Cast(CastOp::IntToPtr) => return true,
+            Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) | Opcode::GetElementPtr { .. } => at = def.operands.first().copied(),
+            _ => return false,
+        }
+    }
+    false
+}
+
 pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
     let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
     let (mut unknown_read, mut unknown_write) = (false, false);
+    let mut types = Some(BTreeSet::new());
     let facts = points_to(unit, None, None)?;
     for (_, inst) in unit.function.walk() {
         let Some(reference) = MemRef::of(unit, inst) else { continue };
         let read = matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. });
+        // A write nothing places is its type's, not a slice of the unknown object.
+        let unplaced = |types: &mut Option<BTreeSet<Access>>| {
+            let access = reference.typed.clone().map(|typed| (typed, reference.lineage.clone()));
+            match (types.as_mut(), access) {
+                (Some(types), Some(access)) => {
+                    types.insert(access);
+                }
+                _ => *types = None,
+            }
+        };
         let Some(provenance) = facts.reference(unit, &reference) else {
             if read {
                 unknown_read = true;
             } else {
                 unknown_write = true;
+                // An address built from an integer reaches only what escaped, as `Unknown`
+                // does; any other the analysis lost may be a tracked global's too.
+                if from_integer(unit, inst) {
+                    unplaced(&mut types);
+                } else {
+                    types = None;
+                }
             }
             continue;
         };
         for one in provenance.slices {
             let unknown = one.object.kind == MemoryKind::Unknown;
-            if outlives(&one) {
+            if outlives(&one) && !(unknown && !read) {
                 if read {
                     reads.insert(one);
                 } else {
@@ -525,13 +577,14 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
                     unknown_read = true;
                 } else {
                     unknown_write = true;
+                    unplaced(&mut types);
                 }
             }
         }
     }
     let captures =
         facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter && matches!(one.identity, Some(Identity::Int(_)))).map(|one| one.identity.clone()).collect();
-    Ok(Summary { reads, writes, captures, unknown_read, unknown_write })
+    Ok(Summary { reads, writes, captures, unknown_read, unknown_write, unknown_write_types: types })
 }
 
 fn _recursive_edges(procedures: &IndexMap<String, Procedure>) -> BTreeSet<(String, String)> {
@@ -620,6 +673,7 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
             let (mut reads, mut writes) = (direct.reads, direct.writes);
             let captures = facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter && matches!(one.identity, Some(Identity::Int(_)))).map(|one| one.identity.clone()).collect();
             let (mut unknown_read, mut unknown_write) = (direct.unknown_read, direct.unknown_write);
+            let mut types = direct.unknown_write_types.clone();
             for at in call_sites(&procedure.unit) {
                 let target = procedure.calls.get(&at);
                 let callee = target.and_then(|target| _summary(&procedure.unit, &result, target));
@@ -638,12 +692,13 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
                 reads.extend(effect.reads);
                 writes.extend(effect.writes);
                 unknown_read |= effect.unknown_read;
+                types = merged_types((unknown_write, &types), (effect.unknown_write, &effect.unknown_write_types));
                 unknown_write |= effect.unknown_write;
             }
             // A callee's frame is gone when it returns: what its calls touch
             // there, like its own accesses, is no effect of calling it.
             let (reads, writes) = (reads.into_iter().filter(outlives).collect(), writes.into_iter().filter(outlives).collect());
-            let made = Summary { reads: _coalesced(&reads), writes: _coalesced(&writes), captures, unknown_read, unknown_write };
+            let made = Summary { reads: _coalesced(&reads), writes: _coalesced(&writes), captures, unknown_read, unknown_write, unknown_write_types: types };
             if made != result[name] {
                 result.insert(name.clone(), made);
                 changed = true;
@@ -706,14 +761,28 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
             effect.reads.extend(NONLOCAL.slices.clone());
             effect.reads.extend(_tracked(&procedure.unit));
         }
+        // What an unplaced write may reach: each of its types' stores, not an untyped one.
+        let mut typed = Vec::new();
         if effect.unknown_write {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
-            effect.writes.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
-            effect.writes.extend(NONLOCAL.slices.clone());
-            effect.writes.extend(_tracked(&procedure.unit));
+            let mut reached = if visible.is_empty() { UNKNOWN.slices.clone() } else { visible };
+            reached.extend(NONLOCAL.slices.clone());
+            match &effect.unknown_write_types {
+                // A pointer no fact follows reaches only what escaped, never a tracked global.
+                Some(types) if !types.is_empty() => {
+                    for (name, lineage) in types {
+                        typed.extend(reached.iter().map(|one| MemRef { typed: Some(name.clone()), lineage: lineage.clone(), ..reference(one) }));
+                    }
+                }
+                _ => {
+                    effect.writes.extend(reached);
+                    effect.writes.extend(_tracked(&procedure.unit));
+                }
+            }
         }
         let fills = _fills(&procedure.unit, &facts, at);
-        out.insert(at, Effect { loads: effect.reads.iter().map(reference).collect(), stores: effect.writes.iter().map(reference).collect(), fills });
+        let stores = effect.writes.iter().map(reference).chain(typed).collect();
+        out.insert(at, Effect { loads: effect.reads.iter().map(reference).collect(), stores, fills });
     }
     Ok(out)
 }
