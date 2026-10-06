@@ -262,9 +262,6 @@ pub fn address_only(function: &Function, value: ValueId, depth: u32) -> bool {
 /// addressing modes, it takes no register.
 pub fn folded(function: &Function, value: ValueId) -> bool {
     let ValueDef::Instruction(def) = function.value(value).def else { return false };
-    if !matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. } | Opcode::Alloca { .. } | Opcode::Cast(CastOp::AddrSpaceCast)) {
-        return false;
-    }
     let block = function.parent(def);
     let users = function.users(value);
     // A constant offset into a frame object is a displacement wherever it is read.
@@ -272,6 +269,9 @@ pub fn folded(function: &Function, value: ValueId) -> bool {
     // The stack space's view of one is made where it is read, by whatever reads it.
     if displacement && matches!(function.instruction(def).opcode, Opcode::Cast(CastOp::AddrSpaceCast)) {
         return !users.is_empty();
+    }
+    if !matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. } | Opcode::Alloca { .. }) {
+        return false;
     }
     !users.is_empty()
         && users.iter().all(|one| {
