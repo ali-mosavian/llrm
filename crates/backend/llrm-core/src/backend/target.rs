@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use iced_x86::Register;
-use llrm_x86_code16::instructions;
+use crate::backend::classes::RegisterClasses;
 
 use crate::abi::machine::{self, Machine};
 use crate::support::hash::IndexMap;
@@ -59,79 +59,6 @@ impl Occurrence {
             side: side.to_owned(),
             index,
         }
-    }
-}
-
-/// Every operand this instruction requires in one particular register.
-///
-/// The one place those are written down: the `fixed` column of the form that
-/// takes this instruction's operands (`x86.instr`); `reads` and `writes` read it
-/// too. An operand that is an immediate is no register: a shift's count or an
-/// `in`'s port written as one pins nothing, and a segment register is pinned
-/// only while it is a held value, a placed one being where it is.
-pub fn requirements(what: &Semantics) -> IndexMap<Occurrence, Register> {
-    let mut out = IndexMap::default();
-    if _on_the_stack(what) {
-        return out;
-    }
-    let Some(name) = what.name.as_deref() else { return out };
-    let key = (name.to_owned(), what.op.as_str(), what.dests.len(), what.sources.len());
-    let Some(pins) = PINS.get(&key) else { return out };
-    for (side, index, register) in pins {
-        let places = match side {
-            instructions::Side::Dest => &what.dests,
-            instructions::Side::Source => &what.sources,
-        };
-        let pinned = match &places[*index] {
-            Loc::Imm(_) => false,
-            Loc::Held(_) => true,
-            _ => !SEGMENTS.contains(register),
-        };
-        if pinned {
-            out.insert(Occurrence::new(if *side == instructions::Side::Dest { "dest" } else { "source" }, *index), *register);
-        }
-    }
-    out
-}
-
-/// Each form's pins, by the mnemonic, the operation and the operand counts that
-/// pick it out. A pin that tells the members of a family apart (`les`, `lds`, `lfs`
-/// and `lgs` take the same operands and differ in the selector register) is a
-/// choice the allocator makes, not a requirement, and is left out.
-static PINS: LazyLock<std::collections::HashMap<(String, &'static str, usize, usize), Vec<(instructions::Side, usize, Register)>>> = LazyLock::new(|| {
-    let operations: std::collections::HashMap<&str, &'static str> = Operation::ALL.iter().map(|op| (op.as_str(), op.as_str())).collect();
-    let mut pins = std::collections::HashMap::new();
-    for form in instructions::FORMS.iter() {
-        let chosen = |side: instructions::Side, index: usize, root: &str| {
-            instructions::FORMS.iter().any(|other| {
-                other.operation == form.operation
-                    && other.dests == form.dests
-                    && other.sources == form.sources
-                    && other.fixed.iter().any(|(s, i, r)| *s == side && *i == index && r != root)
-            })
-        };
-        let required = form.fixed.iter().filter(|(side, index, root)| !chosen(*side, *index, root)).map(|(side, index, root)| (*side, *index, root_register(root))).collect();
-        pins.entry((form.name.clone(), operations[form.operation.as_str()], form.dests.len(), form.sources.len())).or_insert(required);
-    }
-    pins
-});
-
-/// The register a form's `fixed` column names by its root: `ax` is EAX.
-fn root_register(root: &str) -> Register {
-    match root {
-        "ax" => Register::EAX,
-        "bx" => Register::EBX,
-        "cx" => Register::ECX,
-        "dx" => Register::EDX,
-        "si" => Register::ESI,
-        "di" => Register::EDI,
-        "bp" => Register::EBP,
-        "sp" => Register::ESP,
-        "es" => Register::ES,
-        "ds" => Register::DS,
-        "fs" => Register::FS,
-        "gs" => Register::GS,
-        other => unreachable!("x86.instr names no register `{other}`"),
     }
 }
 
@@ -205,9 +132,9 @@ pub fn tied(what: &Semantics) -> Option<Register> {
 
 /// Registers this operation reads whether or not it names them, keyed on
 /// the root it reads.
-pub fn reads(what: &Semantics) -> IndexMap<Register, Need> {
+pub fn reads(what: &Semantics, classes: &RegisterClasses) -> IndexMap<Register, Need> {
     let mut out = IndexMap::default();
-    for (r#where, register) in requirements(what) {
+    for (r#where, register) in classes.requirements(what) {
         if r#where.side == "source" {
             out.insert(
                 register,
@@ -248,12 +175,12 @@ pub fn reads(what: &Semantics) -> IndexMap<Register, Need> {
 }
 
 /// Registers this operation writes whether or not it names them.
-pub fn writes(what: &Semantics) -> IndexMap<Register, Need> {
+pub fn writes(what: &Semantics, classes: &RegisterClasses) -> IndexMap<Register, Need> {
     let mut out = IndexMap::default();
     if _on_the_stack(what) {
         return out;
     }
-    for (r#where, register) in requirements(what) {
+    for (r#where, register) in classes.requirements(what) {
         if r#where.side == "dest" {
             out.insert(
                 register,
@@ -613,7 +540,7 @@ mod tests {
             vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6), held(7)],
             vec![held(1), held(2), held(3), held(4), held(8)],
         );
-        let wanted = requirements(&repeated);
+        let wanted = RegisterClasses::code16().requirements(&repeated);
         let at = |side: &str, index: usize| wanted.get(&Occurrence::new(side, index)).copied();
         assert_eq!((at("source", 0), at("source", 1), at("source", 2)), (Some(Register::ECX), Some(Register::ESI), Some(Register::EDI)));
         assert_eq!((at("source", 3), at("source", 4)), (Some(Register::FS), Some(Register::ES)));
@@ -624,11 +551,11 @@ mod tests {
             vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6)],
             vec![held(2), held(3), reg(Register::DS, 2), held(8)],
         );
-        let wanted = requirements(&single);
+        let wanted = RegisterClasses::code16().requirements(&single);
         let at = |side: &str, index: usize| wanted.get(&Occurrence::new(side, index)).copied();
         assert_eq!((at("source", 0), at("source", 1), at("source", 2), at("source", 3)), (Some(Register::ESI), Some(Register::EDI), None, Some(Register::ES)));
         assert_eq!(at("dest", 3), None);
-        assert!(reads(&repeated).contains_key(&Register::ECX) && writes(&repeated).contains_key(&Register::ECX));
+        assert!(reads(&repeated, &crate::backend::classes::RegisterClasses::code16()).contains_key(&Register::ECX) && writes(&repeated, &crate::backend::classes::RegisterClasses::code16()).contains_key(&Register::ECX));
     }
 
     fn reg(register: Register, width: u32) -> Loc {
@@ -754,7 +681,7 @@ mod tests {
             IndexMap::default(),
         );
 
-        assert!(!requirements(&what).contains_key(&Occurrence::new("dest", 1)));
+        assert!(!RegisterClasses::code16().requirements(&what).contains_key(&Occurrence::new("dest", 1)));
         assert_eq!(
             crate::backend::regclass::classes(&body, &BTreeSet::new(), &BUILT_IN)[&2],
             BUILT_IN.selectors.iter().copied().collect::<BTreeSet<_>>()
@@ -792,7 +719,7 @@ mod tests {
             })],
         );
         let want: BTreeSet<Register> = ADDRESSING.iter().map(|x| ir::root(*x)).collect();
-        assert_eq!(reads(&what)[&Register::ESI].r#where, want);
+        assert_eq!(reads(&what, &crate::backend::classes::RegisterClasses::code16())[&Register::ESI].r#where, want);
     }
 
     /// The set-ordered tables, `NAMES` and `name_of`, as CPython builds them.
@@ -846,7 +773,7 @@ mod tests {
 
 
     fn pins(what: &Semantics) -> Vec<(String, usize, Register)> {
-        requirements(what).into_iter().map(|(place, register)| (place.side, place.index, register)).collect()
+        RegisterClasses::code16().requirements(what).into_iter().map(|(place, register)| (place.side, place.index, register)).collect()
     }
 
     fn held(value: u32) -> Loc {
@@ -860,7 +787,7 @@ mod tests {
     fn test_a_register_that_picks_a_form_of_a_family_is_no_requirement() {
         for name in ["les", "lds", "lfs", "lgs"] {
             let what = semantics(Operation::Move, name, vec![held(1), held(2)], vec![Loc::Mem(ir::Mem::new(None, 4))]);
-            assert!(requirements(&what).is_empty(), "{name}: {:?}", pins(&what));
+            assert!(RegisterClasses::code16().requirements(&what).is_empty(), "{name}: {:?}", pins(&what));
         }
     }
 

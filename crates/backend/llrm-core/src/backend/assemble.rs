@@ -10,6 +10,7 @@ use llrm_mir::facts::Fact;
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
 
 use crate::abi::runtime::Contract;
+use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{Profile, ProfileOrName};
 use crate::backend::target::Segments;
 use crate::backend::constpool::Pool;
@@ -64,7 +65,8 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
     let mut referenced: IndexMap<String, bool> = IndexMap::default();
     let mut data = Vec::new();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
-    let target = Target { cpu, segments, selection, arch, runtime: "", basic: false, zeroed: false };
+    let classes = Rc::new(RegisterClasses::of(arch));
+    let target = Target { cpu, segments, selection, arch, classes: &classes, runtime: "", basic: false, zeroed: false };
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         let name = global.name.as_deref().unwrap_or_default();
@@ -150,6 +152,8 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
 /// registers, the runtime family whose frame it calls into, and whether
 /// floats keep BASIC's semantics.
 pub struct Target<'t> {
+    /// What the target requires of registers: the pins of its forms.
+    pub classes: &'t Rc<RegisterClasses>,
     pub cpu: &'t Profile,
     pub segments: &'t Segments,
     /// The instruction selector of the target, which its driver binds.
@@ -302,7 +306,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let frame = Rc::new(RefCell::new(frame));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, spilling.then(|| Rc::clone(&run)), target.selection.rules(), &target.arch.frame_registers())? {
+    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, target.classes, spilling.then(|| Rc::clone(&run)), target.selection.rules(), &target.arch.frame_registers())? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
             continue;

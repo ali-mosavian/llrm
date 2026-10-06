@@ -481,7 +481,7 @@ mod tests {
     }
 
     fn allocated(body: &LirBody, pins: &IndexMap<u32, Register>) -> allocate::Assignment {
-        allocate::allocate(body, Some(pins), None, None, None, ProfileOrName::Name("386"), &target::BUILT_IN).expect("allocates")
+        allocate::allocate(body, Some(pins), None, None, None, ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("allocates")
     }
 
     /// HARR's hoisted selector copy became unencodable mov es,es across a coverage gap.

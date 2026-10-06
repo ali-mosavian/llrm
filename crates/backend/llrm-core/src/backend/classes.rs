@@ -1,0 +1,101 @@
+//! What a target says about its registers that the allocator and the passes
+//! around it read: which operand of which instruction form lives in which
+//! register. Built from the selected target (`RegisterClasses::of`) and handed
+//! down beside `Segments`; no pass reads another target's.
+
+use std::collections::HashMap;
+
+use iced_x86::Register;
+use llrm_target::Target;
+use llrm_x86_code16::instructions::{self, Side};
+
+use crate::backend::target::{Occurrence, SEGMENTS, _on_the_stack};
+use crate::model::ir::{Loc, Operation, Semantics};
+use crate::support::hash::IndexMap;
+
+type Key = (String, &'static str, usize, usize);
+
+pub struct RegisterClasses {
+    /// Each form's pins, by the mnemonic, the operation and the operand counts that
+    /// pick it out.
+    pins: HashMap<Key, Vec<(Side, usize, Register)>>,
+}
+
+impl RegisterClasses {
+    /// The target's: from the `fixed` column of its instruction forms. A pin that tells
+    /// the members of a family apart (`les`, `lds`, `lfs` and `lgs` take the same operands
+    /// and differ in the selector register) is a choice the allocator makes, not a
+    /// requirement, and is left out.
+    pub fn of(arch: &dyn Target) -> Self {
+        let forms = instructions::parse::parse(&arch.forms_text()).expect("the target's forms parse");
+        let operations: HashMap<&str, &'static str> = Operation::ALL.iter().map(|op| (op.as_str(), op.as_str())).collect();
+        let mut pins = HashMap::new();
+        for form in &forms {
+            let chosen = |side: Side, index: usize, root: &str| {
+                forms.iter().any(|other| {
+                    other.operation == form.operation && other.dests == form.dests && other.sources == form.sources && other.fixed.iter().any(|(s, i, r)| *s == side && *i == index && r != root)
+                })
+            };
+            let required = form.fixed.iter().filter(|(side, index, root)| !chosen(*side, *index, root)).map(|(side, index, root)| (*side, *index, root_register(root))).collect();
+            pins.entry((form.name.clone(), operations[form.operation.as_str()], form.dests.len(), form.sources.len())).or_insert(required);
+        }
+        Self { pins }
+    }
+
+    /// 16-bit x86's, which the tests of this crate are written for.
+    #[cfg(test)]
+    pub fn code16() -> std::rc::Rc<Self> {
+        std::rc::Rc::new(Self::of(&llrm_x86_code16::Code16))
+    }
+
+    /// Every operand this instruction requires in one particular register.
+    ///
+    /// The one place those are written down: the `fixed` column of the form that takes this
+    /// instruction's operands; `reads` and `writes` read it too. An operand that is an
+    /// immediate is no register: a shift's count or an `in`'s port written as one pins
+    /// nothing, and a segment register is pinned only while it is a held value, a placed
+    /// one being where it is.
+    pub fn requirements(&self, what: &Semantics) -> IndexMap<Occurrence, Register> {
+        let mut out = IndexMap::default();
+        if _on_the_stack(what) {
+            return out;
+        }
+        let Some(name) = what.name.as_deref() else { return out };
+        let key = (name.to_owned(), what.op.as_str(), what.dests.len(), what.sources.len());
+        let Some(pins) = self.pins.get(&key) else { return out };
+        for (side, index, register) in pins {
+            let places = match side {
+                Side::Dest => &what.dests,
+                Side::Source => &what.sources,
+            };
+            let pinned = match &places[*index] {
+                Loc::Imm(_) => false,
+                Loc::Held(_) => true,
+                _ => !SEGMENTS.contains(register),
+            };
+            if pinned {
+                out.insert(Occurrence::new(if *side == Side::Dest { "dest" } else { "source" }, *index), *register);
+            }
+        }
+        out
+    }
+}
+
+/// The register a form's `fixed` column names by its root: `ax` is EAX.
+fn root_register(root: &str) -> Register {
+    match root {
+        "ax" => Register::EAX,
+        "bx" => Register::EBX,
+        "cx" => Register::ECX,
+        "dx" => Register::EDX,
+        "si" => Register::ESI,
+        "di" => Register::EDI,
+        "bp" => Register::EBP,
+        "sp" => Register::ESP,
+        "es" => Register::ES,
+        "ds" => Register::DS,
+        "fs" => Register::FS,
+        "gs" => Register::GS,
+        other => unreachable!("x86.instr names no register `{other}`"),
+    }
+}
