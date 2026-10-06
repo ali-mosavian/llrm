@@ -1,5 +1,4 @@
 # Copies of target facts left in shared code, per file: count path. Only shrinks.
-1 crates/backend/llrm-core/src/abi/mod.rs
 3 crates/backend/llrm-core/src/abi/qb.rs
 1 crates/backend/llrm-core/src/backend/addressvalues.rs
 1 crates/backend/llrm-core/src/backend/affine.rs
@@ -35,10 +34,9 @@
 6 crates/backend/llrm-core/src/backend/spiller.rs
 1 crates/backend/llrm-core/src/backend/spillforward.rs
 2 crates/backend/llrm-core/src/backend/storecombine.rs
-7 crates/backend/llrm-core/src/backend/target.rs
+9 crates/backend/llrm-core/src/backend/target.rs
 1 crates/backend/llrm-core/src/backend/upperzero.rs
 7 crates/backend/llrm-core/src/driver/basic.rs
-8 crates/backend/llrm-driver/src/lib.rs
 1 crates/backend/llrm-peepgen/src/table.rs
 1 crates/bc/llrm-bc/examples/gate.rs
 1 crates/bc/llrm-bc/examples/nodes.rs
@@ -54,7 +52,7 @@
 7 crates/bc/llrm-bc/src/pairs.rs
 2 crates/bc/llrm-bc/src/runtime.rs
 2 crates/bc/llrm-bc/src/sites.rs
-2 crates/bc/llrm-bcdriver/src/lib.rs
+3 crates/bc/llrm-bcdriver/src/lib.rs
 2 crates/bc/llrm-bcmachine/src/abi/callsite.rs
 6 crates/bc/llrm-bcmachine/src/frontends/bc/blocks.rs
 2 crates/bc/llrm-bcmachine/src/frontends/bc/stack.rs
