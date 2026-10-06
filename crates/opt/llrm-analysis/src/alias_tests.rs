@@ -705,6 +705,42 @@ b0:
     assert!(!after("nocapture noretain"));
 }
 
+/// A `noretain` call keeps nothing, but still reaches what its argument points
+/// to while it runs. `ERASE` of a `$STATIC` array through a descriptor zeroes the
+/// array; its write set lacked the array, so a later read of `cacheList(1)` was
+/// forwarded the 9 stored before it (Q45S34).
+#[test]
+fn a_noretain_call_still_writes_what_its_argument_points_to() {
+    let premise = Parsed::new(
+        "declare void @use(ptr nocapture)
+
+define void @f() {
+b0:
+  %slot = alloca [4 x i8]
+  %inner = alloca [4 x i8]
+  store ptr %inner, ptr %slot
+  call void @use(ptr %slot)
+  ret void
+}
+",
+    );
+    assert!(writes(&premise.effects(&IndexMap::default())[0], &bytes(&premise.object("inner"), 0, 4)));
+    let kept = Parsed::new(
+        "declare void @use(ptr nocapture noretain)
+
+define void @f() {
+b0:
+  %slot = alloca [4 x i8]
+  %inner = alloca [4 x i8]
+  store ptr %inner, ptr %slot
+  call void @use(ptr %slot)
+  ret void
+}
+",
+    );
+    assert!(writes(&kept.effects(&IndexMap::default())[0], &bytes(&kept.object("inner"), 0, 4)));
+}
+
 /// A value nothing is known of is a multiple of 1, so `x << 1` and
 /// `0 - (x << 1)` are multiples of 2 and `x * 8` of 8: the fact a trip
 /// count's divisibility proof reads. Only operands with a fact gave one.

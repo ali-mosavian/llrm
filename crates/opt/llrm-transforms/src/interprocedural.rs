@@ -698,7 +698,8 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         let (Some(name), Some(function), true) = (global.name.as_ref(), global.function(), exact) else { continue };
         let Some(summary) = known.get(name) else { continue };
         let shape = analyses.function::<Shape>(module, id);
-        let procedure = Procedure::of(Unit { program: Some(&program), ..Unit::of(module, layout, function) }.with_globals_aa(globals).with_shape(&shape));
+        let exposed = llrm_analysis::memory::exposed_frames(&Unit::of(module, layout, function));
+        let procedure = Procedure::of(Unit { program: Some(&program), ..Unit::of(module, layout, function) }.with_globals_aa(globals).with_shape(&shape).with_exposed(&exposed));
         let initialized = alias::initialized(&procedure, known)?;
         let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))).collect::<Vec<_>>();
         let states = |fact: Fact| calls.iter().all(|&inst| effects::states(&module.context, &declarations, function, inst, fact));

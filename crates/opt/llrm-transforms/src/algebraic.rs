@@ -90,6 +90,7 @@ fn _rewritten(context: &mut Context, layout: &DataLayout, function: &mut Functio
         || _constant_address(context, function, inst)
         || _offset_scaled(context, function, inst)
         || _cast_pair(context, function, inst)
+        || _narrowed_binary(context, function, inst)
         || _nonnegative_sext(context, function, inst)
         || _masked_extension(context, layout, function, inst)
         || _casted_logic(context, function, inst)
@@ -104,6 +105,7 @@ fn _rewritten(context: &mut Context, layout: &DataLayout, function: &mut Functio
         || _decided(context, function, inst)
         || _selected(context, function, inst)
         || _inverted_compare(context, function, inst)
+        || _narrow_compare(context, function, inst)
         || _extended_boolean_tested(context, function, inst)
         || _extended_boolean_negated(context, function, inst)
 }
@@ -183,6 +185,120 @@ fn _inverted_compare(context: &mut Context, function: &mut Function, inst: InstI
     let operands = function.instruction(made).operands.clone();
     _replace(function, inst, Opcode::ICmp(predicate.inverse()), operands);
     true
+}
+
+/// `icmp P (ext a), (ext b)` or `icmp P (ext a), C` is a compare of the narrow
+/// `a`, as InstCombine's `foldICmpWithZextOrSext`: a `zext` pair orders as
+/// unsigned, a `sext` pair keeps its predicate, and a constant outside `a`'s
+/// range decides the answer. C's `int` promotion makes every `unsigned short`
+/// compare one of these. Where the extension lives on for another reader the
+/// compare narrows only for a loop-carried `a`, whose trip count is proven at
+/// its own width: narrowed elsewhere it moves the value to a byte-addressable
+/// register for nothing (grep grew 24 bytes).
+fn _narrow_compare(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    let Opcode::ICmp(predicate) = instruction.opcode else { return false };
+    let (left, right) = (instruction.operands[0], instruction.operands[1]);
+    let extension = |function: &Function, operand: Operand| {
+        let made = _definition(function, operand)?;
+        let Opcode::Cast(kind @ (CastOp::ZExt | CastOp::SExt)) = function.instruction(made).opcode else { return None };
+        Some((kind, function.instruction(made).operands[0]))
+    };
+    let Some((kind, a)) = extension(function, left) else { return false };
+    let Some(narrow) = function.operand_type(context, a) else { return false };
+    let Some(n) = context.types.int_bits(narrow) else { return false };
+    let wide = context.types.int_bits(function.operand_type(context, left).expect("a typed operand")).expect("an integer");
+    let signed = kind == CastOp::SExt;
+    let unsigned_form = |predicate| match predicate {
+        IntPredicate::Sgt => IntPredicate::Ugt,
+        IntPredicate::Sge => IntPredicate::Uge,
+        IntPredicate::Slt => IntPredicate::Ult,
+        IntPredicate::Sle => IntPredicate::Ule,
+        same => same,
+    };
+    if let Some((other, b)) = extension(function, right)
+        && other == kind
+        && function.operand_type(context, b) == Some(narrow)
+        && (_loop_carried(function, a) || _loop_carried(function, b) || _single_use(function, left) && _single_use(function, right))
+    {
+        let predicate = if signed { predicate } else { unsigned_form(predicate) };
+        _replace(function, inst, Opcode::ICmp(predicate), vec![a, b]);
+        return true;
+    }
+    let Some(bits) = _integer(context, right) else { return false };
+    if wide > 64 {
+        return false;
+    }
+    // `a`'s range and C, as numbers.
+    let (low, high) = if signed { (-(1_i128 << (n - 1)), (1_i128 << (n - 1)) - 1) } else { (0, (1_i128 << n) - 1) };
+    let compared_signed = matches!(predicate, IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle);
+    if signed && !compared_signed && !matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
+        return false;
+    }
+    let c = if compared_signed || signed { ((bits as i128) << (128 - wide)) >> (128 - wide) } else { bits as i128 };
+    if (low..=high).contains(&c) {
+        if !_loop_carried(function, a) && !_single_use(function, left) {
+            return false;
+        }
+        let predicate = if signed { predicate } else { unsigned_form(predicate) };
+        let number = Operand::Constant(context.int(narrow, c));
+        _replace(function, inst, Opcode::ICmp(predicate), vec![a, number]);
+        return true;
+    }
+    // Every value of `a` is on one side of C.
+    let side = if c < low { high } else { low };
+    let holds = match predicate {
+        IntPredicate::Eq => side == c,
+        IntPredicate::Ne => side != c,
+        IntPredicate::Ugt | IntPredicate::Sgt => side > c,
+        IntPredicate::Uge | IntPredicate::Sge => side >= c,
+        IntPredicate::Ult | IntPredicate::Slt => side < c,
+        IntPredicate::Ule | IntPredicate::Sle => side <= c,
+    };
+    let decided = _constant(context, function, inst, u128::from(holds));
+    _forward(function, inst, decided);
+    true
+}
+
+/// `trunc (op (ext a), y)` is `op a, (trunc y)` for an operation that commutes
+/// with truncation, as InstCombine's `visitTrunc`: a wrapping `unsigned short`
+/// sum is computed in `int` and cut back, and cut first it is one narrow
+/// operation. `ext a` must be `a` at the result's width, so a conversion
+/// goes; the other operand's cut is loop-invariant where it is.
+fn _narrowed_binary(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    if instruction.opcode != Opcode::Cast(CastOp::Trunc) || !_single_use(function, instruction.operands[0]) {
+        return false;
+    }
+    let narrow = instruction.ty;
+    let Some(made) = _definition(function, instruction.operands[0]) else { return false };
+    let Some((op, left, right, wide)) = _binary(context, function, made) else { return false };
+    if !matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) || wide > 128 {
+        return false;
+    }
+    let source = |function: &Function, operand: Operand| {
+        let extended = _definition(function, operand)?;
+        let Opcode::Cast(CastOp::ZExt | CastOp::SExt) = function.instruction(extended).opcode else { return None };
+        let from = function.instruction(extended).operands[0];
+        (function.operand_type(context, from) == Some(narrow)).then_some(from)
+    };
+    let (a, b) = (source(function, left), source(function, right));
+    if a.is_none() && b.is_none() {
+        return false;
+    }
+    let mut cut = |function: &mut Function, known: Option<Operand>, operand: Operand| match (known, operand) {
+        (Some(from), _) => from,
+        (None, Operand::Constant(_)) => _integer(context, operand).map_or(operand, |bits| Operand::Constant(context.int(narrow, bits as i128))),
+        _ => _before(function, inst, Opcode::Cast(CastOp::Trunc), vec![operand]),
+    };
+    let (left, right) = (cut(function, a, left), cut(function, b, right));
+    _replace(function, inst, Opcode::Binary(op), vec![left, right]);
+    true
+}
+
+/// `operand` is a phi: carried round a loop, or merged.
+fn _loop_carried(function: &Function, operand: Operand) -> bool {
+    _definition(function, operand).is_some_and(|made| function.instruction(made).opcode == Opcode::Phi)
 }
 
 fn _definition(function: &Function, operand: Operand) -> Option<InstId> {

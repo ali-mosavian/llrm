@@ -2654,8 +2654,8 @@ fn peek_and_poke_touch_memory_every_time() {
     let path = written(&directory, "tick.bas", source);
     let text = listing(&parsed_as(&path, "qb45", "qb45"));
     assert!(source.windows(5).any(|one| one == b"PEEK("), "the shape that was folded");
-    // The loop re-reads: a label, a byte read of the tick, and a jump back to it.
-    let read = regex::Regex::new(r"(L\d+_\d+):\n\s+movzx \w+, byte ptr es:\[108\]\n").unwrap();
+    // The loop re-reads: a label, a byte read of the tick (loaded, or compared in place), and a jump back to it.
+    let read = regex::Regex::new(r"(L\d+_\d+):\n\s+(?:movzx \w+, byte ptr es:\[108\]|cmp byte ptr es:\[108\], \w+)\n").unwrap();
     let back = |label: &str| regex::Regex::new(&format!(r"\s+j\w+ {label}\n")).unwrap().is_match(&text);
     assert!(read.captures_iter(&text).any(|found| back(&found[1])), "{text}");
     assert_eq!(text.matches("mov byte ptr es:[108],").count(), 2, "{text}");

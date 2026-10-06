@@ -58,6 +58,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
 
 /// `module` as masm, its code in the segment `code`, selected by `selection`.
 pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments, selection: &'static isel::Compiled, arch: &dyn llrm_target::Target) -> Result<masm::Module, String> {
+    let _encoding = crate::backend::select::encoding_in(arch.object().bitness);
     let cpu = crate::backend::cpu::profile(cpu)?;
     let module = &*timed("mir near code", || crate::backend::nearcode::placed(module));
     let mut names = timed("global names", || globals::names(module, &|name| abi.linked(name)))?;

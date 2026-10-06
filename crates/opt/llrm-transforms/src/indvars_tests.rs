@@ -155,3 +155,58 @@ fn rewinding_the_corpus_loses_no_trip_count() {
     }
     assert!(fired > 0, "the corpus rewinds somewhere");
 }
+
+// ------------------------------------------------------------------ widened
+
+/// `for (unsigned short i = 0; i < n; ++i) a[i] = 0` on a 32-bit address:
+/// the counter's `zext` to the index width is a conversion a trip and its
+/// counted-loop proof was 16 bits against the pointer's 32, so `fill` and
+/// `lsr` found no matching counter (code32 sieve, 19277 executed).
+fn clearing(layout: &str) -> String {
+    format!(
+        "target datalayout = \"{layout}\"
+
+define i32 @f(i16 %n) {{
+b0:
+  %buf = alloca [64 x i8]
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %go = icmp ult i16 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %w = zext i16 %i to i32
+  %p = getelementptr inbounds i8, ptr %buf, i32 %w
+  store i8 1, ptr %p
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i32 0
+}}
+"
+    )
+}
+
+fn widening(text: &str) -> (bool, String) {
+    let (changed, module) = through(text, &[&[0], &[1], &[7], &[64]], |context, layout, function, analyses| super::widened(context, layout, function, analyses.outer()));
+    (changed, printed(&module))
+}
+
+#[test]
+fn a_counter_extended_to_the_index_width_is_that_wide() {
+    let (changed, after) = widening(&clearing("e-p:32:32-n8:16:32"));
+    assert!(changed, "{after}");
+    assert!(after.contains("icmp ult i32 %widen.iv"), "{after}");
+    assert!(!after.contains("zext i16 %i to i32"), "{after}");
+}
+
+#[test]
+fn a_counter_extended_past_the_index_width_stays() {
+    // 16-bit addresses (a segment's offset): `zext` to 32 is no index.
+    let text = clearing("e-p:16:16-n8:16:32").replace("i32 %w", "i16 %w16").replace("zext i16 %i to i32", "zext i16 %i to i32\n  %w16 = trunc i32 %w to i16");
+    let (changed, after) = widening(&text);
+    assert!(!changed, "{after}");
+}
