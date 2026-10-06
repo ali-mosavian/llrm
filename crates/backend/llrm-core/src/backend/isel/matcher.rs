@@ -20,7 +20,48 @@ pub(super) enum State {
     Leaf(&'static [usize]),
 }
 
-include!(concat!(env!("OUT_DIR"), "/isel.rs"));
+/// The most operands a pattern tests.
+pub(super) const OPERANDS: usize = 3;
+
+type Holds = for<'a, 'b, 'c, 'd> fn(&mut Selector<'a, 'b, 'c>, usize, &Match<'d>) -> bool;
+type Costs = for<'a, 'b, 'c, 'd> fn(&mut Selector<'a, 'b, 'c>, usize, &Match<'d>) -> Result<i64, Unselected>;
+type Emits = for<'a, 'b, 'c, 'd, 'e> fn(&mut Selector<'a, 'b, 'c>, usize, &Match<'d>, &'e mut Vec<Arc<Insn>>) -> Result<(), Unselected>;
+
+/// One target's instruction selector, as generated from its definition
+/// directory: the automaton's tables and the patterns' methods. A target is
+/// bound to its selector by `llrm-driver`; nothing here names one.
+pub struct Compiled {
+    pub name: &'static str,
+    opcodes: &'static [&'static str],
+    types: &'static [&'static str],
+    kinds: &'static [&'static str],
+    commutative: &'static [&'static str],
+    root: Option<usize>,
+    states: &'static [State],
+    groups: &'static [Option<usize>],
+    covers: &'static [bool],
+    holds: Holds,
+    covers_here: Holds,
+    cost: Costs,
+    emit: Emits,
+}
+
+mod selectors {
+    use super::*;
+
+    include!(concat!(env!("OUT_DIR"), "/selectors.rs"));
+}
+
+/// The selector of the target `name`, as its definition directory is named.
+pub fn selector(name: &str) -> Option<&'static Compiled> {
+    selectors::ALL.iter().copied().find(|one| one.name == name)
+}
+
+/// The selector built for 16-bit x86, the default of every driver that is
+/// not handed another.
+pub(crate) fn code16() -> &'static Compiled {
+    &selectors::x86_code16::SELECTOR
+}
 
 /// The instruction a pattern matched: its operands, a commutative
 /// opcode's constant taken second.
@@ -58,13 +99,13 @@ impl Selector<'_, '_, '_> {
         let m = self.matched(inst, block_at, convention);
         let candidates = self.candidates(&m);
         let Some(chosen) = self.chosen(candidates, &m)? else { return refuse(self.function.instruction(inst).opcode.mnemonic()) };
-        self.pattern_emit(chosen, &m, out)
+        (self.compiled.emit)(self, chosen, &m, out)
     }
 
     fn matched<'a>(&self, inst: InstId, block_at: &'a IndexMap<BlockId, i64>, convention: &'a Convention) -> Match<'a> {
         let instruction = self.function.instruction(inst);
         let mut ops = instruction.operands.clone();
-        if COMMUTATIVE.contains(&instruction.opcode.mnemonic()) && matches!(ops.first(), Some(Operand::Constant(_))) {
+        if self.compiled.commutative.contains(&instruction.opcode.mnemonic()) && matches!(ops.first(), Some(Operand::Constant(_))) {
             ops.swap(0, 1);
         }
         let volatile = matches!(instruction.opcode, Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. });
@@ -74,9 +115,9 @@ impl Selector<'_, '_, '_> {
     /// The patterns the automaton leaves standing for `m`, in file order.
     fn candidates(&self, m: &Match) -> &'static [usize] {
         let features = self.features(m);
-        let mut state = ROOT;
+        let mut state = self.compiled.root;
         loop {
-            match state.map(|one| &STATES[one]) {
+            match state.map(|one| &self.compiled.states[one]) {
                 None => return &[],
                 Some(State::Leaf(patterns)) => return patterns,
                 Some(State::Test { feature, edges, default }) => {
@@ -91,7 +132,7 @@ impl Selector<'_, '_, '_> {
     pub(super) fn covered_by_pattern(&mut self, inst: InstId, block_at: &IndexMap<BlockId, i64>, convention: &Convention) {
         let m = self.matched(inst, block_at, convention);
         for &one in self.candidates(&m) {
-            if COVERS[one] && self.pattern_covers(one, &m) {
+            if self.compiled.covers[one] && (self.compiled.covers_here)(self, one, &m) {
                 return;
             }
         }
@@ -99,18 +140,19 @@ impl Selector<'_, '_, '_> {
 
     fn chosen(&mut self, candidates: &[usize], m: &Match) -> Result<Option<usize>, Unselected> {
         let this = std::cell::RefCell::new(self);
-        choose(candidates, &GROUPS, |one| this.borrow_mut().pattern_holds(one, m), |one| this.borrow_mut().pattern_cost(one, m))
+        let compiled = this.borrow().compiled;
+        choose(candidates, compiled.groups, |one| (compiled.holds)(&mut this.borrow_mut(), one, m), |one| (compiled.cost)(&mut this.borrow_mut(), one, m))
     }
 
     fn features(&self, m: &Match) -> [u16; 2 + 2 * OPERANDS] {
         let instruction = self.function.instruction(m.inst);
         let position = |domain: &[&str], name: &str| domain.iter().position(|one| *one == name).expect("a name the generator knows") as u16;
         let mut out = [0; 2 + 2 * OPERANDS];
-        out[0] = position(&OPCODES, instruction.opcode.mnemonic());
-        out[1] = position(&TYPES, self.class(Some(instruction.ty)));
+        out[0] = position(self.compiled.opcodes, instruction.opcode.mnemonic());
+        out[1] = position(self.compiled.types, self.class(Some(instruction.ty)));
         for (index, &operand) in m.ops.iter().take(OPERANDS).enumerate() {
-            out[2 + 2 * index] = position(&KINDS, self.kind(operand));
-            out[3 + 2 * index] = position(&TYPES, self.class(self.function.operand_type(&self.module.context, operand)));
+            out[2 + 2 * index] = position(self.compiled.kinds, self.kind(operand));
+            out[3 + 2 * index] = position(self.compiled.types, self.class(self.function.operand_type(&self.module.context, operand)));
         }
         out
     }
