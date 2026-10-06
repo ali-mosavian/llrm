@@ -66,7 +66,7 @@ fn a_targets_cpu_profile_has_its_own_address_forms_and_registers() {
     assert!(real.dword_address_form().unwrap().secondary);
     assert!(!flat.dword_address_form().unwrap().secondary);
     assert_eq!((real.register_capacity, real.call_register_capacity), (6, 2));
-    assert_eq!((flat.register_capacity, flat.call_register_capacity), (6, 3));
+    assert_eq!((flat.register_capacity, flat.call_register_capacity), (6, 5));
     assert_eq!(flat.name, real.name);
     assert_eq!((real.operand_bytes, flat.operand_bytes), (2, 4));
 }

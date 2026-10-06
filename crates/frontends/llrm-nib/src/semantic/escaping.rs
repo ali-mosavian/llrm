@@ -102,7 +102,7 @@ impl FunctionCompiler<'_> {
             span,
         };
         let signature = signature(self.types, &check, 0)?;
-        let compiler = FunctionCompiler::new(&check, &signature, self.signatures, self.templates, self.builtin_ids, self.private_methods, self.literals, self.types, self.facts, &crate::Frontend { unchecked_bounds: self.unchecked_bounds, debug: false, checked_stack: false, ..crate::Frontend::default() })?;
+        let compiler = FunctionCompiler::new(&check, &signature, self.signatures, self.templates, self.builtin_ids, self.private_methods, self.literals, self.types, self.facts, self.unchecked_bounds, false)?;
         compiler.compile(&check).map(|_| ())
     }
 

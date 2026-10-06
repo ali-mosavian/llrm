@@ -341,7 +341,7 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop, costs: &OperationCosts, s
     }
     let stride = formula.step.known()?;
     let descending = matches!(stored, Stored::Copy(_)) && stride == -bytes.clone();
-    if (stride != bytes && !descending) || proof.width() != width || unit.layout.pointer(unit.space(pointer)?).index_bits != width {
+    if (stride != bytes && !descending) || proof.width() > width || unit.layout.pointer(unit.space(pointer)?).index_bits != width {
         return None;
     }
     let pattern = match &stored {
@@ -389,7 +389,7 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop, costs: &OperationCosts, s
                 if user.opcode != Opcode::Phi || function.parent(one.user) != Some(exit) || from != Some(&Operand::Block(header)) {
                     return None;
                 }
-                left.push((result, induction::_signed(&AffineOperand::Const(step.clone()), &facts, width)?));
+                left.push((result, induction::_signed(&AffineOperand::Const(step.clone()), &facts, proof.width())?));
             }
         }
     }
@@ -471,19 +471,26 @@ fn _copy(context: &mut Context, declared: &mut Declared, how: How, to: u32, from
 
 /// The loop made one trip that fills.
 fn _filled(context: &mut Context, declared: &mut Declared, function: &mut Function, found: &_Found) {
-    let width = found.proof.width();
-    let mut seeds = Seeds { context, function, at: found.effect, width };
+    let counter = found.proof.width();
+    let mut seeds = Seeds { context, function, at: found.effect, width: counter };
     let trips = induction::trips(&found.proof, &mut |kind, args| seeds.computed(kind, args)).expect("a pre-tested proof");
+    // The bytes are counted in the pointer's index: a narrower counter's trips, never wrapped, widen.
+    let width = found.memset.1;
+    let counted = trips.clone();
+    let trips = seeds.widened(&trips, width);
+    seeds.width = width;
     let cells = matches!(found.stored, Stored::Fill(Byte::Pattern(..)));
     let count = if found.bytes == BigInt::from(1) || cells { trips.clone() } else { seeds.computed(BinaryOp::Mul, vec![trips.clone(), AffineOperand::constant(found.bytes.clone(), width)]) };
+    seeds.width = counter;
     let finals = found
         .left
         .iter()
         .map(|(value, step)| {
-            let moved = if *step == BigInt::from(1) { trips.clone() } else { seeds.computed(BinaryOp::Mul, vec![trips.clone(), AffineOperand::constant(step.clone(), width)]) };
-            (*value, seeds.computed(BinaryOp::Add, vec![AffineOperand::Value(*value, width), moved]))
+            let moved = if *step == BigInt::from(1) { counted.clone() } else { seeds.computed(BinaryOp::Mul, vec![counted.clone(), AffineOperand::constant(step.clone(), counter)]) };
+            (*value, seeds.computed(BinaryOp::Add, vec![AffineOperand::Value(*value, counter), moved]))
         })
         .collect::<IndexMap<_, _>>();
+    seeds.width = width;
     let count = seeds.operand(&count);
     let finals = finals.into_iter().map(|(value, sum)| (value, seeds.operand(&sum))).collect::<IndexMap<_, _>>();
     let void = seeds.context.types.void();
