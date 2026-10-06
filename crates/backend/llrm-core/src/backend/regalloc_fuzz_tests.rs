@@ -769,6 +769,12 @@ fn test_dense_liveness_is_what_the_sorted_sets_gave() {
         let (plain, _) = body(seed, &shape);
         for body in [in_ssa(&plain), plain] {
             assert_eq!(crate::backend::allocate::live(&body), crate::backend::allocate::live_reference(&body), "seed {seed}");
+            let (entering, leaving) = crate::backend::allocate::live_reference(&body);
+            let rows = crate::backend::allocate::live_rows(&body);
+            for block in &body.blocks {
+                assert_eq!(rows.entering(block.at).collect::<Vec<_>>(), entering[&block.at].iter().copied().collect::<Vec<_>>(), "seed {seed} entering {}", block.at);
+                assert_eq!(rows.leaving(block.at).collect::<Vec<_>>(), leaving[&block.at].iter().copied().collect::<Vec<_>>(), "seed {seed} leaving {}", block.at);
+            }
         }
     }
 }

@@ -140,6 +140,46 @@ pub type Live = IndexMap<i64, BTreeSet<u32>>;
 /// Dense: the values numbered by their order, each block's sets one row of bits in one array, the
 /// fixed point a worklist over the rows. No set is built but the answer.
 pub fn live(body: &LirBody) -> (Live, Live) {
+    let dense = live_rows(body);
+    (dense.sets(&dense.into), dense.sets(&dense.out))
+}
+
+/// What is live at each block's entry and exit as the fixed point leaves it: rows of bits, which a
+/// reader that only walks the values need not turn into sets.
+pub struct LiveRows {
+    numbered: Vec<u32>,
+    words: usize,
+    position: IndexMap<i64, usize>,
+    blocks: Vec<i64>,
+    into: Vec<u64>,
+    out: Vec<u64>,
+}
+
+impl LiveRows {
+    /// The values live at the entry of the block at `at`, in order.
+    pub fn entering(&self, at: i64) -> impl Iterator<Item = u32> + '_ {
+        self.values(&self.into, self.position[&at])
+    }
+
+    /// The values live at the exit of the block at `at`, in order.
+    pub fn leaving(&self, at: i64) -> impl Iterator<Item = u32> + '_ {
+        self.values(&self.out, self.position[&at])
+    }
+
+    fn values<'a>(&'a self, rows: &'a [u64], block: usize) -> impl Iterator<Item = u32> + 'a {
+        rows[block * self.words..(block + 1) * self.words]
+            .iter()
+            .enumerate()
+            .flat_map(move |(word, bits)| (0..64).filter(move |bit| bits >> bit & 1 == 1).map(move |bit| self.numbered[word * 64 + bit]))
+    }
+
+    fn sets(&self, rows: &[u64]) -> Live {
+        self.blocks.iter().enumerate().map(|(at, block)| (*block, self.values(rows, at).collect())).collect()
+    }
+}
+
+/// `live`, as rows.
+pub fn live_rows(body: &LirBody) -> LiveRows {
     // Every value the body names, numbered by order. Ids can be far apart, so the number of a value
     // is found by a table over the ids where they are dense enough, else by search.
     let mut numbered: Vec<u32> = Vec::new();
@@ -264,25 +304,13 @@ pub fn live(body: &LirBody) -> (Live, Live) {
             }
         }
     }
-    let numbers = &numbered;
-    let values = |row: &[u64]| -> BTreeSet<u32> {
-        row.iter()
-            .enumerate()
-            .flat_map(|(word, bits)| (0..64).filter(move |bit| bits >> bit & 1 == 1).map(move |bit| numbers[word * 64 + bit]))
-            .collect()
-    };
-    let live_in: Live = body.blocks.iter().enumerate().map(|(at, block)| (block.at, values(&into[at * words..(at + 1) * words]))).collect();
-    let live_out: Live = body
-        .blocks
-        .iter()
-        .enumerate()
-        .map(|(at, block)| {
-            let row = at * words..(at + 1) * words;
-            let leaving: Vec<u64> = out[row.clone()].iter().zip(&handed[row]).map(|(one, other)| one | other).collect();
-            (block.at, values(&leaving))
-        })
-        .collect();
-    (live_in, live_out)
+    // A phi's argument is read at the end of its predecessor, leaving it.
+    for (at, row) in out.chunks_mut(words).enumerate() {
+        for (word, bits) in row.iter_mut().zip(&handed[at * words..(at + 1) * words]) {
+            *word |= bits;
+        }
+    }
+    LiveRows { numbered, words, position, blocks: body.blocks.iter().map(|block| block.at).collect(), into, out }
 }
 
 /// `live` as it was written over sorted sets, which the tests hold the dense one to.
