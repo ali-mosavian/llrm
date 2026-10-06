@@ -78,8 +78,11 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let source = source.ok_or("the following arguments are required: source")?;
     frontend.debug = flags.debug;
     frontend.checked_stack = flags.sanitize.stack;
-    let bound = llrm_driver::target(&flags, &["x86-code16"])?;
-    let codegen = bound.options(&flags, flags.machine(nib::machine())?);
+    let bound = llrm_driver::target(&flags, &["x86-code16", "x86-code32"])?;
+    frontend.layout = bound.target.layout();
+    frontend.slot = u32::try_from(bound.target.stack_slot_bytes()).expect("a slot is positive");
+    frontend.os = super::Os::of(bound.target.runtime("nib").ok_or("this target has no Nib runtime")?)?;
+    let codegen = bound.options(&flags, flags.machine(nib::machine(&*bound.target, &frontend.os))?);
     Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen })
 }
 
@@ -115,7 +118,7 @@ pub fn main(argv: &[String]) -> i32 {
         if !args.used_by.is_empty() {
             nib::keep_exports(&mut program, &used(&args.used_by)?);
         }
-        let module = nib::assembled(&program, &args.entry, &args.codegen)?;
+        let module = nib::assembled(&program, &args.entry, &args.codegen, &args.frontend.os)?;
         let bytes = if args.flags.assembly {
             masm::text(&module).map_err(|error| error.to_string())?.into_bytes()
         } else {

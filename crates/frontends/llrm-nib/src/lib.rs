@@ -44,6 +44,8 @@ pub struct Frontend {
     pub layout: llrm_target::layout::Layout,
     /// The bytes an argument takes on the stack at least: the target's stack slot.
     pub slot: u32,
+    /// The target's OS layer under Nib's runtime.
+    pub os: Os,
     /// Index and slice bounds go unchecked, as in `unsafe`: `--unchecked-bounds`.
     pub unchecked_bounds: bool,
     /// `-g`: source lines and debug information.
@@ -55,7 +57,42 @@ pub struct Frontend {
 impl Default for Frontend {
     /// For real mode, where the language began: a caller that knows its target sets `layout`.
     fn default() -> Self {
-        Self { layout: llrm_x86_code16::layout(), slot: 2, unchecked_bounds: false, debug: false, checked_stack: false }
+        Self { layout: llrm_x86_code16::layout(), slot: 2, os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false }
+    }
+}
+
+/// What a target's OS layer says of Nib's runtime (`runtime/nib/nib.toml` of its crate).
+#[derive(Clone, Debug)]
+pub struct Os {
+    /// `std.os` and `os`: the module the runtime's routines call the operating system through.
+    pub module: String,
+    /// What `-fsanitize=stack` compares and calls.
+    pub stack: llrm_core::hir::model::StackCheck,
+    /// The stack the start-up reserves; the object's own adds to it.
+    pub stack_base: i64,
+    /// Whether the start-up zeroes the far uninitialised data.
+    pub far_bss: bool,
+    /// The directory the description is in, and the assembly files it names there.
+    pub directory: String,
+    pub start: String,
+    pub dos: String,
+}
+
+impl Os {
+    pub fn of(description: llrm_target::runtime::Description) -> Result<Self, String> {
+        let table = description.table()?;
+        let text = |key: &str| description.string(key);
+        let file = |key: &str| -> Result<String, String> { let name = text(key)?; description.file(&name).map(str::to_owned).ok_or(format!("the runtime description names {name}, which is not shipped")) };
+        let stack = toml::Value::Table(file("stack")?.parse().map_err(|error: toml::de::Error| error.to_string())?);
+        Ok(Self {
+            module: file("os")?,
+            stack: llrm_core::hir::model::StackCheck::from_toml(&stack)?,
+            stack_base: table.get("stack_base").and_then(|one| one.as_integer()).ok_or("stack_base is not an integer")?,
+            far_bss: table.get("far_bss").and_then(|one| one.as_bool()).ok_or("far_bss is not a boolean")?,
+            directory: description.directory.to_owned(),
+            start: text("start")?,
+            dos: text("dos")?,
+        })
     }
 }
 
@@ -98,7 +135,7 @@ pub fn syntax_text(source: &str) -> Result<String, Diagnostic> {
 /// The program whose main module is the file `path`: its imports are the
 /// files under the same directory, `a.b` at `a/b.nib`.
 pub fn compile_file(path: &std::path::Path, frontend: &Frontend) -> Result<String, (std::path::PathBuf, Diagnostic)> {
-    let module = load_file(path)?;
+    let module = load_file(path, &frontend.os)?;
     let sources = module.sources.clone();
     compile_module(module, module_name(path), frontend).map_err(|error| located(path, &sources, error))
 }
@@ -108,7 +145,7 @@ pub fn declare_file(
     path: &std::path::Path,
     language: declarations::Language,
 ) -> Result<String, (std::path::PathBuf, Diagnostic)> {
-    let module = load_file(path)?;
+    let module = load_file(path, &Frontend::default().os)?;
     declarations::declarations(&module, module_name(path), language).map_err(|error| located(path, &module.sources, error))
 }
 
@@ -140,7 +177,7 @@ pub fn module_path(path: &std::path::Path, name: &str) -> std::path::PathBuf {
     }
 }
 
-fn load_file(path: &std::path::Path) -> Result<syntax::Module, (std::path::PathBuf, Diagnostic)> {
+fn load_file(path: &std::path::Path, os: &Os) -> Result<syntax::Module, (std::path::PathBuf, Diagnostic)> {
     let source = std::fs::read_to_string(path).map_err(|error| {
         (
             path.to_path_buf(),
@@ -148,6 +185,9 @@ fn load_file(path: &std::path::Path) -> Result<syntax::Module, (std::path::PathB
         )
     })?;
     modules::load(&source, &mut |name| {
+        if matches!(name, "os" | "std.os") {
+            return Ok(os.module.clone());
+        }
         std::fs::read_to_string(module_path(path, name)).map_err(|error| error.to_string())
     })
     .map_err(|(name, error)| (module_path(path, &name), error))
@@ -170,7 +210,9 @@ pub struct Checked {
 }
 
 pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>) -> Checked {
-    let loaded = match modules::read_all(source, read) {
+    // An editor checks for the language's first target: `std.os` is its OS layer.
+    let mut read = |name: &str| if name == "std.os" { Ok(Frontend::default().os.module) } else { read(name) };
+    let loaded = match modules::read_all(source, &mut read) {
         Ok(loaded) => loaded,
         Err(error) => return Checked { loaded: None, facts: Vec::new(), error: Some(error) },
     };

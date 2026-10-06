@@ -26,7 +26,7 @@ fn _stack_of(fixture: &str) -> Result<(String, Vec<u8>), String> {
 
     let program = nib::parsed(&nib::fixture(&format!("{fixture}.nib")));
     let options = nib::O2();
-    let module = crate::compile::assembled(&program, "main", &options)?;
+    let module = crate::compile::assembled(&program, "main", &options, &crate::Frontend::default().os)?;
     let object = crate::compile::object(&module, &nib::fixture(&format!("{fixture}.nib")), llrm_core::backend::omfwrite::CodeLayout::OneSegment)?;
     Ok((llrm_core::backend::masm::text(&module).expect("prints"), object))
 }
@@ -58,8 +58,8 @@ fn test_a_frame_no_stack_segment_holds_is_refused() {
 /// `STACK_BASE` is the stack `start.asm` links: a different one would size the object's wrongly.
 #[test]
 fn test_the_stack_base_is_the_one_start_links() {
-    let start = std::fs::read_to_string(crate::test_nib_frontend::root().join("crates/frontends/llrm-nib/src/runtime/start.asm")).unwrap();
-    assert!(start.contains(&format!(".stack {}", crate::compile::STACK_BASE)));
+    let start = std::fs::read_to_string(crate::test_nib_frontend::root().join("crates/target/llrm-x86-code16/runtime/nib/start.asm")).unwrap();
+    assert!(start.contains(&format!(".stack {}", crate::Frontend::default().os.stack_base)));
 }
 
 /// The listing's innermost loops, each as the lines from the label a later
@@ -98,8 +98,11 @@ fn test_a_partition_loop_has_no_bounds_check_in_it() {
 fn test_the_stack_check_names_what_the_nib_runtime_defines() {
     use crate::test_nib_frontend as nib;
 
-    let check = crate::compile::stack_check();
-    let runtime = |name: &str| std::fs::read_to_string(format!("{}/src/runtime/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let check = crate::Frontend::default().os.stack.clone();
+    let runtime = |name: &str| {
+        let directory = if name.ends_with(".asm") { format!("{}/../../target/llrm-x86-code16/runtime/nib", env!("CARGO_MANIFEST_DIR")) } else { format!("{}/src/runtime", env!("CARGO_MANIFEST_DIR")) };
+        std::fs::read_to_string(format!("{directory}/{name}")).unwrap()
+    };
     assert!(runtime("dos.asm").contains(&format!("public {}", check.limit)) && runtime("start.asm").contains(&format!("mov {}, ax", check.limit)));
     assert!(runtime("errors.nib").contains(&format!("@export(name=\"{}\")", check.handler)));
     // The limit sits the reserve `stack_to_add` leaves above the stack's bottom.
@@ -121,7 +124,7 @@ fn test_a_loop_admitted_on_a_tie_in_counted_bytes_does_not_grow_the_object() {
     let source = nib::root().join("examples/loader.nib");
     let program = nib::parsed(&source);
     let options = nib::level("Os");
-    let module = crate::compile::assembled(&program, "main", &options).expect("assembles");
+    let module = crate::compile::assembled(&program, "main", &options, &crate::Frontend::default().os).expect("assembles");
     let object = crate::compile::object(&module, &source, llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("an object").len();
     // 2517 bytes before the loop was admitted on the tie; 2532 with it.
     assert!(object <= 2517, "{object} bytes");

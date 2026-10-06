@@ -7,6 +7,7 @@ pub mod machine;
 pub mod object;
 pub mod opcosts;
 pub mod registers;
+pub mod runtime;
 pub mod timings;
 
 use std::rc::Rc;
@@ -135,6 +136,11 @@ pub trait Target {
 
     /// How this target's passes are given the prices of a CPU.
     fn cost_model(&self) -> CostModel;
+
+    /// The OS layer a language's runtime is built on here, if the target has one for it.
+    fn runtime(&self, _language: &str) -> Option<runtime::Description> {
+        None
+    }
 
     /// The object file and listing this target writes.
     fn object(&self) -> object::ObjectFormat;

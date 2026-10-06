@@ -33,7 +33,7 @@ for part in "$@"; do
     used="$used --used-by $work/$name.obj"
 done
 for part in start dos; do
-    "$toolchain/jwasm" -q -c -Cp -Zg -omf "-Fo$work/$part.obj" "$root/crates/frontends/llrm-nib/src/runtime/$part.asm"
+    "$toolchain/jwasm" -q -c -Cp -Zg -omf "-Fo$work/$part.obj" "$root/crates/target/llrm-x86-code16/runtime/nib/$part.asm"
     used="$used --used-by $work/$part.obj"
 done
 # jwlink keeps whatever any segment references, even one it drops, so the

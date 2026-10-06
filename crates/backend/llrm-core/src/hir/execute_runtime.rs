@@ -275,7 +275,7 @@ impl Machine<'_> {
     }
 
     /// The DOS file calls on host files: a handle or count, or DOS's error
-    /// code negated, as crates/frontends/llrm-nib/src/runtime/dos.asm returns them.
+    /// code negated, as crates/target/llrm-x86-code16/runtime/nib/dos.asm returns them.
     fn file(&mut self, name: &str, arguments: &[Scalar]) -> Outcome<i16> {
         use std::io::{Read, Write};
         const FIRST: usize = 5;
