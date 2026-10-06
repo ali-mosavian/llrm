@@ -3299,3 +3299,41 @@ fn test_a_body_is_encoded_in_its_own_mode() {
     assert_eq!(through_of_the_read(&copyprop::forwarded(&read_through_a_copy(32))), Register::ECX);
     assert_eq!(through_of_the_read(&copyprop::forwarded(&read_through_a_copy(16))), Register::EBX);
 }
+
+// ----------------------------------------------------------------- what a jump reads
+
+/// The flags a conditional jump reads are the condition's: what code16's rows say of each jump, iced states
+/// of the mnemonic, so a target whose jump rows are its own needs no copy of them.
+#[test]
+fn test_what_a_conditional_jump_reads_is_the_conditions_for_every_condition() {
+    let rows: Vec<_> = instructions::FORMS.iter().filter(|form| form.operation == "branch").collect();
+    assert_eq!(rows.len(), 16);
+    for form in rows {
+        let branch = Semantics { name: Some(form.name.clone()), ..Semantics::new(Operation::Branch) };
+        let wanted = _flag_lanes(instructions::flags(form).expect("a jump reads flags").0);
+        assert_eq!(_branch_reads(&branch), wanted, "{}", form.name);
+    }
+}
+
+// ------------------------------------------------------------------ the count of a `rep`
+
+fn repeated_fill(name: &str, width: u32, di: Register, cx: Register, ax: Register) -> Insn {
+    let what = sem(Operation::Fill, name, vec![Loc::Mem(Mem::new(None, 0)), rl(di, width), rl(cx, width)], vec![rl(ax, width), rl(cx, width), rl(di, width)]);
+    insn(0, Some((0, 0)), Some(what), vec![], vec![])
+}
+
+/// `rep stosw` in 16-bit code counts CX down and leaves the upper half of ECX alone. `rep` was taken to write
+/// ECX whole, so a value live in ECX's upper half across it read as overwritten.
+#[test]
+fn test_a_rep_in_real_mode_writes_cx_and_not_the_upper_half_of_ecx() {
+    let (_, writes) = _register_effects(16, &repeated_fill("stosw", 2, Register::DI, Register::CX, Register::AX), true, false).expect("encodes");
+    assert!(writes.contains(&(Register::ECX, 0)) && writes.contains(&(Register::ECX, 1)), "{writes:?}");
+    assert!(!writes.contains(&(Register::ECX, 2)) && !writes.contains(&(Register::ECX, 3)), "{writes:?}");
+}
+
+/// In 32-bit code it counts ECX.
+#[test]
+fn test_a_rep_in_flat_mode_writes_ecx_whole() {
+    let (_, writes) = _register_effects(32, &repeated_fill("stosd", 4, Register::EDI, Register::ECX, Register::EAX), true, false).expect("encodes");
+    assert!((0..4).all(|lane| writes.contains(&(Register::ECX, lane))), "{writes:?}");
+}
