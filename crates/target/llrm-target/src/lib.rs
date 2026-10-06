@@ -186,7 +186,12 @@ pub trait Target {
 
     /// What a frame is built of.
     fn frame_registers(&self) -> FrameRegisters {
-        FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved(), slot: self.stack_slot_bytes() }
+        FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved(), slot: self.stack_slot_bytes(), optional: self.frame_optional() }
+    }
+
+    /// Whether a function that needs no frame register may leave it out (`calling.toml`'s `frame_optional`).
+    fn frame_optional(&self) -> bool {
+        false
     }
 }
 
@@ -201,6 +206,8 @@ pub struct FrameRegisters {
     pub saved: Vec<(iced_x86::Register, iced_x86::Register)>,
     /// The bytes the stack is kept a multiple of.
     pub slot: i64,
+    /// A function that needs no frame register may leave it out.
+    pub optional: bool,
 }
 
 impl FrameRegisters {
