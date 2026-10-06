@@ -600,9 +600,10 @@ pub fn siblings(
     // A shared slot holds each member at every width it is used, not just moved.
     let widths = _widest(body, &adjacent.keys().copied().collect());
 
-    let near = coalesce::_interference(body);
-    let deep = ranges::depths(body);
     let wanted: BTreeSet<u32> = adjacent.keys().copied().collect();
+    // Only pairs among the copy-related values are asked of.
+    let near = coalesce::_interference_among(body, Some(&wanted));
+    let deep = ranges::depths(body);
     let mut occurs: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::default();
     for block in &body.blocks {
         let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));

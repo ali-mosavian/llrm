@@ -799,3 +799,27 @@ fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
     intervals(&other, None);
     assert_eq!(worked() - before, 2, "another body was answered from the first");
 }
+
+/// `spiller::siblings` built the interference of every value live together (13.8% of compiling
+/// `d_faces`, #559) to ask of the pairs among the values a plain move relates. The graph of those
+/// values alone has the edges among them that the whole graph has.
+#[test]
+fn test_interference_among_some_values_is_the_whole_graphs_among_them() {
+    use crate::backend::coalesce::{_interference, _interference_among};
+    for seed in 0..120 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            let whole = _interference(&body);
+            let mut some: std::collections::BTreeSet<u32> = whole.keys().copied().filter(|one| (one + seed as u32) % 3 != 0).collect();
+            some.insert(1);
+            let among = _interference_among(&body, Some(&some));
+            for value in &some {
+                let expected: std::collections::BTreeSet<u32> = whole.get(value).map(|near| near.intersection(&some).copied().collect()).unwrap_or_default();
+                let found = among.get(value).cloned().unwrap_or_default();
+                assert_eq!(found, expected, "seed {seed} value {value}");
+            }
+            assert!(among.keys().all(|one| some.contains(one)), "seed {seed}: a value outside the set has an entry");
+        }
+    }
+}
