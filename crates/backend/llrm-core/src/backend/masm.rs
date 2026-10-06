@@ -358,7 +358,7 @@ fn parts(procedure: &Procedure, omit: bool) -> (Vec<Semantics>, Vec<Semantics>) 
     // Inline code is bytes this printer cannot read, so it may address the frame.
     let framed = !omit
         && (reserve != 0
-            || roots.contains(&procedure.registers.pointer)
+            || roots.contains(&ir::root(procedure.registers.pointer))
             || procedure.callees.values().any(|one| !one.code.is_empty()));
     let (bp, sp) = (reg(FRAME), reg(STACK));
     let mut leave: Vec<Semantics> =
@@ -655,6 +655,8 @@ fn stack_addressed(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
                         }
                     }
                     Operation::Leave | Operation::Exchange | Operation::Escape | Operation::Barrier | Operation::Call => return refused(procedure, &format!("{what:?}")),
+                    // `pushf` and its kind move the stack and carry no operand to read the amount from.
+                    Operation::Nothing if what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")) => return refused(procedure, &format!("{what:?}")),
                     Operation::Return => {
                         if here != 0 {
                             return refused(procedure, &format!("a return at depth {here}"));
@@ -1446,6 +1448,8 @@ mod tests {
         assert!(has(&flat(true, 8, value, IndexMap::default()), "push ebp"));
         let indirect = vec![insn(0, Semantics { indirect: true, ..semantics(Operation::Call, "call", vec![], vec![eax()]) }), ret()];
         assert!(has(&flat(true, 8, indirect, IndexMap::default()), "push ebp"));
+        let flags = vec![insn(0, semantics(Operation::Nothing, "pushf", vec![], vec![])), insn(1, semantics(Operation::Move, "mov", vec![eax()], vec![cell(8)])), ret()];
+        assert!(has(&flat(true, 8, flags, IndexMap::default()), "push ebp"));
         assert!(!has(&flat(true, 8, read(), IndexMap::default()), "push ebp"));
     }
 

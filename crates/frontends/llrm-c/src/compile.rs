@@ -983,7 +983,7 @@ mod tests {
     /// cell read 32 bits wide (a 16-bit frame's `[bp]` under 32-bit addressing) wrote `movzx ebp, ebp`
     /// into a flat frame, and the reserve was 70 bytes, not a multiple of the dword stack.
     #[test]
-    fn test_m32_keeps_ebp_and_the_dword_stack() {
+    fn test_m32_keeps_the_dword_stack() {
         let lines = flat_listing("bytes");
         assert!(lines.iter().all(|line| !line.starts_with("movzx ebp")), "{lines:#?}");
         assert!(lines.contains(&"sub esp, 76".to_owned()), "{lines:#?}");
