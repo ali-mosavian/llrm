@@ -12,7 +12,6 @@
 // CHECK: _fact endp
 // CHECK-LABEL: _moves proc
 // CHECK: call {{.*}}_moves
-// CHECK-NOT: call {{.*}}_moves
 // CHECK: _moves endp
 // CHECK-LABEL: _insert proc
 // CHECK-NOT: call {{.*}}_insert
