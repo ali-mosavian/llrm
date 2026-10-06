@@ -262,13 +262,17 @@ pub fn address_only(function: &Function, value: ValueId, depth: u32) -> bool {
 /// addressing modes, it takes no register.
 pub fn folded(function: &Function, value: ValueId) -> bool {
     let ValueDef::Instruction(def) = function.value(value).def else { return false };
-    if !matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. } | Opcode::Alloca { .. }) {
+    if !matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. } | Opcode::Alloca { .. } | Opcode::Cast(CastOp::AddrSpaceCast)) {
         return false;
     }
     let block = function.parent(def);
     let users = function.users(value);
     // A constant offset into a frame object is a displacement wherever it is read.
     let displacement = _frame_object(function, value) || _frame_offset(function, value);
+    // The stack space's view of one is made where it is read, by whatever reads it.
+    if displacement && matches!(function.instruction(def).opcode, Opcode::Cast(CastOp::AddrSpaceCast)) {
+        return !users.is_empty();
+    }
     !users.is_empty()
         && users.iter().all(|one| {
             let op = function.instruction(one.user);
@@ -284,7 +288,15 @@ pub fn folded(function: &Function, value: ValueId) -> bool {
 
 /// Whether `value` is a frame object's address: a displacement from BP in each access.
 fn _frame_object(function: &Function, value: ValueId) -> bool {
-    matches!(function.value(value).def, ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Alloca { .. }))
+    match function.value(value).def {
+        ValueDef::Instruction(def) => match (&function.instruction(def).opcode, &function.instruction(def).operands[..]) {
+            (Opcode::Alloca { .. }, _) => true,
+            // The same address in the stack's space.
+            (Opcode::Cast(CastOp::AddrSpaceCast), [Operand::Value(from)]) => _frame_object(function, *from),
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 /// Whether `value` is a frame object's address plus constants.
@@ -294,10 +306,7 @@ fn _frame_offset(function: &Function, value: ValueId) -> bool {
     let Opcode::GetElementPtr { .. } = op.opcode else { return false };
     let [Operand::Value(base), indexes @ ..] = op.operands.as_slice() else { return false };
     indexes.iter().all(|one| matches!(one, Operand::Constant(_)))
-        && match function.value(*base).def {
-            ValueDef::Instruction(at) => matches!(function.instruction(at).opcode, Opcode::Alloca { .. }) || _frame_offset(function, *base),
-            _ => false,
-        }
+        && (_frame_object(function, *base) || _frame_offset(function, *base))
 }
 
 fn _flags(function: &Function, value: ValueId) -> bool {
