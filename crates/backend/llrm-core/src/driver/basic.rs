@@ -620,7 +620,6 @@ fn object_abi(object: &Object, runtime: model::RuntimeProfile) -> HirAbi {
 /// each body framed as the runtime frames it, the statement table last, and
 /// the data where `object` lays it out.
 pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfile, options: &Options) -> Result<masm::Module, String> {
-    let _encoding = crate::backend::select::encoding_in(options.arch.object().bitness);
     let abi = object_abi(object, runtime);
     let mut names = globals::names(module, &|name| abi.linked(name))?;
     // A symbol the frontend states stands as it is, BASIC's type suffix and all.

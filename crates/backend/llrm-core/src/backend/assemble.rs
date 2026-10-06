@@ -58,7 +58,6 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
 
 /// `module` as masm, its code in the segment `code`, selected by `selection`.
 pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments, selection: &'static isel::Compiled, arch: &dyn llrm_target::Target) -> Result<masm::Module, String> {
-    let _encoding = crate::backend::select::encoding_in(arch.object().bitness);
     let cpu = crate::backend::cpu::profile(cpu)?;
     let module = &*timed("mir near code", || crate::backend::nearcode::placed(module));
     let mut names = timed("global names", || globals::names(module, &|name| abi.linked(name)))?;
@@ -270,7 +269,7 @@ pub fn trying<T>(candidates: Candidates, run: impl FnOnce() -> T) -> T {
 /// else the instructions and memory operands it is expected to execute per call.
 fn cost(made: &Machined, target: &Target<'_>) -> Option<f64> {
     if target.cpu.size {
-        made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| select::emit(what, 0, None, false, false, None).map(|code| code.code.len() as f64)).sum()
+        made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| select::emit_in(made.body.bits, what, 0, None, false, false, None).map(|code| code.code.len() as f64)).sum()
     } else {
         executed::work(&made.body)
     }

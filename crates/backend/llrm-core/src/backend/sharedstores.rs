@@ -28,8 +28,8 @@ fn literal(one: &Insn) -> Option<(u32, i64)> {
     (cell.width == *width && [1, 2, 4].contains(width)).then_some((*width, *value))
 }
 
-fn bytes(what: &Semantics) -> Option<usize> {
-    select::emit(what, 0, None, false, false, None).map(|code| code.code.len())
+fn bytes(bits: u32, what: &Semantics) -> Option<usize> {
+    select::emit_in(bits, what, 0, None, false, false, None).map(|code| code.code.len())
 }
 
 
@@ -48,9 +48,9 @@ pub fn shared(body: &LirBody, cpu: &Profile, saved: &[Register]) -> LirBody {
         .blocks
         .iter()
         .map(|block| {
-            let dead = regthrash::_dead_after(block, exits[&block.at].clone());
+            let dead = regthrash::_dead_after(body.bits, block, exits[&block.at].clone());
             let flags_dead_out = flags_out.get(&block.at).is_some_and(|lanes| lanes.is_empty());
-            let flags_dead = _flags_dead_after(block, flags_dead_out);
+            let flags_dead = _flags_dead_after(body.bits, block, flags_dead_out);
             let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len());
             let mut at = 0;
             while at < block.insns.len() {
@@ -62,7 +62,7 @@ pub fn shared(body: &LirBody, cpu: &Profile, saved: &[Register]) -> LirBody {
                 };
                 // Zero is any width's; another literal is shared at its own.
                 let run = block.insns[at..].iter().take_while(|one| literal(one).is_some_and(|(wide, same)| same == value && (value == 0 || wide == width))).count();
-                match shared_run(&block.insns[at..at + run], value, &scratch, &dead, &flags_dead) {
+                match shared_run(body.bits, &block.insns[at..at + run], value, &scratch, &dead, &flags_dead) {
                     Some(made) => insns.extend(made),
                     None => insns.extend(block.insns[at..at + run].iter().cloned()),
                 }
@@ -75,6 +75,7 @@ pub fn shared(body: &LirBody, cpu: &Profile, saved: &[Register]) -> LirBody {
 }
 
 fn shared_run(
+    bits: u32,
     run: &[Arc<Insn>],
     value: i64,
     scratch: &[Register],
@@ -84,7 +85,7 @@ fn shared_run(
     let last = run.last()?;
     let widths: Vec<u32> = run.iter().map(|one| literal(one).expect("a literal store").0).collect();
     let width = *widths.iter().max()?;
-    let reads = run.iter().filter_map(|one| _register_effects(one, false, true)).fold(Lanes::new(), |all, (reads, _)| all.or(&reads));
+    let reads = run.iter().filter_map(|one| _register_effects(bits, one, false, true)).fold(Lanes::new(), |all, (reads, _)| all.or(&reads));
     let named = |width: u32, full: Register| -> Option<Reg> {
         let register = target::named(full, i64::from(width));
         (target::width_of(register) == Some(i64::from(width))).then_some(Reg { register, width })
@@ -106,8 +107,8 @@ fn shared_run(
         .zip(&widths)
         .map(|(one, width)| Some(Semantics { sources: vec![Loc::Reg(named(*width, full)?)], ..one.what.clone().expect("a literal store") }))
         .collect::<Option<_>>()?;
-    let before: usize = run.iter().map(|one| bytes(one.what.as_ref().expect("a literal store"))).sum::<Option<usize>>()?;
-    let after = bytes(&load)? + stores.iter().map(bytes).sum::<Option<usize>>()?;
+    let before: usize = run.iter().map(|one| bytes(bits, one.what.as_ref().expect("a literal store"))).sum::<Option<usize>>()?;
+    let after = bytes(bits, &load)? + stores.iter().map(|what| bytes(bits, what)).sum::<Option<usize>>()?;
     if after >= before {
         return None;
     }

@@ -85,7 +85,7 @@ fn _once(body: &LirBody) -> Option<LirBody> {
         let mut dead = exits[&block.at].clone();
         let mut redundant: HashSet<usize> = HashSet::default();
         for one in block.insns.iter().rev() {
-            let Some(effect) = liveness::effect(one) else {
+            let Some(effect) = liveness::effect(body.bits, one) else {
                 dead.clear();
                 continue;
             };
