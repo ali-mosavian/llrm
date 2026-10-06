@@ -605,10 +605,11 @@ pub fn siblings(
     // A shared slot holds each member at every width it is used, not just moved.
     let widths = llrm_support::debug::timed("siblings widths", || _widest(body, &adjacent.keys().copied().collect()));
 
-    let near = llrm_support::debug::timed("siblings interference", || coalesce::_interference(body));
+    let wanted: BTreeSet<u32> = adjacent.keys().copied().collect();
+    // Only pairs among the copy-related values are asked of.
+    let near = llrm_support::debug::timed("siblings interference", || coalesce::_interference_among(body, Some(&wanted)));
     let deep = llrm_support::debug::timed("siblings depths", || ranges::depths(body));
     let occurring = llrm_support::debug::span("siblings occurs");
-    let wanted: BTreeSet<u32> = adjacent.keys().copied().collect();
     let mut occurs: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::default();
     for block in &body.blocks {
         let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
