@@ -155,7 +155,7 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
     let mut rematerialized_definitions: BTreeSet<usize> = BTreeSet::new();
     let mut identities: BTreeSet<usize> = BTreeSet::new();
     let body = llrm_support::debug::timed("spill sunk copies", || _sunk_from_copies(&body, &addresses.keys().copied().collect()));
-    let r#final = llrm_support::debug::timed("spill final uses", || _final_uses(&body));
+    let r#final = FinalUses::new(&body);
     let _rewrite = llrm_support::debug::span("spill rewrite");
     let rebuilt_values: BTreeSet<u32> = rebuilt.keys().copied().collect();
     let mut cells = _Cells::new(rebuilt.clone());
@@ -1523,6 +1523,7 @@ impl CellOf for _Cells {
 /// 1110.
 pub(crate) fn _final_uses(body: &LirBody) -> BTreeSet<(usize, u32)> {
     use crate::backend::allocate;
+    FINALS.with(|runs| runs.set(runs.get() + 1));
 
     // Only what leaves each block is read: rows, not the sets of every block's entry and exit.
     let rows = allocate::live_rows(body);
@@ -1554,9 +1555,36 @@ pub(crate) fn _final_uses(body: &LirBody) -> BTreeSet<(usize, u32)> {
     out
 }
 
+thread_local! {
+    static FINALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out the final uses of a body, for a test that a spill nothing folds
+/// does not.
+pub fn final_use_runs() -> usize {
+    FINALS.with(std::cell::Cell::get)
+}
+
+/// `_final_uses` of a body, worked out when first asked: only an index fold reads it, and it takes the
+/// liveness of the whole body, for each spill.
+pub(crate) struct FinalUses<'a> {
+    body: &'a LirBody,
+    found: std::cell::OnceCell<BTreeSet<(usize, u32)>>,
+}
+
+impl<'a> FinalUses<'a> {
+    pub(crate) fn new(body: &'a LirBody) -> Self {
+        Self { body, found: std::cell::OnceCell::new() }
+    }
+
+    fn contains(&self, pair: &(usize, u32)) -> bool {
+        self.found.get_or_init(|| _final_uses(self.body)).contains(pair)
+    }
+}
+
 /// Spilled word indexes that can become a direct frame add.
 pub fn foldable_indexes(body: &LirBody, values: &BTreeSet<u32>) -> BTreeSet<u32> {
-    let r#final = _final_uses(body);
+    let r#final = FinalUses::new(body);
     body.blocks
         .iter()
         .flat_map(|block| &block.insns)
@@ -1570,7 +1598,7 @@ pub fn unfolded_indexes(body: &LirBody, values: &BTreeSet<u32>) -> (LirBody, BTr
     if values.is_empty() {
         return (body.clone(), BTreeSet::new());
     }
-    let r#final = _final_uses(body);
+    let r#final = FinalUses::new(body);
     let mut changed: BTreeSet<u32> = BTreeSet::new();
     let mut blocks = Vec::new();
     for block in &body.blocks {
@@ -1647,7 +1675,7 @@ fn _flags_overwritten(crossed: &[Arc<Insn>]) -> bool {
 fn _indexed_pattern(
     one: &Arc<Insn>,
     values: &BTreeSet<u32>,
-    r#final: &BTreeSet<(usize, u32)>,
+    r#final: &FinalUses<'_>,
 ) -> Option<(Held, Held, Vec<Mem>)> {
     let what = one.what.as_ref()?;
     if one.group.is_some() || !one.requires.is_empty() || !one.delivers.is_empty() || !one.clobbers.is_empty() {
@@ -1743,7 +1771,7 @@ fn _indexed_source(
     one: &Arc<Insn>,
     values: &BTreeSet<u32>,
     frame: &mut Frame,
-    r#final: &BTreeSet<(usize, u32)>,
+    r#final: &FinalUses<'_>,
 ) -> Result<Option<(Arc<Insn>, Arc<Insn>)>, Error> {
     let Some((base, index, _cells)) = _indexed_pattern(one, values, r#final) else {
         return Ok(None);
@@ -3699,6 +3727,21 @@ mod tests {
             .unwrap();
         assert!(as_mem(&what(addressed).sources[0]).index.is_none(), "{:?}", addressed.what);
         assert!(!result.iter().any(|one| one.spill_reload), "{result:?}");
+    }
+
+    /// Each spill took the liveness of the whole body for `_final_uses`, which only an index fold reads: 4% of
+    /// compiling d_alias (#559). It is worked out when a fold asks, and once for the body.
+    #[test]
+    fn test_final_uses_are_worked_out_only_for_a_body_with_an_index_to_fold() {
+        let before = super::final_use_runs();
+        let result = _out(&_body(vec![_add(1, 2, 0x100), _move(3, 1, None, 0x102)]), &[1]);
+        assert!(!result.is_empty());
+        assert_eq!(super::final_use_runs() - before, 0, "a body with no memory index asked for the final uses");
+        let read = _read(0x102, 4, _far(0, Some(1)), &[5, 1]);
+        let before = super::final_use_runs();
+        let result = _out(&_body(vec![_add(1, 2, 0x100), read]), &[1]);
+        assert_eq!(result.iter().filter(|one| _folded_add(one)).count(), 1, "the fold is still made");
+        assert_eq!(super::final_use_runs() - before, 1, "worked out once");
     }
 
     /// The index fold may not move a second access through the same base.
