@@ -2024,8 +2024,51 @@ fn _scoped_foldable_indexes(body: &LirBody, bases: &BTreeSet<u32>) -> BTreeSet<u
     spiller::foldable_indexes(body, &indexes)
 }
 
-/// How much of a spilled read disappears when it becomes a memory operand.
-fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
+/// How much of a spilled read disappears when it becomes a memory operand, for each form an instruction
+/// can fold in: a profile's prices, looked up once for a rebuild and not once per instruction.
+struct FoldDiscounts {
+    alu: f64,
+    imul32: f64,
+}
+
+impl FoldDiscounts {
+    fn of(profile: &Profile) -> Self {
+        Self { alu: Self::form(profile, "alu_rr", "alu_rm"), imul32: Self::form(profile, "imul_r32", "imul_m32") }
+    }
+
+    fn form(profile: &Profile, register: &str, memory: &str) -> f64 {
+        if ![register, memory, "mov_rm"].iter().all(|form| profile.prices(form)) {
+            return 0.0;
+        }
+        let load = profile.cost("mov_rm").expect("priced above");
+        if load <= 0 {
+            return 0.0;
+        }
+        let remainder = 0.max(profile.cost(memory).expect("priced above") - profile.cost(register).expect("priced above"));
+        _max(0.0, _min(1.0, 1.0 - remainder as f64 / load as f64))
+    }
+
+    /// What `one` folds, by its form: nothing for one that has none.
+    fn of_insn(&self, one: &Insn) -> f64 {
+        let Some(what) = &one.what else {
+            return 0.0;
+        };
+        match (what.op, what.name.as_deref(), what.sources.as_slice()) {
+            (Operation::Binary | Operation::Compare, name, _) => {
+                if matches!(name, Some("add" | "sub" | "and" | "or" | "xor" | "cmp")) {
+                    self.alu
+                } else {
+                    0.0
+                }
+            }
+            (Operation::Multiply, Some("imul"), [Loc::Held(first), Loc::Held(second)]) if first.width == 4 && second.width == 4 => self.imul32,
+            _ => 0.0,
+        }
+    }
+}
+
+/// The old per-instruction form of `FoldDiscounts`, which `LLRM_CHECK_FOLDS=1` holds it to.
+pub(crate) fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
     let Some(what) = &one.what else {
         return 0.0;
     };
@@ -2055,17 +2098,24 @@ fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
 }
 
 /// Discount reads by the target-specific saving from folding them.
-fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile, busy: &Frequency) -> IndexMap<u32, Interval> {
+pub(crate) fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile, busy: &Frequency) -> IndexMap<u32, Interval> {
+    let discounts = FoldDiscounts::of(profile);
+    let check = std::env::var_os("LLRM_CHECK_FOLDS").is_some();
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = busy.block(block.at);
         for one in &block.insns {
-            let discount = _fold_discount(one, profile);
+            let discount = discounts.of_insn(one);
+            if check {
+                assert!(discount == _fold_discount(one, profile), "{}: a fold discount differs from the per-instruction lookup", body.name);
+            }
             if discount == 0.0 {
                 continue;
             }
+            // Only the second source of the pair can fold, once for each time the instruction reads it.
+            let Some((_, right)) = spiller::folded_pair(one, true) else { continue };
             for value in &one.uses {
-                if spiller::folded_source_among(one, &|spilled| spilled == *value, true).is_some() {
+                if *value == right.value {
                     *free.entry(*value).or_insert(0.0) += each * discount;
                 }
             }

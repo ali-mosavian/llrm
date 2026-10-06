@@ -1,0 +1,5 @@
+# What every PC-compatible x86 target knows of the machine, as physical addresses: a target turns one
+# into the pointer its address space has (a flat target uses it as is, real mode builds segment:offset).
+[physical]
+# The colour text screen's video memory, 80x25 cells of a character and an attribute.
+text_screen = 0xB8000

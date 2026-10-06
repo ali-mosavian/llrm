@@ -194,9 +194,11 @@ pub fn intervals_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency)
         if std::env::var_os("LLRM_CHECK_INTERVALS").is_some() {
             assert!(*found == worked_out(body, index, busy), "{}: a remembered answer differs from working it out", body.name);
         }
-        return (*found).clone();
+        llrm_support::debug::counted("intervals remembered", true);
+        return llrm_support::debug::timed("intervals cloned", || (*found).clone());
     }
-    let answer = worked_out(body, index, busy);
+    llrm_support::debug::counted("intervals remembered", false);
+    let answer = llrm_support::debug::timed("intervals worked out", || worked_out(body, index, busy));
     RECENT.with(|recent| {
         let mut recent = recent.borrow_mut();
         recent.insert(0, Remembered::of(body, &answer));
@@ -227,7 +229,7 @@ fn worked_out_by(body: &LirBody, index: Option<&Indexes>, busy: &Frequency, keep
         }
     };
     let ranges = _ranges(body, index, keep);
-    let weight = _weights(body, busy, &ranges, keep);
+    let weight = llrm_support::debug::timed("intervals weights", || _weights(body, busy, &ranges, keep));
     ranges
         .into_iter()
         .map(|(value, one)| {
@@ -252,8 +254,134 @@ fn _group_start(block: &LirBlock, position: usize) -> usize {
 /// Where each value is live, before anything prices it.
 ///
 /// Python builds `pieces` by iterating sets; only the map's order differs,
-/// and nothing reads it in order.
+/// and nothing reads it in order. (The order is kept as it was all the same.)
 fn _ranges(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
+    let found = _walked(body, index, keep);
+    if std::env::var_os("LLRM_CHECK_RANGES").is_some() {
+        let reference = _ranges_reference(body, index, keep);
+        assert!(found.iter().eq(reference.iter()), "{}: the walk differs from the reference", body.name);
+    }
+    found
+}
+
+/// What is live now in a block's backward walk, in the order values became so: removal leaves a gap, not
+/// a shift of all that follows, and a value made live again comes last.
+struct Alive {
+    order: Vec<Option<(u32, i64)>>,
+    at: crate::support::hash::HashMap<u32, usize>,
+}
+
+impl Alive {
+    fn new() -> Self {
+        Self { order: Vec::new(), at: Default::default() }
+    }
+
+    fn insert_if_absent(&mut self, value: u32, end: i64) {
+        if !self.at.contains_key(&value) {
+            self.at.insert(value, self.order.len());
+            self.order.push(Some((value, end)));
+        }
+    }
+
+    fn remove(&mut self, value: u32) -> Option<i64> {
+        let at = self.at.remove(&value)?;
+        self.order[at].take().map(|(_, end)| end)
+    }
+
+    fn contains(&self, value: u32) -> bool {
+        self.at.contains_key(&value)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (u32, i64)> + '_ {
+        self.order.iter().flatten().copied()
+    }
+}
+
+pub(crate) fn _walked(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
+    let live = llrm_support::debug::timed("intervals liveness", || allocate::live_rows_by(body, keep));
+    let _walk = llrm_support::debug::span("intervals walk");
+    let mut pieces: IndexMap<u32, Vec<Segment>> = IndexMap::default();
+    let mut starts: Vec<i64> = Vec::new();
+    let (mut defined, mut used): (Vec<u32>, Vec<u32>) = (Vec::new(), Vec::new());
+    for block in &body.blocks {
+        let (first, last) = index.span[&block.at];
+        // Each instruction's slot: the block's first after its phis' slot, then two for each that is no mark.
+        starts.clear();
+        let mut next = first + PER_INSN;
+        for one in &block.insns {
+            starts.push(next);
+            if !one.is_meta() {
+                next += PER_INSN;
+            }
+        }
+        let mut alive = Alive::new();
+        for one in live.leaving(block.at).filter(|one| keep(*one)) {
+            alive.insert_if_absent(one, last);
+        }
+        let mut written: crate::support::hash::HashSet<u32> = Default::default();
+        let mut position = block.insns.len() as i64 - 1;
+        while position >= 0 {
+            let at = position as usize;
+            let first_in_group = _group_start(block, at);
+            let group = &block.insns[first_in_group..=at];
+            let boundary = starts[at] + DEF;
+            defined.clear();
+            for item in group {
+                for value in &item.defines {
+                    if keep(*value) && !defined.contains(value) {
+                        defined.push(*value);
+                    }
+                }
+            }
+            for &value in &defined {
+                written.insert(value);
+                let end = alive.remove(value).unwrap_or(boundary + 1);
+                pieces.entry(value).or_default().push(Segment { start: boundary, end });
+            }
+            used.clear();
+            for item in group {
+                for value in &item.uses {
+                    if keep(*value) && !used.contains(value) {
+                        used.push(*value);
+                    }
+                }
+            }
+            for &value in &used {
+                alive.insert_if_absent(value, boundary);
+            }
+            position = first_in_group as i64 - 1;
+        }
+        // A phi's result is defined at the top of the block.
+        for phi in block.phis.iter().filter(|phi| keep(phi.result)) {
+            written.insert(phi.result);
+            let end = alive.remove(phi.result).unwrap_or(first + DEF + 1);
+            pieces.entry(phi.result).or_default().push(Segment { start: first + DEF, end });
+        }
+        // Whatever is still alive arrived from a predecessor.
+        for (value, end) in alive.iter() {
+            if end > first {
+                pieces.entry(value).or_default().push(Segment { start: first, end });
+            }
+        }
+        // Live through: in at the top, out at the bottom, untouched between.
+        for value in live.entering(block.at) {
+            if !written.contains(&value) && !alive.contains(value) {
+                pieces.entry(value).or_default().push(Segment { start: first, end: last });
+            }
+        }
+    }
+    drop(_walk);
+    llrm_support::debug::timed("intervals merge", || {
+        pieces.into_iter().map(|(value, runs)| (value, Interval::new(value, _merged(runs)))).collect()
+    })
+}
+
+/// `_ranges` as it was written, over a hashed map of slots, a map that shifts on removal and a set per group,
+/// which `LLRM_CHECK_RANGES=1` and the tests hold the walk below to.
+///
+/// Python builds `pieces` by iterating sets; only the map's order differs,
+/// and nothing reads it in order.
+pub(crate) fn _ranges_reference(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
     let live = allocate::live_rows_by(body, keep);
     let mut pieces: IndexMap<u32, Vec<Segment>> = IndexMap::default();
     for block in &body.blocks {
@@ -303,10 +431,7 @@ fn _ranges(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bool) -> Inde
             }
         }
     }
-    pieces
-        .into_iter()
-        .map(|(value, runs)| (value, Interval::new(value, _merged(runs))))
-        .collect()
+    pieces.into_iter().map(|(value, runs)| (value, Interval::new(value, _merged(runs)))).collect()
 }
 
 /// Join overlapping segments, retaining touching definition boundaries.

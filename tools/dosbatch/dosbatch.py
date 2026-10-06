@@ -115,6 +115,24 @@ def target_link(target: str) -> dict:
         return tomllib.load(text)["link"]
 
 
+_ASSEMBLED: set[tuple[Path, tuple[str, ...]]] = set()
+
+
+def runtime_object(name: str, path: Path, defines: tuple[str, ...] = ()) -> Path:
+    """`path`, the object of the runtime file `name`, made once for this process however many builds ask: one
+    made with the description's defines is not dated by its source, so it is made on the first ask, and an
+    object built by another build is never rewritten under a linker reading it (it is made beside and renamed).
+    Builds run in threads; the others wait for the one that assembles."""
+    with _RUNTIME_LOCK:
+        if (path, defines) not in _ASSEMBLED:
+            if defines or not path.exists() or path.stat().st_mtime < (ROOT / name).stat().st_mtime:
+                made = path.with_name(f"{path.stem}.{os.getpid()}.tmp")
+                assemble(ROOT / name, made, *defines)
+                os.replace(made, path)
+            _ASSEMBLED.add((path, defines))
+    return path
+
+
 def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = (), defines: tuple[str, ...] = ()) -> tuple[Path, ...]:
     """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline, linked as
     `target` says; the files its executable needs beside it (an extender's loader)."""
@@ -124,15 +142,7 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
     made.mkdir(exist_ok=True)
 
     def objects(names: list[str]) -> list[Path]:
-        out = []
-        for name in names:
-            path = made / (Path(name).stem.upper() + ".OBJ")
-            with _RUNTIME_LOCK:  # builds run in threads; one assembles the start-up, the others wait for it
-                # An object made with the description's defines is made each time: they are not in its age.
-                if defines or not path.exists() or path.stat().st_mtime < (ROOT / name).stat().st_mtime:
-                    assemble(ROOT / name, path, *defines)
-            out.append(path)
-        return out
+        return [runtime_object(name, made / (Path(name).stem.upper() + ".OBJ"), defines) for name in names]
 
     first, last, final = objects(runtime[0] if runtime else link["first"]), objects(runtime[1] if runtime else link["last"]), objects(link["final"])
     mapping = ["option", f"map={listing}"] if listing else []

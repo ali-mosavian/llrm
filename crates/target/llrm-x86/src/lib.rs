@@ -45,3 +45,22 @@ pub mod instructions {
         format!("{FAMILY}\n{own}")
     }
 }
+
+/// The physical addresses `platform.toml` names, each by its name.
+pub fn physical_addresses() -> Vec<(String, u64)> {
+    let table: toml::Table = include_str!("../platform.toml").parse().expect("platform.toml parses");
+    table["physical"]
+        .as_table()
+        .expect("[physical] is a table")
+        .iter()
+        .map(|(name, address)| (name.clone(), u64::try_from(address.as_integer().expect("an address is an integer")).expect("an address is not negative")))
+        .collect()
+}
+
+#[cfg(test)]
+mod platform_tests {
+    #[test]
+    fn the_text_screen_is_at_its_physical_address() {
+        assert_eq!(super::physical_addresses(), [("text_screen".to_owned(), 0xB8000)]);
+    }
+}

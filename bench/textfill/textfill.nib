@@ -1,9 +1,9 @@
-# targets: x86-code16   (writes the text screen at B800:0000, a real-mode segment address)
-# Text screen at B800:0000 through a far pointer.
+# Text screen through a pointer the OS layer makes of the machine's physical address.
+import os
 
 fn fill(ch: i16, at: i16) -> void:
     unsafe:
-        let screen: *far mut u8 = 0xB8000000
+        let screen = os.text_screen()
         let mut o: i16 = 0
         while o <= 3998:
             screen[o] = ch + (o & 15)
@@ -13,7 +13,7 @@ fn fill(ch: i16, at: i16) -> void:
 fn checksum() -> i32:
     let mut s: i32 = 0
     unsafe:
-        let screen: *far u8 = 0xB8000000
+        let screen = os.text_screen()
         for o in 0..4000:
             s += screen[o]
     return s
