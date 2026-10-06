@@ -488,8 +488,12 @@ fn instruction(text: &str, line: usize) -> Result<(Instruction, Option<String>),
     Ok((chosen, target))
 }
 
-/// The machine code of `lines`, one statement each; `;` starts a comment.
-pub fn assembled(lines: &[&str]) -> Result<Vec<u8>, Refusal> {
+/// The machine code of `lines`, one statement each, for code of `bits` bits; `;` starts a comment.
+/// Only 16-bit code is assembled.
+pub fn assembled(lines: &[&str], bits: u32) -> Result<Vec<u8>, Refusal> {
+    if bits != 16 {
+        return refusal(0, format!("inline assembly is 16-bit only: this target's code is {bits}-bit"));
+    }
     let mut instructions: Vec<(Instruction, Option<String>, usize)> = Vec::new();
     // Each label's instruction, by index; the end of the block is one past the last.
     let mut labels: HashMap<String, usize> = HashMap::new();
@@ -541,11 +545,11 @@ mod tests {
     use super::*;
 
     fn bytes(lines: &[&str]) -> Vec<u8> {
-        assembled(lines).unwrap_or_else(|refusal| panic!("line {}: {}", refusal.line, refusal.message))
+        assembled(lines, 16).unwrap_or_else(|refusal| panic!("line {}: {}", refusal.line, refusal.message))
     }
 
     fn refused(lines: &[&str]) -> String {
-        assembled(lines).expect_err("refused").message
+        assembled(lines, 16).expect_err("refused").message
     }
 
     #[test]
@@ -593,6 +597,6 @@ mod tests {
         assert!(refused(&["mov al, 300"]).contains("no form of 'mov'"));
         assert!(refused(&["jmp nowhere"]).contains("unknown label 'nowhere'"));
         assert!(refused(&["jmp ax"]).contains("no form of 'jmp'"));
-        assert_eq!(assembled(&["", "x: dec cx", "x: inc cx"]).unwrap_err().line, 2);
+        assert_eq!(assembled(&["", "x: dec cx", "x: inc cx"], 16).unwrap_err().line, 2);
     }
 }
