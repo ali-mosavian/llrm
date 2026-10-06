@@ -90,7 +90,7 @@ pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen:
         if unit.flat != codegen.arch.layout().spaces.far_is_near() {
             return Err(hir::Unsupported(format!("the front end is {} but target {} is {}", if unit.flat { "flat" } else { "segmented" }, codegen.arch.name(), if unit.flat { "segmented" } else { "flat" })).into());
         }
-        let program = translate::program(&unit, module, Profile::of(&*codegen.arch).and_then(|profile| codegen.arch.calling().named(&profile.convention).ok_or(format!("calling.toml has no {}", profile.convention))).map_err(hir::Unsupported)?)?;
+        let program = translate::program(&unit, module, codegen.arch.calling(), &Profile::of(&*codegen.arch).map_err(hir::Unsupported)?)?;
         for warning in unit.warnings.borrow().iter() {
             eprintln!("{module}: {warning}");
         }
@@ -144,6 +144,9 @@ pub struct Profile {
     pub flags: Vec<String>,
     /// The header it includes first, from the repository root.
     pub header: String,
+    /// An interrupt handler's parameters, in order: the registers its frame holds, by name. None where the target has no
+    /// interrupt handlers.
+    pub interrupt_parameters: Vec<String>,
 }
 
 impl Profile {
@@ -156,7 +159,11 @@ impl Profile {
         let frontend = table.get("frontend").and_then(toml::Value::as_table).ok_or("the C runtime description has no [frontend]")?;
         let text = |key: &str| frontend.get(key).and_then(toml::Value::as_str).map(str::to_owned).ok_or_else(|| format!("frontend.{key} is not a string"));
         let flags = frontend.get("flags").and_then(toml::Value::as_array).ok_or("frontend.flags is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("a frontend flag is not a string")).collect::<Result<_, _>>()?;
-        Ok(Self { cpu: text("watcom_cpu")?, convention: text("convention")?, flags, header: text("header")? })
+        let interrupt_parameters = match frontend.get("interrupt_parameters") {
+            None => Vec::new(),
+            Some(list) => list.as_array().ok_or("frontend.interrupt_parameters is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("an interrupt parameter is not a string")).collect::<Result<_, _>>()?,
+        };
+        Ok(Self { cpu: text("watcom_cpu")?, convention: text("convention")?, flags, header: text("header")?, interrupt_parameters })
     }
 }
 
@@ -397,7 +404,7 @@ mod tests {
     /// tests/fixtures/c/`path`.cgs's MIR as the front end emits it.
     fn emitted(path: &str) -> String {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{path}.cgs"))).unwrap();
-        let program = crate::translate::program(&crate::hir::unit(&crate::stream::parse(&text)).unwrap(), "t", llrm_target::Target::calling(&llrm_x86_m16::M16).named("cdecl16").unwrap()).unwrap();
+        let program = crate::translate::program(&crate::hir::unit(&crate::stream::parse(&text)).unwrap(), "t", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap();
         let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
         let (mir, _) = llrm_core::driver::emitted(&program, &options).unwrap();
         llrm_mir::print::module(&mir.modules[0])
