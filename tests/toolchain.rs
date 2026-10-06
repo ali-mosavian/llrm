@@ -296,3 +296,19 @@ fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
     let want: Vec<i64> = routines.iter().map(|(_, value)| *value).collect();
     assert_eq!(got, want, "{:?}", routines.map(|(name, _)| name));
 }
+
+/// Far and huge are 16-bit: code32 is one flat space, and a program that names either is
+/// refused, saying why, rather than built as if the pointer were near (the compilers once did).
+#[test]
+fn test_code32_refuses_huge_in_nib_and_far_and_huge_in_c() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("p.obj");
+    let refused = |compiler: &str, source: &str| {
+        let done = Command::new(compiler).args([root.join(source).to_str().unwrap(), "--target", "x86-code32", "-O2", "-o", object.to_str().unwrap()]).output().unwrap();
+        assert!(!done.status.success(), "{source} built for code32");
+        String::from_utf8_lossy(&done.stderr).into_owned()
+    };
+    assert!(refused(env!("CARGO_BIN_EXE_llrm-nib"), "tests/run/nib/huge_array.nib").contains("no huge address space"));
+    assert!(refused(env!("CARGO_BIN_EXE_llrm-c"), "tests/run/c/huge_array16.c").contains("in flat code"));
+}
