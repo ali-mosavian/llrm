@@ -155,6 +155,8 @@ pub struct Module {
     /// Bytes of the linker's stack this module adds to the others' (OMF stack
     /// segments concatenate): where its call graph is the whole program's.
     pub stack: i64,
+    /// The lines the listing opens with: the target's instruction set and model.
+    pub header: Vec<String>,
 }
 
 impl Module {
@@ -172,7 +174,7 @@ pub fn text(module: &Module) -> Result<String, Unprintable> {
 
 /// `module`'s text, each procedure's items as `listed` gives them.
 pub fn text_by(module: &Module, listed: impl Fn(&Procedure, usize) -> Result<Vec<Item>, Unprintable>) -> Result<String, Unprintable> {
-    let mut out: Vec<String> = vec![".model medium".into(), ".386".into(), String::new()];
+    let mut out: Vec<String> = module.header.iter().cloned().chain([String::new()]).collect();
     out.extend(module.publics.iter().map(|name| format!("public {name}")));
     if module.stack > 0 {
         out.push(format!(".stack {}", module.stack));
