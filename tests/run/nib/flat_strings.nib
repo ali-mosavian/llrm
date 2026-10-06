@@ -1,0 +1,12 @@
+# flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+fn main() -> i16:
+    let s = "hello"
+    let t = s + " world"
+    print(t)
+    print(t.len)
+    let mut v: vec[i16] = []
+    for i in 0..10:
+        v.push(i * i)
+    print(v.len)
+    print(v[9])
+    return 0
