@@ -103,21 +103,28 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses, size: bool) -> 
 /// `run` less what the function prices higher for: while moving it before
 /// `before` costs more than leaving it, the values crossing the loop that the
 /// spill model spills, and the instructions reading them, stay in the loop.
+/// What the model charges for spilling a value that needs no register, a
+/// displacement the accesses fold or a value made again at each read, is not counted.
 fn _affordable(unit: &passes::Unit, outer: &Outer, mut run: Vec<InstId>, before: InstId, costs: &OperationCosts, room: crate::spill::Room, frequency: &std::collections::BTreeMap<i64, i64>) -> Vec<InstId> {
     let price = |function: &Function| profit::motion_price(unit.context, unit.layout, outer, function, costs, room, frequency);
-    let kept = price(unit.function);
+    let Some(kept) = price(unit.function) else { return run };
     while !run.is_empty() {
         let mut hoisted = unit.function.clone();
         for &inst in &run {
             hoisted.move_to(inst, Position::Before(before)).expect("a placed instruction");
         }
-        let (Some(kept), Some(moved)) = (kept, price(&hoisted)) else { return run };
-        if moved <= kept {
-            return run;
-        }
+        let Some(moved) = price(&hoisted) else { return run };
         let found = llrm_analysis::liveness::live(&hoisted);
         let Some(forecast) = profit::spill_forecast(unit.context, unit.layout, &hoisted, costs, room, &|inst| crate::spill::kept_across(outer, unit.context, &hoisted, inst), frequency, &found) else { return run };
-        let mut stay: BTreeSet<ValueId> = _crossed_values(&hoisted, &run).intersection(&forecast.spilled).copied().collect();
+        let cells = crate::spill::cells(&hoisted);
+        let traffic = crate::spill::traffic(&hoisted, frequency, &cells, costs, &|_| true, &|value| crate::spill::words(unit.context, unit.layout, &hoisted, value));
+        let free = |value: ValueId| _displacement(&hoisted, value) || traffic.get(&value).is_some_and(|one| one.rebuild.is_some());
+        let crossing = _crossed_values(&hoisted, &run).intersection(&forecast.spilled).copied().collect::<BTreeSet<_>>();
+        let uncounted: i64 = crossing.iter().filter(|&&value| free(value)).filter_map(|value| traffic.get(value)).map(|one| one.price(costs)).sum();
+        if moved - uncounted <= kept {
+            return run;
+        }
+        let mut stay: BTreeSet<ValueId> = crossing.into_iter().filter(|&value| !free(value)).collect();
         if stay.is_empty() {
             return Vec::new();
         }
@@ -132,9 +139,29 @@ fn _affordable(unit: &passes::Unit, outer: &Outer, mut run: Vec<InstId>, before:
                 }
             }
         }
+        // And what only they read has nothing to do before the loop.
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for &inst in &run {
+                let Some(result) = unit.function.instruction(inst).result else { continue };
+                let users = unit.function.users(result);
+                if !stay.contains(&result) && !users.is_empty() && users.iter().all(|one| unit.function.instruction(one.user).result.is_some_and(|read| stay.contains(&read))) {
+                    grew |= stay.insert(result);
+                }
+            }
+        }
         run.retain(|&inst| unit.function.instruction(inst).result.is_none_or(|result| !stay.contains(&result)));
     }
     run
+}
+
+/// Whether `value` is a `getelementptr` by constants that only memory accesses, or such
+/// `getelementptr`s, read.
+fn _displacement(function: &Function, value: ValueId) -> bool {
+    let ValueDef::Instruction(def) = function.value(value).def else { return false };
+    let op = function.instruction(def);
+    matches!(op.opcode, Opcode::GetElementPtr { .. }) && op.operands[1..].iter().all(|one| matches!(one, Operand::Constant(_))) && crate::spill::address_only(function, value, 3)
 }
 
 /// Whether a scalar local is still held in a slot only loaded and stored:

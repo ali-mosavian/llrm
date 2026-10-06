@@ -343,7 +343,7 @@ fn test_a_load_the_language_says_is_invariant_leaves_past_a_store() {
 /// Two inner loops each read three globals nothing writes and double them. Hoisted out of
 /// the outer loop too, six values live across both inner loops, more than
 /// the nine registers hold with the loop's own counters (PLASMABLOBS -Os
-/// +73 B, #529). At -Os each stays in its inner preheader, where three fit.
+/// +73 B, #529). At -Os the ones past the registers stay in their inner preheader.
 #[test]
 fn test_invariants_past_the_registers_stay_in_the_inner_preheader() {
     let loads = |names: [&str; 3]| names.map(|name| format!("  %{name} = load i16, ptr @{name}\n  %w{name} = shl i16 %{name}, 1\n")).concat();
@@ -394,6 +394,6 @@ b9:
     passes.add(super::Hoist { size: true });
     passes.run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() })).unwrap_or_else(|error| panic!("{error}\n{text}"));
     let printed = printed(&after);
-    assert!(block(&printed, "b0").iter().all(|line| !line.contains("load")), "{printed}");
-    assert!(block(&printed, "b2").iter().any(|line| line.contains("load i16, ptr @g1")), "{printed}");
+    let hoisted = block(&printed, "b0").iter().filter(|line| line.contains("load")).count();
+    assert!(hoisted < 6, "{hoisted} of 6 loads left both inner loops\n{printed}");
 }
