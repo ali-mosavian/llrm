@@ -4,7 +4,7 @@
 os = "dos"
 convention = "cdecl32"
 pointer = "near"
-groups = ["core"]
+groups = ["core", "console"]
 start = "start.asm"
 implementation = "os.asm"
 # Whether the start-up zeroes the far uninitialised data, as it does the near.

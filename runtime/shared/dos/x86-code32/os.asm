@@ -10,6 +10,8 @@ public _llrm_os_read
 public _llrm_os_write_file
 public _llrm_os_close
 public _llrm_os_exit
+public _llrm_os_console_read_key
+public _llrm_os_console_key_ready
 public _llrm_os_more
 public _llrm_os_stack_low
 
@@ -25,7 +27,6 @@ heap_end dd 0
 ; The request being served and the arena size being tried, which DPMI 0501h's register use leaves in memory.
 heap_ask dd 0
 heap_try dd 0
-
 .code
 ; _llrm_os_more(bytes: usize) -> *near mut u8: `bytes` more of the heap at its end, or 0 when it runs out.
 ; The heap grows inside an arena taken from the extender (DPMI 0501h, allocate memory block): the first
@@ -133,7 +134,7 @@ transferred:
     ret
 _llrm_os_write_file endp
 
-; _llrm_os_close(handle: i16) -> i16
+; _llrm_os_close(handle: handle) -> isize
 _llrm_os_close proc
     push ebx
     movzx ebx, word ptr [esp+8]
@@ -144,10 +145,30 @@ _llrm_os_close proc
     xor eax, eax                   ; DOS leaves AX undefined on success
 checked::
     jnc short done
-    neg ax
+    movzx eax, ax
+    neg eax
 done:
     ret
 _llrm_os_close endp
+
+; The console's keyboard: standard input, so what DOS redirects it follows.
+
+; _llrm_os_console_read_key() -> u8: DOS's character input without echo (08h).
+_llrm_os_console_read_key proc
+    mov ah, DOS_READ_KEY
+    int DOS_INT
+    movzx eax, al
+    ret
+_llrm_os_console_read_key endp
+
+; _llrm_os_console_key_ready() -> bool: DOS's input status (0Bh), 0FFh or 0, as 1 or 0.
+_llrm_os_console_key_ready proc
+    mov ah, DOS_KEY_READY
+    int DOS_INT
+    movzx eax, al
+    and eax, 1
+    ret
+_llrm_os_console_key_ready endp
 
 ; _llrm_os_exit(code: u8): ends the program.
 _llrm_os_exit proc

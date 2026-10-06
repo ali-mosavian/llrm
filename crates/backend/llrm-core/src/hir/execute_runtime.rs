@@ -287,7 +287,7 @@ impl Machine<'_> {
                 Some(sink) => Some(Scalar::Address(sink)),
                 None => return fail(format!("{} without {}", rt::PRINT_END, rt::PRINT_BEGIN)),
             },
-            symbol if rt::file_operation(symbol).is_some() => {
+            symbol if rt::os_operation(symbol).is_some() => {
                 Some(Scalar::Int(i128::from(self.file(name, arguments)?)))
             }
             _ => return Ok(None),
@@ -300,7 +300,6 @@ impl Machine<'_> {
     fn file(&mut self, name: &str, arguments: &[Scalar]) -> Outcome<i16> {
         use std::io::{Read, Write};
         const FIRST: usize = 5;
-        const STANDARD_OUTPUT: usize = 1;
         let failed = |error: std::io::Error| -> i16 {
             match error.kind() {
                 std::io::ErrorKind::NotFound => -rt::error_code("not_found"),
@@ -308,7 +307,7 @@ impl Machine<'_> {
                 _ => -31,
             }
         };
-        let operation = rt::file_operation(name);
+        let operation = rt::os_operation(name);
         if matches!(operation, Some("open" | "create")) {
             let Some(path) = pointer(&arguments[0])? else {
                 return fail(format!("{name} of null"));
@@ -332,11 +331,30 @@ impl Machine<'_> {
                 Err(error) => failed(error),
             });
         }
+        match operation {
+            Some("console_read_key") => return Ok(self.input.pop_front().map_or(0, i16::from)),
+            Some("console_key_ready") => return Ok(i16::from(!self.input.is_empty())),
+            _ => {}
+        }
         let handle = size(&arguments[0])?;
-        if operation == Some("write_file") && handle == STANDARD_OUTPUT {
+        if operation == Some("write_file") && handle == rt::standard_handle("stdout") {
             let bytes = view_bytes(&arguments[1], &arguments[2])?;
             self.emit(&cp437(&bytes))?;
             return Ok(bytes.len() as i16);
+        }
+        if operation == Some("read") && handle == rt::standard_handle("stdin") {
+            let Some(data) = pointer(&arguments[1])? else {
+                return fail(format!("{name} of null"));
+            };
+            let count = size(&arguments[2])?.min(self.input.len());
+            let bytes: Vec<u8> = self.input.drain(..count).collect();
+            let start = data.offset as usize;
+            let mut cells = data.memory.borrow_mut();
+            let Some(target) = cells.bytes.get_mut(start..start + count) else {
+                return fail(format!("{name} outside its buffer"));
+            };
+            target.copy_from_slice(&bytes);
+            return Ok(count as i16);
         }
         let Some(Some(file)) = handle.checked_sub(FIRST).and_then(|at| self.files.get_mut(at)) else {
             return Ok(-6);
