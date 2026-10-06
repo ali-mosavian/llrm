@@ -2283,13 +2283,19 @@ impl Selector<'_, '_, '_> {
         // A signed division by a constant is a multiply by its reciprocal
         // where the target prices that cheaper, as the old route's
         // division::reciprocal selects.
-        if let Some(constant) = self.constant(instruction.operands[1], width).filter(|_| signed) {
+        if let Some(constant) = self.constant(instruction.operands[1], width) {
             let mut next = self.next;
             let mut fresh = || {
                 next += 1;
                 next
             };
-            let reciprocal = division::reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, remainder == result || self.paired.contains_key(&inst)).map_err(Unselected)?;
+            let both = remainder == result || self.paired.contains_key(&inst);
+            let reciprocal = if signed {
+                division::reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, both)
+            } else {
+                division::unsigned_reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, both)
+            }
+            .map_err(Unselected)?;
             self.next = next;
             if let Some(parts) = reciprocal {
                 out.extend(parts.into_iter().map(|what| insn(at, what)));
