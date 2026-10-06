@@ -117,6 +117,8 @@ fn test_the_console_and_its_standard_handles_come_from_the_layer() {
         let binding = layer.nib_module().unwrap();
         assert!(binding.contains("pub const STDOUT: i16 = 1") && binding.contains("pub fn console_read_key() -> u8") && binding.contains("pub fn console_key_ready() -> bool"), "{binding}");
         assert!(layer.c_header().unwrap().contains("#define LLRM_OS_STDIN 0"));
+        // close's status was `i16`, a width written in the shared interface; it is the target's own word.
+        assert!(binding.contains("pub fn close(handle: i16) -> isize"), "{binding}");
         for (language, file) in [("c", "ext.asm"), ("nib", "init.asm")] {
             if let Ok(text) = std::fs::read_to_string(format!("{}/{file}", target.runtime(language).unwrap().directory)) {
                 let code: Vec<&str> = text.lines().map(|line| line.split(';').next().unwrap().trim()).collect();

@@ -164,6 +164,7 @@ impl Layer {
                 "bytes_mut" => format!("unsigned char {qualifier}*"),
                 "heap" => "unsigned char *".to_owned(),
                 "i16" => "short".to_owned(),
+                "isize" => "int".to_owned(),
                 "i32" => "long".to_owned(),
                 "u8" => "unsigned char".to_owned(),
                 "usize" => "unsigned".to_owned(),
@@ -222,7 +223,7 @@ impl Layer {
                 "bytes_mut" => format!("*{pointer} mut u8"),
                 "heap" => "*near mut u8".to_owned(),
                 "handler" => "extern \"interrupt16\" fn() -> void".to_owned(),
-                "i16" | "i32" | "u8" | "usize" | "bool" | "void" => name.to_owned(),
+                "i16" | "i32" | "u8" | "usize" | "isize" | "bool" | "void" => name.to_owned(),
                 other => return Err(format!("the interface has a type {other} the Nib binding does not know")),
             })
         };

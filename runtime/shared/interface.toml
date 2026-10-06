@@ -3,7 +3,7 @@
 # `os.toml` says which groups it implements, its pointer kind and its convention, and the
 # languages' bindings (os.nib, a C header) are rendered from this file, never written by hand.
 #
-# A result below zero is an error: minus its code, the code being the number `[errors]` gives it
+# A result below zero is an error (`isize` is the target's own word, so no width is written here): minus its code, the code being the number `[errors]` gives it
 # where it names the condition and the operating system's own otherwise.
 #
 # Types: `path` and `bytes` and `bytes_mut` are data pointers (far where the target has far data,
@@ -54,7 +54,7 @@ group = "core"
 name = "close"
 doc = "0 on success."
 args = [["handle", "handle"]]
-returns = "i16"
+returns = "isize"
 
 [[op]]
 group = "core"
@@ -82,7 +82,7 @@ returns = "u8"
 [[op]]
 group = "console"
 name = "console_key_ready"
-doc = "Whether `console_read_key` would not wait."
+doc = "Whether `console_read_key` would not wait. What it says at the end of redirected input is the operating system's: DOSBox says ready."
 args = []
 returns = "bool"
 

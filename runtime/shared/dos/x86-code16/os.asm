@@ -138,7 +138,7 @@ transferred:
     retf
 _llrm_os_write_file endp
 
-; _llrm_os_close(handle: i16) -> i16
+; _llrm_os_close(handle: handle) -> isize
 _llrm_os_close proc far
     push bp
     mov bp, sp

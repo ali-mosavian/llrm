@@ -134,7 +134,7 @@ transferred:
     ret
 _llrm_os_write_file endp
 
-; _llrm_os_close(handle: i16) -> i16
+; _llrm_os_close(handle: handle) -> isize
 _llrm_os_close proc
     push ebx
     movzx ebx, word ptr [esp+8]
@@ -145,7 +145,8 @@ _llrm_os_close proc
     xor eax, eax                   ; DOS leaves AX undefined on success
 checked::
     jnc short done
-    neg ax
+    movzx eax, ax
+    neg eax
 done:
     ret
 _llrm_os_close endp
