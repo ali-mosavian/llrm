@@ -13,28 +13,60 @@ public N$OEXT
 public N$OMEM
 public N$OSLO
 
-HEAP_BYTES equ 1048576
+; HEAP_BYTES comes from nib.toml (assembler_defines).
 
 .data
 ; The lowest ESP a checked function may reach (-fsanitize=stack). Start-up sets it.
 N$OSLO dd 0
-; The heap's next free byte: set on the first N$OMEM.
+; The heap's next free byte and the end of its arena: set on the first N$OMEM, which asks the
+; extender for the arena.
 heap_next dd 0
-
-.data?
-heap_arena db HEAP_BYTES dup (?)
+heap_end dd 0
 
 .code
 ; N$OMEM(bytes: usize) -> *near mut u8: `bytes` more of the heap at its end, or 0 when it runs out.
+; The first call takes the arena from the extender (DPMI 0501h, allocate memory block): HEAP_BYTES, or
+; the largest half of it the extender has, down to 64 KB. The heap grows inside it.
 N$OMEM proc
     mov ecx, dword ptr [esp+4]
     mov eax, heap_next
     test eax, eax
     jnz started
-    mov eax, offset heap_arena
+    push ebx
+    push esi
+    push edi
+    ; DPMI 0501h returns the block's handle in SI:DI, so the size being tried stays in heap_end.
+    mov heap_end, HEAP_BYTES
+arena:
+    mov ebx, heap_end
+    shr ebx, 16
+    mov ecx, heap_end
+    and ecx, 0FFFFh
+    mov eax, 0501h
+    int 31h
+    jnc arena_got
+    shr heap_end, 1
+    cmp heap_end, 10000h
+    jae arena
+    mov heap_end, 0
+    pop edi
+    pop esi
+    pop ebx
+    xor eax, eax
+    ret
+arena_got:
+    shl ebx, 16
+    mov bx, cx
+    mov heap_next, ebx
+    add heap_end, ebx
+    mov eax, ebx
+    pop edi
+    pop esi
+    pop ebx
+    mov ecx, dword ptr [esp+4]
 started:
     lea edx, [eax + ecx]
-    cmp edx, offset heap_arena + HEAP_BYTES
+    cmp edx, heap_end
     ja refused
     mov heap_next, edx
     ret
@@ -63,13 +95,14 @@ N$OCRE proc
     jmp short checked
 N$OCRE endp
 
-; N$OREA(handle: i16, data: *far mut u8, count: u16) -> i16: bytes read.
+; N$OREA(handle: i16, data: *near mut u8, count: usize) -> isize: bytes read, in one call: DOS/32A takes a
+; 32-bit count and returns one. Where DOS sets carry, the error code negated.
 N$OREA proc
     mov ah, 3Fh
     jmp short transfer
 N$OREA endp
 
-; N$OWRI(handle: i16, data: *far u8, count: u16) -> i16: bytes written.
+; N$OWRI(handle: i16, data: *near u8, count: usize) -> isize: bytes written, as N$OREA.
 N$OWRI proc
     mov ah, 40h
 transfer::
@@ -79,7 +112,11 @@ transfer::
     mov ecx, dword ptr [esp+16]
     int 21h
     pop ebx
-    jmp short checked
+    jnc short transferred
+    movzx eax, ax
+    neg eax
+transferred:
+    ret
 N$OWRI endp
 
 ; N$OCLO(handle: i16) -> i16
