@@ -22,6 +22,7 @@ use iced_x86::Register;
 use crate::analysis::frequency::Frequency;
 use crate::analysis::intervals as ranges;
 use crate::backend::allocate::{self, _whole};
+use crate::backend::classes::RegisterClasses;
 use crate::backend::regclass::{self, Classes};
 use crate::backend::frame::Frame;
 use crate::backend::target::{self, Segments};
@@ -91,6 +92,7 @@ impl Default for Run {
 pub struct SsaSpill {
     pub frame: Rc<RefCell<Frame>>,
     pub segments: Segments,
+    pub classes: Rc<RegisterClasses>,
     pub prices: Prices,
     pub run: Rc<Run>,
 }
@@ -150,7 +152,7 @@ impl LIRTransform for SsaSpill {
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         // A body nothing was done to is returned as it came: a copy loses what later phases know of it.
-        let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments, self.prices, &self.run)?;
+        let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments, &self.classes, self.prices, &self.run)?;
         if made.is_some() {
             self.run.changed.set(true);
         }
@@ -328,28 +330,30 @@ enum File {
 /// The registers one file's values may sit in: all of them, or one class's.
 struct Machine<'a> {
     confined: &'a Classes,
+    /// What the target requires of each instruction's operands.
+    classes: &'a RegisterClasses,
     file: File,
     /// The data segment register, which an instruction that needs the data group takes from the selectors.
     data: Register,
     /// The file's registers (whole, as the allocator names them).
     general: BTreeSet<Register>,
-    classes: BTreeSet<BTreeSet<Register>>,
+    pools: BTreeSet<BTreeSet<Register>>,
     /// The registers with byte halves.
     bytes: BTreeSet<Register>,
 }
 
 impl<'a> Machine<'a> {
-    fn of(confined: &'a Classes, file: File, segments: &Segments) -> Self {
+    fn of(confined: &'a Classes, file: File, segments: &Segments, classes: &'a RegisterClasses) -> Self {
         let general: BTreeSet<Register> = match file {
             File::General => target::AVAILABLE.iter().map(|one| _whole(*one)).collect(),
             File::Selector => segments.selectors.iter().copied().collect(),
         };
-        let classes = confined
+        let pools: BTreeSet<BTreeSet<Register>> = confined
             .values()
             .map(|class| class.iter().map(|one| _whole(*one)).filter(|one| general.contains(one)).collect::<BTreeSet<Register>>())
             .filter(|class| !class.is_empty() && class.len() < general.len())
             .collect();
-        Self { confined, file, data: segments.data, general, classes, bytes: target::BYTE.iter().map(|one| _whole(*one)).collect() }
+        Self { confined, file, classes, data: segments.data, general, pools, bytes: target::BYTE.iter().map(|one| _whole(*one)).collect() }
     }
 
     /// A value that lives in a register of this file at all: a selector only where the program names it so.
@@ -373,7 +377,7 @@ impl<'a> Machine<'a> {
         if held.len() > room {
             return false;
         }
-        self.classes.iter().all(|class| {
+        self.pools.iter().all(|class| {
             let counted = |value: &u32| {
                 self.class(*value).is_some_and(|mine| mine.is_subset(class) && (acting.contains(value) || (mine.len() > 1 && mine.is_subset(&self.bytes))))
             };
@@ -383,10 +387,10 @@ impl<'a> Machine<'a> {
 }
 
 /// The registers an instruction states it takes: what it requires, delivers or clobbers.
-fn stated(one: &Insn, general: &BTreeSet<Register>) -> BTreeSet<Register> {
+fn stated(one: &Insn, general: &BTreeSet<Register>, classes: &RegisterClasses) -> BTreeSet<Register> {
     let mut out: BTreeSet<Register> = BTreeSet::new();
     if let Some(what) = &one.what {
-        out.extend(target::requirements(what).values().map(|register| _whole(*register)));
+        out.extend(classes.requirements(what).values().map(|register| _whole(*register)));
     }
     out.extend(one.requires.iter().chain(&one.delivers).map(|(_, register)| _whole(*register)));
     out.extend(one.clobbers.iter().map(|register| _whole(*register)));
@@ -495,12 +499,12 @@ struct Edits {
     w_out: BTreeSet<u32>,
 }
 
-pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices) -> Result<LirBody, String> {
-    Ok(changed(body, frame, segments, prices, &Run::default())?.unwrap_or_else(|| body.clone()))
+pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments, classes: &RegisterClasses, prices: Prices) -> Result<LirBody, String> {
+    Ok(changed(body, frame, segments, classes, prices, &Run::default())?.unwrap_or_else(|| body.clone()))
 }
 
 /// `body` spilled, or None where there was nothing to spill and nothing to simplify.
-fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices, run: &Run) -> Result<Option<LirBody>, String> {
+fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, classes: &RegisterClasses, prices: Prices, run: &Run) -> Result<Option<LirBody>, String> {
     let simple = ssarepair::simplified(original);
     let body = simple.as_ref().unwrap_or(original);
     // The loops, found once: depths, headers and each loop's pressure all come from them.
@@ -517,7 +521,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
     let mut result = Simulated::default();
     let mut selectors: BTreeSet<u32> = BTreeSet::new();
     for file in [File::General, File::Selector] {
-        let machine = Machine::of(&confined, file, segments);
+        let machine = Machine::of(&confined, file, segments, classes);
         if machine.general.is_empty() {
             continue;
         }
@@ -1027,14 +1031,14 @@ fn simulated(
             }
             evict(&mut held, &mut leaving, &used, k);
             // What the instruction states it takes leaves less for what lives through it.
-            let mut taken = stated(one, &machine.general);
+            let mut taken = stated(one, &machine.general, machine.classes);
             if machine.file == File::Selector && machine.general.contains(&machine.data) && target::needs_data_group(one) {
                 taken.insert(machine.data);
             }
             // A register a value of this instruction sits in is that value's, not one more.
             let mut covered: BTreeSet<Register> = one.requires.iter().chain(&one.delivers).map(|(_, register)| _whole(*register)).collect();
             if let Some(what) = &one.what {
-                for (place, register) in target::requirements(what) {
+                for (place, register) in machine.classes.requirements(what) {
                     let side = if place.side == "dest" { &what.dests } else { &what.sources };
                     if matches!(side.get(place.index), Some(Loc::Held(_))) {
                         covered.insert(_whole(register));
@@ -1664,7 +1668,8 @@ mod tests {
     fn test_two_base_only_values_fit_while_one_acts() {
         let bx = BTreeSet::from([Register::EBX]);
         let confined: Classes = [(1, bx.clone()), (2, bx), (3, BTreeSet::from([Register::ESI, Register::EDI]))].into_iter().collect();
-        let machine = Machine::of(&confined, File::General, &target::BUILT_IN);
+        let classes = crate::backend::classes::RegisterClasses::code16();
+        let machine = Machine::of(&confined, File::General, &target::BUILT_IN, &classes);
         let held: BTreeSet<u32> = [1, 2, 3].into_iter().collect();
         assert!(machine.fits(&held, &BTreeSet::from([1]), 6), "one acting BX value leaves the other waiting");
         assert!(!machine.fits(&held, &BTreeSet::from([1, 2]), 6), "premise: two acting BX values cannot both sit in BX");

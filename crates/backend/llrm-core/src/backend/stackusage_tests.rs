@@ -25,7 +25,7 @@ fn procedure(name: &str, reserve: i64, pushes: usize, callees: &[&str]) -> Proce
 }
 
 fn module(procedures: Vec<Procedure>) -> Module {
-    Module { header: llrm_target::Target::listing_header(&llrm_x86_code16::Code16), code: String::new(), names: IndexMap::default(), externs: Vec::new(), publics: Vec::new(), data: Vec::new(), procedures, private: Default::default(), far_bss: Default::default(), requests: Default::default(), debug: None, stack: 0 }
+    Module { object: llrm_target::Target::object(&llrm_x86_code16::Code16), code: String::new(), names: IndexMap::default(), externs: Vec::new(), publics: Vec::new(), data: Vec::new(), procedures, private: Default::default(), far_bss: Default::default(), requests: Default::default(), debug: None, stack: 0 }
 }
 
 /// What a program can use of the stack was nowhere stated: a deep chain of

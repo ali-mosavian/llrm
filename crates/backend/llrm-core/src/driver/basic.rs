@@ -637,6 +637,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let segments = Segments::of(&options.machine);
     let cpu = options.cpu()?;
+    let classes = std::rc::Rc::new(crate::backend::classes::RegisterClasses::of(&*options.arch));
     let mut procedures = Vec::new();
     let mut referenced: BTreeMap<String, bool> = BTreeMap::new();
     let mut rows = Vec::new();
@@ -651,7 +652,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         }
         let frame = object.frames.get(module.global(id).name.as_deref().unwrap_or_default()).copied().unwrap_or(Frame::Runtime { strings: 0 });
         // B$ENRA zero-fills a runtime frame's locals.
-        let target = Target { cpu, segments: &segments, selection: options.selection, arch: &*options.arch, runtime: runtime.value(), basic: true, zeroed: matches!(frame, Frame::Runtime { .. }) };
+        let target = Target { cpu, segments: &segments, selection: options.selection, arch: &*options.arch, classes: &classes, runtime: runtime.value(), basic: true, zeroed: matches!(frame, Frame::Runtime { .. }) };
         let (procedure, landing, statics) = llrm_support::debug::in_function(module.global(id).name.as_deref().unwrap_or_default(), || timed("procedure", || procedure(module, id, id == main, frame, &names, &abi, &pool, &target, runtime)))?;
         main_frame += statics;
         for callee in procedure.callees.values() {
@@ -733,7 +734,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         debug,
         stack: 0,
         // BASIC is code16's.
-        header: llrm_target::Target::listing_header(&llrm_x86_code16::Code16),
+        object: llrm_target::Target::object(&llrm_x86_code16::Code16),
     })
 }
 

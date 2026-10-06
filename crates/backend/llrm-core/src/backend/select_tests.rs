@@ -76,18 +76,18 @@ fn test_signed_word_extension_uses_explicit_operands() {
     let instruction = decoded(&made(emitted(&what)).code, 0);
     assert_eq!(instruction.code(), Code::Movsx_r32_rm16);
     assert!(instruction.op0_register() == Register::EBX && instruction.op1_register() == Register::SI);
-    assert!(target::requirements(&what).is_empty());
+    assert!(crate::backend::classes::RegisterClasses::code16().requirements(&what).is_empty());
 }
 
 #[test]
 fn test_load_accepts_unsigned_dword_bit_pattern() {
-    assert_eq!(hex(&made(load(Register::ESI, 0xBFFFFFF9, 0)).code), "66bef9ffffbf");
+    assert_eq!(hex(&made(load(Register::ESI, 0xBFFFFFF9, At::bits16(0))).code), "66bef9ffffbf");
 }
 
 #[test]
 fn test_push_accepts_unsigned_dword_bit_patterns() {
     for value in [0x80000000_i64, 0xEDCBA987, 0xFFFFFFFF] {
-        let instruction = decoded(&made(push_imm(value, 4, 0, false)).code, 0);
+        let instruction = decoded(&made(push_imm(value, 4, At::bits16(0), false)).code, 0);
         assert_eq!(instruction.stack_pointer_increment(), -4);
         assert_eq!(instruction.immediate(0) & 0xFFFFFFFF, value as u64);
     }
@@ -95,7 +95,7 @@ fn test_push_accepts_unsigned_dword_bit_patterns() {
 
 #[test]
 fn test_store_accepts_unsigned_dword_bit_pattern() {
-    assert_eq!(hex(&made(store_imm(&frame(-4, 4), 0xC1747C23, 0)).code), "66c746fc237c74c1");
+    assert_eq!(hex(&made(store_imm(&frame(-4, 4), 0xC1747C23, At::bits16(0))).code), "66c746fc237c74c1");
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn test_a_move_decodes_back_to_the_move_that_was_asked_for() {
             if into == outof {
                 continue;
             }
-            let back = decoded(&made(r#move(into, outof, 0)).code, 0);
+            let back = decoded(&made(r#move(into, outof, At::bits16(0))).code, 0);
             assert_eq!(back.code(), Code::Mov_r32_rm32);
             assert_eq!(back.op0_register(), into);
             assert_eq!(back.op1_register(), outof);
@@ -115,72 +115,72 @@ fn test_a_move_decodes_back_to_the_move_that_was_asked_for() {
 
 #[test]
 fn test_a_sixteen_bit_move_is_shorter_than_a_thirty_two_bit_one() {
-    let wide = made(r#move(Register::ECX, Register::EAX, 0));
-    let narrow = made(r#move(Register::CX, Register::AX, 0));
+    let wide = made(r#move(Register::ECX, Register::EAX, At::bits16(0)));
+    let narrow = made(r#move(Register::CX, Register::AX, At::bits16(0)));
     assert!(wide.code.len() == 3 && narrow.code.len() == 2);
     assert_eq!(wide.code[0], 0x66);
 }
 
 #[test]
 fn test_a_move_to_itself_is_no_instruction() {
-    assert!(made(r#move(Register::EAX, Register::EAX, 0)).code.is_empty());
+    assert!(made(r#move(Register::EAX, Register::EAX, At::bits16(0))).code.is_empty());
 }
 
 #[test]
 fn test_mixed_widths_are_refused_rather_than_guessed() {
-    assert!(r#move(Register::ECX, Register::AX, 0).is_none());
-    assert!(r#move(Register::AX, Register::ECX, 0).is_none());
+    assert!(r#move(Register::ECX, Register::AX, At::bits16(0)).is_none());
+    assert!(r#move(Register::AX, Register::ECX, At::bits16(0)).is_none());
 }
 
 #[test]
 fn test_registers_this_does_not_name_are_refused() {
-    assert!(r#move(Register::EAX, Register::ES, 0).is_none());
-    assert!(r#move(Register::ES, Register::EAX, 0).is_none());
-    assert!(r#move(Register::EBP, Register::ESP, 0).is_some());
+    assert!(r#move(Register::EAX, Register::ES, At::bits16(0)).is_none());
+    assert!(r#move(Register::ES, Register::EAX, At::bits16(0)).is_none());
+    assert!(r#move(Register::EBP, Register::ESP, At::bits16(0)).is_some());
 }
 
 #[test]
 fn test_a_wide_push_is_not_a_narrow_one() {
-    let (narrow, wide) = (made(push_imm(3, 2, 0, false)), made(push_imm(3, 4, 0, false)));
+    let (narrow, wide) = (made(push_imm(3, 2, At::bits16(0), false)), made(push_imm(3, 4, At::bits16(0), false)));
     assert_eq!(decoded(&narrow.code, 0).stack_pointer_increment(), -2);
     assert_eq!(decoded(&wide.code, 0).stack_pointer_increment(), -4);
 }
 
 #[test]
 fn test_a_register_is_not_an_immediate() {
-    let one = made(push(Register::EAX, 0));
+    let one = made(push(Register::EAX, At::bits16(0)));
     assert_eq!(one.code, [0x66, 0x50]);
-    let other = made(push_imm(Register::EAX as i64, 2, 0, false));
+    let other = made(push_imm(Register::EAX as i64, 2, At::bits16(0), false));
     assert_ne!(other.code, one.code);
 }
 
 #[test]
 fn test_a_mixed_width_operation_is_refused() {
-    assert!(arith("add", Register::AX, Register::ECX, 0).is_none());
-    assert!(arith("add", Register::EAX, Register::CX, 0).is_none());
+    assert!(arith("add", Register::AX, Register::ECX, At::bits16(0)).is_none());
+    assert!(arith("add", Register::EAX, Register::CX, At::bits16(0)).is_none());
 }
 
 #[test]
 fn test_an_operation_not_in_the_table_is_refused() {
     for name in ["rol", "shl", "imul", "xchg", ""] {
-        assert!(arith(name, Register::AX, Register::CX, 0).is_none());
+        assert!(arith(name, Register::AX, Register::CX, At::bits16(0)).is_none());
     }
     for name in ["bswap", "shr", ""] {
-        assert!(unary(name, Register::AX, 0).is_none());
+        assert!(unary(name, Register::AX, At::bits16(0)).is_none());
     }
 }
 
 #[test]
 fn test_a_relocated_address_is_emitted_as_zero_and_says_where() {
     let cell = ir::Mem::new(Some(a(Space::Segment, 0x1234, 5, Register::None, Register::None)), 2);
-    let made = made(move_from(Register::AX, &cell, 0));
+    let made = made(move_from(Register::AX, &cell, At::bits16(0)));
     let at = made.displacement_at.expect("a displacement");
     assert_eq!(made.code[at..at + 2], [0, 0], "a relocated displacement is not a number");
 }
 
 #[test]
 fn test_a_frame_slot_keeps_its_displacement() {
-    let made = made(move_from(Register::AX, &frame(-0x18, 2), 0));
+    let made = made(move_from(Register::AX, &frame(-0x18, 2), At::bits16(0)));
     assert_eq!(hex(&made.code), "8b46e8"); // mov ax,[bp-18h]
     let at = made.displacement_at.expect("a displacement");
     assert_eq!(made.code[at..], [(-0x18_i64 & 0xFF) as u8]);
@@ -189,24 +189,24 @@ fn test_a_frame_slot_keeps_its_displacement() {
 #[test]
 fn test_the_spaces_that_cannot_be_encoded_are_refused() {
     for space in [Space::Far, Space::Group, Space::Stack] {
-        assert!(operand_of(&ir::Mem::new(Some(Addr::new(space, 4)), 2)).is_none(), "{space:?}");
+        assert!(operand_of(&ir::Mem::new(Some(Addr::new(space, 4)), 2), 16).is_none(), "{space:?}");
     }
-    assert!(operand_of(&ir::Mem::new(None, 2)).is_none());
-    let literal = operand_of(&ir::Mem::new(Some(Addr::new(Space::Literal, 4)), 2));
+    assert!(operand_of(&ir::Mem::new(None, 2), 16).is_none());
+    let literal = operand_of(&ir::Mem::new(Some(Addr::new(Space::Literal, 4)), 2), 16);
     assert!(literal.is_some_and(|(_, relocated)| !relocated), "a literal address relocates nothing");
 }
 
 #[test]
 fn test_a_cell_of_the_wrong_width_is_refused() {
     let cell = frame(-4, 4);
-    assert!(move_from(Register::AX, &cell, 0).is_none());
-    assert!(move_from(Register::EAX, &cell, 0).is_some());
+    assert!(move_from(Register::AX, &cell, At::bits16(0)).is_none());
+    assert!(move_from(Register::EAX, &cell, At::bits16(0)).is_some());
 }
 
 #[test]
 fn test_a_near_call_and_a_far_call_are_told_apart_by_the_target() {
-    let near = made(call_near(0x32, 0x4E));
-    let far = made(call_far(0x4E));
+    let near = made(call_near(0x32, At::bits16(0x4E)));
+    let far = made(call_far(At::bits16(0x4E)));
     assert!(near.displacement_at.is_none());
     assert_eq!(far.displacement_at, Some(1));
     assert_eq!(far.code, [0x9A, 0, 0, 0, 0]);
@@ -219,21 +219,21 @@ fn test_a_near_call_and_a_far_call_are_told_apart_by_the_target() {
 fn test_a_store_of_an_immediate_takes_the_cell_s_width() {
     // `word ptr` and `dword ptr`, as the bytes Python printed.
     for (width, want) in [(2, "c746fc0000"), (4, "66c746fc00000000")] {
-        assert_eq!(hex(&made(store_imm(&frame(-4, width), 0, 0)).code), want);
+        assert_eq!(hex(&made(store_imm(&frame(-4, width), 0, At::bits16(0))).code), want);
     }
 }
 
 #[test]
 fn test_a_narrow_push_of_a_small_literal_takes_the_byte_form() {
     for (value, want) in [(0, "6a00"), (1, "6a01"), (0x31, "6a31"), (-1, "6aff"), (127, "6a7f"), (-128, "6a80")] {
-        assert_eq!(hex(&made(push_imm(value, 2, 0, false)).code), want);
+        assert_eq!(hex(&made(push_imm(value, 2, At::bits16(0), false)).code), want);
     }
 }
 
 #[test]
 fn test_a_narrow_push_that_does_not_fit_a_byte_stays_wide() {
     for value in [128, -129, 1000, -1000, 0x7FFF, -0x8000] {
-        let made = made(push_imm(value, 2, 0, false));
+        let made = made(push_imm(value, 2, At::bits16(0), false));
         assert_eq!(made.code[0], 0x68, "{value} took the byte form and does not fit one");
         assert_eq!(made.code.len(), 3);
     }
@@ -241,9 +241,9 @@ fn test_a_narrow_push_that_does_not_fit_a_byte_stays_wide() {
 
 #[test]
 fn test_a_word_immediate_written_unsigned_still_fits_a_byte() {
-    assert_eq!(hex(&made(push_imm(0xFFFF, 2, 0, false)).code), "6aff");
-    assert_eq!(hex(&made(push_imm(0xFF80, 2, 0, false)).code), "6a80");
-    assert_eq!(hex(&made(arith_imm("add", Register::BX, 0xFFFF, 0, false)).code), "83c3ff");
+    assert_eq!(hex(&made(push_imm(0xFFFF, 2, At::bits16(0), false)).code), "6aff");
+    assert_eq!(hex(&made(push_imm(0xFF80, 2, At::bits16(0), false)).code), "6a80");
+    assert_eq!(hex(&made(arith_imm("add", Register::BX, 0xFFFF, At::bits16(0), false)).code), "83c3ff");
 }
 
 #[test]
@@ -253,14 +253,14 @@ fn test_a_literal_address_through_a_register_uses_the_byte_displacement() {
         offset: 0x0A,
         ..ir::Mem::new(Some(at(Space::Literal, 0x0A, Register::SI, Register::None)), 2)
     };
-    assert_eq!(hex(&made(arith_mem("add", Register::BX, &cell, 0)).code), "035c0a");
+    assert_eq!(hex(&made(arith_mem("add", Register::BX, &cell, At::bits16(0))).code), "035c0a");
 }
 
 #[test]
 fn test_a_bare_literal_address_keeps_two_bytes_however_small_it_is() {
     for value in [0, 1, 0x10, 0x7F] {
         let cell = ir::Mem::new(Some(Addr::new(Space::Literal, value)), 2);
-        let made = made(arith_mem("add", Register::BX, &cell, 0));
+        let made = made(arith_mem("add", Register::BX, &cell, At::bits16(0)));
         assert_eq!(made.code.len(), 4, "{value:#x} came back {}", hex(&made.code));
         assert_eq!(made.code[1] & 0xC7, 0x06, "{value:#x} is not the direct-address form");
     }
@@ -268,22 +268,22 @@ fn test_a_bare_literal_address_keeps_two_bytes_however_small_it_is() {
 
 #[test]
 fn test_a_relocated_push_keeps_the_wide_immediate() {
-    assert_eq!(hex(&made(push_imm(0, 2, 0, true)).code), "680000");
-    assert_eq!(hex(&made(push_imm(0, 2, 0, false)).code), "6a00");
-    assert_eq!(hex(&made(push_imm(3, 4, 0, true)).code), "666803000000");
-    assert_eq!(hex(&made(push_imm(3, 4, 0, false)).code), "666a03");
+    assert_eq!(hex(&made(push_imm(0, 2, At::bits16(0), true)).code), "680000");
+    assert_eq!(hex(&made(push_imm(0, 2, At::bits16(0), false)).code), "6a00");
+    assert_eq!(hex(&made(push_imm(3, 4, At::bits16(0), true)).code), "666803000000");
+    assert_eq!(hex(&made(push_imm(3, 4, At::bits16(0), false)).code), "666a03");
 }
 
 #[test]
 fn test_a_shift_by_one_takes_its_own_opcode() {
     for (name, reg, want) in [("shl", Register::AX, "d1e0"), ("shl", Register::BX, "d1e3"), ("sar", Register::AX, "d1f8")] {
-        assert_eq!(hex(&made(shift(name, RegisterOrCell::Reg(reg), Some(1), 0)).code), want);
+        assert_eq!(hex(&made(shift(name, RegisterOrCell::Reg(reg), Some(1), At::bits16(0))).code), want);
     }
 }
 
 #[test]
 fn test_a_shift_by_more_than_one_keeps_the_immediate_form() {
-    assert_eq!(hex(&made(shift("shl", RegisterOrCell::Reg(Register::AX), Some(3), 0)).code), "c1e003");
+    assert_eq!(hex(&made(shift("shl", RegisterOrCell::Reg(Register::AX), Some(3), At::bits16(0))).code), "c1e003");
 }
 
 #[test]
@@ -302,28 +302,28 @@ fn test_spilled_shift_is_encodable() {
 #[test]
 fn test_an_accumulator_immediate_takes_the_short_opcode() {
     for (name, value, want) in [("add", 0x1286, "058612"), ("cmp", 0x1234, "3d3412"), ("sub", 0x4000, "2d0040")] {
-        assert_eq!(hex(&made(arith_imm(name, Register::AX, value, 0, false)).code), want);
+        assert_eq!(hex(&made(arith_imm(name, Register::AX, value, At::bits16(0), false)).code), want);
     }
 }
 
 #[test]
 fn test_a_byte_immediate_still_beats_the_accumulator_form() {
-    assert_eq!(hex(&made(arith_imm("add", Register::AX, 3, 0, false)).code), "83c003");
-    assert_eq!(hex(&made(arith_imm("add", Register::BX, 3, 0, false)).code), "83c303");
-    assert_eq!(hex(&made(arith_imm("add", Register::BX, 0x1286, 0, false)).code), "81c38612");
+    assert_eq!(hex(&made(arith_imm("add", Register::AX, 3, At::bits16(0), false)).code), "83c003");
+    assert_eq!(hex(&made(arith_imm("add", Register::BX, 3, At::bits16(0), false)).code), "83c303");
+    assert_eq!(hex(&made(arith_imm("add", Register::BX, 0x1286, At::bits16(0), false)).code), "81c38612");
 }
 
 #[test]
 fn test_a_compare_of_memory_against_a_small_literal_takes_the_byte_form() {
     for (value, want) in [(0x32, "837ee232"), (0, "837ee200"), (-1, "837ee2ff")] {
-        assert_eq!(hex(&made(compare(&Loc::Mem(frame(-0x1E, 2)), value, 0, false)).code), want);
+        assert_eq!(hex(&made(compare(&Loc::Mem(frame(-0x1E, 2)), value, At::bits16(0), false)).code), want);
     }
 }
 
 #[test]
 fn test_a_compare_of_a_byte_cell_against_a_literal() {
     for (value, want) in [(0, "807efc00"), (200, "807efcc8"), (-1, "807efcff")] {
-        assert_eq!(hex(&made(compare(&Loc::Mem(frame(-4, 1)), value, 0, false)).code), want);
+        assert_eq!(hex(&made(compare(&Loc::Mem(frame(-4, 1)), value, At::bits16(0), false)).code), want);
     }
 }
 
@@ -344,17 +344,17 @@ fn test_an_extension_encodes_from_a_byte_or_a_cell() {
 
 #[test]
 fn test_a_compare_of_memory_against_a_large_literal_stays_wide() {
-    assert_eq!(hex(&made(compare(&Loc::Mem(frame(-0x1E, 2)), 0x1234, 0, false)).code), "817ee23412");
+    assert_eq!(hex(&made(compare(&Loc::Mem(frame(-0x1E, 2)), 0x1234, At::bits16(0), false)).code), "817ee23412");
 }
 
 #[test]
 fn test_a_relocated_arithmetic_immediate_keeps_its_width() {
     for name in ["add", "sub", "cmp", "and", "or", "xor"] {
-        let wide = made(arith_imm(name, Register::AX, 0, 0, true));
+        let wide = made(arith_imm(name, Register::AX, 0, At::bits16(0), true));
         assert_eq!(wide.code.len(), 3, "{name} ax,0 relocated came back {}", hex(&wide.code));
         assert!(wide.immediate_at.is_some());
         assert_ne!(wide.code[0], 0x83);
-        let narrow = made(arith_imm(name, Register::AX, 0, 0, false));
+        let narrow = made(arith_imm(name, Register::AX, 0, At::bits16(0), false));
         assert_eq!(narrow.code[0], 0x83);
     }
 }
@@ -362,9 +362,9 @@ fn test_a_relocated_arithmetic_immediate_keeps_its_width() {
 #[test]
 fn test_a_relocated_immediate_against_memory_keeps_its_width() {
     let cell = frame(-4, 2);
-    let wide = made(arith_into_imm("add", &cell, 0, 0, true));
+    let wide = made(arith_into_imm("add", &cell, 0, At::bits16(0), true));
     assert_eq!(wide.code[0], 0x81, "came back {}", hex(&wide.code));
-    let narrow = made(arith_into_imm("add", &cell, 0, 0, false));
+    let narrow = made(arith_into_imm("add", &cell, 0, At::bits16(0), false));
     assert_eq!(narrow.code[0], 0x83);
 }
 
@@ -372,13 +372,13 @@ fn test_a_relocated_immediate_against_memory_keeps_its_width() {
 fn test_a_comparison_against_zero_takes_the_test_form() {
     for (reg, want) in [(Register::EAX, "6685c0"), (Register::ECX, "6685c9"), (Register::AX, "85c0"), (Register::BX, "85db")] {
         let width = if matches!(reg, Register::EAX | Register::ECX) { 4 } else { 2 };
-        assert_eq!(hex(&made(compare(&rg(reg, width), 0, 0, false)).code), want);
+        assert_eq!(hex(&made(compare(&rg(reg, width), 0, At::bits16(0), false)).code), want);
     }
 }
 
 #[test]
 fn test_a_comparison_against_zero_stays_a_compare_when_relocated() {
-    let made = made(compare(&rg(Register::AX, 2), 0, 0, true));
+    let made = made(compare(&rg(Register::AX, 2), 0, At::bits16(0), true));
     assert_ne!(made.code[0], 0x85, "a relocated compare became a test: {}", hex(&made.code));
 }
 
@@ -432,10 +432,10 @@ fn test_a_funnel_shift_is_two_address_in_its_low_half() {
 
 #[test]
 fn test_a_funnel_shift_by_a_register_takes_its_count_in_cl() {
-    let dynamic = target::reads(&funnel_of(rg(Register::CL, 1), "shrd"));
+    let dynamic = target::reads(&funnel_of(rg(Register::CL, 1), "shrd"), &crate::backend::classes::RegisterClasses::code16());
     assert!(dynamic.get(&Register::ECX).is_some_and(|need| need.fixed() == Some(Register::ECX)));
-    assert!(!target::reads(&funnel_of(imm(16, 1), "shrd")).contains_key(&Register::EAX));
-    assert!(target::writes(&funnel_of(imm(16, 1), "shrd")).is_empty(), "shrd writes only what it names");
+    assert!(!target::reads(&funnel_of(imm(16, 1), "shrd"), &crate::backend::classes::RegisterClasses::code16()).contains_key(&Register::EAX));
+    assert!(target::writes(&funnel_of(imm(16, 1), "shrd"), &crate::backend::classes::RegisterClasses::code16()).is_empty(), "shrd writes only what it names");
 }
 
 #[test]
@@ -481,23 +481,23 @@ fn placed(r#where: Addr, through: Register, offset: i64, disp_width: u32, value:
 fn test_a_relocated_cell_is_reached_through_the_register_it_was_placed_in() {
     let r#where = at(Space::Segment, 0x2, Register::SI, Register::None);
     let cell = placed(r#where, Register::BX, 2, 1, 17);
-    let got = decoded(&made(move_from(Register::AX, &cell, 0)).code, 0);
+    let got = decoded(&made(move_from(Register::AX, &cell, At::bits16(0))).code, 0);
     assert_eq!(got.memory_base(), Register::BX);
-    assert!(operand_of(&cell).expect("encodable").1, "a segment address still needs its fixup moved");
+    assert!(operand_of(&cell, 16).expect("encodable").1, "a segment address still needs its fixup moved");
 
-    let plain = made(move_from(Register::AX, &ir::Mem::new(Some(r#where), 2), 0));
+    let plain = made(move_from(Register::AX, &ir::Mem::new(Some(r#where), 2), At::bits16(0)));
     assert_eq!(decoded(&plain.code, 0).memory_base(), Register::SI);
-    assert!(operand_of(&ir::Mem::new(Some(r#where), 2)).expect("encodable").1);
+    assert!(operand_of(&ir::Mem::new(Some(r#where), 2), 16).expect("encodable").1);
 }
 
 #[test]
 fn test_a_literal_cell_is_reached_through_the_register_it_was_placed_in() {
     let r#where = at(Space::Literal, 0x2, Register::SI, Register::None);
-    let got = decoded(&made(move_from(Register::AX, &placed(r#where, Register::BX, 2, 1, 17), 0)).code, 0);
+    let got = decoded(&made(move_from(Register::AX, &placed(r#where, Register::BX, 2, 1, 17), At::bits16(0))).code, 0);
     assert_eq!(got.memory_base(), Register::BX);
     assert_eq!(got.memory_displacement64(), 2);
 
-    let back = decoded(&made(move_from(Register::AX, &ir::Mem::new(Some(r#where), 2), 0)).code, 0);
+    let back = decoded(&made(move_from(Register::AX, &ir::Mem::new(Some(r#where), 2), At::bits16(0))).code, 0);
     assert_eq!(back.memory_base(), Register::SI);
     assert_eq!(back.memory_displacement64(), 2);
 }
@@ -505,11 +505,11 @@ fn test_a_literal_cell_is_reached_through_the_register_it_was_placed_in() {
 #[test]
 fn test_a_far_cell_is_reached_through_the_register_it_was_placed_in() {
     let r#where = at(Space::Far, 0, Register::BX, Register::ES);
-    let got = decoded(&made(move_from(Register::AX, &placed(r#where, Register::DI, 0, 0, 21), 0)).code, 0);
+    let got = decoded(&made(move_from(Register::AX, &placed(r#where, Register::DI, 0, 0, 21), At::bits16(0))).code, 0);
     assert_eq!(got.memory_base(), Register::DI);
     assert_eq!(got.memory_segment(), Register::ES);
 
-    let back = decoded(&made(move_from(Register::AX, &ir::Mem::new(Some(r#where), 2), 0)).code, 0);
+    let back = decoded(&made(move_from(Register::AX, &ir::Mem::new(Some(r#where), 2), At::bits16(0))).code, 0);
     assert_eq!(back.memory_base(), Register::BX);
     assert_eq!(back.memory_segment(), Register::ES);
 }
@@ -554,9 +554,9 @@ fn test_arithmetic_encodes_the_same_32_bit_pattern_in_either_signed_notation() {
                 let cell = frame(-4, 4);
                 let encode = |value| {
                     if memory {
-                        arith_into_imm(name, &cell, value, 0, false)
+                        arith_into_imm(name, &cell, value, At::bits16(0), false)
                     } else {
-                        arith_imm(name, Register::EDX, value, 0, false)
+                        arith_imm(name, Register::EDX, value, At::bits16(0), false)
                     }
                 };
                 let (positive, negative) = (made(encode(number)), made(encode(number - (1 << 32))));
@@ -641,7 +641,7 @@ fn test_a_frame_derived_indirect_cell_keeps_its_stack_segment() {
         base: Some(h(1, 2)),
         ..ir::Mem::new(Some(at(Space::Literal, 0, Register::None, Register::SS)), 4)
     };
-    let got = decoded(&made(move_into(&cell, Register::EAX, 0)).code, 0);
+    let got = decoded(&made(move_into(&cell, Register::EAX, At::bits16(0))).code, 0);
     assert_eq!(got.memory_base(), Register::BX);
     assert_eq!(got.memory_segment(), Register::SS);
 }
@@ -712,7 +712,7 @@ fn test_a_word_index_is_encoded_with_word_addressing() {
 #[test]
 fn test_selected_indexed_frame_cell_keeps_bp_and_its_dynamic_index() {
     let cell = ir::Mem { through: Register::BP, base: Some(h(1, 2)), index_through: Register::SI, ..frame(-96, 4) };
-    let code = made(move_from(Register::EAX, &cell, 0)).code;
+    let code = made(move_from(Register::EAX, &cell, At::bits16(0))).code;
     let instruction = crate::frontends::bc::declen::decode(&code, 0).expect("decodes");
     assert_eq!(instruction.insn.memory_base(), Register::BP);
     assert_eq!(instruction.insn.memory_index(), Register::SI);
@@ -803,7 +803,7 @@ fn test_an_immediate_too_wide_raises_the_same_text_on_every_compiler() {
 }
 
 fn decoded_over(segment: Register) -> (Register, usize) {
-    let code = made(copy("movsw", segment, 0, false)).code;
+    let code = made(copy("movsw", segment, At::bits16(0), false)).code;
     (decoded(&code, 0).segment_prefix(), code.len())
 }
 
@@ -812,7 +812,7 @@ fn decoded_over(segment: Register) -> (Register, usize) {
 #[test]
 fn test_a_string_move_encodes_by_width_and_repeat() {
     let decoded = |name: &str, repeated: bool| {
-        let code = made(copy(name, Register::None, 0, repeated)).code;
+        let code = made(copy(name, Register::None, At::bits16(0), repeated)).code;
         let one = decoded(&code, 0);
         (one.mnemonic(), one.has_rep_prefix(), code.len())
     };
@@ -821,7 +821,7 @@ fn test_a_string_move_encodes_by_width_and_repeat() {
     assert_eq!(decoded("movsd", false), (Mnemonic::Movsd, false, 2));
     assert_eq!(decoded("movsw", true), (Mnemonic::Movsw, true, 2));
     assert_eq!(decoded("movsd", true), (Mnemonic::Movsd, true, 3));
-    assert!(copy("movsq", Register::None, 0, false).is_none());
+    assert!(copy("movsq", Register::None, At::bits16(0), false).is_none());
     // The source read through another segment is an override on the move.
     let over = decoded_over(Register::SS);
     assert_eq!(over, (Register::SS, 2));

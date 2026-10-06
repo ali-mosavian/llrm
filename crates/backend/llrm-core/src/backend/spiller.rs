@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
+use crate::backend::classes::RegisterClasses;
 use crate::support::hash::{IndexMap, IndexSet};
 
 use crate::analysis::intervals::{self as ranges, Interval, Segment, key};
@@ -51,8 +52,9 @@ pub fn spilled(
     body: &LirBody,
     values: &BTreeSet<u32>,
     frame: Option<&mut Frame>,
+    classes: &RegisterClasses,
 ) -> Result<(LirBody, BTreeSet<u32>), Error> {
-    spilled_from(body, values, frame, 0)
+    spilled_from(body, values, frame, 0, classes)
 }
 
 /// How each value of a set is spilled: the decision, made before any
@@ -121,6 +123,7 @@ pub fn spilled_from(
     values: &BTreeSet<u32>,
     frame: Option<&mut Frame>,
     floor: u32,
+    classes: &RegisterClasses,
 ) -> Result<(LirBody, BTreeSet<u32>), Error> {
     if values.is_empty() {
         return Ok((body.clone(), BTreeSet::new()));
@@ -134,13 +137,13 @@ pub fn spilled_from(
         }
     };
     let plan = planned(body, values, frame)?;
-    materialized(body, &plan, frame, floor)
+    materialized(body, &plan, frame, floor, classes)
 }
 
 /// `body` with `plan` written: a reload before each read of a stored value, a
 /// store after each write, and every other value made again where it is read.
 /// The values made are returned; each lives for one use.
-pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32) -> Result<(LirBody, BTreeSet<u32>), Error> {
+pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, classes: &RegisterClasses) -> Result<(LirBody, BTreeSet<u32>), Error> {
     let mut fresh = _next_value(body).max(floor);
     let mut made: BTreeSet<u32> = BTreeSet::new();
     let Plan { constants, addresses, extensions, frame_loads, frame_homes, rebuilt, stored, narrow } = plan;
@@ -271,7 +274,7 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32) 
             }
             let direct = match _in_place(&one, &stored, frame)? {
                 Some(direct) => Some(direct),
-                None => _tied(&one, &stored, frame)?,
+                None => _tied(&one, &stored, frame, classes)?,
             };
             if let Some(direct) = direct {
                 insns.push(direct);
@@ -284,7 +287,7 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32) 
                 let (reloads, renamed) = _reloaded(&read, &stored, frame, &mut fresh)?;
                 insns.extend(reloads);
                 insns.push(if renamed.is_empty() { read } else { _renamed(&read, &renamed) });
-                if let Some(direct) = _tied(&one, &stored, frame)? {
+                if let Some(direct) = _tied(&one, &stored, frame, classes)? {
                     insns.push(direct);
                     continue;
                 }
@@ -2258,7 +2261,7 @@ fn _memory_source_read_first(one: &Insn, values: &BTreeSet<u32>, fresh: u32) -> 
 }
 
 /// A value an instruction both reads and writes, kept in its slot.
-fn _tied(one: &Insn, values: &BTreeSet<u32>, frame: &mut Frame) -> Result<Option<Arc<Insn>>, Error> {
+fn _tied(one: &Insn, values: &BTreeSet<u32>, frame: &mut Frame, classes: &RegisterClasses) -> Result<Option<Arc<Insn>>, Error> {
     let Some(what) = &one.what else {
         return Ok(None);
     };
@@ -2275,7 +2278,7 @@ fn _tied(one: &Insn, values: &BTreeSet<u32>, frame: &mut Frame) -> Result<Option
         return Ok(None);
     }
     // A fixed register is a fixed register: a slot is not one.
-    for (place, _register) in target::requirements(what) {
+    for (place, _register) in classes.requirements(what) {
         let side = if place.side == "dest" { &what.dests } else { &what.sources };
         if place.index < side.len() && matches!(&side[place.index], Loc::Held(held) if held.value == value) {
             return Ok(None);
@@ -2429,7 +2432,7 @@ mod tests {
     }
 
     fn _out(body: &LirBody, values: &[u32]) -> Vec<Arc<Insn>> {
-        let (got, _made) = spilled(body, &set(values), Some(&mut Frame::new(0))).expect("spills");
+        let (got, _made) = spilled(body, &set(values), Some(&mut Frame::new(0)), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         got.insns()
     }
 
@@ -2595,7 +2598,7 @@ mod tests {
         );
         let mut frame = Frame::new(0);
         let (result, _made) =
-            spilled(&_body(vec![load, store, _add(3, 1, 0x102)]), &set(&[1]), Some(&mut frame)).expect("spills");
+            spilled(&_body(vec![load, store, _add(3, 1, 0x102)]), &set(&[1]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         (result, frame, parameter)
     }
 
@@ -2791,7 +2794,7 @@ mod tests {
     #[test]
     fn test_a_spill_numbers_its_reloads_above_the_floor_it_is_given() {
         let body = _body(vec![_move(1, 10, None, 0x10), _add(11, 1, 0x12), _add(12, 1, 0x14)]);
-        let (_, made) = spilled_from(&body, &set(&[1]), Some(&mut Frame::new(0)), 100).expect("spills");
+        let (_, made) = spilled_from(&body, &set(&[1]), Some(&mut Frame::new(0)), 100, &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert!(!made.is_empty() && made.iter().all(|one| *one >= 100), "{made:?}");
     }
 
@@ -2855,7 +2858,7 @@ mod tests {
         let source = _frame_address(-132, 2);
         let mut frame = Frame::new(0);
         let body = _body(vec![_lea(0, (0, 3), &source), _add(2, 1, 0x100)]);
-        let (result, _made) = spilled(&body, &set(&[1]), Some(&mut frame)).expect("spills");
+        let (result, _made) = spilled(&body, &set(&[1]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert!(!frame.slots.contains_key(&slot(1)));
         let insns = result.insns();
         let recreated = _recreated(&insns);
@@ -2880,7 +2883,7 @@ mod tests {
             &[1],
         );
         let body = _body(vec![_lea(0x10, (0x10, 0x13), &source), load]);
-        let (result, made) = spilled(&body, &set(&[1]), Some(&mut Frame::new(0))).expect("spills");
+        let (result, made) = spilled(&body, &set(&[1]), Some(&mut Frame::new(0)), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert!(made.is_empty());
         let insns = result.insns();
         assert!(_recreated(&insns).is_empty());
@@ -2897,7 +2900,7 @@ mod tests {
             let source = Address { disp_width: 2, ..Address::new(Some(Addr { index: 7, ..Addr::new(space, 12) })) };
             let mut frame = Frame::new(0);
             let body = _body(vec![_lea(0, (0, 3), &source), _add(2, 1, 0x100)]);
-            let (result, _made) = spilled(&body, &set(&[1]), Some(&mut frame)).expect("spills");
+            let (result, _made) = spilled(&body, &set(&[1]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
             assert!(!frame.slots.contains_key(&slot(1)));
             let insns = result.insns();
             let recreated = _recreated(&insns);
@@ -2913,7 +2916,7 @@ mod tests {
                 vec![Loc::Address(source)],
             );
             let names: IndexMap<(Space, i64), String> = IndexMap::from_iter([((space, 7), "_descriptor".to_owned())]);
-            let emitted = omfwrite::_encoded(&lea, &names).expect("encodes");
+            let emitted = omfwrite::_encoded(&lea, &names, 16).expect("encodes");
             assert_eq!(emitted.code, [0x8D, 0x1E, 0x0C, 0x00]);
             assert_eq!(emitted.fixups, [omfwrite::Fixup::new(2, omfwrite::OFFSET, "_descriptor")]);
         }
@@ -2938,7 +2941,7 @@ mod tests {
         for op_name in ["movsx", "movzx"] {
             let mut frame = Frame::new(0);
             let body = _body(vec![_move(1, 0, None, 0x0F), _extension(op_name, 0x10), _wide_add(0x14, 3)]);
-            let (result, _made) = spilled(&body, &set(&[2]), Some(&mut frame)).expect("spills");
+            let (result, _made) = spilled(&body, &set(&[2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
             let insns = result.insns();
             assert!(!frame.slots.contains_key(&slot(2)));
             assert_eq!(insns.iter().map(|one| name(one).unwrap()).collect::<Vec<_>>(), ["mov", op_name, "add"]);
@@ -2971,7 +2974,7 @@ mod tests {
                 ));
             }
             let mut frame = Frame::new(0);
-            spilled(&_body(insns), &set(&[2]), Some(&mut frame)).expect("spills");
+            spilled(&_body(insns), &set(&[2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
             assert!(frame.slots.contains_key(&slot(2)), "{unsafe_}");
         }
     }
@@ -3003,7 +3006,7 @@ mod tests {
             IndexMap::default(),
         );
         let mut frame = Frame::new(0);
-        spilled(&body, &set(&[2]), Some(&mut frame)).expect("spills");
+        spilled(&body, &set(&[2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert!(frame.slots.contains_key(&slot(2)));
     }
 
@@ -3018,7 +3021,7 @@ mod tests {
     #[test]
     fn test_nonoverlapping_spills_share_one_compatible_frame_slot() {
         let mut frame = Frame::new(0);
-        spilled(&_sequential(), &set(&[1, 2]), Some(&mut frame)).expect("spills");
+        spilled(&_sequential(), &set(&[1, 2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert_eq!(frame.slots[&slot(1)], frame.slots[&slot(2)]);
         assert_eq!(frame.size(), 2);
     }
@@ -3026,8 +3029,8 @@ mod tests {
     #[test]
     fn test_nonoverlapping_spills_from_later_rounds_reuse_the_frame_slot() {
         let mut frame = Frame::new(0);
-        let (first, _made) = spilled(&_sequential(), &set(&[1]), Some(&mut frame)).expect("spills");
-        spilled(&first, &set(&[2]), Some(&mut frame)).expect("spills");
+        let (first, _made) = spilled(&_sequential(), &set(&[1]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
+        spilled(&first, &set(&[2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert_eq!(frame.slots[&slot(1)], frame.slots[&slot(2)]);
         assert_eq!(frame.size(), 2);
     }
@@ -3035,8 +3038,8 @@ mod tests {
     #[test]
     fn test_overlapping_spills_from_later_rounds_keep_distinct_slots() {
         let mut frame = Frame::new(0);
-        let (first, _made) = spilled(&_overlapping(), &set(&[1]), Some(&mut frame)).expect("spills");
-        spilled(&first, &set(&[2]), Some(&mut frame)).expect("spills");
+        let (first, _made) = spilled(&_overlapping(), &set(&[1]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
+        spilled(&first, &set(&[2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert_ne!(frame.slots[&slot(1)], frame.slots[&slot(2)]);
     }
 
@@ -3053,7 +3056,7 @@ mod tests {
             _add(21, 2, 0x18),
         ]);
         let mut frame = Frame::new(0);
-        let (first, _made) = spilled(&body, &set(&[1, 3]), Some(&mut frame)).expect("spills");
+        let (first, _made) = spilled(&body, &set(&[1, 3]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         _color_slots(&first, &set(&[2]), &IndexMap::from_iter([(2, 2)]), &mut frame).expect("colors");
         assert_eq!(frame.slots[&slot(2)], frame.slots[&slot(1)]);
     }
@@ -3091,8 +3094,8 @@ mod tests {
         let mut frame = Frame::new(0);
         let [wide, use_wide] = _wide_pair(1, 10, 11, 0x10);
         let body = _body(vec![wide, use_wide, _move(2, 20, None, 0x14), _add(21, 2, 0x16)]);
-        let (first, _made) = spilled(&body, &set(&[1]), Some(&mut frame)).expect("spills");
-        spilled(&first, &set(&[2]), Some(&mut frame)).expect("spills");
+        let (first, _made) = spilled(&body, &set(&[1]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
+        spilled(&first, &set(&[2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert_eq!(frame.slots[&slot(1)], frame.slots[&slot(2)]);
         assert_eq!(frame.size(), 4);
     }
@@ -3106,8 +3109,8 @@ mod tests {
             let [wide, use_wide] = _wide_pair(1, 10, 11, 0x10);
             let mut body = _body(vec![wide, use_wide, _move(2, 20, None, 0x14), _add(21, 2, 0x16)]);
             body.returns_twice = twice;
-            let (first, _made) = spilled(&body, &set(&[1]), Some(&mut frame)).expect("spills");
-            spilled(&first, &set(&[2]), Some(&mut frame)).expect("spills");
+            let (first, _made) = spilled(&body, &set(&[1]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
+            spilled(&first, &set(&[2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
             frame.slots[&slot(1)] == frame.slots[&slot(2)]
         };
         assert_eq!((shared(false), shared(true)), (true, false));
@@ -3118,8 +3121,8 @@ mod tests {
         let mut frame = Frame::new(0);
         let [wide, use_wide] = _wide_pair(2, 20, 21, 0x14);
         let body = _body(vec![_move(1, 10, None, 0x10), _add(11, 1, 0x12), wide, use_wide]);
-        let (first, _made) = spilled(&body, &set(&[1]), Some(&mut frame)).expect("spills");
-        spilled(&first, &set(&[2]), Some(&mut frame)).expect("spills");
+        let (first, _made) = spilled(&body, &set(&[1]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
+        spilled(&first, &set(&[2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert_ne!(frame.slots[&slot(1)], frame.slots[&slot(2)]);
         assert_eq!(frame.size(), 6);
     }
@@ -3127,7 +3130,7 @@ mod tests {
     #[test]
     fn test_overlapping_spills_keep_distinct_frame_slots() {
         let mut frame = Frame::new(0);
-        spilled(&_overlapping(), &set(&[1, 2]), Some(&mut frame)).expect("spills");
+        spilled(&_overlapping(), &set(&[1, 2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert_ne!(frame.slots[&slot(1)], frame.slots[&slot(2)]);
         assert_eq!(frame.size(), 4);
     }
@@ -3137,7 +3140,7 @@ mod tests {
         let mut frame = Frame::new(0);
         let [wide, use_wide] = _wide_pair(1, 10, 11, 0x10);
         let body = _body(vec![wide, use_wide, _move(2, 20, None, 0x14), _add(21, 2, 0x16)]);
-        spilled(&body, &set(&[1, 2]), Some(&mut frame)).expect("spills");
+        spilled(&body, &set(&[1, 2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert_eq!(frame.slots[&slot(1)], frame.slots[&slot(2)]);
         assert_eq!(frame.size(), 4);
     }
@@ -3152,7 +3155,7 @@ mod tests {
             let body = _body(vec![_constant(0, (0, 0)), _move(2, 1, Some(7), 0x100), _move(3, 4, Some(7), 0x100)]);
             let mut frame = Frame::new(0);
             let values = if destination_spilled { set(&[1, 2]) } else { set(&[1]) };
-            let (done, _) = spilled(&body, &values, Some(&mut frame)).expect("spills");
+            let (done, _) = spilled(&body, &values, Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
             let insns = done.insns();
             let group: Vec<&Arc<Insn>> = insns.iter().filter(|one| one.group == Some(7)).collect();
             assert_eq!(group.len(), 2);
@@ -3173,7 +3176,7 @@ mod tests {
         let load = insn(0, (0, 0), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![Loc::Mem(cell)]), &[1], &[]);
         let body = _body(vec![load, _move(2, 1, None, 0x10), _add(21, 2, 0x12), _add(22, 1, 0x14)]);
         let mut frame = Frame::new(0);
-        let (done, _) = spilled(&body, &set(&[2]), Some(&mut frame)).expect("spills");
+        let (done, _) = spilled(&body, &set(&[2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert_eq!(frame.size(), 0, "a slot for a copy of a load");
         assert!(!done.insns().iter().any(|one| one.spill_store || one.spill_reload));
     }
@@ -3187,7 +3190,7 @@ mod tests {
         let write = insn(0x20, (0x20, 0x20), semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![imm(9, 2)]), &[], &[]);
         let body = _body(vec![load, _move(2, 1, None, 0x10), _add(21, 1, 0x12), write, _add(22, 2, 0x30)]);
         let mut frame = Frame::new(0);
-        let (done, _) = spilled(&body, &set(&[2]), Some(&mut frame)).expect("spills");
+        let (done, _) = spilled(&body, &set(&[2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert!(done.insns().iter().any(|one| one.spill_store || one.spill_reload), "the copy was made again from a cell that changed");
     }
 
@@ -3258,7 +3261,7 @@ mod tests {
         frame.slots.insert(slot(1), -2);
         frame.slots.insert(slot(2), -4);
         let (got, _) =
-            spilled(&_body(vec![_move(1, 2, Some(1), 0x100)]), &set(&[1, 2]), Some(&mut frame)).expect("spills");
+            spilled(&_body(vec![_move(1, 2, Some(1), 0x100)]), &set(&[1, 2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         let got = got.insns();
         assert!(got.len() == 1 && got[0].group == Some(1));
         assert!(operands(what(&got[0])).all(is_mem));
@@ -3269,7 +3272,7 @@ mod tests {
     fn test_a_grouped_move_coalesced_to_one_spill_slot_is_an_identity() {
         let mut frame = Frame::new(0);
         let (got, _) =
-            spilled(&_body(vec![_move(1, 2, Some(1), 0x100)]), &set(&[1, 2]), Some(&mut frame)).expect("spills");
+            spilled(&_body(vec![_move(1, 2, Some(1), 0x100)]), &set(&[1, 2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         assert_eq!(frame.slots[&slot(1)], frame.slots[&slot(2)]);
         assert!(got.insns().is_empty());
     }
@@ -3316,7 +3319,7 @@ mod tests {
             &[5],
             &[3],
         );
-        let (out, made) = spilled(&_body(vec![load]), &set(&[3]), None).expect("spills");
+        let (out, made) = spilled(&_body(vec![load]), &set(&[3]), None, &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         let got = out.blocks[0]
             .insns
             .iter()
@@ -3402,7 +3405,7 @@ mod tests {
         let body =
             _body(vec![op("mov", 1, 2, &[3]), op("mov", 2, 2, &[3]), op("add", 1, 4, &[1, 3]), op("add", 2, 2, &[2, 3])]);
         let mut frame = Frame::new(0);
-        let (got, _made) = spilled(&body, &set(&[1, 2]), Some(&mut frame)).expect("spills");
+        let (got, _made) = spilled(&body, &set(&[1, 2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         let cells: BTreeSet<(i64, u32)> = got
             .insns()
             .iter()
@@ -3443,7 +3446,7 @@ mod tests {
             let mut frame = Frame::new(0);
             let op = _add(1, 2, 0x100);
             let op = Insn { what: Some(Semantics { name: Some(name.to_owned()), ..what(&op).clone() }), ..op };
-            let (body, _) = spilled(&_body(vec![op]), &set(&[1, 2]), Some(&mut frame)).expect("spills");
+            let (body, _) = spilled(&_body(vec![op]), &set(&[1, 2]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
             let first = Loc::Mem(frame.cell(1u32, 2).unwrap());
             let second = Loc::Mem(frame.cell(2u32, 2).unwrap());
             let mut values: Vec<(Loc, i64)> = vec![(first.clone(), 12000), (second.clone(), 3000)];
@@ -3672,7 +3675,7 @@ mod tests {
             IndexMap::default(),
             IndexMap::default(),
         );
-        let (done, _made) = spilled(&body, &set(&[1]), Some(&mut Frame::new(0))).expect("spills");
+        let (done, _made) = spilled(&body, &set(&[1]), Some(&mut Frame::new(0)), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         let mut held_: IndexMap<u32, i64> = IndexMap::default();
         let mut memory: IndexMap<i64, i64> = IndexMap::default();
         let mut pushed: Vec<i64> = Vec::new();
@@ -3717,7 +3720,7 @@ mod tests {
 
     fn _spilled_one(name: &str, insns: Vec<Insn>) -> LirBody {
         let body = LirBody::new(name, 0, vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect())], IndexMap::default(), IndexMap::default());
-        spilled(&body, &set(&[1]), Some(&mut Frame::new(0))).expect("spills").0
+        spilled(&body, &set(&[1]), Some(&mut Frame::new(0)), &crate::backend::classes::RegisterClasses::code16()).expect("spills").0
     }
 
     /// MODEL's MOD_OPEN kept mov bx,40h after rematerializing 40h at its call.
