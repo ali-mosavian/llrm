@@ -65,6 +65,12 @@ impl zed::Extension for Nib {
         };
         Ok(zed::Command { command, args: arguments, env: worktree.shell_env() })
     }
+
+    /// `lsp.nib-lsp.initialization_options` from the settings: `{"target": "x86-code32"}` names the
+    /// project's target, which nib-lsp checks for (real mode's when it is not named).
+    fn language_server_initialization_options(&mut self, _id: &LanguageServerId, worktree: &zed::Worktree) -> Result<Option<zed::serde_json::Value>> {
+        Ok(LspSettings::for_worktree(SERVER, worktree).ok().and_then(|settings| settings.initialization_options))
+    }
 }
 
 zed::register_extension!(Nib);
