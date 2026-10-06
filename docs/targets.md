@@ -9,6 +9,23 @@ each crate owns, and the PR sequence. Optimization targets are in
 Targets the design must fit: `x86-code16`, `x86-code32` (flat), `x86-code64`,
 `arm64`. Only code32 is built in this task.
 
+## First principle
+
+**Adding a target never customises an IR (HIR, MIR, LIR) or a shared pass.** The
+target's descriptions and the machine model are the only specifics; everything else
+stays as it is. No enum variant, constant, default or branch for one target in an IR
+crate or a shared pass: what differs between targets reaches the pass as a parameter
+the driver (the one place that names targets) hands in. Review every PR, this
+plan's and code32's, against it.
+
+Known departures today, each to be removed:
+
+| Where | What | Removed by |
+|---|---|---|
+| `llrm-core`: `isel::code16()`, `Options::of`, `Flags::driver`, `assemble::assembled`, `flow::machine`, `Peephole::new`, `Profile::new` | defaults that name the 16-bit selector, rules or model, kept so tests need no target | PR 4c: explicit parameters; the tests take them from a helper |
+| `llrm-core`: the `target.rs` statics, `select.rs` bases, `masm`/`sharedstores` register lists, `cpu.rs` tables | code16's registers and prices read directly | PRs 5, 9 to 11, 19 |
+| `llrm-hir`, `llrm-mir`: the datalayout string, address-space numbers, `TargetProfile` variants | a target's layout in an IR crate | PR 14a, and the code32 session's HIR change (data layout and address spaces from the `Target`) |
+
 ## Principle: a target is description
 
 Adding a target is writing description files, as LLVM's `.td` files are. Custom
@@ -501,10 +518,11 @@ code16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | 3c | `llrm-driver`, `trait Target` (in `llrm-target`: `llrm-core` cannot be below code16 while `llrm-bcmachine` was above it), `--target` (default code16), the target in `Options`; `llrm-core` stays on code16 for the statics that `allocate`, `regclass`, `constrain` and `ssaspill` read (until PR 19) and for the profile tables (until PR 5); metric baseline | about 12 uses in `llrm-core` left |
 | 4 | one selector per target definition directory: `build.rs` generates a `Compiled` for each `crates/target/<name>/src/isel/` (`patterns.isel`, forms in `src/instructions/x86.instr`), found by the directory's name; `llrm-driver` binds a target to its selector and hands it in through `Options`; code16's `patterns.isel` moved there. The generated code and its hooks stay in `llrm-core` until the inversion (after 19) | `build.rs`, `matcher.rs`, `isel.rs`, `assemble.rs` |
 | 4b | the same for the peephole rules (`peephole.peep`) | `build.rs`, `peep/` |
+| 4c | no default names a target in shared code: `Options`, `assemble`, `flow`, `Peephole`, `Profile` take the selector, rules and model from the driver; tests use a helper | `llrm-core`, `llrm-driver` |
 | 5 | `llrm-x86` family crate: schema, parser, condition codes, encoder; byte sizes from the encoder | `parse.rs`, `isel/matcher.rs:366` |
 | 6 | the form table is the only list of fixed registers, flags, ties and implicit defs/uses; string-op rows | `target.rs:67-162` (~100 lines) |
 | 7 | shadow oracle: old and new selector compared per function (isel LIR dump with every field, pool snapshot) | test tool only |
-| 8 | legality table in the description, with the derived-table test | `width_of`, `is_wide`, `is_far` read it |
+| 7' | one `TypeClass` that the patterns' type names, `width_of` and `size_of` read; the legality table moves to PR 15 (generic opcodes), where it has a reader | `isel.rs`, `isel/matcher.rs` |
 | 9 | the legalizer's state out of `Selector`; three shared sets stay | `isel.rs`, `wide.rs` |
 | 10 | register description; `RegId` as an alias of iced's `Register`, `RegisterInfo` queries, generated constants, the parity test | no behaviour change |
 | 11 | `RegId` migration in slices by area, one PR each; `regclass`, `allocate`, `ssaspill`, `constrain` get only the mechanical rename after cost-spill; then the alias becomes a newtype | ~830 sites |

@@ -408,6 +408,7 @@ name = "llrm-target"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-mir",
  "toml",
 ]
 
@@ -450,6 +451,7 @@ name = "llrm-x86-code32"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-mir",
  "llrm-target",
 ]
 

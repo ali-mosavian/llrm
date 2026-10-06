@@ -4064,6 +4064,33 @@ fn test_a_selector_is_found_by_its_targets_name() {
     assert!(isel::selector("x86-code99").is_none());
 }
 
+/// A type's class, its register width and its size in memory are read off one
+/// classification: the patterns' `ptr`/`far`, the register a pointer takes and the bytes
+/// it stores can not disagree about whether a pointer is one value or two.
+#[test]
+fn test_one_class_of_a_type_says_its_name_register_and_size() {
+    let params = "i1 %a, i8 %b, i16 %c, i32 %d, i64 %e, ptr %p, ptr addrspace(1) %q, float %x, double %y, x86_fp80 %z";
+    let check = |layout: &str, want: &[(&str, Result<u32, ()>, Result<u32, ()>)]| {
+        let module = llrm_mir::parse::module(&format!("target datalayout = \"{layout}\"\ndefine void @f({params}) {{\nentry:\n  ret void\n}}\n")).expect("parses");
+        let function = module.global(module.named("f").expect("f")).function().expect("a function");
+        let layout = llrm_mir::datalayout::DataLayout::parse(layout).expect("a layout");
+        for (&parameter, (name, width, size)) in function.parameters().iter().zip(want) {
+            let ty = function.value(parameter).ty;
+            assert_eq!(isel::TypeClass::of(&module.context.types, &layout, Some(ty)).name(), *name);
+            assert_eq!(isel::width_of(&module, &layout, ty).map_err(|_| ()), *width, "{name} width");
+            assert_eq!(isel::size_of(&module, &layout, ty).map_err(|_| ()), *size, "{name} size");
+        }
+    };
+    check(
+        "e-p:16:16-p1:32:16:16:16-i32:16-i64:16",
+        &[("i1", Ok(1), Ok(1)), ("i8", Ok(1), Ok(1)), ("i16", Ok(2), Ok(2)), ("i32", Ok(4), Ok(4)), ("i64", Err(()), Ok(8)), ("ptr", Ok(2), Ok(2)), ("far", Err(()), Ok(4)), ("float", Ok(10), Ok(4)), ("float", Ok(10), Ok(8)), ("float", Ok(10), Ok(10))],
+    );
+    check(
+        "e-p:32:32-p1:32:32-i32:32-i64:32",
+        &[("i1", Ok(1), Ok(1)), ("i8", Ok(1), Ok(1)), ("i16", Ok(2), Ok(2)), ("i32", Ok(4), Ok(4)), ("i64", Err(()), Ok(8)), ("ptr", Ok(4), Ok(4)), ("ptr", Ok(4), Ok(4)), ("float", Ok(10), Ok(4)), ("float", Ok(10), Ok(8)), ("float", Ok(10), Ok(10))],
+    );
+}
+
 /// A pointer of 32 bits reaches `[base+index*4]` as it is, with no proof and no widening:
 /// the sum is as wide as the pointer, and its base a dword already. Selected for the
 /// 16-bit target's profile it was `shl index,2` and an access through `[base+index]`: the
