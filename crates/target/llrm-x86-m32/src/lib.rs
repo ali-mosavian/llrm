@@ -52,7 +52,7 @@ impl llrm_target::Target for M32 {
     }
 
     fn machine(&self) -> Machine {
-        Machine::parse(DOS32, TIMINGS.default_cpu().expect("timings.times states a default CPU")).expect("the flat DOS description parses")
+        Machine::parse(DOS32, TIMINGS.default_cpu().expect("timings.times states a default CPU")).expect("the flat DOS description parses").with_layout(layout())
     }
 
     fn cpus(&self) -> &'static [&'static str] {

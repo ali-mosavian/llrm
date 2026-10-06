@@ -37,7 +37,7 @@ pub fn declare(facts: &crate::machine::Facts, module: &mut llrm_mir::Module) -> 
     let ty = types.intern(llrm_mir::Type::Function { returns: pair, parameters: vec![], variadic: true });
     let global = module.add_function(&declared(), ty, llrm_mir::Linkage::External).ok()?;
     let one = &mut module.globals[global.0 as usize];
-    one.address_space = crate::FAR;
+    one.address_space = facts.spaces.far;
     let llrm_mir::GlobalKind::Function(function) = &mut one.kind else { unreachable!("a function") };
     function.calling_convention = llrm_mir::opcode::BASIC;
     Some((module.reference(global), ty))
@@ -68,7 +68,7 @@ fn element(emitter: &mut Emitter) -> Emit<()> {
     let answer = emitter.call_as(llrm_mir::opcode::BASIC, ty, callee, &arguments)?.expect("an answer");
     emitter.popped(2 * (rank + 1))?;
     let (address, selector) = (emitter.b.extract_value(answer, 0, ""), emitter.b.extract_value(answer, 1, ""));
-    let segment = emitter.b.context.types.ptr(crate::SEGMENT);
+    let segment = emitter.b.context.types.ptr(crate::segment(&emitter.unit.facts.spaces));
     let selector = emitter.cast(CastOp::IntToPtr, selector, segment);
     emitter.set_register(Register::BX, address)?;
     emitter.set(Var::Es, selector);

@@ -272,6 +272,8 @@ fn carried(body: &BodyFacts, contracts: &IndexMap<i64, Contract>) -> IndexMap<i6
 /// A module's code, decoded, with a contract for every call.
 pub struct Facts<'m> {
     pub found: &'m Module,
+    /// The address spaces of the target the objects are recompiled for: the machine's layout's.
+    pub spaces: llrm_mir::spaces::Spaces,
     pub bodies: Vec<BodyFacts>,
     pub contracts: IndexMap<i64, Contract>,
     /// Each procedure's CodeView record, by its entry.
@@ -362,7 +364,7 @@ impl<'m> Facts<'m> {
         statements.reverse();
         statements.dedup_by_key(|&mut (at, _)| at);
         statements.reverse();
-        Ok(Facts { found, bodies, contracts, procedures, event_stub, handlers, registrations, resumptions, statements })
+        Ok(Facts { found, spaces: machine.layout().spaces.roles, bodies, contracts, procedures, event_stub, handlers, registrations, resumptions, statements })
     }
 
     /// Whether `node` calls the event-poll adapter.

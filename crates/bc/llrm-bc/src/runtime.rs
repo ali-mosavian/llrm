@@ -21,7 +21,7 @@ use llrm_mir::{Attribute, ConstantId, GlobalId, Linkage, Module, Type, TypeId};
 pub use crate::machine::{Answer, Interface};
 use crate::machine::{FLAGS, FRAME_ENTRY, FRAME_EXIT, Facts, Registers, TRACKED, Word, Words, from_contract};
 use crate::sites;
-use crate::{FAR, RUNTIME};
+use crate::RUNTIME;
 
 /// A callee, declared.
 #[derive(Clone, Debug)]
@@ -116,13 +116,13 @@ pub fn declare(facts: &Facts, module: &mut Module, procedures: &BTreeMap<String,
     let mut callees = Callees::default();
     let family = facts.family();
     for (name, sites) in sites_of {
-        let made = declared(module, &name, &sites, family.value(), facts.handlers);
+        let made = declared(module, facts.spaces.far, &name, &sites, family.value(), facts.handlers);
         callees.named.insert(name, made);
     }
     // A dispatch out of its table's range is B$SERR's error.
     if dispatches {
         let contract = runtime::per_call(&IndexMap::from_iter([(0, ERROR.to_owned())]), facts.family().value(), &Default::default()).swap_remove(&0).expect("one contract");
-        let made = declared(module, ERROR, &[(0, &contract, Words::new())], family.value(), facts.handlers);
+        let made = declared(module, facts.spaces.far, ERROR, &[(0, &contract, Words::new())], family.value(), facts.handlers);
         callees.named.insert(ERROR.to_owned(), made);
     }
     callees
@@ -135,7 +135,7 @@ pub const ERROR: &str = "B$SERR";
 /// Illegal function call's error number.
 pub const ILLEGAL_FUNCTION_CALL: i128 = 5;
 
-fn declared(module: &mut Module, name: &str, sites: &[(usize, &Contract, Words)], family: &str, handlers: bool) -> Result<Callee, String> {
+fn declared(module: &mut Module, far: u32, name: &str, sites: &[(usize, &Contract, Words)], family: &str, handlers: bool) -> Result<Callee, String> {
     let contract = sites[0].1;
     if !contract.established {
         return Err(format!("{name}'s contract is not established"));
@@ -200,7 +200,7 @@ fn declared(module: &mut Module, name: &str, sites: &[(usize, &Contract, Words)]
     let never_returns = contract.control == Control::Never;
     {
         let one = &mut module.globals[global.0 as usize];
-        one.address_space = FAR;
+        one.address_space = far;
         let llrm_mir::GlobalKind::Function(function) = &mut one.kind else { unreachable!("a function") };
         function.calling_convention = convention;
         function.attrs.extend(memory(contract, runtime::named_writes(name, family).is_some_and(|cells| !cells.is_empty())));

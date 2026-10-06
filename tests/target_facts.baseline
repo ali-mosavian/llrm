@@ -48,7 +48,6 @@
 46 crates/bc/llrm-bc/src/emit.rs
 3 crates/bc/llrm-bc/src/emit/handling.rs
 11 crates/bc/llrm-bc/src/floats.rs
-1 crates/bc/llrm-bc/src/lib.rs
 2 crates/bc/llrm-bc/src/longs.rs
 29 crates/bc/llrm-bc/src/machine.rs
 7 crates/bc/llrm-bc/src/pairs.rs

@@ -47,7 +47,7 @@ pub fn program(program: &Program) -> Result<Vec<Vec<u8>>, String> {
         let found = found_module::of(&records).ok_or_else(|| format!("{name}: the module has no code segment"))?;
         parsed.push((name, records, found));
     }
-    let segments = llrm_bc::segments(parsed.iter().map(|(_, _, found)| found));
+    let segments = llrm_bc::segments(program.machine, parsed.iter().map(|(_, _, found)| found));
     parsed.iter().map(|(name, records, found)| recompiled(records, found, &segments, program.machine, name).map_err(|why| format!("{name}: {why}"))).collect()
 }
 
