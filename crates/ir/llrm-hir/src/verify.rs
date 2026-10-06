@@ -317,7 +317,7 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
                 invalid!("{}: duplicate function {}", module.name, function.id);
             }
             function_ids.insert(function.id);
-            _function(module, function, &types)?;
+            _function(program.descriptor_word, module, function, &types)?;
         }
         _facts(module)?;
     }
@@ -325,6 +325,7 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
 }
 
 fn _function(
+    descriptor_word: i64,
     module: &model::Module,
     function: &model::Function,
     types: &IndexMap<i64, &model::Type>,
@@ -785,8 +786,8 @@ fn _function(
                     {
                         invalid!("{prefix}: descriptor place needs a sequence pointer");
                     }
-                    if field.kind != model::TypeKind::Integer || !matches!(field.width, 2 | 4) || field.signed != Some(false) {
-                        invalid!("{prefix}: descriptor field is not an unsigned word (u16 or u32)");
+                    if field.kind != model::TypeKind::Integer || field.width != descriptor_word || field.signed != Some(false) {
+                        invalid!("{prefix}: descriptor field is not an unsigned word of the program's {} bytes", descriptor_word);
                     }
                 }
             }

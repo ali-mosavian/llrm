@@ -308,6 +308,8 @@ fn class_tags(module: &mut Module, classes: &[model::AliasClass]) -> Emit<HashMa
 struct Tables<'h> {
     /// The target's address spaces: what the HIR's near, far, segment, huge and fixed addresses are.
     spaces: AddressSpaces,
+    /// The bytes of a descriptor's words, which the program states (`Program::descriptor_word`).
+    descriptor_word: i64,
     /// The flags facts state of each instruction, by function and instruction id.
     instruction_flags: HashMap<(i64, i64), Flags>,
     /// The facts stated of each call's arguments, by function and instruction id: the operand and the fact.
@@ -463,6 +465,7 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
         array_order,
         module_handler: None,
         zeroed,
+        descriptor_word: program.descriptor_word,
         layout: DataLayout::parse(&layout.datalayout).expect("the target's layout"),
         spaces: layout.spaces.clone(),
         types: hir.types.iter().map(|one| (one.id, one)).collect(),
@@ -1746,7 +1749,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let base = self.values.get(&one.base).copied().ok_or_else(|| format!("value {} used before its definition", one.base))?;
                 let pointee = self.tables.types[&self.value_types[&one.base]].element.map(|element| self.tables.types[&element]);
                 let ty = stored_type(&mut self.b.context.types, &self.tables.spaces, self.tables.types[&one.r#type])?;
-                Ok((self.offset(base, one.offset(pointee, self.tables.types[&one.r#type].width), false), ty, false, None))
+                Ok((self.offset(base, one.offset(pointee, self.tables.descriptor_word), false), ty, false, None))
             }
             Operand::ValueRef(_) | Operand::Constant(_) => Err("a value where a place belongs".to_owned()),
         }
