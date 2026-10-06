@@ -71,6 +71,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--procedure-segments" => layout = CodeLayout::PerProcedure,
             "--os-layer" => os_layer = Some(value("--os-layer")?),
+            "-Wno-distance" => frontend.warn_distance = false,
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
             "--unchecked-bounds" => frontend.unchecked_bounds = true,
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
@@ -143,6 +144,9 @@ pub fn main(argv: &[String]) -> i32 {
             (None, Some(_)) => return Ok(()),
         };
         let mut program = llrm_core::support::debug::timed("frontend", || driver::parsed(&args.source, &args.frontend, None)).map_err(|error| error.0)?;
+        for warning in args.frontend.warnings.borrow().iter() {
+            eprintln!("{}", driver::refused(&args.source, warning).0);
+        }
         if !args.used_by.is_empty() {
             nib::keep_exports(&mut program, &used(&args.used_by)?);
         }
@@ -185,6 +189,8 @@ mod tests {
         fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)> { self.0.callee_saved() }
         fn cpu_table(&self, name: &str) -> Option<llrm_target::timings::CpuTable> { self.0.cpu_table(name) }
         fn forms_text(&self) -> String { self.0.forms_text() }
+        fn registers_text(&self) -> String { self.0.registers_text() }
+        fn operand_bytes(&self) -> i64 { self.0.operand_bytes() }
         fn default_cpu(&self) -> &'static str { self.0.default_cpu() }
         fn operation_costs(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> llrm_mir::target::OperationCosts { self.0.operation_costs(price, prefix) }
         fn register_capacity(&self) -> i64 { self.0.register_capacity() }

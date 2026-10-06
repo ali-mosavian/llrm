@@ -82,7 +82,7 @@ fn test_nib_start_puts_the_stack_in_dgroup() {
     let run = |program: &Path, args: &[&str]| {
         assert!(Command::new(program).args(args).current_dir(dir).status().unwrap().success(), "{}", program.display());
     };
-    let runtime = root.join("crates/frontends/llrm-nib/src/runtime");
+    let runtime = root.join("crates/target/llrm-x86-code16/runtime/nib");
     for part in ["start", "dos"] {
         run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-Zg", "-omf", &format!("-Fo{part}.obj"), runtime.join(format!("{part}.asm")).to_str().unwrap()]);
     }
@@ -113,7 +113,7 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
     let run = |program: &Path, args: &[&str]| {
         assert!(Command::new(program).args(args).current_dir(dir).status().unwrap().success(), "{}", program.display());
     };
-    let runtime = root.join("crates/frontends/llrm-nib/src/runtime");
+    let runtime = root.join("crates/target/llrm-x86-code16/runtime/nib");
     for part in ["start", "dos"] {
         run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-Zg", "-omf", &format!("-Fo{part}.obj"), runtime.join(format!("{part}.asm")).to_str().unwrap()]);
     }
@@ -295,4 +295,25 @@ fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
     let got: Vec<i64> = bytes.chunks_exact(4).map(|word| i64::from(i32::from_le_bytes(word.try_into().unwrap()))).collect();
     let want: Vec<i64> = routines.iter().map(|(_, value)| *value).collect();
     assert_eq!(got, want, "{:?}", routines.map(|(name, _)| name));
+}
+
+/// Far and huge are near where a target has one address space, and the compiler says so, once for each
+/// place: code16 and a flat program that writes neither stay silent, and `-Wno-distance` (the runtime's
+/// build, which writes `*far` for the targets that have one) silences it.
+#[test]
+fn test_far_and_huge_are_near_with_a_warning_on_code32() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("p.obj");
+    let stderr = |source: &str, extra: &[&str]| {
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).arg(root.join(source)).args(extra).args(["-O2", "-o", object.to_str().unwrap()]).output().unwrap();
+        assert!(done.status.success(), "{source}: {}", String::from_utf8_lossy(&done.stderr));
+        String::from_utf8_lossy(&done.stderr).into_owned()
+    };
+    let flat = ["--target", "x86-code32"];
+    let warned = stderr("tests/run/nib/far_near.nib", &flat);
+    assert!(warned.contains("far_near.nib:5:6: warning: 'huge' is near") && warned.contains("warning: 'far' is near"), "{warned}");
+    assert_eq!(stderr("tests/run/nib/far_near.nib", &[]), "");
+    assert_eq!(stderr("tests/run/nib/far_near.nib", &["--target", "x86-code32", "-Wno-distance"]), "");
+    assert_eq!(stderr("tests/run/nib/flat_arith.nib", &flat), "");
 }

@@ -20,11 +20,6 @@ use crate::support::pyset::PySet;
 
 // ---------------------------------------------------------------- registers
 
-pub static ADDRESSING: LazyLock<BTreeSet<Register>> =
-    LazyLock::new(|| BTreeSet::from([Register::BX, Register::BP, Register::SI, Register::DI]));
-// `[bx+si]`: a word base and a word index are each confined to their half.
-pub static WORD_BASES: LazyLock<BTreeSet<Register>> = LazyLock::new(|| llrm_x86_code16::word_bases().into_iter().collect());
-pub static WORD_INDEXES: LazyLock<BTreeSet<Register>> = LazyLock::new(|| llrm_x86_code16::WORD_INDEXES.into());
 
 /// Where an operand has to live: one register, or any of a set.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -165,7 +160,7 @@ pub fn reads(what: &Semantics, classes: &RegisterClasses) -> IndexMap<Register, 
                 out.insert(
                     _root(r#where),
                     Need {
-                        r#where: ADDRESSING.iter().map(|x| _root(*x)).collect(),
+                        r#where: classes.addressing.iter().map(|x| _root(*x)).collect(),
                     },
                 );
             }
@@ -193,19 +188,6 @@ pub fn writes(what: &Semantics, classes: &RegisterClasses) -> IndexMap<Register,
     out
 }
 
-// Every register a value may be placed in: `mir.TRACKED`, what the raise
-// follows.
-pub const AVAILABLE: [Register; 6] = llrm_x86_code16::GENERAL;
-
-// What this may hand out for an operand that reaches memory, which is not
-// what the encoding permits: bp is a legal base and also the frame pointer.
-pub static BASES: LazyLock<Vec<Register>> = LazyLock::new(|| {
-    let addressing: BTreeSet<Register> = ADDRESSING.iter().map(|x| ir::root(*x)).collect();
-    AVAILABLE
-        .into_iter()
-        .filter(|one| addressing.contains(one))
-        .collect()
-});
 
 pub static WIDE: LazyLock<PySet<Register>> = LazyLock::new(|| {
     [
@@ -292,9 +274,9 @@ pub fn named(register: Register, width: i64) -> Register {
 /// The registers an operand may take, in the order to try them.
 ///
 /// LLVM's `AllocationOrder`. `None` means the operand said nothing.
-pub fn order(r#where: Option<&BTreeSet<Register>>, segments: &Segments) -> Vec<Register> {
+pub fn order(r#where: Option<&BTreeSet<Register>>, segments: &Segments, classes: &RegisterClasses) -> Vec<Register> {
     let Some(r#where) = r#where else {
-        return AVAILABLE.to_vec();
+        return classes.available.clone();
     };
     let wanted: BTreeSet<Register> = r#where.iter().map(|one| ir::root(*one)).collect();
     if !wanted.is_empty() && wanted.is_subset(&SEGMENTS) {
@@ -305,8 +287,10 @@ pub fn order(r#where: Option<&BTreeSet<Register>>, segments: &Segments) -> Vec<R
             .filter(|one| wanted.contains(one))
             .collect();
     }
-    AVAILABLE
-        .into_iter()
+    classes
+        .available
+        .iter()
+        .copied()
         .filter(|one| wanted.contains(one))
         .collect()
 }
@@ -495,6 +479,12 @@ pub fn name_of(register: Register) -> String {
 mod tests {
     use super::*;
 
+    /// What the allocator may hand out for an operand that reaches memory: the addressing registers it holds values in.
+    fn bases(classes: &RegisterClasses) -> Vec<Register> {
+        let addressing: BTreeSet<Register> = classes.addressing.iter().map(|x| ir::root(*x)).collect();
+        classes.available.iter().copied().filter(|one| addressing.contains(one)).collect()
+    }
+
     /// `Segments::of` panicked ("a segmented machine") on a flat machine, so no flat
     /// target reached the allocator; a flat machine places no selector.
     #[test]
@@ -509,7 +499,7 @@ mod tests {
     fn test_the_allocators_bases_are_the_encodable_ones_but_the_frame() {
         let encodable: BTreeSet<Register> = llrm_x86_code16::ENCODABLE_BASES.into_iter().collect();
         let held: BTreeSet<Register> = encodable.iter().copied().filter(|&one| one != llrm_x86_code16::FRAME).collect();
-        assert_eq!(*WORD_BASES, held);
+        assert_eq!(RegisterClasses::code16().word_bases, held);
         assert!(crate::backend::select::_WORD_BASES.iter().all(|one| encodable.contains(one)));
     }
 
@@ -524,7 +514,7 @@ mod tests {
     #[test]
     fn test_the_spill_models_address_registers_are_the_allocators() {
         use llrm_mir::target::Machine;
-        let restricted: BTreeSet<Register> = WORD_BASES.union(&WORD_INDEXES).copied().collect();
+        let restricted: BTreeSet<Register> = { let classes = RegisterClasses::code16(); classes.word_bases.union(&classes.word_indexes).copied().collect() };
         assert_eq!(llrm_x86_code16::Dos::default().address_registers(), restricted.len() as i64);
     }
 
@@ -611,17 +601,18 @@ mod tests {
     #[test]
     fn test_the_requirements_table_says_what_the_encoding_permits() {
         assert!(
-            ADDRESSING.contains(&Register::BP),
+            RegisterClasses::code16().addressing.contains(&Register::BP),
             "a frame slot is reached through bp"
         );
         assert!(
-            !ADDRESSING.contains(&Register::DX),
+            !RegisterClasses::code16().addressing.contains(&Register::DX),
             "`[dx+0Ah]` has no encoding"
         );
-        assert!(!BASES.is_empty(), "and the assignable set is not empty");
-        assert!(BASES.iter().all(|one| AVAILABLE.contains(one)));
+        let classes = RegisterClasses::code16();
+        assert!(!bases(&classes).is_empty(), "and the assignable set is not empty");
+        assert!(bases(&classes).iter().all(|one| classes.available.contains(one)));
         assert!(
-            !BASES.iter().any(|one| *one == Register::EBP),
+            !bases(&classes).iter().any(|one| *one == Register::EBP),
             "bp is the frame pointer"
         );
     }
@@ -683,7 +674,7 @@ mod tests {
 
         assert!(!RegisterClasses::code16().requirements(&what).contains_key(&Occurrence::new("dest", 1)));
         assert_eq!(
-            crate::backend::regclass::classes(&body, &BTreeSet::new(), &BUILT_IN)[&2],
+            crate::backend::regclass::classes(&body, &BTreeSet::new(), &BUILT_IN, &crate::backend::classes::RegisterClasses::code16())[&2],
             BUILT_IN.selectors.iter().copied().collect::<BTreeSet<_>>()
         );
     }
@@ -701,7 +692,7 @@ mod tests {
         let held = |value| Loc::Held(ir::Held { value, width: 2 });
         let copy = semantics(Operation::Copy, "movsd", vec![Loc::Mem(ir::Mem::new(None, 0)), held(5), held(6)], vec![held(1), held(2), Loc::Reg(ir::Reg { register: Register::DS, width: 2 }), held(3)]);
         let body = LirBody::new("string", 0x10, vec![LirBlock::new(0x10, vec![Arc::new(Insn::new(0x10, Some((0x10, 0x11)), Some(copy), vec![5, 6], vec![1, 2, 3]))])], IndexMap::default(), IndexMap::default());
-        let classes = crate::backend::regclass::classes(&body, &BTreeSet::new(), &BUILT_IN);
+        let classes = crate::backend::regclass::classes(&body, &BTreeSet::new(), &BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
         assert_eq!(classes.get(&3), Some(&BUILT_IN.selectors.iter().copied().collect::<BTreeSet<_>>()));
         assert!(!classes.contains_key(&1), "premise: the offsets stay general");
     }
@@ -718,7 +709,7 @@ mod tests {
                 ..ir::Mem::new(None, 4)
             })],
         );
-        let want: BTreeSet<Register> = ADDRESSING.iter().map(|x| ir::root(*x)).collect();
+        let want: BTreeSet<Register> = RegisterClasses::code16().addressing.iter().map(|x| ir::root(*x)).collect();
         assert_eq!(reads(&what, &crate::backend::classes::RegisterClasses::code16())[&Register::ESI].r#where, want);
     }
 
@@ -764,7 +755,7 @@ mod tests {
                 (44, vec![(4, 44), (2, 28)]),
             ]
         );
-        assert_eq!(*BASES, [Register::EBX, Register::ESI, Register::EDI]);
+        assert_eq!(bases(&RegisterClasses::code16()), [Register::EBX, Register::ESI, Register::EDI]);
         let python = "none al cl dl bl ah ch dh bh spl bpl sil dil r8l r9l r10l r11l r12l r13l r14l r15l ax cx dx bx sp bp si di r8w r9w r10w r11w r12w r13w r14w r15w eax ecx edx ebx esp ebp esi edi r8d r9d r10d r11d r12d r13d r14d r15d rax rcx rdx rbx rsp rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15 eip rip es cs ss ds fs gs xmm0 xmm1 xmm2 xmm3 xmm4 xmm5 xmm6 xmm7 xmm8 xmm9 xmm10 xmm11 xmm12 xmm13 xmm14 xmm15 xmm16 xmm17 xmm18 xmm19 xmm20 xmm21 xmm22 xmm23 xmm24 xmm25 xmm26 xmm27 xmm28 xmm29 xmm30 xmm31 ymm0 ymm1 ymm2 ymm3 ymm4 ymm5 ymm6 ymm7 ymm8 ymm9 ymm10 ymm11 ymm12 ymm13 ymm14 ymm15 ymm16 ymm17 ymm18 ymm19 ymm20 ymm21 ymm22 ymm23 ymm24 ymm25 ymm26 ymm27 ymm28 ymm29 ymm30 ymm31 zmm0 zmm1 zmm2 zmm3 zmm4 zmm5 zmm6 zmm7 zmm8 zmm9 zmm10 zmm11 zmm12 zmm13 zmm14 zmm15 zmm16 zmm17 zmm18 zmm19 zmm20 zmm21 zmm22 zmm23 zmm24 zmm25 zmm26 zmm27 zmm28 zmm29 zmm30 zmm31 k0 k1 k2 k3 k4 k5 k6 k7 bnd0 bnd1 bnd2 bnd3 cr0 cr1 cr2 cr3 cr4 cr5 cr6 cr7 cr8 cr9 cr10 cr11 cr12 cr13 cr14 cr15 dr0 dr1 dr2 dr3 dr4 dr5 dr6 dr7 dr8 dr9 dr10 dr11 dr12 dr13 dr14 dr15 st0 st1 st2 st3 st4 st5 st6 st7 mm0 mm1 mm2 mm3 mm4 mm5 mm6 mm7 tr0 tr1 tr2 tr3 tr4 tr5 tr6 tr7 tmm0 tmm1 tmm2 tmm3 tmm4 tmm5 tmm6 tmm7";
         let rust: Vec<String> = Register::values().take(249).map(name_of).collect();
         assert_eq!(rust.join(" "), python);

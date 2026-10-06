@@ -1,6 +1,41 @@
 //! What every x86 target shares. Each target's `x86.instr` holds only the forms
 //! it adds to `instructions::FAMILY`.
 
+/// The bytes of the encodings the selector prices for size, where an operand of other than
+/// the target's default size (`operand`) takes the 66h prefix.
+pub mod encoding {
+    fn prefix_bytes(width: i64, operand: i64) -> i64 {
+        i64::from(width != operand)
+    }
+
+    /// Bytes of `op r, r` on `width`-byte registers: the opcode and ModRM.
+    pub fn register_bytes(width: i64, operand: i64) -> i64 {
+        prefix_bytes(width, operand) + 2
+    }
+
+    /// Bytes of a shift of a `width`-byte register by `count`: `D1` for one, `C1` with a byte count otherwise.
+    pub fn shift_bytes(count: i64, width: i64, operand: i64) -> i64 {
+        prefix_bytes(width, operand) + if count == 1 { 2 } else { 3 }
+    }
+
+    /// Bytes of `imul r, r, number` on `width`-byte registers: a byte immediate where `number` fits one, else the operand's width.
+    pub fn imul_immediate_bytes(number: i64, width: i64, operand: i64) -> i64 {
+        prefix_bytes(width, operand) + 2 + if (-128..=127).contains(&number) { 1 } else { width }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The prefix is for the size that is not the default: a dword in real mode, a word when flat.
+        #[test]
+        fn the_operand_size_prefix_is_for_the_size_that_is_not_the_default() {
+            assert_eq!((register_bytes(2, 2), register_bytes(4, 2), register_bytes(2, 4), register_bytes(4, 4)), (2, 3, 3, 2));
+            assert_eq!((shift_bytes(1, 4, 4), shift_bytes(3, 2, 4), imul_immediate_bytes(446, 4, 4)), (2, 4, 6));
+        }
+    }
+}
+
 pub mod instructions {
     /// The forms every x86 target has, `x86.instr`.
     pub const FAMILY: &str = include_str!("instructions/x86.instr");

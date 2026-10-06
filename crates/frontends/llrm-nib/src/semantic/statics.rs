@@ -96,11 +96,16 @@ impl TypeRegistry {
             if !declared.huge && u64::from(extent) > (1_u64 << (8 * self.sizes.near)) - 1 {
                 return Err(Diagnostic::new(declared.span, format!("{} takes {extent} bytes, past DGROUP's 64K: declare it 'huge var'", declared.name)));
             }
-            let segment = declared.huge.then(|| format!("{}_{}_HUGE", identifier(module_name), declared.name));
+            // Where far is near a huge object is in the one space: no segment of its own.
+            let huge = declared.huge && self.sizes.segmented;
+            if declared.huge {
+                self.warn_distance("huge", declared.span);
+            }
+            let segment = huge.then(|| format!("{}_{}_HUGE", identifier(module_name), declared.name));
             let symbol = literals.object(&format!("$var_{}", declared.name), bytes, false, segment);
             let volatile = shared.contains(&declared.name);
             let align = self.alignment_of(element);
-            self.statics.insert(declared.name.clone(), StaticLayout { symbol, binding, type_id, extent, volatile, align, huge: declared.huge });
+            self.statics.insert(declared.name.clone(), StaticLayout { symbol, binding, type_id, extent, volatile, align, huge });
         }
         Ok(())
     }
