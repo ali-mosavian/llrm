@@ -155,6 +155,8 @@ pub struct Module {
     /// Bytes of the linker's stack this module adds to the others' (OMF stack
     /// segments concatenate): where its call graph is the whole program's.
     pub stack: i64,
+    /// The lines the listing opens with: the target's instruction set and model.
+    pub header: Vec<String>,
 }
 
 impl Module {
@@ -172,7 +174,7 @@ pub fn text(module: &Module) -> Result<String, Unprintable> {
 
 /// `module`'s text, each procedure's items as `listed` gives them.
 pub fn text_by(module: &Module, listed: impl Fn(&Procedure, usize) -> Result<Vec<Item>, Unprintable>) -> Result<String, Unprintable> {
-    let mut out: Vec<String> = vec![".model medium".into(), ".386".into(), String::new()];
+    let mut out: Vec<String> = module.header.iter().cloned().chain([String::new()]).collect();
     out.extend(module.publics.iter().map(|name| format!("public {name}")));
     if module.stack > 0 {
         out.push(format!(".stack {}", module.stack));
@@ -1152,6 +1154,26 @@ mod tests {
 
         assert_eq!(return_overhead_bytes(&procedure(0)).unwrap(), 1);
         assert_eq!(return_overhead_bytes(&procedure(4)).unwrap(), 1);
+    }
+
+    /// The listing opened `.model medium` whatever the target: a flat program's header is its target's.
+    #[test]
+    fn test_a_listing_opens_with_its_targets_header() {
+        let module = Module {
+            header: vec![".386".to_owned(), ".model flat".to_owned()],
+            code: "T_TEXT".into(),
+            names: no_names(),
+            externs: Vec::new(),
+            publics: Vec::new(),
+            data: Vec::new(),
+            procedures: Vec::new(),
+            private: BTreeSet::new(),
+            far_bss: BTreeSet::new(),
+            requests: BTreeSet::new(),
+            debug: None,
+            stack: 0,
+        };
+        assert!(text(&module).unwrap().starts_with(".386\n.model flat\n\n"));
     }
 
     /// The frame register and stack pointer are LIR's BP and SP whatever the

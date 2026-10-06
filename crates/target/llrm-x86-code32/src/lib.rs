@@ -41,6 +41,11 @@ impl llrm_target::Target for Code32 {
         8
     }
 
+    /// Flat: no segments, one model.
+    fn listing_header(&self) -> Vec<String> {
+        vec![".386".to_owned(), ".model flat".to_owned()]
+    }
+
     fn stack_pointer(&self) -> Register {
         ESP
     }
@@ -74,6 +79,7 @@ mod tests {
     #[test]
     fn test_code32_answers_cdecl32() {
         let frame = Code32.frame_registers();
+        assert_eq!(Code32.listing_header(), [".386", ".model flat"]);
         assert_eq!((frame.pointer, frame.stack), (EBP, ESP));
         assert_eq!(frame.saved, [(EBX, EBX), (ESI, ESI), (EDI, EDI)]);
         assert_eq!((Code32.stack_slot_bytes(), Code32.first_argument_offset(false)), (4, 8));
