@@ -1646,7 +1646,7 @@ fn _affine_address(
     // The target's own price of the form (`three_operand`): a word address has no prefix and reads no dword register.
     let scale = address.scale;
     let width = i64::from(dest.width);
-    let Some(form) = llrm_mir::target::three_operand(&cpu.operations, &cpu.address_forms, width, scale, word) else {
+    let Some(form) = llrm_mir::target::three_operand(&cpu.operations, &cpu.address_forms, width, i64::from(cpu.operand_bytes), scale, word) else {
         return Ok(None);
     };
     let price = form + if word { 0 } else { stalls };
