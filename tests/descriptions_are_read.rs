@@ -14,7 +14,7 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 /// What a description names itself rather than the schema: a table keyed by a name or a number.
 /// (file, path from the file's root, with `*` for any one name)
 /// (`ports.*` and `foreign.*` are read through a closure that takes the key: `bound("low")`.)
-const NAMED: [(&str, &str); 9] = [
+const NAMED: &[(&str, &str)] = &[
     ("calling.toml", "*"),
     ("calling.toml", "*.symbol.*"),
     ("calling.toml", "*.result.*"),
@@ -24,6 +24,12 @@ const NAMED: [(&str, &str); 9] = [
     ("dos.toml", "port.*"),
     ("pc-ports.toml", "ports.*"),
     ("dos.toml", "foreign.*"),
+    // Every integer of an OS facts file is defined for the assembler as -DDOS_<KEY>: the mechanism reads them all.
+    ("facts.toml", "*"),
+    ("facts.toml", "errors.*"),
+    ("os.toml", "heap_bytes"),
+    // The error codes are a table the interface maps over, whatever their names.
+    ("interface.toml", "errors.*"),
 ];
 
 /// The files git tracks under `directories` of `root`: what the repository holds, not what a build,
@@ -129,15 +135,18 @@ fn every_toml_key_has_a_reader() {
         if !name.ends_with(".toml") || name == "Cargo.toml" {
             continue;
         }
-        let Ok(value) = fs::read_to_string(&path).unwrap().parse::<toml::Table>() else { continue };
+        let text = fs::read_to_string(&path).unwrap();
+        let Ok(value) = text.parse::<toml::Table>() else { continue };
         let mut all = Vec::new();
         keys("", &toml::Value::Table(value), &mut all);
         for (at, key) in all {
             let named = NAMED.iter().any(|(file, pattern)| *file == name && matches(pattern, &at));
             // A reader that takes the key through a closure or a helper: `name("code")`, `number("fixed")`.
-            let called = regex::Regex::new(&format!(r#"\w\("{}"\)"#, regex::escape(&key))).unwrap();
+            let called = regex::Regex::new(&format!(r#"(?:\w\(|,\s*)"{}"\s*[,)]"#, regex::escape(&key))).unwrap();
+            // `assembler_defines = ["stack_base:STACK_BYTES"]`: a key the description itself names for the assembler.
+            let defined = text.contains(&format!("\"{key}:"));
             let read = [format!("get(\"{key}\")"), format!("[\"{key}\"]"), format!("remove(\"{key}\")"), format!("contains_key(\"{key}\")"), format!("\"{key}\" =>"), format!("\"{key}\","), format!("\"{key}\"]")];
-            if !named && !called.is_match(&sources) && !read.iter().any(|one| sources.contains(one.as_str())) {
+            if !named && !defined && !called.is_match(&sources) && !read.iter().any(|one| sources.contains(one.as_str())) {
                 unread.insert(format!("{}: {at}", path.strip_prefix(ROOT).unwrap().display()));
             }
         }
