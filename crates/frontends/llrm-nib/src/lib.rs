@@ -44,6 +44,8 @@ pub struct Frontend {
     pub layout: llrm_target::layout::Layout,
     /// The bytes an argument takes on the stack at least: the target's stack slot.
     pub slot: u32,
+    /// The calling conventions the target defines, the first its programs' own.
+    pub conventions: Vec<String>,
     /// The target's OS layer under Nib's runtime.
     pub os: Os,
     /// Index and slice bounds go unchecked, as in `unsafe`: `--unchecked-bounds`.
@@ -57,7 +59,7 @@ pub struct Frontend {
 impl Default for Frontend {
     /// For real mode, where the language began: a caller that knows its target sets `layout`.
     fn default() -> Self {
-        Self { layout: llrm_x86_code16::layout(), slot: 2, os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false }
+        Self { layout: llrm_x86_code16::layout(), slot: 2, conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false }
     }
 }
 
@@ -109,6 +111,11 @@ pub struct Sizes {
 }
 
 impl Frontend {
+    /// The convention the language's own functions have: the target's first.
+    pub fn native(&self) -> syntax::Abi {
+        self.conventions.first().and_then(|name| syntax::Abi::named(name)).expect("a target defines a calling convention the language names")
+    }
+
     /// The pointers' sizes: what the datalayout says of the near and the far space.
     pub fn sizes(&self) -> Sizes {
         let layout = llrm_mir::datalayout::DataLayout::parse(&self.layout.datalayout).expect("a target's datalayout parses");

@@ -71,6 +71,10 @@ impl llrm_target::Target for Code16 {
         layout()
     }
 
+    fn conventions(&self) -> &'static [&'static str] {
+        &["cdecl16", "pascal16", "interrupt16", "qb45", "pds71", "vbdos"]
+    }
+
     fn runtime(&self, language: &str) -> Option<llrm_target::runtime::Description> {
         (language == "nib").then_some(llrm_target::runtime::Description {
             directory: concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/nib"),

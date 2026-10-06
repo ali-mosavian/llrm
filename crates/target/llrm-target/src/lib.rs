@@ -137,6 +137,10 @@ pub trait Target {
     /// How this target's passes are given the prices of a CPU.
     fn cost_model(&self) -> CostModel;
 
+    /// The calling conventions a program for this target may name, by the names `calling.toml`
+    /// gives them; the first is the one a language's own functions use.
+    fn conventions(&self) -> &'static [&'static str];
+
     /// The OS layer a language's runtime is built on here, if the target has one for it.
     fn runtime(&self, _language: &str) -> Option<runtime::Description> {
         None

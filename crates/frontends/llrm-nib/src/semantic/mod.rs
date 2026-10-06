@@ -190,6 +190,10 @@ impl LiteralPool {
 struct TypeRegistry {
     /// The bytes of a near and of a far pointer on the target.
     sizes: crate::Sizes,
+    /// The convention the language's own functions have here: the target's first.
+    native: Abi,
+    /// The names of the conventions the target defines: any other is refused.
+    conventions: Vec<String>,
     types: Vec<hir::Type>,
     arrays: BTreeMap<(u32, Shape), u32>,
     /// Each fixed array type, by id: its element and shape.
@@ -283,10 +287,13 @@ impl TypeRegistry {
         u8::try_from(if far { self.sizes.far } else { self.sizes.near }).expect("a pointer is under 256 bytes")
     }
 
-    /// The language's types, its pointers `sizes` bytes wide.
-    fn new(sizes: crate::Sizes) -> Self {
+    /// The language's types, its pointers `sizes` bytes wide, its own functions in the
+    /// convention `native` and the conventions the target defines `conventions`.
+    fn new(sizes: crate::Sizes, native: Abi, conventions: Vec<String>) -> Self {
         Self {
             sizes,
+            native,
+            conventions,
             types: vec![
                 plain_type(VOID, "void", "void", 0, None, "none"),
                 plain_type(BOOL, "bool", "boolean", 1, Some(false), "none"),
@@ -1284,7 +1291,7 @@ fn signature(
         slot,
         foreign: false,
         exported: false,
-        abi: Abi::Cdecl16,
+        abi: types.native,
         view,
         method: function.is_method(),
         result_pointer: None,
@@ -1354,7 +1361,7 @@ fn program(
     facts: Option<&RefCell<Vec<Fact>>>,
     frontend: &super::Frontend,
 ) -> Result<hir::Program, Diagnostic> {
-    let mut types = TypeRegistry::new(frontend.sizes());
+    let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.conventions.clone());
     types.register_fixed_types(&module.fixed_types)?;
     types.register_aggregates(&module.structs, &module.enums)?;
     types.register_drops(&module.functions.iter().collect::<Vec<_>>())?;

@@ -45,6 +45,10 @@ impl llrm_target::Target for Code32 {
         &CPUS
     }
 
+    fn conventions(&self) -> &'static [&'static str] {
+        &["cdecl32"]
+    }
+
     fn layout(&self) -> llrm_target::layout::Layout {
         llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("flat datalayout.toml parses")
     }

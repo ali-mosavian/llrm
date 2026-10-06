@@ -63,7 +63,7 @@ impl FunctionCompiler<'_> {
         let callee = self.signatures[&name].id;
         let pointer = self.address_of(view);
         let instruction = self.emit("call", Vec::new(), vec![pointer], Some(name));
-        self.calls.push(hir::CallSite::new(instruction, callee, 1, Abi::Cdecl16));
+        self.calls.push(hir::CallSite::new(instruction, callee, 1, self.types.native));
     }
 
     pub(super) fn is_drop_method(&self, name: &str) -> bool {

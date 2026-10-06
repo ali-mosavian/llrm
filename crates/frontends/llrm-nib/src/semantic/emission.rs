@@ -39,7 +39,7 @@ impl<'a> FunctionCompiler<'a> {
             .into_iter()
             .collect();
         let instruction = self.emit("call", results.clone(), operands, Some(name.into()));
-        self.calls.push(hir::CallSite::new(instruction, callee, count as u32, Abi::Cdecl16));
+        self.calls.push(hir::CallSite::new(instruction, callee, count as u32, self.types.native));
         results.first().map(|one| hir::Operand::Value(*one))
     }
 
