@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
 use iced_x86::Register;
+use llrm_x86_code16::instructions;
 
 use crate::abi::machine::{self, Machine};
 use crate::support::hash::IndexMap;
@@ -63,105 +64,76 @@ impl Occurrence {
 
 /// Every operand this instruction requires in one particular register.
 ///
-/// The one place those are written down; `reads` and `writes` read it too.
+/// The one place those are written down: the `fixed` column of the form that
+/// takes this instruction's operands (`x86.instr`); `reads` and `writes` read it
+/// too. An operand that is an immediate is no register: a shift's count or an
+/// `in`'s port written as one pins nothing, and a segment register is pinned
+/// only while it is a held value, a placed one being where it is.
 pub fn requirements(what: &Semantics) -> IndexMap<Occurrence, Register> {
     let mut out = IndexMap::default();
     if _on_the_stack(what) {
         return out;
     }
-    // The widening forms name neither half: the product and the dividend
-    // are both dx:ax, low first.
-    if [Operation::Multiply, Operation::Divide].contains(&what.op) && what.dests.len() != 1 {
-        out.insert(Occurrence::new("dest", 0), Register::EAX);
-        out.insert(Occurrence::new("dest", 1), Register::EDX);
-        // A multiply reads the accumulator. A divide reads the pair, high
-        // first as `ir.DIVIDE_PAIR` has it.
-        if what.op == Operation::Divide {
-            out.insert(Occurrence::new("source", 0), Register::EDX);
-            out.insert(Occurrence::new("source", 1), Register::EAX);
-        } else {
-            out.insert(Occurrence::new("source", 0), Register::EAX);
-        }
-    }
-    // A repeated string fill reads value, count, address and segment, then
-    // leaves di past the last cell and cx empty.  A single store has no count
-    // source or result: value, address and segment are its three sources.
-    if what.op == Operation::Fill && what.sources.len() == 4 {
-        out.insert(Occurrence::new("source", 0), Register::EAX);
-        out.insert(Occurrence::new("source", 1), Register::ECX);
-        out.insert(Occurrence::new("source", 2), Register::EDI);
-        if matches!(what.sources[3], Loc::Held(_)) {
-            out.insert(Occurrence::new("source", 3), Register::ES);
-        }
-        if what.dests.len() == 3 {
-            out.insert(Occurrence::new("dest", 1), Register::EDI);
-            out.insert(Occurrence::new("dest", 2), Register::ECX);
-        }
-    } else if what.op == Operation::Fill && what.sources.len() == 3 {
-        out.insert(Occurrence::new("source", 0), Register::EAX);
-        out.insert(Occurrence::new("source", 1), Register::EDI);
-        if matches!(what.sources[2], Loc::Held(_)) {
-            out.insert(Occurrence::new("source", 2), Register::ES);
-        }
-        if what.dests.len() == 2 {
-            out.insert(Occurrence::new("dest", 1), Register::EDI);
-        }
-    }
-    // A string move reads cx cells from si to es:di, leaving si and di past
-    // them and cx empty; a single move has no count. The last two sources
-    // are the segments: the source's, which the instruction names as an
-    // override (fs where it is a value), and es.
-    if what.op == Operation::Copy && matches!(what.sources.len(), 4 | 5) {
-        let first = what.sources.len() - 4;
-        if first == 1 {
-            out.insert(Occurrence::new("source", 0), Register::ECX);
-        }
-        out.insert(Occurrence::new("source", first), Register::ESI);
-        out.insert(Occurrence::new("source", first + 1), Register::EDI);
-        if matches!(what.sources[first + 2], Loc::Held(_)) {
-            out.insert(Occurrence::new("source", first + 2), Register::FS);
-        }
-        if matches!(what.sources[first + 3], Loc::Held(_)) {
-            out.insert(Occurrence::new("source", first + 3), Register::ES);
-        }
-        out.insert(Occurrence::new("dest", 1), Register::ESI);
-        out.insert(Occurrence::new("dest", 2), Register::EDI);
-        if first == 1 {
-            out.insert(Occurrence::new("dest", 3), Register::ECX);
-        }
-    }
-    // Port I/O moves al; a port not written as an immediate is dx.
-    if what.op == Operation::Barrier && matches!(what.name.as_deref(), Some("in" | "out")) {
-        if !matches!(what.sources[0], Loc::Imm(_)) {
-            out.insert(Occurrence::new("source", 0), Register::EDX);
-        }
-        if what.name.as_deref() == Some("in") {
-            out.insert(Occurrence::new("dest", 0), Register::EAX);
-        } else {
-            out.insert(Occurrence::new("source", 1), Register::EAX);
-        }
-    }
-    if what.op == Operation::Extend && matches!(what.name.as_deref(), Some("cwd" | "cdq")) {
-        out.insert(Occurrence::new("source", 0), Register::EAX);
-        out.insert(Occurrence::new("dest", 0), Register::EDX);
-    }
-    // A shift or rotate by anything but a literal counts from cl, asked of
-    // the operand's shape: an unplaced value names no register.
-    let counted =
-        _COUNTED.contains(&what.name.as_deref().unwrap_or("")) || what.op == Operation::Funnel;
-    if counted && what.sources.len() > 1 {
-        let count = &what.sources[what.sources.len() - 1];
-        if !matches!(count, Loc::Imm(_)) {
-            out.insert(
-                Occurrence::new("source", what.sources.len() - 1),
-                Register::ECX,
-            );
+    let Some(name) = what.name.as_deref() else { return out };
+    let key = (name.to_owned(), what.op.as_str(), what.dests.len(), what.sources.len());
+    let Some(pins) = PINS.get(&key) else { return out };
+    for (side, index, register) in pins {
+        let places = match side {
+            instructions::Side::Dest => &what.dests,
+            instructions::Side::Source => &what.sources,
+        };
+        let pinned = match &places[*index] {
+            Loc::Imm(_) => false,
+            Loc::Held(_) => true,
+            _ => !SEGMENTS.contains(register),
+        };
+        if pinned {
+            out.insert(Occurrence::new(if *side == instructions::Side::Dest { "dest" } else { "source" }, *index), *register);
         }
     }
     out
 }
 
-const _COUNTED: [&str; 8] = ["shl", "sal", "shr", "sar", "rol", "ror", "rcl", "rcr"];
+/// Each form's pins, by the mnemonic, the operation and the operand counts that
+/// pick it out. A pin that tells the members of a family apart (`les`, `lds`, `lfs`
+/// and `lgs` take the same operands and differ in the selector register) is a
+/// choice the allocator makes, not a requirement, and is left out.
+static PINS: LazyLock<std::collections::HashMap<(String, &'static str, usize, usize), Vec<(instructions::Side, usize, Register)>>> = LazyLock::new(|| {
+    let operations: std::collections::HashMap<&str, &'static str> = Operation::ALL.iter().map(|op| (op.as_str(), op.as_str())).collect();
+    let mut pins = std::collections::HashMap::new();
+    for form in instructions::FORMS.iter() {
+        let chosen = |side: instructions::Side, index: usize, root: &str| {
+            instructions::FORMS.iter().any(|other| {
+                other.operation == form.operation
+                    && other.dests == form.dests
+                    && other.sources == form.sources
+                    && other.fixed.iter().any(|(s, i, r)| *s == side && *i == index && r != root)
+            })
+        };
+        let required = form.fixed.iter().filter(|(side, index, root)| !chosen(*side, *index, root)).map(|(side, index, root)| (*side, *index, root_register(root))).collect();
+        pins.entry((form.name.clone(), operations[form.operation.as_str()], form.dests.len(), form.sources.len())).or_insert(required);
+    }
+    pins
+});
+
+/// The register a form's `fixed` column names by its root: `ax` is EAX.
+fn root_register(root: &str) -> Register {
+    match root {
+        "ax" => Register::EAX,
+        "bx" => Register::EBX,
+        "cx" => Register::ECX,
+        "dx" => Register::EDX,
+        "si" => Register::ESI,
+        "di" => Register::EDI,
+        "bp" => Register::EBP,
+        "sp" => Register::ESP,
+        "es" => Register::ES,
+        "ds" => Register::DS,
+        "fs" => Register::FS,
+        "gs" => Register::GS,
+        other => unreachable!("x86.instr names no register `{other}`"),
+    }
+}
 
 fn _root(register: Register) -> Register {
     ir::root(register)
@@ -592,6 +564,108 @@ pub fn name_of(register: Register) -> String {
 
 #[cfg(test)]
 mod tests {
+    const COUNTED: [&str; 8] = ["shl", "sal", "shr", "sar", "rol", "ror", "rcl", "rcr"];
+
+    /// What `requirements` was before it read the form table: written out by hand
+        /// for each operation. Kept as the oracle of the differential test below.
+    fn by_hand(what: &Semantics) -> IndexMap<Occurrence, Register> {
+        let mut out = IndexMap::default();
+        if _on_the_stack(what) {
+            return out;
+        }
+        // The widening forms name neither half: the product and the dividend
+        // are both dx:ax, low first.
+        if [Operation::Multiply, Operation::Divide].contains(&what.op) && what.dests.len() != 1 {
+            out.insert(Occurrence::new("dest", 0), Register::EAX);
+            out.insert(Occurrence::new("dest", 1), Register::EDX);
+            // A multiply reads the accumulator. A divide reads the pair, high
+            // first as `ir.DIVIDE_PAIR` has it.
+            if what.op == Operation::Divide {
+                out.insert(Occurrence::new("source", 0), Register::EDX);
+                out.insert(Occurrence::new("source", 1), Register::EAX);
+            } else {
+                out.insert(Occurrence::new("source", 0), Register::EAX);
+            }
+        }
+        // A repeated string fill reads value, count, address and segment, then
+        // leaves di past the last cell and cx empty.  A single store has no count
+        // source or result: value, address and segment are its three sources.
+        if what.op == Operation::Fill && what.sources.len() == 4 {
+            out.insert(Occurrence::new("source", 0), Register::EAX);
+            out.insert(Occurrence::new("source", 1), Register::ECX);
+            out.insert(Occurrence::new("source", 2), Register::EDI);
+            if matches!(what.sources[3], Loc::Held(_)) {
+                out.insert(Occurrence::new("source", 3), Register::ES);
+            }
+            if what.dests.len() == 3 {
+                out.insert(Occurrence::new("dest", 1), Register::EDI);
+                out.insert(Occurrence::new("dest", 2), Register::ECX);
+            }
+        } else if what.op == Operation::Fill && what.sources.len() == 3 {
+            out.insert(Occurrence::new("source", 0), Register::EAX);
+            out.insert(Occurrence::new("source", 1), Register::EDI);
+            if matches!(what.sources[2], Loc::Held(_)) {
+                out.insert(Occurrence::new("source", 2), Register::ES);
+            }
+            if what.dests.len() == 2 {
+                out.insert(Occurrence::new("dest", 1), Register::EDI);
+            }
+        }
+        // A string move reads cx cells from si to es:di, leaving si and di past
+        // them and cx empty; a single move has no count. The last two sources
+        // are the segments: the source's, which the instruction names as an
+        // override (fs where it is a value), and es.
+        if what.op == Operation::Copy && matches!(what.sources.len(), 4 | 5) {
+            let first = what.sources.len() - 4;
+            if first == 1 {
+                out.insert(Occurrence::new("source", 0), Register::ECX);
+            }
+            out.insert(Occurrence::new("source", first), Register::ESI);
+            out.insert(Occurrence::new("source", first + 1), Register::EDI);
+            if matches!(what.sources[first + 2], Loc::Held(_)) {
+                out.insert(Occurrence::new("source", first + 2), Register::FS);
+            }
+            if matches!(what.sources[first + 3], Loc::Held(_)) {
+                out.insert(Occurrence::new("source", first + 3), Register::ES);
+            }
+            out.insert(Occurrence::new("dest", 1), Register::ESI);
+            out.insert(Occurrence::new("dest", 2), Register::EDI);
+            if first == 1 {
+                out.insert(Occurrence::new("dest", 3), Register::ECX);
+            }
+        }
+        // Port I/O moves al; a port not written as an immediate is dx.
+        if what.op == Operation::Barrier && matches!(what.name.as_deref(), Some("in" | "out")) {
+            if !matches!(what.sources[0], Loc::Imm(_)) {
+                out.insert(Occurrence::new("source", 0), Register::EDX);
+            }
+            if what.name.as_deref() == Some("in") {
+                out.insert(Occurrence::new("dest", 0), Register::EAX);
+            } else {
+                out.insert(Occurrence::new("source", 1), Register::EAX);
+            }
+        }
+        if what.op == Operation::Extend && matches!(what.name.as_deref(), Some("cwd" | "cdq")) {
+            out.insert(Occurrence::new("source", 0), Register::EAX);
+            out.insert(Occurrence::new("dest", 0), Register::EDX);
+        }
+        // A shift or rotate by anything but a literal counts from cl, asked of
+        // the operand's shape: an unplaced value names no register.
+        let counted =
+            COUNTED.contains(&what.name.as_deref().unwrap_or("")) || what.op == Operation::Funnel;
+        if counted && what.sources.len() > 1 {
+            let count = &what.sources[what.sources.len() - 1];
+            if !matches!(count, Loc::Imm(_)) {
+                out.insert(
+                    Occurrence::new("source", what.sources.len() - 1),
+                    Register::ECX,
+                );
+            }
+        }
+        out
+    }
+
+
     use super::*;
 
     /// The allocator's bases are the encodable ones less the frame register: a new frame rule changes one place.
@@ -860,4 +934,55 @@ mod tests {
         assert_eq!(rust.join(" "), python);
         assert_eq!(name_of(Register::DontUse0), "249");
     }
+
+    /// `requirements` read the form table where it had been written out by hand
+    /// for each operation: every shape a form takes, with each operand in turn a
+    /// held value, an immediate, a placed register or a placed segment register,
+    /// is pinned as the hand-written function pinned it. An immediate at a
+    /// position the form says is only a register is no instruction, and not asked.
+    #[test]
+    fn test_requirements_from_the_form_table_are_what_the_hand_written_ones_were() {
+        let held = |value: u32| Loc::Held(ir::Held { value, width: 2 });
+        let kinds: [fn(u32) -> Loc; 4] = [
+            |value| Loc::Held(ir::Held { value, width: 2 }),
+            |value| Loc::Imm(ir::Imm { value: i64::from(value), width: 2, address: None }),
+            |_| Loc::Reg(ir::Reg { register: Register::BX, width: 2 }),
+            |_| Loc::Reg(ir::Reg { register: Register::DS, width: 2 }),
+        ];
+        let mut compared = 0;
+        let mut pinning = 0;
+        for form in instructions::FORMS.iter() {
+            let op = Operation::ALL.iter().copied().find(|op| op.as_str() == form.operation).expect("an operation");
+            let (dests, sources) = (form.dests.len(), form.sources.len());
+            let shape = |place: Option<(usize, usize)>| {
+                let at = |index: usize, which: usize| match place {
+                    Some((slot, kind)) if slot == index => kinds[kind](index as u32 + 1),
+                    _ => held(index as u32 + 1 + which as u32 * 10),
+                };
+                semantics(op, &form.name, (0..dests).map(|i| at(i, 0)).collect(), (0..sources).map(|i| at(dests + i, 1)).collect())
+            };
+            let only_registers = |slot: usize, kind: usize| {
+                // The operand a form says is a register alone, as an immediate: no instruction.
+                let operand = if slot < dests { &form.dests[slot] } else { &form.sources[slot - dests] };
+                kind == 1 && !operand.allows('i')
+            };
+            let mut variants = vec![shape(None)];
+            for slot in 0..dests + sources {
+                for kind in 0..kinds.len() {
+                    if !only_registers(slot, kind) {
+                        variants.push(shape(Some((slot, kind))));
+                    }
+                }
+            }
+            for what in variants {
+                let (old, new) = (by_hand(&what), requirements(&what));
+                assert_eq!(old, new, "{} {:?} <- {:?}", form.name, what.dests, what.sources);
+                compared += 1;
+                pinning += usize::from(!new.is_empty());
+            }
+        }
+        assert!(compared > 900 && pinning > 400, "{compared} shapes, {pinning} with a pin");
+    }
+
+
 }

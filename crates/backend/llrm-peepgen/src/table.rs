@@ -30,7 +30,7 @@ pub fn flag(name: &str) -> Option<u32> {
 }
 
 /// `ir::Operation`'s variants, as x86.instr spells each (`Operation::as_str`).
-pub const OPERATIONS: [(&str, &str); 28] = [
+pub const OPERATIONS: [(&str, &str); 29] = [
     ("move", "Move"),
     ("xchg", "Exchange"),
     ("addr", "Address"),
@@ -59,6 +59,7 @@ pub const OPERATIONS: [(&str, &str); 28] = [
     ("farithp", "FloatArithPop"),
     ("funary", "FloatUnary"),
     ("barrier", "Barrier"),
+    ("copy", "Copy"),
 ];
 
 #[derive(Debug)]
