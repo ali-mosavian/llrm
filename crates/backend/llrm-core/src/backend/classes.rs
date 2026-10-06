@@ -133,9 +133,9 @@ mod tests {
         let classes = RegisterClasses::of(&llrm_x86_code16::Code16);
         assert_eq!(classes.available, llrm_x86_code16::GENERAL);
         assert_eq!(classes.word_bases, llrm_x86_code16::word_bases().into_iter().collect());
-        assert_eq!(classes.word_indexes, llrm_x86_code16::WORD_INDEXES.into_iter().collect());
+        assert_eq!(classes.word_indexes, llrm_x86::addressing16::INDEXES.into_iter().collect());
         assert_eq!(classes.frame, llrm_x86_code16::FRAME);
-        assert_eq!(classes.encodable_bases, llrm_x86_code16::ENCODABLE_BASES.into_iter().collect());
+        assert_eq!(classes.encodable_bases, llrm_x86::addressing16::BASES.into_iter().collect());
         assert_eq!(classes.addressing, [Register::BX, Register::BP, Register::SI, Register::DI].into_iter().collect());
     }
 }
