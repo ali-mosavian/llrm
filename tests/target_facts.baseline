@@ -40,6 +40,7 @@
 1 crates/backend/llrm-peepgen/src/table.rs
 3 crates/bc/llrm-bcdriver/src/lib.rs
 9 crates/frontends/llrm-c/src/translate.rs
+1 crates/frontends/llrm-nib/src/declarations.rs
 1 crates/frontends/llrm-nib/src/library.rs
 1 crates/frontends/llrm-nib/src/semantic/assembly.rs
 1 crates/frontends/llrm-qb/src/cli.rs
