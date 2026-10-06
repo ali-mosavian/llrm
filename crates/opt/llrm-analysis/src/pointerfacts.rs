@@ -58,8 +58,19 @@ impl Offsets<'_> {
             if inbounds && !instruction.flags.contains(Flags::INBOUNDS) {
                 return Some((value, offset));
             }
-            let indices: Vec<Option<i128>> = instruction.operands[1..].iter().map(|&one| self.int(one)).collect();
-            let (constant, variable) = self.layout.collect_offset(&self.context.types, source, &indices);
+            // A step has a few indices: no vector for them.
+            let (mut small, mut large) = ([None; 4], Vec::new());
+            let operands = &instruction.operands[1..];
+            let indices: &[Option<i128>] = if operands.len() <= small.len() {
+                for (slot, &one) in small.iter_mut().zip(operands) {
+                    *slot = self.int(one);
+                }
+                &small[..operands.len()]
+            } else {
+                large.extend(operands.iter().map(|&one| self.int(one)));
+                &large
+            };
+            let (constant, variable) = self.layout.collect_offset(&self.context.types, source, indices);
             if !variable.is_empty() {
                 return Some((value, offset));
             }
@@ -189,6 +200,24 @@ b:
         let at = |name: &str| Operand::Value(value(f, name));
         let location = |name: &str, bytes| Location { pointer: at(name), bytes };
         check(&facts, &location, &at);
+    }
+
+    /// A step of five or more indices, which are not kept in place, is read as one of four or fewer is.
+    #[test]
+    fn a_step_of_many_constant_indices_is_an_offset() {
+        with_facts(
+            "define void @f(ptr %p) {
+b:
+  %a = getelementptr inbounds [2 x [2 x [2 x [2 x i16]]]], ptr %p, i16 0, i16 1, i16 1, i16 1, i16 1
+  %b = getelementptr inbounds [2 x [2 x i16]], ptr %p, i16 0, i16 1, i16 1
+  ret void
+}
+",
+            |facts, _, at| {
+                assert_eq!(facts.relative(at("a")), Some((at("p"), 30)));
+                assert_eq!(facts.relative(at("b")), Some((at("p"), 6)));
+            },
+        );
     }
 
     #[test]
