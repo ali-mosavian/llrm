@@ -12,8 +12,8 @@ use llrm_target::CostModel;
 /// Flat DOS under an extender, and the PC ports it shares.
 pub const DOS32: &str = concat!(include_str!("machines/dos32.toml"), include_str!("../../llrm-target/src/machines/pc-ports.toml"));
 
-/// The processors flat code is priced for: those the descriptions know.
-pub const CPUS: [&str; 8] = ["386", "486", "P5", "P6", "K5", "K6", "K7", "Core"];
+/// The processors flat code is priced for: those `timings.times` has.
+pub const CPUS: [&str; 2] = ["486", "P5"];
 
 /// The data layout and address spaces: `machines/datalayout.toml`.
 pub const DATALAYOUT_TOML: &str = include_str!("machines/datalayout.toml");
@@ -23,6 +23,12 @@ pub struct Code32;
 
 /// The registers and the address forms the descriptions state.
 static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> = LazyLock::new(|| llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"));
+
+/// How flat operations are priced from the instruction forms: `opcosts.txt`.
+static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses"));
+
+/// The CPUs' timings: `timings.times`.
+static TIMINGS: LazyLock<llrm_target::timings::Timings> = LazyLock::new(|| llrm_target::timings::Timings::parse(include_str!("timings.times")).expect("timings.times parses"));
 
 static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| llrm_target::addressing::forms(include_str!("machines/datalayout.toml")).expect("datalayout.toml parses"));
 
@@ -71,6 +77,18 @@ impl llrm_target::Target for Code32 {
         vec![(EBX, EBX), (ESI, ESI), (EDI, EDI)]
     }
 
+    fn default_cpu(&self) -> &'static str {
+        TIMINGS.default_cpu().expect("timings.times states a default CPU")
+    }
+
+    fn cpu_table(&self, name: &str) -> Option<llrm_target::timings::CpuTable> {
+        TIMINGS.cpu(name).cloned()
+    }
+
+    fn operation_costs(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> OperationCosts {
+        OPCOSTS.operations(price, prefix)
+    }
+
     fn register_capacity(&self) -> i64 {
         llrm_target::registers::allocatable(&REGISTERS) as i64
     }
@@ -101,7 +119,7 @@ mod tests {
         let forms = Code32.address_forms(&OperationCosts::default(), 0);
         assert_eq!(forms.len(), 1);
         assert!(!forms[0].secondary && forms[0].index_width == 4 && forms[0].scales == std::collections::BTreeSet::from([1, 2, 4, 8]));
-        let model = (Code32.cost_model())(&llrm_target::CpuPrices { costs: Vec::new(), prefix: 1, address_stall: 0, registers: Code32.register_capacity(), call_registers: Code32.callee_saved().len() as i64, address_forms: forms.clone() });
+        let model = (Code32.cost_model())(&llrm_target::CpuPrices { costs: Vec::new(), prefix: 1, address_stall: 0, registers: Code32.register_capacity(), call_registers: Code32.callee_saved().len() as i64, address_forms: forms.clone(), operations: OperationCosts::default() });
         assert_eq!((model.registers(), model.call_registers()), (6, 3));
         assert_eq!(model.address_forms(), forms);
     }

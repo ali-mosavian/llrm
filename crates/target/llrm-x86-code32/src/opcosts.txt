@@ -1,0 +1,35 @@
+# What flat 32-bit code costs by operation: each MIR operation as a sum of the
+# prices of the instruction forms it becomes (`timings.times` has them per CPU).
+# Flat code has no far call, no segment to save around a string operation and no
+# 66h on a dword; `prefix` is the CPU's price of the one 16-bit forms carry.
+[operations]
+add = alu_rr
+multiply = imul_r32
+divide = idiv_r32
+shift = shift_ri
+address = lea
+carry = carry(movzx, alu_rr, shift_ri, mov_rr)
+carry_step = step(alu_rr)
+load = mov_rm
+store = mov_mr
+memory_update = alu_mr
+branch = jcc
+prefix = prefix
+move = mov_rr
+call = call_near
+return = ret_near
+argument = mov_mr + mov_rm
+pop = pop_r
+adjust = alu_ri
+return_pops = ret_pop - ret_near
+float_add = x87_add
+float_multiply = x87_mul
+float_divide = x87_div
+float_load = x87_load
+float_store = x87_store
+extend = movzx
+fill = rep_stos + 2*mov_ri
+fill_cell = rep_stos_cell
+copy = rep_movs + 3*mov_ri
+copy_cell = rep_movs_cell
+direction = 2*alu_rr
