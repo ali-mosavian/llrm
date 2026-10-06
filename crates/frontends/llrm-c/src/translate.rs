@@ -2072,7 +2072,7 @@ mod tests {
     fn raised(fixture: &str) -> Module {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
         let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test").unwrap();
-        let emitted = llrm_core::hir::mir::emit(&program).swap_remove(0);
+        let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         emitted.module
     }
