@@ -206,7 +206,7 @@ static _MADE: LazyLock<std::sync::Mutex<std::collections::HashMap<(&'static str,
 /// `name`'s profile on the target `arch`, tuned for size where `size`.
 pub fn tuned_for(arch: &dyn Target, name: &str, size: bool) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
-        return Err(format!("unknown CPU target: {name}"));
+        return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
     }
     let mut made = _MADE.lock().expect("the profiles are not poisoned");
     let key = (arch.name(), name.to_owned(), size);

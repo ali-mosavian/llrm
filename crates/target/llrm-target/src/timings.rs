@@ -21,12 +21,14 @@ pub struct CpuTable {
 pub struct Timings {
     cpus: Vec<String>,
     tables: Vec<CpuTable>,
+    default: Option<String>,
 }
 
 impl Timings {
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut cpus: Vec<String> = Vec::new();
         let mut tables: Vec<CpuTable> = Vec::new();
+        let mut default = None;
         let mut section = "scalars";
         for (index, raw) in text.lines().enumerate() {
             let line = raw.split('#').next().unwrap_or("").trim();
@@ -44,6 +46,10 @@ impl Timings {
             }
             let columns: Vec<&str> = line.split_whitespace().collect();
             let (name, values) = (columns[0], &columns[1..]);
+            if name == "default_cpu" {
+                default = Some(values.first().ok_or_else(|| format!("{at}: default_cpu names no CPU"))?.to_string());
+                continue;
+            }
             if name == "cpus" {
                 cpus = values.iter().map(|one| (*one).to_owned()).collect();
                 tables = vec![CpuTable::default(); cpus.len()];
@@ -73,12 +79,20 @@ impl Timings {
         if cpus.is_empty() {
             return Err("timings.times: no `cpus` line".to_owned());
         }
-        Ok(Self { cpus, tables })
+        if let Some(name) = default.as_deref().filter(|name| !cpus.iter().any(|one| one == name)) {
+            return Err(format!("timings.times: default_cpu {name} is no column"));
+        }
+        Ok(Self { cpus, tables, default })
     }
 
     /// The CPUs' names, in column order.
     pub fn cpus(&self) -> Vec<&str> {
         self.cpus.iter().map(String::as_str).collect()
+    }
+
+    /// The CPU a compile is priced for when none is asked: the target's `default_cpu` line.
+    pub fn default_cpu(&self) -> Option<&str> {
+        self.default.as_deref()
     }
 
     pub fn cpu(&self, name: &str) -> Option<&CpuTable> {
@@ -100,6 +114,9 @@ mod tests {
         assert_eq!(b.clocks, [("mul".to_owned(), 8)]);
         assert_eq!(timings.cpu("a").unwrap().clocks.len(), 2);
         assert!(timings.cpu("c").is_none());
+        assert_eq!(timings.default_cpu(), None);
+        assert_eq!(Timings::parse("cpus a b\ndefault_cpu b\n").unwrap().default_cpu(), Some("b"));
+        assert_eq!(Timings::parse("cpus a\ndefault_cpu z\n").unwrap_err(), "timings.times: default_cpu z is no column");
         assert_eq!(Timings::parse("cpus a\nalu 1 2\n").unwrap_err(), "timings.times:2: 2 values for 1 CPUs");
     }
 }

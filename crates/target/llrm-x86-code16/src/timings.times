@@ -28,6 +28,8 @@
 # recovers most); `lcp_stall` a 66h on an instruction with an immediate,
 # which stalls the decoder on P6 and Core; `pairing` the P5's U/V pairing.
 #
+# The CPU llrm-c prices for with no --cpu or -march (BASIC and Nib state their own).
+default_cpu           386
 cpus                  386  486   P5   P6   K5   K6   K7 Core
 issue                   1    1    2    3    4    3    3    4
 in_order                1    1    1    0    0    0    0    0

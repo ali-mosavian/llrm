@@ -31,6 +31,10 @@ impl llrm_target::Target for Code16 {
         GENERAL.len() as i64
     }
 
+    fn default_cpu(&self) -> &'static str {
+        timings::TABLE.default_cpu().expect("timings.times states a default CPU")
+    }
+
     fn cpu_table(&self, name: &str) -> Option<llrm_target::timings::CpuTable> {
         timings::TABLE.cpu(name).cloned()
     }

@@ -77,6 +77,10 @@ impl llrm_target::Target for Code32 {
         vec![(EBX, EBX), (ESI, ESI), (EDI, EDI)]
     }
 
+    fn default_cpu(&self) -> &'static str {
+        TIMINGS.default_cpu().expect("timings.times states a default CPU")
+    }
+
     fn cpu_table(&self, name: &str) -> Option<llrm_target::timings::CpuTable> {
         TIMINGS.cpu(name).cloned()
     }

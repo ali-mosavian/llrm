@@ -115,6 +115,9 @@ pub trait Target {
     /// One CPU's timings (a column of the target's `timings.times`), if the target prices it.
     fn cpu_table(&self, name: &str) -> Option<timings::CpuTable>;
 
+    /// The CPU a compile is priced for where none is asked.
+    fn default_cpu(&self) -> &'static str;
+
     /// The operations priced by `price` (the CPU's clocks of a form), as the target's
     /// `opcosts.txt` makes them of forms; `prefix` is the CPU's operand-size prefix cost.
     fn operation_costs(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> OperationCosts;
