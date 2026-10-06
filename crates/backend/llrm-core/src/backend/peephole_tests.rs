@@ -3300,6 +3300,21 @@ fn test_a_body_is_encoded_in_its_own_mode() {
     assert_eq!(through_of_the_read(&copyprop::forwarded(&read_through_a_copy(16))), Register::EBX);
 }
 
+// ----------------------------------------------------------------- what a jump reads
+
+/// The flags a conditional jump reads are the condition's: what code16's rows say of each jump, iced states
+/// of the mnemonic, so a target whose jump rows are its own needs no copy of them.
+#[test]
+fn test_what_a_conditional_jump_reads_is_the_conditions_for_every_condition() {
+    let rows: Vec<_> = instructions::FORMS.iter().filter(|form| form.operation == "branch").collect();
+    assert_eq!(rows.len(), 16);
+    for form in rows {
+        let branch = Semantics { name: Some(form.name.clone()), ..Semantics::new(Operation::Branch) };
+        let wanted = _flag_lanes(instructions::flags(form).expect("a jump reads flags").0);
+        assert_eq!(_branch_reads(&branch), wanted, "{}", form.name);
+    }
+}
+
 // ------------------------------------------------------------------ the count of a `rep`
 
 fn repeated_fill(name: &str, width: u32, di: Register, cx: Register, ax: Register) -> Insn {
