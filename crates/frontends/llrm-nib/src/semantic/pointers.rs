@@ -25,11 +25,15 @@ impl TypeRegistry {
 
     /// Warns, once for each place, that a `far` or `huge` written where the target has one space is near.
     pub(super) fn warn_distance(&mut self, distance: &str, span: Span) {
-        let Some(warnings) = &self.warnings else { return };
         if self.sizes.segmented || distance == "near" {
             return;
         }
-        let message = format!("warning: '{distance}' is near on this target: it has one address space");
+        self.warn(span, format!("warning: '{distance}' is near on this target: it has one address space"));
+    }
+
+    /// Records `message` at `span`, once, unless the build asked for no warnings.
+    pub(super) fn warn(&mut self, span: Span, message: String) {
+        let Some(warnings) = &self.warnings else { return };
         let mut warnings = warnings.borrow_mut();
         if !warnings.iter().any(|one| one.span == span && one.message == message) {
             warnings.push(Diagnostic::new(span, message));

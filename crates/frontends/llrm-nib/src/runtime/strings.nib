@@ -4,7 +4,7 @@
 import buffers
 
 # `text` with `count` more bytes after it; it may move.
-pub fn append_bytes(text: *near mut u8, bytes: *far u8, count: u16) -> *near mut u8:
+pub fn append_bytes(text: *near mut u8, bytes: *far u8, count: usize) -> *near mut u8:
     unsafe:
         let length = *buffers.length(text)
         let grown = buffers.reserve(text, length + count, 1)

@@ -785,8 +785,8 @@ fn _function(
                     {
                         invalid!("{prefix}: descriptor place needs a sequence pointer");
                     }
-                    if field.kind != model::TypeKind::Integer || field.width != 2 || field.signed != Some(false) {
-                        invalid!("{prefix}: descriptor field is not u16");
+                    if field.kind != model::TypeKind::Integer || !matches!(field.width, 2 | 4) || field.signed != Some(false) {
+                        invalid!("{prefix}: descriptor field is not an unsigned word (u16 or u32)");
                     }
                 }
             }

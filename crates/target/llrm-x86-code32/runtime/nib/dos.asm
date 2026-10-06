@@ -76,7 +76,7 @@ transfer::
     push ebx
     movzx ebx, word ptr [esp+8]
     mov edx, dword ptr [esp+12]
-    movzx ecx, word ptr [esp+16]
+    mov ecx, dword ptr [esp+16]
     int 21h
     pop ebx
     jmp short checked

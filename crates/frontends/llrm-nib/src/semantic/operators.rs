@@ -130,6 +130,15 @@ impl<'a> FunctionCompiler<'a> {
         if !conversions::implicit(value.type_name) || !conversions::implicit(target) {
             return Err(type_mismatch(span, target, value.type_name));
         }
+        // A length is usize, the target's word: a narrower integer cuts it, silently unless said.
+        if let Some(hir::Operand::Value(id)) = &value.operand
+            && self.lengths.contains(id)
+            && is_integer(target)
+            && width(self.types.sizes, target) < self.word_bytes()
+        {
+            let name = self.types.types[(type_id(target) - 1) as usize].name.clone();
+            self.types.warn(span, format!("warning: a length is {} bytes and {name} holds fewer: write {name}(...) to cut it", self.word_bytes()));
+        }
         self.converted(value, target, span)
     }
 

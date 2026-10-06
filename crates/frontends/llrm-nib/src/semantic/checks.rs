@@ -17,8 +17,8 @@ impl FunctionCompiler<'_> {
             return Ok(());
         }
         for (axis, index) in indices.iter().enumerate() {
-            let dim = self.value(TypeName::U16);
-            let place = hir::Operand::IndirectPlace { base: descriptor, offset: descriptor::dim(axis as u8), type_id: U16, inbounds: false, member: None };
+            let dim = self.value(self.word());
+            let place = hir::Operand::IndirectPlace { base: descriptor, offset: descriptor::dim(axis as u8, self.word_bytes()), type_id: self.word_id(), inbounds: false, member: None };
             let load = self.emit("load", vec![dim], vec![place], None);
             if element_width > 1 {
                 let most = i64::from(65535 / element_width);
@@ -61,7 +61,7 @@ impl FunctionCompiler<'_> {
             return Ok(());
         }
         let wide = [value, &limit].iter().any(|one| matches!(one, hir::Operand::Value(id) if self.types.width(self.type_of(*id)) == 4));
-        let unsigned = if wide { TypeName::U32 } else { TypeName::U16 };
+        let unsigned = if wide { TypeName::U32 } else { self.word() };
         let [value, limit] = [value.clone(), limit].map(|one| self.unsigned(one, unsigned));
         let below = self.value(TypeName::Bool);
         self.emit(if inclusive { "beloweq" } else { "below" }, vec![below], vec![value, limit], None);

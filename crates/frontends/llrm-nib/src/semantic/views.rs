@@ -138,7 +138,7 @@ impl FunctionCompiler<'_> {
     /// An uninitialized view descriptor in this frame: its far pointer.
     pub(super) fn view_slot(&mut self, element: ElementType, rank: u8) -> u32 {
         let descriptor_type = self.types.slice_descriptor(element, rank);
-        let place = self.local_place(&format!("$view{}", self.next_place), descriptor_type, descriptor::size(rank) + 4, true);
+        let place = self.local_place(&format!("$view{}", self.next_place), descriptor_type, descriptor::size(rank, self.word_bytes()) + 4, true);
         let pointer_type = self.types.slice_pointer(element, rank);
         let pointer = self.value_type(pointer_type);
         self.emit("address", vec![pointer], vec![hir::Operand::Place(place)], None);
@@ -156,8 +156,9 @@ impl FunctionCompiler<'_> {
 
     /// Copies the view descriptor `source` points to over `target`'s.
     pub(super) fn copy_view(&mut self, source: u32, target: u32, element: ElementType, rank: u8) {
-        let words = (0..descriptor::size(rank)).step_by(2).map(|offset| (offset, U16));
-        let data = (descriptor::size(rank), self.types.pointer(element.id(), 0));
+        let (word, word_id) = (self.word_bytes(), self.word_id());
+        let words = (0..descriptor::size(rank, word)).step_by(word as usize).map(|offset| (offset, word_id));
+        let data = (descriptor::size(rank, word), self.types.pointer(element.id(), 0));
         for (offset, type_id) in words.chain([data]) {
             let value = self.value_type(type_id);
             self.emit("load", vec![value], vec![hir::Operand::IndirectPlace { base: source, offset, type_id, inbounds: false, member: None }], None);

@@ -133,7 +133,7 @@ impl FunctionCompiler<'_> {
                 .strides()
                 .into_iter()
                 .zip(shape.dims())
-                .map(|(stride, dim)| hir::Operand::Constant(U16, i64::from(index / stride % dim)))
+                .map(|(stride, dim)| hir::Operand::Constant(self.word_id(), i64::from(index / stride % dim)))
                 .collect();
             return StructView { struct_id: element.id(), indices, ..array.clone() };
         }
@@ -270,8 +270,8 @@ impl FunctionCompiler<'_> {
                     self.emit("store", Vec::new(), vec![place, value], None);
                 }
                 Store::Bytes { destination, source, count } => {
-                    let (to, from) = (self.projected_place(&destination, 0, TypeName::U16), self.projected_place(&source, 0, TypeName::U16));
-                    self.emit("copy_bytes", Vec::new(), vec![to, from, hir::Operand::Constant(type_id(TypeName::U16), i64::from(count))], None);
+                    let (to, from) = (self.projected_place(&destination, 0, self.word()), self.projected_place(&source, 0, self.word()));
+                    self.emit("copy_bytes", Vec::new(), vec![to, from, hir::Operand::Constant(type_id(self.word()), i64::from(count))], None);
                 }
                 Store::Run { destination, element, count, source } => self.emit_run(&destination, element, count, source, span)?,
             }

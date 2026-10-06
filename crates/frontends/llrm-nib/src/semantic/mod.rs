@@ -118,6 +118,8 @@ const RESULT: &str = "$result";
 
 #[derive(Default)]
 struct LiteralPool {
+    /// The bytes of a length word: the target's usize.
+    word: u32,
     floats: BTreeMap<(TypeName, u64), u32>,
     strings: BTreeMap<Vec<u8>, u32>,
     data: Vec<hir::DataObject>,
@@ -154,13 +156,16 @@ impl LiteralPool {
             return *symbol;
         }
         let id = self.data.len() as u32 + 1;
-        let length =
-            u16::try_from(value.len()).expect("string length checked by semantic analysis");
-        let mut bytes = Vec::with_capacity(value.len() + 7);
+        let word = self.word as usize;
+        let length = (value.len() as u64).to_le_bytes();
+        assert!(value.len() >> (8 * word) == 0, "string length checked by semantic analysis");
+        let mut bytes = Vec::with_capacity(value.len() + 3 * word + 1);
         // A literal is static and read-only: the first write copies it to the heap.
-        bytes.extend([STRING_READONLY, 0]);
-        bytes.extend(length.to_le_bytes());
-        bytes.extend(length.to_le_bytes());
+        // The header is three words: the flags, then the length and the capacity.
+        bytes.push(STRING_READONLY);
+        bytes.resize(word, 0);
+        bytes.extend(&length[..word]);
+        bytes.extend(&length[..word]);
         bytes.extend(value);
         bytes.push(0);
         self.strings.insert(value.to_vec(), id);
@@ -705,6 +710,21 @@ impl TypeRegistry {
         format!("[{}; {}]", self.types[(element.id() - 1) as usize].name, dims.join(", "))
     }
 
+    /// The word of a length, capacity or index: usize, the target's near pointer wide.
+    pub(super) fn word(&self) -> TypeName {
+        if self.sizes.near == 4 { TypeName::U32 } else { TypeName::U16 }
+    }
+
+    /// `word`'s type id.
+    pub(super) fn word_id(&self) -> u32 {
+        if self.sizes.near == 4 { U32 } else { U16 }
+    }
+
+    /// The bytes of a word.
+    pub(super) fn word_bytes(&self) -> u32 {
+        self.sizes.near
+    }
+
     fn width(&self, id: u32) -> u32 {
         self.types[(id - 1) as usize].width
     }
@@ -765,7 +785,7 @@ impl TypeRegistry {
             id,
             name,
             kind: "opaque",
-            width: descriptor::size(rank) + 4,
+            width: descriptor::size(rank, self.word_bytes()) + 4,
             signed: None,
             evaluation: "none",
             element: Some(element_id),
@@ -784,7 +804,7 @@ impl TypeRegistry {
         if let Some((&id, _)) = found {
             return Ok(id);
         }
-        let word = TypeSpec::Primitive(TypeName::U16);
+        let word = TypeSpec::Primitive(self.word());
         let data = TypeSpec::Applied { name: "&".into(), args: vec![TypeAnnotation::Value(self.spec_of(element))] };
         let field = |name: String, type_spec: TypeSpec| StructField { name, mutable: false, type_spec, dims: Vec::new(), span };
         let declared = Struct {
@@ -800,7 +820,7 @@ impl TypeRegistry {
         };
         self.register_struct(&declared)?;
         let id = self.structs[&declared.name].id;
-        debug_assert_eq!(self.width(id), descriptor::size(rank) + 4);
+        debug_assert_eq!(self.width(id), descriptor::size(rank, self.word_bytes()) + 4);
         self.kept_views.insert(id, (element, rank));
         if mutable {
             self.writable_views.insert(id);
@@ -1180,20 +1200,36 @@ impl Shape {
 }
 
 /// The descriptor before an array's data, or in a view before its data
-/// pointer: the dimensions, then the capacity, each a u16 word. Storage is
+/// pointer: the dimensions, then the capacity, each a usize word. Storage is
 /// row-major and contiguous, so the strides follow from the dimensions.
 mod descriptor {
-    pub fn dim(axis: u8) -> u32 {
-        2 * u32::from(axis)
+    /// The descriptor of a program's own arrays and views: each word `word` bytes, the target's usize.
+    pub fn dim(axis: u8, word: u32) -> u32 {
+        word * u32::from(axis)
     }
 
-    pub fn capacity(rank: u8) -> u32 {
-        dim(rank)
+    pub fn capacity(rank: u8, word: u32) -> u32 {
+        dim(rank, word)
     }
 
     /// The descriptor's size, and so a view's data pointer offset.
-    pub fn size(rank: u8) -> u32 {
-        capacity(rank) + 2
+    pub fn size(rank: u8, word: u32) -> u32 {
+        capacity(rank, word) + word
+    }
+
+    /// A BASIC array's descriptor: its words are 16 bits whatever the target.
+    pub mod basic {
+        pub fn dim(axis: u8) -> u32 {
+            super::dim(axis, 2)
+        }
+
+        pub fn capacity(rank: u8) -> u32 {
+            super::capacity(rank, 2)
+        }
+
+        pub fn size(rank: u8) -> u32 {
+            super::size(rank, 2)
+        }
     }
 }
 
@@ -1382,7 +1418,7 @@ let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.
     types.register_fixed_types(&module.fixed_types)?;
     types.register_aggregates(&module.structs, &module.enums)?;
     types.register_drops(&module.functions.iter().collect::<Vec<_>>())?;
-    let mut literals = LiteralPool::default();
+    let mut literals = LiteralPool { word: frontend.sizes().near, ..Default::default() };
     types.register_statics(&module.statics, &statics::shared(module), module_name, &mut literals)?;
     let declared: Vec<Function> = module.functions.iter().map(|one| types.with_owner_generics(one)).collect();
     let (generators, functions): (Vec<&Function>, Vec<&Function>) = declared
@@ -1735,6 +1771,8 @@ struct FunctionCompiler<'a> {
     statement_span: Span,
     /// Whether the statement takes an address in a huge module variable.
     huge_address: bool,
+    /// The values loaded from a length or capacity word: usize, which an implicit conversion may narrow.
+    lengths: std::collections::BTreeSet<u32>,
     /// Changes to borrowed owners, refused if a holder is used after one.
     conflicts: Vec<liveness::Conflict>,
     /// The stores that give a reseated view a new descriptor, by block and
@@ -1761,6 +1799,21 @@ struct FunctionCompiler<'a> {
 }
 
 impl<'a> FunctionCompiler<'a> {
+    /// The word of a length, capacity or index: usize.
+    fn word(&self) -> TypeName {
+        self.types.word()
+    }
+
+    /// `word`'s type id.
+    fn word_id(&self) -> u32 {
+        self.types.word_id()
+    }
+
+    /// The bytes of a word.
+    fn word_bytes(&self) -> u32 {
+        self.types.word_bytes()
+    }
+
     fn new(
         function: &Function,
         signature: &'a Signature,
@@ -1830,6 +1883,7 @@ impl<'a> FunctionCompiler<'a> {
             lends: Vec::new(),
             statement_span: Span::new(0, 0, 0),
             huge_address: false,
+            lengths: Default::default(),
             conflicts: Vec::new(),
             reseats: BTreeSet::new(),
             reference_cells: Vec::new(),
@@ -1876,7 +1930,8 @@ impl<'a> FunctionCompiler<'a> {
                 // A borrowed view's descriptor is the caller's, and only reseating
                 // a binding writes one: no parameter is reseated.
                 SignatureParameter::Borrowed { target: BindingType::Slice { rank, .. }, .. } => {
-                    compiler.stated.state(subject, llrm_mir::facts::Fact::NoAlias).state(subject, llrm_mir::facts::Fact::ReadOnly).state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(descriptor::size(rank) + 4)));
+                    let view_bytes = descriptor::size(rank, compiler.word_bytes()) + 4;
+                    compiler.stated.state(subject, llrm_mir::facts::Fact::NoAlias).state(subject, llrm_mir::facts::Fact::ReadOnly).state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(view_bytes)));
                 }
                 // A reference is made from a place, so it is not null and points at
                 // the whole of what it borrows; a shared one cannot write it. Whether
