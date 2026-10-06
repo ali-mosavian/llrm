@@ -136,7 +136,158 @@ pub fn _group_start(block: &LirBlock, index: usize) -> usize {
 pub type Live = IndexMap<i64, BTreeSet<u32>>;
 
 /// What is live at each block's entry and exit, to a fixed point.
+///
+/// Dense: the values numbered by their order, each block's sets one row of bits in one array, the
+/// fixed point a worklist over the rows. No set is built but the answer.
 pub fn live(body: &LirBody) -> (Live, Live) {
+    // Every value the body names, numbered by order. Ids can be far apart, so the number of a value
+    // is found by a table over the ids where they are dense enough, else by search.
+    let mut numbered: Vec<u32> = Vec::new();
+    for block in &body.blocks {
+        numbered.extend(block.phis.iter().flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value))));
+        for one in &block.insns {
+            numbered.extend(one.defines.iter().chain(&one.uses).copied());
+        }
+    }
+    numbered.sort_unstable();
+    numbered.dedup();
+    let largest = numbered.last().copied().unwrap_or(0) as usize;
+    let table: Option<Vec<u32>> = (largest <= 8 * numbered.len() + 64).then(|| {
+        let mut table = vec![u32::MAX; largest + 1];
+        for (at, value) in numbered.iter().enumerate() {
+            table[*value as usize] = at as u32;
+        }
+        table
+    });
+    let number = |value: u32| -> usize {
+        match &table {
+            Some(table) => table[value as usize] as usize,
+            None => numbered.binary_search(&value).expect("every value is numbered"),
+        }
+    };
+    let words = numbered.len() / 64 + 1;
+    let count = body.blocks.len();
+    let set = |row: &mut [u64], value: u32| {
+        let at = number(value);
+        row[at / 64] |= 1 << (at % 64);
+    };
+    let position: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    // Rows of `words` each, a block's at `block * words`.
+    let mut defined = vec![0u64; count * words];
+    let mut generated = vec![0u64; count * words];
+    // A phi's argument is read at the end of the predecessor it comes from.
+    let mut handed = vec![0u64; count * words];
+    for block in &body.blocks {
+        for phi in &block.phis {
+            for (from, value) in &phi.incoming {
+                if let Some(&at) = position.get(from) {
+                    set(&mut handed[at * words..(at + 1) * words], *value);
+                } else {
+                    // A predecessor the body does not hold: its row is none, as its set was dropped.
+                }
+            }
+        }
+    }
+    for (at, block) in body.blocks.iter().enumerate() {
+        let row = at * words..(at + 1) * words;
+        for phi in &block.phis {
+            set(&mut defined[row.clone()], phi.result);
+        }
+        for one in &block.insns {
+            for value in &one.defines {
+                set(&mut defined[row.clone()], *value);
+            }
+        }
+        let mut alive: Vec<u64> = handed[row.clone()].to_vec();
+        let mut index = block.insns.len() as i64 - 1;
+        while index >= 0 {
+            let first = _group_start(block, index as usize);
+            let group = &block.insns[first..=index as usize];
+            for item in group {
+                for value in &item.defines {
+                    let at = number(*value);
+                    alive[at / 64] &= !(1 << (at % 64));
+                }
+            }
+            for item in group {
+                for value in &item.uses {
+                    set(&mut alive, *value);
+                }
+            }
+            index = first as i64 - 1;
+        }
+        for phi in &block.phis {
+            let at = number(phi.result);
+            alive[at / 64] &= !(1 << (at % 64));
+        }
+        generated[row].copy_from_slice(&alive);
+    }
+    let mut predecessors = vec![Vec::new(); count];
+    let mut successors: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (at, block) in body.blocks.iter().enumerate() {
+        for successor in &block.succ {
+            if let Some(&to) = position.get(successor) {
+                predecessors[to].push(at);
+                successors[at].push(to);
+            }
+        }
+    }
+    // The least fixed point of a backward problem: a worklist over the rows.
+    let mut into = generated.clone();
+    let mut out = vec![0u64; count * words];
+    let mut pending: Vec<usize> = (0..count).collect();
+    let mut queued = vec![true; count];
+    let mut now = vec![0u64; words];
+    while let Some(at) = pending.pop() {
+        queued[at] = false;
+        now.iter_mut().for_each(|word| *word = 0);
+        for &from in &successors[at] {
+            for (word, bits) in now.iter_mut().zip(&into[from * words..(from + 1) * words]) {
+                *word |= bits;
+            }
+        }
+        out[at * words..(at + 1) * words].copy_from_slice(&now);
+        let mut changed = false;
+        for word in 0..words {
+            let entering = generated[at * words + word] | (now[word] & !defined[at * words + word]);
+            if entering != into[at * words + word] {
+                into[at * words + word] = entering;
+                changed = true;
+            }
+        }
+        if changed {
+            for &pred in &predecessors[at] {
+                if !queued[pred] {
+                    queued[pred] = true;
+                    pending.push(pred);
+                }
+            }
+        }
+    }
+    let numbers = &numbered;
+    let values = |row: &[u64]| -> BTreeSet<u32> {
+        row.iter()
+            .enumerate()
+            .flat_map(|(word, bits)| (0..64).filter(move |bit| bits >> bit & 1 == 1).map(move |bit| numbers[word * 64 + bit]))
+            .collect()
+    };
+    let live_in: Live = body.blocks.iter().enumerate().map(|(at, block)| (block.at, values(&into[at * words..(at + 1) * words]))).collect();
+    let live_out: Live = body
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(at, block)| {
+            let row = at * words..(at + 1) * words;
+            let leaving: Vec<u64> = out[row.clone()].iter().zip(&handed[row]).map(|(one, other)| one | other).collect();
+            (block.at, values(&leaving))
+        })
+        .collect();
+    (live_in, live_out)
+}
+
+/// `live` as it was written over sorted sets, which the tests hold the dense one to.
+#[cfg(test)]
+pub fn live_reference(body: &LirBody) -> (Live, Live) {
     let defines: IndexMap<i64, BTreeSet<u32>> = body
         .blocks
         .iter()
