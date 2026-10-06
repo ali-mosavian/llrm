@@ -4,6 +4,8 @@
 //! DOSBox starts with zeroed RAM, so a plain run proves nothing: every program here runs under
 //! `tools/dosbatch/dirty.asm`, which fills free memory with 0A5h first.
 
+mod common;
+
 use llrm_target::Target;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -51,7 +53,7 @@ impl Lab {
 
     fn assemble(&self, source: &Path, object: &str, define: &[&str]) {
         let out = format!("-Fo{}", self.path(object).display());
-        let mut args = vec!["-q", "-c", "-Cp", "-Zg", "-omf", out.as_str()];
+        let mut args = vec!["-q", "-c", "-Cp", "-Zg", common::assembler(), out.as_str()];
         args.extend(define);
         let source = source.to_str().unwrap();
         args.push(source);
@@ -80,7 +82,7 @@ impl Lab {
         self.run("llrm-c", &["-Os", flag, "-march=i486", "t.c", "-o", &format!("{name}.obj")]);
         let exe = self.path(&format!("{name}.exe"));
         let (start, init, program) = (format!("{name}-start.obj"), format!("{name}-init.obj"), format!("{name}.obj"));
-        self.run("jwlink", &["option", "quiet", "format", "dos", "name", exe.to_str().unwrap(), "file", &start, "file", &init, "file", &program, "file", "ext.obj", "file", "os.obj"]);
+        self.run("jwlink", &common::jwlink(&["option", "quiet", "name", exe.to_str().unwrap(), "file", &start, "file", &init, "file", &program, "file", "ext.obj", "file", "os.obj"]));
         exe
     }
 

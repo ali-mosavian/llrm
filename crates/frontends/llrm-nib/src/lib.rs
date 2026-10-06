@@ -72,11 +72,17 @@ pub struct Frontend {
     pub reported: std::rc::Rc<std::cell::RefCell<Vec<(std::path::PathBuf, Diagnostic)>>>,
 }
 
-impl Default for Frontend {
-    /// For real mode, where the language began: a caller that knows its target sets `layout`.
-    fn default() -> Self {
-        Self { layout: llrm_x86_m16::layout(), slot: 2, bits: 16, registers: llrm_target::registers::parse(&llrm_target::Target::registers_text(&llrm_x86_m16::M16)).expect("registers.regs parses"), physical: llrm_target::Target::physical_addresses(&llrm_x86_m16::M16), conventions: llrm_target::Target::conventions(&llrm_x86_m16::M16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_m16::M16, "nib").expect("real mode has a Nib runtime"), llrm_target::Target::os_layer(&llrm_x86_m16::M16).expect("real mode has an OS layer")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default(), reported: Default::default() }
-    }
+/// The frontend for real mode, which the tests of the language compile against.
+#[cfg(test)]
+pub(crate) fn real_mode() -> Frontend {
+    Frontend::for_target(&llrm_x86_m16::M16).expect("real mode has a Nib runtime")
+}
+
+/// `source` compiled for real mode.
+#[cfg(test)]
+pub fn compile(source: &str, module_name: &str) -> Result<String, Diagnostic> {
+    let tokens = lex(source)?;
+    compile_module(parse(tokens)?, module_name, &real_mode())
 }
 
 /// What a target's OS layer and Nib's runtime description (`runtime/nib/<target>/nib.toml`) say.
@@ -116,7 +122,12 @@ impl Frontend {
             physical: target.physical_addresses(),
             conventions: target.conventions().iter().map(|one| (*one).to_owned()).collect(),
             os: Os::for_target(target)?,
-            ..Self::default()
+            unchecked_bounds: false,
+            debug: false,
+            checked_stack: false,
+            warn_target_width: true,
+            warnings: Default::default(),
+            reported: Default::default(),
         })
     }
 }
@@ -178,11 +189,6 @@ impl Frontend {
         let max_object = self.layout.segment_bytes().map_or_else(|| (1_u64 << (8 * near)) - 1, |bytes| bytes as u64 - 1);
         Sizes { near, far: bytes(self.layout.spaces.far), segmented: !self.layout.spaces.far_is_near(), slot: self.slot, max_object }
     }
-}
-
-pub fn compile(source: &str, module_name: &str) -> Result<String, Diagnostic> {
-    let tokens = lex(source)?;
-    compile_module(parse(tokens)?, module_name, &Frontend::default())
 }
 
 /// `source`'s tokens, one `line:column kind` per line.

@@ -127,14 +127,14 @@ fn main() -> i16:
     // The runtime routine stays declared either way; only its calls go.
     let checks = |unchecked_bounds| {
         let module = super::parse(super::lex(source).unwrap()).unwrap();
-        let hir = super::compile_module(module, "t", &super::Frontend { unchecked_bounds, ..Default::default() }).unwrap();
+        let hir = super::compile_module(module, "t", &super::Frontend { unchecked_bounds, ..crate::real_mode() }).unwrap();
         hir.replace([' ', '\n'], "").matches("\"callee\":\"N$EBND\"").count()
     };
     assert_eq!(checks(false), 3);
     assert_eq!(checks(true), 0);
     let constant = "fn main() -> i16:\n    let values: i16[3] = [1, 2, 3]\n    return values[3]\n";
     let module = super::parse(super::lex(constant).unwrap()).unwrap();
-    let refused = super::compile_module(module, "t", &super::Frontend { unchecked_bounds: true, ..Default::default() }).expect_err("refused");
+    let refused = super::compile_module(module, "t", &super::Frontend { unchecked_bounds: true, ..crate::real_mode() }).expect_err("refused");
     assert!(refused.message.contains("3 is outside 0..3"), "{}", refused.message);
 }
 
@@ -162,7 +162,7 @@ fn main() -> i16:
     let directory = tempfile::tempdir().expect("a directory");
     let main = directory.path().join("main.nib");
     std::fs::write(&main, source).expect("written");
-    let hir = super::compile_file(&main, &Default::default()).unwrap_or_else(|(_, error)| panic!("{}", error.message));
+    let hir = super::compile_file(&main, &crate::real_mode()).unwrap_or_else(|(_, error)| panic!("{}", error.message));
     let program = codec::decode(&hir).expect("decodes");
     let executed = execute::run(&program, "main", &[]).expect("runs");
     assert_eq!(executed.output, "-24 24 0 11333\n");
@@ -903,7 +903,7 @@ fn linked_output(main: &str, files: &[(&str, &str)]) -> Result<String, String> {
     };
     let module = super::modules::load(main, &mut read)
         .map_err(|(module, error)| format!("{module}: {}", error.message))?;
-    let hir = super::compile_module(module, "t", &Default::default()).map_err(|error| error.message)?;
+    let hir = super::compile_module(module, "t", &crate::real_mode()).map_err(|error| error.message)?;
     let executed = execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
     assert_eq!(executed.leaked, 0, "heap buffers leaked");
     Ok(executed.output)
@@ -2071,7 +2071,7 @@ fn an_array_field_is_declared_for_c_and_assembler_and_refused_for_basic() {
 /// `source`'s refusal, its imports supplied by the compiler.
 fn refused_with_imports(source: &str) -> String {
     let module = super::modules::load(source, &mut |name| Err(format!("{name} is not supplied"))).expect("loads");
-    super::compile_module(module, "t", &Default::default()).expect_err("refused").message
+    super::compile_module(module, "t", &crate::real_mode()).expect_err("refused").message
 }
 
 #[test]
@@ -3534,7 +3534,7 @@ fn repr_c_packs_to_the_targets_alignment() {
     let source = |layout: &str| format!("@repr(\"{layout}\")\nstruct S:\n    a: u8\n    b: i32\n\nfn main() -> i16:\n    print(size_of[S]())\n    return 0\n");
     let run = |text: &str, slot: u32| {
         let module = super::modules::load(text, &mut |_| Err("no such module".to_owned())).expect("loads");
-        let hir = super::compile_module(module, "t", &super::Frontend { slot, ..Default::default() }).expect("compiles");
+        let hir = super::compile_module(module, "t", &super::Frontend { slot, ..crate::real_mode() }).expect("compiles");
         execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs").output
     };
     assert_eq!((run(&source("c"), 2), run(&source("c"), 4), run(&source("c16"), 4)), ("6\n".to_owned(), "8\n".to_owned(), "6\n".to_owned()));

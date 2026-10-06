@@ -73,8 +73,8 @@ def test_the_c_start_up_gives_dos_a_stack_outside_the_code(tmp_path):
     code; a timer interrupt before the start-up switched stacks wrote six
     bytes into a procedure, and the program restarted itself forever."""
     bin_ = Path(__file__).resolve().parents[1] / "target" / "release"
-    (tmp_path / "m.asm").write_text(".model medium\n.code\npublic _main\n_main proc far\n    ret\n_main endp\nend\n")
-    subprocess.run([bin_ / "jwasm", "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{tmp_path / 'm.obj'}", tmp_path / "m.asm"], check=True)
+    (tmp_path / "m.asm").write_text("\n".join(dos.dosbatch.linkrecipe.recipe(dos.dosbatch.REAL_MODE)["header"]) + "\n.code\npublic _main\n_main proc far\n    ret\n_main endp\nend\n")
+    subprocess.run([bin_ / "jwasm", "-q", "-c", "-Cp", "-Zg", dos.dosbatch.linkrecipe.assembler(dos.dosbatch.REAL_MODE), f"-Fo{tmp_path / 'm.obj'}", tmp_path / "m.asm"], check=True)
     dos.dosbatch.link_c(tmp_path / "m.obj", tmp_path / "p.exe", tmp_path)
     exe = (tmp_path / "p.exe").read_bytes()
     # the code is at the load image's start; the stack must be elsewhere
