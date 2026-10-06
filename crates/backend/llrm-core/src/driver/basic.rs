@@ -672,7 +672,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
     if !handled {
         rows.clear();
     }
-    procedures.push(super::statement_table(&rows));
+    procedures.push(super::statement_table(&rows, options.arch.frame_registers()));
     let mut data = Vec::new();
     for segment in &object.segments {
         data.push((segment.name.clone(), laid_out(module, segment, &names)?));

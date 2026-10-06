@@ -66,8 +66,8 @@ pub fn selector(name: &str) -> Option<&'static Compiled> {
     selectors::ALL.iter().copied().find(|one| one.name == name)
 }
 
-/// The selector built for 16-bit x86, the default of every driver that is
-/// not handed another.
+/// The selector built for 16-bit x86, which the tests of this crate use.
+#[cfg(test)]
 pub(crate) fn code16() -> &'static Compiled {
     &selectors::x86_code16::SELECTOR
 }

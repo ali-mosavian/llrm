@@ -63,6 +63,7 @@ mod matcher;
 mod unwind;
 
 pub use matcher::{Compiled, selector};
+#[cfg(test)]
 pub(crate) use matcher::code16;
 mod wide;
 

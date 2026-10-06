@@ -74,8 +74,10 @@ impl Profile {
         self.address_forms.iter().find(|form| form.index_width == 4)
     }
 
-    /// The dataclass constructor with every defaulted field at its default.
+    /// The dataclass constructor with every defaulted field at its default, and the
+    /// registers and cost model of the target `arch`.
     pub fn new(
+        arch: &dyn Target,
         name: &str,
         issue_width: i64,
         in_order: bool,
@@ -88,8 +90,8 @@ impl Profile {
             in_order,
             prefix_cost,
             partial_register_stall,
-            register_capacity: llrm_x86_code16::GENERAL.len() as i64,
-            call_register_capacity: llrm_x86_code16::PRESERVED.len() as i64,
+            register_capacity: arch.register_capacity(),
+            call_register_capacity: arch.callee_saved().len() as i64,
             address_scales: BTreeSet::from([1]),
             _costs: Vec::new(),
             _latencies: Vec::new(),
@@ -100,7 +102,7 @@ impl Profile {
             max_unrolled_operations: DEFAULT_MAX_UNROLLED_OPERATIONS,
             address_prefix_stall: 0,
             size: false,
-            model: llrm_target::Target::cost_model(&llrm_x86_code16::Code16),
+            model: arch.cost_model(),
         }
     }
 
@@ -157,10 +159,13 @@ impl Profile {
 /// `str | Profile`, the argument every public function here accepts.
 #[derive(Clone, Copy, Debug)]
 pub enum ProfileOrName<'a> {
+    /// A name on 16-bit x86, which the tests of this crate are written for.
+    #[cfg(test)]
     Name(&'a str),
     Profile(&'a Profile),
 }
 
+#[cfg(test)]
 impl<'a> From<&'a str> for ProfileOrName<'a> {
     fn from(value: &'a str) -> Self {
         Self::Name(value)
@@ -284,16 +289,11 @@ fn _address_forms(arch: &dyn Target, costs: &OperationCosts, prefix: i64, addres
     arch.address_forms(&OperationCosts { prefix, ..costs.clone() }, address_stall)
 }
 
-/// What the target states of its registers and prices, over the CPU's own.
-fn _of_target(arch: &dyn Target, profile: Profile) -> Profile {
-    Profile { register_capacity: arch.register_capacity(), call_register_capacity: arch.callee_saved().len() as i64, model: arch.cost_model(), ..profile }
-}
-
 fn _profile(arch: &dyn Target, name: &str) -> Result<Profile, String> {
     if name == "386" {
         let costs = _I386_COSTS.clone();
         let operations = _operation_costs(&costs, 0);
-        return Ok(_of_target(arch, Profile {
+        return Ok(Profile {
             address_forms: _address_forms(arch, &operations, 0, 0),
             operations,
             _costs: costs
@@ -304,8 +304,8 @@ fn _profile(arch: &dyn Target, name: &str) -> Result<Profile, String> {
                 .iter()
                 .map(|(key, value)| ((*key).to_owned(), *value))
                 .collect(),
-            ..Profile::new(name, 1, true, 0, 0)
-        }));
+            ..Profile::new(arch, name, 1, true, 0, 0)
+        });
     }
     let at = timings::ARCHS
         .iter()
@@ -316,7 +316,7 @@ fn _profile(arch: &dyn Target, name: &str) -> Result<Profile, String> {
         .map(|(operation, values)| (*operation, values[at]))
         .collect();
     let operations = _operation_costs(&costs, timings::PREFIX[at]);
-    Ok(_of_target(arch, Profile {
+    Ok(Profile {
         pentium_pairing: name == "P5",
         address_forms: _address_forms(arch, &operations, timings::PREFIX[at], timings::LCP_STALL[at]),
         operations,
@@ -330,13 +330,14 @@ fn _profile(arch: &dyn Target, name: &str) -> Result<Profile, String> {
             .collect(),
         address_prefix_stall: timings::LCP_STALL[at],
         ..Profile::new(
+            arch,
             name,
             timings::ISSUE[at],
             timings::INORDER[at] != 0,
             timings::PREFIX[at],
             timings::PARTIAL_STALL[at],
         )
-    }))
+    })
 }
 
 /// The profiles made so far, by target, CPU and size: each made once, as the passes hold them.
@@ -358,10 +359,12 @@ pub fn tuned_for(arch: &dyn Target, name: &str, size: bool) -> Result<&'static P
 }
 
 /// `name`'s profile on 16-bit x86, tuned for size where `size`.
+#[cfg(test)]
 pub fn tuned(name: &str, size: bool) -> Result<&'static Profile, String> {
     tuned_for(&llrm_x86_code16::Code16, name, size)
 }
 
+#[cfg(test)]
 pub fn names() -> Vec<&'static str> {
     llrm_target::Target::cpus(&llrm_x86_code16::Code16).to_vec()
 }
@@ -369,10 +372,12 @@ pub fn names() -> Vec<&'static str> {
 pub fn profile<'a>(value: impl Into<ProfileOrName<'a>>) -> Result<&'a Profile, String> {
     match value.into() {
         ProfileOrName::Profile(value) => Ok(value),
+        #[cfg(test)]
         ProfileOrName::Name(value) => named(value),
     }
 }
 
+#[cfg(test)]
 pub fn named(name: &str) -> Result<&'static Profile, String> {
     tuned(name, false)
 }
@@ -440,7 +445,7 @@ mod tests {
             address_scales: BTreeSet::from([1]),
             _costs: Vec::new(),
             _latencies: Vec::new(),
-            ..Profile::new("test", 1, true, 0, 0)
+            ..Profile::new(&llrm_x86_code16::Code16, "test", 1, true, 0, 0)
         };
 
         assert_eq!(target.register_capacity, 3);
