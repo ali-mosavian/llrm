@@ -63,13 +63,14 @@ N$OCRE proc
     jmp short checked
 N$OCRE endp
 
-; N$OREA(handle: i16, data: *far mut u8, count: u16) -> i16: bytes read.
+; N$OREA(handle: i16, data: *near mut u8, count: usize) -> isize: bytes read, in one call: DOS/32A takes a
+; 32-bit count and returns one. Where DOS sets carry, the error code negated.
 N$OREA proc
     mov ah, 3Fh
     jmp short transfer
 N$OREA endp
 
-; N$OWRI(handle: i16, data: *far u8, count: u16) -> i16: bytes written.
+; N$OWRI(handle: i16, data: *near u8, count: usize) -> isize: bytes written, as N$OREA.
 N$OWRI proc
     mov ah, 40h
 transfer::
@@ -79,7 +80,11 @@ transfer::
     mov ecx, dword ptr [esp+16]
     int 21h
     pop ebx
-    jmp short checked
+    jnc short transferred
+    movzx eax, ax
+    neg eax
+transferred:
+    ret
 N$OWRI endp
 
 ; N$OCLO(handle: i16) -> i16
