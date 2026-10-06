@@ -1156,6 +1156,26 @@ mod tests {
         assert_eq!(return_overhead_bytes(&procedure(4)).unwrap(), 1);
     }
 
+    /// The listing opened `.model medium` whatever the target: a flat program's header is its target's.
+    #[test]
+    fn test_a_listing_opens_with_its_targets_header() {
+        let module = Module {
+            header: vec![".386".to_owned(), ".model flat".to_owned()],
+            code: "T_TEXT".into(),
+            names: no_names(),
+            externs: Vec::new(),
+            publics: Vec::new(),
+            data: Vec::new(),
+            procedures: Vec::new(),
+            private: BTreeSet::new(),
+            far_bss: BTreeSet::new(),
+            requests: BTreeSet::new(),
+            debug: None,
+            stack: 0,
+        };
+        assert!(text(&module).unwrap().starts_with(".386\n.model flat\n\n"));
+    }
+
     /// The frame register and stack pointer are LIR's BP and SP whatever the
     /// target: a flat one listed `push bp; mov bp,sp` and `[bp+6]`, 16-bit code in a
     /// 32-bit program.
