@@ -89,6 +89,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let bound = llrm_driver::target(&flags, None)?;
     frontend.layout = bound.target.layout();
     frontend.slot = u32::try_from(bound.target.stack_slot_bytes()).expect("a slot is positive");
+    frontend.bits = bound.target.object().bitness;
     frontend.conventions = bound.target.conventions().iter().map(|one| (*one).to_owned()).collect();
     frontend.os = nib_os(&*bound.target)?;
     let codegen = bound.options(&flags, flags.machine(nib::machine(&*bound.target, &frontend.os))?);
