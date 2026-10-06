@@ -15,6 +15,9 @@ far_loads body
 increments body
 borrows body
 doubled body
+narrowed_arithmetic body
+widened_moves body
+zero_extensions body
 zero_compares body
 memory_arguments insns
 paired_pushes insns

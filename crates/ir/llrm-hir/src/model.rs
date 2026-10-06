@@ -338,15 +338,16 @@ pub struct DescriptorPlace {
 
 impl DescriptorPlace {
     /// The field's offset from the base pointer, whose pointee is
-    /// `pointee`: a scoped view (`$slice[..]`) holds its length then its
-    /// capacity, and a heap string's header, the same two, precedes its data.
-    pub fn offset(&self, pointee: Option<&Type>) -> i64 {
+    /// `pointee`, the fields `width` bytes wide each (the type of the place): a scoped view
+    /// (`$slice[..]`) holds its length then its capacity, and a heap string's header, the same
+    /// two, precedes its data.
+    pub fn offset(&self, pointee: Option<&Type>, width: i64) -> i64 {
         let view = pointee.is_some_and(|one| one.kind == TypeKind::Opaque && one.name.starts_with("$slice["));
         match (view, self.field) {
             (true, DescriptorField::Length) => 0,
-            (true, DescriptorField::Capacity) => 2,
-            (false, DescriptorField::Length) => -4,
-            (false, DescriptorField::Capacity) => -2,
+            (true, DescriptorField::Capacity) => width,
+            (false, DescriptorField::Length) => -2 * width,
+            (false, DescriptorField::Capacity) => -width,
         }
     }
 }

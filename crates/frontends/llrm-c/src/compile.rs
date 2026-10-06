@@ -1087,6 +1087,22 @@ mod tests {
         }
     }
 
+    /// A word sum is the word `add`, not a dword one and the `movzx` of its low word: its upper
+    /// half stays as it was, which is zero where the words were zero-extended.
+    #[test]
+    fn test_code32_adds_words_as_words() {
+        let body = flat_body("narrow", "short_sum");
+        assert!(body.iter().any(|line| line.starts_with("add ax, ")) && !body.iter().any(|line| line.starts_with("add eax, ")), "{body:#?}");
+    }
+
+    /// The same sum of dwords keeps the `movzx`: the word `add` would leave the upper half as it was,
+    /// and the result is read as a dword.
+    #[test]
+    fn test_code32_keeps_the_extension_where_the_upper_half_is_not_zero() {
+        let body = flat_body("narrow", "int_sum");
+        assert!(body.iter().any(|line| line.starts_with("add eax, ")) && body.iter().any(|line| line == "movzx eax, ax"), "{body:#?}");
+    }
+
     /// A loop over `int *`: the pointer, the index and the sum are dwords in 32-bit registers,
     /// addressed `[base+index]` with no segment, selector or 16-bit register.
     #[test]

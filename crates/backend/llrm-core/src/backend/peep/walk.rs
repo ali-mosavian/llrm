@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::backend::cpu::Profile;
 use crate::backend::lanes::Lanes;
 use crate::backend::peephole::{self, Counter, DeadAfter, id};
-use crate::backend::{liveness, regthrash};
+use crate::backend::{liveness, regthrash, upperzero};
 use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::support::hash::{HashMap, IndexMap};
@@ -214,16 +214,17 @@ pub struct Facts<'a> {
     exits: OnceCell<IndexMap<i64, Lanes>>,
     flags_out: OnceCell<HashMap<i64, Lanes>>,
     users: OnceCell<Counter>,
+    zero: OnceCell<HashMap<usize, upperzero::Roots>>,
 }
 
 impl<'a> Facts<'a> {
     pub fn new(body: &'a LirBody, cpu: Option<&'a Profile>) -> Self {
-        Self { body: Some(body), cpu, counts: None, exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new() }
+        Self { body: Some(body), cpu, counts: None, exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new(), zero: OnceCell::new() }
     }
 
     /// For instructions outside a body, with the caller's read counts.
     pub fn counted(counts: &'a Counter) -> Self {
-        Self { body: None, cpu: None, counts: Some(counts), exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new() }
+        Self { body: None, cpu: None, counts: Some(counts), exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new(), zero: OnceCell::new() }
     }
 
     /// The same, pricing for `cpu`.
@@ -291,6 +292,11 @@ impl<'a> Cx<'a> {
     /// The flag lanes something may read after the block.
     pub fn flags_out(&self) -> Lanes {
         self.facts.flags_out.get_or_init(|| peephole::_flags_live_out(self.facts.body()))[&self.block().at]
+    }
+
+    /// The roots whose upper half is zero before `one`.
+    pub fn upper_zero(&self, one: &Arc<Insn>) -> upperzero::Roots {
+        self.facts.zero.get_or_init(|| upperzero::before(self.facts.body()))[&id(one)]
     }
 
     pub fn cpu(&self) -> &Profile {
