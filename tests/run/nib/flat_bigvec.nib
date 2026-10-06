@@ -1,4 +1,4 @@
-# flags: -O2 --cpu 486 --target x86-code32
+# flags: -O2 -march=i486 -m32
 # A vector past 64 KB, and a string: lengths and capacities are as wide as the target's near pointer.
 fn main() -> i16:
     let mut v: vec[i32] = []

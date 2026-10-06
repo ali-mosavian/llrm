@@ -1341,13 +1341,69 @@ pub struct Mask {
     pub before: BTreeSet<Register>,
 }
 
-pub type Masks = Vec<Mask>;
+/// The points that destroy registers, and, for each register, where, in order: whether a value is live
+/// across one is asked of every value and every register, over and over, and answered from the slots by
+/// bisection, not by a look at every point.
+#[derive(Default)]
+pub struct Masks {
+    list: Vec<Mask>,
+    reaching: std::cell::OnceCell<crate::support::hash::HashMap<Register, Reaching>>,
+}
+
+/// Where one register is destroyed, sorted: before the point's own reads (`read`), during it
+/// (`during`), or only its high half (`high`).
+#[derive(Default)]
+struct Reaching {
+    read: Vec<i64>,
+    during: Vec<i64>,
+    high: Vec<i64>,
+}
+
+impl Masks {
+    pub fn new(list: Vec<Mask>) -> Self {
+        Self { list, reaching: std::cell::OnceCell::new() }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Mask> {
+        self.list.iter()
+    }
+
+    fn reaching(&self, register: Register) -> Option<&Reaching> {
+        self.reaching
+            .get_or_init(|| {
+                let mut found: crate::support::hash::HashMap<Register, Reaching> = crate::support::hash::HashMap::default();
+                for mask in &self.list {
+                    for register in mask.before.iter().chain(&mask.during).chain(&mask.high) {
+                        let one = found.entry(*register).or_default();
+                        if mask.before.contains(register) {
+                            one.read.push(mask.slot);
+                        } else if mask.during.contains(register) {
+                            one.during.push(mask.slot);
+                        } else {
+                            one.high.push(mask.slot);
+                        }
+                    }
+                }
+                for one in found.values_mut() {
+                    one.read.sort_unstable();
+                    one.during.sort_unstable();
+                    one.high.sort_unstable();
+                }
+                found
+            })
+            .get(&register)
+    }
+}
 
 /// Every point a register is destroyed without being named, and which. The
 /// data segment register is reloaded ahead of a point that needs the data
 /// group, so it holds none of that point's operands either.
 pub fn _masks(body: &LirBody, index: &Indexes, segments: &Segments) -> Masks {
-    let mut out = Vec::new();
+    let mut out: Vec<Mask> = Vec::new();
     for block in &body.blocks {
         for one in &block.insns {
             let during: BTreeSet<Register> = one.clobbers.iter().map(|register| _whole(*register)).collect();
@@ -1359,7 +1415,7 @@ pub fn _masks(body: &LirBody, index: &Indexes, segments: &Segments) -> Masks {
             }
         }
     }
-    out
+    Masks::new(out)
 }
 
 /// The 32-bit register this one is part of.
@@ -1370,8 +1426,35 @@ pub fn _whole(register: Register) -> Register {
 /// Whether this range is live across a point that destroys the register, or
 /// into one that destroys it before reading.
 pub fn _clobbered(one: &Interval, register: Register, masks: &Masks, width: u32) -> bool {
+    let answer = _clobbered_from(one, register, masks, width);
+    if check_clobbered() {
+        assert_eq!(answer, _clobbered_reference(one, register, masks, width), "LLRM_CHECK_CLOBBERED: {register:?} over {:?}", one.segments);
+    }
+    answer
+}
+
+fn check_clobbered() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CLOBBERED").is_some())
+}
+
+/// `_clobbered`, from where each register is destroyed: a segment meets a point where the point is after its
+/// start and, by `reaches`, no later than its end.
+fn _clobbered_from(one: &Interval, register: Register, masks: &Masks, width: u32) -> bool {
+    let Some(places) = masks.reaching(_whole(register)) else { return false };
+    // The first slot after `start` is the best candidate: any later one reaches no further.
+    let after = |slots: &[i64], start: i64| slots.get(slots.partition_point(|slot| *slot <= start)).copied();
+    one.segments.iter().any(|seg| {
+        after(&places.read, seg.start).is_some_and(|slot| seg.end >= slot + ranges::DEF)
+            || after(&places.during, seg.start).is_some_and(|slot| seg.end > slot + ranges::DEF)
+            || (width > 2 && after(&places.high, seg.start).is_some_and(|slot| seg.end > slot + ranges::DEF))
+    })
+}
+
+/// What `_clobbered` was: a look at every point.
+pub fn _clobbered_reference(one: &Interval, register: Register, masks: &Masks, width: u32) -> bool {
     let mine = _whole(register);
-    for mask in masks {
+    for mask in masks.iter() {
         let slot = mask.slot;
         let read = mask.before.contains(&mine);
         if !read && !mask.during.contains(&mine) && (!mask.high.contains(&mine) || width <= 2) {
@@ -2942,7 +3025,7 @@ mod tests {
         let union: IndexMap<Register, Vec<u32>> = IndexMap::from_iter([(_whole(Register::DI), vec![1])]);
         let live: IndexMap<u32, Interval> = IndexMap::from_iter([(1, kept), (2, incoming.clone())]);
         let got =
-            _evict(&incoming, &[Register::DI], &union, &live, &Vec::new(), &|_, _| false, &values(&[1]), 4, None, None);
+            _evict(&incoming, &[Register::DI], &union, &live, &Masks::default(), &|_, _| false, &values(&[1]), 4, None, None);
         assert!(got.is_none(), "{got:?}");
     }
 
@@ -2965,7 +3048,7 @@ mod tests {
             union: &mut union,
             r#where: &mut placed,
             live: &live,
-            masks: &Vec::new(),
+            masks: &Masks::default(),
             order: &choices,
             width: &|_| 2,
             fenced: &BTreeSet::new(),
@@ -3029,7 +3112,7 @@ mod tests {
             union: &mut union,
             r#where: &mut placed,
             live: &live,
-            masks: &Vec::new(),
+            masks: &Masks::default(),
             order: &choices,
             width: &|_| 2,
             fenced: &BTreeSet::new(),

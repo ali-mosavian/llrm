@@ -1,4 +1,4 @@
-# flags: -O2 --cpu 486 --target x86-code32
+# flags: -O2 -march=i486 -m32
 # A file past 64 KB through os.write_file and os.read: one call each.
 import os
 

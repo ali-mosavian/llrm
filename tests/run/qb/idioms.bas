@@ -1,4 +1,4 @@
-' flags: -O2 --cpu 486 | -Os --cpu 486 | -O2 --cpu 486 -fsanitize=bounds
+' flags: -O2 -march=i486 | -Os -march=i486 | -O2 -march=i486 -fsanitize=bounds
 ' dialect: qb45 pds71 vbdos
 ' Fill and copy loops as programs write them: clearing and scrolling a buffer, filling a
 ' palette, copying rows and records, and the loops that look alike but are not one move:

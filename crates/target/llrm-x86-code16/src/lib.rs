@@ -39,6 +39,14 @@ impl llrm_target::Target for Code16 {
         GENERAL.len() as i64
     }
 
+    fn march(&self, name: &str) -> Option<&'static str> {
+        timings::TABLE.march(name)
+    }
+
+    fn marches(&self) -> Vec<&'static str> {
+        timings::TABLE.marches()
+    }
+
     fn registers_text(&self) -> String {
         include_str!("registers.regs").to_owned()
     }

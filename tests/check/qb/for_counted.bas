@@ -1,4 +1,4 @@
-' RUN: llrm-qb %s --dialect {qb45 | pds71 | vbdos} --runtime {qb45 | pds71 | vbdos} -O2 --cpu 486 -fno-inline-functions -S -o /dev/stdout
+' RUN: llrm-qb %s --dialect {qb45 | pds71 | vbdos} --runtime {qb45 | pds71 | vbdos} -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
 ' ownf_free's loops: a FOR with a constant step is counted, its test one compare against the limit.
 ' Main lost that (287e5640): the step was loaded each trip and tested for its sign, twice.
 ' CHECK-LABEL: $QB$MAIN proc

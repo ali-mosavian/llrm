@@ -108,6 +108,29 @@ def ow_root() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "llrm" / f"open-watcom-v2-{commit}"
 
 
+def target_modes() -> dict[str, int]:
+    """Each target's gcc `-m` number, from its `datalayout.toml` (`mode`): the one place that says."""
+    modes = {}
+    for crate in sorted((ROOT / "crates" / "target").glob("llrm-x86-code*")):
+        with open(crate / "src" / "machines" / "datalayout.toml", "rb") as text:
+            modes[crate.name.removeprefix("llrm-")] = tomllib.load(text)["mode"]
+    return modes
+
+
+def m_flag(target: str) -> str:
+    """The flag that names `target` to the compilers."""
+    return f"-m{target_modes()[target]}"
+
+
+def target_of(flags: list[str], default: str) -> str:
+    """The target a compiler's `flags` name by `-m<N>`, else `default`."""
+    for flag in flags:
+        for name, mode in target_modes().items():
+            if flag == f"-m{mode}":
+                return name
+    return default
+
+
 def target_link(target: str) -> dict:
     """How `target` links a C program: the `[link]` of its `object.toml` (crates/target/llrm-<target>)."""
     crate = ROOT / "crates" / "target" / ("llrm-" + target)
@@ -174,7 +197,7 @@ _COMPILERS = {"c": "llrm-c", "nib": "llrm-nib"}
 
 def os_layer(target: str, field: str, language: str) -> str:
     """What `language`'s compiler says of `target`'s OS layer (`--os-layer FIELD`)."""
-    return subprocess.run([str(BIN / _COMPILERS[language]), "--target", target, "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip()
+    return subprocess.run([str(BIN / _COMPILERS[language]), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip()
 
 
 def os_defines(target: str, language: str) -> tuple[str, ...]:
@@ -211,7 +234,7 @@ def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level:
     """A Nib program for `target`: its object, `runtime.nib` cut to what the program and the OS layer name, linked as the target says."""
     runtime = work / (obj.stem + "R.obj")
     used = [word for one in (obj, *foreign) for word in ("--used-by", str(one))]
-    _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), "--target", target, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used])
+    _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), m_flag(target), "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used])
     return link_target(target, obj, exe, work, runtime=(os_start(target, "nib"), []), objects_after=(runtime, *foreign), defines=os_defines(target, "nib"))
 
 

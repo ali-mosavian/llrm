@@ -12,7 +12,7 @@ in `extension.toml` and `Cargo.toml` together.
 The project's target goes to the server as its initialization options (code16 when none):
 
 ```json
-"lsp": { "nib-lsp": { "initialization_options": { "target": "x86-code32" } } }
+"lsp": { "nib-lsp": { "initialization_options": { "mode": 32 } } }
 ```
 
 To run a local build instead:

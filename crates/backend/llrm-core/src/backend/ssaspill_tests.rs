@@ -360,7 +360,7 @@ fn test_selectors_live_at_once_fit_the_segment_registers() {
     assert!(live <= target::BUILT_IN.selectors.len(), "{live} selectors live at once");
 }
 
-/// QCport's `_draw_string` at --cpu 486: a word copied from the low half of a dword load was made again as
+/// QCport's `_draw_string` at -march=i486: a word copied from the low half of a dword load was made again as
 /// that dword load into a word (`mov dx, dword [bp+20]`), which no encoding has; llrm-c refused four modules.
 #[test]
 fn test_a_word_copied_from_a_dword_is_not_made_again_as_the_dword() {

@@ -24,7 +24,7 @@ Links are pinned: llrm at [`079fceb3`][ll], Open Watcom v2 at
 ## Measurements
 
 Seven kernels from [`bench/c`][bench] were built three ways, with llrm at
-`1ded74a4`. `llrm-c --opt --cpu 486` produced medium-model far objects, linked with Microsoft LINK.
+`1ded74a4`. `llrm-c --opt -march=i486` produced medium-model far objects, linked with Microsoft LINK.
 `clang -m16 -march=i486 -O2` and `ia16-elf-gcc -march=i286 -O2` produced
 tiny-model `.COM` files. Each kernel was its own translation unit, so no
 compiler could see the harness's constant arguments. Each run timed the

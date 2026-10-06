@@ -1,4 +1,4 @@
-' RUN: llrm-qb %s --dialect pds71 --runtime pds71 -O2 --cpu 486 -fsanitize=bounds --huge-arrays -S -o /dev/stdout
+' RUN: llrm-qb %s --dialect pds71 --runtime pds71 -O2 -march=i486 -fsanitize=bounds --huge-arrays -S -o /dev/stdout
 ' /D checks each subscript in code and raises ERROR 9 itself: every element
 ' was a B$HARY call, which also hid the check from the optimizer.
 ' CHECK-NOT: B$HARY
