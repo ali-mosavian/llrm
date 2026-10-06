@@ -146,6 +146,10 @@ pattern float_cast_from
   call float_cast
 end
 
+# Where a target's own patterns for memory go: after the conversions above, which
+# no memory pattern of its own competes with, and before the general ones.
+own memory
+
 pattern load
   match load(p)
   let c = access(p)
@@ -213,6 +217,10 @@ pattern extractvalue
   match extractvalue
   call extractvalue
 end
+
+# Where a target's own casts go: after the i64 and float casts, which are not
+# those of its own types, and before the general ones.
+own casts
 
 pattern truncate_to_boolean
   match trunc.i1(x)

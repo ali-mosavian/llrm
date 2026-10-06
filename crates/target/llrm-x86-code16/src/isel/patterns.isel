@@ -1,5 +1,8 @@
 # The patterns real mode adds to the family's (llrm-x86): far pointers, which a
-# selector and an offset make two words.
+# selector and an offset make two words. Each `splice` is where the family's
+# file says `own` of that name.
+
+splice memory
 
 pattern far_load
   match load.far(p)
@@ -10,6 +13,8 @@ pattern far_store
   match store(v.far, p)
   call far_store(v, p)
 end
+
+splice casts
 
 pattern far_cast_to
   match cast.far
