@@ -49,6 +49,26 @@ mod tests {
         assert_eq!(dos.ports, Machine::parse(&format!("addressing = \"flat\"\nsegment_end_faults = false\ncpu = \"486\"\n{}", llrm_target::PC_PORTS), &CPUS).unwrap().ports);
     }
 
+    /// What code16's consumers read from the built-in description, stated
+    /// once: a move of the type, the parser or the files cannot change a
+    /// value unseen.
+    #[test]
+    fn test_the_built_in_description_states_what_the_backend_reads() {
+        let dos = &*BUILT_IN;
+        assert_eq!((dos.addressing, dos.cpu.as_str(), dos.segment_end_faults, dos.far_bss), (Addressing::Real, "486", true, false));
+        assert_eq!(dos.protected_huge_shift, None);
+        assert_eq!(dos.huge_shift(), Some(12));
+        let segments = |machine: &Machine| machine.segments.clone().unwrap();
+        assert_eq!(segments(dos), Segments { data: "ds".into(), stack: "ss".into(), code: "cs".into(), stack_is_data: false });
+        assert!(segments(&BASIC).stack_is_data);
+        assert_eq!(dos.foreign, [(0x0, 0x700), (0xA0000, 0xC0000), (0xC0000, 0xC8000), (0xF0000, 0x10FFF0)]);
+        assert_eq!(dos.ports.len(), 21);
+        assert_eq!(dos.ports[0], Port { low: 0x0, high: 0x20, memory: PortMemory::Dma });
+        assert_eq!(dos.ports[20], Port { low: 0x3F8, high: 0x400, memory: PortMemory::None });
+        assert_eq!(BASIC.foreign, dos.foreign);
+        assert_eq!(BASIC.ports, dos.ports);
+    }
+
     #[test]
     fn test_vga_selectors_are_foreign_only_in_real_mode() {
         let dos = Machine::parse(DOS, &CPUS).unwrap();
