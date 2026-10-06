@@ -275,13 +275,15 @@ pub fn operand_of(what: &ir::Mem) -> Option<(MemoryOperand, bool)> {
             if index != Register::None && !_WORD_INDEXES.contains(&index) {
                 return None;
             }
+            // Through the frame register, spelled: BP in real mode, EBP in flat.
+            let frame = if what.through == Register::None { Register::BP } else { what.through };
             Some((
                 memory_operand(
-                    Register::BP,
+                    frame,
                     index,
                     1,
                     addr.disp,
-                    _displacement_size(Register::BP, Register::None, addr.disp),
+                    _displacement_size(frame, Register::None, addr.disp),
                     Register::None,
                 ),
                 false,
@@ -733,7 +735,9 @@ pub static CONTROL_WORD: LazyLock<IndexMap<&'static str, &'static str>> =
 
 /// An instruction with no operands at all.
 pub fn bare(name: &str, at: At) -> Option<Emitted> {
-    let code = _code(BARE.get(name).copied().unwrap_or(""))?;
+    let named = BARE.get(name).copied().unwrap_or("");
+    // The table spells each in 16-bit mode, a word form (`RETNW`); a 32-bit one is the dword (`RETND`).
+    let code = _code(&if at.bits == 32 && named.ends_with('W') { format!("{}D", &named[..named.len() - 1]) } else { named.to_owned() })?;
     _assemble(&Instruction::with(code), at, true)
 }
 
