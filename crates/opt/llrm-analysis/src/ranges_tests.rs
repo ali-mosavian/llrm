@@ -1084,3 +1084,21 @@ fn an_entry_outside_the_box_gets_no_box() {
     let at = known.get(&cfg::id(parsed.block("b2")));
     assert!(at.is_none_or(|at| at.get(&parsed.value("x")).is_none_or(|x| x.high >= BigInt::from(1_u64 << 30))), "{at:?}");
 }
+
+/// A range scope narrowed by each edge above a block copied every interval it knew once per edge
+/// (200 sequential loops: 301 s in `analysis annotated`, #556). An edge's effect is the intervals it
+/// sets, and `on_edge` is that effect on the known ones.
+#[test]
+fn test_an_edge_sets_the_intervals_it_narrows_and_copies_none_of_the_rest() {
+    let parsed = compare("slt", 16, 4);
+    let x = parsed.value("x");
+    let unit = parsed.unit();
+    let mut known: IndexMap<ValueId, Interval> = (1000..2000).map(|at| (ValueId(at), interval(0, 1, 16))).collect();
+    known.insert(x, interval(0, 9, 16));
+    let delta = super::edge_delta(&unit, parsed.block("b0"), parsed.block("yes"), &known, None).unwrap().unwrap();
+    assert_eq!(delta.len(), 1, "an edge on one comparison sets one interval");
+    assert_eq!(delta[&x], interval(0, 3, 16));
+    let whole = on_edge(&unit, parsed.block("b0"), parsed.block("yes"), &known, None).unwrap().unwrap();
+    assert_eq!(whole.len(), known.len());
+    assert_eq!(whole[&x], delta[&x]);
+}
