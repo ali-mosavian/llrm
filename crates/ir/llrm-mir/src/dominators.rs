@@ -106,9 +106,30 @@ impl DominatorTree {
         if !self.is_reachable(b) {
             return true;
         }
+        SCANS.with(|scans| scans.set(scans.get() + 1));
         let list = function.block(a).instructions();
         list.iter().position(|one| *one == def) < list.iter().position(|one| *one == user)
     }
+
+    /// `instruction_dominates`, where `position` is each instruction's index in its block
+    /// (`Function::positions`): no scan of the block for two in the same one.
+    pub fn instruction_dominates_at(&self, function: &Function, def: InstId, user: InstId, position: &[u32]) -> bool {
+        let (Some(a), Some(b)) = (function.parent(def), function.parent(user)) else { return false };
+        if a != b {
+            return self.dominates(a, b);
+        }
+        !self.is_reachable(b) || position[def.0 as usize] < position[user.0 as usize]
+    }
+}
+
+thread_local! {
+    static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has scanned a block's instructions to order two of them, for a test that the
+/// verifier does not.
+pub fn scans() -> usize {
+    SCANS.with(std::cell::Cell::get)
 }
 
 fn intersect(idom: &[u32], order: &[u32], mut a: u32, mut b: u32) -> u32 {

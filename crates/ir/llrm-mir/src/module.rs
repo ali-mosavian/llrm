@@ -184,6 +184,17 @@ impl Function {
         self.instructions.len()
     }
 
+    /// Each instruction's index in its block, by id; erased and unplaced ones are zero.
+    pub fn positions(&self) -> Vec<u32> {
+        let mut positions = vec![0; self.instructions.len()];
+        for &block in self.layout() {
+            for (index, inst) in self.block(block).instructions().iter().enumerate() {
+                positions[inst.0 as usize] = index as u32;
+            }
+        }
+        positions
+    }
+
     pub fn instruction(&self, id: InstId) -> &Instruction {
         &self.instructions[id.0 as usize]
     }
