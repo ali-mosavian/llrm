@@ -9,6 +9,7 @@ A header comment holds a program's settings:
     ' flags: -Os -march=pentium      extra compiler flags (default: -O2); `a | b` builds and runs the program once for each
     ' dialect: pds71           qb45 (default), pds71 or vbdos: its compiler dialect and runtime; several, blank apart, run once each
     ' link: sortlib.nib        more sources built with it, beside the program (a .nib for BASIC; a .c or .asm for Nib); `@c-runtime` is the target's own file of the routines a program calls and does not define
+    ' stdin: input.dat        a file the program reads as standard input (`< INPUT.DAT`), its output redirected too, copied beside it
     ' data: values.dat         a file the program reads, copied beside it; @dickens: a cached corpus, verified (skipped if unavailable)
     ' mask: \d+(?= spins)       text of the output that varies: each match reads as N
     ' known: #123              fails today, tracked by issue 123
@@ -39,7 +40,7 @@ RUN = ROOT / "tests" / "run"
 EXAMPLES = ROOT / "examples"
 BENCH = ROOT / "bench"
 DEFAULT_FLAGS = ["-O2"]
-KEYS = ("flags", "known", "bc", "diverges", "dialect", "link", "data", "mask", "targets")
+KEYS = ("flags", "known", "bc", "diverges", "dialect", "link", "data", "stdin", "mask", "targets")
 FLAT = "x86-code32"
 HEADER = re.compile(rf"^\s*(?:'|//|#)\s*({'|'.join(KEYS)}):\s*(.*?)\s*$")
 COMPILERS = {".bas": ["llrm-qb"], ".nib": [], ".c": ["llrm-c"]}
@@ -56,6 +57,7 @@ class Program:
     data: tuple[str, ...] = ()
     mask: str = ""
     label: str = ""
+    stdin: str = ""
 
     @property
     def name(self) -> str:
@@ -123,7 +125,7 @@ def discover(selected: list[str]) -> list[Program]:
                 # Where a Nib program runs on code32 too, with the same output.
                 configured += [(f"{label}{' ' if label else ''}[{FLAT}]", [*flags, dosbatch.m_flag(FLAT)], dialect) for label, flags, dialect in configured]
             for label, flags, dialect in configured:
-                program = Program(source, flags, settings.get("known"), dialect, tuple(settings.get("link", "").split()), tuple(settings.get("data", "").split()), settings.get("mask", ""), label)
+                program = Program(source, flags, settings.get("known"), dialect, tuple(settings.get("link", "").split()), tuple(settings.get("data", "").split()) + tuple(settings.get("stdin", "").split()), settings.get("mask", ""), label, settings.get("stdin", ""))
                 if program.out.exists():
                     programs.append(program)
     if selected:
@@ -198,7 +200,7 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
     for at, source in enumerate(linked(program, target)):
         obj = work / f"{stem}F{at}.obj"
         if source.suffix == ".asm":
-            dosbatch.assemble(source, obj)
+            dosbatch.assemble(source, obj, *dosbatch.os_defines(target, "c"))
         else:
             dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(include), dosbatch.m_flag(target), level, "-o", str(obj)])
         objects.append(obj)
@@ -278,7 +280,7 @@ def main() -> int:
         built = dict(zip((p.name for p in programs), pool.map(lambda p: build(p, objs, stems[p.name]), programs)))
     ran = {}
     for dialect, tools in TOOLS.items():
-        jobs = [built[p.name] for p in programs if p.dialect == dialect and isinstance(built[p.name], Job)]
+        jobs = [dataclasses.replace(built[p.name], args=f"< {p.stdin.upper()}") if p.stdin else built[p.name] for p in programs if p.dialect == dialect and isinstance(built[p.name], Job)]
         if jobs:
             ran |= dosbatch.run(jobs, work / dialect, tools=tools)
     bad = passed = known = 0

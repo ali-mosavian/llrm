@@ -7,6 +7,8 @@ public _llrm_os_read
 public _llrm_os_write_file
 public _llrm_os_close
 public _llrm_os_exit
+public _llrm_os_console_read_key
+public _llrm_os_console_key_ready
 public _llrm_os_more
 public _llrm_os_vector
 public _llrm_os_set_vector
@@ -136,7 +138,7 @@ transferred:
     retf
 _llrm_os_write_file endp
 
-; _llrm_os_close(handle: i16) -> i16
+; _llrm_os_close(handle: handle) -> isize
 _llrm_os_close proc far
     push bp
     mov bp, sp
@@ -159,6 +161,24 @@ done:
     pop bp
     retf
 _llrm_os_close endp
+
+; The console's keyboard: standard input, so what DOS redirects it follows.
+
+; _llrm_os_console_read_key() -> u8: DOS's character input without echo (08h).
+_llrm_os_console_read_key proc far
+    mov ah, DOS_READ_KEY
+    int DOS_INT
+    xor ah, ah
+    retf
+_llrm_os_console_read_key endp
+
+; _llrm_os_console_key_ready() -> bool: DOS's input status (0Bh), 0FFh or 0, as 1 or 0.
+_llrm_os_console_key_ready proc far
+    mov ah, DOS_KEY_READY
+    int DOS_INT
+    and ax, 1
+    retf
+_llrm_os_console_key_ready endp
 
 ; Interrupt vectors, for handlers the program installs. A handler is
 ; entered with interrupts off and leaves by iret.

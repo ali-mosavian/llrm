@@ -178,3 +178,26 @@ fn no_list_lets_any_registered_target_through() {
     assert_eq!(target(&flags(&["-m32"]), None).unwrap().target.name(), "x86-code32");
     assert!(target(&flags(&["-m64"]), None).err().unwrap().contains("no target for -m64"));
 }
+
+/// The audited multiply and divide bounds of a CPU are its description's: a flat target prices the CPUs it
+/// has as the real-mode one does, and a CPU a description has no row for has none (they were name matches
+/// in `timing.rs`, which a new CPU or target would have had to edit).
+#[test]
+fn the_audited_bounds_come_from_the_targets_timings() {
+    use llrm_core::backend::timing::{Clocks, signed_divide, signed_multiply};
+    let profile = |arguments: &[&str]| {
+        let flags = flags(arguments);
+        let bound = target(&flags, Some(&["x86-code16", "x86-code32"])).unwrap();
+        let machine = flags.machine(&*bound.target, bound.target.machine()).unwrap();
+        bound.options(&flags, machine).cpu().unwrap()
+    };
+    for target in [&["-march=i486"][..], &["-m32", "-march=i486"][..]] {
+        let cpu = profile(target);
+        assert_eq!(signed_multiply(cpu, 4, true).unwrap(), Some(Clocks { minimum: 13, maximum: 42 }));
+        assert_eq!(signed_divide(cpu, 2).unwrap(), Some(Clocks { minimum: 27, maximum: 27 }));
+    }
+    let pentium = profile(&["-march=pentium"]);
+    assert_eq!(signed_multiply(pentium, 2, true).unwrap(), Some(Clocks { minimum: 11, maximum: 11 }));
+    assert_eq!(signed_multiply(pentium, 2, false).unwrap(), Some(Clocks { minimum: 10, maximum: 10 }));
+    assert_eq!(signed_multiply(profile(&["-march=k6"]), 4, true).unwrap(), None);
+}

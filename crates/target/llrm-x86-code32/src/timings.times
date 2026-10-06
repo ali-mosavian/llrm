@@ -76,6 +76,18 @@ sahf         2   1
 unknown      2   2
 
 # The latencies are the clocks, as the 386's are, until measured.
+
+# Audited bounds of the signed multiply and divide (docs/measurement/timing-audit.md), where a CPU has them:
+# the least and most clocks by operand width in bytes (`w2`, `w4`), and where the P5 prices the full product
+# of a word differently (`smul_full_w2`). Read by backend/timing.rs; the divide has one figure.
+smul_min_w2     13   10
+smul_max_w2     26   10
+smul_min_w4     13   10
+smul_max_w4     42   10
+smul_full_w2     -   11
+sdiv_w2         27   30
+sdiv_w4         43   46
+
 [latency]
 alu_rr       1   1
 alu_ri       1   1

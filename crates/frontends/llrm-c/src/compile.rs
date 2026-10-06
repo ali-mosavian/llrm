@@ -1138,6 +1138,16 @@ mod tests {
         assert!(loop_.iter().filter(copies).count() == 0, "{loop_:#?}");
     }
 
+    /// `d = a + b` into a register that is neither is one `lea`: no flags to keep, three bytes for the four of
+    /// `mov; add`, and a native form flat code has without a prefix. The target priced a flat dword's address
+    /// as the real-mode prefixed one and had no price for the native form, so it never chose it.
+    #[test]
+    fn test_code32_adds_into_a_new_register_with_lea() {
+        let body = flat_body("lea", "lea_sum");
+        assert!(body.iter().any(|line| line.starts_with("lea e") && line.contains("[e") && line.contains("+e")), "{body:#?}");
+        assert!(!body.iter().any(|line| line != "mov ebp, esp" && line.starts_with("mov e") && line.split_once(", ").is_some_and(|(_, from)| from.starts_with('e') && from.len() == 3)), "{body:#?}");
+    }
+
     /// A loop over `int *`: the pointer, the index and the sum are dwords in 32-bit registers,
     /// addressed `[base+index]` with no segment, selector or 16-bit register.
     #[test]
