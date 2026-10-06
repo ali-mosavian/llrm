@@ -3,13 +3,13 @@
 # are the same pointer, and the target's C convention is cdecl32.
 
 @extern("cdecl32", name="N$OOPN")
-pub fn open(name: *far char, mode: u8) -> i16
+pub fn open(name: *near char, mode: u8) -> i16
 @extern("cdecl32", name="N$OCRE")
-pub fn create(name: *far char) -> i16
+pub fn create(name: *near char) -> i16
 @extern("cdecl32", name="N$OREA")
-pub fn read(handle: i16, data: *far mut u8, count: u16) -> i16
+pub fn read(handle: i16, data: *near mut u8, count: u16) -> i16
 @extern("cdecl32", name="N$OWRI")
-pub fn write_file(handle: i16, data: *far u8, count: u16) -> i16
+pub fn write_file(handle: i16, data: *near u8, count: u16) -> i16
 @extern("cdecl32", name="N$OCLO")
 pub fn close(handle: i16) -> i16
 # Ends the program with `code`.
@@ -22,6 +22,6 @@ pub fn more(bytes: u16) -> *near mut u8
 const STANDARD_OUTPUT: i16 = 1
 
 # `length` bytes of `text` to standard output.
-pub fn write(text: *far u8, length: u16) -> void:
+pub fn write(text: *near u8, length: u16) -> void:
     unsafe:
         write_file(STANDARD_OUTPUT, text, length)
