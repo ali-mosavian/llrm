@@ -397,3 +397,40 @@ b9:
     let hoisted = block(&printed, "b0").iter().filter(|line| line.contains("load")).count();
     assert!(hoisted < 6, "{hoisted} of 6 loads left both inner loops\n{printed}");
 }
+
+/// A loop that calls and reads six fields of its argument: each `getelementptr` of a constant is
+/// folded into its load, a displacement from the argument, but counted as a value live across the
+/// calls it was forecast spilled, and left in the loop (QCport part.c +56 B at -Os, #529).
+#[test]
+fn test_a_displacement_the_loads_fold_is_not_pruned_for_the_registers() {
+    let fields = (1..=6).map(|at| format!("  %p{at} = getelementptr i8, ptr %p, i16 {}\n  %v{at} = load i16, ptr %p{at}\n  %s{at} = add i16 %s{}, %v{at}\n", at * 2, at - 1)).collect::<String>();
+    let text = format!(
+        "declare void @g()
+define i16 @f(ptr %p, i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %s0 = phi i16 [ 0, %b0 ], [ %s6, %b1 ]
+  call void @g()
+{fields}  %i1 = add i16 %i, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %s6
+}}
+"
+    );
+    let before = parsed(&text);
+    let mut after = before.clone();
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.require::<Summaries>();
+    passes.add(super::Hoist { size: true });
+    passes.run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 3, call_registers: 1, ..Default::default() })).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    let printed = printed(&after);
+    let hoisted = block(&printed, "b0").iter().filter(|line| line.contains("getelementptr")).count();
+    assert_eq!(hoisted, 6, "{printed}");
+}
