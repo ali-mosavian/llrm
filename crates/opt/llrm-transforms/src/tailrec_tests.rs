@@ -330,3 +330,28 @@ b4:
     assert_eq!(calls(&after(5)), 2, "{}", after(5));
     assert_eq!(calls(&after(6)), 1, "{}", after(6));
 }
+
+/// Nib's `sort(a: &mut [i16], lo, hi)` passes `a` on as it got it: stripped of `noalias`, the loop could
+/// not keep the slice's header in registers over the partition's stores, and quicksort ran 57% more
+/// instructions on code16. The parameter the calls change loses it, the one they pass on keeps it.
+#[test]
+fn noalias_stays_on_the_parameter_the_calls_pass_on() {
+    let text = "define i16 @f(ptr noalias %a, ptr noalias %b, i16 %n) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b1, label %b2
+
+b1:
+  ret i16 0
+
+b2:
+  %m = sub i16 %n, 1
+  %p = getelementptr i16, ptr %b, i16 1
+  %v = call i16 @f(ptr %a, ptr %p, i16 %m)
+  ret i16 %v
+}
+";
+    let after = managed(&mut parsed(&format!("{DOS}{text}")), TailRecursion);
+    assert_eq!(calls(&after), 0, "{after}");
+    assert!(after.contains("define i16 @f(ptr noalias %a, ptr %b, i16 %n)"), "{after}");
+}
