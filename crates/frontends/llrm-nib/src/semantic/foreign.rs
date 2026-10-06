@@ -138,7 +138,7 @@ pub(super) fn foreign_signature(
         &declared.function.name,
         declared.function.span,
     )?;
-    signature.name = declared.symbol.clone().unwrap_or_else(|| abi.symbol(&declared.function.name));
+    signature.name = declared.symbol.clone().unwrap_or_else(|| types.symbol(abi, &declared.function.name));
     Ok(signature)
 }
 
@@ -151,6 +151,14 @@ fn interrupt_shape(abi: Abi, takes_nothing_returns_void: bool, span: Span) -> Re
 }
 
 impl TypeRegistry {
+    /// The object symbol of `name` under `abi`: its convention's pattern in the object format, else `Abi::symbol`'s.
+    pub(super) fn symbol(&self, abi: Abi, name: &str) -> String {
+        match self.symbols.get(abi.name()) {
+            Some(pattern) => pattern.replace('*', name),
+            None => abi.symbol(name),
+        }
+    }
+
     /// `extern "abi" fn(A) -> R`: the far address of a function of that ABI
     /// whose type is `function`. Nothing reads or calls through it here; a
     /// foreign function does.

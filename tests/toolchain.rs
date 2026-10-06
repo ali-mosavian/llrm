@@ -372,7 +372,7 @@ fn test_the_generated_header_is_far_only_where_far_code_is() {
     };
     assert!(header(&[]).contains("extern short __far __cdecl weight(short value);"));
     let flat = header(&["-m32"]);
-    assert!(flat.contains("extern short __cdecl weight(short value);") && !flat.contains("__far"), "{flat}");
+    assert!(flat.contains("extern short __watcall weight(short value);") && !flat.contains("__far"), "{flat}");
 }
 
 /// A flat target's block clears and copies are `rep stos`/`rep movs` on dwords through DS=ES, as m16's

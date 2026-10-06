@@ -85,7 +85,8 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
 /// [`selected`], each function checking its stack as `stack_check` says (`-fsanitize=stack`).
 pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options, stack_check: Option<llrm_core::hir::model::StackCheck>) -> Result<masm::Module, CompileError> {
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
-        let unit = hir::unit(&stream::parse(text))?;
+        let mut unit = hir::unit(&stream::parse(text))?;
+        unit.decorate(codegen.arch.calling(), codegen.object_format);
         // The front end was picked by the shim's flat flag; the target says what flat is.
         if unit.flat != codegen.arch.layout().spaces.far_is_near() {
             return Err(hir::Unsupported(format!("the front end is {} but target {} is {}", if unit.flat { "flat" } else { "segmented" }, codegen.arch.name(), if unit.flat { "segmented" } else { "flat" })).into());
@@ -974,6 +975,22 @@ mod tests {
     fn regs_body(name: &str) -> Vec<String> {
         let lines = flat_listing("regs");
         lines.iter().skip_while(|line| **line != format!("{name} proc near")).skip(1).take_while(|line| **line != format!("{name} endp")).cloned().collect()
+    }
+
+    /// An ELF object has no `_` before a C name and no `_` after a default one: `six_` and `_explicit_cdecl` were
+    /// printed whatever object format was asked, where the convention's `symbol` table says `*` for elf.
+    #[test]
+    fn test_m32_an_elf_object_spells_its_symbols_without_decoration() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32/regs.cgs")).unwrap();
+        let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
+        let mut args = super::parse_args(&argv).unwrap();
+        args.codegen.object_format = "elf";
+        let built = super::selected(&text, "regs", None, &args.codegen).unwrap();
+        let listing = llrm_core::backend::masm::text(&built).unwrap();
+        for name in ["six", "result", "explicit_cdecl", "far_away"] {
+            assert!(listing.contains(&format!("\n{name} proc near")) || listing.contains(&format!("extern {name}:near")), "{name} in {listing}");
+        }
+        assert!(!listing.contains("six_") && !listing.contains("_explicit_cdecl"), "{listing}");
     }
 
     /// An unmarked C function takes Open Watcom's register convention: `six` read its fifth and sixth from the

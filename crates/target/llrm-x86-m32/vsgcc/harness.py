@@ -217,7 +217,8 @@ def run(prog, variant, hot=False, limit=300_000_000):
     if variant.startswith("llrm"):
         segs, syms = omf_link(OUT / "o" / f"{prog}.{variant}.obj", stub)
         main = syms["_main"]
-        kern = syms[f"_bench_{prog}"]
+        # The default convention's name is `bench_x_`, cdecl's `_bench_x`.
+        kern = syms.get(f"bench_{prog}_") or syms[f"_bench_{prog}"]
     else:
         elf = OUT / "b" / f"{prog}.{variant}.elf"
         segs, syms = elf_segments(elf), nm(elf)
@@ -231,7 +232,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
     uc.mem_write(esp, struct.pack("<III", SENT, 0, 0))
     uc.reg_write(UC_X86_REG_ESP, esp)
     code_end = max(va + len(b) for va, b, _ in segs)
-    report_at = stub["report"]
+    report_at, report_in_eax = stub["report"], stub["report_"]
     st = dict(active=False, sp=0, prev=None, prev_ins=None, cnt=0)
     total = Counter()   # instructions, mem, clocks
     hits = Counter()
@@ -246,6 +247,8 @@ def run(prog, variant, hot=False, limit=300_000_000):
             uc.emu_stop(); return
         if address == report_at:
             reports.append(struct.unpack("<i", uc.mem_read(uc.reg_read(UC_X86_REG_ESP) + 4, 4))[0])
+        elif address == report_in_eax:
+            reports.append(struct.unpack("<i", struct.pack("<I", uc.reg_read(UC_X86_REG_EAX)))[0])
         if not st["active"]:
             if address != kern:
                 return

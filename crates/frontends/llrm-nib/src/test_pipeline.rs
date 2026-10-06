@@ -257,3 +257,19 @@ fn test_a_module_names_the_targets_physical_addresses() {
     assert_eq!(executed.output, "753664\n");
     assert!(crate::Frontend { physical: Vec::new(), ..Default::default() }.physical_constants().is_empty());
 }
+
+/// A convention spells a symbol as the object format asks: `f_` for OMF's default convention, and `f` for ELF's, where the
+/// description's `symbol` table says `*`. Nib spelled `Abi::symbol`'s pattern whatever format was asked.
+#[test]
+fn test_an_exported_symbol_is_spelled_as_the_object_format_asks() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let path = directory.path().join("a.nib");
+    std::fs::write(&path, "@export(\"watcall32\")\nfn f(a: i32) -> i32:\n    return a\n\nfn main() -> i32:\n    return f(1)\n").expect("written");
+    let spelled = |symbols: &[(&str, &str)]| {
+        let frontend = crate::Frontend { conventions: vec!["watcall32".into()], symbols: symbols.iter().map(|(name, pattern)| ((*name).to_owned(), (*pattern).to_owned())).collect(), ..Default::default() };
+        let program = crate::driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{}", error.0));
+        program.modules[0].functions.iter().map(|one| one.name.clone()).collect::<Vec<_>>()
+    };
+    assert!(spelled(&[]).contains(&"f_".to_owned()));
+    assert!(spelled(&[("watcall32", "*")]).contains(&"f".to_owned()));
+}

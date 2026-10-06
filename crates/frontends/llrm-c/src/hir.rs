@@ -195,9 +195,7 @@ impl Symbol {
         if self.pattern == "^" {
             return self.base.to_uppercase();
         }
-        if self.entry() {
-            return "_main".to_owned();
-        }
+
         let base = intrinsic_runtime(&self.base).unwrap_or(&self.base);
         if self.pattern.is_empty() {
             base.to_owned()
@@ -321,6 +319,22 @@ pub struct Unit {
 }
 
 impl Unit {
+    /// Each symbol's decoration as `calling` states it for `format`: what the front end recorded is OMF's, and a
+    /// symbol whose pattern a convention states takes that convention's for `format`. The entry `main` is called
+    /// by the runtime's start in C's convention, whatever the front end made of it.
+    pub fn decorate(&mut self, calling: &llrm_target::calling::Calling, format: &str) {
+        let cdecl = calling.by_cc("cdecl").and_then(|one| one.symbol.get(format)).cloned();
+        for symbol in self.symbols.values_mut() {
+            if symbol.entry() {
+                if let Some(pattern) = &cdecl {
+                    symbol.pattern = pattern.clone();
+                }
+            } else if let Some(pattern) = calling.redecorated(&symbol.pattern, format) {
+                symbol.pattern = pattern;
+            }
+        }
+    }
+
     /// Warns that far and huge pointers are near on a target with one address space (the front end
     /// gives both the same type, so it cannot say which was written).
     pub fn warn_near(&self) {

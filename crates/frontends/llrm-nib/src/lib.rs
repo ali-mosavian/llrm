@@ -53,6 +53,9 @@ pub struct Frontend {
     pub physical: Vec<(String, u64)>,
     /// The calling conventions the target defines, the first its programs' own.
     pub conventions: Vec<String>,
+    /// How each convention spells a symbol in the object format asked for (`*` is the name), where the target's
+    /// description says: `symbols_for`. A convention it does not name spells it as `Abi::symbol` does.
+    pub symbols: std::collections::BTreeMap<String, String>,
     /// The target's OS layer under Nib's runtime.
     pub os: Os,
     /// Index and slice bounds go unchecked, as in `unsafe`: `--unchecked-bounds`.
@@ -75,7 +78,7 @@ pub struct Frontend {
 impl Default for Frontend {
     /// For real mode, where the language began: a caller that knows its target sets `layout`.
     fn default() -> Self {
-        Self { layout: llrm_x86_m16::layout(), slot: 2, bits: 16, registers: llrm_target::registers::parse(&llrm_target::Target::registers_text(&llrm_x86_m16::M16)).expect("registers.regs parses"), physical: llrm_target::Target::physical_addresses(&llrm_x86_m16::M16), conventions: llrm_target::Target::conventions(&llrm_x86_m16::M16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_m16::M16, "nib").expect("real mode has a Nib runtime"), llrm_target::Target::os_layer(&llrm_x86_m16::M16).expect("real mode has an OS layer")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default(), reported: Default::default() }
+        Self { layout: llrm_x86_m16::layout(), slot: 2, bits: 16, registers: llrm_target::registers::parse(&llrm_target::Target::registers_text(&llrm_x86_m16::M16)).expect("registers.regs parses"), physical: llrm_target::Target::physical_addresses(&llrm_x86_m16::M16), conventions: llrm_target::Target::conventions(&llrm_x86_m16::M16).iter().map(|one| (*one).to_owned()).collect(), symbols: Default::default(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_m16::M16, "nib").expect("real mode has a Nib runtime"), llrm_target::Target::os_layer(&llrm_x86_m16::M16).expect("real mode has an OS layer")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default(), reported: Default::default() }
     }
 }
 
@@ -115,6 +118,7 @@ impl Frontend {
             registers: llrm_target::registers::parse(&target.registers_text())?,
             physical: target.physical_addresses(),
             conventions: target.conventions().iter().map(|one| (*one).to_owned()).collect(),
+            symbols: Default::default(),
             os: Os::for_target(target)?,
             ..Self::default()
         })
@@ -165,6 +169,11 @@ pub struct Sizes {
 }
 
 impl Frontend {
+    /// `target`'s symbol decorations in object format `format` (`omf`, `elf`, `macho`): each convention's pattern.
+    pub fn symbols_for(target: &dyn llrm_target::Target, format: &str) -> std::collections::BTreeMap<String, String> {
+        target.calling().conventions.iter().filter_map(|one| Some((one.name.clone(), one.symbol.get(format)?.clone()))).collect()
+    }
+
     /// The convention the language's own functions have: the target's first.
     pub fn native(&self) -> syntax::Abi {
         self.conventions.first().and_then(|name| syntax::Abi::named(name)).expect("a target defines a calling convention the language names")

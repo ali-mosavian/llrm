@@ -205,6 +205,8 @@ struct TypeRegistry {
     native: Abi,
     /// The names of the conventions the target defines: any other is refused.
     conventions: Vec<String>,
+    /// How a convention spells a symbol in the object format asked for: the description's, where it gives one.
+    symbols: BTreeMap<String, String>,
     types: Vec<hir::Type>,
     arrays: BTreeMap<(u32, Shape), u32>,
     /// Each fixed array type, by id: its element and shape.
@@ -316,6 +318,7 @@ impl TypeRegistry {
             registers: Vec::new(),
             native,
             conventions,
+            symbols: BTreeMap::new(),
             warnings: None,
             types: vec![
                 plain_type(VOID, "void", "void", 0, None, "none"),
@@ -1417,6 +1420,7 @@ fn program(
     frontend: &super::Frontend,
 ) -> Result<hir::Program, Diagnostic> {
     let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.conventions.clone(), frontend.bits);
+    types.symbols = frontend.symbols.clone();
     types.warnings = frontend.warn_target_width.then(|| frontend.warnings.clone());
     types.registers = frontend.registers.clone();
     types.register_fixed_types(&module.fixed_types)?;
@@ -1456,7 +1460,7 @@ fn program(
                 foreign::check_foreign(&mut types, &mut signature, &function.name, function.span)?;
             }
             signature.exported = true;
-            signature.name = export.symbol.clone().unwrap_or_else(|| abi.map_or_else(|| function.name.clone(), |abi| abi.symbol(&function.name)));
+            signature.name = export.symbol.clone().unwrap_or_else(|| abi.map_or_else(|| function.name.clone(), |abi| types.symbol(abi, &function.name)));
         } else {
             foreign::check_adapters(&signature, &function.name, function.span)?;
         }

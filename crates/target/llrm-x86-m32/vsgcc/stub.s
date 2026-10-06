@@ -1,9 +1,13 @@
 .text
-.globl report, _report, input_read, _input_read
+.globl report, _report, input_read, _input_read, report_, input_read_
 report:
 _report:
 input_read:
 _input_read:
+ ret
+# llrm's default convention takes the value in EAX, and the harness reads it there: a place of its own
+report_:
+input_read_:
  ret
 # libc stand-ins: dword string ops, then the tail bytes
 .globl memset, memcpy, memmove
