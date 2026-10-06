@@ -9,3 +9,6 @@ start = "start.asm"
 implementation = "os.asm"
 # Whether the start-up zeroes the far uninitialised data, as it does the near.
 far_bss = true
+# What the runtime's routines, DOS and an interrupt use below the deepest chain of frames the program
+# makes: the stack limit is the bottom plus this, and the stack the object adds covers it.
+stack_reserve = 512

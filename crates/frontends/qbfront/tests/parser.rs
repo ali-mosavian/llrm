@@ -2383,3 +2383,15 @@ fn a_near_string_literal_is_laid_out_as_the_runtime_description_says() {
         assert!(hir.contains(&format!("\"addend\":{}", layout.size)) && hir.contains(&format!("\"at\":{}", layout.data)), "{runtime}: {hir}");
     }
 }
+
+/// The near-data budget was a literal 64 KiB: a target whose data segment holds 1 KiB got a 2 KiB array
+/// accepted, and a target with no segments was refused one. The target's description says how much, once.
+#[test]
+fn the_near_data_budget_is_the_targets_segment() {
+    let module = parse("DIM SHARED a(1 TO 1000) AS INTEGER\na(1) = 1\n", Dialect::Pds71).unwrap();
+    let on = |segment_bytes| compile_with_options(&module, "m", Dialect::Pds71, "pds71", &Options { segment_bytes, ..Options::default() });
+    let error = on(Some(1024)).unwrap_err().message;
+    assert!(error.contains("exceeds the 1 KiB near-data budget"), "{error}");
+    assert!(on(Some(65536)).is_ok());
+    assert!(on(None).is_ok());
+}

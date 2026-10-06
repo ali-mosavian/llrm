@@ -286,6 +286,7 @@ dependencies = [
  "llrm-transforms",
  "llrm-x86",
  "llrm-x86-m16",
+ "llrm-x86-m32",
  "num-bigint",
  "num-traits",
  "regex",
@@ -378,6 +379,7 @@ dependencies = [
  "llrm-target",
  "llrm-transforms",
  "llrm-x86-m16",
+ "llrm-x86-m32",
  "num-bigint",
  "num-traits",
  "regex",
@@ -571,6 +573,8 @@ name = "qbfront"
 version = "0.1.0"
 dependencies = [
  "buildprs",
+ "llrm-core",
+ "llrm-driver",
  "llrm-hir",
  "llrm-qbruntime",
 ]

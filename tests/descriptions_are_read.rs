@@ -74,8 +74,9 @@ fn readers_in(root: &Path) -> String {
             text.push('\n');
         } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") && name != "tests.rs" && !name.starts_with("test_") {
             let source = fs::read_to_string(&path).unwrap_or_default();
-            // Not the tests of a module: they would read anything.
-            text += source.split("\n#[cfg(test)]").next().unwrap_or("");
+            // Not the tests of a module (`#[cfg(test)] mod tests`, wherever its file is): they would read anything.
+            let tests = regex::Regex::new(r"\n#\[cfg\(test\)\]\n(?:#\[[^\n]*\n)*(?:pub )?mod \w+ \{").unwrap();
+            text += tests.split(&source).next().unwrap_or("");
             text.push('\n');
         }
     }
