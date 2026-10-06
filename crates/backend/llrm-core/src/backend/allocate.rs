@@ -747,7 +747,14 @@ impl Facts {
         }
         let masks = llrm_support::debug::timed("facts masks", || _masks(body, &index, segments));
         let widths = llrm_support::debug::timed("facts widths", || _widest(body));
-        let confined = llrm_support::debug::timed("facts classes", || classes(body, protected, segments, registers));
+        let confined = llrm_support::debug::timed("facts classes", || {
+            let given = crate::backend::regclass::Found { live: &live, masks: &masks };
+            let found = crate::backend::regclass::classes_given(body, protected, segments, registers, &given);
+            if std::env::var_os("LLRM_CHECK_CLASSES").is_some() {
+                assert!(found.iter().eq(classes(body, protected, segments, registers).iter()), "{}: classes from the given intervals differ from working them out", body.name);
+            }
+            found
+        });
         let hints = llrm_support::debug::timed("facts hints", || _copy_hints(body));
         Self { index, live, masks, widths, confined, hints }
     }
