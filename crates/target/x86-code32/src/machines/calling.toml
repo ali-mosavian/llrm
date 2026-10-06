@@ -23,7 +23,10 @@ int = ["eax"]
 i64 = ["eax", "edx"]
 pointer = ["eax"]
 float = ["st0"]
-# Borland's rule, as llrm-c has it for code16 (`returned_as_integer`): a struct of
+# PROVISIONAL until the extender and object format are chosen: the rule must
+# match the C ABI that code32 links against (Win32 cdecl under HX/PE: 1, 2, 4
+# and 8 bytes in EAX[:EDX], else a hidden first-argument pointer returned in
+# EAX; DJGPP: its i386 SysV rule). Borland's rule, as llrm-c has it for code16 (`returned_as_integer`): a struct of
 # 1, 2 or 4 bytes is returned in AL, AX or EAX. Any other is written to caller
 # memory through a pointer pushed after every argument (so it is the lowest
 # slot), which the callee returns in EAX; the caller pops it. Open Watcom's own
