@@ -216,16 +216,24 @@ fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>,
     if candidates == Candidates::AllocatorOnly {
         return phased(module, name, abi, pool, target, hole, false);
     }
-    let before = ssaspill::changes();
+    let (before, ties) = (ssaspill::changes(), ssaspill::admission_ties());
     let spilled = phased(module, name, abi, pool, target, hole, true)?;
     if ssaspill::changes() == before || candidates == Candidates::SpillerOnly {
         return Ok(spilled);
     }
     let allocator_alone = phased(module, name, abi, pool, target, hole, false)?;
-    let kept = match (cost(&spilled.0, target), cost(&allocator_alone.0, target)) {
-        (Some(with), Some(without)) if without < with => allocator_alone,
-        _ => spilled,
+    let (kept, from_spiller) = match (cost(&spilled.0, target), cost(&allocator_alone.0, target)) {
+        (Some(with), Some(without)) if without < with => (allocator_alone, false),
+        _ => (spilled, true),
     };
+    // Where code bytes are the measure, a loop admitted because its trips are fewer, on a tie in the bytes the spiller
+    // counts, is checked against the encoded code: the loads it moved to the entry are not all it changed.
+    if from_spiller && ssaspill::admission_ties() != ties {
+        let plain = ssaspill::without_admission(|| phased(module, name, abi, pool, target, hole, true))?;
+        if cost(&plain.0, target).zip(cost(&kept.0, target)).is_some_and(|(plain, admitted)| plain < admitted) {
+            return Ok(plain);
+        }
+    }
     Ok(kept)
 }
 

@@ -55,9 +55,9 @@ impl Form {
     }
 }
 
-const OPERATIONS: [&str; 28] = [
+const OPERATIONS: [&str; 29] = [
     "move", "xchg", "addr", "binary", "mul", "div", "cmp", "unary", "funnel", "extend", "push", "pop", "leave", "fill", "jump", "branch", "escape", "call",
-    "ret", "nothing", "restore", "data", "fload", "fstore", "farith", "farithp", "funary", "barrier",
+    "ret", "nothing", "restore", "data", "fload", "fstore", "farith", "farithp", "funary", "barrier", "copy",
 ];
 
 const REGISTERS: [&str; 12] = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "es", "ds", "fs", "gs"];

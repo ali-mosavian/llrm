@@ -111,3 +111,23 @@ fn test_the_stack_check_names_what_the_nib_runtime_defines() {
     let plain = _procedure(&nib::listing(&nib::parsed(&nib::fixture("sum.nib")), "sum", &nib::O2()), "_sum");
     assert!(!plain.contains("cmp sp"), "{plain}");
 }
+
+/// examples/loader.nib at -Os: a loop whose entry loaded what it reads was admitted on a tie in the bytes the spiller
+/// counts (its trips were fewer), and the object grew by 15 bytes (2517 to 2532). The encoded code decides a tie.
+#[test]
+fn test_a_loop_admitted_on_a_tie_in_counted_bytes_does_not_grow_the_object() {
+    use crate::test_nib_frontend as nib;
+
+    let source = nib::root().join("examples/loader.nib");
+    let program = nib::parsed(&source);
+    let options = nib::level("Os");
+    let size = |admitting: bool| {
+        let make = || {
+            let module = crate::compile::assembled(&program, "main", &options).expect("assembles");
+            crate::compile::object(&module, &source, llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("an object").len()
+        };
+        if admitting { make() } else { llrm_core::backend::ssaspill::without_admission(make) }
+    };
+    let (admitting, plain) = (size(true), size(false));
+    assert!(admitting <= plain, "{admitting} bytes against {plain}");
+}
