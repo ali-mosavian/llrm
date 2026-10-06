@@ -1,18 +1,18 @@
-reason = "Nib: a far pointer to a local array is a stack pointer read through ss: (near-stack narrowing). queens -O2 +2,441 instructions: place's [bx+si] saves SI on every non-leaf call; -3,701 memory operands, -15 bytes; odds #487"
-blessed = "2026-10-05"
+reason = "a loop's entry loads what the loop reads where the allocated body runs less (loop-entry judge)"
+blessed = "2026-10-06"
 
 [bas.O2]
-instructions = 88
+instructions = 85
 memory_operands = 42
-code_bytes = 305
+code_bytes = 296
 data_bytes = 103
 bss_bytes = 0
 kernel_ms = 0.0109
 
 [bas.Os]
-instructions = 88
+instructions = 85
 memory_operands = 42
-code_bytes = 304
+code_bytes = 296
 data_bytes = 103
 bss_bytes = 0
 kernel_ms = 0.0109

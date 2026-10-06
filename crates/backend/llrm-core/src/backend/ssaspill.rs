@@ -37,6 +37,8 @@ const EXIT: i64 = 1 << 20;
 
 thread_local! {
     static CHANGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ALTERNATIVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ENTERING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MEMORY_PHIS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     static SHARED_SLOTS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
@@ -62,6 +64,19 @@ pub fn without_memory_phis<T>(run: impl FnOnce() -> T) -> T {
 /// How many bodies this phase has changed on this thread: what a caller reads to learn whether a run did anything.
 pub fn changes() -> usize {
     CHANGES.with(std::cell::Cell::get)
+}
+
+/// How many bodies this thread's runs have spilled two ways: loop entries that load what their loop reads, and not.
+pub fn alternatives() -> usize {
+    ALTERNATIVES.with(std::cell::Cell::get)
+}
+
+/// `run` with every loop's entry loading what the loop reads, on this thread.
+pub fn entering<T>(run: impl FnOnce() -> T) -> T {
+    let before = ENTERING.with(|one| one.replace(true));
+    let done = run();
+    ENTERING.with(|one| one.set(before));
+    done
 }
 
 pub struct SsaSpill {
@@ -482,14 +497,17 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
     if crate::analysis::loops::loops(&body.blocks, Some(body.entry)).is_empty() {
         return Ok(plain);
     }
-    // Whether a loop's entry loads what the loop reads is judged by what the whole body then runs, as every other choice
-    // between two bodies is: the spiller's own tally of loads leaves out what a held value displaces.
+    // Whether a loop's entry loads what the loop reads is for the caller to judge on what each body becomes once
+    // allocated (`assemble::cheaper`): what the spiller can tell of it stops at the loads it counts.
     let entering = changed_with(original, frame, segments, prices, true)?;
+    // Worth a second allocation only where the spiller's own estimate of what the body runs is lower with it.
     let ran = |one: &LirBody| crate::backend::executed::executed(one).map(|done| done.instructions + done.memory);
-    Ok(match (&plain, &entering) {
-        (Some(without), Some(with)) if ran(with).zip(ran(without)).is_some_and(|(with, without)| with < without) => entering,
-        _ => plain,
-    })
+    if let (Some(without), Some(with)) = (&plain, &entering) {
+        if ran(with).zip(ran(without)).is_some_and(|(with, without)| with < without) {
+            ALTERNATIVES.with(|count| count.set(count.get() + 1));
+        }
+    }
+    Ok(if ENTERING.with(std::cell::Cell::get) { entering } else { plain })
 }
 
 /// `changed`, with a loop's entry loading what the loop reads (that no predecessor ends with) or not.

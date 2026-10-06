@@ -3824,6 +3824,28 @@ fn test_a_function_the_spiller_makes_larger_is_built_without_it() {
     assert_eq!(sized_with(assemble::Candidates::Both, &text), allocator);
 }
 
+/// deedlines RGBLIGHTS at -O2, with a loop's entry loading what the loop reads: the spiller's own estimate called that
+/// cheaper, and once allocated the body ran 1.9% more work (3706456 against 3636334). The body that runs less is kept.
+#[test]
+fn test_a_loop_entry_that_allocates_to_more_work_is_not_kept() {
+    let text = std::fs::read_to_string(concat!(env!("LLRM_ROOT"), "/tests/check/mir/rgblights.ll")).unwrap();
+    let work = |entering: bool, candidates: assemble::Candidates| {
+        let run = || {
+            assemble::trying(candidates, || {
+                let profile = crate::backend::cpu::tuned("486", false).expect("the 486 profile");
+                let module = assemble::assembled(&parsed(&text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
+                let one = module.procedures.iter().find(|one| one.name.contains("RGBLIGHTS")).expect("RGBLIGHTS");
+                crate::backend::executed::work(&one.body).expect("a reducible body")
+            })
+        };
+        if entering { crate::backend::ssaspill::entering(run) } else { run() }
+    };
+    let (plain, entering) = (work(false, assemble::Candidates::SpillerOnly), work(true, assemble::Candidates::SpillerOnly));
+    assert!(entering > plain, "premise: the entry loads allocate to more work ({entering} against {plain})");
+    let chosen = work(false, assemble::Candidates::Both);
+    assert!(chosen <= plain, "the body runs {chosen} against {plain}");
+}
+
 /// A memcpy past the unrolled moves is `rep movsd` through es:di, the source
 /// read through ss as an override and the tail by `movsw`: a refusal failed
 /// every program with a copy that long.

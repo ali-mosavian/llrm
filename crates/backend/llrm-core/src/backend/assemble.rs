@@ -206,7 +206,7 @@ fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>,
     if candidates == Candidates::AllocatorOnly {
         return phased(module, name, abi, pool, target, hole, false);
     }
-    let before = ssaspill::changes();
+    let (before, alternatives) = (ssaspill::changes(), ssaspill::alternatives());
     let spilled = phased(module, name, abi, pool, target, hole, true)?;
     if ssaspill::changes() == before || candidates == Candidates::SpillerOnly {
         return Ok(spilled);
@@ -216,6 +216,13 @@ fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>,
         (Some(with), Some(without)) if without < with => allocator_alone,
         _ => spilled,
     };
+    // Where a loop's entry may load what the loop reads, that body is kept if it beats the one chosen on both axes.
+    if ssaspill::alternatives() != alternatives {
+        let entering = ssaspill::entering(|| phased(module, name, abi, pool, target, hole, true))?;
+        if dominates(&entering.0, &kept.0, target) {
+            return Ok(entering);
+        }
+    }
     Ok(kept)
 }
 
@@ -238,6 +245,17 @@ pub fn trying<T>(candidates: Candidates, run: impl FnOnce() -> T) -> T {
     let done = run();
     CANDIDATES.with(|one| one.set(before));
     done
+}
+
+/// Whether `made` is better than `other` on the axis the level optimizes (bytes at -Os, executed work else) and no
+/// worse on the other, or the same on the first and better on the other: a trade of one for the other is not taken.
+fn dominates(made: &Machined, other: &Machined, target: &Target<'_>) -> bool {
+    let bytes = |one: &Machined| {
+        one.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| select::emit(what, 0, None, false, false, None).map(|code| code.code.len() as f64)).sum::<Option<f64>>()
+    };
+    let (Some(size), Some(sizes), Some(work), Some(works)) = (bytes(made), bytes(other), executed::work(&made.body), executed::work(&other.body)) else { return false };
+    let ((first, firsts), (second, seconds)) = if target.cpu.size { ((size, sizes), (work, works)) } else { ((work, works), (size, sizes)) };
+    first <= firsts && second <= seconds && (first < firsts || second < seconds)
 }
 
 /// What a finished function costs: its encoded bytes where the target optimizes for size,
