@@ -947,6 +947,40 @@ mod tests {
         assert!(lines.contains(&"mov byte ptr [ebp+eax-70], al".to_owned()), "{lines:#?}");
     }
 
+    /// `fixture`'s flat object, as records: (type, body).
+    fn flat_object(fixture: &str) -> Vec<(u8, Vec<u8>)> {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs"))).unwrap();
+        let argv: Vec<String> = ["--target", "x86-code32", "-O2", "x.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
+        let bytes = llrm_core::backend::omfwrite::written(&built, "x.c").unwrap();
+        let (mut at, mut out) = (0, Vec::new());
+        while at < bytes.len() {
+            let length = usize::from(u16::from_le_bytes([bytes[at + 1], bytes[at + 2]]));
+            out.push((bytes[at], bytes[at + 3..at + 2 + length].to_vec()));
+            at += 3 + length;
+        }
+        out
+    }
+
+    /// A flat object is USE32 and its records are the 32-bit ones: a segment with its 32-bit length,
+    /// a public with a 32-bit offset, data at a 32-bit offset, no group; and `add`'s code is the
+    /// 32-bit encoding of what its listing says. It was 16-bit records and `67 8b 46 08` (`mov
+    /// eax, [bp+8]` under an address-size prefix) ending in `66 c3` (a word return).
+    #[test]
+    fn test_code32_writes_a_use32_object_with_its_own_encoding() {
+        let records = flat_object("add");
+        let kinds: Vec<u8> = records.iter().map(|(kind, _)| *kind).collect();
+        assert_eq!(kinds, [0x80, 0x96, 0x99, 0x99, 0x91, 0xA1, 0x8A], "THEADR LNAMES SEGDEF32 x2 PUBDEF32 LEDATA32 MODEND");
+        assert!(records[2].1[0] & 1 == 1 && records[3].1[0] & 1 == 1, "both segments are USE32: {records:?}");
+        let code = &records[5].1;
+        assert_eq!(hex(&code[5..]), "558bec8b450803450c5dc3", "push ebp; mov ebp,esp; mov eax,[ebp+8]; add eax,[ebp+12]; pop ebp; ret");
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
     /// A loop over `int *`: the pointer, the index and the sum are dwords in 32-bit registers,
     /// addressed `[base+index]` with no segment, selector or 16-bit register.
     #[test]

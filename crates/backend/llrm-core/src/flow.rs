@@ -84,6 +84,11 @@ pub fn machine_with<'a>(
     if spilling.is_none() {
         phases.retain(|phase| phase.class_name() != "SsaSpill");
     }
+    // Its slots are words of 2 bytes and it parks BP at that width: a target whose stack slot is
+    // wider has no such slots.
+    if registers.slot != 2 {
+        phases.retain(|phase| phase.class_name() != "LoopSlots");
+    }
     Ok(phases)
 }
 

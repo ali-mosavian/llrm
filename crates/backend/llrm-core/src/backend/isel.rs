@@ -1424,6 +1424,11 @@ impl Selector<'_, '_, '_> {
         self.next
     }
 
+    /// Bytes of an address held in a register: the space-0 pointer's.
+    fn address_bytes(&self) -> u32 {
+        self.layout.pointer(0).bits / 8
+    }
+
     fn fresh_held(&mut self, width: u32) -> Held {
         Held { value: self.fresh(), width }
     }
@@ -1473,7 +1478,7 @@ impl Selector<'_, '_, '_> {
         };
         Ok(match pointer {
             Some(Pointer::Global { space, index, offset, base: None, .. }) => {
-                Some(Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, offset) }) }))
+                Some(Loc::Imm(Imm { value: 0, width: self.address_bytes(), address: Some(Addr { index, ..Addr::new(space, offset) }) }))
             }
             _ => None,
         })
