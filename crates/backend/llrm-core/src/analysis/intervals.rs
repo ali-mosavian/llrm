@@ -164,11 +164,11 @@ fn _group_start(block: &LirBlock, position: usize) -> usize {
 /// Python builds `pieces` by iterating sets; only the map's order differs,
 /// and nothing reads it in order.
 fn _ranges(body: &LirBody, index: &Indexes) -> IndexMap<u32, Interval> {
-    let (live_in, live_out) = allocate::live(body);
+    let live = allocate::live_rows(body);
     let mut pieces: IndexMap<u32, Vec<Segment>> = IndexMap::default();
     for block in &body.blocks {
         let (first, last) = index.span[&block.at];
-        let mut alive: IndexMap<u32, i64> = live_out[&block.at].iter().map(|one| (*one, last)).collect();
+        let mut alive: IndexMap<u32, i64> = live.leaving(block.at).map(|one| (one, last)).collect();
         let mut written: BTreeSet<u32> = BTreeSet::new();
         let mut position = block.insns.len() as i64 - 1;
         while position >= 0 {
@@ -207,9 +207,9 @@ fn _ranges(body: &LirBody, index: &Indexes) -> IndexMap<u32, Interval> {
             }
         }
         // Live through: in at the top, out at the bottom, untouched between.
-        for value in &live_in[&block.at] {
-            if !written.contains(value) && !alive.contains_key(value) {
-                pieces.entry(*value).or_default().push(Segment { start: first, end: last });
+        for value in live.entering(block.at) {
+            if !written.contains(&value) && !alive.contains_key(&value) {
+                pieces.entry(value).or_default().push(Segment { start: first, end: last });
             }
         }
     }
