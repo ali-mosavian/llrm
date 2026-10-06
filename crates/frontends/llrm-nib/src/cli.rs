@@ -184,7 +184,7 @@ pub fn main(argv: &[String]) -> i32 {
         let bytes = if args.flags.assembly {
             masm::text(&module).map_err(|error| error.to_string())?.into_bytes()
         } else {
-            nib::object(&module, &args.source, args.layout)?
+            nib::object(&module, &args.source, args.layout, args.flags.format(&*args.codegen.arch)?)?
         };
         llrm_core::support::debug::timed("write output", || std::fs::write(&output, &bytes)).map_err(|error| error.to_string())?;
         println!("{} ({} bytes)", output.display(), bytes.len());

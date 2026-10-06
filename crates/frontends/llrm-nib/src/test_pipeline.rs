@@ -27,7 +27,7 @@ fn _stack_of(fixture: &str) -> Result<(String, Vec<u8>), String> {
     let program = nib::parsed(&nib::fixture(&format!("{fixture}.nib")));
     let options = nib::O2();
     let module = crate::compile::assembled(&program, "main", &options, &crate::Frontend::default().os)?;
-    let object = crate::compile::object(&module, &nib::fixture(&format!("{fixture}.nib")), llrm_core::backend::objbuild::CodeLayout::OneSegment)?;
+    let object = crate::compile::object(&module, &nib::fixture(&format!("{fixture}.nib")), llrm_core::backend::objbuild::CodeLayout::OneSegment, llrm_target::object::Format::Omf)?;
     Ok((llrm_core::backend::masm::text(&module).expect("prints"), object))
 }
 
@@ -126,7 +126,7 @@ fn test_a_loop_admitted_on_a_tie_in_counted_bytes_does_not_grow_the_object() {
     let program = nib::parsed(&source);
     let options = nib::level("Os");
     let module = crate::compile::assembled(&program, "main", &options, &crate::Frontend::default().os).expect("assembles");
-    let object = crate::compile::object(&module, &source, llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("an object").len();
+    let object = crate::compile::object(&module, &source, llrm_core::backend::objbuild::CodeLayout::OneSegment, llrm_target::object::Format::Omf).expect("an object").len();
     // 2517 bytes before the loop was admitted on the tie; 2532 with it.
     assert!(object <= 2517, "{object} bytes");
 }

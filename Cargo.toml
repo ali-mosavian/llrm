@@ -27,6 +27,7 @@ llrm-x86 = { path = "crates/target/llrm-x86" }
 llrm-x86-code32 = { path = "crates/target/llrm-x86-code32" }
 llrm-omf = { path = "crates/target/llrm-omf" }
 llrm-object = { path = "crates/target/llrm-object" }
+llrm-elf32 = { path = "crates/target/llrm-elf32" }
 llrm-bcmachine = { path = "crates/bc/llrm-bcmachine" }
 llrm-bc = { path = "crates/bc/llrm-bc" }
 llrm-bcdriver = { path = "crates/bc/llrm-bcdriver" }

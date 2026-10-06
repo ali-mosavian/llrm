@@ -1,0 +1,9 @@
+[package]
+name = "llrm-elf32"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "llrm's ELF32 relocatable object writer, for i386"
+
+[dependencies]
+llrm-object = { workspace = true }
