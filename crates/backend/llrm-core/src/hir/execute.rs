@@ -334,8 +334,8 @@ struct Machine<'p> {
     column: usize,
     /// A QB END stopped the program.
     ended: bool,
-    /// The bytes of a length, a capacity or a near address: what the program's own buffer
-    /// routines take as their count (`N$BRES`'s capacity), 2 where it has none.
+    /// The bytes of a length, a capacity or a near address: the width of the program's descriptor
+    /// fields (its `string` pointer's where it has none).
     word: usize,
 }
 
@@ -360,14 +360,22 @@ impl<'p> Machine<'p> {
                 )
             })
             .collect::<HashMap<i64, Memory>>();
-        let types: HashMap<i64, &model::Type> = module.types.iter().map(|one| (one.id, one)).collect();
+        // The word of a length and a capacity: what the frontend gave the descriptor places it
+        // emitted, as the MIR emitter reads it; a program with none reads only the buffers the
+        // runtime makes and its static strings, whose words are as wide as the pointer to them.
+        let width_of = |id: i64| module.types.iter().find(|one| one.id == id).map(|one| one.width as usize);
         let word = module
-            .callables
+            .functions
             .iter()
-            .find(|one| one.name == rt::BUFFER_RESERVE)
-            .and_then(|one| one.parameter_types.get(1))
-            .and_then(|one| types.get(one))
-            .map_or(2, |one| one.width as usize);
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .flat_map(|instruction| &instruction.operands)
+            .find_map(|operand| match operand {
+                model::Operand::DescriptorPlace(place) => width_of(place.r#type),
+                _ => None,
+            })
+            .or_else(|| module.types.iter().find(|one| one.name == "string").map(|one| one.width as usize))
+            .unwrap_or(2);
         // A near or far relocation stores its target's address in the cell.
         for object in &module.data {
             for relocation in object.relocations.iter().filter(|one| !one.code) {
