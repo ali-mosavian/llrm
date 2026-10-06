@@ -13,7 +13,6 @@
 //! pointers reached from one base lie in one allocation. The old width and
 //! segment checks were for split pointer halves, which MIR does not have.
 
-use std::collections::HashSet;
 
 use llrm_mir::context::signed;
 use llrm_mir::datalayout::DataLayout;
@@ -50,7 +49,7 @@ impl Offsets<'_> {
 
     fn stepped(&self, pointer: Operand, inbounds: bool) -> Option<(Operand, i64)> {
         let (mut value, mut offset) = (pointer, 0_i64);
-        let mut seen = HashSet::new();
+        let mut seen = Visited::default();
         while seen.insert(value) {
             let Operand::Value(id) = value else { return Some((value, offset)) };
             let ValueDef::Instruction(inst) = self.function.value(id).def else { return Some((value, offset)) };
@@ -109,6 +108,36 @@ impl Offsets<'_> {
             return true;
         }
         self.comparable(one, other).is_some_and(|(left, right)| left == right) && one.bytes == other.bytes
+    }
+}
+
+/// The operands a walk has passed, to refuse a cycle: a chain is a few steps, so the first ones are
+/// compared in place, and only a longer one is hashed.
+#[derive(Default)]
+struct Visited {
+    first: [Option<Operand>; 16],
+    count: usize,
+    more: Option<llrm_support::hash::HashSet<Operand>>,
+}
+
+impl Visited {
+    /// Whether `value` is new.
+    fn insert(&mut self, value: Operand) -> bool {
+        if let Some(more) = &mut self.more {
+            return more.insert(value);
+        }
+        if self.first[..self.count].contains(&Some(value)) {
+            return false;
+        }
+        if self.count < self.first.len() {
+            self.first[self.count] = Some(value);
+            self.count += 1;
+            return true;
+        }
+        let mut more: llrm_support::hash::HashSet<Operand> = self.first.iter().flatten().copied().collect();
+        more.insert(value);
+        self.more = Some(more);
+        true
     }
 }
 
@@ -256,6 +285,26 @@ b:
                 assert!(facts.disjoint(location("a", 2), location("b", 2)));
             },
         );
+    }
+
+    /// Every walk of a pointer's offsets hashed each operand it passed, with SipHash: 5% of compiling
+    /// matmul at -O2 (#560). A short chain is compared in place, and only a longer one hashed; a repeat is
+    /// refused either way.
+    #[test]
+    fn a_short_walk_is_not_hashed_and_a_repeat_is_refused_in_a_long_one() {
+        use llrm_mir::module::ValueId;
+        let mut seen = Visited::default();
+        for at in 0..16 {
+            assert!(seen.insert(Operand::Value(ValueId(at))));
+        }
+        assert!(seen.more.is_none(), "16 operands hashed");
+        assert!(!seen.insert(Operand::Value(ValueId(3))), "a repeat in the first 16");
+        for at in 16..100 {
+            assert!(seen.insert(Operand::Value(ValueId(at))));
+        }
+        assert!(seen.more.is_some());
+        assert!(!seen.insert(Operand::Value(ValueId(3))), "a repeat after the first 16");
+        assert!(!seen.insert(Operand::Value(ValueId(60))), "a repeat in the hashed ones");
     }
 
     #[test]
