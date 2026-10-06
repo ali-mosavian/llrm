@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 /* Histogram of a 4096-byte table; result is sum(counts[i] * (i + 1)). */
 extern void report(long value);
 

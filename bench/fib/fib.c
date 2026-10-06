@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 extern void report(long value);
 
 static int fib(int n)

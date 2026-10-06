@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 /* Volatile keeps every iteration at IEEE double precision on x87 and SSE hosts. */
 extern void report(long value);
 

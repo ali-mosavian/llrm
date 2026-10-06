@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 /* Scroll an 80x25 text screen up a row, blank the bottom row, scroll it back down, and keep a copy
    in a back buffer: fifty times, then a weighted sum of the copy. */
 extern void report(long value);
