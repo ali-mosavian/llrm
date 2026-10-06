@@ -79,24 +79,24 @@ impl Plan {
 /// `values` of `body` decided: how each is spilled, and the slots of those stored.
 pub fn planned(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame) -> Result<Plan, Error> {
     // A plain copy of a value made again is made again the same way.
-    let copies = _copies(body, values);
+    let copies = llrm_support::debug::timed("spill copies", || _copies(body, values));
     let wide: BTreeSet<u32> = values.iter().chain(copies.values()).copied().collect();
-    let constants = _through_copies(_constants(body, &wide), values, &copies);
-    let addresses = _through_copies(_addresses(body, &wide), values, &copies);
-    let extensions = _extensions(body, values);
-    let mut frame_loads = _stable_loads(body, values);
-    frame_loads.extend(_frame_loads(body, values));
+    let constants = _through_copies(llrm_support::debug::timed("spill constants", || _constants(body, &wide)), values, &copies);
+    let addresses = _through_copies(llrm_support::debug::timed("spill addresses", || _addresses(body, &wide)), values, &copies);
+    let extensions = llrm_support::debug::timed("spill extensions", || _extensions(body, values));
+    let mut frame_loads = llrm_support::debug::timed("spill stable loads", || _stable_loads(body, values));
+    frame_loads.extend(llrm_support::debug::timed("spill frame loads", || _frame_loads(body, values)));
     // A copy of a load is made again as that load, unless the value has a frame home of its own (an argument's slot).
     if !copies.is_empty() {
         let apart: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
-        let homed = _frame_homes(body, &apart);
-        let copied = _through_copies(_stable_loads_through(body, &wide, &copies), &apart.iter().copied().filter(|value| !homed.contains_key(value)).collect(), &copies);
+        let homed = llrm_support::debug::timed("spill frame homes", || _frame_homes(body, &apart));
+        let copied = _through_copies(llrm_support::debug::timed("spill stable loads", || _stable_loads_through(body, &wide, &copies)), &apart.iter().copied().filter(|value| !homed.contains_key(value)).collect(), &copies);
         for (value, cell) in copied {
             frame_loads.entry(value).or_insert(cell);
         }
     }
     let unloaded: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
-    let frame_homes = _frame_homes(body, &unloaded);
+    let frame_homes = llrm_support::debug::timed("spill frame homes", || _frame_homes(body, &unloaded));
     let mut rebuilt = frame_loads.clone();
     rebuilt.extend(frame_homes.iter().map(|(value, (home, _at))| (*value, home.clone())));
     let stored: BTreeSet<u32> = values
@@ -111,8 +111,8 @@ pub fn planned(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame) -> Res
         })
         .collect();
     // Before any cell names a slot.
-    _color_slots(body, &stored, &_widest(body, &stored), frame)?;
-    let narrow = _literals(body, &stored, true);
+    llrm_support::debug::timed("spill color slots", || _color_slots(body, &stored, &_widest(body, &stored), frame))?;
+    let narrow = llrm_support::debug::timed("spill literals", || _literals(body, &stored, true));
     Ok(Plan { constants, addresses, extensions, frame_loads, frame_homes, rebuilt, stored, narrow })
 }
 
@@ -147,15 +147,16 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
     let mut fresh = _next_value(body).max(floor);
     let mut made: BTreeSet<u32> = BTreeSet::new();
     let Plan { constants, addresses, extensions, frame_loads, frame_homes, rebuilt, stored, narrow } = plan;
-    let (body, next) = _short_update_runs(body, &stored, frame, fresh)?;
+    let (body, next) = llrm_support::debug::timed("spill short updates", || _short_update_runs(body, &stored, frame, fresh))?;
     fresh = next;
-    let (body, next) = _local_updates(&body, &stored, frame, fresh)?;
+    let (body, next) = llrm_support::debug::timed("spill local updates", || _local_updates(&body, &stored, frame, fresh))?;
     fresh = next;
     let mut abandoned: BTreeSet<usize> = BTreeSet::new();
     let mut rematerialized_definitions: BTreeSet<usize> = BTreeSet::new();
     let mut identities: BTreeSet<usize> = BTreeSet::new();
-    let body = _sunk_from_copies(&body, &addresses.keys().copied().collect());
-    let r#final = _final_uses(&body);
+    let body = llrm_support::debug::timed("spill sunk copies", || _sunk_from_copies(&body, &addresses.keys().copied().collect()));
+    let r#final = llrm_support::debug::timed("spill final uses", || _final_uses(&body));
+    let _rewrite = llrm_support::debug::span("spill rewrite");
     let rebuilt_values: BTreeSet<u32> = rebuilt.keys().copied().collect();
     let mut cells = _Cells::new(rebuilt.clone());
 
@@ -327,6 +328,8 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
         }
         blocks.push(block.with_insns(insns));
     }
+    drop(_rewrite);
+    let _cleanup = llrm_support::debug::span("spill cleanup");
     let mut result = body.with_blocks(blocks);
     let never = None::<fn(&Arc<Insn>) -> Arc<Insn>>;
     if !rematerialized_definitions.is_empty() {
@@ -583,6 +586,7 @@ pub fn siblings(
     if values.is_empty() {
         return Ok(BTreeSet::new());
     }
+    let adjacency = llrm_support::debug::span("siblings adjacency");
     let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         let Some(pair) = _plain_move(one) else {
@@ -597,11 +601,13 @@ pub fn siblings(
     if !values.iter().any(|one| adjacent.contains_key(one)) {
         return Ok(BTreeSet::new());
     }
+    drop(adjacency);
     // A shared slot holds each member at every width it is used, not just moved.
-    let widths = _widest(body, &adjacent.keys().copied().collect());
+    let widths = llrm_support::debug::timed("siblings widths", || _widest(body, &adjacent.keys().copied().collect()));
 
-    let near = coalesce::_interference(body);
-    let deep = ranges::depths(body);
+    let near = llrm_support::debug::timed("siblings interference", || coalesce::_interference(body));
+    let deep = llrm_support::debug::timed("siblings depths", || ranges::depths(body));
+    let occurring = llrm_support::debug::span("siblings occurs");
     let wanted: BTreeSet<u32> = adjacent.keys().copied().collect();
     let mut occurs: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::default();
     for block in &body.blocks {
@@ -614,6 +620,7 @@ pub fn siblings(
         }
     }
 
+    drop(occurring);
     let worth = |candidate: u32, group: &PySet<i64>| -> bool {
         let (mut saved, mut cost) = (0.0, 0.0);
         for (each, one) in occurs.get(&candidate).into_iter().flatten() {

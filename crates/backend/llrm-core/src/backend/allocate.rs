@@ -1072,7 +1072,7 @@ fn _allocated(
                     // since sharing the slot makes the copies between them free.
                     let mut chosen = BTreeSet::from([value]);
                     let settled: BTreeSet<u32> = fixed.keys().chain(protected.iter()).chain(unspillable.iter()).copied().collect();
-                    chosen.extend(spiller::siblings(&body, &chosen, Some(frame), &settled)?);
+                    chosen.extend(llrm_support::debug::timed("spill siblings", || spiller::siblings(&body, &chosen, Some(frame), &settled))?);
                     llrm_support::debug!("spill", "{}: spill {value} with {:?}", body.name, chosen);
                     for one in &chosen {
                         if let Some(register) = r#where.shift_remove(one) {
