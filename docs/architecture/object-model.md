@@ -58,5 +58,10 @@ writer cannot express.
 | OMF | `llrm-omf` (`write`) | 16- and 32-bit |
 | ELF32 | `llrm-elf32` | i386: `.text`/`.data`/`.rodata`/`.bss`, REL, `R_386_32`, `R_386_PC32`, `_16`, `PC16`, `_8`, `PC8` |
 
+| ELF64 | `llrm-elf64` | x86-64: RELA, `R_X86_64_64`, `_PC32`, `_32`, `_16`, `_PC16`, `_8`, `_PC8`, `_PC64`; no target produces one yet |
+
+`llrm-elf` holds the container both share (sections, symbols, relocation tables); a machine gives it
+its ELF number, its relocation types, and REL or RELA.
+
 An ELF object is written for `-m32 -fobject-format=elf` into a file named `*.o`. It refuses what OMF alone
 has: segments with a selector of their own, far pointers, groups, the stack segment, and `-g`'s CodeView.

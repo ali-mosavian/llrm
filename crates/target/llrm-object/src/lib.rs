@@ -9,6 +9,8 @@ pub enum Arch {
     I8086,
     /// 32-bit x86.
     I386,
+    /// x86-64.
+    X8664,
 }
 
 impl Arch {
@@ -17,6 +19,7 @@ impl Arch {
         match self {
             Arch::I8086 => 16,
             Arch::I386 => 32,
+            Arch::X8664 => 64,
         }
     }
 }

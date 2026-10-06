@@ -274,6 +274,7 @@ dependencies = [
  "llrm-analysis",
  "llrm-bcmachine",
  "llrm-elf32",
+ "llrm-elf64",
  "llrm-hir",
  "llrm-mir",
  "llrm-object",
@@ -309,10 +310,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrm-elf32"
+name = "llrm-elf"
 version = "0.1.0"
 dependencies = [
  "llrm-object",
+]
+
+[[package]]
+name = "llrm-elf32"
+version = "0.1.0"
+dependencies = [
+ "llrm-elf",
+ "llrm-object",
+]
+
+[[package]]
+name = "llrm-elf64"
+version = "0.1.0"
+dependencies = [
+ "llrm-elf",
+ "llrm-object",
+ "tempfile",
 ]
 
 [[package]]

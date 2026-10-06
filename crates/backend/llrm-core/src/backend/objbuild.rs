@@ -370,6 +370,7 @@ pub fn written_in(module: &masm::Module, source: &str, layout: CodeLayout, forma
         match format {
             Format::Omf => Ok(llrm_omf::write::write(&object)?),
             Format::Elf if object.arch == Arch::I386 => Ok(llrm_elf32::write(&object)?),
+            Format::Elf if object.arch == Arch::X8664 => Ok(llrm_elf64::write(&object)?),
             Format::Elf | Format::MachO => Err(Error::Unsupported(llrm_object::Unsupported(format!("no {} writer for {:?} yet", format.name(), object.arch)))),
         }
     })
