@@ -168,8 +168,27 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
 
     // The blocks holding an instruction the cleanup after this loop removes or anchors.
     let mut marked: BTreeSet<usize> = BTreeSet::new();
+    // An instruction that names none of the values below is left as it is, so a block with none is not looked at.
+    let relevant: BTreeSet<u32> = stored
+        .iter()
+        .chain(rebuilt.keys())
+        .chain(constants.keys())
+        .chain(addresses.keys())
+        .chain(extensions.keys())
+        .chain(frame_loads.keys())
+        .chain(frame_homes.keys())
+        .copied()
+        .collect();
+    let named: BTreeSet<usize> = postings::following(&body, |postings| {
+        relevant.iter().flat_map(|value| postings.defs(*value).iter().chain(postings.uses(*value)).chain(postings.needs(*value))).map(|at| at.0 as usize).collect()
+    });
     let mut blocks = Vec::new();
     for (block_index, block) in body.blocks.iter().enumerate() {
+        if !named.contains(&block_index) && !check_postings() {
+            blocks.push(block.clone());
+            continue;
+        }
+        LOOKED.with(|looked| looked.set(looked.get() + 1));
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         // Where the parallel copy being copied begins in `insns`: what its
         // moves read is made before all of them, not between two.
@@ -336,6 +355,9 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
             }
             insns.extend(after);
             made.extend(rename.values().copied());
+        }
+        if check_postings() && !named.contains(&block_index) {
+            assert!(insns.len() == block.insns.len() && insns.iter().zip(&block.insns).all(|(made, was)| Arc::ptr_eq(made, was)), "{}: the block at {:#x} names none of the values spilled and was rewritten", body.name, block.at);
         }
         blocks.push(block.with_insns(insns));
     }
@@ -1636,6 +1658,13 @@ pub(crate) fn _final_uses(body: &LirBody) -> BTreeSet<(usize, u32)> {
 
 thread_local! {
     static FINALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many blocks this thread has rewritten instruction by instruction, for a test that a block naming none of the
+/// values spilled is not looked at.
+pub fn blocks_looked_at() -> usize {
+    LOOKED.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has worked out the final uses of a body, for a test that a spill nothing folds
@@ -4024,6 +4053,17 @@ mod tests {
         // The values the rewrite made are found in the next one.
         let (again, _) = spilled(&spilt, &made, Some(&mut Frame::new(0)), &crate::backend::classes::RegisterClasses::m16()).expect("spills again");
         crate::backend::postings::following(&again, |found| assert!(*found == crate::backend::postings::Postings::of(&again)));
+    }
+
+    /// Each spill looked at every instruction of the body to rewrite those that name the values spilled: 8% of
+    /// compiling d_alias (#559). A block that names none is left as it is.
+    #[test]
+    fn test_a_spill_looks_only_at_the_blocks_that_name_its_values() {
+        let body = _three_blocks();
+        let before = super::blocks_looked_at();
+        let (spilt, _made) = spilled(&body, &set(&[1]), Some(&mut Frame::new(0)), &crate::backend::classes::RegisterClasses::m16()).expect("spills");
+        assert!(super::blocks_looked_at() - before <= 1, "{} blocks looked at for a value in one", super::blocks_looked_at() - before);
+        assert!(Arc::ptr_eq(&spilt.blocks[0].insns[0], &body.blocks[0].insns[0]) && Arc::ptr_eq(&spilt.blocks[2].insns[1], &body.blocks[2].insns[1]), "the blocks that name nothing are as they were");
     }
 
     /// The index fold may not move a second access through the same base.
