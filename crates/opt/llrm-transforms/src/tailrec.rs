@@ -25,6 +25,8 @@ use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags, Opcode, Tail};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+use crate::spill::Room;
+use std::collections::BTreeSet;
 use num_bigint::BigInt;
 
 use crate::counting;
@@ -45,7 +47,8 @@ impl FunctionPass for TailRecursion {
         }
         let exposed = analyses.get::<ExposedFrames>(unit.context, unit.layout, unit.function);
         let outer = analyses.outer();
-        if eliminated(unit.context, outer.callees(), &outer.globals, unit.function, id, exposed.is_empty()) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        let room = crate::profit::registers(outer);
+        if eliminated(unit.context, outer.callees(), &outer.globals, unit.function, id, exposed.is_empty(), &room) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -69,7 +72,7 @@ struct Step {
 /// `function` with each call to itself that is the last thing it does made a branch to its entry;
 /// whether any was. `private`: no frame object's address is exposed, so a callee cannot read what the
 /// frame holds and the next trip may reuse it.
-pub fn eliminated(context: &mut Context, callees: &Callees, globals: &[GlobalValue], function: &mut Function, id: GlobalId, private: bool) -> bool {
+pub fn eliminated(context: &mut Context, callees: &Callees, globals: &[GlobalValue], function: &mut Function, id: GlobalId, private: bool, room: &Room) -> bool {
     if !private || !fixed_frame(function) || by_copy(function) || returns_twice(context, globals, function) {
         return false;
     }
@@ -77,11 +80,30 @@ pub fn eliminated(context: &mut Context, callees: &Callees, globals: &[GlobalVal
     // One accumulating operation per function: a site of another keeps its call.
     let operation = found.iter().find_map(|site| site.step.as_ref().map(|step| step.op));
     found.retain(|site| site.step.as_ref().is_none_or(|step| Some(step.op) == operation));
-    if found.is_empty() {
+    if found.is_empty() || !fits(function, &found, operation, room) {
         return false;
     }
     rewrite(context, function, &found, operation);
     true
+}
+
+/// Whether the loop's carried values stay in registers. Every parameter the body reads, and the
+/// accumulator, live round the loop; where a call is left in it they must outlast the call, in the
+/// registers the target keeps across one (`across_call`) with one to spare, and else in any register.
+/// Spilled, they cost the stores and reloads the call's argument pushes were: bench's quicksort,
+/// hanoi and fib on a target of six registers and two kept across a call ran up to 25% more memory
+/// operands in a loop than in the recursion.
+fn fits(function: &Function, found: &[Site], operation: Option<BinaryOp>, room: &Room) -> bool {
+    if !room.priced() {
+        return true;
+    }
+    let read = function.parameters().iter().filter(|&&parameter| !function.users(parameter).is_empty()).count() as i64;
+    let carried = read + i64::from(operation.is_some());
+    let kept = found.iter().map(|site| site.call).collect::<BTreeSet<_>>();
+    let calls = function.walk().any(|(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Call(_)) && !kept.contains(&inst));
+    let limit = if calls { room.across_call } else { room.registers };
+    llrm_support::debug!("tailrec", "carried {carried}, room {limit} ({} registers, {} across a call)", room.registers, room.across_call);
+    carried < limit || (!calls && carried <= limit)
 }
 
 /// Whether every `alloca` is in the entry block and of one size: a dynamic one would grow with each trip.
@@ -316,8 +338,12 @@ fn rewrite(context: &mut Context, function: &mut Function, found: &[Site], opera
             function.set_operand(end, 0, sum);
         }
     }
-    // The next trip's arguments need not be what the first one's did not alias.
-    for attrs in &mut function.parameter_attrs {
+    // The next trip's argument is another pointer where the calls change it, which `noalias` does not
+    // cover; where they pass it on as it came, it is the same pointer, and its promise (Nib's `&mut`) stands.
+    for (attrs, same) in function.parameter_attrs.iter_mut().zip(&unchanged) {
+        if *same {
+            continue;
+        }
         attrs.retain(|attr| Fact::of_attribute(attr) != Some(Fact::NoAlias));
     }
 }

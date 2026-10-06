@@ -292,3 +292,41 @@ b4:
     let after = eliminated(text, &[&[0], &[1], &[2], &[7], &[12]]);
     assert_eq!(calls(&after), 1, "{after}");
 }
+
+/// bench/hanoi, bench/quicksort and bench/fib on code16 (six registers, two kept across a call) ran 8% to
+/// 25% more memory operands as a loop whose carried values spilled than as the recursion: a call left in
+/// the loop keeps the values in the registers kept across it, with one to spare, or the recursion stays.
+#[test]
+fn a_loop_whose_carried_values_outnumber_the_registers_kept_across_a_call_stays_a_recursion() {
+    use crate::testing::{managed_on, Tuned};
+    let text = "define i16 @f(i16 %n, i16 %a, i16 %b, i16 %c) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b3, label %b2
+
+b2:
+  %m = sub i16 %n, 1
+  %x = call i16 @f(i16 %m, i16 %a, i16 %c, i16 %b)
+  %y = add i16 %x, 1
+  %w = call i16 @f(i16 %m, i16 %c, i16 %b, i16 %a)
+  %s = add i16 %y, %w
+  br label %b4
+
+b3:
+  br label %b4
+
+b4:
+  %r = phi i16 [ %s, %b2 ], [ 0, %b3 ]
+  ret i16 %r
+}
+";
+    let after = |kept: i64| {
+        let mut module = parsed(&format!("{DOS}{text}"));
+        let machine = Tuned { registers: 6, call_registers: kept, ..Tuned::default() };
+        managed_on(&mut module, TailRecursion, machine)
+    };
+    // Five carried (four parameters and the sum), then one to spare.
+    assert_eq!(calls(&after(2)), 2, "{}", after(2));
+    assert_eq!(calls(&after(5)), 2, "{}", after(5));
+    assert_eq!(calls(&after(6)), 1, "{}", after(6));
+}
