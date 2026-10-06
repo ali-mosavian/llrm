@@ -36,7 +36,7 @@ use llrm_mir::program::Program;
 use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
-    promote, rotate, unroll, unswitch, window,
+    promote, rotate, tailrec, unroll, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -173,6 +173,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Before anything asks what a port call does to memory.
         Box::new(ports::Ports),
         Box::new(decide::Decide),
+        // Once the arguments are values rather than frame cells; the loop it makes goes to the loop passes below.
+        Box::new(tailrec::TailRecursion),
         Box::new(loopsimplify::LoopSimplify),
         Box::new(lcssa::LoopClosedSSA),
         // Strict floating recurrences must retain their original iteration
@@ -303,7 +305,7 @@ fn rerun(module: &mut Module, analyses: &mut ModuleAnalyses, id: GlobalId, fixed
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
         return Err(format!("@{}: not a function", id.0));
     };
-    let mut unit = Unit { context, layout: &layout, function, metadata, declared: &mut declared };
+    let mut unit = Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared };
     let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
     analyses.invalidate(&preserved);
     declared.place(module)

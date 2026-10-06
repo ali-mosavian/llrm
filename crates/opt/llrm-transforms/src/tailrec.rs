@@ -1,0 +1,298 @@
+//! A call a function makes to itself as the last thing it does is a branch to its own entry with the
+//! arguments rewritten: LLVM's TailRecursionElimination, and gcc's tree-tailcall.
+//!
+//! Where the call's result only feeds an associative, commutative `add`, `mul`, `and`, `or` or `xor`
+//! on its way out (`return f(n - 1) + x`), the call is still one: an accumulator, `acc` in the loop's
+//! header, starts at the operation's identity and takes `x` each trip, and every other way out of the
+//! function returns `acc op value`. gcc's `fib` is `fib(n - 1)` called, `fib(n - 2)` looped;
+//! `hanoi`'s second call is the same.
+//!
+//! What changed with the IR:
+//! - The call is found in MIR, where the frontend's returns through one join block are a block of phis
+//!   and a `ret`; a block that branches to it takes the value of its arm, as LLVM's
+//!   `foldReturnAndProcessPred` does by copying the `ret` there.
+//! - The function's own id comes from the pass manager (`Unit::id`): LLVM compares the callee with `F`.
+//! - A frame object whose address escapes keeps the call: the callee may read it. The one escape
+//!   analysis (`frameescape`) answers; LLVM's `AllocaDerivedValueTracker` is its own.
+//!
+//! The loop is the ordinary loop passes' to improve: the pass names nothing about the machine.
+
+use llrm_analysis::frameescape;
+use llrm_mir::context::{Context, GlobalId};
+use llrm_mir::edit::Position;
+use llrm_mir::memory::{self, Callees};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::opcode::{Attribute, BinaryOp, Flags, Opcode, Tail};
+use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+use num_bigint::BigInt;
+
+use crate::counting;
+use crate::edges;
+use crate::fill::pure;
+use crate::lcssa::{arms, from_arms};
+
+pub struct TailRecursion;
+
+impl FunctionPass for TailRecursion {
+    fn name(&self) -> &'static str {
+        "tailrec"
+    }
+
+    fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+        let Some(id) = unit.id else { return PreservedAnalyses::all() };
+        if eliminated(unit.context, analyses.outer().callees(), unit.function, id) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
+
+/// A self call that ends its block's work.
+struct Site {
+    block: BlockId,
+    call: InstId,
+    /// Where the block goes on to return, if not by `ret` itself.
+    join: Option<BlockId>,
+    /// What combines the call's result with an operand on the way out.
+    step: Option<Step>,
+    /// Work after the call that does not use it: it moves above.
+    after: Vec<InstId>,
+}
+
+struct Step {
+    inst: InstId,
+    op: BinaryOp,
+}
+
+/// `function` with each call to itself that is the last thing it does made a branch to its entry;
+/// whether any was.
+pub fn eliminated(context: &mut Context, callees: &Callees, function: &mut Function, id: GlobalId) -> bool {
+    if function.is_declaration() || !function.walk().any(|(_, inst)| memory::callee(context, function, inst) == Some(id)) || !private_frame(context, callees, function) {
+        return false;
+    }
+    let mut found = sites(context, callees, function, id);
+    // One accumulating operation per function: a site of another keeps its call.
+    let operation = found.iter().find_map(|site| site.step.as_ref().map(|step| step.op));
+    found.retain(|site| site.step.as_ref().is_none_or(|step| Some(step.op) == operation));
+    if found.is_empty() {
+        return false;
+    }
+    rewrite(context, function, &found, operation);
+    true
+}
+
+/// Whether no frame object is reached by anything but accesses of its own: a callee cannot read what
+/// the frame holds, so the next trip may reuse it. A dynamic `alloca` would grow with each trip.
+fn private_frame(context: &Context, callees: &Callees, function: &Function) -> bool {
+    let entry = function.entry();
+    let fixed = function.walk().all(|(block, inst)| match function.instruction(inst).opcode {
+        Opcode::Alloca { .. } => Some(block) == entry && function.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_))),
+        _ => true,
+    });
+    let marker = |inst: InstId| memory::callee(context, function, inst).and_then(|callee| callees.get(&callee)).is_some_and(|summary| summary.lifetime);
+    fixed && frameescape::exposed_allocas(function, marker).is_empty()
+}
+
+/// The self calls of `function` that end a block.
+fn sites(context: &Context, callees: &Callees, function: &Function, id: GlobalId) -> Vec<Site> {
+    function.layout().iter().filter_map(|&block| site(context, callees, function, id, block)).collect()
+}
+
+/// `block`'s self call, if its last work is one.
+fn site(context: &Context, callees: &Callees, function: &Function, id: GlobalId, block: BlockId) -> Option<Site> {
+    let end = function.terminator(block)?;
+    let (value, join) = match function.instruction(end).opcode {
+        Opcode::Ret => (function.instruction(end).operands.first().copied(), None),
+        Opcode::Br if function.instruction(end).operands.len() == 1 => {
+            let Operand::Block(to) = function.instruction(end).operands[0] else { return None };
+            (returned_from(function, to, block)?, Some(to))
+        }
+        _ => return None,
+    };
+    let work: Vec<InstId> = function.block(block).instructions().iter().copied().filter(|&one| one != end).collect();
+    let is_call = |inst: InstId| {
+        let op = function.instruction(inst);
+        let Opcode::Call(info) = &op.opcode else { return false };
+        memory::callee(context, function, inst) == Some(id)
+            && info.function_type == function.ty
+            && info.calling_convention == function.calling_convention
+            && info.tail != Tail::NoTail
+            && op.operands.len() == function.parameters().len() + 1
+    };
+    let defined = |operand: Operand| match operand {
+        Operand::Value(value) => match function.value(value).def {
+            ValueDef::Instruction(inst) if function.parent(inst) == Some(block) => Some(inst),
+            _ => None,
+        },
+        _ => None,
+    };
+    let (call, step) = match value {
+        None => (work.iter().rposition(|&inst| !pure(context, callees, function, inst)).map(|at| work[at]).filter(|&inst| is_call(inst))?, None),
+        Some(returned) => {
+            let made = defined(returned)?;
+            if is_call(made) {
+                (made, None)
+            } else {
+                let Opcode::Binary(op @ (BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)) = function.instruction(made).opcode else { return None };
+                let [left, right] = function.instruction(made).operands[..] else { return None };
+                let call = match (defined(left).filter(|&one| is_call(one)), defined(right).filter(|&one| is_call(one))) {
+                    (Some(call), None) | (None, Some(call)) => call,
+                    _ => return None,
+                };
+                (call, Some(Step { inst: made, op }))
+            }
+        }
+    };
+    // The call's result goes nowhere but on to the way out.
+    if let Some(result) = function.instruction(call).result
+        && function.users(result).len() != 1
+    {
+        return None;
+    }
+    if let Some(step) = &step
+        && function.users(function.instruction(step.inst).result?).len() != 1
+    {
+        return None;
+    }
+    let at = work.iter().position(|&inst| inst == call)?;
+    let after: Vec<InstId> = work[at + 1..].iter().copied().filter(|&inst| Some(inst) != step.as_ref().map(|step| step.inst)).collect();
+    // Only work with no effect may stand between the call and the way out, and it moves above the call.
+    if !after.iter().all(|&inst| pure(context, callees, function, inst)) || step.as_ref().is_some_and(|step| !work[at + 1..].contains(&step.inst)) {
+        return None;
+    }
+    Some(Site { block, call, join, step, after })
+}
+
+/// What a join block returns to `from`, which branches to it, if the block is only phis and a `ret`:
+/// `Some(None)` for `ret void`.
+fn returned_from(function: &Function, join: BlockId, from: BlockId) -> Option<Option<Operand>> {
+    let end = function.terminator(join).filter(|&one| function.instruction(one).opcode == Opcode::Ret)?;
+    if join == from || function.block(join).instructions().iter().any(|&one| one != end && function.instruction(one).opcode != Opcode::Phi) {
+        return None;
+    }
+    let value = function.instruction(end).operands.first().copied();
+    let Some(Operand::Value(returned)) = value else { return Some(value) };
+    match function.value(returned).def {
+        ValueDef::Instruction(phi) if function.parent(phi) == Some(join) => Some(arms(function, phi).into_iter().find(|&(_, block)| block == from).map(|(value, _)| value)),
+        _ => Some(value),
+    }
+}
+
+/// The accumulator's value before the first trip: what `op` leaves a number as.
+fn identity(context: &mut Context, op: BinaryOp, bits: u32) -> Operand {
+    let one = if op == BinaryOp::Mul { 1 } else if op == BinaryOp::And { -1 } else { 0 };
+    counting::constant(context, &BigInt::from(one), bits)
+}
+
+fn rewrite(context: &mut Context, function: &mut Function, found: &[Site], operation: Option<BinaryOp>) {
+    let void = context.types.void();
+    let entry = function.entry().expect("a body");
+    // The entry keeps the frame; the rest is the loop's header.
+    let header = function.create_block(Some("tailrecurse"));
+    function.insert_block(header, Some(entry)).expect("a new block");
+    let first = function.block(entry).instructions().iter().copied().find(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }));
+    for inst in function.block(entry).instructions().to_vec() {
+        if !matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }) {
+            function.move_to(inst, Position::End(header)).expect("a placed instruction");
+        }
+    }
+    function.replace_block_uses_with(entry, header);
+    let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(header)], Flags::default(), None);
+    function.insert(jump, Position::End(entry)).expect("a placed block");
+    let first = first.expect("the call is in the body");
+
+    // One phi per parameter, and one for the accumulator.
+    let mut phis = Vec::new();
+    for parameter in function.parameters().to_vec() {
+        let ty = function.value(parameter).ty;
+        let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), None);
+        function.insert(phi, Position::Before(first)).expect("a placed instruction");
+        let value = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
+        function.replace_all_uses_with(parameter, value);
+        function.set_operands(phi, vec![Operand::Value(parameter), Operand::Block(entry)]);
+        phis.push(phi);
+    }
+    let accumulator = operation.map(|op| {
+        let ty = function.instruction(found.iter().find(|site| site.step.is_some()).expect("an accumulating site").call).ty;
+        let bits = context.types.int_bits(ty).expect("an integer accumulator");
+        let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), None);
+        function.insert(phi, Position::Before(first)).expect("a placed instruction");
+        let start = identity(context, op, bits);
+        function.set_operands(phi, vec![start, Operand::Block(entry)]);
+        (phi, op, ty)
+    });
+    let accumulated = accumulator.map(|(phi, ..)| Operand::Value(function.instruction(phi).result.expect("a phi's value")));
+
+    let mut joins = Vec::new();
+    for site in found {
+        // A body of one block moved to the header with the rest of the entry.
+        let block = if site.block == entry { header } else { site.block };
+        for &inst in &site.after {
+            function.move_to(inst, Position::Before(site.call)).expect("a placed instruction");
+        }
+        let arguments = function.instruction(site.call).operands.clone();
+        let carried = match (&site.step, accumulator, accumulated) {
+            (Some(step), Some((_, op, ty)), Some(acc)) => {
+                // Read now: a parameter it names has become its phi.
+                let result = function.instruction(site.call).result.map(Operand::Value);
+                let with = function.instruction(step.inst).operands.iter().copied().find(|&one| Some(one) != result).expect("a step has another operand");
+                let made = function.create_instruction(Opcode::Binary(op), ty, vec![acc, with], Flags::default(), None);
+                function.insert(made, Position::Before(site.call)).expect("a placed instruction");
+                function.instruction(made).result.map(Operand::Value)
+            }
+            _ => accumulated,
+        };
+        let end = function.terminator(block).expect("a terminator");
+        if let Some(join) = site.join {
+            for phi in edges::phis(function, join) {
+                let kept: Vec<_> = arms(function, phi).into_iter().filter(|&(_, from)| from != block).collect();
+                function.set_operands(phi, from_arms(&kept));
+            }
+            joins.push(join);
+        }
+        function.erase(end).expect("a terminator has no result");
+        if let Some(step) = &site.step {
+            function.erase(step.inst).expect("its user is gone");
+        }
+        function.erase(site.call).expect("its user is gone");
+        for (&phi, &argument) in phis.iter().zip(&arguments) {
+            let mut operands = function.instruction(phi).operands.clone();
+            operands.extend([argument, Operand::Block(block)]);
+            function.set_operands(phi, operands);
+        }
+        if let (Some((phi, ..)), Some(carried)) = (accumulator, carried) {
+            let mut operands = function.instruction(phi).operands.clone();
+            operands.extend([carried, Operand::Block(block)]);
+            function.set_operands(phi, operands);
+        }
+        let back = function.create_instruction(Opcode::Br, void, vec![Operand::Block(header)], Flags::default(), None);
+        function.insert(back, Position::End(block)).expect("a placed block");
+    }
+
+    // A join nothing reaches any more goes.
+    for join in joins {
+        if function.layout().contains(&join) && function.predecessors(join).is_empty() {
+            for inst in function.block(join).instructions().iter().rev().copied().collect::<Vec<_>>() {
+                function.erase(inst).expect("only the block's own instructions use them");
+            }
+            function.erase_block(join).expect("an empty block nothing names");
+        }
+    }
+    // What returns now returns what the trips before it accumulated.
+    if let Some((phi, op, ty)) = accumulator {
+        let acc = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
+        for block in function.layout().to_vec() {
+            let Some(end) = function.terminator(block).filter(|&one| function.instruction(one).opcode == Opcode::Ret) else { continue };
+            let value = function.instruction(end).operands[0];
+            let sum = function.create_instruction(Opcode::Binary(op), ty, vec![acc, value], Flags::default(), None);
+            function.insert(sum, Position::Before(end)).expect("a placed terminator");
+            let sum = Operand::Value(function.instruction(sum).result.expect("a sum"));
+            function.set_operand(end, 0, sum);
+        }
+    }
+    // The next trip's arguments need not be what the first one's did not alias.
+    for attrs in &mut function.parameter_attrs {
+        attrs.retain(|attr| !matches!(attr, Attribute::Flag(name) if name == "noalias"));
+    }
+}
+
+#[cfg(test)]
+#[path = "tailrec_tests.rs"]
+mod tests;

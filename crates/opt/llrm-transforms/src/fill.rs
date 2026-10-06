@@ -21,7 +21,7 @@
 //!   counter must be the index's width.
 //! - The memset is declared where the module has none, through the pass
 //!   manager's `Declared`.
-//! - `_pure` is `memory::only_value` less loads and allocas, and less
+//! - `pure` is `memory::only_value` less loads and allocas, and less
 //!   divisions, which trap.
 //!
 //! llrm-mir has no idiom pass.
@@ -108,7 +108,7 @@ pub fn merged(context: &mut Context, layout: &DataLayout, callees: &Callees, fun
             for (order, &inst) in function.block(*block).instructions().iter().enumerate() {
                 if let Some(cell) = _cell(&unit, inst, order) {
                     open.push(cell);
-                } else if !_pure(unit.context, callees, function, inst) || matches!(function.instruction(inst).opcode, Opcode::Store { .. }) {
+                } else if !pure(unit.context, callees, function, inst) || matches!(function.instruction(inst).opcode, Opcode::Store { .. }) {
                     runs.extend(_adjacent(&unit, std::mem::take(&mut open)));
                 }
             }
@@ -304,9 +304,9 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop, costs: &OperationCosts, s
 
     // How many trips is `induction`'s to prove, whatever the counter's step or test.
     let tested = operations(function, header);
-    let pure = |inst: InstId| _pure(unit.context, callees, function, inst);
+    let plain = |inst: InstId| pure(unit.context, callees, function, inst);
     let proof = induction::counted(unit, loop_, None, true).into_iter().find(|proof| {
-        !proof.posttested && tested.last() == Some(&proof.branch) && tested.contains(&proof.compare) && tested.iter().all(|&one| one == proof.branch || one == proof.compare || pure(one))
+        !proof.posttested && tested.last() == Some(&proof.branch) && tested.contains(&proof.compare) && tested.iter().all(|&one| one == proof.branch || one == proof.compare || plain(one))
     })?;
     let counters = induction::basics(unit, loop_);
     let phis = edges::phis(function, header);
@@ -315,7 +315,7 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop, costs: &OperationCosts, s
     }
 
     let work = chain.iter().flat_map(|&block| operations(function, block).into_iter().filter(move |&inst| function.terminator(block) != Some(inst))).collect::<Vec<_>>();
-    let effects = work.iter().copied().filter(|&inst| !pure(inst)).collect::<Vec<_>>();
+    let effects = work.iter().copied().filter(|&inst| !plain(inst)).collect::<Vec<_>>();
     let steps = work.iter().copied().filter_map(|inst| _stepped(unit, &phis, latch, inst)).collect::<BTreeSet<_>>();
     if steps.len() != phis.len() {
         return None;
@@ -670,7 +670,7 @@ fn _stepped(unit: &Unit, phis: &[InstId], latch: BlockId, inst: InstId) -> Optio
 }
 
 /// Work that stores nothing, reads nothing and cannot trap.
-fn _pure(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> bool {
+pub(crate) fn pure(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> bool {
     let op = function.instruction(inst);
     let traps = matches!(op.opcode, Opcode::Binary(BinaryOp::SDiv | BinaryOp::UDiv | BinaryOp::SRem | BinaryOp::URem));
     let reads = matches!(op.opcode, Opcode::Load { .. } | Opcode::Alloca { .. } | Opcode::Call(_));
