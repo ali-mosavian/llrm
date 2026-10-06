@@ -231,7 +231,7 @@ impl<'a> Facts<'a> {
         Self { cpu: Some(cpu), ..self }
     }
 
-    fn body(&self) -> &'a LirBody {
+    pub fn body(&self) -> &'a LirBody {
         self.body.expect("a group reading the body runs on one")
     }
 

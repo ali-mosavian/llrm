@@ -236,7 +236,7 @@ pub fn clear_of(_: &Cx, t: Reg, s: Reg, one: &Arc<Insn>) -> bool {
 /// register: it neither consumes nor replaces the loaded register nor
 /// changes anything the cell is addressed by. Instructions that write
 /// memory stay outside: proving them disjoint belongs in MIR.
-pub fn delays(_: &Cx, load: &Insn, crossed: &Arc<Insn>) -> bool {
+pub fn delays(cx: &Cx, load: &Insn, crossed: &Arc<Insn>) -> bool {
     let Some(crossed_what) = &crossed.what else {
         return false;
     };
@@ -254,9 +254,19 @@ pub fn delays(_: &Cx, load: &Insn, crossed: &Arc<Insn>) -> bool {
     {
         return false;
     }
-    if !(matches!(crossed_what.op, Operation::Move | Operation::Extend | Operation::Address)
-        && matches!(crossed_what.dests.as_slice(), [Loc::Reg(_)]))
-    {
+    // A write to memory crosses where the cell still holds after it (`spiller::_keeps`: the optimizer's proofs
+    // included); anything else must write registers alone, which the lane check below keeps from the load's.
+    let writes_memory = crossed_what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_)));
+    let load_cell = match load.what.as_ref().map(|what| what.sources.as_slice()) {
+        Some([Loc::Mem(cell)]) => Some(cell),
+        _ => None,
+    };
+    if writes_memory {
+        let Some(cell) = load_cell else { return false };
+        if !crate::backend::spiller::_keeps(crossed, load, cell, true, cx.facts.body()) {
+            return false;
+        }
+    } else if !(matches!(crossed_what.op, Operation::Move | Operation::Extend | Operation::Address | Operation::Binary | Operation::Unary | Operation::Multiply | Operation::Funnel | Operation::Compare) && crossed_what.dests.iter().all(|dest| matches!(dest, Loc::Reg(_)))) {
         return false;
     }
     let (Some((load_reads, load_writes)), Some((crossed_reads, crossed_writes))) =

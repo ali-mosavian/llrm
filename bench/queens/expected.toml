@@ -1,5 +1,5 @@
-reason = "a near string op's ES is a held DGROUP, set once and saved by none; a constant backward start is one mov (#493, #494)"
-blessed = "2026-10-05"
+reason = "shared remat of copied loads, a stable load folded into its single use (spiller::_folded_reads) and across writes its cell survives (peephole); queens c and parity/qbsp nib trade an instruction for memory operands at lower executed work (queens c -O2/-Os 271291 -> 270819, qbsp nib -O2 440 -> 438, -Os 441 -> 439), owner-approved"
+blessed = "2026-10-06"
 
 [bas.O2]
 instructions = 332047
@@ -18,25 +18,25 @@ bss_bytes = 0
 kernel_ms = 4.4913
 
 [c.O2]
-instructions = 230365
-memory_operands = 40926
+instructions = 230917
+memory_operands = 39902
 code_bytes = 215
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 3.073
 
 [c.Os]
-instructions = 233348
-memory_operands = 40926
+instructions = 233900
+memory_operands = 39902
 code_bytes = 199
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 3.1128
 
 [nib.O2]
-instructions = 240411
-memory_operands = 51603
-code_bytes = 243
+instructions = 231273
+memory_operands = 46010
+code_bytes = 239
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 3.2073
