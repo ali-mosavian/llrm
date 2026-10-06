@@ -51,6 +51,13 @@ impl Profile {
         std::rc::Rc::new(llrm_x86_code16::Dos::priced(&self._costs, self.prefix_cost, self.address_prefix_stall, self.register_capacity, self.call_register_capacity))
     }
 
+    /// The form that indexes by a dword register: where a target has one, a
+    /// 16-bit target's behind the address-size prefix (`secondary`), a flat one's
+    /// native.
+    pub fn dword_address_form(&self) -> Option<&AddressForm> {
+        self.address_forms.iter().find(|form| form.index_width == 4)
+    }
+
     /// The dataclass constructor with every defaulted field at its default.
     pub fn new(
         name: &str,
@@ -488,5 +495,20 @@ mod tests {
         let abi = crate::abi::qb::HirAbi { runtime: crate::hir::model::RuntimeProfile::Freestanding, objects: Default::default(), preserved: Default::default(), stack_check: None };
         let target = crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi);
         assert_eq!((target.costs().call, target.size_costs().call), (18, 5));
+    }
+
+    /// Real mode indexes by a dword behind the address-size prefix; a flat target's form is
+    /// native. Both are the form that takes a dword index, and the word form is not.
+    #[test]
+    fn test_the_dword_address_form_is_the_one_that_indexes_by_dwords() {
+        let real = profile("486").unwrap();
+        let form = real.dword_address_form().expect("real mode has one");
+        assert!(form.secondary && form.index_width == 4 && form.scales.contains(&4));
+        let mut flat = real.clone();
+        flat.address_forms = vec![AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 0, 0, 0, false, None).unwrap()];
+        let form = flat.dword_address_form().expect("a flat target has one");
+        assert!(!form.secondary && form.index_width == 4);
+        flat.address_forms = vec![real.address_forms[0].clone()];
+        assert!(flat.dword_address_form().is_none());
     }
 }

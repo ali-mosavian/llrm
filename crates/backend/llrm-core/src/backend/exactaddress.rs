@@ -421,7 +421,7 @@ fn folds(body: &LirBody, form: &AddressForm, cpu: &Profile) -> Vec<Fold> {
 /// Fold each exact address's chain the cost model prefers, until none is left.
 pub fn exact_addresses<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Result<LirBody, String> {
     let profile = targets::profile(cpu)?;
-    let Some(form) = profile.address_forms.iter().find(|form| form.secondary && form.index_width == 4) else {
+    let Some(form) = profile.dword_address_form() else {
         return Ok(body.clone());
     };
     let mut body = body.clone();
