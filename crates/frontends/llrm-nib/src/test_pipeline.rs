@@ -231,4 +231,7 @@ fn test_the_interpreter_runs_strings_and_vectors_of_a_target_with_wide_words() {
     };
     assert_eq!(run(&Default::default()), "hello world\n11\n40\n117\n");
     assert_eq!(run(&flat), "hello world\n11\n40\n117\n");
+    // A program that only prints a literal has no descriptor place: its word is its string pointer's.
+    std::fs::write(&path, "fn main() -> i16:\n    print(\"literal\")\n    return 0\n").expect("written");
+    assert_eq!(run(&flat), "literal\n");
 }
