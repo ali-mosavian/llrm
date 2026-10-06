@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::rc::Rc;
 
-use llrm_core::backend::omfwrite::CodeLayout;
+use llrm_core::backend::objbuild::CodeLayout;
 use llrm_core::objectfile::{cvinfo, omf};
 
 const SOURCE: &str = "var counter: i16 = 5

@@ -198,7 +198,7 @@ pub(crate) fn O2() -> Options {
 }
 
 /// `program` compiled to an object.
-fn object_of(program: &model::Program, entry: &str, source: &Path, options: &Options, layout: llrm_core::backend::omfwrite::CodeLayout) -> Result<Vec<u8>, String> {
+fn object_of(program: &model::Program, entry: &str, source: &Path, options: &Options, layout: llrm_core::backend::objbuild::CodeLayout) -> Result<Vec<u8>, String> {
     nib_compile::object(&nib_compile::assembled(program, entry, options, &crate::real_mode().os)?, source, layout)
 }
 
@@ -568,7 +568,7 @@ fn main() -> i16:
 ",
     );
     let bytes = |options: &Options| -> usize {
-        object_of(&parsed(&source), "main", &source, options, llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").len()
+        object_of(&parsed(&source), "main", &source, options, llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").len()
     };
     let uncopied = unrolled_or_peeled_none();
     assert_ne!(listing(&parsed(&source), "main", &level("O2")), listing(&parsed(&source), "main", &uncopied), "premise: -O2 copies the loop");
@@ -637,7 +637,7 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     // `bump` is internal and called directly: it pops its own view, a stack pointer of one word, `ret 2`.
     assert!(!main.contains("add sp, 2") && bump.contains("ret 2"), "{main}{bump}");
     assert!(bump.contains("es:["));
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -771,7 +771,7 @@ fn test_data_is_an_explicit_pointer_escape_hatch() {
     let types = types(&program);
     assert_eq!(types["addr"].kind, model::TypeKind::Pointer);
     assert_eq!((types["addr"].width, types["addr"].address), (4, model::AddressKind::Far));
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -798,7 +798,7 @@ fn test_return_inside_sequence_iteration_reaches_object_generation() {
     );
 
     let program = parsed(&source);
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -812,7 +812,7 @@ fn test_bounded_comprehension_materializes_and_generator_fuses() {
 
     let program = parsed(&source);
     assert!(program.modules[0].callables.iter().all(|one| !["iter", "next", "collect", "append"].contains(&one.name.as_str())));
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -825,7 +825,7 @@ fn test_dictionary_comprehension_deduplicates_and_has_explicit_lookup() {
     );
 
     let program = parsed(&source);
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -1149,7 +1149,7 @@ fn test_a_vec_view_names_dgroup_in_the_object() {
         "view.nib",
         "fn total(values: &[i16]) -> i16:\n    let mut sum = 0\n    for value in values:\n        sum += value\n    return sum\n\nfn main() -> i16:\n    let values = [x * x for x in [1, 2, 3]]\n    return total(values)\n",
     );
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
 }
 
 /// `v[0].bump()` passed the element's near pointer where `&mut T` is far:
@@ -1211,7 +1211,7 @@ fn test_float_arguments_comparisons_and_truncation_reach_the_object() {
         "floats.nib",
         "fn unused(x: f32) -> i16:\n    return 1\n\nfn above(x: f32) -> i16:\n    if x > 1.0:\n        return i16(x)\n    return 0\n\nfn main() -> i16:\n    return above(2.5) + unused(1.5)\n",
     );
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
 }
 
 #[test]
@@ -1345,7 +1345,7 @@ fn test_small_aggregates_return_in_registers() {
         (function.parameters.len(), types(&program).values().find(|one| one.id == function.result_type).expect("a type").width)
     };
     assert_eq!([shape("point"), shape("cell"), shape("box")], [(2, 4), (1, 4), (2, 0)]);
-    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
 }
 
 #[test]
@@ -1375,7 +1375,7 @@ fn test_a_panic_path_reaches_the_object() {
         "checked.nib",
         "fn at(values: &[i16], i: u16) -> i16:\n    return values[i]\n\nfn main() -> i16:\n    let v: i16[3] = [1, 2, 3]\n    return at(&v, 1)\n",
     );
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
 }
 
 #[test]
@@ -1465,7 +1465,7 @@ fn test_each_procedure_has_a_code_segment_the_linker_may_drop() {
     // runtime even when it called one routine.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "two.nib", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
-    let object = object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::PerProcedure).expect("writes");
+    let object = object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::PerProcedure).expect("writes");
     let records = llrm_core::objectfile::omf::parse(&object).expect("parses");
     let segments = records.iter().filter(|one| one.r#type & 0xFE == llrm_core::objectfile::omf::SEGDEF).count();
     // Two procedures, and _DATA.
@@ -1478,7 +1478,7 @@ fn test_an_object_defines_each_segment_once_unless_asked_for_one_per_procedure()
     // LINK 3.69 read them as one and refused SORTLIB.OBJ with L1103.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "two.nib", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
-    let object = object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes");
+    let object = object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes");
     let records = llrm_core::objectfile::omf::parse(&object).expect("parses");
     let segments = records.iter().filter(|one| one.r#type & 0xFE == llrm_core::objectfile::omf::SEGDEF).count();
     // The code, and _DATA.
@@ -1490,7 +1490,7 @@ fn test_a_computed_float_argument_is_passed_through_memory() {
     // x87 cannot push: "floating instruction has no allocation rule".
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "pushed.nib", "fn half(x: f64) -> f64:\n    return x / 2.0\n\n@export(\"cdecl16\")\nfn quarter(x: f32, y: f64) -> f64:\n    print(x * 2.0)\n    return half(y) / 2.0\n\nfn main() -> i16:\n    return 0\n");
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
 }
 
 #[test]
@@ -1584,7 +1584,7 @@ fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
     );
     assert_eq!(lines[lines.len() - 6..], ["pop gs", "pop fs", "pop es", "pop ds", "popad", "iret"], "{text}");
     assert!(text.contains("dd _tick"), "{text}");
-    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
 }
 
 #[test]
@@ -2513,5 +2513,5 @@ fn test_a_near_call_reaches_a_procedure_in_another_code_segment_of_the_object() 
     // With a segment per procedure, a near call between them was refused: "a near call to _down in another code segment".
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "near.nib", RECURSIVE);
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::PerProcedure).expect("writes");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::PerProcedure).expect("writes");
 }

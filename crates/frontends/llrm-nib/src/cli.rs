@@ -20,7 +20,7 @@ use super::compile as nib;
 use super::driver;
 use super::nibstages;
 use llrm_core::backend::masm;
-use llrm_core::backend::omfwrite::CodeLayout;
+use llrm_core::backend::objbuild::CodeLayout;
 use llrm_core::driver::{self as codegen, flags::{self, Flags}};
 
 fn usage() -> String {

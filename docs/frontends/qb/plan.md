@@ -146,7 +146,7 @@ Gate: hand-built HIR for each Phase 0 probe lowers to existing MIR without any
 MIR/backend modification and matches the hand-derived expectation.
 
 The fresh writer is not a new subsystem: the implementation target is the
-existing `backend.masm.Module` plus `backend.omfwrite` pipeline already used by
+existing `backend.masm.Module` plus `backend.objbuild` pipeline already used by
 the WCC frontend. The missing piece is a QB-owned ABI adapter that supplies
 far/callee-cleanup procedure scaffolding, call arguments, runtime imports,
 the fixed module header, and descriptor data/fixups without teaching MIR any
