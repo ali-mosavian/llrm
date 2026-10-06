@@ -1,5 +1,5 @@
-reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
-blessed = "2026-10-06"
+reason = "bintree c: insert's self call is a loop (tail recursion): 99758 -> 68757 instructions at -O2, 21104 -> 14226 memory operands; code bytes 357 -> 349"
+blessed = "2026-10-07"
 
 [bas.O2]
 instructions = 146294
@@ -18,20 +18,18 @@ bss_bytes = 0
 kernel_ms = 1.9135
 
 [c.O2]
-instructions = 99758
-memory_operands = 21104
-code_bytes = 357
+instructions = 68757
+memory_operands = 14226
+code_bytes = 349
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 1.3335
 
 [c.Os]
-instructions = 89131
-memory_operands = 22458
-code_bytes = 300
+instructions = 62516
+memory_operands = 15580
+code_bytes = 292
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 1.1963
 
 [nib.O2]
 instructions = 111422
