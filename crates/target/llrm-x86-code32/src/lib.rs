@@ -2,7 +2,7 @@
 //! Its descriptions are the files beside this one; this answers what they
 //! cannot say.
 
-use iced_x86::Register::{self, EAX, EBP, EDX};
+use iced_x86::Register::{self, EAX, EBP, EBX, EDI, EDX, ESI, ESP};
 use llrm_target::machine::Machine;
 
 /// Flat DOS under an extender, and the PC ports it shares.
@@ -41,6 +41,15 @@ impl llrm_target::Target for Code32 {
         8
     }
 
+    fn stack_pointer(&self) -> Register {
+        ESP
+    }
+
+    /// cdecl32 keeps EBX, ESI and EDI whole.
+    fn callee_saved(&self) -> Vec<(Register, Register)> {
+        vec![(EBX, EBX), (ESI, ESI), (EDI, EDI)]
+    }
+
     /// A dword leaves in EAX and an i64 in EDX:EAX.
     fn results(&self, width: u32) -> Vec<Register> {
         if width == 8 { vec![EAX, EDX] } else { vec![EAX] }
@@ -59,5 +68,15 @@ mod tests {
         assert_eq!(machine.addressing, llrm_target::machine::Addressing::Flat);
         assert!(machine.segments.is_none());
         assert!(!machine.ports.is_empty());
+    }
+
+    /// cdecl32 (calling.toml): EBP and ESP frame, EBX/ESI/EDI kept whole, first argument at [ebp+8].
+    #[test]
+    fn test_code32_answers_cdecl32() {
+        let frame = Code32.frame_registers();
+        assert_eq!((frame.pointer, frame.stack), (EBP, ESP));
+        assert_eq!(frame.saved, [(EBX, EBX), (ESI, ESI), (EDI, EDI)]);
+        assert_eq!((Code32.stack_slot_bytes(), Code32.first_argument_offset(false)), (4, 8));
+        assert_eq!([4, 8].map(|width| Code32.results(width)), [vec![EAX], vec![EAX, EDX]]);
     }
 }
