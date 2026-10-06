@@ -4,4 +4,4 @@
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 sum=$(cd "$HERE" && cat ow-commit build.sh cgshim.c cc-objects.txt patches/*.patch | sha256sum | cut -c1-16)
-echo "$(cat "$HERE/ow-commit")-$sum"
+echo "$(cat "$HERE/ow-commit")-$sum-${OWCPU:-i86}"
