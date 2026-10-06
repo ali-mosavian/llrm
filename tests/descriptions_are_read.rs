@@ -25,55 +25,50 @@ const NAMED: [(&str, &str); 8] = [
     ("dos.toml", "foreign.*"),
 ];
 
+/// The files git tracks under `directories` of `root`: what the repository holds, not what a build,
+/// a virtualenv or an editor left beside it (a `tools/.venv` held every key's name and let a key
+/// nobody reads pass).
+fn tracked(root: &Path, directories: &[&str]) -> Vec<PathBuf> {
+    let listed = std::process::Command::new("git").arg("-C").arg(root).arg("ls-files").arg("--").args(directories).output().expect("git runs");
+    assert!(listed.status.success(), "git ls-files: {}", String::from_utf8_lossy(&listed.stderr));
+    String::from_utf8_lossy(&listed.stdout).lines().map(|line| root.join(line)).collect()
+}
+
 fn descriptions() -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    for entry in fs::read_dir(Path::new(ROOT).join("crates/target")).unwrap().flatten() {
-        walk(&entry.path().join("src"), &mut found);
-        for name in ["platform.toml"] {
-            if entry.path().join(name).exists() {
-                found.push(entry.path().join(name));
-            }
-        }
-    }
+    let mut found: Vec<PathBuf> = tracked(Path::new(ROOT), &["crates/target"])
+        .into_iter()
+        .filter(|path| {
+            let name = path.file_name().unwrap().to_string_lossy();
+            let in_src = path.components().any(|one| one.as_os_str() == "src") || name == "platform.toml";
+            in_src && (matches!(path.extension().and_then(|one| one.to_str()), Some("toml" | "regs" | "times" | "instr" | "isel" | "peep" | "legal")) || name == "opcosts.txt")
+        })
+        .collect();
     found.sort();
     found
 }
 
-fn walk(directory: &Path, found: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(directory) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            walk(&path, found);
-        } else if matches!(path.extension().and_then(|one| one.to_str()), Some("toml" | "regs" | "times" | "instr" | "isel" | "peep" | "legal")) || path.file_name().is_some_and(|one| one == "opcosts.txt") {
-            found.push(path);
-        }
-    }
-}
-
 /// The source that reads descriptions: the target layer's non-test Rust (it parses them) and the tools' Python.
 fn readers() -> String {
+    readers_in(Path::new(ROOT))
+}
+
+fn readers_in(root: &Path) -> String {
     let mut text = String::new();
-    let mut stack = vec![Path::new(ROOT).join("crates/target"), Path::new(ROOT).join("tools")];
-    while let Some(directory) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&directory) else { continue };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            if path.is_dir() {
-                if name != "tests" {
-                    stack.push(path);
-                }
-            } else if name.ends_with(".py") && !name.starts_with("test_") {
-                // The tools read the link recipe: `object.toml`'s `[link]`.
-                text += &fs::read_to_string(&path).unwrap_or_default();
-                text.push('\n');
-            } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") && name != "tests.rs" && !name.starts_with("test_") {
-                let source = fs::read_to_string(&path).unwrap_or_default();
-                // Not the tests of a module: they would read anything.
-                text += source.split("\n#[cfg(test)]").next().unwrap_or("");
-                text.push('\n');
-            }
+    for path in tracked(root, &["crates/target", "tools"]) {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let relative = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+        if relative.contains("/tests/") {
+            continue;
+        }
+        if name.ends_with(".py") && !name.starts_with("test_") {
+            // The tools read the link recipe: `object.toml`'s `[link]`.
+            text += &fs::read_to_string(&path).unwrap_or_default();
+            text.push('\n');
+        } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") && name != "tests.rs" && !name.starts_with("test_") {
+            let source = fs::read_to_string(&path).unwrap_or_default();
+            // Not the tests of a module: they would read anything.
+            text += source.split("\n#[cfg(test)]").next().unwrap_or("");
+            text.push('\n');
         }
     }
     text
@@ -108,11 +103,9 @@ fn matches(pattern: &str, path: &str) -> bool {
 #[test]
 fn every_description_file_has_a_reader() {
     let mut sources = readers();
-    for entry in fs::read_dir(Path::new(ROOT).join("crates")).unwrap().flatten() {
-        for crate_dir in fs::read_dir(entry.path()).into_iter().flatten().flatten() {
-            if let Ok(build) = fs::read_to_string(crate_dir.path().join("build.rs")) {
-                sources += &build;
-            }
+    for path in tracked(Path::new(ROOT), &["crates"]) {
+        if path.file_name().is_some_and(|name| name == "build.rs") {
+            sources += &fs::read_to_string(&path).unwrap_or_default();
         }
     }
     let unread: Vec<String> = descriptions()
@@ -139,8 +132,10 @@ fn every_toml_key_has_a_reader() {
         keys("", &toml::Value::Table(value), &mut all);
         for (at, key) in all {
             let named = NAMED.iter().any(|(file, pattern)| *file == name && matches(pattern, &at));
+            // A reader that takes the key through a closure or a helper: `name("code")`, `number("fixed")`.
+            let called = regex::Regex::new(&format!(r#"\w\("{}"\)"#, regex::escape(&key))).unwrap();
             let read = [format!("get(\"{key}\")"), format!("[\"{key}\"]"), format!("remove(\"{key}\")"), format!("contains_key(\"{key}\")"), format!("\"{key}\" =>"), format!("\"{key}\","), format!("\"{key}\"]")];
-            if !named && !read.iter().any(|one| sources.contains(one.as_str())) {
+            if !named && !called.is_match(&sources) && !read.iter().any(|one| sources.contains(one.as_str())) {
                 unread.insert(format!("{}: {at}", path.strip_prefix(ROOT).unwrap().display()));
             }
         }
@@ -157,4 +152,21 @@ fn the_search_finds_descriptions_and_misses_a_key_nobody_reads() {
     }
     assert!(!readers().contains("\"a_key_no_reader_names_zz\""));
     assert!(matches("*.result.*", "cdecl32.result.1") && !matches("*.result.*", "cdecl32.result"));
+}
+
+/// The walk read every file beside the checkout, and a virtualenv under `tools` holding a key's name
+/// let three keys nobody reads pass on one machine and fail on a clean one: only what git tracks counts.
+#[test]
+fn an_untracked_file_is_not_a_reader() {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("descriptions_tracked");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("tools/.venv/lib")).unwrap();
+    fs::create_dir_all(root.join("crates/target/llrm-x/src")).unwrap();
+    let git = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&root).args(args).output().unwrap().status.success());
+    git(&["init", "-q"]);
+    fs::write(root.join("tools/reads.py"), "x = table[\"tracked_key\"]\n").unwrap();
+    fs::write(root.join("tools/.venv/lib/site.py"), "y = \"unread_key\"\n").unwrap();
+    git(&["add", "tools/reads.py"]);
+    let found = readers_in(&root);
+    assert!(found.contains("tracked_key") && !found.contains("unread_key"), "{found}");
 }
