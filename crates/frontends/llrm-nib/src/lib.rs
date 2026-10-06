@@ -149,7 +149,7 @@ pub fn syntax_text(source: &str) -> Result<String, Diagnostic> {
 /// The program whose main module is the file `path`: its imports are the
 /// files under the same directory, `a.b` at `a/b.nib`.
 pub fn compile_file(path: &std::path::Path, frontend: &Frontend) -> Result<String, (std::path::PathBuf, Diagnostic)> {
-    let module = load_file(path, &frontend.os)?;
+    let module = load_file(path, &frontend.os, frontend.sizes().near)?;
     let sources = module.sources.clone();
     compile_module(module, module_name(path), frontend).map_err(|error| located(path, &sources, error))
 }
@@ -158,9 +158,10 @@ pub fn compile_file(path: &std::path::Path, frontend: &Frontend) -> Result<Strin
 pub fn declare_file(
     path: &std::path::Path,
     language: declarations::Language,
+    frontend: &Frontend,
 ) -> Result<String, (std::path::PathBuf, Diagnostic)> {
-    let module = load_file(path, &Frontend::default().os)?;
-    declarations::declarations(&module, module_name(path), language).map_err(|error| located(path, &module.sources, error))
+    let module = load_file(path, &frontend.os, frontend.sizes().near)?;
+    declarations::declarations_on(&module, module_name(path), language, frontend.sizes().segmented, frontend.slot).map_err(|error| located(path, &module.sources, error))
 }
 
 fn module_name(path: &std::path::Path) -> &str {
@@ -191,19 +192,19 @@ pub fn module_path(path: &std::path::Path, name: &str) -> std::path::PathBuf {
     }
 }
 
-fn load_file(path: &std::path::Path, os: &Os) -> Result<syntax::Module, (std::path::PathBuf, Diagnostic)> {
+fn load_file(path: &std::path::Path, os: &Os, near_bytes: u32) -> Result<syntax::Module, (std::path::PathBuf, Diagnostic)> {
     let source = std::fs::read_to_string(path).map_err(|error| {
         (
             path.to_path_buf(),
             Diagnostic::new(syntax::Span::new(1, 1, 1), error.to_string()),
         )
     })?;
-    modules::load(&source, &mut |name| {
+    modules::load_for(&source, &mut |name| {
         if matches!(name, "os" | "std.os") {
             return Ok(os.module.clone());
         }
         std::fs::read_to_string(module_path(path, name)).map_err(|error| error.to_string())
-    })
+    }, near_bytes)
     .map_err(|(name, error)| (module_path(path, &name), error))
 }
 

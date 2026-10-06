@@ -17,7 +17,7 @@ pub fn close(handle: i16) -> i16
 pub fn exit(code: u8) -> void
 # `bytes` more of the heap, right after the last grant, or null.
 @extern("cdecl32", name="N$OMEM")
-pub fn more(bytes: u16) -> *near mut u8
+pub fn more(bytes: usize) -> *near mut u8
 
 const STANDARD_OUTPUT: i16 = 1
 

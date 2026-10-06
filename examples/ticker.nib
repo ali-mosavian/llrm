@@ -1,3 +1,4 @@
+# targets: x86-code16   (an interrupt16 handler)
 # mask: \d+(?= spins)
 # A timer hook. The BIOS raises INT 1Ch on every tick, 18.2 times a second;
 # `tick` counts them and passes each on to the handler it replaced. The

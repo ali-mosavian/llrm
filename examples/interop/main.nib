@@ -1,19 +1,21 @@
+# flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 # link: geometry.c
-# Calls a C library through cdecl16, and exports the rule it calls back.
+# Calls a C library through the target's C convention ("c": cdecl16 or cdecl32), and exports the
+# rule it calls back. On code32 the far pointers are near, with a warning.
 
-@repr("c16", pack=1)
+@repr("c", pack=1)
 struct CPoint:
     x: i16
     y: i16
 
-@extern("cdecl16")
+@extern("c")
 fn checksum(data: *far u8, count: u16) -> u16
-@extern("cdecl16")
+@extern("c")
 fn weighted_sum(values: *far i16, count: u16) -> i32
-@extern("cdecl16")
+@extern("c")
 fn centroid(points: *far CPoint, count: u16, out: *far mut CPoint) -> void
 
-@export("cdecl16")
+@export("c")
 fn weight(value: i16) -> i16:
     if value < 0:
         return -value * 3

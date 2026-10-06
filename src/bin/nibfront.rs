@@ -62,7 +62,7 @@ fn main() -> ExitCode {
         };
     }
     if let Some(language) = declare {
-        return match llrm_nib::declare_file(Path::new(&input), language) {
+        return match llrm_nib::declare_file(Path::new(&input), language, &Default::default()) {
             Ok(text) => {
                 print!("{text}");
                 ExitCode::SUCCESS
