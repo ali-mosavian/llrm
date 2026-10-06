@@ -5,7 +5,7 @@ SEG 3 attr=0xc name="CONST2" align=4
 SEG 4 attr=0x6 name="_DATA" align=4
 START
 TYPE T25 size=28 align=1
-f1 DBSrcFile "/home/alim/scratch/code32/tests/fixtures/c32/extend.c" main=1
+f1 DBSrcFile "/home/alim/scratch/m32/tests/fixtures/c32/extend.c" main=1
 - DBSrcCue f1 1 1
 SYM y1 name="extend" base="extend" pattern="_*" attr=0x7 seg=1
 CALLCONV y1 class=0x80 target=0x602 parms=[] ret=0:0

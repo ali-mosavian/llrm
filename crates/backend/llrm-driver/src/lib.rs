@@ -11,11 +11,11 @@ use llrm_core::abi::machine::Machine;
 use llrm_target::Target;
 
 /// The target a driver builds for when no `-m` is given.
-pub const DEFAULT: &str = "x86-code16";
+pub const DEFAULT: &str = "x86-m16";
 
 /// Every target built in.
 pub fn all() -> Vec<Rc<dyn Target>> {
-    vec![Rc::new(llrm_x86_code16::Code16), Rc::new(llrm_x86_code32::Code32)]
+    vec![Rc::new(llrm_x86_m16::M16), Rc::new(llrm_x86_m32::M32)]
 }
 
 /// A target and the instruction selector generated from its definitions.
@@ -33,8 +33,8 @@ impl Bound {
 
 /// The options of the frontends that are built for 16-bit x86 only (BASIC, Nib, BC
 /// objects) and of the tests of those: the one place that names it for them.
-pub fn code16_options(machine: Machine) -> Options {
-    let target: Rc<dyn Target> = Rc::new(llrm_x86_code16::Code16);
+pub fn m16_options(machine: Machine) -> Options {
+    let target: Rc<dyn Target> = Rc::new(llrm_x86_m16::M16);
     let selection = isel::selector(target.name()).expect("the 16-bit selector is built");
     Options::new(machine, target, selection)
 }

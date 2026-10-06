@@ -1,6 +1,6 @@
 # flags: -O2 -march=i486 | -O2 -march=i486 -m32
 # Far, huge and unmarked pointers and a huge array past 64 KB. Where the target has one address
-# space far and huge are near, with a warning (tests/toolchain.rs); the output is code16's.
+# space far and huge are near, with a warning (tests/toolchain.rs); the output is m16's.
 var table: i16[8] = [1, 2, 3, 4, 5, 6, 7, 8]
 huge var big: u8[70000] = [0] * 70000
 

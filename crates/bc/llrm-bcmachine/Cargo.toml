@@ -16,4 +16,4 @@ toml = { workspace = true }
 
 [dev-dependencies]
 llrm-omf = { workspace = true, features = ["testing"] }
-llrm-x86-code16 = { workspace = true }
+llrm-x86-m16 = { workspace = true }

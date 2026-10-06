@@ -1,6 +1,6 @@
 # flags: -O2 -march=i486 | -O2 -march=i486 -m32
-# Hello and arithmetic end to end: strings, i16 and i32 maths, recursion, a loop. Code16 and
-# code32 print the same.
+# Hello and arithmetic end to end: strings, i16 and i32 maths, recursion, a loop. M16 and
+# m32 print the same.
 fn fib(n: i32) -> i32:
     if n < 2:
         return n

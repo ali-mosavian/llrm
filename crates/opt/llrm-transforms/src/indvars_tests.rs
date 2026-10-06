@@ -161,7 +161,7 @@ fn rewinding_the_corpus_loses_no_trip_count() {
 /// `for (unsigned short i = 0; i < n; ++i) a[i] = 0` on a 32-bit address:
 /// the counter's `zext` to the index width is a conversion a trip and its
 /// counted-loop proof was 16 bits against the pointer's 32, so `fill` and
-/// `lsr` found no matching counter (code32 sieve, 19277 executed).
+/// `lsr` found no matching counter (m32 sieve, 19277 executed).
 fn clearing(layout: &str) -> String {
     format!(
         "target datalayout = \"{layout}\"

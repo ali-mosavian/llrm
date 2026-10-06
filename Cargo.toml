@@ -21,10 +21,10 @@ tempfile = "3.27.0"
 toml = { version = "0.9", features = ["preserve_order"] }
 regex = "1"
 llrm-support = { path = "crates/support/llrm-support" }
-llrm-x86-code16 = { path = "crates/target/llrm-x86-code16" }
+llrm-x86-m16 = { path = "crates/target/llrm-x86-m16" }
 llrm-target = { path = "crates/target/llrm-target" }
 llrm-x86 = { path = "crates/target/llrm-x86" }
-llrm-x86-code32 = { path = "crates/target/llrm-x86-code32" }
+llrm-x86-m32 = { path = "crates/target/llrm-x86-m32" }
 llrm-omf = { path = "crates/target/llrm-omf" }
 llrm-object = { path = "crates/target/llrm-object" }
 llrm-elf32 = { path = "crates/target/llrm-elf32" }
@@ -75,8 +75,8 @@ dosrun = []
 [dev-dependencies]
 llrm-target = { workspace = true }
 llrm-x86 = { workspace = true }
-llrm-x86-code16 = { workspace = true }
-llrm-x86-code32 = { workspace = true }
+llrm-x86-m16 = { workspace = true }
+llrm-x86-m32 = { workspace = true }
 llrm-driver = { workspace = true }
 regex = { workspace = true }
 toml = { workspace = true }

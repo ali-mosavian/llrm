@@ -52,10 +52,10 @@ fn the_default_build_checks_nothing() {
             assert_eq!(plain.stack_check, None);
             let text = listing(&plain);
             assert!(!text.contains("pendchk") && !text.contains("ERR_OSS") && !text.contains("B$ENRD"), "{runtime}: {text}");
-            let mir = llrm_core::hir::mir::emit(&plain, &llrm_x86_code16::layout());
+            let mir = llrm_core::hir::mir::emit(&plain, &llrm_x86_m16::layout());
             assert!(mir.iter().all(|one| !format!("{:?}", one.module.globals).contains("stackcheck")), "{runtime}");
         }
-        let marked = llrm_core::hir::mir::emit(&program(runtime, true, SOURCE), &llrm_x86_code16::layout());
+        let marked = llrm_core::hir::mir::emit(&program(runtime, true, SOURCE), &llrm_x86_m16::layout());
         assert!(marked.iter().any(|one| format!("{:?}", one.module.globals).contains("stackcheck")), "{runtime}");
     }
 }

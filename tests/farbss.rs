@@ -61,7 +61,7 @@ impl Lab {
     /// What the assembler is told of the OS layer and C's runtime description; `nozero` adds NOZERO, a start-up
     /// that does not zero.
     fn defines(nozero: bool) -> Vec<String> {
-        let target = llrm_x86_code16::Code16;
+        let target = llrm_x86_m16::M16;
         let (layer, c) = (target.os_layer().unwrap(), target.runtime("c").unwrap());
         let mut defines: Vec<String> = layer.defines().unwrap().into_iter().chain(c.defines().unwrap()).map(|(symbol, value)| format!("-D{symbol}={value}")).collect();
         defines.extend(nozero.then(|| "-DNOZERO".to_owned()));
@@ -70,7 +70,7 @@ impl Lab {
 
     /// `PROGRAM` at the flag, linked with the OS layer's start-up (`nozero`: one that does not zero).
     fn exe(&self, name: &str, flag: &str, nozero: bool) -> PathBuf {
-        let target = llrm_x86_code16::Code16;
+        let target = llrm_x86_m16::M16;
         let (layer, c) = (target.os_layer().unwrap(), target.runtime("c").unwrap());
         let defines = Self::defines(nozero);
         let defines: Vec<&str> = defines.iter().map(String::as_str).collect();
@@ -97,7 +97,7 @@ impl Lab {
     }
 
     fn runtime(&self) {
-        let target = llrm_x86_code16::Code16;
+        let target = llrm_x86_m16::M16;
         let (layer, c) = (target.os_layer().unwrap(), target.runtime("c").unwrap());
         let defines = Self::defines(false);
         let defines: Vec<&str> = defines.iter().map(String::as_str).collect();

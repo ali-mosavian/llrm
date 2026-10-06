@@ -26,7 +26,7 @@ fn folded(between: Semantics, reads: i64) -> Vec<Arc<Insn>> {
     let crossed = Insn::new(1, Some((1, 1)), Some(between), vec![2], vec![]);
     let push = Insn::new(2, Some((2, 2)), Some(what(Operation::Push, "push", vec![], vec![Loc::Held(value)])), vec![], vec![1]);
     let counts: IndexMap<u32, i64> = IndexMap::from_iter([(1, reads)]);
-    super::rewritten_insns(super::targets::x86_code16::RULES.memory_arguments, &[Arc::new(load), Arc::new(crossed), Arc::new(push)], &Facts::counted(&counts, 16))
+    super::rewritten_insns(super::targets::x86_m16::RULES.memory_arguments, &[Arc::new(load), Arc::new(crossed), Arc::new(push)], &Facts::counted(&counts, 16))
 }
 
 fn pushes(insns: &[Arc<Insn>]) -> Vec<Loc> {
@@ -70,10 +70,10 @@ fn a_folded_value_defined_twice_is_refused() {
     let load = |at| Arc::new(Insn::new(at, Some((at, at)), Some(what(Operation::Move, "mov", vec![Loc::Held(value)], vec![Loc::Mem(argument())])), vec![1], vec![]));
     let push = Arc::new(Insn::new(1, Some((1, 1)), Some(what(Operation::Push, "push", vec![], vec![Loc::Held(value)])), vec![], vec![1]));
     let counts: IndexMap<u32, i64> = IndexMap::from_iter([(1, 1)]);
-    super::rewritten_insns(super::targets::x86_code16::RULES.memory_arguments, &[load(0), push, load(2)], &Facts::counted(&counts, 16));
+    super::rewritten_insns(super::targets::x86_m16::RULES.memory_arguments, &[load(0), push, load(2)], &Facts::counted(&counts, 16));
 }
 
-/// A target with no `peephole.peep` has no rules, not code16's: its code is
+/// A target with no `peephole.peep` has no rules, not m16's: its code is
 /// left as the selector made it.
 #[test]
 fn a_target_without_rules_leaves_the_code_alone() {
@@ -85,16 +85,16 @@ fn a_target_without_rules_leaves_the_code_alone() {
     let insns = [load, push];
     assert_eq!(super::rewritten_insns(None, &insns, &facts).len(), 2);
     assert_eq!(super::rewritten_insns(super::Rules::NONE.memory_arguments, &insns, &facts).len(), 2);
-    // code16's rules fold the load into the push.
-    assert_eq!(super::rewritten_insns(super::targets::x86_code16::RULES.memory_arguments, &insns, &facts).len(), 1);
+    // m16's rules fold the load into the push.
+    assert_eq!(super::rewritten_insns(super::targets::x86_m16::RULES.memory_arguments, &insns, &facts).len(), 1);
 }
 
 /// The rules are bound to a target through its selector: the one generated
 /// from the same directory.
 #[test]
 fn a_selector_carries_the_rules_of_its_directory() {
-    let selector = crate::backend::isel::selector("x86-code16").expect("code16's selector");
-    assert!(std::ptr::eq(selector.rules(), &super::targets::x86_code16::RULES));
+    let selector = crate::backend::isel::selector("x86-m16").expect("m16's selector");
+    assert!(std::ptr::eq(selector.rules(), &super::targets::x86_m16::RULES));
     assert!(selector.rules().far_loads.is_some() && selector.rules().zero_jcc.contains("je"));
 }
 
@@ -102,8 +102,8 @@ fn a_selector_carries_the_rules_of_its_directory() {
 /// rules has none: one list names them for the struct, `NONE` and the checks.
 #[test]
 fn the_rule_groups_come_from_one_list() {
-    let mut present = super::targets::x86_code16::RULES.present();
-    present.extend(super::targets::x86_code32::RULES.present());
+    let mut present = super::targets::x86_m16::RULES.present();
+    present.extend(super::targets::x86_m32::RULES.present());
     present.sort_unstable();
     present.dedup();
     let mut all = super::Rules::GROUPS.to_vec();

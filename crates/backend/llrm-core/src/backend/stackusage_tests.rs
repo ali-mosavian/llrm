@@ -21,11 +21,11 @@ fn procedure(name: &str, reserve: i64, pushes: usize, callees: &[&str]) -> Proce
     insns.push(insn(101, Operation::Return, "ret", vec![]));
     let body = LirBody::new(name, 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
     let callees = callees.iter().enumerate().map(|(at, one)| (100 + at as i64, Callee::new(*one, true))).collect();
-    Procedure { name: name.to_owned(), public: true, far: true, body, reserve, callees, interrupt: None, size: false, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16) }
+    Procedure { name: name.to_owned(), public: true, far: true, body, reserve, callees, interrupt: None, size: false, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16) }
 }
 
 fn module(procedures: Vec<Procedure>) -> Module {
-    Module { object: llrm_target::Target::object(&llrm_x86_code16::Code16), code: String::new(), names: IndexMap::default(), externs: Vec::new(), publics: Vec::new(), data: Vec::new(), procedures, private: Default::default(), far_bss: Default::default(), requests: Default::default(), debug: None, stack: 0 }
+    Module { object: llrm_target::Target::object(&llrm_x86_m16::M16), code: String::new(), names: IndexMap::default(), externs: Vec::new(), publics: Vec::new(), data: Vec::new(), procedures, private: Default::default(), far_bss: Default::default(), requests: Default::default(), debug: None, stack: 0 }
 }
 
 /// What a program can use of the stack was nowhere stated: a deep chain of
@@ -98,7 +98,7 @@ fn test_the_stack_to_add_is_what_the_chain_needs_beyond_the_base() {
     assert_eq!(stack_to_add(&one(100), 0x800, Some(0xF000)), Ok(0));
     assert_eq!(stack_to_add(&one(6010), 0x800, Some(0xF000)), Ok(4 + 6010 + STACK_RESERVE - 0x800));
     assert!(stack_to_add(&one(0xF000), 0x800, Some(0xF000)).unwrap_err().contains("bytes of stack"));
-    // A target without segments has no such limit: a 70 KB frame was refused on code32.
+    // A target without segments has no such limit: a 70 KB frame was refused on m32.
     assert_eq!(stack_to_add(&one(70000), 0x800, None), Ok(4 + 70000 + STACK_RESERVE - 0x800));
 }
 

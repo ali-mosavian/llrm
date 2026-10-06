@@ -195,7 +195,7 @@ entry:
     let found = liveness::live(function);
     let cells = cells(function);
     let integer = |value: ValueId| integer(&module.context, function, value);
-    let views = |value: ValueId| segment_view(&module.context, &layout, llrm_x86_code16::spaces(), function, value);
+    let views = |value: ValueId| segment_view(&module.context, &layout, llrm_x86_m16::spaces(), function, value);
     let at = |segments: i64| {
         let room = Room { registers: 6, across_call: 2, segments, ..Room::default() };
         let block = function.layout()[0];
@@ -215,7 +215,7 @@ fn _peak(text: &str, room: Room) -> i64 {
     let found = liveness::live(function);
     let cells = cells(function);
     let integer = |value: ValueId| integer(&module.context, function, value);
-    let views = |value: ValueId| segment_view(&module.context, &layout, llrm_x86_code16::spaces(), function, value);
+    let views = |value: ValueId| segment_view(&module.context, &layout, llrm_x86_m16::spaces(), function, value);
     let addressed = addressed(function);
     let routed = |value: ValueId| addressed.contains(&value);
     let points = function.layout().iter().flat_map(|&block| sites(function, &found, block, room, &|_| 2, &|inst, live| transient(&module.context, &layout, function, inst, room, live), &cells, &integer, &views, &routed)).flat_map(Site::points);

@@ -27,7 +27,7 @@ toml = { workspace = true }
 toolchain = []
 
 [dev-dependencies]
-llrm-x86-code16 = { workspace = true }
-llrm-x86-code32 = { workspace = true }
+llrm-x86-m16 = { workspace = true }
+llrm-x86-m32 = { workspace = true }
 regex = { workspace = true }
 llrm-core = { workspace = true, features = ["testing"] }

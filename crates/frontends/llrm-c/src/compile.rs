@@ -218,7 +218,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         (None, Some(_)) => PathBuf::new(),
         (None, None) => return Err("the following arguments are required: source".to_owned()),
     };
-    let bound = llrm_driver::target(&flags, Some(&["x86-code16", "x86-code32"]))?;
+    let bound = llrm_driver::target(&flags, Some(&["x86-m16", "x86-m32"]))?;
     let os_layer = os_layer.map(|field| bound.target.os_layer().ok_or_else(|| "this target has no OS layer".to_owned()).and_then(|layer| layer.report(&bound.target.runtime("c").ok_or("this target has no C runtime")?, &field)));
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
     Ok(Args {
@@ -261,7 +261,7 @@ pub fn main(argv: &[String]) -> i32 {
                 // The target's physical addresses reach the program as `PHYSICAL_<NAME>`.
                 let defines: Vec<String> = args.codegen.arch.physical_addresses().iter().map(|(name, address)| format!("-dPHYSICAL_{}=0x{address:X}UL", name.to_uppercase())).collect();
                 let switches: Vec<&str> = args.watcom.iter().copied().chain(defines.iter().map(String::as_str)).collect();
-                recorded_for(&args.source, &args.include, args.flags.debug, &switches, args.codegen.arch.name() == "x86-code32")
+                recorded_for(&args.source, &args.include, args.flags.debug, &switches, args.codegen.arch.name() == "x86-m32")
             })?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
@@ -301,7 +301,7 @@ mod tests {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("{}/tests/fixtures/c/{fixture}.cgs", env!("LLRM_ROOT")));
         let text = std::fs::read_to_string(path).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, fixture, None, &llrm_driver::code16_options(machine)).unwrap();
+        let built = super::selected(&text, fixture, None, &llrm_driver::m16_options(machine)).unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let lines: Vec<&str> = asm.lines().map(str::trim).collect();
         let (top, back) = lines
@@ -322,12 +322,12 @@ mod tests {
     #[test]
     fn the_stack_check_names_what_the_c_runtime_defines() {
         let root = Path::new(env!("LLRM_ROOT"));
-        let check = super::stack_check(&llrm_x86_code16::Code16);
+        let check = super::stack_check(&llrm_x86_m16::M16);
         let runtime = |name: &str| std::fs::read_to_string(root.join("runtime").join(name)).unwrap();
-        assert!(runtime("shared/dos/x86-code16/os.asm").contains(&format!("public {}", check.limit)) && runtime("shared/dos/x86-code16/start.asm").contains(&format!("mov {}, ax", check.limit)));
-        assert!(runtime("c/x86-code16/ext.asm").contains(&format!("public {}", check.handler)));
+        assert!(runtime("shared/dos/m16/os.asm").contains(&format!("public {}", check.limit)) && runtime("shared/dos/m16/start.asm").contains(&format!("mov {}, ax", check.limit)));
+        assert!(runtime("c/x86-m16/ext.asm").contains(&format!("public {}", check.handler)));
         let text = std::fs::read_to_string(root.join("tests/fixtures/c/anims.cgs")).unwrap();
-        let options = llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() });
+        let options = llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() });
         let listing = |check| llrm_core::backend::masm::text(&super::selected_checking(&text, "anims", None, &options, check).unwrap()).unwrap();
         let named = llrm_core::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check };
         let checked = listing(Some(named));
@@ -380,7 +380,7 @@ mod tests {
     fn emitted(path: &str) -> String {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{path}.cgs"))).unwrap();
         let program = crate::translate::program(&crate::hir::unit(&crate::stream::parse(&text)).unwrap(), "t").unwrap();
-        let options = llrm_driver::code16_options(llrm_core::abi::machine::BUILT_IN.clone());
+        let options = llrm_driver::m16_options(llrm_core::abi::machine::BUILT_IN.clone());
         let (mir, _) = llrm_core::driver::emitted(&program, &options).unwrap();
         llrm_mir::print::module(&mir.modules[0])
     }
@@ -388,7 +388,7 @@ mod tests {
     /// tests/fixtures/c/`path`.cgs compiled.
     fn compiles(path: &str) {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{path}.cgs"))).unwrap();
-        let options = llrm_driver::code16_options(llrm_core::abi::machine::BUILT_IN.clone());
+        let options = llrm_driver::m16_options(llrm_core::abi::machine::BUILT_IN.clone());
         super::selected(&text, "t", None, &options).unwrap_or_else(|error| panic!("{path}: {error}"));
     }
 
@@ -430,7 +430,7 @@ mod tests {
     /// `name`'s listing of `function`, compiled from tests/fixtures/c/`name`.cgs.
     fn listing_of(name: &str, function: &str) -> String {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).unwrap();
-        let options = llrm_driver::code16_options(llrm_core::abi::machine::BUILT_IN.clone());
+        let options = llrm_driver::m16_options(llrm_core::abi::machine::BUILT_IN.clone());
         let built = super::selected(&text, name, None, &options).unwrap_or_else(|error| panic!("{error:?}"));
         let listing = llrm_core::backend::masm::text(&built).unwrap();
         let start = listing.find(&format!("{function} proc")).expect("the function");
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn test_register_convention_is_refused() {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/regs.cgs");
-        match super::selected(&std::fs::read_to_string(path).unwrap(), "regs", None, &llrm_driver::code16_options(llrm_core::abi::machine::BUILT_IN.clone())) {
+        match super::selected(&std::fs::read_to_string(path).unwrap(), "regs", None, &llrm_driver::m16_options(llrm_core::abi::machine::BUILT_IN.clone())) {
             Err(CompileError::Unsupported(refused)) => {
                 assert!(refused.to_string().contains("_twice has a register calling convention"), "{refused}");
             }
@@ -523,7 +523,7 @@ mod tests {
     fn selected_loop(fixture: &str, function: &str, marker: &str) -> Vec<String> {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_driver::code16_options(machine)).unwrap();
+        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_driver::m16_options(machine)).unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find(&format!("{function} proc")).expect("the function");
         let lines: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -544,7 +544,7 @@ mod tests {
     fn selected_body(fixture: &str, function: &str) -> Vec<String> {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_driver::code16_options(machine)).unwrap();
+        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_driver::m16_options(machine)).unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find(&format!("{function} proc")).expect("the function");
         asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).map(str::to_owned).collect()
@@ -620,7 +620,7 @@ mod tests {
     fn test_code_addresses_in_data_are_called_through() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/codeptrs.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "codeptrs", None, &llrm_driver::code16_options(machine)).expect("selects");
+        let built = super::selected(&text, "codeptrs", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let lines: Vec<&str> = asm.lines().map(str::trim).collect();
         assert!(lines.contains(&"dw _twice") && lines.iter().any(|one| one.starts_with("dd _show")), "{asm}");
@@ -636,7 +636,7 @@ mod tests {
     fn test_a_local_array_initializer_is_copied() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/arrayinit.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "arrayinit", None, &llrm_driver::code16_options(machine));
+        let built = super::selected(&text, "arrayinit", None, &llrm_driver::m16_options(machine));
         assert!(built.is_ok(), "{:?}", built.err());
     }
 
@@ -648,7 +648,7 @@ mod tests {
     fn test_inline_code_reads_and_writes_its_frame_places() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/inlinecode.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "inlinecode", None, &llrm_driver::code16_options(machine)).expect("selects");
+        let built = super::selected(&text, "inlinecode", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let body = |name: &str| -> Vec<String> {
             let from = asm.find(&format!("{name} proc")).expect("the procedure");
@@ -692,7 +692,7 @@ mod tests {
     fn test_a_far_pointer_constant_keeps_its_segment() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/farconst.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "farconst", None, &llrm_driver::code16_options(machine)).expect("selects");
+        let built = super::selected(&text, "farconst", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_ticks proc").expect("_ticks");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -709,7 +709,7 @@ mod tests {
     fn test_an_integer_made_a_far_pointer_is_not_in_dgroup() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/farnull.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "farnull", None, &llrm_driver::code16_options(machine)).expect("selects");
+        let built = super::selected(&text, "farnull", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_put proc").expect("_put");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -724,7 +724,7 @@ mod tests {
     fn test_near_data_is_reached_through_ds_alone() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/nearviads.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "nearviads", None, &llrm_driver::code16_options(machine)).expect("selects");
+        let built = super::selected(&text, "nearviads", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_paint proc").expect("_paint");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -739,7 +739,7 @@ mod tests {
     fn test_a_far_pointer_to_a_local_is_in_the_stack_segment() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/localfar.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "localfar", None, &llrm_driver::code16_options(machine)).expect("selects");
+        let built = super::selected(&text, "localfar", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_caller proc").expect("_caller");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -754,7 +754,7 @@ mod tests {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/popargs.cgs")).unwrap();
         let cleanups = |level: Level| {
             let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-            let options = llrm_core::driver::Options { pipeline: level.options(), ..llrm_driver::code16_options(machine) };
+            let options = llrm_core::driver::Options { pipeline: level.options(), ..llrm_driver::m16_options(machine) };
             let built = super::selected(&text, "popargs", None, &options).expect("selects");
             let asm = llrm_core::backend::masm::text(&built).unwrap();
             let from = asm.find("_caller proc").expect("_caller");
@@ -772,7 +772,7 @@ mod tests {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/halve.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
         let directory = std::env::temp_dir().join(format!("llrm-c-norecurse-{}", std::process::id()));
-        super::selected(&text, "halve", Some(&directory), &llrm_driver::code16_options(machine)).expect("selects");
+        super::selected(&text, "halve", Some(&directory), &llrm_driver::m16_options(machine)).expect("selects");
         let mut stages = std::fs::read_dir(&directory).unwrap().flatten().map(|one| one.path()).filter(|one| one.extension().is_some_and(|ext| ext == "ll")).collect::<Vec<_>>();
         stages.sort_by_key(|one| one.file_name().map(std::ffi::OsStr::to_owned));
         let last = std::fs::read_to_string(stages.last().expect("a stage")).unwrap();
@@ -787,7 +787,7 @@ mod tests {
     fn test_fabs_is_the_instruction() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/fabs.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "fabs", None, &llrm_driver::code16_options(machine)).expect("selects");
+        let built = super::selected(&text, "fabs", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_halfabs proc").expect("_halfabs");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -800,7 +800,7 @@ mod tests {
     fn test_spill_slots_sit_above_a_big_frame_array() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/spillnear.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "spillnear", None, &llrm_driver::code16_options(machine)).expect("selects");
+        let built = super::selected(&text, "spillnear", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_spills proc").expect("_spills");
         let far: Vec<&str> = asm[from..]
@@ -819,7 +819,7 @@ mod tests {
     #[test]
     fn test_stores_a_callee_reads_through_its_argument_stay() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/argread.cgs")).unwrap();
-        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
+        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
         let built = super::selected(&text, "argread", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_test proc").expect("_test");
@@ -844,7 +844,7 @@ mod tests {
     #[test]
     fn test_an_array_read_by_index_keeps_its_initializer() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/indexread.cgs")).unwrap();
-        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
+        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
         let built = super::selected(&text, "indexread", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_test proc").expect("_test");
@@ -859,7 +859,7 @@ mod tests {
     fn test_conversions_in_a_row_switch_the_rounding_mode_once() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/truncs.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "truncs", None, &llrm_driver::code16_options(machine)).expect("selects");
+        let built = super::selected(&text, "truncs", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_truncs proc").expect("_truncs");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -873,7 +873,7 @@ mod tests {
     fn test_both_arms_of_an_if_else_come_before_the_return() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/diamond.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "diamond", None, &llrm_driver::code16_options(machine)).expect("selects");
+        let built = super::selected(&text, "diamond", None, &llrm_driver::m16_options(machine)).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_diamond proc").expect("_diamond");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
@@ -886,7 +886,7 @@ mod tests {
     #[test]
     fn test_a_float_argument_is_read_from_its_own_cell() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/paramremat.cgs")).unwrap();
-        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
+        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
         let built = super::selected(&text, "paramremat", None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_summed proc").expect("_summed");
@@ -897,7 +897,7 @@ mod tests {
     /// The listing of each function in `fixture`, `-Os` on a 486.
     fn listed(fixture: &str, functions: &[&str]) -> Vec<Vec<String>> {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"))).unwrap();
-        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
+        let options = llrm_core::driver::Options { pipeline: llrm_core::driver::flags::Level::Os.options(), ..llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }) };
         let built = super::selected(&text, fixture, None, &options).expect("selects");
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         functions
@@ -938,7 +938,7 @@ mod tests {
     fn test_floats_crowding_a_compare_before_its_branches_spill() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/x87crowd.cgs")).unwrap();
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
-        let built = super::selected(&text, "x87crowd", None, &llrm_driver::code16_options(machine));
+        let built = super::selected(&text, "x87crowd", None, &llrm_driver::m16_options(machine));
         assert!(built.is_ok(), "{:?}", built.err());
     }
 
@@ -947,7 +947,7 @@ mod tests {
     #[test]
     fn test_a_void_function_is_selected() {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/parity/qmove.cgs");
-        let built = super::selected(&std::fs::read_to_string(path).unwrap(), "qmove", None, &llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }));
+        let built = super::selected(&std::fs::read_to_string(path).unwrap(), "qmove", None, &llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }));
         assert!(built.is_ok(), "{:?}", built.err());
     }
 
@@ -964,7 +964,7 @@ mod tests {
     /// the result in EAX, EBP the frame. It listed `bp`, `[bp+4]` and a DX:AX result, and
     /// never reached the allocator, before the target stated them.
     #[test]
-    fn test_code32_lists_add_as_flat_cdecl32() {
+    fn test_m32_lists_add_as_flat_cdecl32() {
         let lines = flat_listing("add");
         assert_eq!(&lines[..2], [".386", ".model flat"]);
         let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_add proc near").skip(1).take_while(|line| *line != "_add endp").map(String::as_str).collect();
@@ -974,7 +974,7 @@ mod tests {
     /// A narrow argument goes as a stack slot: `push ax` pushed two bytes, and cdecl32's next
     /// argument, and the callee's read of it, lay a dword apart.
     #[test]
-    fn test_code32_pushes_narrow_arguments_as_dwords() {
+    fn test_m32_pushes_narrow_arguments_as_dwords() {
         let lines = flat_listing("args");
         assert!(lines.iter().filter(|line| line.starts_with("push ")).all(|line| line.split_whitespace().nth(1).is_some_and(|operand| operand.starts_with('e') || operand.starts_with("offset"))), "{lines:#?}");
         assert!(lines.contains(&"add esp, 8".to_owned()), "{lines:#?}");
@@ -984,7 +984,7 @@ mod tests {
     /// cell read 32 bits wide (a 16-bit frame's `[bp]` under 32-bit addressing) wrote `movzx ebp, ebp`
     /// into a flat frame, and the reserve was 70 bytes, not a multiple of the dword stack.
     #[test]
-    fn test_code32_keeps_ebp_and_the_dword_stack() {
+    fn test_m32_keeps_ebp_and_the_dword_stack() {
         let lines = flat_listing("bytes");
         assert!(lines.iter().all(|line| !line.starts_with("movzx ebp")), "{lines:#?}");
         assert!(lines.contains(&"sub esp, 72".to_owned()), "{lines:#?}");
@@ -1016,7 +1016,7 @@ mod tests {
     /// 32-bit encoding of what its listing says. It was 16-bit records and `67 8b 46 08` (`mov
     /// eax, [bp+8]` under an address-size prefix) ending in `66 c3` (a word return).
     #[test]
-    fn test_code32_writes_a_use32_object_with_its_own_encoding() {
+    fn test_m32_writes_a_use32_object_with_its_own_encoding() {
         let records = flat_object("add");
         let kinds: Vec<u8> = records.iter().map(|(kind, _)| *kind).collect();
         assert_eq!(kinds, [0x80, 0x96, 0x99, 0x99, 0x91, 0xA1, 0x8A], "THEADR LNAMES SEGDEF32 x2 PUBDEF32 LEDATA32 MODEND");
@@ -1028,7 +1028,7 @@ mod tests {
     /// A near procedure that pops its own arguments returns `ret 4` (`c2 0400`): the word form,
     /// `66 c2 0400`, pops a 16-bit return address and sent the flat program into the vector table.
     #[test]
-    fn test_code32_returns_popping_arguments_with_a_dword_ret() {
+    fn test_m32_returns_popping_arguments_with_a_dword_ret() {
         let object = flat_object("pop");
         let code = hex(&object.iter().find(|(kind, _)| *kind == 0xA1).expect("code").1);
         assert!(code.contains("c20400") && !code.contains("66c2"), "{code}");
@@ -1038,7 +1038,7 @@ mod tests {
     /// `movs dword ptr es:[di], dword ptr ebx:[si]` with the source and count in whatever registers
     /// the allocator chose, and a refusal ("may be in no register") before that.
     #[test]
-    fn test_code32_lists_a_string_copy_through_esi_edi_ecx() {
+    fn test_m32_lists_a_string_copy_through_esi_edi_ecx() {
         let lines = flat_listing("strings");
         let at = lines.iter().position(|line| line == "rep movsd").expect("a rep movsd");
         let before = &lines[..at];
@@ -1052,11 +1052,11 @@ mod tests {
     /// `-fsanitize=stack` compares ESP with a dword limit and enters a near handler: `cmp sp, word ptr`
     /// and `call far ptr` were a 16-bit compare and a far call in a flat program.
     #[test]
-    fn test_code32_checks_its_stack_against_a_dword_limit_and_a_near_handler() {
+    fn test_m32_checks_its_stack_against_a_dword_limit_and_a_near_handler() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32/add.cgs")).unwrap();
         let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
         let args = super::parse_args(&argv).unwrap();
-        let built = super::selected_checking(&text, "add", None, &args.codegen, Some(super::stack_check(&llrm_x86_code32::Code32))).unwrap();
+        let built = super::selected_checking(&text, "add", None, &args.codegen, Some(super::stack_check(&llrm_x86_m32::M32))).unwrap();
         let listing = llrm_core::backend::masm::text(&built).unwrap();
         assert!(listing.contains("cmp esp, dword ptr _llrm_os_stack_low") && listing.contains("call __STKOVERFLOW"), "{listing}");
         assert!(!listing.contains("far ptr") && listing.contains("extern __STKOVERFLOW:near"), "{listing}");
@@ -1076,7 +1076,7 @@ mod tests {
     /// encoder whether `movsx eax, word ptr [eax]` encodes, which it does not, so a flat compile kept
     /// `mov ax, word ptr [eax]; movsx eax, ax`.
     #[test]
-    fn test_code32_widens_a_load_in_one_instruction() {
+    fn test_m32_widens_a_load_in_one_instruction() {
         let body = flat_body("extend", "extend");
         assert!(body.contains(&"movsx eax, word ptr [eax]".to_owned()), "{body:#?}");
     }
@@ -1086,7 +1086,7 @@ mod tests {
     /// [ebx]` wrongly, and moved it above a read of EAX: `movsx eax, [ebx]; movsx ebx, [eax]`
     /// loaded through a value.
     #[test]
-    fn test_code32_never_addresses_through_a_value() {
+    fn test_m32_never_addresses_through_a_value() {
         let body = flat_body("extend", "extend2");
         let mut pointers: Vec<&str> = Vec::new();
         for line in &body {
@@ -1114,7 +1114,7 @@ mod tests {
     /// A word sum is the word `add`, not a dword one and the `movzx` of its low word: its upper
     /// half stays as it was, which is zero where the words were zero-extended.
     #[test]
-    fn test_code32_adds_words_as_words() {
+    fn test_m32_adds_words_as_words() {
         let body = flat_body("narrow", "short_sum");
         assert!(body.iter().any(|line| line.starts_with("add ax, ")) && !body.iter().any(|line| line.starts_with("add eax, ")), "{body:#?}");
     }
@@ -1122,16 +1122,16 @@ mod tests {
     /// The same sum of dwords keeps the `movzx`: the word `add` would leave the upper half as it was,
     /// and the result is read as a dword.
     #[test]
-    fn test_code32_keeps_the_extension_where_the_upper_half_is_not_zero() {
+    fn test_m32_keeps_the_extension_where_the_upper_half_is_not_zero() {
         let body = flat_body("narrow", "int_sum");
         assert!(body.iter().any(|line| line.starts_with("add eax, ")) && body.iter().any(|line| line == "movzx eax, ax"), "{body:#?}");
     }
 
     /// The sieve's inner loop indexes its array with a word counter, and the counter's register is the
     /// index: the zero extension of a word whose register is zero above it was a copy into another one
-    /// that the store read, one more instruction a trip than code16's `[bp+si]`.
+    /// that the store read, one more instruction a trip than m16's `[bp+si]`.
     #[test]
-    fn test_code32_indexes_through_the_counter_not_a_copy_of_it() {
+    fn test_m32_indexes_through_the_counter_not_a_copy_of_it() {
         let body = flat_body("sieve", "bench_sieve");
         let from = body.iter().position(|line| line.starts_with("imul ")).expect("the counter starts as i*i");
         let loop_ = &body[from..];
@@ -1143,7 +1143,7 @@ mod tests {
     /// `mov; add`, and a native form flat code has without a prefix. The target priced a flat dword's address
     /// as the real-mode prefixed one and had no price for the native form, so it never chose it.
     #[test]
-    fn test_code32_adds_into_a_new_register_with_lea() {
+    fn test_m32_adds_into_a_new_register_with_lea() {
         let body = flat_body("lea", "lea_sum");
         assert!(body.iter().any(|line| line.starts_with("lea e") && line.contains("[e") && line.contains("+e")), "{body:#?}");
         assert!(!body.iter().any(|line| line != "mov ebp, esp" && line.starts_with("mov e") && line.split_once(", ").is_some_and(|(_, from)| from.starts_with('e') && from.len() == 3)), "{body:#?}");
@@ -1152,7 +1152,7 @@ mod tests {
     /// A loop over `int *`: the pointer, the index and the sum are dwords in 32-bit registers,
     /// addressed `[base+index]` with no segment, selector or 16-bit register.
     #[test]
-    fn test_code32_lists_a_loop_over_int_pointers() {
+    fn test_m32_lists_a_loop_over_int_pointers() {
         let lines = flat_listing("sum");
         let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_sum proc near").skip(1).take_while(|line| *line != "_sum endp").map(String::as_str).collect();
         // The load is the add's operand, and the add of the stride sets the flags the branch reads.

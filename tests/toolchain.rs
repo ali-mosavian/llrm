@@ -160,7 +160,7 @@ fn test_c_parity_fixtures_compute_their_expected_values() {
         .collect();
     names.sort();
     // The C start-up is the OS layer's: its start, C's hook, and its operations, which `main` below calls.
-    let target = llrm_x86_code16::Code16;
+    let target = llrm_x86_m16::M16;
     let (layer, c) = (llrm_target::Target::os_layer(&target).unwrap(), llrm_target::Target::runtime(&target, "c").unwrap());
     let defines: Vec<String> = layer.defines().unwrap().into_iter().chain(c.defines().unwrap()).map(|(symbol, value)| format!("-D{symbol}={value}")).collect();
     let assemble = |source: String, object: &str| {
@@ -323,10 +323,10 @@ fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
 }
 
 /// Far and huge are near where a target has one address space, and the compiler says so, once for each
-/// place: code16 and a flat program that writes neither stay silent, and `-Wno-target-width` (the runtime's
+/// place: m16 and a flat program that writes neither stay silent, and `-Wno-target-width` (the runtime's
 /// build, which writes `*far` for the targets that have one) silences it.
 #[test]
-fn test_far_and_huge_are_near_with_a_warning_on_code32() {
+fn test_far_and_huge_are_near_with_a_warning_on_m32() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
     let object = scratch.path().join("p.obj");
@@ -346,7 +346,7 @@ fn test_far_and_huge_are_near_with_a_warning_on_code32() {
 /// C's far and huge are near with a warning where the target has one address space, and an unmarked
 /// pointer is near in every model: `-ml` (default data pointers far) is not a switch.
 #[test]
-fn test_c_far_and_huge_are_near_with_a_warning_on_code32() {
+fn test_c_far_and_huge_are_near_with_a_warning_on_m32() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
     let object = scratch.path().join("p.obj");
@@ -375,11 +375,11 @@ fn test_the_generated_header_is_far_only_where_far_code_is() {
     assert!(flat.contains("extern short __cdecl weight(short value);") && !flat.contains("__far"), "{flat}");
 }
 
-/// A flat target's block clears and copies are `rep stos`/`rep movs` on dwords through DS=ES, as code16's
+/// A flat target's block clears and copies are `rep stos`/`rep movs` on dwords through DS=ES, as m16's
 /// are through ES: the lowering took segment operands and 16-bit counts (a departure row), and a constant
-/// fill or copy on code32 was a loop. Neither sets a segment register here.
+/// fill or copy on m32 was a loop. Neither sets a segment register here.
 #[test]
-fn test_code32_block_operations_are_rep_string_instructions_without_segments() {
+fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
     let scratch = tempfile::tempdir().unwrap();
     let source = scratch.path().join("m.c");
     std::fs::write(&source, "char a[300], b[300];\nvoid clear(void) { unsigned i; for (i = 0; i < 300; i++) a[i] = 0; }\nvoid copy(void) { int i; for (i = 0; i < 300; i++) b[i] = a[i]; }\nint main(void) { clear(); copy(); return b[5]; }\n").unwrap();
@@ -389,10 +389,10 @@ fn test_code32_block_operations_are_rep_string_instructions_without_segments() {
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         std::fs::read_to_string(out).unwrap()
     };
-    let flat = listing("x86-code32");
+    let flat = listing("x86-m32");
     assert!(flat.contains("rep stosd") && flat.contains("rep movsd"), "{flat}");
     assert!(!flat.contains("DGROUP") && flat.lines().all(|line| !matches!(line.trim(), "pop es" | "push es") && !line.trim().ends_with(", es")), "{flat}");
-    let real = listing("x86-code16");
+    let real = listing("x86-m16");
     assert!(real.contains("rep stosd") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
 }
 
@@ -426,7 +426,7 @@ fn test_the_examples_and_benchmarks_compile_without_warnings() {
             scope.spawn(move || {
                 let text = std::fs::read_to_string(file).unwrap();
                 let header = text.lines().take_while(|line| line.starts_with('#')).find_map(|line| line.trim_start_matches('#').trim().strip_prefix("targets:"));
-                let targets: Vec<&str> = header.map_or(vec!["x86-code16", "x86-code32"], |list| list.split_whitespace().take(1).collect());
+                let targets: Vec<&str> = header.map_or(vec!["x86-m16", "x86-m32"], |list| list.split_whitespace().take(1).collect());
                 for target in targets {
                     let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).arg(file).args([&mode(target), "-O2", "-o", object.to_str().unwrap()]).output().unwrap();
                     let stderr = String::from_utf8_lossy(&done.stderr);
@@ -454,7 +454,7 @@ fn test_the_zed_extension_names_a_library_that_exists_and_passes_the_projects_ta
     assert!(source.contains("fn language_server_initialization_options") && source.contains("settings.initialization_options"));
 }
 
-/// The file calls' result was an `i32` on code16 and an `isize` on code32, so a program naming the type
+/// The file calls' result was an `i32` on m16 and an `isize` on m32, so a program naming the type
 /// was written for one target; both OS layers declare the same one.
 #[test]
 fn test_both_targets_declare_the_same_file_call_result() {
@@ -465,8 +465,8 @@ fn test_both_targets_declare_the_same_file_call_result() {
         let text = String::from_utf8_lossy(&done.stdout).into_owned();
         ["pub fn read(", "pub fn write_file("].iter().map(|head| text.lines().find(|line| line.starts_with(head)).and_then(|line| line.rsplit_once("-> ")).map(|(_, result)| result.trim().to_owned()).expect("declared")).collect()
     };
-    assert_eq!(results("x86-code16"), ["i32", "i32"]);
-    assert_eq!(results("x86-code32"), results("x86-code16"));
+    assert_eq!(results("x86-m16"), ["i32", "i32"]);
+    assert_eq!(results("x86-m32"), results("x86-m16"));
 }
 
 /// start.asm and os.asm each named a constant of their own (the stack, the heap's arena, DOS's function
@@ -478,11 +478,11 @@ fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         String::from_utf8_lossy(&done.stdout).split_whitespace().map(str::to_owned).collect::<Vec<_>>()
     };
-    let flat = defines("x86-code32");
+    let flat = defines("x86-m32");
     for told in ["STACK_BYTES=16384", "HEAP_BYTES=16777216", "DOS_OPEN=61", "DOS_INT=33", "DOS_DPMI_ALLOC=1281"] {
         assert!(flat.contains(&told.to_owned()), "{told} in {flat:?}");
     }
-    let real = defines("x86-code16");
+    let real = defines("x86-m16");
     assert!(real.contains(&"DOS_OPEN=61".to_owned()) && !real.iter().any(|one| one.starts_with("HEAP_BYTES")), "{real:?}");
 }
 
@@ -512,9 +512,9 @@ fn mode(target: &str) -> String {
     format!("-m{}", found.layout().mode)
 }
 
-/// The `-march` flag for the code16 CPU `cpu`, as its `timings.times` names it.
+/// The `-march` flag for the m16 CPU `cpu`, as its `timings.times` names it.
 fn march(cpu: &str) -> String {
-    let code16 = llrm_driver::all().into_iter().find(|one| one.name() == "x86-code16").expect("code16");
-    let at = code16.cpus().iter().position(|one| *one == cpu).expect("a CPU code16 prices");
-    format!("-march={}", code16.marches()[at])
+    let m16 = llrm_driver::all().into_iter().find(|one| one.name() == "x86-m16").expect("m16");
+    let at = m16.cpus().iter().position(|one| *one == cpu).expect("a CPU m16 prices");
+    format!("-march={}", m16.marches()[at])
 }

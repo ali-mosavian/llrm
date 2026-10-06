@@ -1,0 +1,13 @@
+# x86-m16: OMF with 16-bit records, and the listing's MASM header.
+formats = ["omf"]
+default = "omf"
+bitness = 16
+header = [".model medium", ".386"]
+
+# How a C test is linked (tools/dosbatch): the start-up, the program, the externals, any
+# extras, then the last object, as jwlink's `file` lines; paths from the repository root.
+[link]
+format = ["format", "dos"]
+first = ["runtime/shared/dos/m16/start.asm", "runtime/c/x86-m16/init.asm"]
+last = ["runtime/c/x86-m16/ext.asm"]
+final = ["runtime/shared/dos/m16/os.asm"]
