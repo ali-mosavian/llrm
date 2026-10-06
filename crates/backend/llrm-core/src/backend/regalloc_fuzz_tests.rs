@@ -999,3 +999,41 @@ fn test_the_next_value_is_one_past_the_largest_the_body_names() {
         }
     }
 }
+
+/// The classes of every value numbered the body, found every interval and built the clobber masks for the
+/// `[word+word]` roles, all of which the allocator's facts had just found for the same body (2.3 s of
+/// compiling `d_faces`, #559). Given them, the classes are the same, in the same order, and nothing is worked
+/// out again.
+#[test]
+fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
+    use crate::analysis::intervals::{indexed, intervals, worked};
+    use crate::backend::allocate::_masks;
+    use crate::backend::classes::RegisterClasses;
+    use crate::backend::regclass::{Found, classes, classes_given};
+    let registers = RegisterClasses::code16();
+    for seed in 0..150 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            let live = intervals(&body, None);
+            let masks = _masks(&body, &indexed(&body), &crate::backend::target::BUILT_IN);
+            let before = worked();
+            let given = classes_given(&body, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &registers, &Found { live: &live, masks: &masks });
+            assert_eq!(worked() - before, 0, "seed {seed}: intervals were worked out again");
+            let alone = classes(&body, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &registers);
+            assert!(given.iter().eq(alone.iter()), "seed {seed}");
+        }
+    }
+    // A body with a `[base+index]` access of two words: the roles are chosen from the intervals and masks.
+    let cell = Mem { base: Some(Held { value: 1, width: 2 }), index: Some(Held { value: 2, width: 2 }), scale: 1, ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
+    let load = Insn::new(3, Some((3, 1)), Some(Semantics { name: Some("mov".to_owned()), dests: vec![held(3)], sources: vec![Loc::Mem(cell)], ..Semantics::new(Operation::Move) }), vec![3], vec![1, 2]);
+    let define = |at: i64, value: u32| Insn::new(at, Some((at, 1)), Some(Semantics { name: Some("mov".to_owned()), dests: vec![held(value)], sources: vec![imm(0)], ..Semantics::new(Operation::Move) }), vec![value], vec![]);
+    let blocks = vec![LirBlock::new(1, vec![Arc::new(define(1, 1)), Arc::new(define(2, 2)), Arc::new(load)])];
+    let pairs = LirBody::new("f", 1, blocks, Default::default(), Default::default());
+    let live = intervals(&pairs, None);
+    let masks = _masks(&pairs, &indexed(&pairs), &crate::backend::target::BUILT_IN);
+    let given = classes_given(&pairs, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &registers, &Found { live: &live, masks: &masks });
+    let alone = classes(&pairs, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &registers);
+    assert!(given.contains_key(&1) && given.contains_key(&2), "the pair's values are confined to a base and an index");
+    assert!(given.iter().eq(alone.iter()));
+}
