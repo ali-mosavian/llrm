@@ -44,6 +44,9 @@ pub trait Target {
     /// a value in: each by its full register and by the one a prologue pushes.
     fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)>;
 
+    /// The lines a listing opens with: its instruction set and memory model.
+    fn listing_header(&self) -> Vec<String>;
+
     /// What a frame is built of.
     fn frame_registers(&self) -> FrameRegisters {
         FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved() }
