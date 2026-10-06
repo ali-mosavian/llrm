@@ -135,7 +135,8 @@ pub fn recorded_for(source: &Path, includes: &[String], debug: bool, watcom: &[&
     // Flat: the same switches but the model, packing and Borland's headers. Its structs
     // are laid out as Watcom's 386 does at -zp4 (provisional until the C ABI is chosen
     // with the extender), and cdecl as -ecc.
-    let flat_flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-ecc", "-s", "-zl", "-zq"];
+    let flat_header = format!("-fi={}", root.join("crates/frontends/llrm-c/src/flat.h").display());
+    let flat_flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-ecc", "-s", "-zl", "-zq", flat_header.as_str()];
     let flags: &[&str] = if flat { &flat_flags } else { &medium };
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
@@ -924,6 +925,17 @@ mod tests {
         assert_eq!(&lines[..2], [".386", ".model flat"]);
         let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_add proc near").skip(1).take_while(|line| *line != "_add endp").map(String::as_str).collect();
         assert_eq!(body, ["push ebp", "mov ebp, esp", "L0_0:", "mov eax, dword ptr [ebp+8]", "add eax, dword ptr [ebp+12]", "pop ebp", "ret"]);
+    }
+
+    /// Native 32-bit addressing reads whole registers: the pass that zeroed EBP's upper half for a
+    /// cell read 32 bits wide (a 16-bit frame's `[bp]` under 32-bit addressing) wrote `movzx ebp, ebp`
+    /// into a flat frame, and the reserve was 70 bytes, not a multiple of the dword stack.
+    #[test]
+    fn test_code32_keeps_ebp_and_the_dword_stack() {
+        let lines = flat_listing("bytes");
+        assert!(lines.iter().all(|line| !line.starts_with("movzx ebp")), "{lines:#?}");
+        assert!(lines.contains(&"sub esp, 72".to_owned()), "{lines:#?}");
+        assert!(lines.contains(&"mov byte ptr [ebp+eax-70], al".to_owned()), "{lines:#?}");
     }
 
     /// A loop over `int *`: the pointer, the index and the sum are dwords in 32-bit registers,
