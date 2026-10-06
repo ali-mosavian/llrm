@@ -190,6 +190,8 @@ impl LiteralPool {
 struct TypeRegistry {
     /// The bytes of a near and of a far pointer on the target.
     sizes: crate::Sizes,
+    /// The bits of the target's code.
+    code_bits: u32,
     /// The convention the language's own functions have here: the target's first.
     native: Abi,
     /// The names of the conventions the target defines: any other is refused.
@@ -289,9 +291,10 @@ impl TypeRegistry {
 
     /// The language's types, its pointers `sizes` bytes wide, its own functions in the
     /// convention `native` and the conventions the target defines `conventions`.
-    fn new(sizes: crate::Sizes, native: Abi, conventions: Vec<String>) -> Self {
+    fn new(sizes: crate::Sizes, native: Abi, conventions: Vec<String>, bits: u32) -> Self {
         Self {
             sizes,
+            code_bits: bits,
             native,
             conventions,
             types: vec![
@@ -1361,7 +1364,7 @@ fn program(
     facts: Option<&RefCell<Vec<Fact>>>,
     frontend: &super::Frontend,
 ) -> Result<hir::Program, Diagnostic> {
-    let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.conventions.clone());
+    let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.conventions.clone(), frontend.bits);
     types.register_fixed_types(&module.fixed_types)?;
     types.register_aggregates(&module.structs, &module.enums)?;
     types.register_drops(&module.functions.iter().collect::<Vec<_>>())?;
