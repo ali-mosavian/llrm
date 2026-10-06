@@ -291,6 +291,7 @@ dependencies = [
  "llrm-core",
  "llrm-target",
  "llrm-x86-code16",
+ "llrm-x86-code32",
 ]
 
 [[package]]
@@ -441,6 +442,14 @@ dependencies = [
  "serde",
  "serde_json",
  "toml",
+]
+
+[[package]]
+name = "llrm-x86-code32"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-target",
 ]
 
 [[package]]

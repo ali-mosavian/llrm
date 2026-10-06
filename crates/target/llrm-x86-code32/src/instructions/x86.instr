@@ -1,0 +1,7 @@
+# The forms flat 32-bit code adds to the family's: rel32 branches and calls,
+# and no segment loads.
+#
+# name   operation shape            widths    cost        fixed                  iced
+j{cc}    branch    -/-              -         jcc         -                      J{cc}_rel32_32
+jmp      jump      -/-              -         jmp_short   -                      Jmp_rel32_32
+call     call      -/-              -         call_near   -                      Call_rel32_32
