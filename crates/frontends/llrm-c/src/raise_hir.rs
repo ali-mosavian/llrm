@@ -13,6 +13,14 @@ use llrm_core::abi::runtime;
 
 /// `WIDTHS.get(type_)`.
 pub fn widths(type_: &str) -> Option<u32> {
+    widths_for(false, type_)
+}
+
+/// `widths`, where flat code's `int` and pointers are 4 bytes.
+pub fn widths_for(flat: bool, type_: &str) -> Option<u32> {
+    if flat && matches!(type_, "TY_INTEGER" | "TY_UNSIGNED" | "TY_BOOLEAN" | "TY_POINTER" | "TY_NEAR_POINTER" | "TY_CODE_PTR" | "TY_NEAR_CODE_PTR") {
+        return Some(4);
+    }
     Some(match type_ {
         "TY_UINT_1" | "TY_INT_1" => 1,
         "TY_UINT_2" | "TY_INT_2" => 2,
@@ -70,6 +78,17 @@ pub(crate) fn pointers(type_: &str) -> bool {
 
 /// C's aliasing classes.
 pub(crate) fn classes(type_: &str) -> Option<&'static str> {
+    classes_for(false, type_)
+}
+
+/// `classes`, where flat code's `int` is a dword and its pointers 4 bytes.
+pub(crate) fn classes_for(flat: bool, type_: &str) -> Option<&'static str> {
+    if flat && matches!(type_, "TY_INTEGER" | "TY_UNSIGNED") {
+        return Some("int4");
+    }
+    if flat && matches!(type_, "TY_NEAR_POINTER" | "TY_POINTER") {
+        return Some("pointer4");
+    }
     Some(match type_ {
         "TY_INT_2" | "TY_UINT_2" | "TY_INTEGER" | "TY_UNSIGNED" => "int2",
         "TY_INT_4" | "TY_UINT_4" => "int4",
@@ -116,6 +135,17 @@ pub(crate) fn medium_model(name: String, caller_pops: bool, pushed: i64) -> runt
         direct_writes: None,
         flags_result: false,
         direct_reads: None,
+    }
+}
+
+/// A call's contract under cdecl32: stack arguments, the result in EAX (EDX:EAX
+/// for an i64), EBX, ESI, EDI and EBP kept, the rest clobbered. `Reg` names the
+/// 16-bit registers; each stands for its family.
+pub(crate) fn cdecl32(name: String, caller_pops: bool, pushed: i64) -> runtime::Contract {
+    runtime::Contract {
+        clobbers: BTreeSet::from([runtime::Reg::Ax, runtime::Reg::Cx, runtime::Reg::Dx, runtime::Reg::Flags]),
+        evidence: "cdecl32: stack arguments, result in EAX or EDX:EAX; EBX, ESI, EDI and EBP kept".to_owned(),
+        ..medium_model(name, caller_pops, pushed)
     }
 }
 

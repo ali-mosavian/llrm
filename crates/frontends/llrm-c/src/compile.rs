@@ -116,15 +116,27 @@ struct Args {
 /// The code-generator stream wccq records for one C file; with `debug`,
 /// its debug types and symbols too (-d2).
 pub fn recorded(source: &Path, includes: &[String], debug: bool, watcom: &[&str]) -> Result<String, hir::Unsupported> {
+    recorded_for(source, includes, debug, watcom, false)
+}
+
+/// `recorded` by the 386 front end for the flat 32-bit target when `flat`, else
+/// by the 16-bit one.
+pub fn recorded_for(source: &Path, includes: &[String], debug: bool, watcom: &[&str], flat: bool) -> Result<String, hir::Unsupported> {
     let root = Path::new(env!("LLRM_ROOT"));
-    let wccq = Path::new(option_env!("LLRM_WCCQ").ok_or_else(|| hir::Unsupported("llrm was built without the toolchain feature".into()))?);
+    let unbuilt = || hir::Unsupported("llrm was built without the toolchain feature".into());
+    let wccq = Path::new(if flat { option_env!("LLRM_WCCQ386") } else { option_env!("LLRM_WCCQ") }.ok_or_else(unbuilt)?);
     // Borland's medium model: far code, near data, cdecl, signed char, 80-bit long
     // double, byte-packed structs, 16-bit enums, x87 inline, no stack probes, no
     // default library. -fp3 is for inline assembly: qcport's own uses 387 instructions.
     // Borland's ABI is the only one: wccq also lays bit fields out as BCC 3.1 does,
     // with no switch, since no other struct or call ABI exists here to match.
     let borland = format!("-fi={}", root.join("crates/frontends/llrm-c/src/borland.h").display());
-    let flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
+    let medium = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
+    // Flat: the same switches but the model, packing and Borland's headers. Its structs
+    // are laid out as Watcom's 386 does at -zp4 (provisional until the C ABI is chosen
+    // with the extender), and cdecl as -ecc.
+    let flat_flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-ecc", "-s", "-zl", "-zq"];
+    let flags: &[&str] = if flat { &flat_flags } else { &medium };
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
     let out = scratch.path().join("unit.cgs");
@@ -182,7 +194,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         at += 1;
     }
     let source = source.ok_or("the following arguments are required: source")?;
-    let bound = llrm_driver::target(&flags, &["x86-code16"])?;
+    let bound = llrm_driver::target(&flags, &["x86-code16", "x86-code32"])?;
     let machine = flags.machine(llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..bound.target.machine() })?;
     Ok(Args {
         source,
@@ -207,7 +219,7 @@ pub fn main(argv: &[String]) -> i32 {
         let text = if args.source.extension().and_then(|one| one.to_str()) == Some("cgs") {
             fs::read_to_string(&args.source)?
         } else {
-            recorded(&args.source, &args.include, args.flags.debug, &args.watcom)?
+            recorded_for(&args.source, &args.include, args.flags.debug, &args.watcom, args.codegen.arch.name() == "x86-code32")?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
         let module = args
@@ -446,6 +458,20 @@ mod tests {
         let recorded = super::recorded(&source, &[], false, &[]).expect("wccq records probe.c");
         let data: Vec<&str> = recorded.lines().filter(|line| line.contains("DGBytes")).collect();
         assert_eq!(data, ["- DGBytes 10 00000000000000e00040"], "{recorded}");
+    }
+
+    /// The 386 front end records `sum.c` as the committed flat stream: `flat=1` in INIT, int and
+    /// pointers 4 bytes. (Its source path is the machine's, so that line is not compared.)
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_the_386_wccq_records_the_committed_flat_stream() {
+        let dir = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32");
+        let recorded = super::recorded_for(&dir.join("sum.c"), &[], false, &[], true).expect("the 386 wccq records sum.c");
+        let committed = std::fs::read_to_string(dir.join("sum.cgs")).unwrap();
+        let body = |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).map(str::to_owned).collect::<Vec<_>>();
+        assert!(recorded.starts_with("INIT ") && recorded.lines().next().unwrap().ends_with(" flat=1"), "{recorded}");
+        assert_eq!(body(&recorded), body(&committed));
     }
 
     /// The loop in `function` that reads `marker`, from its label to its backward branch, as the rich route selects it.
@@ -878,5 +904,36 @@ mod tests {
         let path = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/parity/qmove.cgs");
         let built = super::selected(&std::fs::read_to_string(path).unwrap(), "qmove", None, &llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() }));
         assert!(built.is_ok(), "{:?}", built.err());
+    }
+
+    /// tests/fixtures/c32/`fixture`.cgs, as the 386 front end recorded it, selected for `--target x86-code32`.
+    fn flat_listing(fixture: &str) -> Vec<String> {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs"))).unwrap();
+        let argv: Vec<String> = ["--target", "x86-code32", "-O2", "x.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
+        llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect()
+    }
+
+    /// `int add(int, int)` as flat 32-bit code: cdecl32's arguments at [ebp+8] and [ebp+12],
+    /// the result in EAX, EBP the frame. It listed `bp`, `[bp+4]` and a DX:AX result, and
+    /// never reached the allocator, before the target stated them.
+    #[test]
+    fn test_code32_lists_add_as_flat_cdecl32() {
+        let lines = flat_listing("add");
+        assert_eq!(&lines[..2], [".386", ".model flat"]);
+        let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_add proc near").skip(1).take_while(|line| *line != "_add endp").map(String::as_str).collect();
+        assert_eq!(body, ["push ebp", "mov ebp, esp", "L0_0:", "mov eax, dword ptr [ebp+8]", "add eax, dword ptr [ebp+12]", "pop ebp", "ret"]);
+    }
+
+    /// A loop over `int *`: the pointer, the index and the sum are dwords in 32-bit registers,
+    /// addressed `[base+index]` with no segment, selector or 16-bit register.
+    #[test]
+    fn test_code32_lists_a_loop_over_int_pointers() {
+        let lines = flat_listing("sum");
+        let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_sum proc near").skip(1).take_while(|line| *line != "_sum endp").map(String::as_str).collect();
+        assert!(body.contains(&"mov edx, dword ptr [ebx+ecx]") && body.contains(&"add ecx, 4"), "{body:#?}");
+        assert!(body.iter().all(|line| !line.contains(" bp") && !line.contains("[bx") && !line.contains("es:") && !line.contains("far")), "{body:#?}");
+        assert_eq!(body.last(), Some(&"ret"));
     }
 }
