@@ -1746,7 +1746,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let base = self.values.get(&one.base).copied().ok_or_else(|| format!("value {} used before its definition", one.base))?;
                 let pointee = self.tables.types[&self.value_types[&one.base]].element.map(|element| self.tables.types[&element]);
                 let ty = stored_type(&mut self.b.context.types, &self.tables.spaces, self.tables.types[&one.r#type])?;
-                Ok((self.offset(base, one.offset(pointee), false), ty, false, None))
+                Ok((self.offset(base, one.offset(pointee, self.tables.types[&one.r#type].width), false), ty, false, None))
             }
             Operand::ValueRef(_) | Operand::Constant(_) => Err("a value where a place belongs".to_owned()),
         }

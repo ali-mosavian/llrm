@@ -577,13 +577,8 @@ impl<'p> Machine<'p> {
         let Some(Scalar::Address(address)) = activation.values.get(&descriptor.base) else {
             return fail("descriptor place has no address value");
         };
-        let length = descriptor.field == model::DescriptorField::Length;
-        let offset = match (self.scoped_view(activation, descriptor), length) {
-            (true, true) => 0,
-            (true, false) => 2,
-            (false, true) => -4,
-            (false, false) => -2,
-        };
+        let pointee = activation.layout.value_types[&descriptor.base].element.map(|one| self.types[&one]);
+        let offset = descriptor.offset(pointee, i64::from(self.types[&descriptor.r#type].width));
         Ok(Location { memory: address.memory.clone(), offset: address.offset + offset, type_: self.types[&descriptor.r#type] })
     }
 
