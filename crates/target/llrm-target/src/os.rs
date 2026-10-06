@@ -1,4 +1,4 @@
-//! The OS layer: one interface (`os/interface.toml`) every target implements for every language's
+//! The OS layer: one interface (`runtime/shared/interface.toml`) every target implements for every language's
 //! runtime. A target ships a `Layer` -- its `os.toml`, the assembly that implements the
 //! interface, and the facts of its operating system -- and the languages' bindings are rendered
 //! from the interface and the target's pointer kind, so no binding is written by hand.
@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 /// The interface's declaration.
-pub const INTERFACE: &str = include_str!("../os/interface.toml");
+pub const INTERFACE: &str = include_str!("../../../../runtime/shared/interface.toml");
 
 /// One operation of the interface.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -128,7 +128,7 @@ impl Layer {
             })
         };
         let mut text = format!(
-            "# The operating system under this target: what only assembly reaches. Rendered from the OS layer's interface\n# (crates/target/llrm-target/os/interface.toml) for {pointer} data pointers, {convention}. A call returns its result,\n# or its error code negated.\n\n"
+            "# The operating system under this target: what only assembly reaches. Rendered from the OS layer's interface\n# (runtime/shared/interface.toml) for {pointer} data pointers, {convention}. A call returns its result,\n# or its error code negated.\n\n"
         );
         for op in interface.of_groups(&groups) {
             for line in op.doc.lines() {

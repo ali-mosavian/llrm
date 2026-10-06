@@ -1,4 +1,4 @@
-# Nib's runtime on real-mode DOS: what the language asks of the target's OS layer (../../os/dos).
+# Nib's runtime on real-mode DOS: what the language asks of the target's OS layer (runtime/shared/dos/x86-code16).
 # Each field naming a file names one in this directory.
 
 # What `-fsanitize=stack` compares and calls.
