@@ -795,6 +795,36 @@ impl Facts {
 /// The values whose register a rewrite made them share with another, lose
 /// to a point that destroys it, or leave their class: the later of each pair.
 fn _overlapping(union: &IndexMap<Register, Vec<u32>>, r#where: &IndexMap<u32, Register>, facts: &Facts) -> BTreeSet<u32> {
+    let found = _overlapping_by_start(union, r#where, facts);
+    if std::env::var_os("LLRM_CHECK_OVERLAPPING").is_some() {
+        assert!(found == _overlapping_reference(union, r#where, facts), "values sharing a register found by start differ from the pairwise look");
+    }
+    found
+}
+
+fn _overlapping_by_start(union: &IndexMap<Register, Vec<u32>>, r#where: &IndexMap<u32, Register>, facts: &Facts) -> BTreeSet<u32> {
+    let mut out = BTreeSet::new();
+    for held in union.values() {
+        // The segments of the values kept so far, by start: kept values do not overlap one another, so a segment
+        // meets a kept one only if the last that starts before its end reaches past its start.
+        let mut kept: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
+        for value in held {
+            let Some(mine) = facts.live.get(value) else { continue };
+            let width = facts.widths.get(value).copied().unwrap_or(4);
+            let outside = facts.confined.get(value).is_some_and(|class| !class.iter().any(|one| _whole(*one) == _whole(r#where[value])));
+            let meets = |kept: &std::collections::BTreeMap<i64, i64>| mine.segments.iter().any(|seg| kept.range(..seg.end).next_back().is_some_and(|(_, end)| *end > seg.start));
+            if outside || meets(&kept) || _clobbered(mine, r#where[value], &facts.masks, width) {
+                out.insert(*value);
+            } else {
+                kept.extend(mine.segments.iter().map(|seg| (seg.start, seg.end)));
+            }
+        }
+    }
+    out
+}
+
+/// What `_overlapping` was: each value against every one kept before it.
+fn _overlapping_reference(union: &IndexMap<Register, Vec<u32>>, r#where: &IndexMap<u32, Register>, facts: &Facts) -> BTreeSet<u32> {
     let mut out = BTreeSet::new();
     for held in union.values() {
         let mut kept: Vec<u32> = Vec::new();
@@ -1165,13 +1195,15 @@ fn _allocated(
         // What is done of the rewrite besides its facts: the pins, the placed values it disturbs, the queue.
         let _after = llrm_support::debug::span("regalloc after rewrite");
         placing = None;
-        for (one, register) in constrain::required(&body, classes) {
-            fixed.entry(one).or_insert(register);
-        }
-        wanted = _wanted(&facts.hints, &fixed);
+        llrm_support::debug::timed("after required", || {
+            for (one, register) in constrain::required(&body, classes) {
+                fixed.entry(one).or_insert(register);
+            }
+        });
+        wanted = llrm_support::debug::timed("after wanted", || _wanted(&facts.hints, &fixed));
         fenced = fixed.keys().copied().chain(protected.iter().copied()).collect();
         let gone: Vec<u32> = r#where.keys().copied().filter(|one| !facts.live.contains_key(one)).collect();
-        let clashing = _overlapping(&union, &r#where, &facts);
+        let clashing = llrm_support::debug::timed("after overlapping", || _overlapping(&union, &r#where, &facts));
         for one in gone.iter().chain(&clashing) {
             if let Some(register) = r#where.shift_remove(one) {
                 union.get_mut(&_whole(register)).expect("a placed value is in its register").retain(|other| other != one);
@@ -1179,12 +1211,14 @@ fn _allocated(
         }
         // What the rewrite made or moved competes again; the rest still waits.
         let changed: BTreeSet<u32> = made.iter().chain(&gone).chain(&clashing).copied().collect();
-        for one in facts.live.keys().copied().filter(|one| !r#where.contains_key(one) && !spilled.contains(one)) {
-            if changed.contains(&one) || waiting.get(&one).copied().unwrap_or(0) == 0 {
-                queue.push(queued(one, &facts.live, &stage, &fixed));
-                *waiting.entry(one).or_insert(0) += 1;
+        llrm_support::debug::timed("after queue", || {
+            for one in facts.live.keys().copied().filter(|one| !r#where.contains_key(one) && !spilled.contains(one)) {
+                if changed.contains(&one) || waiting.get(&one).copied().unwrap_or(0) == 0 {
+                    queue.push(queued(one, &facts.live, &stage, &fixed));
+                    *waiting.entry(one).or_insert(0) += 1;
+                }
             }
-        }
+        });
     }
     if seen >= BUDGET {
         llrm_support::debug!("regalloc", "{}: out of budget with {} queued", body.name, queue.len());
