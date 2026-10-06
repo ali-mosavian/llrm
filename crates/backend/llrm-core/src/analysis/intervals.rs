@@ -122,6 +122,12 @@ pub fn indexed(body: &LirBody) -> Indexes {
 
 /// The live interval of every value in this body, weighted.
 pub fn intervals(body: &LirBody, index: Option<&Indexes>) -> IndexMap<u32, Interval> {
+    intervals_over(body, index, &Frequency::of(body))
+}
+
+/// `intervals`, weighted by `busy`, the body's block frequencies, which a caller that asks for several
+/// facts of one body finds once.
+pub fn intervals_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> IndexMap<u32, Interval> {
     let owned;
     let index = match index {
         Some(index) => index,
@@ -131,7 +137,7 @@ pub fn intervals(body: &LirBody, index: Option<&Indexes>) -> IndexMap<u32, Inter
         }
     };
     let ranges = _ranges(body, index);
-    let weight = _weights(body, index, &ranges);
+    let weight = _weights(body, busy, &ranges);
     ranges
         .into_iter()
         .map(|(value, one)| {
@@ -263,8 +269,7 @@ pub fn level(depth: u32) -> f64 {
 pub const GRACE: i64 = 25 * PER_INSN;
 
 /// `references weighted by block frequency / (live slots + grace)`.
-fn _weights(body: &LirBody, _index: &Indexes, ranges: &IndexMap<u32, Interval>) -> IndexMap<u32, f64> {
-    let busy = Frequency::of(body);
+fn _weights(body: &LirBody, busy: &Frequency, ranges: &IndexMap<u32, Interval>) -> IndexMap<u32, f64> {
     let mut total: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = busy.block(block.at);

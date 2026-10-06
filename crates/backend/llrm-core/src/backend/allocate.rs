@@ -537,10 +537,10 @@ struct Facts {
 }
 
 impl Facts {
-    fn of(body: &LirBody, profile: &Profile, segments: &Segments, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>) -> Self {
+    fn of(body: &LirBody, profile: &Profile, segments: &Segments, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, busy: &Frequency) -> Self {
         let _span = llrm_support::debug::span("regalloc facts");
         let index = ranges::indexed(body);
-        let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals(body, Some(&index))), profile);
+        let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals_over(body, Some(&index), busy), busy), profile, busy);
         // A spiller product lives for one use: a spill gains nothing.
         for one in unspillable {
             if let Some(interval) = live.get_mut(one) {
@@ -597,7 +597,11 @@ fn _allocated(
     let empty = BTreeSet::new();
     let protected = protected.unwrap_or(&empty);
     let mut unspillable: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
-    let mut facts = Facts::of(&body, profile, segments, &unspillable, protected);
+    // A rewrite inserts instructions in blocks, and a split may add a block: the frequencies are the
+    // body's until its blocks are more.
+    let mut busy = Frequency::of(&body);
+    let mut busy_blocks = body.blocks.len();
+    let mut facts = Facts::of(&body, profile, segments, &unspillable, protected, &busy);
     if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments) {
         return Err(Unplaced(why).into());
     }
@@ -923,7 +927,11 @@ fn _allocated(
         // the change left sharing a register competes again.
         let Some(made) = rewritten else { continue };
         floor = floor.max(splitkit::_next_value(&body));
-        facts = Facts::of(&body, profile, segments, &unspillable, protected);
+        if body.blocks.len() != busy_blocks {
+            busy = Frequency::of(&body);
+            busy_blocks = body.blocks.len();
+        }
+        facts = Facts::of(&body, profile, segments, &unspillable, protected, &busy);
         placing = None;
         for (one, register) in constrain::required(&body, classes) {
             fixed.entry(one).or_insert(register);
@@ -1674,7 +1682,7 @@ fn _min(first: f64, second: f64) -> f64 {
 }
 
 /// Intervals whose copies to a value they could share a slot with cost nothing.
-fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u32, Interval> {
+fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>, busy: &Frequency) -> IndexMap<u32, Interval> {
     let moves: Vec<(i64, (u32, u32))> = body
         .blocks
         .iter()
@@ -1708,7 +1716,6 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u3
                 .filter(|value| !(in_place && one.defines.contains(value) && one.uses.contains(value))),
         );
     }
-    let busy = Frequency::of(body);
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for (at, (into, out_of)) in moves {
         if impure.contains(&into)
@@ -1858,8 +1865,7 @@ fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
 }
 
 /// Discount reads by the target-specific saving from folding them.
-fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile) -> IndexMap<u32, Interval> {
-    let busy = Frequency::of(body);
+fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile, busy: &Frequency) -> IndexMap<u32, Interval> {
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = busy.block(block.at);
@@ -2699,7 +2705,7 @@ mod tests {
         let cell = Mem { base: Some(Held { value: 1, width: 2 }), ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
         let body = _one_block(vec![_mov(1, 5, 0), _load(4, 2, cell, vec![1])]);
         let profile = targets::profile(ProfileOrName::from("386")).expect("a profile");
-        let facts = Facts::of(&body, profile, &target::BUILT_IN, &BTreeSet::new(), &BTreeSet::new());
+        let facts = Facts::of(&body, profile, &target::BUILT_IN, &BTreeSet::new(), &BTreeSet::new(), &Frequency::of(&body));
         let union = IndexMap::from_iter([(_whole(Register::AX), vec![1])]);
         let placed = IndexMap::from_iter([(1, Register::AX)]);
         assert_eq!(_overlapping(&union, &placed, &facts), BTreeSet::from([1]));
