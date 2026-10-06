@@ -35,11 +35,16 @@ use llrm_mir::context::{ConstantKind, mask};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
+use llrm_mir::types::Type;
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
 
+use crate::profit::{self, OperationCosts};
 use crate::transform::_undisturbed;
 
-pub struct Hoist;
+/// `size`: price a run in bytes, every block once (-Os), not in executed work.
+pub struct Hoist {
+    pub size: bool,
+}
 
 impl FunctionPass for Hoist {
     fn name(&self) -> &'static str {
@@ -48,13 +53,16 @@ impl FunctionPass for Hoist {
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         // Blocks and edges are as they were.
-        if hoisted(unit, analyses) { PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>() } else { PreservedAnalyses::all() }
+        if hoisted(unit, analyses, self.size) { PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>() } else { PreservedAnalyses::all() }
     }
 }
 
 /// Each loop's invariant run moved to its preheader, inner loops first so
-/// what leaves one may leave the next. Whether anything moved.
-pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
+/// what leaves one may leave the next, where the function does not price
+/// higher for it: a run's values live across the loop may be more than
+/// the target's registers hold, and spill (`profit::motion_price`). Whether
+/// anything moved.
+pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses, size: bool) -> bool {
     let graph = cfg::graph(unit.function);
     let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
     let found = &shape.loops;
@@ -65,6 +73,10 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
     let Ok(accesses) = Accesses::managed(unit.context, unit.layout, unit.function, analyses) else { return false };
     let outer = std::rc::Rc::clone(analyses.outer());
     let terminal = analyses.get::<noreturn::TerminalSites>(unit.context, unit.layout, unit.function);
+    let room = profit::registers(&outer);
+    let costs = if size { outer.target().size_costs() } else { profit::costs(&outer) };
+    // Moving instructions leaves every block and loop as they are.
+    let frequency = (room.priced() && !_slots_remain(unit)).then(|| _frequency(unit, analyses, &outer, size)).flatten();
     let mut changed = false;
     for one in found {
         let Some(into) = _preheader(&graph, one) else { continue };
@@ -73,12 +85,86 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
             continue;
         }
         let before = unit.function.terminator(cfg::block(into)).expect("a terminator");
+        let run = match &frequency {
+            Some(frequency) => _affordable(unit, &outer, run, before, &costs, room, frequency),
+            None => run,
+        };
+        if run.is_empty() {
+            continue;
+        }
         for inst in run {
             unit.function.move_to(inst, Position::Before(before)).expect("a placed instruction");
         }
         changed = true;
     }
     changed
+}
+
+/// `run` less what the function prices higher for: while moving it before
+/// `before` costs more than leaving it, the values crossing the loop that the
+/// spill model spills, and the instructions reading them, stay in the loop.
+fn _affordable(unit: &passes::Unit, outer: &Outer, mut run: Vec<InstId>, before: InstId, costs: &OperationCosts, room: crate::spill::Room, frequency: &std::collections::BTreeMap<i64, i64>) -> Vec<InstId> {
+    let price = |function: &Function| profit::motion_price(unit.context, unit.layout, outer, function, costs, room, frequency);
+    let kept = price(unit.function);
+    while !run.is_empty() {
+        let mut hoisted = unit.function.clone();
+        for &inst in &run {
+            hoisted.move_to(inst, Position::Before(before)).expect("a placed instruction");
+        }
+        let (Some(kept), Some(moved)) = (kept, price(&hoisted)) else { return run };
+        if moved <= kept {
+            return run;
+        }
+        let found = llrm_analysis::liveness::live(&hoisted);
+        let Some(forecast) = profit::spill_forecast(unit.context, unit.layout, &hoisted, costs, room, &|inst| crate::spill::kept_across(outer, unit.context, &hoisted, inst), frequency, &found) else { return run };
+        let mut stay: BTreeSet<ValueId> = _crossed_values(&hoisted, &run).intersection(&forecast.spilled).copied().collect();
+        if stay.is_empty() {
+            return Vec::new();
+        }
+        // What reads a value that stays cannot leave before it.
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for &inst in &run {
+                let instruction = unit.function.instruction(inst);
+                if instruction.operands.iter().any(|operand| matches!(operand, Operand::Value(value) if stay.contains(value))) {
+                    grew |= instruction.result.is_some_and(|result| stay.insert(result));
+                }
+            }
+        }
+        run.retain(|&inst| unit.function.instruction(inst).result.is_none_or(|result| !stay.contains(&result)));
+    }
+    run
+}
+
+/// Whether a scalar local is still held in a slot only loaded and stored:
+/// `promote` will make it a value, and what is priced before that counts
+/// loads that will not be there.
+fn _slots_remain(unit: &passes::Unit) -> bool {
+    let function = &*unit.function;
+    function.walk().any(|(_, inst)| {
+        let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode else { return false };
+        let scalar = matches!(unit.context.types.get(allocated), Type::Int(_) | Type::Float(_) | Type::Pointer(_));
+        scalar
+            && function.instruction(inst).result.is_some_and(|slot| {
+                function.users(slot).iter().all(|one| match function.instruction(one.user).opcode {
+                    Opcode::Load { .. } => one.index == 0,
+                    Opcode::Store { .. } => one.index == 1,
+                    _ => false,
+                })
+            })
+    })
+}
+
+/// Each block's executions per entry: as `_frequencies` finds them from the
+/// loops' proven trips, or once for all where `size` counts bytes.
+fn _frequency(unit: &passes::Unit, analyses: &mut Analyses, outer: &Outer, size: bool) -> Option<std::collections::BTreeMap<i64, i64>> {
+    if size {
+        return Some(unit.function.layout().iter().map(|&block| (cfg::id(block), profit::UNIT)).collect());
+    }
+    let facts = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
+    let trips = profit::proven_trips(&Unit::within(unit.context, unit.layout, unit.function, outer), &facts);
+    profit::_frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips))
 }
 
 /// The one block entering `loop_` from outside it.

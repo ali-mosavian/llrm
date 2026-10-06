@@ -178,7 +178,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Strict floating recurrences must retain their original iteration
         // order; LICM may move invariant preparation out afterwards.
         Box::new(floatloop::FloatLoop),
-        Box::new(hoist::Hoist),
+        Box::new(hoist::Hoist { size: applied.options.prefers_size() }),
         Box::new(loopmotion::LoopMotion),
         // Before gvn: a far pointer cast from a near one is read as the near one.
         Box::new(inferspace::InferAddressSpaces),
@@ -264,7 +264,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if applied.options.wanted("hoist") {
-        manager.add(hoist::Hoist);
+        manager.add(hoist::Hoist { size: applied.options.prefers_size() });
     }
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {

@@ -19,7 +19,7 @@ fn hoisted(text: &str) -> (Module, Module) {
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
-    passes.add(super::Hoist);
+    passes.add(super::Hoist { size: false });
     passes.run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap_or_else(|error| panic!("{error}\n{text}"));
     (before, after)
 }
@@ -338,4 +338,62 @@ fn test_a_load_the_language_says_is_invariant_leaves_past_a_store() {
     let printed = printed(&stated);
     assert!(block_of(&printed, "f", "b2").iter().all(|line| !line.contains("load i16, ptr @g")), "{printed}");
     assert!(block_of(&printed, "f", "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{printed}");
+}
+
+/// Two inner loops each read three globals nothing writes and double them. Hoisted out of
+/// the outer loop too, six values live across both inner loops, more than
+/// the nine registers hold with the loop's own counters (PLASMABLOBS -Os
+/// +73 B, #529). At -Os each stays in its inner preheader, where three fit.
+#[test]
+fn test_invariants_past_the_registers_stay_in_the_inner_preheader() {
+    let loads = |names: [&str; 3]| names.map(|name| format!("  %{name} = load i16, ptr @{name}\n  %w{name} = shl i16 %{name}, 1\n")).concat();
+    let inner = |at: &str, names: [&str; 3], next: &str| {
+        format!(
+            "{at}:\n  %i{at} = phi i16 [ 0, %{pre} ], [ %n{at}, %{at} ]\n  %s{at} = phi i16 [ %t, %{pre} ], [ %r{at}, %{at} ]\n{loads}  %u{at} = add i16 %w{a}, %w{b}\n  %v{at} = add i16 %u{at}, %w{c}\n  %r{at} = add i16 %s{at}, %v{at}\n  %n{at} = add i16 %i{at}, 1\n  %k{at} = icmp slt i16 %n{at}, %n\n  br i1 %k{at}, label %{at}, label %{next}\n\n",
+            pre = if at == "b3" { "b2" } else { "b4" },
+            loads = loads(names),
+            a = names[0],
+            b = names[1],
+            c = names[2],
+        )
+    };
+    let text = format!(
+        "{globals}define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %j = phi i16 [ 0, %b0 ], [ %j1, %b6 ]
+  %t = phi i16 [ 0, %b0 ], [ %sb5, %b6 ]
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b2, label %b9
+
+b2:
+  br label %b3
+
+{first}b4:
+  br label %b5
+
+{second}b6:
+  %j1 = add i16 %j, 1
+  br label %b1
+
+b9:
+  ret i16 %t
+}}
+",
+        globals = ["g1", "g2", "g3", "g4", "g5", "g6"].map(|name| format!("@{name} = global i16 0\n")).concat(),
+        first = inner("b3", ["g1", "g2", "g3"], "b4"),
+        second = inner("b5", ["g4", "g5", "g6"], "b6"),
+    );
+    let before = parsed(&text);
+    let mut after = before.clone();
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.require::<Summaries>();
+    passes.add(super::Hoist { size: true });
+    passes.run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() })).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    let printed = printed(&after);
+    assert!(block(&printed, "b0").iter().all(|line| !line.contains("load")), "{printed}");
+    assert!(block(&printed, "b2").iter().any(|line| line.contains("load i16, ptr @g1")), "{printed}");
 }
