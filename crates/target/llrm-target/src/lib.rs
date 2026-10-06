@@ -115,6 +115,9 @@ pub trait Target {
     /// One CPU's timings (a column of the target's `timings.times`), if the target prices it.
     fn cpu_table(&self, name: &str) -> Option<timings::CpuTable>;
 
+    /// The target's instruction forms: the family's and its own, in `x86.instr`'s format.
+    fn forms_text(&self) -> String;
+
     /// The CPU a compile is priced for where none is asked.
     fn default_cpu(&self) -> &'static str;
 

@@ -103,3 +103,26 @@ fn a_target_states_its_default_cpu_and_names_its_cpus_when_asked_for_another() {
     let machine = flags.machine(bound.target.machine()).unwrap();
     assert_eq!(bound.options(&flags, machine).cpu().err().unwrap(), "unknown CPU target: 386; x86-code32 has 486, P5");
 }
+
+/// The registers an instruction pins come from the selected target's forms. They came from
+/// 16-bit x86's whatever the target, so a flat compile pinned a string store's operands as
+/// real mode has them (its selector among them) and, once flat string ops are written, would
+/// have left its own unpinned.
+#[test]
+fn a_targets_pins_come_from_its_own_forms() {
+    use llrm_core::backend::classes::RegisterClasses;
+    use llrm_core::model::ir::{Held, Loc, Mem, Operation, Semantics};
+
+    let held = |value: u32| Loc::Held(Held { value, width: 2 });
+    // `stosd` as real mode lowers it: a placeholder cell and the pointer after; the value, the pointer, the selector.
+    let store = Semantics {
+        name: Some("stosd".to_owned()),
+        dests: vec![Loc::Mem(Mem::new(None, 0)), held(5)],
+        sources: vec![held(1), held(2), held(3)],
+        ..Semantics::new(Operation::Fill)
+    };
+    let real = RegisterClasses::of(&llrm_x86_code16::Code16).requirements(&store);
+    let flat = RegisterClasses::of(&llrm_x86_code32::Code32).requirements(&store);
+    assert_eq!(real.len(), 4, "{real:?}");
+    assert!(flat.is_empty(), "{flat:?}");
+}

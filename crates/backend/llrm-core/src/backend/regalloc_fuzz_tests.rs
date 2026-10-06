@@ -620,7 +620,7 @@ fn allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), String> {
     let (body, notes) = body(seed, shape);
     let generated = body.clone();
     let segments = &*target::BUILT_IN;
-    let mut phases: Vec<Box<dyn LIRTransform>> = vec![Box::new(RegAlloc::new(None, None, ProfileOrName::Name(cpu), segments)?)];
+    let mut phases: Vec<Box<dyn LIRTransform>> = vec![Box::new(RegAlloc::new(None, None, ProfileOrName::Name(cpu), segments, &crate::backend::classes::RegisterClasses::code16())?)];
     if std::env::var_os("FUZZ_NO_PARCOPY").is_none() {
         phases.push(Box::new(ParallelCopy));
     }
@@ -652,11 +652,11 @@ fn spilled_and_allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), Stri
     let segments = &*target::BUILT_IN;
     let frame = std::rc::Rc::new(std::cell::RefCell::new(crate::backend::frame::Frame::new(0)));
     let mut phases: Vec<Box<dyn LIRTransform>> = vec![
-        Box::new(SsaSpill { frame: frame.clone(), segments: segments.clone(), prices: crate::backend::ssaspill::Prices::clocks(), run: Default::default() }),
+        Box::new(SsaSpill { frame: frame.clone(), segments: segments.clone(), classes: crate::backend::classes::RegisterClasses::code16(), prices: crate::backend::ssaspill::Prices::clocks(), run: Default::default() }),
         Box::new(PhiElimination),
         Box::new(TwoAddress),
         Box::new(Coalescer::new(None, segments)),
-        Box::new(RegAlloc::new(None, Some(frame), ProfileOrName::Name(cpu), segments)?),
+        Box::new(RegAlloc::new(None, Some(frame), ProfileOrName::Name(cpu), segments, &crate::backend::classes::RegisterClasses::code16())?),
         Box::new(ParallelCopy),
     ];
     if std::env::var_os("FUZZ_NO_PARCOPY").is_some() {
