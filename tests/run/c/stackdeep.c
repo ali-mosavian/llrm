@@ -1,4 +1,4 @@
-// flags: -O2 -fsanitize=stack
+// flags: -O2 -fsanitize=stack | -O2 -fsanitize=stack --target x86-code32
 // A recursion that fits runs unchanged under -fsanitize=stack.
 extern void report(long value);
 int deep(int n)

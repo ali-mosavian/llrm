@@ -28,7 +28,7 @@ fn the_limit_and_handler_come_from_the_runtime_description() {
     for runtime in RUNTIMES {
         let mut checked = program(runtime, true, SOURCE);
         assert_eq!(checked.stack_check, llrm_core::abi::runtime::semantics::stack(runtime), "{runtime}");
-        checked.stack_check = Some(StackCheck { limit: "FOO".into(), handler: "BAR".into(), red_zone: 0, entry: Some("BAZ".into()) });
+        checked.stack_check = Some(StackCheck { limit: "FOO".into(), handler: "BAR".into(), far: true, red_zone: 0, entry: Some("BAZ".into()) });
         let own = procedure(&checked);
         assert!(own.contains("cmp sp, word ptr FOO") && own.contains("call far ptr BAR"), "{runtime}: {own}");
         assert!(!own.contains("pendchk") && !own.contains("ERR_OSS"), "{runtime}: {own}");

@@ -72,7 +72,16 @@ pub fn selected(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_co
 /// What C's runtime says of its stack: `stack.toml`, Open Watcom's `_STACKLOW` and
 /// `__STKOVERFLOW`, which `__STK` compares and enters.
 pub fn stack_check() -> llrm_core::hir::model::StackCheck {
-    let row = toml::Value::Table(include_str!("stack.toml").parse().expect("stack.toml parses"));
+    stack_check_of(include_str!("stack.toml"))
+}
+
+/// The flat runtime's: `llrm-x86-code32/runtime/stack.toml`.
+pub fn flat_stack_check() -> llrm_core::hir::model::StackCheck {
+    stack_check_of(include_str!("../../../target/llrm-x86-code32/runtime/stack.toml"))
+}
+
+fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
+    let row = toml::Value::Table(text.parse().expect("stack.toml parses"));
     llrm_core::hir::model::StackCheck::from_toml(&row).expect("stack.toml states a stack check")
 }
 
@@ -228,7 +237,7 @@ pub fn main(argv: &[String]) -> i32 {
             .file_stem()
             .and_then(|one| one.to_str())
             .unwrap_or_default();
-        let built = selected_checking(&text, module, args.dump.as_deref(), &args.codegen, args.flags.sanitize.stack.then(stack_check))?;
+        let built = selected_checking(&text, module, args.dump.as_deref(), &args.codegen, args.flags.sanitize.stack.then(|| if args.codegen.arch.name() == "x86-code32" { flat_stack_check() } else { stack_check() }))?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if !args.flags.assembly && output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref() == Some("obj") {
             fs::write(&output, omfwrite::written(&built, name)?)?;
@@ -1003,6 +1012,19 @@ mod tests {
         let object = flat_object("strings");
         let code = hex(&object.iter().find(|(kind, _)| *kind == 0xA1).expect("code").1);
         assert!(code.contains("f3a5") && !code.contains("66f3a5"), "rep movsd, not its word form: {code}");
+    }
+
+    /// `-fsanitize=stack` compares ESP with a dword limit and enters a near handler: `cmp sp, word ptr`
+    /// and `call far ptr` were a 16-bit compare and a far call in a flat program.
+    #[test]
+    fn test_code32_checks_its_stack_against_a_dword_limit_and_a_near_handler() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32/add.cgs")).unwrap();
+        let argv: Vec<String> = ["--target", "x86-code32", "-O2", "x.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        let built = super::selected_checking(&text, "add", None, &args.codegen, Some(super::flat_stack_check())).unwrap();
+        let listing = llrm_core::backend::masm::text(&built).unwrap();
+        assert!(listing.contains("cmp esp, dword ptr _STACKLOW") && listing.contains("call __STKOVERFLOW"), "{listing}");
+        assert!(!listing.contains("far ptr") && listing.contains("extern __STKOVERFLOW:near"), "{listing}");
     }
 
     fn hex(bytes: &[u8]) -> String {

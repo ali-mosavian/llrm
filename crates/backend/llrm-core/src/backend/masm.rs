@@ -296,7 +296,7 @@ pub fn stack_externs(procedures: &[Procedure], names: &mut IndexMap<(Space, i64)
         names.insert((Space::External, STACK_LIMIT_ID), check.limit.clone());
         externs.push((check.limit.clone(), "byte".to_owned()));
         if !procedures.iter().any(|one| one.name == check.handler) {
-            externs.push((check.handler.clone(), "far".to_owned()));
+            externs.push((check.handler.clone(), if check.far { "far" } else { "near" }.to_owned()));
         }
     }
     externs
@@ -379,7 +379,8 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
             enter.push(overflow("jb"));
         }
         enter.extend([
-            semantics(Operation::Compare, "cmp", vec![], vec![sp_reg(), Loc::Mem(ir::Mem::new(Some(limit), 2))]),
+            // The limit is a stack slot's word.
+            semantics(Operation::Compare, "cmp", vec![], vec![sp_reg(), Loc::Mem(ir::Mem::new(Some(limit), procedure.registers.slot as u32))]),
             overflow("jb"),
         ]);
     }
@@ -558,7 +559,7 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
     // Last, where nothing falls into it: the call that does not return.
     if let Some(check) = &procedure.stack_check {
         out.push(Item::Label(Label { name: label(number, cold_at(&procedure.body)) }));
-        out.push(Item::Callee(Callee::new(check.handler.clone(), true)));
+        out.push(Item::Callee(Callee::new(check.handler.clone(), check.far)));
     }
     Ok(out.into_iter().map(|item| spelled(item, &procedure.registers)).collect())
 }
@@ -1134,7 +1135,7 @@ mod tests {
     /// call is last, where no block falls into it, and the default has neither.
     #[test]
     fn test_a_stack_check_names_what_the_runtime_states() {
-        let check = StackCheck { limit: "FOO".into(), handler: "BAR".into(), red_zone: 0, entry: None };
+        let check = StackCheck { limit: "FOO".into(), handler: "BAR".into(), far: true, red_zone: 0, entry: None };
         let (lines, externs) = _checked(Some(check), 4);
         assert_eq!(lines[1..7], ["push bp", "mov bp, sp", "sub sp, 4", "jb L0_2", "cmp sp, word ptr FOO", "jb L0_2"], "{lines:?}");
         assert_eq!(lines[lines.len() - 3..], ["L0_2:", "call far ptr BAR", "_get endp"]);

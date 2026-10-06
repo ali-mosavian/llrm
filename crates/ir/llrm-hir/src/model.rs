@@ -944,8 +944,10 @@ impl RuntimePromises {
 pub struct StackCheck {
     /// The data-group word holding the lowest SP the runtime allows.
     pub limit: String,
-    /// The far routine entered on overflow; it does not return.
+    /// The routine entered on overflow; it does not return.
     pub handler: String,
+    /// Whether it is entered by a far call: a real-mode runtime's is, a flat one's is near.
+    pub far: bool,
     /// Bytes below `limit` that the handler, interrupts and an unchecked
     /// leaf's frame share.
     pub red_zone: i64,
@@ -955,13 +957,13 @@ pub struct StackCheck {
 }
 
 impl StackCheck {
-    /// The check a runtime's description row states: `limit`, `handler`, `red_zone` and, where
-    /// its frame entry checks, `entry`.
+    /// The check a runtime's description row states: `limit`, `handler`, `red_zone`, whether the
+    /// handler is `far` (it is unless the row says not) and, where its frame entry checks, `entry`.
     pub fn from_toml(row: &toml::Value) -> Result<Self, String> {
         let text = |key: &str| row.get(key).and_then(toml::Value::as_str).map(str::to_owned);
         let need = |key: &str| text(key).ok_or_else(|| format!("stack {key} is not a string"));
         let red_zone = row.get("red_zone").and_then(toml::Value::as_integer).ok_or("stack red_zone is not an integer")?;
-        Ok(Self { limit: need("limit")?, handler: need("handler")?, red_zone, entry: text("entry") })
+        Ok(Self { limit: need("limit")?, handler: need("handler")?, far: row.get("far").and_then(toml::Value::as_bool).unwrap_or(true), red_zone, entry: text("entry") })
     }
 }
 
