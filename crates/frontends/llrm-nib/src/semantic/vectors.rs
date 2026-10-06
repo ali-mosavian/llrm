@@ -17,7 +17,7 @@ impl TypeRegistry {
             id: type_id,
             name,
             kind: "pointer",
-            width: 2,
+            width: self.sizes.near,
             signed: None,
             evaluation: "none",
             element: Some(element_id),

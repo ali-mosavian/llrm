@@ -860,7 +860,7 @@ impl Signature {
     /// The bytes its arguments take on the stack, each at least a word.
     fn argument_bytes(&self, types: &TypeRegistry) -> u32 {
         let hidden = self.result_pointer.map_or(0, |one| types.width(type_id(one)));
-        self.parameters.iter().map(|one| types.width(one.hir_type()).max(2)).sum::<u32>() + hidden
+        self.parameters.iter().map(|one| types.width(one.hir_type()).max(types.sizes.slot)).sum::<u32>() + hidden
     }
 
     /// Whether it takes and gives what `other` does, a value matching a

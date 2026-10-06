@@ -93,7 +93,7 @@ impl TypeRegistry {
             if declared.huge && dims.is_empty() {
                 return Err(Diagnostic::new(declared.span, "only an array is 'huge var'"));
             }
-            if !declared.huge && extent > 0xFFFF {
+            if !declared.huge && u64::from(extent) > (1_u64 << (8 * self.sizes.near)) - 1 {
                 return Err(Diagnostic::new(declared.span, format!("{} takes {extent} bytes, past DGROUP's 64K: declare it 'huge var'", declared.name)));
             }
             let segment = declared.huge.then(|| format!("{}_{}_HUGE", identifier(module_name), declared.name));

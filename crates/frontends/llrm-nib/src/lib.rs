@@ -42,6 +42,8 @@ pub struct Frontend {
     /// The data layout and address spaces of the target the program is for: how many bytes a
     /// near and a far pointer are, which the language's `*near` and `*far` mean there.
     pub layout: llrm_target::layout::Layout,
+    /// The bytes an argument takes on the stack at least: the target's stack slot.
+    pub slot: u32,
     /// Index and slice bounds go unchecked, as in `unsafe`: `--unchecked-bounds`.
     pub unchecked_bounds: bool,
     /// `-g`: source lines and debug information.
@@ -53,7 +55,7 @@ pub struct Frontend {
 impl Default for Frontend {
     /// For real mode, where the language began: a caller that knows its target sets `layout`.
     fn default() -> Self {
-        Self { layout: llrm_x86_code16::layout(), unchecked_bounds: false, debug: false, checked_stack: false }
+        Self { layout: llrm_x86_code16::layout(), slot: 2, unchecked_bounds: false, debug: false, checked_stack: false }
     }
 }
 
@@ -65,6 +67,8 @@ pub struct Sizes {
     /// Whether the near and the far pointer reach different spaces: a near one reaches only the
     /// data group.
     pub segmented: bool,
+    /// A stack slot's bytes.
+    pub slot: u32,
 }
 
 impl Frontend {
@@ -72,7 +76,7 @@ impl Frontend {
     pub fn sizes(&self) -> Sizes {
         let layout = llrm_mir::datalayout::DataLayout::parse(&self.layout.datalayout).expect("a target's datalayout parses");
         let bytes = |space: u32| layout.pointer(space).bits / 8;
-        Sizes { near: bytes(self.layout.spaces.near), far: bytes(self.layout.spaces.far), segmented: self.layout.spaces.near != self.layout.spaces.far }
+        Sizes { near: bytes(self.layout.spaces.near), far: bytes(self.layout.spaces.far), segmented: self.layout.spaces.near != self.layout.spaces.far, slot: self.slot }
     }
 }
 
