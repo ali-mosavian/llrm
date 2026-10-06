@@ -60,6 +60,9 @@ pub(crate) fn _read(what: &ir::Semantics) -> Vec<u32> {
 mod generator;
 mod matcher;
 mod unwind;
+
+pub use matcher::{Compiled, selector};
+pub(crate) use matcher::code16;
 mod wide;
 
 /// Where a function's parameters arrive and its result leaves, as its
@@ -327,7 +330,7 @@ enum Pointer {
 }
 
 /// `hole` bytes below BP are left free, above the allocas, for spill slots.
-pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, zeroed: bool, hole: i64) -> Result<Selected, Unselected> {
+pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, compiled: &'static Compiled, zeroed: bool, hole: i64) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -372,6 +375,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         callees: llrm_mir::memory::callees(module),
         private: Vec::new(),
         cpu,
+        compiled,
         segments,
         exact,
         exact_sums: BTreeSet::new(),
@@ -520,6 +524,7 @@ struct Selector<'m, 'c, 'p> {
     private: Vec<(crate::model::ir::Addr, u32)>,
     /// What each instruction costs, where a choice depends on it.
     cpu: &'c Profile,
+    compiled: &'static Compiled,
     /// Which segment registers the machine's program model leaves free.
     segments: &'c Segments,
     /// Index values every access names exactly at any wider width.

@@ -67,7 +67,7 @@ pub fn before_phase_skipping<'a>(
     };
     let cpu = cpu::profile(cpu_name).unwrap();
     let pool = Rc::new(RefCell::new(Pool::new(0)));
-    let selected = isel::selected(&module, name, &abi, &mut pool.borrow_mut(), cpu, &target::BUILT_IN, false, 0).expect("selects");
+    let selected = isel::selected(&module, name, &abi, &mut pool.borrow_mut(), cpu, &target::BUILT_IN, isel::code16(), false, 0).expect("selects");
     let mut made = frame::of(&selected.body, Some(&selected.calls), "", None).unwrap();
     made.floor = made.floor.min(-selected.depth);
     let shared = Rc::new(RefCell::new(made));

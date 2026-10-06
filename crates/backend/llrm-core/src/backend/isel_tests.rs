@@ -16,7 +16,7 @@ fn parsed(text: &str) -> llrm_mir::Module {
 }
 
 fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
-    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, false, 0)
+    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::code16(), false, 0)
 }
 
 /// The module's text, once its object is written: a listing that does not
@@ -3650,7 +3650,7 @@ fn test_a_fixed_address_pointer_selects_as_a_far_one() {
     let layout = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16\"\n";
     let listing = |space| {
         let module = llrm_mir::parse::module(&format!("{layout}{}", body(space))).expect("parses");
-        let chosen = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, false, 0).expect("selected");
+        let chosen = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::code16(), false, 0).expect("selected");
         format!("{chosen:?}")
     };
     assert_eq!(listing(4), listing(1));
@@ -4052,4 +4052,14 @@ fn test_code16_emits_386_forms() {
     };
     assert!(scaled("386").contains(&"mov ax, word ptr [ebx+eax*2]".to_owned()), "{:?}", scaled("386"));
     assert!(!scaled("486").iter().any(|one| one.contains("*2")), "{:?}", scaled("486"));
+}
+
+/// Selectors are generated per target directory and found by its name: the
+/// 16-bit one is there, a target nobody has described is not.
+#[test]
+fn test_a_selector_is_found_by_its_targets_name() {
+    let found = isel::selector("x86-code16").expect("the 16-bit x86 selector");
+    assert_eq!(found.name, "x86-code16");
+    assert!(std::ptr::eq(found, isel::code16()));
+    assert!(isel::selector("x86-code99").is_none());
 }

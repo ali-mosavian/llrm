@@ -236,7 +236,7 @@ impl Flags {
 
     /// The driver's options for `machine`.
     pub fn driver(&self, machine: Machine) -> super::Options {
-        super::Options { pipeline: self.pipeline(), stack_usage: self.stack_usage, stack_limit: self.stack_limit, ..super::Options::of(machine) }
+        super::Options { selection: crate::backend::isel::code16(), pipeline: self.pipeline(), stack_usage: self.stack_usage, stack_limit: self.stack_limit, ..super::Options::of(machine) }
     }
 }
 
