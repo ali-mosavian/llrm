@@ -25,10 +25,13 @@ elif [ ! -x "$OWROOT/build/binbuild/wmake" ] || [ ! -f "$OWROOT/bld/cc/${OWCPU:-
 fi
 CPU="${OWCPU:-i86}"
 case "$CPU" in
-    i86) BIN=bin; FLAT=0 ;;
-    386) BIN=bin386; FLAT=1 ;;
+    i86) BIN=bin ;;
+    386) BIN=bin386 ;;
     *) echo "OWCPU is i86 or 386, not $CPU" >&2; exit 1 ;;
 esac
+# What the target's description says, which build.rs reads for each Open Watcom tree (FLAT: 1 where far is near).
+FLAT=${LLRM_FLAT:?LLRM_FLAT comes from the target's description}
+NEAR=${LLRM_NEAR_BYTES:?}; FAR=${LLRM_FAR_BYTES:?}; INT=${LLRM_INT_BYTES:?}
 CC_OBJ="$OWROOT/bld/cc/$CPU/binbuild"
 OUT="${1:-$HERE/$BIN}"
 mkdir -p "$OUT"
@@ -46,7 +49,7 @@ CC_LINE=$(set +u; cd "$OWROOT" && . ./setvars.sh >/dev/null && cd "$CC_OBJ" \
     | grep -- '-o ccheck.obj' | sed -e 's|"||g' -e 's| -o ccheck.obj||' -e 's| [^ ]*/ccheck\.c$||')
 [ -n "$CC_LINE" ] || { echo "no compile line for ccheck.obj in $CC_OBJ" >&2; exit 1; }
 
-compile() { ( cd "$CC_OBJ" && $CC_LINE -I"$HERE" -DLLRM_FLAT=$FLAT -o "$1" "$2" ); }
+compile() { ( cd "$CC_OBJ" && $CC_LINE -I"$HERE" -DLLRM_FLAT=$FLAT -DLLRM_NEAR_BYTES=$NEAR -DLLRM_FAR_BYTES=$FAR -DLLRM_INT_BYTES=$INT -o "$1" "$2" ); }
 
 compile "$OUT/cgshim.o" "$HERE/cgshim.c"
 compile "$OUT/i64.o" "$OWROOT/bld/watcom/c/i64.c"

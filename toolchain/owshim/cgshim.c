@@ -26,9 +26,10 @@
 #include "cgprotos.h"
 #include "feprotos.h"
 
-/* LLRM_FLAT: the 386 front end, one flat address space of 4-byte integers and pointers. */
-#ifndef LLRM_FLAT
-#define LLRM_FLAT 0
+/* What the target says (build.rs reads its description, build.sh passes it): whether its far pointer is its near one
+ * (LLRM_FLAT), and the bytes of its near pointer, its far pointer and its `int`. */
+#if !defined( LLRM_FLAT ) || !defined( LLRM_NEAR_BYTES ) || !defined( LLRM_FAR_BYTES ) || !defined( LLRM_INT_BYTES )
+#error LLRM_FLAT, LLRM_NEAR_BYTES, LLRM_FAR_BYTES and LLRM_INT_BYTES come from the target's description
 #endif
 
 static FILE *Out;
@@ -135,16 +136,16 @@ static unsigned_32 length( cg_type t )
     case TY_UINT_2: case TY_INT_2: return( 2 );
     case TY_UINT_4: case TY_INT_4: return( 4 );
     case TY_UINT_8: case TY_INT_8: return( 8 );
-    case TY_NEAR_POINTER: case TY_NEAR_CODE_PTR: return( LLRM_FLAT ? 4 : 2 );
-    case TY_LONG_POINTER: case TY_HUGE_POINTER: case TY_LONG_CODE_PTR: return( LLRM_FLAT ? 6 : 4 );
+    case TY_NEAR_POINTER: case TY_NEAR_CODE_PTR: return( LLRM_NEAR_BYTES );
+    case TY_LONG_POINTER: case TY_HUGE_POINTER: case TY_LONG_CODE_PTR: return( LLRM_FAR_BYTES );
     case TY_SINGLE: return( 4 );
     case TY_DOUBLE: return( 8 );
     case TY_LONG_DOUBLE: return( 10 );
     case TY_BOOLEAN: case TY_DEFAULT: return( 0 );
     case TY_PROC_PARM: return( 4 );
-    case TY_INTEGER: case TY_UNSIGNED: return( LLRM_FLAT ? 4 : 2 );
-    case TY_POINTER: return( LLRM_FLAT ? 4 : ( Target & CGSW_X86_BIG_DATA ) ? 4 : 2 );
-    case TY_CODE_PTR: return( LLRM_FLAT ? 4 : ( Target & CGSW_X86_BIG_CODE ) ? 4 : 2 );
+    case TY_INTEGER: case TY_UNSIGNED: return( LLRM_INT_BYTES );
+    case TY_POINTER: return( LLRM_FLAT ? LLRM_NEAR_BYTES : ( Target & CGSW_X86_BIG_DATA ) ? LLRM_FAR_BYTES : LLRM_NEAR_BYTES );
+    case TY_CODE_PTR: return( LLRM_FLAT ? LLRM_NEAR_BYTES : ( Target & CGSW_X86_BIG_CODE ) ? LLRM_FAR_BYTES : LLRM_NEAR_BYTES );
     default:
         for( i = 0; i < TypeCount; ++i ) {
             if( Types[i].t == t ) {
