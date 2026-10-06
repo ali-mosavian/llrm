@@ -444,7 +444,8 @@ pub struct Segments {
 
 impl Segments {
     pub fn of(machine: &Machine) -> Self {
-        let segments = &machine.segments;
+        // A flat machine reaches the backend with the flat target (PR 16).
+        let segments = machine.segments.as_ref().expect("a segmented machine");
         let named = |one: &Register, name: &String| name.eq_ignore_ascii_case(crate::backend::select::SEGMENTS[one]);
         let register = |name: &String| {
             *crate::backend::select::SEGMENTS
@@ -721,7 +722,7 @@ mod tests {
         assert_eq!(BUILT_IN.selectors, [Register::ES, Register::FS, Register::GS]);
         assert_eq!((BUILT_IN.data, BUILT_IN.through), (Register::DS, None));
         let joined = crate::abi::machine::Machine {
-            segments: crate::abi::machine::Segments { stack_is_data: true, ..machine::BUILT_IN.segments.clone() },
+            segments: machine::BUILT_IN.segments.clone().map(|segments| crate::abi::machine::Segments { stack_is_data: true, ..segments }),
             ..machine::BUILT_IN.clone()
         };
         let joined = Segments::of(&joined);

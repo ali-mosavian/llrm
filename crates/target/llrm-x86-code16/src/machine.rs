@@ -6,7 +6,8 @@ use std::sync::LazyLock;
 
 pub use llrm_target::machine::*;
 
-pub const DOS: &str = include_str!("machines/dos.toml");
+/// `dos.toml` and the PC ports it shares with every PC platform.
+pub const DOS: &str = concat!(include_str!("machines/dos.toml"), include_str!("../../llrm-target/src/machines/pc-ports.toml"));
 
 /// The built-in description, which nothing can change.
 pub static BUILT_IN: LazyLock<Machine> = LazyLock::new(|| Machine::parse(DOS, &CPUS).expect("the built-in DOS description parses"));
@@ -14,7 +15,7 @@ pub static BUILT_IN: LazyLock<Machine> = LazyLock::new(|| Machine::parse(DOS, &C
 /// The built-in description as a BASIC runtime runs it: compiled code only
 /// ever runs on the program's stack, which is in the data group.
 pub static BASIC: LazyLock<Machine> =
-    LazyLock::new(|| Machine { segments: Segments { stack_is_data: true, ..BUILT_IN.segments.clone() }, ..BUILT_IN.clone() });
+    LazyLock::new(|| Machine { segments: BUILT_IN.segments.clone().map(|segments| Segments { stack_is_data: true, ..segments }), ..BUILT_IN.clone() });
 
 /// The processors a description may name. `llrm-core` checks that the
 /// backend prices exactly these.
@@ -37,6 +38,15 @@ mod tests {
         assert_eq!(dos.foreign_span((0xF000, 0xF000), every, 1), Some((0xF0000, 0x100000)));
         assert_eq!(dos.foreign_span((0xFFFF, 0xFFFF), every, 1), Some((0xFFFF0, 0x10FFF0)));
         assert_eq!(dos.foreign_span((0xE000, 0xE000), (0, 0), 1), None);
+    }
+
+    /// `dos.toml` keeps the PC ports in the file every PC platform shares:
+    /// the machine it describes is the one it was with them inline.
+    #[test]
+    fn test_dos_has_its_ports_from_the_shared_file() {
+        let dos = Machine::parse(DOS, &CPUS).unwrap();
+        assert_eq!((dos.ports.len(), dos.foreign.len()), (21, 4));
+        assert_eq!(dos.ports, Machine::parse(&format!("addressing = \"flat\"\nsegment_end_faults = false\ncpu = \"486\"\n{}", llrm_target::PC_PORTS), &CPUS).unwrap().ports);
     }
 
     #[test]

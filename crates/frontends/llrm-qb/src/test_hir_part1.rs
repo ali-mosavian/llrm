@@ -79,7 +79,7 @@ fn test_qb_cli_reads_the_machine_it_is_given() {
 /// group, unless -mno-stack-is-data says otherwise.
 #[test]
 fn test_qb_cli_keeps_the_stack_in_the_data_group_unless_told_not_to() {
-    let stack_is_data = |arguments: &[&str]| parse_args(&argv(arguments)).expect("parses").codegen.machine.segments.stack_is_data;
+    let stack_is_data = |arguments: &[&str]| parse_args(&argv(arguments)).expect("parses").codegen.machine.segments.unwrap().stack_is_data;
     assert!(stack_is_data(&["probe.bas"]));
     assert!(!stack_is_data(&["probe.bas", "-mno-stack-is-data"]));
 }

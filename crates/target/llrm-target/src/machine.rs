@@ -10,6 +10,8 @@ pub enum Addressing {
     Real,
     /// A selector names a descriptor: nothing follows from its value.
     Protected,
+    /// One linear address space: no selectors, no segments.
+    Flat,
 }
 
 /// The segment registers the program model reserves, by name.
@@ -44,7 +46,8 @@ pub struct Port {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Machine {
     pub addressing: Addressing,
-    pub segments: Segments,
+    /// The segment registers the program model reserves; none on a flat machine.
+    pub segments: Option<Segments>,
     /// Linear [low, high) ranges no program data occupies.
     pub foreign: Vec<(i64, i64)>,
     /// [low, high) port ranges and what their access does to memory.
@@ -69,20 +72,16 @@ impl Machine {
         let addressing = match table.get("addressing").and_then(toml::Value::as_str) {
             Some("real") => Addressing::Real,
             Some("protected") => Addressing::Protected,
-            other => return Err(format!("addressing must be \"real\" or \"protected\", not {other:?}")),
+            Some("flat") => Addressing::Flat,
+            other => return Err(format!("addressing must be \"real\", \"protected\" or \"flat\", not {other:?}")),
         };
-        let segments = table.get("segments").and_then(toml::Value::as_table).ok_or("segments is not a table")?;
-        let name = |key: &str| {
-            segments.get(key).and_then(toml::Value::as_str).map(str::to_owned).ok_or_else(|| format!("segments needs a {key}"))
-        };
-        let segments = Segments {
-            data: name("data")?,
-            stack: name("stack")?,
-            code: name("code")?,
-            stack_is_data: segments
-                .get("stack_is_data")
-                .and_then(toml::Value::as_bool)
-                .ok_or("segments needs a boolean stack_is_data")?,
+        let segments = if addressing == Addressing::Flat {
+            if table.contains_key("segments") {
+                return Err("a flat machine has no segments".to_owned());
+            }
+            None
+        } else {
+            Some(Self::segments(&table)?)
         };
         let ranges = |key: &str| -> Result<Vec<(i64, i64)>, String> {
             let Some(rows) = table.get(key) else { return Ok(Vec::new()) };
@@ -117,6 +116,22 @@ impl Machine {
         })
     }
 
+    fn segments(table: &toml::Table) -> Result<Segments, String> {
+        let segments = table.get("segments").and_then(toml::Value::as_table).ok_or("segments is not a table")?;
+        let name = |key: &str| {
+            segments.get(key).and_then(toml::Value::as_str).map(str::to_owned).ok_or_else(|| format!("segments needs a {key}"))
+        };
+        Ok(Segments {
+            data: name("data")?,
+            stack: name("stack")?,
+            code: name("code")?,
+            stack_is_data: segments
+                .get("stack_is_data")
+                .and_then(toml::Value::as_bool)
+                .ok_or("segments needs a boolean stack_is_data")?,
+        })
+    }
+
     /// The selector stride a huge pointer takes per 64K, as a shift of the
     /// carry: where a selector is a paragraph number, 64K is 1 << 12 of them.
     /// None where nothing states it.
@@ -124,6 +139,7 @@ impl Machine {
         match self.addressing {
             Addressing::Real => Some(16 - 4),
             Addressing::Protected => self.protected_huge_shift,
+            Addressing::Flat => None,
         }
     }
 
@@ -192,3 +208,43 @@ fn ports(table: &toml::Table) -> Result<Vec<Port>, String> {
         .collect()
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FLAT: &str = "addressing = \"flat\"\nsegment_end_faults = false\ncpu = \"486\"\n";
+
+    /// A flat machine had no way to be described: `segments` was required and
+    /// `addressing` was real or protected, so code32 could not state its platform.
+    #[test]
+    fn test_a_flat_machine_parses_without_segments() {
+        let flat = Machine::parse(FLAT, &["486"]).expect("a flat machine parses");
+        assert_eq!(flat.addressing, Addressing::Flat);
+        assert!(flat.segments.is_none());
+        assert_eq!(flat.huge_shift(), None);
+        assert_eq!(flat.foreign_span((0, 0), (0x100, 0x100), 1), None);
+        assert!(flat.access_may_trap(1, 1));
+    }
+
+    #[test]
+    fn test_a_flat_machine_with_segments_is_refused() {
+        let text = format!("{FLAT}[segments]\ndata = \"ds\"\nstack = \"ss\"\ncode = \"cs\"\nstack_is_data = true\n");
+        assert_eq!(Machine::parse(&text, &["486"]), Err("a flat machine has no segments".to_owned()));
+    }
+
+    /// The PC's ports are one file every PC platform appends to its own text.
+    #[test]
+    fn test_a_platform_takes_the_shared_pc_ports() {
+        let flat = Machine::parse(&format!("{FLAT}{}", crate::PC_PORTS), &["486"]).unwrap();
+        assert_eq!(flat.port_memory((0x3C4, 0x3C5)), PortMemory::None);
+        assert_eq!(flat.port_memory((0x0B, 0x0B)), PortMemory::Dma);
+        assert_eq!(flat.port_memory((0x300, 0x300)), PortMemory::Any);
+    }
+
+    #[test]
+    fn test_a_segmented_machine_still_needs_its_segments() {
+        let text = "addressing = \"real\"\nsegment_end_faults = true\ncpu = \"486\"\n";
+        assert_eq!(Machine::parse(text, &["486"]), Err("segments is not a table".to_owned()));
+    }
+}
