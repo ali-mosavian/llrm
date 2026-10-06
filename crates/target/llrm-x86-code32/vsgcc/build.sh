@@ -1,7 +1,7 @@
 #!/bin/bash
 # build.sh PROG: llrm (OMF), gcc and clang (ELF) at -O2 and -Os into $VSGCC_WORK, flags as tools/bench plus -fno-inline-functions
 set -e
-P=$1; R=$(cd "$(dirname "$0")/../.." && pwd); O=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}; S=$R/bench/$P/$P.c
+P=$1; R=$(cd "$(dirname "$0")/../../../.." && pwd); O=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}; S=$R/bench/$P/$P.c
 LLRM=${LLRM:-$R/target/release/llrm-c}
 mkdir -p $O/b $O/o
 $LLRM --target x86-code32 -O2 -march=i486 -fno-inline-functions -o $O/o/$P.llrm.obj $S 2>$O/o/$P.llrm.err || echo "FAIL llrm $P"

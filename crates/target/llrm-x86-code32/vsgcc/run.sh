@@ -2,7 +2,7 @@
 # run.sh: build llrm-c (release), every program with every compiler, run them all, print the tables.
 # Needs gcc, clang (32-bit objects), GNU ld/nm/size, uv. Products go to $VSGCC_WORK (default ~/scratch/vsgcc-work).
 set -e
-R=$(cd "$(dirname "$0")/../.." && pwd); H=$R/tools/vsgcc; export VSGCC_WORK=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}
+R=$(cd "$(dirname "$0")/../../../.." && pwd); H=$R/crates/target/llrm-x86-code32/vsgcc; export VSGCC_WORK=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}
 PROGS=$(ls $R/bench | grep -v -E "readme|parity|huge|textfill|grep")   # 16-bit only, no input, or timed only
 mkdir -p $VSGCC_WORK
 (cd $R && cargo build --release --bin llrm-c -q)

@@ -19,7 +19,7 @@ from iced_x86 import Decoder, Mnemonic, OpKind, Formatter, FormatterSyntax, Flow
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc
 from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_ESP, UC_X86_REG_EIP
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[4]
 OUT = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))   # build products and results, never in the tree
 BENCH = REPO / "bench"
 STUB, SENT, STACK_TOP, MEM = 0x8000, 0x7000, 0x7F0000, 0x800000

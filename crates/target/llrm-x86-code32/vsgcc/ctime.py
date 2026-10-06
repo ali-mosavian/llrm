@@ -1,7 +1,7 @@
 """Compile time of each compiler, per program: best of 5 wall-clock runs, source to object, one process each."""
 import json, os, subprocess, sys, time
 from pathlib import Path
-R = Path(__file__).resolve().parents[2]; O = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))
+R = Path(__file__).resolve().parents[4]; O = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))
 progs = [p for p in sorted(x.name for x in (R / "bench").iterdir()) if p not in ("readme.md", "parity", "huge", "textfill", "grep")]
 F = "-m32 -march=i486 -fno-pic -fno-inline-functions -fno-stack-protector -fcf-protection=none -Dfar=".split()
 def cmds(p):

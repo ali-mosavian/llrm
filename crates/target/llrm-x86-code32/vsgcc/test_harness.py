@@ -6,7 +6,7 @@ import pytest
 
 import harness
 
-pytestmark = pytest.mark.skipif(not (harness.OUT / "results.jsonl").exists(), reason="run tools/vsgcc/run.sh first")
+pytestmark = pytest.mark.skipif(not (harness.OUT / "results.jsonl").exists(), reason="run crates/target/llrm-x86-code32/vsgcc/run.sh first")
 
 BENCH = harness.BENCH
 
