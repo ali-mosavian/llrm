@@ -71,6 +71,7 @@ jw = []
 dosrun = []
 
 [dev-dependencies]
+llrm-driver = { workspace = true }
 regex = { workspace = true }
 toml = { workspace = true }
 
