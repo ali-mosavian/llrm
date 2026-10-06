@@ -24,6 +24,8 @@ pub struct Interface {
     pub prefix: String,
     /// The neutral error conditions and their codes.
     pub errors: BTreeMap<String, i64>,
+    /// The handles a program starts with; the operating system's facts number them.
+    pub handles: Vec<String>,
     pub ops: Vec<Op>,
 }
 
@@ -52,7 +54,8 @@ impl Interface {
             })
             .collect::<Result<_, String>>()?;
         let errors = table.get("errors").and_then(|one| one.as_table()).ok_or("the interface has no errors")?.iter().map(|(name, code)| Ok((name.clone(), code.as_integer().ok_or("an error code is an integer")?))).collect::<Result<_, String>>()?;
-        Ok(Self { prefix: string(&table, "symbol_prefix")?, errors, ops })
+        let handles = table.get("handles").and_then(|one| one.as_array()).ok_or("the interface has no handles")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or_else(|| "a handle is a name".to_owned())).collect::<Result<_, String>>()?;
+        Ok(Self { prefix: string(&table, "symbol_prefix")?, errors, handles, ops })
     }
 
     /// The interface this crate ships.
@@ -90,6 +93,22 @@ impl Layer {
 
     pub fn string(&self, key: &str) -> Result<String, String> {
         self.table()?.get(key).and_then(|one| one.as_str()).map(str::to_owned).ok_or_else(|| format!("os.toml has no string {key}"))
+    }
+
+    /// The integer type a `handle` is on this target: as wide as the operating system's facts say.
+    pub fn handle_type(&self) -> Result<&'static str, String> {
+        let facts: toml::Table = self.facts.parse().map_err(|error: toml::de::Error| format!("the OS facts: {error}"))?;
+        match facts.get("handle_bits").and_then(|one| one.as_integer()) {
+            Some(16) => Ok("i16"),
+            Some(32) => Ok("i32"),
+            other => Err(format!("the OS facts' handle_bits is 16 or 32, not {other:?}")),
+        }
+    }
+
+    /// The standard handles and their numbers: the interface's names, the operating system's facts.
+    pub fn handles(&self) -> Result<Vec<(String, i64)>, String> {
+        let facts: toml::Table = self.facts.parse().map_err(|error: toml::de::Error| format!("the OS facts: {error}"))?;
+        Interface::shipped().handles.into_iter().map(|name| facts.get(&name).and_then(|one| one.as_integer()).map(|number| (name.clone(), number)).ok_or_else(|| format!("the OS facts lack the handle {name}"))).collect()
     }
 
     /// The groups of the interface the target implements.
@@ -135,8 +154,11 @@ impl Layer {
         let pointer = self.string("pointer")?;
         let qualifier = if pointer == "far" { "__far " } else { "" };
         let groups = self.groups()?;
+        let handle = self.handle_type()?;
         let kind = |name: &str| -> Option<String> {
             Some(match name {
+                "handle" => if handle == "i16" { "short" } else { "long" }.to_owned(),
+                "bool" => "unsigned char".to_owned(),
                 "path" => format!("const char {qualifier}*"),
                 "bytes" => format!("const unsigned char {qualifier}*"),
                 "bytes_mut" => format!("unsigned char {qualifier}*"),
@@ -165,6 +187,9 @@ impl Layer {
             text += &format!("#define LLRM_OS_{} {code}\n", name.to_uppercase()).replace("\n", "
 ");
         }
+        for (name, number) in self.handles()? {
+            text += &format!("#define LLRM_OS_{} {number}\n", name.to_uppercase());
+        }
         text += &match pointer.as_str() {
             "far" => "
 /* The colour text screen, 80x25 cells of a character and an attribute. */
@@ -188,14 +213,16 @@ impl Layer {
         let convention = self.string("convention")?;
         let pointer = self.string("pointer")?;
         let groups = self.groups()?;
+        let handle = self.handle_type()?;
         let kind = |name: &str| -> Result<String, String> {
             Ok(match name {
+                "handle" => handle.to_owned(),
                 "path" => format!("*{pointer} char"),
                 "bytes" => format!("*{pointer} u8"),
                 "bytes_mut" => format!("*{pointer} mut u8"),
                 "heap" => "*near mut u8".to_owned(),
                 "handler" => "extern \"interrupt16\" fn() -> void".to_owned(),
-                "i16" | "i32" | "u8" | "usize" | "void" => name.to_owned(),
+                "i16" | "i32" | "u8" | "usize" | "bool" | "void" => name.to_owned(),
                 other => return Err(format!("the interface has a type {other} the Nib binding does not know")),
             })
         };
@@ -213,8 +240,11 @@ impl Layer {
         for (name, code) in &interface.errors {
             text += &format!("pub const {}: i16 = {code}\n", name.to_uppercase());
         }
-        text += "\nconst STANDARD_OUTPUT: i16 = 1\n\n";
-        text += &format!("# `length` bytes of `text` to standard output.\npub fn write(text: *{pointer} u8, length: usize) -> void:\n    unsafe:\n        write_file(STANDARD_OUTPUT, text, length)\n\n");
+        text += "\n# The handles a program starts with.\n";
+        for (name, number) in self.handles()? {
+            text += &format!("pub const {}: {handle} = {number}\n", name.to_uppercase());
+        }
+        text += &format!("\n# `length` bytes of `text` to standard output.\npub fn write(text: *{pointer} u8, length: usize) -> void:\n    unsafe:\n        write_file(STDOUT, text, length)\n\n");
         text += "# The colour text screen: 80x25 cells of a character and an attribute, at the machine's physical address\n# (the target's description names it).\n";
         match pointer.as_str() {
             "far" => {
@@ -234,7 +264,7 @@ impl Layer {
 mod tests {
     use super::*;
 
-    const LAYER: Layer = Layer { directory: "/x", text: "os = \"dos\"\nconvention = \"cdecl32\"\npointer = \"near\"\ngroups = [\"core\"]\nheap_bytes = 4096\n", facts: "open = 0x3D\nint = 0x21\n" };
+    const LAYER: Layer = Layer { directory: "/x", text: "os = \"dos\"\nconvention = \"cdecl32\"\npointer = \"near\"\ngroups = [\"core\"]\nheap_bytes = 4096\n", facts: "open = 0x3D\nint = 0x21\nhandle_bits = 16\nstdin = 0\nstdout = 1\nstderr = 2\n" };
 
     #[test]
     fn the_shipped_interface_parses_and_every_op_is_in_a_group_with_a_known_type() {
@@ -248,7 +278,7 @@ mod tests {
 
     #[test]
     fn the_assembler_is_told_the_os_facts_prefixed_and_the_layers_own_fields() {
-        let told: Vec<(String, String)> = [("DOS_OPEN", "61"), ("DOS_INT", "33"), ("HEAP_BYTES", "4096")].into_iter().map(|(name, value)| (name.to_owned(), value.to_owned())).collect();
+        let told: Vec<(String, String)> = [("DOS_OPEN", "61"), ("DOS_INT", "33"), ("DOS_HANDLE_BITS", "16"), ("DOS_STDIN", "0"), ("DOS_STDOUT", "1"), ("DOS_STDERR", "2"), ("HEAP_BYTES", "4096")].into_iter().map(|(name, value)| (name.to_owned(), value.to_owned())).collect();
         assert_eq!(LAYER.defines().unwrap(), told);
     }
 
@@ -266,5 +296,21 @@ mod tests {
         assert!(LAYER.nib_module().unwrap().contains("pub fn open(name: *near char, mode: u8) -> i16"));
         let far = Layer { text: "os = \"dos\"\nconvention = \"cdecl16\"\npointer = \"far\"\ngroups = [\"core\"]\n", ..LAYER };
         assert!(far.nib_module().unwrap().contains("@extern(\"cdecl16\", name=\"_llrm_os_open\")\npub fn open(name: *far char, mode: u8) -> i16"));
+    }
+
+    /// A handle was spelled `i16` in the interface, a target's width in a shared file: it takes the
+    /// width the operating system's facts give, and the standard handles their numbers.
+    #[test]
+    fn a_handle_is_as_wide_as_the_facts_say_and_the_standard_handles_are_theirs() {
+        let wide = Layer { facts: "handle_bits = 32\nstdin = 0\nstdout = 1\nstderr = 2\n", ..LAYER };
+        let module = wide.nib_module().unwrap();
+        assert!(module.contains("pub fn open(name: *near char, mode: u8) -> i32") && module.contains("pub fn read(handle: i32,"), "{module}");
+        assert!(module.contains("pub const STDOUT: i32 = 1") && module.contains("write_file(STDOUT, text, length)"), "{module}");
+        assert!(wide.c_header().unwrap().contains("long llrm_os_open(const char *, unsigned char);"));
+        assert!(wide.c_header().unwrap().contains("#define LLRM_OS_STDERR 2"));
+        let narrow = Layer { facts: "handle_bits = 16\nstdin = 0\nstdout = 1\nstderr = 2\n", ..LAYER };
+        assert!(narrow.nib_module().unwrap().contains("pub fn read(handle: i16,"));
+        let lacking = Layer { facts: "handle_bits = 16\n", ..LAYER };
+        assert!(lacking.nib_module().is_err(), "a standard handle the facts do not number is an error");
     }
 }

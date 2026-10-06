@@ -101,3 +101,43 @@ fn test_the_interfaces_error_codes_are_the_operating_systems_own() {
         assert_eq!(dos[name].as_integer(), Some(*code), "{name}");
     }
 }
+
+/// The console's operations and the standard handles are the layer's: a program asks the key calls, and
+/// reads and writes the console as `read` and `write_file` on the handles the facts number. The binding
+/// carries those numbers, so no runtime spells a literal 1 for standard output.
+#[test]
+fn test_the_console_and_its_standard_handles_come_from_the_layer() {
+    let facts: toml::Table = llrm_x86::DOS_FACTS.parse().unwrap();
+    for target in targets() {
+        let layer = target.os_layer().unwrap();
+        assert!(layer.groups().unwrap().contains(&"console".to_owned()), "{} lacks the console group", target.name());
+        for (name, number) in layer.handles().unwrap() {
+            assert_eq!(facts[&name].as_integer(), Some(number));
+        }
+        let binding = layer.nib_module().unwrap();
+        assert!(binding.contains("pub const STDOUT: i16 = 1") && binding.contains("pub fn console_read_key() -> u8") && binding.contains("pub fn console_key_ready() -> bool"), "{binding}");
+        assert!(layer.c_header().unwrap().contains("#define LLRM_OS_STDIN 0"));
+        for (language, file) in [("c", "ext.asm"), ("nib", "init.asm")] {
+            if let Ok(text) = std::fs::read_to_string(format!("{}/{file}", target.runtime(language).unwrap().directory)) {
+                let code: Vec<&str> = text.lines().map(|line| line.split(';').next().unwrap().trim()).collect();
+                let literal = code.windows(2).any(|pair| pair[0] == "push 1" && pair[1].contains("_llrm_os_write_file"));
+                assert!(!literal, "{} {language} writes to a literal handle 1", target.name());
+            }
+        }
+    }
+}
+
+/// The host interpreter's console was a literal handle 1 and had no input: standard output is the OS facts'
+/// stdout, and `read` on their stdin, `console_read_key` and `console_key_ready` take what the run is fed.
+#[test]
+fn test_the_interpreters_console_follows_the_standard_handles() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut run = Command::new(env!("CARGO_BIN_EXE_llrm-run")).arg(root.join("tests/run/nib/os_console_in.nib")).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    run.stdin.take().unwrap().write_all(&std::fs::read(root.join("tests/run/nib/conin.dat")).unwrap()).unwrap();
+    let done = run.wait_with_output().unwrap();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    let want = std::fs::read_to_string(root.join("tests/run/nib/os_console_in.out")).unwrap();
+    assert_eq!(String::from_utf8_lossy(&done.stdout).replace("\r\n", "\n"), want);
+}

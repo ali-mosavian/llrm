@@ -26,7 +26,7 @@ __STKOVERFLOW proc far
     push 17
     push ds
     push offset stkmsg
-    push 1
+    push DOS_STDOUT
     call far ptr _llrm_os_write_file
     push 1
     call far ptr _llrm_os_exit
@@ -68,7 +68,7 @@ unsigned:
     push cx
     push ds
     push di
-    push 1
+    push DOS_STDOUT
     call far ptr _llrm_os_write_file
     add sp, 8
     pop di

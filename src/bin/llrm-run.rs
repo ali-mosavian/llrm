@@ -1,7 +1,10 @@
 //! Runs a Nib module's entry on the host HIR interpreter.
 //!
-//!   llrm-run SOURCE.nib [ENTRY] [INTEGER...]
+//!   llrm-run SOURCE.nib [ENTRY] [INTEGER...] [< INPUT]
+//!
+//! Standard input, when it is not a terminal, is what the program reads from its console.
 
+use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
 
 use llrm_core::hir::codec;
@@ -40,7 +43,11 @@ fn main() -> ExitCode {
     let result = codec::decode(&hir)
         .map_err(|error| error.to_string())
         .and_then(|program| {
-            execute::run(&program, entry, &values).map_err(|error| error.to_string())
+            let mut input = Vec::new();
+            if !std::io::stdin().is_terminal() {
+                std::io::stdin().read_to_end(&mut input).map_err(|error| error.to_string())?;
+            }
+            execute::run_with_input(&program, entry, &values, execute::STEP_LIMIT, &input).map_err(|error| error.to_string())
         });
     match result {
         Ok(executed) => {
