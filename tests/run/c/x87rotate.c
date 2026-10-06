@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32 | -Os --cpu 486 --target x86-code32
 /* Ten floats rotate in a loop: a 10-wide cycle of spilled phi copies (#358). */
 extern void report(long value);
 long rot(short n, float seed)

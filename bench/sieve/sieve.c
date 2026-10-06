@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 /* Prime count and sum below 1024 in one checkable word; sieve.bas/.nib mirror this. */
 extern void report(long value);
 

@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 /* Arrays are 0-based, index i stands for BASIC's i-50 (C has no lower bounds). */
 extern void report(long value);
 

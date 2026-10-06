@@ -102,7 +102,7 @@ fn test_the_stack_to_add_is_what_the_chain_needs_beyond_the_base() {
 
 fn checked(mut one: Procedure, red_zone: i64) -> Procedure {
     one.public = false;
-    one.stack_check = Some(crate::backend::masm::StackCheck { limit: "LIM".into(), handler: "HAND".into(), red_zone, entry: None });
+    one.stack_check = Some(crate::backend::masm::StackCheck { limit: "LIM".into(), handler: "HAND".into(), far: true, red_zone, entry: None });
     one
 }
 

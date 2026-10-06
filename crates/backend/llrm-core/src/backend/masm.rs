@@ -296,7 +296,7 @@ pub fn stack_externs(procedures: &[Procedure], names: &mut IndexMap<(Space, i64)
         names.insert((Space::External, STACK_LIMIT_ID), check.limit.clone());
         externs.push((check.limit.clone(), "byte".to_owned()));
         if !procedures.iter().any(|one| one.name == check.handler) {
-            externs.push((check.handler.clone(), "far".to_owned()));
+            externs.push((check.handler.clone(), if check.far { "far" } else { "near" }.to_owned()));
         }
     }
     externs
@@ -379,7 +379,8 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
             enter.push(overflow("jb"));
         }
         enter.extend([
-            semantics(Operation::Compare, "cmp", vec![], vec![sp_reg(), Loc::Mem(ir::Mem::new(Some(limit), 2))]),
+            // The limit is a stack slot's word.
+            semantics(Operation::Compare, "cmp", vec![], vec![sp_reg(), Loc::Mem(ir::Mem::new(Some(limit), procedure.registers.slot as u32))]),
             overflow("jb"),
         ]);
     }
@@ -558,7 +559,7 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
     // Last, where nothing falls into it: the call that does not return.
     if let Some(check) = &procedure.stack_check {
         out.push(Item::Label(Label { name: label(number, cold_at(&procedure.body)) }));
-        out.push(Item::Callee(Callee::new(check.handler.clone(), true)));
+        out.push(Item::Callee(Callee::new(check.handler.clone(), check.far)));
     }
     Ok(out.into_iter().map(|item| spelled(item, &procedure.registers)).collect())
 }
@@ -722,19 +723,22 @@ pub fn _instruction(
     let name = what.name.as_deref().unwrap_or("");
     if what.op == Operation::Fill {
         // Its operands are the registers the instruction names in its opcode.
-        return Ok(vec![format!("{}{name}", if what.sources.len() == 4 { "rep " } else { "" })]);
+        // A count (and so REP) is the extra result, whatever segments the target names.
+        return Ok(vec![format!("{}{name}", if what.dests.len() == 3 { "rep " } else { "" })]);
     }
     if what.op == Operation::Copy {
         // Its operands are the registers the instruction names in its opcode;
         // a source read through another segment than ds says so.
-        let rep = if what.sources.len() == 5 { "rep " } else { "" };
+        let counted = what.dests.len() == 4;
+        let rep = if counted { "rep " } else { "" };
         let size = match name {
             "movsb" => "byte",
             "movsw" => "word",
             _ => "dword",
         };
-        return Ok(vec![match &what.sources[what.sources.len() - 2] {
-            Loc::Reg(one) if one.register != Register::DS => {
+        let segmented = what.sources.len() == if counted { 5 } else { 4 };
+        return Ok(vec![match what.sources.get(what.sources.len().wrapping_sub(2)).filter(|_| segmented) {
+            Some(Loc::Reg(one)) if one.register != Register::DS => {
                 format!("{rep}movs {size} ptr es:[di], {size} ptr {}:[si]", format!("{:?}", one.register).to_lowercase())
             }
             _ => format!("{rep}{name}"),
@@ -975,12 +979,17 @@ mod tests {
     #[test]
     fn test_a_string_move_prints_with_rep_where_it_repeats() {
         let held = |value| Loc::Held(crate::model::ir::Held { value, width: 2 });
-        let semantics = |sources: Vec<Loc>| Semantics { name: Some("movsw".to_owned()), sources, ..Semantics::new(Operation::Copy) };
-        let repeated = semantics(vec![held(1), held(2), held(3), held(4), held(5)]);
-        let single = semantics(vec![held(2), held(3), held(4), held(5)]);
+        // A count is the extra result; the segments, where the target has them, the last two sources.
+        let results = |count: usize| (0..count).map(|one| held(10 + one as u32)).collect::<Vec<_>>();
+        let semantics = |dests: usize, sources: Vec<Loc>| Semantics { name: Some("movsw".to_owned()), dests: results(dests), sources, ..Semantics::new(Operation::Copy) };
+        let repeated = semantics(4, vec![held(1), held(2), held(3), held(4), held(5)]);
+        let single = semantics(3, vec![held(2), held(3), held(4), held(5)]);
         assert_eq!(_instruction(&repeated, &no_names(), 0).unwrap(), ["rep movsw"]);
         assert_eq!(_instruction(&single, &no_names(), 0).unwrap(), ["movsw"]);
-        let ss = |name: &str, sources: Vec<Loc>| Semantics { name: Some(name.to_owned()), sources, ..Semantics::new(Operation::Copy) };
+        // A target with no segment registers names none: its operands are the registers.
+        assert_eq!(_instruction(&semantics(4, vec![held(1), held(2), held(3)]), &no_names(), 0).unwrap(), ["rep movsw"]);
+        assert_eq!(_instruction(&semantics(3, vec![held(2), held(3)]), &no_names(), 0).unwrap(), ["movsw"]);
+        let ss = |name: &str, sources: Vec<Loc>| Semantics { name: Some(name.to_owned()), dests: results(4), sources, ..Semantics::new(Operation::Copy) };
         let segment = |register| Loc::Reg(ir::Reg { register, width: 2 });
         let through = ss("movsd", vec![held(1), held(2), held(3), segment(Register::SS), segment(Register::ES)]);
         assert_eq!(_instruction(&through, &no_names(), 0).unwrap(), ["rep movs dword ptr es:[di], dword ptr ss:[si]"]);
@@ -1126,7 +1135,7 @@ mod tests {
     /// call is last, where no block falls into it, and the default has neither.
     #[test]
     fn test_a_stack_check_names_what_the_runtime_states() {
-        let check = StackCheck { limit: "FOO".into(), handler: "BAR".into(), red_zone: 0, entry: None };
+        let check = StackCheck { limit: "FOO".into(), handler: "BAR".into(), far: true, red_zone: 0, entry: None };
         let (lines, externs) = _checked(Some(check), 4);
         assert_eq!(lines[1..7], ["push bp", "mov bp, sp", "sub sp, 4", "jb L0_2", "cmp sp, word ptr FOO", "jb L0_2"], "{lines:?}");
         assert_eq!(lines[lines.len() - 3..], ["L0_2:", "call far ptr BAR", "_get endp"]);

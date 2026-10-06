@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32 | -Os --cpu 486 --target x86-code32
 /* A word or dword stored in n cells by a loop: the cells filled and no others. */
 extern void report(long value);
 short a[64];

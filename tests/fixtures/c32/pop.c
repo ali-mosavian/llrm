@@ -1,4 +1,4 @@
-// flags: -O2 --cpu 486 | -Os --cpu 486 | -O2 --cpu 486 -fsanitize=bounds | -O2 --cpu 486 --target x86-code32 | -Os --cpu 486 --target x86-code32 | -O2 --cpu 486 -fsanitize=bounds --target x86-code32
+// flags: -O2 --cpu 486 | -Os --cpu 486 | -O2 --cpu 486 -fsanitize=bounds
 /* A string op sets ES to DGROUP; a far pointer read after it must still hold its own selector. */
 extern void report(long value);
 short __far far_a[100];

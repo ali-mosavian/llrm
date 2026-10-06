@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 extern void report(long value);
 
 /* Row r holds a queen in column q[r]; row `row` is placed next. */
