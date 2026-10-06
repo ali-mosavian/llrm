@@ -1087,12 +1087,12 @@ mod tests {
         }
     }
 
-    /// A word sum of two zero-extended words is the word `add`: its upper half stays zero, and the
-    /// `movzx` after the dword one was an instruction and three clocks more.
+    /// A word sum is the word `add`, not a dword one and the `movzx` of its low word: its upper
+    /// half stays as it was, which is zero where the words were zero-extended.
     #[test]
-    fn test_code32_adds_zero_extended_words_as_words() {
+    fn test_code32_adds_words_as_words() {
         let body = flat_body("narrow", "short_sum");
-        assert!(body.iter().any(|line| line.starts_with("add ax, ")) && !body.iter().any(|line| line.starts_with("movzx eax, ax")), "{body:#?}");
+        assert!(body.iter().any(|line| line.starts_with("add ax, ")) && !body.iter().any(|line| line.starts_with("add eax, ")), "{body:#?}");
     }
 
     /// The same sum of dwords keeps the `movzx`: the word `add` would leave the upper half as it was,

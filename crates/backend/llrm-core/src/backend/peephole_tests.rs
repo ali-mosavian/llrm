@@ -3220,3 +3220,30 @@ fn test_flat_word_copy_of_a_zero_extended_register_is_a_dword_copy() {
     let kept = whats(&made.insns());
     assert_eq!((kept[1].dests.clone(), kept[1].sources.clone()), (vec![rl(Register::ECX, 4)], vec![rl(Register::EAX, 4)]));
 }
+
+fn compared() -> Arc<Insn> {
+    Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Compare, "cmp", vec![], vec![rl(Register::EAX, 4), rl(Register::ECX, 4)])), vec![], vec![]))
+}
+
+fn dword_sum() -> Arc<Insn> {
+    Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, "add", vec![rl(Register::EAX, 4)], vec![rl(Register::EAX, 4), rl(Register::ECX, 4)])), vec![], vec![]))
+}
+
+/// A dword sum and the extension of its low word, where the sum's register is zero above: the word sum.
+#[test]
+fn test_flat_dword_sum_and_its_extension_is_the_word_sum() {
+    // A compare after overwrites the flags the word sum would set differently.
+    let made = narrowed_arithmetic(flat(), &flat_body(vec![word_load(Register::EAX), dword_sum(), extension(Register::EAX, Register::AX), compared()]));
+    let kept = whats(&made.insns());
+    assert_eq!(kept.len(), 3, "{kept:?}");
+    assert_eq!((kept[1].dests.clone(), kept[1].sources.clone()), (vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::CX, 2)]));
+}
+
+/// Not where it is not: the word sum leaves the upper half as it was, which the extension would have cleared.
+/// Taking the word sum there left the old upper half in a register read as a dword.
+#[test]
+fn test_flat_dword_sum_stays_where_the_upper_half_may_not_be_zero() {
+    let made = narrowed_arithmetic(flat(), &flat_body(vec![partial_load(Register::EAX), dword_sum(), extension(Register::EAX, Register::AX), compared()]));
+    let kept = whats(&made.insns());
+    assert_eq!((kept[1].name.as_deref(), kept[2].name.as_deref()), (Some("add"), Some("movzx")), "{kept:?}");
+}
