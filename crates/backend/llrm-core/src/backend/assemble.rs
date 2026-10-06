@@ -214,22 +214,21 @@ fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>,
         _ => CANDIDATES.with(std::cell::Cell::get),
     };
     if candidates == Candidates::AllocatorOnly {
-        return phased(module, name, abi, pool, target, hole, false);
+        return phased(module, name, abi, pool, target, hole, false, true).map(|(made, _)| made);
     }
-    let (before, ties) = (ssaspill::changes(), ssaspill::admission_ties());
-    let spilled = phased(module, name, abi, pool, target, hole, true)?;
-    if ssaspill::changes() == before || candidates == Candidates::SpillerOnly {
+    let (spilled, ran) = phased(module, name, abi, pool, target, hole, true, true)?;
+    if !ran.changed() || candidates == Candidates::SpillerOnly {
         return Ok(spilled);
     }
-    let allocator_alone = phased(module, name, abi, pool, target, hole, false)?;
+    let (allocator_alone, _) = phased(module, name, abi, pool, target, hole, false, true)?;
     let (kept, from_spiller) = match (cost(&spilled.0, target), cost(&allocator_alone.0, target)) {
         (Some(with), Some(without)) if without < with => (allocator_alone, false),
         _ => (spilled, true),
     };
     // Where code bytes are the measure, a loop admitted because its trips are fewer, on a tie in the bytes the spiller
     // counts, is checked against the encoded code: the loads it moved to the entry are not all it changed.
-    if from_spiller && ssaspill::admission_ties() != ties {
-        let plain = ssaspill::without_admission(|| phased(module, name, abi, pool, target, hole, true))?;
+    if from_spiller && ran.ties() {
+        let (plain, _) = phased(module, name, abi, pool, target, hole, true, false)?;
         if cost(&plain.0, target).zip(cost(&kept.0, target)).is_some_and(|(plain, admitted)| plain < admitted) {
             return Ok(plain);
         }
@@ -285,7 +284,11 @@ fn far_frame(body: &LirBody) -> usize {
 }
 
 /// `machined` with `hole` bytes left above the allocas; and the frame.
-fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64, spilling: bool) -> Result<(Machined, frame::Frame), String> {
+/// `machined` once through the machine phases, with the spiller or not and, if so, letting a loop's entry load what the loop reads or
+/// not (`admission`); and what the spiller settled.
+#[allow(clippy::too_many_arguments)]
+fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64, spilling: bool, admission: bool) -> Result<((Machined, frame::Frame), Rc<ssaspill::Run>), String> {
+    let run = ssaspill::Run::new(admission);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let selected = isel::selected(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole);
     let Selected { body, convention, calls, inline, far, depth, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
@@ -296,7 +299,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let frame = Rc::new(RefCell::new(frame));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, spilling, target.selection.rules())? {
+    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, spilling.then(|| Rc::clone(&run)), target.selection.rules())? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
             continue;
@@ -321,7 +324,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
         }
         None => (body, None),
     };
-    Ok((Machined { body, reserve, calls, inline, far, popped: convention.popped, landing }, frame))
+    Ok(((Machined { body, reserve, calls, inline, far, popped: convention.popped, landing }, frame), run))
 }
 
 /// `body` with its landing pad, the block `marker` starts, laid out last:
