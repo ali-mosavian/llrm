@@ -1,0 +1,28 @@
+# flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+# Far and near pointers to the same data, and a huge array past 64 KB.
+var table: i16[8] = [1, 2, 3, 4, 5, 6, 7, 8]
+huge var big: u8[70000] = [0] * 70000
+
+fn sum(p: *far i16, n: u16) -> i16:
+    let mut t: i16 = 0
+    unsafe:
+        for i in 0..n:
+            t += *p.offset(i)
+    return t
+
+fn main() -> i16:
+    let mut local: i16[4] = [10, 20, 30, 40]
+    unsafe:
+        let a: *far i16 = &table
+        let b: *near i16 = &table
+        let c: *far i16 = &local
+        print(sum(a, 8))
+        print(*b.offset(3))
+        print(sum(c, 4))
+    for i in 0..70000:
+        big[i] = u8(i % 251)
+    let mut check: i32 = 0
+    for i in 0..70000:
+        check += i32(big[i])
+    print(check)
+    return 0

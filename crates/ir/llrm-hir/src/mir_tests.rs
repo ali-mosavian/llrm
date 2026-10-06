@@ -1550,6 +1550,9 @@ fn a_flat_target_has_one_space_and_a_32_bit_layout() {
     // A pointer kind the flat target has no space for is refused, not made near.
     let mut huge = program.clone();
     huge.modules[0].types[2].address = AddressKind::Huge;
-    let refused = crate::mir::emit(&huge, &flat).remove(0).refused;
+    // The flat description maps huge to its one space; one that does not says so.
+    assert_eq!(crate::mir::emit(&huge, &flat).remove(0).refused, Vec::<(String, String)>::new());
+    let unmapped = Layout::parse(&FLAT.replace("huge = 0\n", "")).unwrap();
+    let refused = crate::mir::emit(&huge, &unmapped).remove(0).refused;
     assert!(refused.iter().any(|(_, why)| why.contains("no huge address space")), "{refused:?}");
 }

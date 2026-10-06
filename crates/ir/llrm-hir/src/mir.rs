@@ -1814,7 +1814,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let mut global = Value::Constant(self.tables.data[&place.symbol]);
                 if self.tables.huge.contains(&place.symbol) {
                     let huge = self.b.context.types.ptr(self.tables.spaces.huge_space()?);
-                    global = self.b.cast(CastOp::AddrSpaceCast, global, huge, "");
+                    // Where the target says huge is the space the object is in, there is nothing to cast.
+                    if self.b.type_of(global) != huge {
+                        global = self.b.cast(CastOp::AddrSpaceCast, global, huge, "");
+                    }
                 }
                 Ok(self.offset(global, place.offset, false))
             }

@@ -160,7 +160,7 @@ mod tests {
         let layout = Code32.layout();
         assert!(layout.datalayout.starts_with("e-p:32:32"));
         let spaces = layout.spaces;
-        assert_eq!((spaces.near, spaces.far, spaces.segment, spaces.huge, spaces.fixed, spaces.unmarked(4)), (0, 0, None, None, None, Ok(0)));
+        assert_eq!((spaces.near, spaces.far, spaces.segment, spaces.huge, spaces.fixed, spaces.unmarked(4)), (0, 0, None, Some(0), None, Ok(0)));
     }
 
     /// cdecl32 (calling.toml): EBP and ESP frame, EBX/ESI/EDI kept whole, first argument at [ebp+8].
