@@ -119,7 +119,7 @@ def discover(selected: list[str]) -> list[Program]:
         if source.suffix in COMPILERS:
             settings = header(source)
             configured = configurations(settings)
-            if source.suffix in (".nib", ".c") and "targets" not in settings and set(settings.get("link", "").split()) <= {C_RUNTIME} and not any("--target" in flags for _, flags, _ in configured):
+            if source.suffix in (".nib", ".c") and "targets" not in settings and set(settings.get("link", "").split()) <= {dosbatch.C_RUNTIME} and not any("--target" in flags for _, flags, _ in configured):
                 # Where a Nib program runs on code32 too, with the same output.
                 configured += [(f"{label}{' ' if label else ''}[{FLAT}]", [*flags, "--target", FLAT], dialect) for label, flags, dialect in configured]
             for label, flags, dialect in configured:
@@ -175,16 +175,9 @@ def unavailable(program: Program) -> str | None:
     return None
 
 
-C_RUNTIME = "@c-runtime"
-
-
 def linked(program: Program, target: str) -> list[Path]:
-    """The files a `link:` names for `target`: those beside the program, and `@c-runtime`, the target's own file of
-    the routines a program calls but does not define (its `[link] last`), which no program names a path of."""
-    out = []
-    for one in program.link:
-        out += [ROOT / name for name in dosbatch.target_link(target)["last"]] if one == C_RUNTIME else [program.source.parent / one]
-    return out
+    """The files a program's `link:` names for `target` (`dosbatch.link_files`)."""
+    return dosbatch.link_files(program.source, program.link, target)
 
 
 def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple[Path, ...]:
