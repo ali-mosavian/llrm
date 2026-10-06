@@ -288,7 +288,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let frame = Rc::new(RefCell::new(frame));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, spilling)? {
+    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, spilling, target.selection.rules())? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
             continue;
