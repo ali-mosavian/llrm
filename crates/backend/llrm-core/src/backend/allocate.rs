@@ -520,17 +520,7 @@ pub fn rewritten(
     frame: &mut Frame,
     splitting: bool,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
-    // A value read once, from a cell that holds, by an instruction that takes the cell: never held in a register.
-    let wanted: BTreeSet<u32> = _values(body).into_iter().filter(|value| !unspillable.is_some_and(|set| set.contains(value)) && !pinned.is_some_and(|pins| pins.contains_key(value)) && !protected.is_some_and(|set| set.contains(value))).collect();
-    let read_at_use = spiller::_folded_reads(body, &wanted);
-    if read_at_use.is_empty() {
-        return _allocated(body, pinned, unspillable, protected, None, cpu, segments, Some((frame, splitting)));
-    }
-    let floor = splitkit::_next_value(body);
-    let (moved, made) = spiller::spilled_from(body, &read_at_use, Some(frame), floor)?;
-    let mut unspillable: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
-    unspillable.extend(made);
-    _allocated(&moved, pinned, Some(&unspillable), protected, None, cpu, segments, Some((frame, splitting)))
+    _allocated(body, pinned, unspillable, protected, None, cpu, segments, Some((frame, splitting)))
 }
 
 /// What the allocator knows of a body, recomputed whenever it rewrites it.
@@ -1525,6 +1515,19 @@ impl RegAlloc {
         self.pinned = prefer.clone();
         self.pinned.extend(constrain::required(&body));
         let frame = Rc::clone(self.frame.as_ref().expect("made above"));
+        // A value read once, from a cell that holds, by an instruction that takes the cell: never held in a register.
+        // Once per body, before the candidates: every trial starts from the body with those reads placed.
+        let mut reloads = reloads;
+        {
+            let wanted: BTreeSet<u32> = _values(&body).into_iter().filter(|value| !reloads.contains(value) && !self.pinned.contains_key(value)).collect();
+            let read_at_use = spiller::_folded_reads(&body, &wanted);
+            if !read_at_use.is_empty() {
+                let floor = splitkit::_next_value(&body);
+                let (moved, made) = spiller::spilled_from(&body, &read_at_use, Some(&mut frame.borrow_mut()), floor)?;
+                body = moved;
+                reloads.extend(made);
+            }
+        }
         let start = frame.borrow().saved();
         // One allocation per candidate body, each splitting and spilling as
         // it goes; the one whose output costs least is kept.
@@ -2177,6 +2180,27 @@ mod tests {
         let loads_in = |at: i64| got.blocks.iter().find(|one| one.at == at).expect("a block").insns.iter().any(|one| one.what.as_ref().is_some_and(|what| matches!(what.sources.as_slice(), [Loc::Mem(_)]) && what.op == Operation::Move));
         assert!(!loads_in(0), "the load stayed in the entry block: {:?}", got.blocks[0].insns);
         assert!(loads_in(20), "the load is not at the push");
+    }
+
+    /// The first version of reading loads at their use ran once per allocation, and an allocation that spills runs
+    /// the base and each candidate shape: deedlines compiled 2% slower. The scan is a fact of the body: once.
+    #[test]
+    fn test_loads_read_at_their_use_are_found_once_per_body_however_many_candidates_run() {
+        // Volatile loads: not made again, so ten of them live at once spill.
+        let mut insns: Vec<Insn> = (1..=10_u32)
+            .map(|value| {
+                let cell = Mem::new(Some(Addr::new(Space::Segment, i64::from(value) * 2)), 2);
+                Insn { volatile: true, ..Insn::new(i64::from(value) * 4, Some((0, 1)), Some(semantics(Operation::Move, "mov", vec![held(value, 2)], vec![Loc::Mem(cell)])), vec![value], vec![]) }
+            })
+            .collect();
+        for value in 2..=10_u32 {
+            let what = semantics(Operation::Binary, "add", vec![held(1, 2)], vec![held(1, 2), held(value, 2)]);
+            insns.push(Insn::new(100 + i64::from(value), Some((100, 101)), Some(what), vec![1], vec![1, value]));
+        }
+        let before = spiller::folded_read_scans();
+        let got = _through_regalloc(_one_block(insns), &[]);
+        assert!(got.insns().iter().any(|one| one.spill_reload || one.spill_store), "premise: the body spills, so candidates run");
+        assert_eq!(spiller::folded_read_scans() - before, 1);
     }
 
     fn _one_block(insns: Vec<Insn>) -> LirBody {

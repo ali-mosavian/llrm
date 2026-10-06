@@ -85,11 +85,13 @@ pub fn planned(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame) -> Res
     let mut frame_loads = _stable_loads(body, values);
     frame_loads.extend(_frame_loads(body, values));
     // A copy of a load is made again as that load, unless the value has a frame home of its own (an argument's slot).
-    let apart: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
-    let homed = _frame_homes(body, &apart);
-    let copied = _through_copies(_stable_loads_through(body, &wide, &copies), &apart.iter().copied().filter(|value| !homed.contains_key(value)).collect(), &copies);
-    for (value, cell) in copied {
-        frame_loads.entry(value).or_insert(cell);
+    if !copies.is_empty() {
+        let apart: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
+        let homed = _frame_homes(body, &apart);
+        let copied = _through_copies(_stable_loads_through(body, &wide, &copies), &apart.iter().copied().filter(|value| !homed.contains_key(value)).collect(), &copies);
+        for (value, cell) in copied {
+            frame_loads.entry(value).or_insert(cell);
+        }
     }
     let unloaded: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
     let frame_homes = _frame_homes(body, &unloaded);
@@ -904,11 +906,21 @@ fn _through_copies<T: Clone>(found: IndexMap<u32, T>, values: &BTreeSet<u32>, co
     values.iter().filter_map(|value| found.get(value).or_else(|| copies.get(value).and_then(|source| found.get(source))).map(|one| (*value, one.clone()))).collect()
 }
 
+thread_local! {
+    static FOLDED_READ_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many bodies `_folded_reads` has read on this thread.
+pub fn folded_read_scans() -> usize {
+    FOLDED_READ_SCANS.with(std::cell::Cell::get)
+}
+
 /// Each of `values` that is loaded from a cell holding until its one reader, which runs no more often than the load
 /// (frequencies are products of floats: two blocks that run alike differ in the last digits)
 /// and takes that cell as its memory operand: read there it costs the same one memory operand and no instruction,
 /// and no register is held from the load to it, so holding it never pays.
 pub fn _folded_reads(body: &LirBody, values: &BTreeSet<u32>) -> BTreeSet<u32> {
+    FOLDED_READ_SCANS.with(|count| count.set(count.get() + 1));
     let stable = _stable_loads(body, values);
     if stable.is_empty() {
         return BTreeSet::new();
