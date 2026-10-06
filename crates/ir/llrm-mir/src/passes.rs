@@ -71,6 +71,9 @@ pub struct Unit<'a> {
     pub context: &'a mut Context,
     pub layout: &'a DataLayout,
     pub function: &'a mut Function,
+    /// The function's own id in its module, where it is one the module names: a pass that must
+    /// tell a call to itself asks for it.
+    pub id: Option<GlobalId>,
     /// The module's metadata nodes.
     pub metadata: &'a [crate::module::MetadataNode],
     /// Functions the pass declares in the module.
@@ -835,7 +838,7 @@ impl PassManager {
                     continue;
                 }
                 let cache = analyses.manager(id, &outer);
-                let preserved = in_function(global.name.as_deref().unwrap_or_default(), || spanned(name, || pass.run(&mut Unit { context, layout: &layout, function, metadata, declared: &mut declared }, cache)));
+                let preserved = in_function(global.name.as_deref().unwrap_or_default(), || spanned(name, || pass.run(&mut Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared }, cache)));
                 kept.retain(|one| preserved.keeps(*one));
                 spanned("invalidate", || cache.invalidate(&preserved));
                 if self.verify_invalidation {

@@ -191,9 +191,10 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
             // 64K of it, and the rest in the last.
             let found = if continues && out.len() == first { out.last_mut() } else { out[first..].last_mut() };
             let Some(object) = found else { return refuse(format!("{} data before any label", segment.name)) };
+            let near = widths_for(unit.flat, "TY_NEAR_POINTER").unwrap_or(2) as usize;
             let pointer = |object: &mut Object, target: Key, offset: &str, far: bool| -> R<()> {
                 object.relocations.push(Relocation { at: object.bytes.len(), target, offset: number(offset)?, far });
-                object.bytes.extend(std::iter::repeat_n(0, if far { 4 } else { 2 }));
+                object.bytes.extend(std::iter::repeat_n(0, if far { 4 } else { near }));
                 Ok(())
             };
             match (call.as_str(), &args[..]) {

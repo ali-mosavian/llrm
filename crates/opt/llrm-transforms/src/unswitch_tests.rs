@@ -112,7 +112,7 @@ fn through(text: &str, replacement: Option<&str>, costs: OperationCosts) -> (boo
     let outer = Outer::of(&module, None);
     let (context, function) = module.function_mut("f").unwrap();
     let mut declared = llrm_mir::passes::Declared::default();
-    let mut unit = Unit { context, layout: &layout, function, metadata: &metadata, declared: &mut declared };
+    let mut unit = Unit { context, layout: &layout, function, id: None, metadata: &metadata, declared: &mut declared };
     let kept = optimized(&mut unit, &outer, &costs, &mut |trial: &mut Unit| {
         if let Some(one) = &replacement {
             *trial.function = one.clone();

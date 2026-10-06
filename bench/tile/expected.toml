@@ -1,53 +1,47 @@
-reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
+reason = "tile: (y+dy)&63 and (x+dx)&63 are no-ops under the loops' ranges; algebraic drops the mask (7156 -> 4156 instructions on c, 9156 -> 4181 on bas and nib)"
 blessed = "2026-10-06"
 
 [bas.O2]
-instructions = 9156
+instructions = 4181
 memory_operands = 1000
-code_bytes = 178
+code_bytes = 167
 data_bytes = 8205
 bss_bytes = 0
-kernel_ms = 0.5364
 
 [bas.Os]
-instructions = 9156
+instructions = 4181
 memory_operands = 1000
-code_bytes = 178
+code_bytes = 167
 data_bytes = 8205
 bss_bytes = 0
-kernel_ms = 0.5364
 
 [c.O2]
-instructions = 7156
+instructions = 4156
 memory_operands = 1000
-code_bytes = 115
+code_bytes = 107
 data_bytes = 0
 bss_bytes = 8192
-kernel_ms = 0.5661
 
 [c.Os]
-instructions = 7156
+instructions = 4156
 memory_operands = 1000
-code_bytes = 114
+code_bytes = 106
 data_bytes = 0
 bss_bytes = 8192
-kernel_ms = 0.5661
 
 [nib.O2]
-instructions = 9156
+instructions = 4181
 memory_operands = 1000
-code_bytes = 119
+code_bytes = 111
 data_bytes = 8192
 bss_bytes = 0
-kernel_ms = 0.4572
 
 [nib.Os]
-instructions = 9156
+instructions = 4181
 memory_operands = 1000
-code_bytes = 118
+code_bytes = 110
 data_bytes = 8192
 bss_bytes = 0
-kernel_ms = 0.4572
 
 [ow.O2]
 instructions = 11265

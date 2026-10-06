@@ -381,7 +381,7 @@ fn written_basic_inner(module: &masm::Module, header: Vec<u8>, name: &str) -> Re
     let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
     for (name, items) in &module.data {
         let index = segments.iter().position(|one| &one.name == name).expect("every data segment was made");
-        objbuild::_data(&mut segments[index], index, items, &mut symbols);
+        objbuild::_data(&mut segments[index], index, items, &mut symbols, module.object.bitness);
     }
     if module.stack > 0 {
         let mut stack = objbuild::Segment::new("STACK", Role::Stack, true);
@@ -487,7 +487,7 @@ pub fn finalized(body: &lir::LirBody, parameter_bytes: i64) -> Result<Finalized,
             }
             sites.insert(
                 instruction.at,
-                masm::Callee { name: format!("$inline_{name}"), far: false, code: vec![masm::InlinePart::Bytes(code)] },
+                masm::Callee { name: format!("$inline_{name}"), far: false, pops: 0, code: vec![masm::InlinePart::Bytes(code)] },
             );
             let mut replaced = (**instruction).clone();
             replaced.what = Some(Semantics { name: Some(name), ..Semantics::new(Operation::Call) });
@@ -791,7 +791,7 @@ fn procedure(
     }
     for (at, callee) in &machined.calls {
         if let Some(code) = machined.inline.get(at) {
-            callees.insert(*at, masm::Callee { name: callee.clone(), far: false, code: vec![masm::InlinePart::Bytes(code.clone())] });
+            callees.insert(*at, masm::Callee { name: callee.clone(), far: false, pops: 0, code: vec![masm::InlinePart::Bytes(code.clone())] });
             continue;
         }
         let linked = match module.named(callee) {
@@ -875,7 +875,7 @@ fn laid_out(module: &Module, segment: &Segment, names: &IndexMap<(Space, i64), S
 fn size_of(datum: &masm::Datum) -> i64 {
     match datum {
         masm::Datum::Bytes(bytes) => bytes.len() as i64,
-        masm::Datum::Pointer(pointer) => if pointer.far { 4 } else { 2 },
+        masm::Datum::Pointer(pointer) => i64::from(pointer.bytes),
         masm::Datum::SegmentWord(_) => 2,
         masm::Datum::Fill(fill) => fill.size,
         _ => 0,

@@ -402,6 +402,12 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
     let graphics = _graphics_dependencies(module);
     let datum = basic::Item::Datum;
     let label = |name: &str| datum(masm::Datum::Label(masm::Label { name: name.to_owned() }));
+    // The object's pointer cells are the target's: a far pointer's width and a near one's.
+    let (near_bytes, far_bytes) = {
+        let layout = codegen.arch.layout();
+        let datalayout = llrm_mir::datalayout::DataLayout::parse(&layout.datalayout).map_err(CompileError::from)?;
+        (datalayout.pointer(layout.spaces.near).bits / 8, datalayout.pointer(layout.spaces.far).bits / 8)
+    };
     let mut segments: Vec<(&str, Vec<basic::Item>)> = vec![
         ("BR_DATA", vec![]),
         ("BR_SKYS", vec![]),
@@ -413,7 +419,7 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         ("BC_CN", placed.swap_remove("BC_CN").unwrap_or_default()),
         ("BC_DS", read_data.into_iter().chain([masm::Datum::Bytes(vec![0xff, 0xff, 0x01])]).map(datum).collect()),
         ("BC_SAB", vec![label("$QB$SAB")]),
-        ("BC_SA", vec![label("$QB$SA"), datum(masm::Datum::Pointer(masm::Pointer { name: basic::HEADER.into(), offset: 0, far: true }))]),
+        ("BC_SA", vec![label("$QB$SA"), datum(masm::Datum::Pointer(masm::Pointer { name: basic::HEADER.into(), offset: 0, far: true, bytes: far_bytes }))]),
     ];
     let mut private: BTreeSet<String> = BTreeSet::new();
     if vbdos {
@@ -422,7 +428,7 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         private.extend(["FDATA".to_owned(), "FSL_CONST".to_owned()]);
     }
     if vbdos && !graphics.is_empty() {
-        segments.push(("QB_LINK", graphics.iter().map(|name| datum(masm::Datum::Pointer(masm::Pointer { name: name.clone(), offset: 0, far: false }))).collect()));
+        segments.push(("QB_LINK", graphics.iter().map(|name| datum(masm::Datum::Pointer(masm::Pointer { name: name.clone(), offset: 0, far: false, bytes: near_bytes }))).collect()));
         private.insert("QB_LINK".into());
     }
     let object = basic::Object {

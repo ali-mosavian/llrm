@@ -71,6 +71,9 @@ pub struct Convention {
     pub first_argument_offset_far: Option<i64>,
     /// The register a frame's cells are addressed through, and the stack pointer.
     pub frame: String,
+    /// A function that needs no frame register may leave it out: its cells are addressed through the
+    /// stack pointer, and the frame register is not set. gcc's `-fomit-frame-pointer`.
+    pub frame_optional: bool,
     pub stack: String,
     /// The registers a callee keeps, the frame register among them.
     pub preserved: Vec<Kept>,
@@ -92,7 +95,7 @@ pub struct Calling {
     pub conventions: Vec<Convention>,
 }
 
-const KEYS: [&str; 30] = [
+const KEYS: [&str; 31] = [
     "cc",
     "wide_pairs",
     "backfill",
@@ -109,6 +112,7 @@ const KEYS: [&str; 30] = [
     "first_argument_offset",
     "first_argument_offset_far",
     "frame",
+    "frame_optional",
     "stack",
     "preserved",
     "clobbered",
@@ -291,6 +295,7 @@ impl Convention {
             first_argument_offset: integer("first_argument_offset")?,
             first_argument_offset_far: table.contains_key("first_argument_offset_far").then(|| integer("first_argument_offset_far")).transpose()?,
             frame: text("frame")?,
+            frame_optional: flag("frame_optional")?,
             stack: text("stack")?,
             preserved,
             clobbered: names(table.get("clobbered"), "clobbered")?,

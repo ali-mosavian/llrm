@@ -568,7 +568,7 @@ fn test_initializers_are_bytes_and_relocations() {
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
     let names = crate::backend::globals::names(&module, &|name| qb().linked(name)).expect("names");
     let rec = module.named("rec").expect("@rec");
-    let pointer = |name: &str, offset, far| Datum::Pointer(Pointer { name: name.to_owned(), offset, far });
+    let pointer = |name: &str, offset, far| Datum::Pointer(Pointer { name: name.to_owned(), offset, far, bytes: if far { 4 } else { 2 } });
     assert_eq!(
         crate::backend::globals::datums(&module, rec, &names).expect("data"),
         [

@@ -71,6 +71,7 @@ pub mod rotate;
 pub mod spill;
 #[cfg(test)]
 pub mod testing;
+pub mod tailrec;
 pub mod transform;
 pub mod unroll;
 pub mod unswitch;
