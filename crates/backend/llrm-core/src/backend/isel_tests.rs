@@ -1794,14 +1794,18 @@ fn test_a_dword_divided_by_a_constant_is_multiplied_where_cheaper() {
     assert_eq!((divides("P5"), divides("386")), (0, 1));
 }
 
-/// A word, and an unsigned dword, divided by a constant stay divisions:
-/// the reciprocal is the old route's for signed dwords only.
+/// A word divided by a constant stays a division: the reciprocal is for dwords. An unsigned dword is a multiply
+/// where the CPU prices it cheaper (a Pentium's `mul` is 10 clocks against `div`'s 41) and a division where not
+/// (the 386's and 486's multiply by a magic number is 13 to 42).
 #[test]
-fn test_a_word_or_unsigned_division_by_a_constant_divides() {
+fn test_a_word_divides_and_an_unsigned_dword_is_multiplied_where_cheaper() {
     let word = "define i16 @f(i16 %x) addrspace(1) {\n  %q = sdiv i16 %x, 10\n  ret i16 %q\n}\n";
     let unsigned = "define i32 @f(i32 %x) addrspace(1) {\n  %q = udiv i32 %x, 10\n  ret i32 %q\n}\n";
     assert!(inner_on("P5", word).contains(&"idiv bx".to_owned()), "{:?}", inner_on("P5", word));
-    assert!(inner_on("P5", unsigned).contains(&"div ebx".to_owned()), "{:?}", inner_on("P5", unsigned));
+    assert!(inner_on("P5", unsigned).iter().any(|one| one.starts_with("mul ")) && !inner_on("P5", unsigned).iter().any(|one| one.starts_with("div ")), "{:?}", inner_on("P5", unsigned));
+    for cpu in ["386", "486"] {
+        assert!(inner_on(cpu, unsigned).contains(&"div ebx".to_owned()), "{cpu}: {:?}", inner_on(cpu, unsigned));
+    }
 }
 
 /// A multiply by a constant is shifts and adds where the target prices

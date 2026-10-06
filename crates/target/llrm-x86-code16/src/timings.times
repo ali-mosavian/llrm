@@ -107,6 +107,8 @@ smul_max_w4            38   42   10    -    -    -    -    -
 smul_full_w2            -    -   11    -    -    -    -    -
 sdiv_w2                27   27   30    -    -    -    -    -
 sdiv_w4                43   43   46    -    -    -    -    -
+udiv_w2                22   24   25    -    -    -    -    -
+udiv_w4                38   40   41    -    -    -    -    -
 
 [latency]
 alu_rr                  2    1    1    1    1    1    1    1   # add/and/or/xor/sub/cmp reg,reg
