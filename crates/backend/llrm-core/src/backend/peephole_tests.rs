@@ -1241,7 +1241,7 @@ fn test_lea_of_a_frame_cell_is_decoded() {
     let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-18), 2) });
     let lea = insn(0, Some((0, 0)), Some(sem(Operation::Address, "lea", vec![rl(Register::AX, 2)], vec![cell])), vec![], vec![]);
 
-    let (reads, writes) = _register_effects(&lea, false, true).expect("decoded");
+    let (reads, writes) = _register_effects(16, &lea, false, true).expect("decoded");
 
     assert!(reads.is_subset(&_lanes(Register::EBP)));
     assert!(_lanes(Register::AX).is_subset(&writes) && writes.and(&_lanes(Register::EBX)).is_empty());
@@ -3273,4 +3273,52 @@ fn test_a_copy_is_not_forwarded_past_a_write_of_its_source() {
     let made = copyprop::forwarded(&flat_body(vec![copy, bump, store]));
     let Some(Loc::Mem(cell)) = made.insns()[2].what.as_ref().map(|what| what.dests[0].clone()) else { panic!("a store") };
     assert_eq!(cell.index_through, Register::ESI);
+}
+
+// ------------------------------------------------------------- the mode is the body's
+
+/// `mov ebx, ecx` then a byte read through `[ebx]`. A 32-bit base encodes only in 32-bit mode.
+fn read_through_a_copy(bits: u32) -> LirBody {
+    let copy = Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![rl(Register::EBX, 4)], vec![rl(Register::ECX, 4)])), vec![], vec![]));
+    let read = Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![rl(Register::AL, 1)], vec![Loc::Mem(mem(None, 1, Register::EBX, 0, 0))])), vec![], vec![]));
+    LirBody { bits, ..flat_body(vec![copy, read]) }
+}
+
+fn through_of_the_read(body: &LirBody) -> Register {
+    match &body.insns()[1].what.as_ref().expect("a read").sources[0] {
+        Loc::Mem(cell) => cell.through,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// What a body encodes and touches depends on the mode it is for, which it carries: a flat body forwards a
+/// copy into a 32-bit base, a real-mode one does not (it has no such operand). The mode was a thread-local
+/// set around a compile, so a pass run on a body outside one read real mode whatever the body was for.
+#[test]
+fn test_a_body_is_encoded_in_its_own_mode() {
+    assert_eq!(through_of_the_read(&copyprop::forwarded(&read_through_a_copy(32))), Register::ECX);
+    assert_eq!(through_of_the_read(&copyprop::forwarded(&read_through_a_copy(16))), Register::EBX);
+}
+
+// ------------------------------------------------------------------ the count of a `rep`
+
+fn repeated_fill(name: &str, width: u32, di: Register, cx: Register, ax: Register) -> Insn {
+    let what = sem(Operation::Fill, name, vec![Loc::Mem(Mem::new(None, 0)), rl(di, width), rl(cx, width)], vec![rl(ax, width), rl(cx, width), rl(di, width)]);
+    insn(0, Some((0, 0)), Some(what), vec![], vec![])
+}
+
+/// `rep stosw` in 16-bit code counts CX down and leaves the upper half of ECX alone. `rep` was taken to write
+/// ECX whole, so a value live in ECX's upper half across it read as overwritten.
+#[test]
+fn test_a_rep_in_real_mode_writes_cx_and_not_the_upper_half_of_ecx() {
+    let (_, writes) = _register_effects(16, &repeated_fill("stosw", 2, Register::DI, Register::CX, Register::AX), true, false).expect("encodes");
+    assert!(writes.contains(&(Register::ECX, 0)) && writes.contains(&(Register::ECX, 1)), "{writes:?}");
+    assert!(!writes.contains(&(Register::ECX, 2)) && !writes.contains(&(Register::ECX, 3)), "{writes:?}");
+}
+
+/// In 32-bit code it counts ECX.
+#[test]
+fn test_a_rep_in_flat_mode_writes_ecx_whole() {
+    let (_, writes) = _register_effects(32, &repeated_fill("stosd", 4, Register::EDI, Register::ECX, Register::EAX), true, false).expect("encodes");
+    assert!((0..4).all(|lane| writes.contains(&(Register::ECX, lane))), "{writes:?}");
 }

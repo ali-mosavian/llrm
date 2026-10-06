@@ -275,7 +275,7 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
             }
             let direct = match _in_place(&one, &stored, frame)? {
                 Some(direct) => Some(direct),
-                None => _tied(&one, &stored, frame, classes)?,
+                None => _tied(body.bits, &one, &stored, frame, classes)?,
             };
             if let Some(direct) = direct {
                 insns.push(direct);
@@ -288,7 +288,7 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
                 let (reloads, renamed) = _reloaded(&read, &stored, frame, &mut fresh)?;
                 insns.extend(reloads);
                 insns.push(if renamed.is_empty() { read } else { _renamed(&read, &renamed) });
-                if let Some(direct) = _tied(&one, &stored, frame, classes)? {
+                if let Some(direct) = _tied(body.bits, &one, &stored, frame, classes)? {
                     insns.push(direct);
                     continue;
                 }
@@ -2332,7 +2332,7 @@ fn _memory_source_read_first(one: &Insn, values: &BTreeSet<u32>, fresh: u32) -> 
 }
 
 /// A value an instruction both reads and writes, kept in its slot.
-fn _tied(one: &Insn, values: &BTreeSet<u32>, frame: &mut Frame, classes: &RegisterClasses) -> Result<Option<Arc<Insn>>, Error> {
+fn _tied(bits: u32, one: &Insn, values: &BTreeSet<u32>, frame: &mut Frame, classes: &RegisterClasses) -> Result<Option<Arc<Insn>>, Error> {
     let Some(what) = &one.what else {
         return Ok(None);
     };
@@ -2376,7 +2376,7 @@ fn _tied(one: &Insn, values: &BTreeSet<u32>, frame: &mut Frame, classes: &Regist
         sources: what.sources.iter().map(swap).collect(),
         ..what.clone()
     };
-    if !_encodable(&made, classes)? {
+    if !_encodable(bits, &made, classes)? {
         return Ok(None);
     }
     Ok(Some(_with(one, |insn| {
@@ -2387,7 +2387,7 @@ fn _tied(one: &Insn, values: &BTreeSet<u32>, frame: &mut Frame, classes: &Regist
 }
 
 /// Whether this form exists, asked of the one place that knows.
-fn _encodable(what: &Semantics, classes: &RegisterClasses) -> Result<bool, Error> {
+fn _encodable(bits: u32, what: &Semantics, classes: &RegisterClasses) -> Result<bool, Error> {
     let mut taken: IndexMap<u32, Register> = IndexMap::default();
     let rows: IndexMap<u32, Vec<Register>> = [1_u32, 2, 4]
         .into_iter()
@@ -2423,7 +2423,7 @@ fn _encodable(what: &Semantics, classes: &RegisterClasses) -> Result<bool, Error
         sources: what.sources.iter().map(&mut placed).collect(),
         ..what.clone()
     };
-    Ok(super::select::emit(&probe, 0, None, false, false, None).is_some())
+    Ok(super::select::emit_in(bits, &probe, 0, None, false, false, None).is_some())
 }
 
 /// One past the highest value id this body names.

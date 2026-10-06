@@ -449,7 +449,7 @@ fn _interrupt_parts(group: Addr) -> (Vec<Semantics>, Vec<Semantics>) {
 pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable> {
     let (_enter, leave) = _frame_parts(procedure);
     let emitted: Vec<Option<select::Emitted>> =
-        leave.iter().map(|one| select::emit(one, 0, None, false, false, None)).collect();
+        leave.iter().map(|one| select::emit_in(procedure.body.bits, one, 0, None, false, false, None)).collect();
     if emitted.iter().any(Option::is_none) {
         return Err(Unprintable(format!("{}: implicit return sequence is not encodable", procedure.name)));
     }

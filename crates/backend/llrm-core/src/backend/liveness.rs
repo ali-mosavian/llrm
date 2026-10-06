@@ -78,23 +78,23 @@ impl Effect {
 }
 
 /// `one`'s effect as it decodes, else as its contract declares; None when unknown.
-pub fn effect(one: &Insn) -> Option<Effect> {
+pub fn effect(bits: u32, one: &Insn) -> Option<Effect> {
     if _terminator(one.what.as_ref()) {
         // A jump or branch writes nothing; a branch reads its flags.
         let what = one.what.as_ref().expect("a terminator has semantics");
         let reads = if what.op == Operation::Branch { _branch_reads(what) } else { Lanes::new() };
         return Some(Effect { reads, writes: Lanes::new(), moved: Vec::new() });
     }
-    let (reads, writes) = _register_effects(one, false, true).or_else(|| _declared(one))?;
-    Some(match _moved_lanes(one) {
+    let (reads, writes) = _register_effects(bits, one, false, true).or_else(|| _declared(one))?;
+    Some(match _moved_lanes(bits, one) {
         Some((moved, operands)) => Effect { reads: reads.minus(&operands), writes, moved },
         None => Effect { reads, writes, moved: Vec::new() },
     })
 }
 
 /// Each instruction's effect in `block`, decoded once for a fixed point to reuse.
-fn _effects(block: &LirBlock) -> Vec<Option<Effect>> {
-    block.insns.iter().map(|one| effect(one)).collect()
+fn _effects(bits: u32, block: &LirBlock) -> Vec<Option<Effect>> {
+    block.insns.iter().map(|one| effect(bits, one)).collect()
 }
 
 /// The lanes live before `effects`, given those live after them. An unknown
@@ -104,8 +104,8 @@ fn _before(effects: &[Option<Effect>], live: Lanes, universe: &Lanes) -> Lanes {
 }
 
 /// The lanes live before `block`, given those live after it.
-pub fn _backwards(block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
-    _before(&_effects(block), live, universe)
+pub fn _backwards(bits: u32, block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
+    _before(&_effects(bits, block), live, universe)
 }
 
 /// What a call says it reads and writes, for an instruction no decoder covers.
@@ -189,7 +189,7 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
         .collect();
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut into: IndexMap<i64, Lanes> = blocks.keys().map(|at| (*at, Lanes::new())).collect();
-    let effects: IndexMap<i64, Vec<Option<Effect>>> = blocks.iter().map(|(at, block)| (*at, _effects(block))).collect();
+    let effects: IndexMap<i64, Vec<Option<Effect>>> = blocks.iter().map(|(at, block)| (*at, _effects(body.bits, block))).collect();
     // The least fixed point of a backward problem, found by a worklist that starts from the last block: a
     // block is recomputed when a successor's lanes changed. Taken round the layout from the first block, each
     // round carried a change one block back, and a chain of n blocks took n rounds.

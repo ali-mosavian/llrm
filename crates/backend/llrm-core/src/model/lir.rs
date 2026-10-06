@@ -302,6 +302,8 @@ pub struct LirBody {
     pub returns_twice: bool,
     /// (load, write) by `at`: the optimizer proved the write leaves the load's cell as it was (`!llrm.spares`).
     pub spares: Arc<BTreeSet<(i64, i64)>>,
+    /// 16 or 32: the mode the target's code runs in, which decides how an instruction encodes and what it touches.
+    pub bits: u32,
 }
 
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
@@ -400,6 +402,7 @@ impl LirBody {
             odds: BlockOdds::default(),
             returns_twice: false,
             spares: Arc::default(),
+            bits: crate::frontends::bc::declen::BITNESS,
         }
     }
 
@@ -422,6 +425,7 @@ impl LirBody {
             odds: self.odds.clone(),
             returns_twice: self.returns_twice,
             spares: Arc::clone(&self.spares),
+            bits: self.bits,
         }
     }
 
