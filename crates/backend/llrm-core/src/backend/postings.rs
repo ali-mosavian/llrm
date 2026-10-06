@@ -9,6 +9,7 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
+use crate::model::ir::{Loc, Space};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::HashMap;
 
@@ -23,6 +24,8 @@ pub struct Postings {
     uses: HashMap<u32, Vec<At>>,
     /// The instructions that `require` the value be in a register.
     needs: HashMap<u32, Vec<At>>,
+    /// For each block, the positions of its instructions with a frame cell among their operands.
+    frames: Vec<Vec<u32>>,
 }
 
 impl Postings {
@@ -43,12 +46,27 @@ impl Postings {
         self.uses.get(&value).map_or(&[], Vec::as_slice)
     }
 
+    /// The positions in block `block` of the instructions that read or write a frame cell.
+    pub fn frames(&self, block: usize) -> &[u32] {
+        self.frames.get(block).map_or(&[], Vec::as_slice)
+    }
+
     pub fn needs(&self, value: u32) -> &[At] {
         self.needs.get(&value).map_or(&[], Vec::as_slice)
     }
 
     /// The occurrences of the instructions of `insns`, block `block`, appended: that block is the last made.
     fn add(&mut self, block: u32, insns: &[Arc<Insn>]) {
+        let framed = |one: &Insn| {
+            one.what.as_ref().is_some_and(|what| {
+                what.dests.iter().chain(&what.sources).any(|operand| matches!(operand, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)))
+            })
+        };
+        let list = insns.iter().enumerate().filter(|(_, one)| framed(one)).map(|(at, _)| at as u32).collect();
+        if self.frames.len() <= block as usize {
+            self.frames.resize(block as usize + 1, Vec::new());
+        }
+        self.frames[block as usize] = list;
         for (at, one) in insns.iter().enumerate() {
             for value in &one.defines {
                 self.defs.entry(*value).or_default().push((block, at as u32));
@@ -69,6 +87,10 @@ impl Postings {
         touched.dedup();
         let mut fresh = Postings::default();
         fresh.add(block, new);
+        if self.frames.len() <= block as usize {
+            self.frames.resize(block as usize + 1, Vec::new());
+        }
+        self.frames[block as usize] = fresh.frames.pop().unwrap_or_default();
         for value in touched {
             for (mine, theirs) in [(&mut self.defs, &fresh.defs), (&mut self.uses, &fresh.uses), (&mut self.needs, &fresh.needs)] {
                 let list = mine.entry(value).or_default();
@@ -106,30 +128,39 @@ fn check() -> bool {
     *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_POSTINGS").is_some())
 }
 
-/// `read` of the postings of `body`, made to follow it first.
+/// Whether the postings already are those of `body`: its blocks, each of the same instructions.
+fn current(held: &Followed, body: &LirBody) -> bool {
+    held.blocks.len() == body.blocks.len()
+        && held.blocks.iter().zip(&body.blocks).all(|((at, before), block)| *at == block.at && before.len() == block.insns.len() && before.iter().zip(&block.insns).all(|(old, new)| Arc::ptr_eq(old, new)))
+}
+
+/// `read` of the postings of `body`, made to follow it first. A read may ask again of the same body.
 pub fn following<R>(body: &LirBody, read: impl FnOnce(&Postings) -> R) -> R {
-    CURRENT.with(|current| {
-        let mut current = current.borrow_mut();
-        let same_shape = current.as_ref().is_some_and(|held| held.blocks.len() == body.blocks.len() && held.blocks.iter().zip(&body.blocks).all(|((at, _), block)| *at == block.at));
-        if !same_shape {
-            REDONE.with(|redone| redone.set(redone.get() + body.blocks.len()));
-            *current = Some(Followed { blocks: body.blocks.iter().map(|block| (block.at, block.insns.clone())).collect(), found: Postings::of(body) });
-        } else {
-            let held = current.as_mut().expect("checked");
-            for (block, (one, (_, before))) in body.blocks.iter().zip(&mut held.blocks).enumerate() {
-                let unchanged = before.len() == one.insns.len() && before.iter().zip(&one.insns).all(|(old, new)| Arc::ptr_eq(old, new));
-                if unchanged {
-                    continue;
+    let up_to_date = CURRENT.with(|current_state| current_state.borrow().as_ref().is_some_and(|held| current(held, body)));
+    if !up_to_date {
+        CURRENT.with(|state| {
+            let mut state = state.borrow_mut();
+            let same_shape = state.as_ref().is_some_and(|held| held.blocks.len() == body.blocks.len() && held.blocks.iter().zip(&body.blocks).all(|((at, _), block)| *at == block.at));
+            if !same_shape {
+                REDONE.with(|redone| redone.set(redone.get() + body.blocks.len()));
+                *state = Some(Followed { blocks: body.blocks.iter().map(|block| (block.at, block.insns.clone())).collect(), found: Postings::of(body) });
+            } else {
+                let held = state.as_mut().expect("checked");
+                for (block, (one, (_, before))) in body.blocks.iter().zip(&mut held.blocks).enumerate() {
+                    let unchanged = before.len() == one.insns.len() && before.iter().zip(&one.insns).all(|(old, new)| Arc::ptr_eq(old, new));
+                    if unchanged {
+                        continue;
+                    }
+                    REDONE.with(|redone| redone.set(redone.get() + 1));
+                    held.found.replaced(block as u32, before, &one.insns);
+                    *before = one.insns.clone();
                 }
-                REDONE.with(|redone| redone.set(redone.get() + 1));
-                held.found.replaced(block as u32, before, &one.insns);
-                *before = one.insns.clone();
             }
-        }
-        let held = current.as_ref().expect("made");
-        if check() {
-            assert!(held.found == Postings::of(body), "{}: the postings that followed the body differ from working them out", body.name);
-        }
-        read(&held.found)
-    })
+            if check() {
+                let held = state.as_ref().expect("made");
+                assert!(held.found == Postings::of(body), "{}: the postings that followed the body differ from working them out", body.name);
+            }
+        });
+    }
+    CURRENT.with(|state| read(&state.borrow().as_ref().expect("made").found))
 }

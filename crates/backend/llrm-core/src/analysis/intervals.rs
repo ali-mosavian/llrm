@@ -121,6 +121,36 @@ pub fn indexed(body: &LirBody) -> Indexes {
     Indexes { at, span, order: body.blocks.iter().map(|block| block.at).collect() }
 }
 
+thread_local! {
+    static NUMBERED: std::cell::RefCell<Option<(Vec<Arc<Insn>>, Vec<(i64, usize)>, Rc<Indexes>)>> = const { std::cell::RefCell::new(None) };
+    static INDEXED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has numbered a body for `indexed_shared`, for a test that asking again of one body
+/// does not.
+pub fn numbered() -> usize {
+    INDEXED.with(std::cell::Cell::get)
+}
+
+/// `indexed(body)`, remembered for the next ask of the same instructions (by identity, in the same blocks).
+pub fn indexed_shared(body: &LirBody) -> Rc<Indexes> {
+    NUMBERED.with(|held| {
+        let mut held = held.borrow_mut();
+        if let Some((insns, blocks, found)) = held.as_ref() {
+            let same = blocks.len() == body.blocks.len()
+                && blocks.iter().zip(&body.blocks).all(|((at, count), block)| *at == block.at && *count == block.insns.len())
+                && insns.iter().zip(body.blocks.iter().flat_map(|block| block.insns.iter())).all(|(held, one)| Arc::ptr_eq(held, one));
+            if same {
+                return Rc::clone(found);
+            }
+        }
+        INDEXED.with(|count| count.set(count.get() + 1));
+        let found = Rc::new(indexed(body));
+        *held = Some((body.blocks.iter().flat_map(|block| block.insns.iter().cloned()).collect(), body.blocks.iter().map(|block| (block.at, block.insns.len())).collect(), Rc::clone(&found)));
+        found
+    })
+}
+
 /// What an answer of `intervals_over` was made of: the body's instructions by identity (held, so
 /// that an address is not reused while it is remembered), its blocks and phis, and what its
 /// frequencies read.
@@ -218,6 +248,12 @@ pub fn intervals_among(body: &LirBody, index: &Indexes, busy: &Frequency, only: 
     worked_out_by(body, Some(index), busy, &|value| only.contains(&value))
 }
 
+/// `intervals_among`, the values named by a test: for values numbered together, a comparison, where a set is
+/// a search of a tree for every operand of every instruction of the body.
+pub fn intervals_where(body: &LirBody, index: &Indexes, busy: &Frequency, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
+    worked_out_by(body, Some(index), busy, keep)
+}
+
 fn worked_out_by(body: &LirBody, index: Option<&Indexes>, busy: &Frequency, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
     WORKED.with(|worked| worked.set(worked.get() + 1));
     let owned;
@@ -298,20 +334,35 @@ impl Alive {
 }
 
 pub(crate) fn _walked(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
+    _walked_at(body, index, keep, None)
+}
+
+/// The values `keep` says of a body of which only the instructions that name them are given, each block's
+/// with the slot each has in the whole body: the body's numbering, blocks and all else are `index`'s.
+pub fn intervals_sparse(sparse: &LirBody, index: &Indexes, starts: &[Vec<i64>], keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
+    _walked_at(sparse, index, keep, Some(starts))
+}
+
+/// `_walked`, each instruction's slot given where `starts` is.
+fn _walked_at(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bool, given: Option<&[Vec<i64>]>) -> IndexMap<u32, Interval> {
     let live = llrm_support::debug::timed("intervals liveness", || allocate::live_rows_by(body, keep));
     let _walk = llrm_support::debug::span("intervals walk");
     let mut pieces: IndexMap<u32, Vec<Segment>> = IndexMap::default();
     let mut starts: Vec<i64> = Vec::new();
     let (mut defined, mut used): (Vec<u32>, Vec<u32>) = (Vec::new(), Vec::new());
-    for block in &body.blocks {
+    for (block_index, block) in body.blocks.iter().enumerate() {
         let (first, last) = index.span[&block.at];
         // Each instruction's slot: the block's first after its phis' slot, then two for each that is no mark.
         starts.clear();
-        let mut next = first + PER_INSN;
-        for one in &block.insns {
-            starts.push(next);
-            if !one.is_meta() {
-                next += PER_INSN;
+        if let Some(given) = given {
+            starts.extend_from_slice(&given[block_index]);
+        } else {
+            let mut next = first + PER_INSN;
+            for one in &block.insns {
+                starts.push(next);
+                if !one.is_meta() {
+                    next += PER_INSN;
+                }
             }
         }
         let mut alive = Alive::new();
