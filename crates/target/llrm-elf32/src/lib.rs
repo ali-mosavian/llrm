@@ -6,6 +6,7 @@ use llrm_object::{Arch, Kind, Object, Unsupported};
 
 const R_386_32: u32 = 1;
 const R_386_PC32: u32 = 2;
+const R_386_PLT32: u32 = 4;
 const R_386_16: u32 = 20;
 const R_386_PC16: u32 = 21;
 const R_386_8: u32 = 22;
@@ -25,6 +26,8 @@ impl Machine for I386 {
             Kind::Abs { width: 2 } => (R_386_16, 2, 0),
             Kind::Abs { width: 1 } => (R_386_8, 1, 0),
             Kind::PcRel { width: 4, from } => (R_386_PC32, 4, from),
+            Kind::Branch { width: 4 } => (R_386_PLT32, 4, 4),
+            Kind::Branch { width: 2 } => (R_386_PC16, 2, 2),
             Kind::PcRel { width: 2, from } => (R_386_PC16, 2, from),
             Kind::PcRel { width: 1, from } => (R_386_PC8, 1, from),
             Kind::SegmentBase => return Err(Unsupported("a segment selector has no ELF relocation".into())),

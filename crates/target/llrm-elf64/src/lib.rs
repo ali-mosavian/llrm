@@ -6,6 +6,7 @@ use llrm_object::{Arch, Kind, Object, Unsupported};
 
 const R_X86_64_64: u32 = 1;
 const R_X86_64_PC32: u32 = 2;
+const R_X86_64_PLT32: u32 = 4;
 const R_X86_64_32: u32 = 10;
 const R_X86_64_16: u32 = 12;
 const R_X86_64_PC16: u32 = 13;
@@ -30,6 +31,7 @@ impl Machine for X8664 {
             Kind::Abs { width: 1 } => (R_X86_64_8, 1, 0),
             Kind::PcRel { width: 8, from } => (R_X86_64_PC64, 8, from),
             Kind::PcRel { width: 4, from } => (R_X86_64_PC32, 4, from),
+            Kind::Branch { width: 4 } => (R_X86_64_PLT32, 4, 4),
             Kind::PcRel { width: 2, from } => (R_X86_64_PC16, 2, from),
             Kind::PcRel { width: 1, from } => (R_X86_64_PC8, 1, from),
             Kind::SegmentBase => return Err(Unsupported("a segment selector has no ELF relocation".into())),

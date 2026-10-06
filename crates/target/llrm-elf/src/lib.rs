@@ -113,11 +113,15 @@ fn align(bytes: &mut Vec<u8>, to: usize) {
     }
 }
 
-fn fits(addend: i64, width: usize) -> bool {
-    match width {
-        8 => true,
-        4 => i32::try_from(addend).is_ok() || u32::try_from(addend).is_ok(),
-        2 => i16::try_from(addend).is_ok() || u16::try_from(addend).is_ok(),
+/// Whether `addend` is a value of a field of `width` bytes: signed where pc-relative.
+fn fits(addend: i64, width: usize, pcrel: bool) -> bool {
+    match (width, pcrel) {
+        (8, _) => true,
+        (4, true) => i32::try_from(addend).is_ok(),
+        (4, false) => i32::try_from(addend).is_ok() || u32::try_from(addend).is_ok(),
+        (2, true) => i16::try_from(addend).is_ok(),
+        (2, false) => i16::try_from(addend).is_ok() || u16::try_from(addend).is_ok(),
+        (_, true) => i8::try_from(addend).is_ok(),
         _ => i8::try_from(addend).is_ok() || u8::try_from(addend).is_ok(),
     }
 }
@@ -208,7 +212,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             };
             // S + A - P, where the model's value is S + addend - (at + from).
             let addend = one.addend + own - from as i64;
-            if !fits(addend, width) {
+            if !fits(addend, width, one.kind.relative()) {
                 return Err(unsupported(format!("{}: an addend of {addend} does not fit its {width}-byte field", section.name)));
             }
             put_word::<M>(&mut entries, one.at as u64);

@@ -28,7 +28,7 @@ pub const OFFSET32: Kind = Kind::Abs { width: 4 };
 
 /// A call's field: relative to its own end.
 fn relative(width: usize) -> Kind {
-    Kind::PcRel { width, from: width }
+    Kind::Branch { width }
 }
 
 /// The role of a data segment `name` that the object's classes name, and that it is otherwise.
@@ -371,6 +371,7 @@ pub fn written_in(module: &masm::Module, source: &str, layout: CodeLayout, forma
             Format::Omf => Ok(llrm_omf::write::write(&object)?),
             Format::Elf if object.arch == Arch::I386 => Ok(llrm_elf32::write(&object)?),
             Format::Elf if object.arch == Arch::X8664 => Ok(llrm_elf64::write(&object)?),
+            Format::MachO if object.arch == Arch::X8664 => Ok(llrm_macho::write(&object)?),
             Format::Elf | Format::MachO => Err(Error::Unsupported(llrm_object::Unsupported(format!("no {} writer for {:?} yet", format.name(), object.arch)))),
         }
     })

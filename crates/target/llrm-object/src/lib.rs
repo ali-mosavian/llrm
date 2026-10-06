@@ -53,6 +53,10 @@ pub enum Kind {
     /// The target's address minus the place `from` bytes past the field's start: an x86 call's
     /// is `width`, the field's end.
     PcRel { width: usize, from: usize },
+    /// A call or jump's target, `width` bytes relative to the field's end: what `PcRel { width,
+    /// from: width }` says, for the formats that tell a branch from a data reference (Mach-O's
+    /// `BRANCH`, which a linker may send through a stub).
+    Branch { width: usize },
     /// OMF: the selector of the target's segment.
     SegmentBase,
     /// OMF: a 16:16 pointer, whose offset is the field's first two bytes.
@@ -63,14 +67,14 @@ impl Kind {
     /// Field bytes this kind patches.
     pub fn width(self) -> usize {
         match self {
-            Kind::Abs { width } | Kind::PcRel { width, .. } => width,
+            Kind::Abs { width } | Kind::PcRel { width, .. } | Kind::Branch { width } => width,
             Kind::SegmentBase => 2,
             Kind::FarPointer => 4,
         }
     }
 
     pub fn relative(self) -> bool {
-        matches!(self, Kind::PcRel { .. })
+        matches!(self, Kind::PcRel { .. } | Kind::Branch { .. })
     }
 }
 

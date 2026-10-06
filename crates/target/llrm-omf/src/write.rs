@@ -89,6 +89,8 @@ fn location(kind: Kind) -> Result<(u8, bool), Error> {
         Kind::SegmentBase => (BASE, false),
         Kind::FarPointer => (POINTER, false),
         Kind::PcRel { width, from } if width == from && matches!(width, 2 | 4) => (if width == 2 { OFFSET } else { OFFSET32 }, true),
+        Kind::Branch { width: 2 } => (OFFSET, true),
+        Kind::Branch { width: 4 } => (OFFSET32, true),
         other => return Err(unencodable(format!("OMF has no fixup for {other:?}"))),
     })
 }
@@ -96,7 +98,7 @@ fn location(kind: Kind) -> Result<(u8, bool), Error> {
 /// Bytes of a field that hold a value: a far pointer's offset is its first two.
 fn packed(kind: Kind) -> usize {
     match kind {
-        Kind::Abs { width: 4 } | Kind::PcRel { width: 4, .. } => 4,
+        Kind::Abs { width: 4 } | Kind::PcRel { width: 4, .. } | Kind::Branch { width: 4 } => 4,
         _ => 2,
     }
 }

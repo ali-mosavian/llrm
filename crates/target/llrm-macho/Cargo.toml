@@ -1,0 +1,12 @@
+[package]
+name = "llrm-macho"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "llrm's Mach-O relocatable object writer, for x86-64"
+
+[dependencies]
+llrm-object = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
