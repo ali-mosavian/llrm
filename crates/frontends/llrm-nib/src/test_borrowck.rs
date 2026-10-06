@@ -945,7 +945,7 @@ fn main() -> i16:
 ";
     let text = super::compile(source, "t").unwrap_or_else(|error| panic!("{}", error.message));
     let program = llrm_hir::codec::decode(&text).expect("HIR");
-    let module = llrm_hir::mir::emit(&program).remove(0).module;
+    let module = llrm_core::hir::mir::emit(&program).remove(0).module;
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
     let function = module.functions().find(|(_, global, _)| global.name.as_deref().is_some_and(|name| name.contains("area"))).expect("area").2;
     let unit = llrm_analysis::memory::Unit::of(&module, &layout, function);

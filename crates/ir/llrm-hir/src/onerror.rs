@@ -18,7 +18,6 @@ use llrm_mir::build::Builder;
 use llrm_mir::opcode::{Attribute, CastOp, Flags, BASIC};
 use llrm_mir::{Constant, ConstantId, ConstantKind, GlobalId, GlobalKind, GlobalVariable, Linkage, Module, Operand, Type, TypeId};
 
-use crate::mir::FAR;
 
 pub const PERSONALITY: &str = "llrm.qb.personality";
 pub const ONERROR: &str = "llrm.qb.onerror";
@@ -41,7 +40,7 @@ pub struct Handled {
 /// Gives `function` the personality, declares ON ERROR GOTO -- ON LOCAL
 /// ERROR GOTO where `local` -- and keeps `lines`, each statement's BASIC
 /// line in the order a site numbers them.
-pub fn handled(module: &mut Module, function: GlobalId, lines: &[i64], local: bool) -> Result<Handled, String> {
+pub fn handled(module: &mut Module, far: u32, function: GlobalId, lines: &[i64], local: bool) -> Result<Handled, String> {
     let name = module.global(function).name.clone().unwrap_or_default();
     let i16 = module.context.types.int(16);
     let table = module.context.types.intern(Type::Array { element: i16, count: lines.len() as u64 });
@@ -55,8 +54,8 @@ pub fn handled(module: &mut Module, function: GlobalId, lines: &[i64], local: bo
     let personality_type = types.intern(Type::Function { returns: i32, parameters: Vec::new(), variadic: true });
     let onerror_type = types.intern(Type::Function { returns: void, parameters: vec![flag], variadic: false });
     let pad = types.intern(Type::Struct { fields: vec![ptr, i32], packed: false });
-    let personality = declared(module, PERSONALITY, personality_type, 0, &[])?;
-    let onerror = declared(module, if local { ONLOCALERROR } else { ONERROR }, onerror_type, BASIC, &["nounwind"])?;
+    let personality = declared(module, far, PERSONALITY, personality_type, 0, &[])?;
+    let onerror = declared(module, far, if local { ONLOCALERROR } else { ONERROR }, onerror_type, BASIC, &["nounwind"])?;
     let GlobalKind::Function(handled) = &mut module.globals[function.0 as usize].kind else { return Err("a handler outside a function".to_owned()) };
     handled.personality = Some(personality);
     Ok(Handled { onerror, onerror_type, pad, lines })
@@ -130,20 +129,20 @@ pub fn erl(b: &mut Builder, handled: &Handled, site: Operand, returns: TypeId) -
 }
 
 /// ERR, `i16 ()`.
-pub fn err(module: &mut Module) -> Result<(ConstantId, TypeId), String> {
+pub fn err(module: &mut Module, far: u32) -> Result<(ConstantId, TypeId), String> {
     let types = &mut module.context.types;
     let i16 = types.int(16);
     let ty = types.intern(Type::Function { returns: i16, parameters: Vec::new(), variadic: false });
-    Ok((declared(module, ERR, ty, BASIC, &["nounwind"])?, ty))
+    Ok((declared(module, far, ERR, ty, BASIC, &["nounwind"])?, ty))
 }
 
-fn declared(module: &mut Module, name: &str, ty: TypeId, convention: u32, flags: &[&str]) -> Result<ConstantId, String> {
+fn declared(module: &mut Module, far: u32, name: &str, ty: TypeId, convention: u32, flags: &[&str]) -> Result<ConstantId, String> {
     if let Some(one) = module.named(name) {
         return Ok(module.reference(one));
     }
     let id = module.add_function(name, ty, Linkage::External)?;
     let global = &mut module.globals[id.0 as usize];
-    global.address_space = FAR;
+    global.address_space = far;
     let GlobalKind::Function(function) = &mut global.kind else { unreachable!("a function") };
     function.calling_convention = convention;
     function.attrs.extend(flags.iter().map(|one| Attribute::Flag((*one).to_owned())));
