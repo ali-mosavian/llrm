@@ -354,7 +354,12 @@ pub struct CallInfo {
 }
 
 /// The calling conventions LLVM names, by number; any other is `ccN`.
-pub const CONVENTIONS: [(&str, u32); 6] = [("ccc", 0), ("fastcc", 8), ("coldcc", 9), ("x86_stdcallcc", 64), ("x86_fastcallcc", 65), ("x86_intrcc", 83)];
+pub const CONVENTIONS: [(&str, u32); 7] = [("ccc", 0), ("fastcc", 8), ("coldcc", 9), ("x86_stdcallcc", 64), ("x86_fastcallcc", 65), ("x86_intrcc", 83), ("watcallcc", WATCALL)];
+
+/// The calling conventions a target names by the `cc` of its description (calling.toml): `ccc` is the
+/// one stating `cc = "cdecl"`, and each other is asked for as `<cc>cc`.
+/// `watcallcc`: Open Watcom's register convention.
+pub const WATCALL: u32 = 1002;
 
 /// BASIC's own: arguments pushed left to right, popped by the callee.
 pub const BASIC: u32 = 1000;
