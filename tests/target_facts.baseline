@@ -62,8 +62,6 @@
 16 crates/bc/llrm-bcmachine/src/model/ir/lift.rs
 4 crates/bc/llrm-bcmachine/src/model/ir/nodes.rs
 27 crates/bc/llrm-bcmachine/src/model/ir/semantics.rs
-1 crates/frontends/llrm-c/build.rs
-3 crates/frontends/llrm-c/src/compile.rs
 9 crates/frontends/llrm-c/src/translate.rs
 1 crates/frontends/llrm-nib/src/library.rs
 1 crates/frontends/llrm-nib/src/semantic/assembly.rs

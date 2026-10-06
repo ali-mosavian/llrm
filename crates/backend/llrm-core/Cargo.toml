@@ -12,6 +12,7 @@ llrm-x86 = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-omf = { workspace = true }
 llrm-object = { workspace = true }
+llrm-elf32 = { workspace = true }
 llrm-bcmachine = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-hir = { workspace = true }

@@ -4,6 +4,7 @@
     linkrecipe.py TARGET assembler   the assembler's flag for the object format the target writes
     linkrecipe.py TARGET format      the linker's format words (`format dos`)
     linkrecipe.py TARGET FIELD       one `[link]` field (`first`, `last`, `final`, `options`, `loader`), words
+    linkrecipe.py TARGET ld-emulation  GNU ld's -m for the target's ELF objects
 """
 
 import sys
@@ -23,7 +24,7 @@ def recipe(target: str) -> dict:
 
 def assembler(target: str) -> str:
     """The flag that makes the assembler write `target`'s object format."""
-    return ASSEMBLER[recipe(target)["writer"]]
+    return ASSEMBLER[recipe(target)["default"]]
 
 
 def link(target: str, field: str) -> list[str]:
@@ -32,6 +33,11 @@ def link(target: str, field: str) -> list[str]:
     return value if isinstance(value, list) else [value]
 
 
+def ld_emulation(target: str) -> str:
+    """GNU ld's `-m` for the target's ELF objects: `[link.elf]`'s `emulation`."""
+    return recipe(target)["link"]["elf"]["emulation"]
+
+
 if __name__ == "__main__":
     target, field = sys.argv[1], sys.argv[2]
-    print(" ".join([assembler(target)] if field == "assembler" else link(target, field)))
+    print({"assembler": lambda: assembler(target), "ld-emulation": lambda: ld_emulation(target)}.get(field, lambda: " ".join(link(target, field)))())
