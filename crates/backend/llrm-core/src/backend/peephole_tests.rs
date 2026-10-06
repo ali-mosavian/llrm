@@ -3313,6 +3313,7 @@ fn test_what_a_conditional_jump_reads_is_the_conditions_for_every_condition() {
         let wanted = _flag_lanes(instructions::flags(form).expect("a jump reads flags").0);
         assert_eq!(_branch_reads(&branch), wanted, "{}", form.name);
     }
+}
 
 // ------------------------------------------------------------------ the count of a `rep`
 
