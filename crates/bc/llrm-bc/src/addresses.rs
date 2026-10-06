@@ -16,7 +16,6 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::types::Type;
 
 use crate::objects::Objects;
-use crate::{FAR, SEGMENT};
 
 /// What an operand is made of: an instruction's or a constant
 /// expression's opcode and operands.
@@ -155,8 +154,8 @@ fn sweep(function: &mut Function, root: Operand) {
 
 /// Gives every near address in `function` formed from an object's
 /// address that object.
-pub fn attribute(function: &mut Function, context: &mut Context, objects: &Objects) {
-    let (near, far, segment, word, byte) = (context.types.ptr(0), context.types.ptr(FAR), context.types.ptr(SEGMENT), context.types.int(16), context.types.int(8));
+pub fn attribute(function: &mut Function, context: &mut Context, objects: &Objects, spaces: &llrm_mir::spaces::Spaces) {
+    let (near, far, segment, word, byte) = (context.types.ptr(0), context.types.ptr(spaces.far), context.types.ptr(crate::segment(spaces)), context.types.int(16), context.types.int(8));
     // A far address through DGROUP's selector is a near one.
     let fars: Vec<InstId> = function.walk().map(|(_, one)| one).filter(|&one| matches!(function.instruction(one).opcode, Opcode::GetElementPtr { source } if source == byte)).collect();
     for inst in fars {

@@ -38,7 +38,6 @@ use crate::machine::{Answer, BodyFacts, FRAME_ENTRY, FRAME_EXIT, Facts, Interfac
 use crate::objects::Objects;
 use crate::runtime::Callees;
 use crate::sites;
-use crate::{FAR, SEGMENT};
 use llrm_hir::onerror::Handled;
 
 mod handling;
@@ -401,7 +400,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     pub fn var_type(&mut self, var: Var) -> TypeId {
         match var {
             Var::Reg(..) => self.b.context.types.int(16),
-            Var::Es => self.b.context.types.ptr(SEGMENT),
+            Var::Es => self.b.context.types.ptr(crate::segment(&self.unit.facts.spaces)),
             Var::Bit(_) => self.b.context.types.int(1),
             Var::St(_) => self.b.context.types.intern(Type::Float(FloatKind::Double)),
         }
@@ -1321,7 +1320,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
                 }
                 Register::CS => {
                     let code = self.unit.objects.code().ok_or("reads cs, with no code segment")?;
-                    let (segment, word) = (self.b.context.types.ptr(SEGMENT), self.b.context.types.int(16));
+                    let (segment, word) = (self.b.context.types.ptr(crate::segment(&self.unit.facts.spaces)), self.b.context.types.int(16));
                     let selector = self.cast(CastOp::AddrSpaceCast, Operand::Constant(code), segment);
                     Ok(self.cast(CastOp::PtrToInt, selector, word))
                 }
@@ -1361,7 +1360,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         match loc {
             Loc::Reg(reg) => match reg.register {
                 Register::ES => {
-                    let segment = self.b.context.types.ptr(SEGMENT);
+                    let segment = self.b.context.types.ptr(crate::segment(&self.unit.facts.spaces));
                     let made = self.b.cast(CastOp::IntToPtr, value, segment, "");
                     self.set(Var::Es, made);
                     Ok(())
@@ -1381,7 +1380,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     /// DGROUP's selector: the segment of any of its objects.
     fn selector(&mut self) -> Emit<Operand> {
         let object = self.unit.objects.any().ok_or("no DGROUP object to name DS by")?;
-        let (far, segment) = (self.b.context.types.ptr(FAR), self.b.context.types.ptr(SEGMENT));
+        let (far, segment) = (self.b.context.types.ptr(self.unit.facts.spaces.far), self.b.context.types.ptr(crate::segment(&self.unit.facts.spaces)));
         let far = self.cast(CastOp::AddrSpaceCast, Operand::Constant(object.reference), far);
         Ok(self.cast(CastOp::AddrSpaceCast, far, segment))
     }
@@ -1466,7 +1465,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             }
             Register::ES => {
                 let es = self.get(Var::Es);
-                let far = self.b.context.types.ptr(FAR);
+                let far = self.b.context.types.ptr(self.unit.facts.spaces.far);
                 let base = self.cast(CastOp::AddrSpaceCast, es, far);
                 Ok(self.indexed(base, offset))
             }

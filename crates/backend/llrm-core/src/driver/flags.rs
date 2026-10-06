@@ -247,7 +247,7 @@ impl Flags {
     /// `default`, or the `--machine` description, on the CPU `-march` or `-mtune` names for `target`.
     pub fn machine(&self, target: &dyn llrm_target::Target, default: Machine) -> Result<Machine, String> {
         let mut machine = match &self.machine {
-            Some(path) => Machine::load(path, &default.cpu)?,
+            Some(path) => Machine { layout: default.layout.clone(), ..Machine::load(path, &default.cpu)? },
             None => default,
         };
         if let Some(cpu) = self.cpu(target)? {
