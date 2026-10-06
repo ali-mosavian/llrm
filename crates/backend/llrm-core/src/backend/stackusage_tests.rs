@@ -21,7 +21,7 @@ fn procedure(name: &str, reserve: i64, pushes: usize, callees: &[&str]) -> Proce
     insns.push(insn(101, Operation::Return, "ret", vec![]));
     let body = LirBody::new(name, 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
     let callees = callees.iter().enumerate().map(|(at, one)| (100 + at as i64, Callee::new(*one, true))).collect();
-    Procedure { name: name.to_owned(), public: true, far: true, body, reserve, callees, interrupt: None, size: false, entry: 0, stack_check: None }
+    Procedure { name: name.to_owned(), public: true, far: true, body, reserve, callees, interrupt: None, size: false, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16) }
 }
 
 fn module(procedures: Vec<Procedure>) -> Module {

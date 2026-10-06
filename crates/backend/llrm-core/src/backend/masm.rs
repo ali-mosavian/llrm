@@ -20,10 +20,6 @@ use crate::support::pyrepr::Repr;
 /// `SIZES`.
 pub static SIZES: LazyLock<IndexMap<u32, &'static str>> =
     LazyLock::new(|| IndexMap::from_iter([(1, "byte"), (2, "word"), (4, "dword"), (8, "qword"), (10, "tbyte")]));
-/// `SAVED`: callee-saved under the C convention. A Borland caller keeps SI
-/// and DI, not their upper halves, and a caller built here keeps nothing
-/// across a call.
-pub static SAVED: LazyLock<IndexMap<Register, Register>> = LazyLock::new(|| IndexMap::from_iter(llrm_x86_code16::PRESERVED));
 /// `SEGMENTS`.
 pub static SEGMENTS: LazyLock<IndexMap<&'static str, &'static str>> =
     LazyLock::new(|| IndexMap::from_iter([("_DATA", ".data"), ("_BSS", ".data?"), ("CONST", ".const")]));
@@ -94,6 +90,8 @@ pub struct Procedure {
     pub entry: i64,
     /// Compare SP with the runtime's limit once the frame is allocated.
     pub stack_check: Option<StackCheck>,
+    /// The target's frame register, stack pointer and callee-saved registers.
+    pub registers: llrm_target::FrameRegisters,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -325,12 +323,12 @@ fn saved_of(procedure: &Procedure) -> Vec<Register> {
     // An interrupt handler has saved everything before its frame, and a runtime-built one has saved
     // SI and DI (B$ENRA/B$ENRD, restored by B$EXSA).
     let owned = procedure.interrupt.is_some() || procedure.entry != 0;
-    SAVED.iter().filter(|(whole, _)| !owned && roots.contains(whole)).map(|(_, low)| *low).collect()
+    procedure.registers.saved.iter().filter(|(whole, _)| !owned && roots.contains(whole)).map(|(_, low)| *low).collect()
 }
 
 /// Where `procedure` saves them, where that is not its entry (`shrinkwrap`).
 fn wrap_of(procedure: &Procedure) -> Option<crate::backend::shrinkwrap::Wrap> {
-    let kept: BTreeSet<Register> = SAVED.iter().filter(|(_, low)| saved_of(procedure).contains(low)).map(|(whole, _)| *whole).collect();
+    let kept: BTreeSet<Register> = procedure.registers.saved.iter().filter(|(_, low)| saved_of(procedure).contains(low)).map(|(whole, _)| *whole).collect();
     crate::backend::shrinkwrap::wrapped(&procedure.body, &kept)
 }
 
@@ -559,7 +557,26 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
         out.push(Item::Label(Label { name: label(number, cold_at(&procedure.body)) }));
         out.push(Item::Callee(Callee::new(check.handler.clone(), true)));
     }
-    Ok(out)
+    Ok(out.into_iter().map(|item| spelled(item, &procedure.registers)).collect())
+}
+
+/// `item` with the frame register and stack pointer LIR calls BP and SP as the
+/// target has them, which is BP and SP where it is real mode.
+fn spelled(item: Item, registers: &llrm_target::FrameRegisters) -> Item {
+    let register = |one: Register| registers.spelled(one);
+    let place = |loc: &Loc| match loc {
+        Loc::Reg(one) if register(one.register) != one.register => {
+            let spelled = register(one.register);
+            Loc::Reg(ir::Reg { register: spelled, width: spelled.size() as u32 })
+        }
+        Loc::Mem(cell) => Loc::Mem(ir::Mem { through: register(cell.through), index_through: register(cell.index_through), ..cell.clone() }),
+        Loc::Address(address) => Loc::Address(ir::Address { through: register(address.through), index: register(address.index), ..address.clone() }),
+        other => other.clone(),
+    };
+    match item {
+        Item::Semantics(what) => Item::Semantics(Semantics { dests: what.dests.iter().map(place).collect(), sources: what.sources.iter().map(place).collect(), ..what }),
+        other => other,
+    }
 }
 
 /// The explicit edge that physical adjacency makes free, if there is one.
@@ -1042,7 +1059,7 @@ mod tests {
         let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
         let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
         let procedure =
-            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: enter, entry: 0, stack_check: None };
+            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: enter, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16) };
         _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
     }
 
@@ -1091,7 +1108,7 @@ mod tests {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
         let leave = insn(1, semantics(Operation::Return, "retf", vec![], vec![]));
         let body = lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, vec![r#move, leave])], IndexMap::default(), IndexMap::default());
-        let procedure = Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: true, entry: 0, stack_check: check };
+        let procedure = Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: true, entry: 0, stack_check: check, registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16) };
         let mut names = no_names();
         let externs = stack_externs(std::slice::from_ref(&procedure), &mut names);
         (_procedure(&procedure, &names, 0).unwrap().iter().map(|line| line.trim().to_owned()).collect(), externs)
@@ -1130,10 +1147,27 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: None,
+            registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16),
         };
 
         assert_eq!(return_overhead_bytes(&procedure(0)).unwrap(), 1);
         assert_eq!(return_overhead_bytes(&procedure(4)).unwrap(), 1);
+    }
+
+    /// The frame register and stack pointer are LIR's BP and SP whatever the
+    /// target: a flat one listed `push bp; mov bp,sp` and `[bp+6]`, 16-bit code in a
+    /// 32-bit program.
+    #[test]
+    fn test_a_flat_frame_is_spelled_with_its_own_registers() {
+        let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
+        let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
+        let body = lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, vec![r#move, leave])], IndexMap::default(), IndexMap::default());
+        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new() };
+        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 4, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers };
+        let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
+        assert!(has(&lines, "push ebp") && has(&lines, "mov ebp, esp") && has(&lines, "sub esp, 4"), "{lines:?}");
+        assert!(lines.iter().any(|one| one.contains("[ebp+6]")), "{lines:?}");
+        assert!(!lines.iter().any(|one| one.contains("[bp") || one.contains(" bp") || one.contains(" sp")), "{lines:?}");
     }
 
     /// SI and DI were pushed and popped whole: an operand-size prefix on every save
@@ -1157,7 +1191,7 @@ mod tests {
             lir::LirBlock::new(3, vec![insn(5, semantics(Operation::Return, "ret", vec![], vec![]))]),
         ];
         let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
-        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 0, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None };
+        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 0, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16) };
         let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
         let at = |text: &str| lines.iter().position(|one| one == text).unwrap_or_else(|| panic!("{text} in {lines:?}"));
         assert_eq!(lines.iter().filter(|one| *one == "push si").count(), 1, "{lines:?}");
@@ -1179,7 +1213,7 @@ mod tests {
             lir::LirBlock::new(3, vec![insn(5, semantics(Operation::Return, "ret", vec![], vec![]))]),
         ];
         let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
-        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 0, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None };
+        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 0, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16) };
         let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
         assert!(lines.iter().position(|one| one == "push si").unwrap() < lines.iter().position(|one| one == "L0_1:").unwrap(), "{lines:?}");
     }

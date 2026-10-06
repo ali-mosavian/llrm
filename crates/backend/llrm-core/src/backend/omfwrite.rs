@@ -1056,7 +1056,7 @@ mod tests {
     }
 
     fn procedure(name: &str, far: bool, body: lir::LirBody, reserve: i64, callees: Vec<(i64, masm::Callee)>) -> masm::Procedure {
-        masm::Procedure { name: name.into(), public: true, far, body, reserve, callees: callees.into_iter().collect(), interrupt: None, size: false, entry: 0, stack_check: None }
+        masm::Procedure { name: name.into(), public: true, far, body, reserve, callees: callees.into_iter().collect(), interrupt: None, size: false, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16) }
     }
 
     fn reg(register: Register) -> Loc {
