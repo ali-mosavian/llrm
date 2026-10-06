@@ -790,25 +790,6 @@ pub fn decodes() -> usize {
     DECODES.with(std::cell::Cell::get)
 }
 
-/// Whether two instructions' semantics are the same down to how their operands encode: a memory operand and an
-/// address are equal without their encoding fields (`through`, `offset` of a cell with an address, `disp_width`,
-/// `index_through`), which decide the bytes.
-fn _exactly(one: &Semantics, other: &Semantics) -> bool {
-    let same = |left: &[Loc], right: &[Loc]| {
-        left.len() == right.len()
-            && left.iter().zip(right).all(|pair| match pair {
-                (Loc::Mem(x), Loc::Mem(y)) => {
-                    x == y && x.through == y.through && x.offset == y.offset && x.disp_width == y.disp_width && x.index_through == y.index_through && x.exact == y.exact
-                }
-                (Loc::Address(x), Loc::Address(y)) => {
-                    x == y && x.through == y.through && x.index == y.index && x.scale == y.scale && x.offset == y.offset && x.disp_width == y.disp_width
-                }
-                (x, y) => x == y,
-            })
-    };
-    one.op == other.op && one.name == other.name && one.target == other.target && one.indirect == other.indirect && same(&one.dests, &other.dests) && same(&one.sources, &other.sources)
-}
-
 /// The machine instructions `what` encodes to.
 ///
 /// Every pass of the peephole asks of the instructions of the body, which a pass leaves as they were (the same
@@ -816,7 +797,7 @@ fn _exactly(one: &Semantics, other: &Semantics) -> bool {
 /// by address, and kept only where the instruction is the one it was made of.
 fn _decoded(bits: u32, what: &Semantics) -> Option<Vec<iced_x86::Instruction>> {
     let key = (bits, what as *const Semantics as usize);
-    let found = DECODED.with(|held| held.borrow().get(&key).filter(|(was, _)| _exactly(was, what)).map(|(_, decoded)| decoded.clone()));
+    let found = DECODED.with(|held| held.borrow().get(&key).filter(|(was, _)| was == what).map(|(_, decoded)| decoded.clone()));
     if let Some(found) = found {
         return found;
     }

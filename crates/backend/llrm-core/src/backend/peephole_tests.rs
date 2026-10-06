@@ -2966,7 +2966,7 @@ fn test_synthetic_high_extract_loads_only_the_high_word() {
             Operation::Move,
             "mov",
             vec![rl(Register::DX, 2)],
-            vec![Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-2), 2) })],
+            vec![Loc::Mem(Mem { through: Register::BP, offset: 2, ..Mem::new(frame(-2), 2) })],
         ))
     );
     assert_eq!(anchor.what.as_ref().unwrap().op, Operation::Nothing);
@@ -3359,8 +3359,8 @@ fn test_an_instruction_the_passes_ask_of_again_is_decoded_once() {
     assert_ne!(_decoded(16, &other).expect("encodes"), first);
 }
 
-/// A memory operand is equal to another that is spelled through another register: `Mem`'s equality leaves out the
-/// encoding fields. The first answer was given for the second (queens -Os: `mov es,[bx+2]` for `mov es,[si+2]`).
+/// A cache of decoded instructions was given a memory operand equal, when `Mem`'s equality left out its encoding
+/// fields, to one spelled through another register (queens -Os: `mov es,[bx+2]` for `mov es,[si+2]`).
 #[test]
 fn test_two_cells_equal_but_spelled_through_other_registers_are_decoded_apart() {
     let through = |register| {
@@ -3369,7 +3369,7 @@ fn test_two_cells_equal_but_spelled_through_other_registers_are_decoded_apart() 
     };
     // One place in memory, the second instruction put where the first was (as a body's rewrite does).
     let mut place = through(Register::BX);
-    assert_eq!(place, through(Register::SI), "the semantics are equal: the encoding fields take no part");
+    assert!(place.same_meaning(&through(Register::SI)) && place != through(Register::SI), "the same cell, spelled another way, is not equal to it");
     let first = _decoded(16, &place).expect("encodes");
     place = through(Register::SI);
     let second = _decoded(16, &place).expect("encodes");

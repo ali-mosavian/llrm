@@ -381,7 +381,7 @@ pub fn unchanged(cx: &Cx, definition: &Arc<Insn>, at: &Arc<Insn>) -> bool {
 
 /// `high` is the word above `low`.
 pub fn above(_: &Cx, high: &Mem, low: &Mem) -> bool {
-    *high == Mem { addr: low.addr.map(|addr| addr.plus(2)), offset: if low.addr.is_some() { low.offset } else { low.offset + 2 }, ..low.clone() }
+    high.same_place(&Mem { addr: low.addr.map(|addr| addr.plus(2)), offset: if low.addr.is_some() { low.offset } else { low.offset + 2 }, ..low.clone() })
 }
 
 /// Both cells are reached through the same registers.
