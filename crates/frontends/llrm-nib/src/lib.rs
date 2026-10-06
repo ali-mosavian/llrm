@@ -60,14 +60,17 @@ pub struct Frontend {
     /// `usize` narrowed implicitly (`-Wno-target-width` turns both off, for the runtime, which writes
     /// `*far` for the targets that have one and counts in words).
     pub warn_target_width: bool,
-    /// What the last compile warned of, for the caller to print.
+    /// What the last compile warned of, by the module each span is in.
     pub warnings: std::rc::Rc<std::cell::RefCell<Vec<Diagnostic>>>,
+    /// What `compile_file` reports of it: each warning with the file it is in, and none of the
+    /// compiler's own modules (`std.*`, `abi.*`), which write for the targets that have what they name.
+    pub reported: std::rc::Rc<std::cell::RefCell<Vec<(std::path::PathBuf, Diagnostic)>>>,
 }
 
 impl Default for Frontend {
     /// For real mode, where the language began: a caller that knows its target sets `layout`.
     fn default() -> Self {
-        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default() }
+        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default(), reported: Default::default() }
     }
 }
 
@@ -171,7 +174,15 @@ pub fn syntax_text(source: &str) -> Result<String, Diagnostic> {
 pub fn compile_file(path: &std::path::Path, frontend: &Frontend) -> Result<String, (std::path::PathBuf, Diagnostic)> {
     let module = load_file(path, &frontend.os, frontend.sizes().near)?;
     let sources = module.sources.clone();
-    compile_module(module, module_name(path), frontend).map_err(|error| located(path, &sources, error))
+    let compiled = compile_module(module, module_name(path), frontend).map_err(|error| located(path, &sources, error))?;
+    *frontend.reported.borrow_mut() = frontend
+        .warnings
+        .borrow()
+        .iter()
+        .map(|warning| located(path, &sources, warning.clone()))
+        .filter(|(_, warning)| !sources.get(usize::from(warning.span.module)).is_some_and(|name| standard::supplied(name)))
+        .collect();
+    Ok(compiled)
 }
 
 /// The `.H`, `.BI` or `.INC` declarations of the program at `path`'s exports.

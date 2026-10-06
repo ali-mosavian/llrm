@@ -26,7 +26,7 @@ fn Player.grade(self: &Player) -> string:
         return "club"
 
 fn best(players: &vec[Player]) -> &Player:
-    let mut top = 0
+    let mut top: usize = 0
     for i in 0..players.len:
         if players[i].rating > players[top].rating:
             top = i
