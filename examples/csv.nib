@@ -2,7 +2,7 @@
 # of the row they were lent, so no field is copied (sections 9 and 13).
 
 fn trimmed(text: &string) -> &string:
-    let mut start: u16 = 0
+    let mut start: usize = 0
     let mut end = text.len
     while start < end && text[start] == ' ':
         start += 1
@@ -10,9 +10,9 @@ fn trimmed(text: &string) -> &string:
         end -= 1
     return &text[start:end]
 
-fn field(row: &string, wanted: u16) -> &string:
-    let mut index: u16 = 0
-    let mut start: u16 = 0
+fn field(row: &string, wanted: usize) -> &string:
+    let mut index: usize = 0
+    let mut start: usize = 0
     for at in 0..row.len:
         if row[at] == ',':
             if index == wanted:

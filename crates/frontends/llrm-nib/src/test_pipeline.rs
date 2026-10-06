@@ -220,6 +220,29 @@ fn test_a_length_narrowed_implicitly_warns() {
     assert_eq!(warned(Default::default()), ["4:warning: usize is 2 bytes and u8 holds fewer: write u8(...) to cut it"]);
 }
 
+/// The interpreter wrote and read 6-byte, 16-bit buffer headers whatever the program's words were:
+/// strings and vectors compiled for code32 (12-byte header, 4-byte words) ran as garbage or failed.
+/// It reads the word from the program (`descriptor_word`) and the layout from the HIR's one method.
+#[test]
+fn test_the_interpreter_runs_strings_and_vectors_of_a_target_with_wide_words() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let path = directory.path().join("w.nib");
+    std::fs::write(&path, "fn main() -> i16:\n    let s = \"hello\" + \" world\"\n    let mut v: vec[i32] = []\n    for i in 0..40:\n        v.push(i32(i) * 3)\n    print(s)\n    print(s.len)\n    print(v.len)\n    print(v[39])\n    return 0\n").expect("written");
+    let flat_text = include_str!("../../../target/llrm-x86-code32/src/machines/datalayout.toml");
+    let flat = crate::Frontend { layout: llrm_target::layout::Layout::parse(flat_text).expect("parses"), slot: 4, ..Default::default() };
+    let run = |frontend: &crate::Frontend| {
+        let hir = crate::compile_file(&path, frontend).unwrap_or_else(|(_, error)| panic!("{}", error.message));
+        let executed = llrm_core::hir::execute::run(&llrm_core::hir::codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
+        assert_eq!(executed.leaked, 0);
+        executed.output
+    };
+    assert_eq!(run(&Default::default()), "hello world\n11\n40\n117\n");
+    assert_eq!(run(&flat), "hello world\n11\n40\n117\n");
+    // A program that only prints a literal has no descriptor place: the program states its word.
+    std::fs::write(&path, "fn main() -> i16:\n    print(\"literal\")\n    return 0\n").expect("written");
+    assert_eq!(run(&flat), "literal\n");
+}
+
 /// The machine's physical addresses are one fact in the platform description; a module names one as
 /// `PHYSICAL_<NAME>` (the text screen's video memory was typed as 0xB8000000 in each program).
 #[test]

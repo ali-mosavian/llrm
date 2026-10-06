@@ -955,6 +955,51 @@ fn test_the_last_reads_are_what_the_sets_of_every_block_gave() {
     }
 }
 
+/// Splitting a value asked of the liveness of every value in every block as sets, built afresh for each
+/// split and again for the body it made (9.7% of compiling `d_faces`, #559). One value at a time is asked
+/// of, and the rows answer it: whether it is live at a block's entry and exit, as the sets said.
+#[test]
+fn test_one_values_liveness_from_rows_is_what_the_sets_said() {
+    use crate::backend::allocate::{LiveAt, live_reference, live_rows, live_rows_by};
+    for seed in 0..150 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            let (entering, leaving) = live_reference(&body);
+            let rows = live_rows(&body);
+            let values: Vec<u32> = body.blocks.iter().flat_map(|block| block.insns.iter().flat_map(|one| one.defines.iter().chain(&one.uses).copied())).chain([u32::MAX, 0]).collect();
+            for &value in values.iter().take(40) {
+                let only = live_rows_by(&body, |one| one == value);
+                for block in &body.blocks {
+                    let (live_in, live_out) = (entering[&block.at].contains(&value), leaving[&block.at].contains(&value));
+                    assert_eq!((rows.live_in(block.at, value), rows.live_out(block.at, value)), (live_in, live_out), "seed {seed} value {value}");
+                    assert_eq!((only.live_in(block.at, value), only.live_out(block.at, value)), (live_in, live_out), "seed {seed} value {value} alone");
+                }
+            }
+            assert!(!rows.live_in(i64::MIN, 1), "a block the body does not hold");
+        }
+    }
+}
+
+/// The next value was found by putting every value the body names in a set (a fifth of a split's carving).
+#[test]
+fn test_the_next_value_is_one_past_the_largest_the_body_names() {
+    for seed in 0..150 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            let mut seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::from([0]);
+            for block in &body.blocks {
+                seen.extend(block.arrives());
+                for one in &block.insns {
+                    seen.extend(one.defines.iter().chain(&one.uses).copied());
+                }
+            }
+            assert_eq!(crate::backend::splitkit::_next_value(&body), seen.last().copied().expect("seeded") + 1, "seed {seed}");
+        }
+    }
+}
+
 /// The classes of every value numbered the body, found every interval and built the clobber masks for the
 /// `[word+word]` roles, all of which the allocator's facts had just found for the same body (2.3 s of
 /// compiling `d_faces`, #559). Given them, the classes are the same, in the same order, and nothing is worked

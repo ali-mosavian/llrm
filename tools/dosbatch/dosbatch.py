@@ -18,6 +18,7 @@ import threading
 import shutil
 import tomllib
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -131,6 +132,19 @@ def runtime_object(name: str, path: Path, defines: tuple[str, ...] = ()) -> Path
                 os.replace(made, path)
             _ASSEMBLED.add((path, defines))
     return path
+
+
+C_RUNTIME = "@c-runtime"
+
+
+def link_files(source: Path, names: Iterable[str], target: str) -> list[Path]:
+    """The files a `link:` header names for `target`: paths beside `source`, and `@c-runtime`, the target's own file of the
+    routines a program calls and does not define (its `[link] last`), which no program names a path of. Every reader of
+    a `link:` header resolves it here."""
+    out: list[Path] = []
+    for name in names:
+        out += [ROOT / one for one in target_link(target)["last"]] if name == C_RUNTIME else [source.parent / name]
+    return out
 
 
 def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = (), defines: tuple[str, ...] = ()) -> tuple[Path, ...]:

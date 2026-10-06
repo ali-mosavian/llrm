@@ -334,6 +334,8 @@ struct Machine<'p> {
     column: usize,
     /// A QB END stopped the program.
     ended: bool,
+    /// The bytes of a length, a capacity or a near address: the program's `descriptor_word`.
+    word: usize,
 }
 
 impl<'p> Machine<'p> {
@@ -357,11 +359,13 @@ impl<'p> Machine<'p> {
                 )
             })
             .collect::<HashMap<i64, Memory>>();
+        // The word of a length and a capacity, as the program states it.
+        let word = program.descriptor_word as usize;
         // A near or far relocation stores its target's address in the cell.
         for object in &module.data {
             for relocation in object.relocations.iter().filter(|one| !one.code) {
                 let width = match relocation.address {
-                    model::AddressKind::Near => 2,
+                    model::AddressKind::Near => word as i64,
                     model::AddressKind::Far => 4,
                     _ => continue,
                 };
@@ -391,6 +395,7 @@ impl<'p> Machine<'p> {
             files: Vec::new(),
             column: 0,
             ended: false,
+            word,
         })
     }
 
@@ -578,7 +583,7 @@ impl<'p> Machine<'p> {
             return fail("descriptor place has no address value");
         };
         let pointee = activation.layout.value_types[&descriptor.base].element.map(|one| self.types[&one]);
-        let offset = descriptor.offset(pointee, i64::from(self.types[&descriptor.r#type].width));
+        let offset = descriptor.offset(pointee, self.program.descriptor_word);
         Ok(Location { memory: address.memory.clone(), offset: address.offset + offset, type_: self.types[&descriptor.r#type] })
     }
 
@@ -1021,8 +1026,8 @@ impl<'p> Machine<'p> {
         let (width, radix, fill, left) = self.field.take().unwrap_or((0, 10, b' ', false));
         let text = match name {
             rt::PRINT_NEWLINE => "\n".to_owned(),
-            rt::PRINT_STRING => cp437(&runtime::string_bytes(&arguments[0])?),
-            rt::PRINT_VIEW => cp437(&runtime::descriptor_bytes(&arguments[0])?),
+            rt::PRINT_STRING => cp437(&runtime::string_bytes(&arguments[0], self.word)?),
+            rt::PRINT_VIEW => cp437(&runtime::descriptor_bytes(&arguments[0], self.word)?),
             rt::PRINT_Q2 | rt::PRINT_Q4 => fixed_text(arguments[0].whole()?, arguments[1].whole()?)?,
             rt::PRINT_BOOL => if arguments[0].truthy() {
                 "true"
