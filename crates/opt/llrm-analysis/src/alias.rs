@@ -678,17 +678,23 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
         .map(|found| found.entries().iter().filter_map(|name| procedures.get_index_of(name)).collect())
         .unwrap_or_default();
     let mut readers: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); procedures.len()];
+    // The bodies that call something unknown read the entries' summaries together, as one: what a
+    // call back into the module may do.
+    let mut callers_of_unknown: BTreeSet<usize> = BTreeSet::new();
     for (at, (_, procedure)) in procedures.iter().enumerate() {
         for target in procedure.calls.values().filter_map(|target| procedures.get_index_of(target)) {
             readers[target].insert(at);
         }
-        let unknown = call_sites(&procedure.unit).iter().any(|site| procedure.calls.get(site).and_then(|target| _summary(&procedure.unit, &result, target)).is_none());
-        if unknown {
-            for &entry in &entries {
-                readers[entry].insert(at);
-            }
+        if call_sites(&procedure.unit).iter().any(|site| procedure.calls.get(site).and_then(|target| _summary(&procedure.unit, &result, target)).is_none()) {
+            callers_of_unknown.insert(at);
         }
     }
+    let called_back = |result: &IndexMap<String, Summary>| procedures.values().next().and_then(|one| _callbacks(&one.unit, result));
+    let mut callbacks = called_back(&result);
+    // What each body's points-to facts were found from: they change only with the callees' captures,
+    // not with the effects a revisit is for.
+    let mut found: Vec<Option<Visit>> = vec![None; procedures.len()];
+    let mut version = 0;
     let mut queued = vec![true; procedures.len()];
     let mut work: std::collections::BinaryHeap<std::cmp::Reverse<usize>> = (0..procedures.len()).map(std::cmp::Reverse).collect();
     while let Some(std::cmp::Reverse(first)) = work.pop() {
@@ -696,10 +702,19 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
         queued[at] = false;
         llrm_support::debug::counted("summaries rounds", true);
         let (name, procedure) = procedures.get_index(at).expect("a member of the graph");
-        let made = _summarized(at, procedure, &direct[name], &result, &graph, procedures)?;
+        let made = _summarized(at, procedure, &direct[name], &result, (callbacks.as_ref(), version), &mut found[at], &graph, procedures)?;
         if made != result[name] {
             result.insert(name.clone(), made);
-            for &reader in &readers[at] {
+            let mut woken: Vec<usize> = readers[at].iter().copied().collect();
+            if entries.contains(&at) {
+                let now = called_back(&result);
+                if now != callbacks {
+                    callbacks = now;
+                    version += 1;
+                    woken.extend(callers_of_unknown.iter().copied());
+                }
+            }
+            for reader in woken {
                 if !queued[reader] {
                     queued[reader] = true;
                     work.push(std::cmp::Reverse(rank[reader]));
@@ -710,6 +725,16 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
     Ok(result)
 }
 
+/// What a body's last visit was made from, and found: its points-to facts, from its callees' captures,
+/// and what its calls to something unknown may do, from those facts and the callbacks of one `version`.
+#[derive(Clone)]
+struct Visit {
+    captured: IndexMap<InstId, Option<BTreeSet<Option<Identity>>>>,
+    facts: Rc<PointsTo>,
+    version: Option<usize>,
+    unknown: (BTreeSet<Slice>, BTreeSet<Slice>),
+}
+
 /// `procedure`'s summary given `result`, the summaries of what it calls so far: what its body does
 /// on its own (`direct`) and what each call does, instantiated at its actuals.
 fn _summarized(
@@ -717,27 +742,44 @@ fn _summarized(
     procedure: &Procedure,
     direct: &Summary,
     result: &IndexMap<String, Summary>,
+    (callbacks, version): (Option<&Summary>, usize),
+    memo: &mut Option<Visit>,
     graph: &llrm_mir::callgraph::CallGraph<usize>,
     procedures: &IndexMap<String, Procedure>,
 ) -> Result<Summary, String> {
     VISITS.with(|visits| visits.set(visits.get() + 1));
-    let callbacks = llrm_support::debug::timed("summaries callbacks", || _callbacks(&procedure.unit, result));
     let captured_at = procedure.calls.iter().map(|(at, target)| (*at, _summary(&procedure.unit, result, target).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
-    let facts = llrm_support::debug::timed("summaries points-to", || points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at)))?;
+    if memo.as_ref().is_none_or(|one| one.captured != captured_at) {
+        let facts = Rc::new(llrm_support::debug::timed("summaries points-to", || points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at)))?);
+        *memo = Some(Visit { captured: captured_at, facts, version: None, unknown: Default::default() });
+    }
+    let visit = memo.as_mut().expect("made above");
+    let facts = Rc::clone(&visit.facts);
+    // What the calls to something unknown may do, all of them together, depends on the facts and on
+    // what a call back into the module may do, and on nothing a revisit changes.
+    if visit.version != Some(version) {
+        let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
+        for at in call_sites(&procedure.unit) {
+            if procedure.calls.get(&at).and_then(|target| _summary(&procedure.unit, result, target)).is_none() {
+                let (read, written) = _unknown_visible(procedure, &facts, at, &_actuals(procedure, &facts, at), callbacks)?;
+                reads.extend(read);
+                writes.extend(written);
+            }
+        }
+        visit.unknown = (reads, writes);
+        visit.version = Some(version);
+    }
     let (mut reads, mut writes) = (direct.reads.clone(), direct.writes.clone());
+    reads.extend(visit.unknown.0.iter().cloned());
+    writes.extend(visit.unknown.1.iter().cloned());
     let captures = facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter && matches!(one.identity, Some(Identity::Int(_)))).map(|one| one.identity.clone()).collect();
     let (mut unknown_read, mut unknown_write) = (direct.unknown_read, direct.unknown_write);
     let mut types = direct.unknown_write_types.clone();
     for at in call_sites(&procedure.unit) {
         let target = procedure.calls.get(&at);
         let callee = target.and_then(|target| _summary(&procedure.unit, result, target));
+        let Some(callee) = callee else { continue };
         let actual = _actuals(procedure, &facts, at);
-        let Some(callee) = callee else {
-            let (read, written) = _unknown_visible(procedure, &facts, at, &actual, callbacks.as_ref())?;
-            reads.extend(read);
-            writes.extend(written);
-            continue;
-        };
         let mut effect = callee.instantiated(&actual);
         let target = target.expect("a known callee has a target");
         if procedures.get_index_of(target).is_some_and(|callee| graph.together(me, callee)) {
