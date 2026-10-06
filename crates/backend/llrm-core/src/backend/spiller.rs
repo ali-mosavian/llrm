@@ -602,12 +602,31 @@ pub fn siblings(
         return Ok(BTreeSet::new());
     }
     drop(adjacency);
+    // Only the copy webs that hold a value of `values` are grown from: the others are asked of by no one.
+    let wanted: BTreeSet<u32> = {
+        let mut web: BTreeSet<u32> = values.iter().copied().filter(|one| adjacent.contains_key(one)).collect();
+        let mut work: Vec<u32> = web.iter().copied().collect();
+        while let Some(one) = work.pop() {
+            for next in &adjacent[&one] {
+                if web.insert(*next) {
+                    work.push(*next);
+                }
+            }
+        }
+        web
+    };
     // A shared slot holds each member at every width it is used, not just moved.
-    let widths = llrm_support::debug::timed("siblings widths", || _widest(body, &adjacent.keys().copied().collect()));
+    let widths = llrm_support::debug::timed("siblings widths", || _widest(body, &wanted));
 
-    let wanted: BTreeSet<u32> = adjacent.keys().copied().collect();
-    // Only pairs among the copy-related values are asked of.
+    // Only pairs among the values of those webs are asked of.
     let near = llrm_support::debug::timed("siblings interference", || coalesce::_interference_among(body, Some(&wanted)));
+    if std::env::var_os("LLRM_CHECK_SIBLINGS").is_some() {
+        let whole = coalesce::_interference(body);
+        for value in &wanted {
+            let among = |graph: &coalesce::Graph| graph.get(value).map(|near| near.intersection(&wanted).copied().collect::<BTreeSet<u32>>()).unwrap_or_default();
+            assert!(among(&near) == among(&whole), "{}: the interference of value#{value} among its web differs from the whole graph's", body.name);
+        }
+    }
     let deep = llrm_support::debug::timed("siblings depths", || ranges::depths(body));
     let occurring = llrm_support::debug::span("siblings occurs");
     let mut occurs: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::default();
@@ -1713,6 +1732,12 @@ pub fn folded_source(one: &Insn, values: &BTreeSet<u32>) -> Option<Held> {
 /// `folded_source`, for an instruction that `tied` writes the register of its first source (after
 /// two-address lowering) or, not tied, names its result apart (SSA).
 pub fn folded_source_in(one: &Insn, values: &BTreeSet<u32>, tied: bool) -> Option<Held> {
+    folded_source_among(one, &|value| values.contains(&value), tied)
+}
+
+/// `folded_source_in` for the values `among` says are spilled, so that a caller that asks of one value at
+/// a time builds no set to ask with.
+pub fn folded_source_among(one: &Insn, among: &dyn Fn(u32) -> bool, tied: bool) -> Option<Held> {
     if one.group.is_some() || !one.requires.is_empty() || !one.delivers.is_empty() || !one.clobbers.is_empty() {
         return None;
     }
@@ -1741,10 +1766,10 @@ pub fn folded_source_in(one: &Insn, values: &BTreeSet<u32>, tied: bool) -> Optio
     };
     if !widths.contains(&left.width)
         || right.width != left.width
-        || !values.contains(&right.value)
+        || !among(right.value)
         || left.value == right.value
         || one.defines.contains(&right.value)
-        || one.uses.iter().any(|value| values.contains(value) && *value != left.value && *value != right.value)
+        || one.uses.iter().any(|value| among(*value) && *value != left.value && *value != right.value)
     {
         return None;
     }
@@ -3069,6 +3094,23 @@ mod tests {
         let (first, _made) = spilled(&body, &set(&[1, 3]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
         _color_slots(&first, &set(&[2]), &IndexMap::from_iter([(2, 2)]), &mut frame).expect("colors");
         assert_eq!(frame.slots[&slot(2)], frame.slots[&slot(1)]);
+    }
+
+    /// The interference of every value live together was built to ask of the pairs in the copy webs a
+    /// spilled value is in (14.8 s of compiling `d_faces`, #559). Another web is asked of by no one.
+    #[test]
+    fn test_siblings_ask_the_webs_of_the_spilled_values_only() {
+        let body = _body(vec![
+            _move(1, 10, None, 0x10),
+            _move(2, 1, None, 0x12),
+            _move(11, 20, None, 0x14),
+            _move(12, 11, None, 0x16),
+            _add(31, 2, 0x18),
+            _add(32, 12, 0x1a),
+        ]);
+        let mut frame = Frame::new(0);
+        super::siblings(&body, &set(&[1]), Some(&mut frame), &BTreeSet::new()).expect("sibling slots");
+        assert_eq!(crate::backend::coalesce::last_asked(), Some(3), "the other web's values were asked of");
     }
 
     #[test]

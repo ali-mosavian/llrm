@@ -718,8 +718,10 @@ struct Facts {
 impl Facts {
     fn of(body: &LirBody, profile: &Profile, segments: &Segments, registers: &RegisterClasses, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, busy: &Frequency) -> Self {
         let _span = llrm_support::debug::span("regalloc facts");
-        let index = ranges::indexed(body);
-        let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals_over(body, Some(&index), busy), busy), profile, busy);
+        let index = llrm_support::debug::timed("facts slots", || ranges::indexed(body));
+        let base = llrm_support::debug::timed("facts intervals", || ranges::intervals_over(body, Some(&index), busy));
+        let base = llrm_support::debug::timed("facts sibling prices", || _sibling_priced(body, base, busy));
+        let mut live = llrm_support::debug::timed("facts fold prices", || _fold_priced(body, base, profile, busy));
         // A spiller product lives for one use: a spill gains nothing.
         for one in unspillable {
             if let Some(interval) = live.get_mut(one) {
@@ -731,8 +733,11 @@ impl Facts {
                 interval.weight = INF;
             }
         }
-        let masks = _masks(body, &index, segments);
-        Self { index, live, masks, widths: _widest(body), confined: classes(body, protected, segments, registers), hints: _copy_hints(body) }
+        let masks = llrm_support::debug::timed("facts masks", || _masks(body, &index, segments));
+        let widths = llrm_support::debug::timed("facts widths", || _widest(body));
+        let confined = llrm_support::debug::timed("facts classes", || classes(body, protected, segments, registers));
+        let hints = llrm_support::debug::timed("facts hints", || _copy_hints(body));
+        Self { index, live, masks, widths, confined, hints }
     }
 }
 
@@ -1102,7 +1107,9 @@ fn _allocated(
         // the change left sharing a register competes again.
         let Some(made) = rewritten else { continue };
         floor = floor.max(splitkit::_next_value(&body));
-        facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body));
+        facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &llrm_support::debug::timed("regalloc frequency", || Frequency::of(&body)));
+        // What is done of the rewrite besides its facts: the pins, the placed values it disturbs, the queue.
+        let _after = llrm_support::debug::span("regalloc after rewrite");
         placing = None;
         for (one, register) in constrain::required(&body, classes) {
             fixed.entry(one).or_insert(register);
@@ -1902,15 +1909,13 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>, busy: &Frequen
             *free.entry(value).or_insert(0.0) += each;
         }
     }
-    live.into_iter()
-        .map(|(value, one)| match free.get(&value) {
-            Some(found) => {
-                let weight = _max(0.0, one.weight - found / (one.size() + ranges::GRACE) as f64);
-                (value, Interval { weight, ..one })
-            }
-            None => (value, one),
-        })
-        .collect()
+    let mut live = live;
+    for (value, found) in &free {
+        if let Some(one) = live.get_mut(value) {
+            one.weight = _max(0.0, one.weight - found / (one.size() + ranges::GRACE) as f64);
+        }
+    }
+    live
 }
 
 /// Frame traffic inside loops by cause, weighted by loop depth: the spiller's
@@ -2048,21 +2053,19 @@ fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile
                 continue;
             }
             for value in &one.uses {
-                if spiller::folded_source(one, &BTreeSet::from([*value])).is_some() {
+                if spiller::folded_source_among(one, &|spilled| spilled == *value, true).is_some() {
                     *free.entry(*value).or_insert(0.0) += each * discount;
                 }
             }
         }
     }
-    live.into_iter()
-        .map(|(value, one)| match free.get(&value) {
-            Some(found) if one.weight != INF => {
-                let weight = _max(0.0, one.weight - found / (one.size() + ranges::GRACE) as f64);
-                (value, Interval { weight, ..one })
-            }
-            _ => (value, one),
-        })
-        .collect()
+    let mut live = live;
+    for (value, found) in &free {
+        if let Some(one) = live.get_mut(value).filter(|one| one.weight != INF) {
+            one.weight = _max(0.0, one.weight - found / (one.size() + ranges::GRACE) as f64);
+        }
+    }
+    live
 }
 
 /// Python `format(value, "g")`.
