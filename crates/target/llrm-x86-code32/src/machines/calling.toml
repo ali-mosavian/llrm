@@ -1,5 +1,6 @@
-# cdecl32: the stack convention, as `wccq` is asked for it (-ecc; Watcom's
-# default is register-based). The aggregate rule below is the front end's.
+# cdecl32, code32's C ABI: Open Watcom's 386 flat ABI as `wccq` is asked for it (-ecc: the stack
+# convention, not Watcom's register-based default; structs packed -zp4; `_name` symbols), with one
+# deliberate difference: the aggregate return below, which is reentrant.
 
 [cdecl32]
 slot_bytes = 4
@@ -23,15 +24,12 @@ int = ["eax"]
 i64 = ["eax", "edx"]
 pointer = ["eax"]
 float = ["st0"]
-# PROVISIONAL until the extender and object format are chosen: the rule must
-# match the C ABI that code32 links against (Win32 cdecl under HX/PE: 1, 2, 4
-# and 8 bytes in EAX[:EDX], else a hidden first-argument pointer returned in
-# EAX; DJGPP: its i386 SysV rule). Borland's rule, as llrm-c has it for code16 (`returned_as_integer`): a struct of
-# 1, 2 or 4 bytes is returned in AL, AX or EAX. Any other is written to caller
-# memory through a pointer pushed after every argument (so it is the lowest
-# slot), which the callee returns in EAX; the caller pops it. Open Watcom's own
-# -ecc rule is not used: measured with bwcc386 -ecc, it passes no pointer and
-# returns the address of one static result area in EAX (not reentrant).
+# THE DIFFERENCE FROM OPEN WATCOM. Its -ecc returns a struct larger than a register by the address
+# of one static result area in EAX: not reentrant. cdecl32 returns it as Borland's rule has it (llrm-c's
+# `returned_as_integer` on code16): a struct of 1, 2 or 4 bytes in AL, AX or EAX; any other is
+# written to caller memory through a pointer pushed after every argument (so it is the lowest slot),
+# which the callee returns in EAX and the caller pops. A call into an Open Watcom object that returns
+# such a struct is the one call this ABI does not match.
 aggregate = "hidden-pointer"
 aggregate_in_register_bytes = [1, 2, 4]
 aggregate_pointer = "after-arguments"
