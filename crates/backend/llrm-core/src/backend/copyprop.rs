@@ -29,15 +29,7 @@ pub fn forwarded(body: &LirBody) -> LirBody {
     if body.blocks.iter().any(|block| !block.phis.is_empty()) {
         return body.clone();
     }
-    let lanes: Vec<Lane> = [
-        Register::EAX,
-        Register::EBX,
-        Register::ECX,
-        Register::EDX,
-        Register::ESI,
-        Register::EDI,
-        Register::EBP,
-    ]
+    let lanes: Vec<Lane> = llrm_x86::registers::ROOTS
     .into_iter()
     .flat_map(_lanes)
     .collect::<Lanes>()
