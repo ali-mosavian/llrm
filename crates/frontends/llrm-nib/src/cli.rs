@@ -86,13 +86,18 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     };
     frontend.debug = flags.debug;
     frontend.checked_stack = flags.sanitize.stack;
-    let bound = llrm_driver::target(&flags, &["x86-code16", "x86-code32"])?;
+    let bound = llrm_driver::target(&flags, None)?;
     frontend.layout = bound.target.layout();
     frontend.slot = u32::try_from(bound.target.stack_slot_bytes()).expect("a slot is positive");
     frontend.conventions = bound.target.conventions().iter().map(|one| (*one).to_owned()).collect();
-    frontend.os = super::Os::of(bound.target.runtime("nib").ok_or("this target has no Nib runtime")?)?;
+    frontend.os = nib_os(&*bound.target)?;
     let codegen = bound.options(&flags, flags.machine(nib::machine(&*bound.target, &frontend.os))?);
     Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen, os_layer })
+}
+
+/// What the target's OS layer says of Nib's runtime; a target without one is refused.
+fn nib_os(target: &dyn llrm_target::Target) -> Result<super::Os, String> {
+    super::Os::of(target.runtime("nib").ok_or_else(|| format!("target {} has no Nib runtime", target.name()))?)
 }
 
 /// The symbols `objects` import.
@@ -156,5 +161,44 @@ pub fn main(argv: &[String]) -> i32 {
             eprintln!("llrm-nib: {error}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use llrm_target::Target;
+
+    /// Code16 without its Nib runtime: what a target not yet given one is.
+    struct Bare(llrm_x86_code16::Code16);
+
+    impl Target for Bare {
+        fn name(&self) -> &'static str { self.0.name() }
+        fn machine(&self) -> llrm_core::abi::machine::Machine { self.0.machine() }
+        fn cpus(&self) -> &'static [&'static str] { self.0.cpus() }
+        fn layout(&self) -> llrm_target::layout::Layout { self.0.layout() }
+        fn stack_slot_bytes(&self) -> i64 { self.0.stack_slot_bytes() }
+        fn frame_register(&self) -> iced_x86::Register { self.0.frame_register() }
+        fn first_argument_offset(&self, far: bool) -> i64 { self.0.first_argument_offset(far) }
+        fn results(&self, width: u32) -> Vec<iced_x86::Register> { self.0.results(width) }
+        fn stack_pointer(&self) -> iced_x86::Register { self.0.stack_pointer() }
+        fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)> { self.0.callee_saved() }
+        fn cpu_table(&self, name: &str) -> Option<llrm_target::timings::CpuTable> { self.0.cpu_table(name) }
+        fn forms_text(&self) -> String { self.0.forms_text() }
+        fn default_cpu(&self) -> &'static str { self.0.default_cpu() }
+        fn operation_costs(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> llrm_mir::target::OperationCosts { self.0.operation_costs(price, prefix) }
+        fn register_capacity(&self) -> i64 { self.0.register_capacity() }
+        fn address_forms(&self, costs: &llrm_mir::target::OperationCosts, address_stall: i64) -> Vec<llrm_mir::target::AddressForm> { self.0.address_forms(costs, address_stall) }
+        fn cost_model(&self) -> llrm_target::CostModel { self.0.cost_model() }
+        fn conventions(&self) -> &'static [&'static str] { self.0.conventions() }
+        fn object(&self) -> llrm_target::object::ObjectFormat { self.0.object() }
+    }
+
+    /// `--target` was a list the frontend kept by hand; a target without a Nib runtime is refused
+    /// by saying so, whatever else it is.
+    #[test]
+    fn a_target_without_a_nib_runtime_is_refused_by_that_message() {
+        let error = super::nib_os(&Bare(llrm_x86_code16::Code16)).expect_err("refused");
+        assert_eq!(error, "target x86-code16 has no Nib runtime");
+        assert!(super::nib_os(&llrm_x86_code16::Code16).is_ok());
     }
 }

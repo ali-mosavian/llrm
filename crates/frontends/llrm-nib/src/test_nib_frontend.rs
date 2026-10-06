@@ -166,7 +166,7 @@ fn between<'t>(text: &'t str, start: &str, end: &str) -> &'t str {
 pub(crate) fn level(name: &str) -> Options {
     let mut flags = llrm_core::driver::flags::Flags::default();
     flags.take(&[format!("-{name}")], &mut 0).expect("a level");
-    { let bound = llrm_driver::target(&flags, &["x86-code16"]).unwrap(); bound.options(&flags, nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) }
+    { let bound = llrm_driver::target(&flags, Some(&["x86-code16"])).unwrap(); bound.options(&flags, nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) }
 }
 
 /// -Os with no inlining: the function under test stays a function, as it does where more than

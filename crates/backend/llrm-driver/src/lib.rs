@@ -40,14 +40,14 @@ pub fn code16_options(machine: Machine) -> Options {
 }
 
 /// The target `flags` name, or the default; refused if it is not built in or
-/// the frontend (`supported`) does not build for it.
-pub fn target(flags: &Flags, supported: &[&str]) -> Result<Bound, String> {
+/// the frontend does not build for it: `supported` lists the ones it does, `None` any.
+pub fn target(flags: &Flags, supported: Option<&[&str]>) -> Result<Bound, String> {
     let name = flags.target().unwrap_or(DEFAULT);
     let known = all();
     let found = known.iter().find(|one| one.name() == name).ok_or_else(|| {
         format!("unknown target {name}; choose {}", known.iter().map(|one| one.name()).collect::<Vec<_>>().join(", "))
     })?;
-    if !supported.contains(&name) {
+    if let Some(supported) = supported.filter(|list| !list.contains(&name)) {
         return Err(format!("this compiler builds for {} only, not {name}", supported.join(", ")));
     }
     let selection = isel::selector(name).ok_or_else(|| format!("no instruction selector is built for {name}"))?;
