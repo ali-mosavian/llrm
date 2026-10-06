@@ -323,7 +323,7 @@ fn compound_assignment_evaluates_an_index_once() {
 
 #[test]
 fn print_runtime_variants_use_short_byte_width_names() {
-    let names: Vec<_> = print_builtins(&mut TypeRegistry::new(crate::Frontend::default().sizes(), crate::syntax::Abi::Cdecl16, vec!["cdecl16".into()], 16)).into_iter().map(|(name, _)| name).collect();
+    let names: Vec<_> = print_builtins(&mut TypeRegistry::new(crate::real_mode().sizes(), crate::syntax::Abi::Cdecl16, vec!["cdecl16".into()], 16)).into_iter().map(|(name, _)| name).collect();
     assert_eq!(
         names,
         [
