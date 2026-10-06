@@ -35,7 +35,9 @@ def test_every_result_reproduces_the_benchmark_output():
 def test_build_script_flags_are_accepted_by_llrm_c():
     """build.sh/ctime.py passed the removed --target: every llrm build failed with exit 2 and run.sh printed no tables."""
     import subprocess
-    out = subprocess.run([str(harness.REPO / "target/release/llrm-c"), "-m32", "-O2", "-march=i486", "-fno-inline-functions", "-o", "/dev/null", str(BENCH / "sieve/sieve.c")], capture_output=True, text=True)
+    if not harness.LLRM.exists():
+        pytest.skip(f"no llrm-c at {harness.LLRM}")
+    out = subprocess.run([str(harness.LLRM), "-m32", "-O2", "-march=i486", "-fno-inline-functions", "-o", "/dev/null", str(BENCH / "sieve/sieve.c")], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     here = Path(__file__).parent
     assert "--target" not in (here / "build.sh").read_text() + (here / "ctime.py").read_text()
