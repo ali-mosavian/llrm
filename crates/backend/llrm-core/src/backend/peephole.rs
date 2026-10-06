@@ -912,9 +912,12 @@ pub fn _register_effects(bits: u32, one: &Insn, may_write: bool, flags: bool) ->
             }
         }
         // `rep` counts its register down to where it stops, which Iced calls a
-        // conditional write: a hoisted `mov cx, n` was run once, not per trip.
+        // conditional write: a hoisted `mov cx, n` was run once, not per trip. The register
+        // is the one the address size names, CX in 16-bit code: its upper half is not touched.
         if insn.has_rep_prefix() || insn.has_repe_prefix() || insn.has_repne_prefix() {
-            writes.extend(_lanes(Register::ECX));
+            for (register, _) in used.iter().filter(|(register, _)| ir::root(*register) == Register::ECX) {
+                writes.extend(_lanes(*register));
+            }
         }
     }
     Some((reads, writes))
