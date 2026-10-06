@@ -18,8 +18,6 @@ near = 0
 far = 0
 data = 0
 stack = 0
-# A huge object is one in the flat space: the segmented arithmetic it needs is not needed.
-huge = 0
 
 [pointers]
 4 = "near"
