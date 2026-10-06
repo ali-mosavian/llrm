@@ -63,11 +63,6 @@ pub struct StructBody {
     pub packed: bool,
 }
 
-/// The address spaces of a 16-bit offset: DGROUP's (what a bare `ptr` is, read through DS) and the stack
-/// segment's. Which segment a space names is the target's; no MIR names a register.
-pub const NEAR_DATA: u32 = 0;
-pub const NEAR_STACK: u32 = 5;
-
 #[derive(Clone, Debug, Default)]
 pub struct Types {
     types: Vec<Type>,

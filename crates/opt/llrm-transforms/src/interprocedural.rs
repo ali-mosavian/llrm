@@ -467,7 +467,7 @@ pub fn optimized<E: From<String>>(
 
     // A far pointer every call fills from DGROUP is passed as its offset.
     for at in 0..count {
-        for id in crate::narrowspace::narrowed(&mut program.modules[at], &program.layout) {
+        for id in crate::narrowspace::narrowed(&mut program.modules[at], &program.layout, program.target.spaces()) {
             edited(&mut modules[at], &[id]);
             reoptimised(&mut program.modules[at], &mut modules[at], id, "narrow.")?;
         }
@@ -698,7 +698,7 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         let (Some(name), Some(function), true) = (global.name.as_ref(), global.function(), exact) else { continue };
         let Some(summary) = known.get(name) else { continue };
         let shape = analyses.function::<Shape>(module, id);
-        let exposed = llrm_analysis::memory::exposed_frames(&Unit::of(module, layout, function));
+        let exposed = llrm_analysis::memory::exposed_frames(&Unit::of(module, layout, function).with_spaces(program.target.spaces()));
         let procedure = Procedure::of(Unit { program: Some(&program), ..Unit::of(module, layout, function) }.with_globals_aa(globals).with_shape(&shape).with_exposed(&exposed));
         let initialized = alias::initialized(&procedure, known)?;
         let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))).collect::<Vec<_>>();
@@ -710,11 +710,11 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         let promised = norecurse && unobserved && states(Fact::WillReturn) && llrm_mir::loops::ends_by_promise(&module.metadata, function, Facts::of(&function.attrs).must_progress());
         let counted = || {
             let shape = Shape::of(function);
-            let proofs = |one| llrm_analysis::induction::counted(&unit_of(module, layout, function), one, None, false);
+            let proofs = |one| llrm_analysis::induction::counted(&unit_of(module, layout, function).with_spaces(program.target.spaces()), one, None, false);
             shape.loops.iter().all(|one| proofs(one).iter().any(|proof| !proof.stops && (proof.count.is_some() || proof.step.magnitude() == &num_bigint::BigUint::from(1_u8))))
         };
         let returns = ((facts::returns_without_looping(function) || counted()) && states(Fact::WillReturn)) || promised;
-        let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, function);
+        let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, program.target.spaces(), function);
         let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
         for &inst in &calls {
             let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { continue };

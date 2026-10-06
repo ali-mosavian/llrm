@@ -388,7 +388,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     let Some(layout) = module.datalayout.as_deref() else { return refuse("a module with no datalayout") };
     let layout = DataLayout::parse(layout).map_err(Unselected)?;
     let convention = convention(module, &layout, global, arch)?;
-    let unit = Unit::of(module, &layout, function);
+    let unit = Unit::of(module, &layout, function).with_spaces(arch.layout().spaces.roles);
     let exact = ranges::exact_offsets(&unit).map_err(Unselected)?;
     let wide = cpu.dword_address_form();
     let secondary = wide.filter(|form| form.before_spill(&cpu.operations));
@@ -404,6 +404,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         module,
         function,
         arch,
+        spaces: arch.layout().spaces.roles,
         layout,
         values: IndexMap::default(),
         next: 0,
@@ -541,6 +542,8 @@ struct Selector<'m, 'c, 'p> {
     /// legalizer expands a value no register holds into two; no offset
     /// register is offset 0.
     fars: IndexMap<ValueId, (Option<Held>, Held)>,
+    /// The target's address spaces by role.
+    spaces: llrm_mir::spaces::Spaces,
     /// Each aggregate a call answers in registers: a register per field.
     fields: IndexMap<ValueId, Vec<Held>>,
     /// Each i64 value's low and high dwords, expanded likewise.
@@ -895,7 +898,7 @@ impl Selector<'_, '_, '_> {
     /// became: a branch takes its MIR edges', shared out among the
     /// successors it has.
     fn odds(&self, made: &IndexMap<BlockId, Vec<LirBlock>>, block_at: &IndexMap<BlockId, i64>) -> BlockOdds {
-        let unit = Unit::of(self.module, &self.layout, self.function);
+        let unit = Unit::of(self.module, &self.layout, self.function).with_spaces(self.spaces);
         let estimated = llrm_analysis::branchprob::estimated(&self.module.context, &self.module.metadata, &self.module.globals, self.function, &unit.shape(), &std::collections::BTreeMap::new());
         let mut odds = BlockOdds::default();
         for (block, chain) in made {
@@ -927,7 +930,7 @@ impl Selector<'_, '_, '_> {
 
     /// Each loop's header and constant trips, as `induction` proves them.
     fn trip_counts(&self, block_at: &IndexMap<BlockId, i64>) -> Vec<(i64, i64)> {
-        let unit = Unit::of(self.module, &self.layout, self.function);
+        let unit = Unit::of(self.module, &self.layout, self.function).with_spaces(self.spaces);
         let facts = unit.registers();
         let mut counts: Vec<(i64, i64)> = unit
             .shape()
@@ -1604,8 +1607,8 @@ impl Selector<'_, '_, '_> {
             return Ok(Pointer::Far { selector, base, index: None, scale: 1, offset: 0 });
         }
         let segment = match self.types().get(ty) {
-            Type::Pointer(llrm_mir::types::NEAR_DATA) => None,
-            Type::Pointer(llrm_mir::types::NEAR_STACK) => Some(Register::SS),
+            Type::Pointer(space) if *space == self.spaces.data => None,
+            Type::Pointer(space) if *space == self.spaces.stack => Some(Register::SS),
             _ => return refuse(format!("an access through a {}", self.types().display(ty))),
         };
         let width = self.width(ty)?;
@@ -2442,7 +2445,7 @@ impl Selector<'_, '_, '_> {
                 _ => None,
             };
             let pair = match (op, self.types().get(from).clone()) {
-                (CastOp::AddrSpaceCast, Type::Pointer(0)) => {
+                (CastOp::AddrSpaceCast, Type::Pointer(space)) if space == self.spaces.near => {
                     let offset = self.held(operand, from, at, out)?;
                     let selector = self.fresh_held(2);
                     // A frame object is in the stack's segment, which need not be DGROUP.
@@ -2458,7 +2461,7 @@ impl Selector<'_, '_, '_> {
                     out.push(mov(selector, segment));
                     (Some(offset), selector)
                 }
-                (CastOp::AddrSpaceCast, Type::Pointer(llrm_mir::types::NEAR_STACK)) => {
+                (CastOp::AddrSpaceCast, Type::Pointer(space)) if space == self.spaces.stack => {
                     let offset = self.held(operand, from, at, out)?;
                     let selector = self.fresh_held(2);
                     out.push(mov(selector, Loc::Reg(Reg { register: Register::SS, width: 2 })));
@@ -2498,8 +2501,8 @@ impl Selector<'_, '_, '_> {
         }
         let (offset, selector) = self.far(operand, at, out)?;
         match (op, self.types().get(to).clone()) {
-            (CastOp::AddrSpaceCast, Type::Pointer(2)) => out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(selector))),
-            (CastOp::AddrSpaceCast, Type::Pointer(0 | llrm_mir::types::NEAR_STACK)) => out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(offset))),
+            (CastOp::AddrSpaceCast, Type::Pointer(space)) if self.spaces.is_segment(Some(space)) => out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(selector))),
+            (CastOp::AddrSpaceCast, Type::Pointer(space)) if space == self.spaces.near || space == self.spaces.stack => out.push(mov(Held { value: self.value(result), width: 2 }, Loc::Held(offset))),
             (CastOp::PtrToInt, Type::Int(32)) => {
                 let joined = Held { value: self.value(result), width: 4 };
                 self.joined(joined, offset, selector, at, out);
