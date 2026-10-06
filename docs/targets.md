@@ -454,6 +454,10 @@ pub struct Mem { at: AddressRef, info: MemInfo }              // hand-written Eq
 - BC raise keeps iced in its decoder and converts at `semantics.rs`
   (`_location`, `_register_effects`) with `x86::reg(Register) -> RegId`, the
   identity on the ordinal.
+- Debt until `RegId`: LIR names the frame register BP and the stack pointer SP
+  whatever the target, and `masm::listing()` spells them as the target's
+  `FrameRegisters` has them (EBP, ESP for code32). Object output must go through
+  the same `listing()`; a pass that compares `through == BP` is reading a role.
 - `llrm_support::register::PhysicalRegister(u32)` exists and is unused: it
   becomes `RegId` or is deleted; never both.
 
