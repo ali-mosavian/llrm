@@ -40,7 +40,7 @@ fn the_first_four_arguments_arrive_in_eax_edx_ebx_ecx() {
 fn arguments_past_the_fourth_are_on_the_stack_and_the_callee_pops_them() {
     let text = listing("@export(\"watcall32\")\nfn sixth(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32) -> i32:\n    return e + f\n");
     let lines = procedure(&text, "sixth_");
-    assert!(lines.contains(&"mov eax, dword ptr [ebp+8]".to_owned()) && lines.contains(&"add eax, dword ptr [ebp+12]".to_owned()), "{lines:?}");
+    assert!(lines.contains(&"mov eax, dword ptr [esp+4]".to_owned()) && lines.contains(&"add eax, dword ptr [esp+8]".to_owned()), "{lines:?}");
     assert_eq!(lines.last().map(String::as_str), Some("ret 8"));
 }
 
@@ -63,7 +63,7 @@ fn a_call_loads_the_registers_and_pushes_the_rest_without_popping() {
 fn the_argument_after_a_float_is_on_the_stack_too() {
     let text = listing("@export(\"watcall32\")\nfn after_float(a: i32, x: f64, b: i32) -> i32:\n    return b\n");
     let lines = procedure(&text, "after_float_");
-    assert!(lines.contains(&"mov eax, dword ptr [ebp+16]".to_owned()), "{lines:?}");
+    assert!(lines.contains(&"mov eax, dword ptr [esp+12]".to_owned()), "{lines:?}");
     assert_eq!(lines.last().map(String::as_str), Some("ret 12"));
 }
 
