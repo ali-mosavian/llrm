@@ -1602,16 +1602,19 @@ pub fn emit_in(
         return jump(target, at, short);
     }
     if op == Operation::Call && what.indirect && sources.len() == 1 {
+        // A near code pointer is as wide as the mode's word; a pointer of two words (offset and selector) is a far one,
+        // which only a segmented mode has.
+        let (near, near_code) = (i64::from(at.bits / 8), if at.bits == 32 { Code::Call_rm32 } else { Code::Call_rm16 });
         match &sources[0] {
-            Loc::Reg(one) if one.width == 2 => {
-                return _assemble(&raised(create_reg(Code::Call_rm16, one.register)), at, true);
+            Loc::Reg(one) if i64::from(one.width) == near => {
+                return _assemble(&raised(create_reg(near_code, one.register)), at, true);
             }
-            Loc::Mem(cell) if cell.width == 2 => {
+            Loc::Mem(cell) if i64::from(cell.width) == near => {
                 if let Some((built, relocated)) = operand_of(cell, at.bits) {
-                    return _assemble(&raised(create_mem(Code::Call_rm16, built)), at, relocated);
+                    return _assemble(&raised(create_mem(near_code, built)), at, relocated);
                 }
             }
-            Loc::Mem(cell) if cell.width == 4 => {
+            Loc::Mem(cell) if cell.width == 4 && at.bits == 16 => {
                 if let Some((built, relocated)) = operand_of(cell, at.bits) {
                     return _assemble(&raised(create_mem(Code::Call_m1616, built)), at, relocated);
                 }
