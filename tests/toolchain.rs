@@ -417,6 +417,19 @@ fn test_the_examples_and_benchmarks_compile_without_warnings() {
     assert!(warned.is_empty(), "{}", warned.join("\n"));
 }
 
+/// start.asm and dos.asm each named a constant of their own (the stack, the heap's arena) beside the
+/// description's; the assembler is now told the description's fields, and a target that lists none is told none.
+#[test]
+fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
+    let defines = |target: &str| {
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).args(["--target", target, "--os-layer", "defines"]).output().unwrap();
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+        String::from_utf8_lossy(&done.stdout).trim().to_owned()
+    };
+    assert_eq!(defines("x86-code32"), "STACK_BYTES=16384 HEAP_BYTES=16777216");
+    assert_eq!(defines("x86-code16"), "");
+}
+
 /// The identity gate is an instrument: a build compared with itself must say SAME of every
 /// program, and a build whose output differs must be reported DIFF with a failing exit, or a
 /// change that moved a target's code would pass the gate silently.

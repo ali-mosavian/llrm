@@ -115,7 +115,7 @@ def target_link(target: str) -> dict:
         return tomllib.load(text)["link"]
 
 
-def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = ()) -> tuple[Path, ...]:
+def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = (), defines: tuple[str, ...] = ()) -> tuple[Path, ...]:
     """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline, linked as
     `target` says; the files its executable needs beside it (an extender's loader)."""
     link = target_link(target)
@@ -128,8 +128,9 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
         for name in names:
             path = made / (Path(name).stem.upper() + ".OBJ")
             with _RUNTIME_LOCK:  # builds run in threads; one assembles the start-up, the others wait for it
-                if not path.exists() or path.stat().st_mtime < (ROOT / name).stat().st_mtime:
-                    assemble(ROOT / name, path)
+                # An object made with the description's defines is made each time: they are not in its age.
+                if defines or not path.exists() or path.stat().st_mtime < (ROOT / name).stat().st_mtime:
+                    assemble(ROOT / name, path, *defines)
             out.append(path)
         return out
 
@@ -153,7 +154,8 @@ def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level:
     runtime = work / (obj.stem + "R.obj")
     used = [word for one in (obj, *foreign) for word in ("--used-by", str(one))]
     _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), "--target", target, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used])
-    return link_target(target, obj, exe, work, runtime=([start], [dos]), objects_after=(runtime, *foreign))
+    defines = subprocess.run([str(BIN / "llrm-nib"), "--target", target, "--os-layer", "defines"], capture_output=True, text=True, check=True).stdout.split()
+    return link_target(target, obj, exe, work, runtime=([start], [dos]), objects_after=(runtime, *foreign), defines=tuple(defines))
 
 
 def link_c(obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = ()) -> None:
