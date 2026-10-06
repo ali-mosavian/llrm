@@ -10,7 +10,7 @@ use super::walk::Cx;
 use super::{Set, field};
 use crate::backend::lanes::Lanes;
 use crate::backend::peephole::{_lanes, _register_effects};
-use crate::backend::{select, target};
+use crate::backend::{select, target, upperzero};
 use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg, Space};
 use crate::model::lir::Insn;
 
@@ -73,6 +73,11 @@ pub fn free(_: &Cx, one: &Insn, fields: u32) -> bool {
         || has(field::POINT) && one.covers.is_none_or(|(start, end)| start != end)
         || has(field::UNOWNED) && one.covers.is_some_and(|(start, end)| start != end)
         || has(field::VOLATILE) && one.volatile)
+}
+
+/// `one` finds the upper half of `register`'s root zero.
+pub fn upper_zero(cx: &Cx, one: &Arc<Insn>, register: Reg) -> bool {
+    upperzero::bit(register.register).is_some_and(|bit| cx.upper_zero(one) & bit != 0)
 }
 
 /// Every lane in `lanes` is dead after `one`.

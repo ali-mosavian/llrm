@@ -166,6 +166,9 @@ impl LIRTransform for Peephole {
         let body = secondary_bases(&body, &self.cpu)?;
         let body = borrows(self.rules, &increments(self.rules, &body));
         let body = doubled(self.rules, &body, &self.cpu)?;
+        let body = narrowed_arithmetic(self.rules, &body);
+        // A zero upper half proven by the first is what the second reads, and the copies it makes are forwarded.
+        let body = if self.rules.zero_extensions.is_some() { copyprop::forwarded(&zero_extensions(self.rules, &widened_moves(self.rules, &body))) } else { body };
         let body = sharedstores::shared(&body, &self.cpu, &self.saved);
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(self.rules, &tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))));
@@ -1702,6 +1705,21 @@ pub fn borrows(rules: &peep::Rules, body: &LirBody) -> LirBody {
 pub fn doubled(rules: &peep::Rules, body: &LirBody, cpu: &Profile) -> Result<LirBody, String> {
     cpu.doubling()?;
     Ok(peep::rewritten(rules.doubled, body, &Facts::new(body, Some(cpu))))
+}
+
+/// A dword operation and the `movzx` of its word, as the word operation where the register's upper half is zero (`peephole.peep`).
+pub fn narrowed_arithmetic(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.narrowed_arithmetic, body, &Facts::new(body, None))
+}
+
+/// A word copy of a register zero above it as the dword copy (`peephole.peep`).
+pub fn widened_moves(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.widened_moves, body, &Facts::new(body, None))
+}
+
+/// The extension of a word whose register is zero above it as a copy of the register (`peephole.peep`).
+pub fn zero_extensions(rules: &peep::Rules, body: &LirBody) -> LirBody {
+    peep::rewritten(rules.zero_extensions, body, &Facts::new(body, None))
 }
 
 fn _flags_before(one: &Insn, flags_dead: bool) -> bool {

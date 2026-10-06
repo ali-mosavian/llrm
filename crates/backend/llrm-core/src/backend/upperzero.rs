@@ -77,8 +77,22 @@ fn disturbed(one: &Insn) -> Roots {
 
 /// What `one` makes of `zero`, the roots known zero before it.
 pub fn after(one: &Insn, zero: Roots) -> Roots {
-    let zeroed = zeroing(one);
+    let zeroed = zeroing(one) | copied(one, zero);
     (zero & !disturbed(one)) | zeroed
+}
+
+/// The root a whole-register copy writes, where the root it copies from has a zero upper half.
+fn copied(one: &Insn, zero: Roots) -> Roots {
+    let Some(Semantics { op: Operation::Move, dests, sources, .. }) = &one.what else {
+        return 0;
+    };
+    match (dests.as_slice(), sources.as_slice()) {
+        ([Loc::Reg(Reg { register: into, width: 4 })], [Loc::Reg(Reg { register: from, width: 4 })]) => match (bit(*into), bit(*from)) {
+            (Some(into), Some(from)) if zero & from != 0 => into,
+            _ => 0,
+        },
+        _ => 0,
+    }
 }
 
 /// Before each instruction, by `id`, the roots whose upper half is zero.

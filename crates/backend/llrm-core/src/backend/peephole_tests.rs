@@ -3160,3 +3160,90 @@ fn test_a_dword_copy_and_add_are_priced_with_their_operand_size_prefixes() {
     let result = addresses(&input, "486").unwrap().insns();
     assert_eq!(names(&result), ["lea", "cmp"]);
 }
+
+// ------------------------------------------------------------ flat zero extensions
+
+fn flat() -> &'static crate::backend::peep::Rules {
+    &crate::backend::peep::targets::x86_code32::RULES
+}
+
+fn word_load(into: Register) -> Arc<Insn> {
+    let cell = Loc::Mem(mem(frame(8), 2, Register::EBP, 0, 4));
+    Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Extend, "movzx", vec![rl(into, 4)], vec![cell])), vec![], vec![]))
+}
+
+fn partial_load(into: Register) -> Arc<Insn> {
+    let cell = Loc::Mem(mem(frame(8), 2, Register::EBP, 0, 4));
+    Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![rl(into, 2)], vec![cell])), vec![], vec![]))
+}
+
+fn extension(into: Register, from: Register) -> Arc<Insn> {
+    Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Extend, "movzx", vec![rl(into, 4)], vec![rl(from, 2)])), vec![], vec![]))
+}
+
+fn flat_body(insns: Vec<Arc<Insn>>) -> LirBody {
+    body("flat", 0, vec![block(0, insns, vec![])])
+}
+
+/// A word whose register is zero above it, extended to another register: the register's own copy.
+/// The extension was a three clock `movzx` where a one clock `mov` does, and kept the copy from joining its source.
+#[test]
+fn test_flat_extension_of_a_zero_extended_word_is_a_copy() {
+    let made = zero_extensions(flat(), &flat_body(vec![word_load(Register::EAX), extension(Register::ESI, Register::AX)]));
+    let kept: Vec<Semantics> = whats(&made.insns());
+    assert_eq!(kept[1].name.as_deref(), Some("mov"), "{kept:?}");
+    assert_eq!((kept[1].dests.clone(), kept[1].sources.clone()), (vec![rl(Register::ESI, 4)], vec![rl(Register::EAX, 4)]));
+}
+
+/// The same extension in place is nothing.
+#[test]
+fn test_flat_extension_in_place_of_a_zero_extended_word_is_dropped() {
+    let made = zero_extensions(flat(), &flat_body(vec![word_load(Register::EAX), extension(Register::EAX, Register::AX)]));
+    assert_eq!(names(&whats(&made.insns()).into_iter().map(|what| Arc::new(insn(0, None, Some(what), vec![], vec![]))).collect::<Vec<_>>()), ["movzx"]);
+}
+
+/// Where the register's upper half is not known zero the extension stays: a word load leaves it as it was.
+/// Taking it for a copy read the old upper half.
+#[test]
+fn test_flat_extension_of_a_partial_load_stays() {
+    let made = zero_extensions(flat(), &flat_body(vec![partial_load(Register::EAX), extension(Register::ESI, Register::AX)]));
+    assert_eq!(whats(&made.insns())[1].name.as_deref(), Some("movzx"));
+}
+
+/// A word copy of a zero-extended register is the dword one when nothing reads the upper half it was leaving.
+#[test]
+fn test_flat_word_copy_of_a_zero_extended_register_is_a_dword_copy() {
+    let copy = Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![rl(Register::CX, 2)], vec![rl(Register::AX, 2)])), vec![], vec![]));
+    // Overwritten whole after, so nothing reads the upper half the word copy was leaving.
+    let cleared = Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Binary, "xor", vec![rl(Register::ECX, 4)], vec![rl(Register::ECX, 4), rl(Register::ECX, 4)])), vec![], vec![]));
+    let made = widened_moves(flat(), &flat_body(vec![word_load(Register::EAX), copy, cleared]));
+    let kept = whats(&made.insns());
+    assert_eq!((kept[1].dests.clone(), kept[1].sources.clone()), (vec![rl(Register::ECX, 4)], vec![rl(Register::EAX, 4)]));
+}
+
+fn compared() -> Arc<Insn> {
+    Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Compare, "cmp", vec![], vec![rl(Register::EAX, 4), rl(Register::ECX, 4)])), vec![], vec![]))
+}
+
+fn dword_sum() -> Arc<Insn> {
+    Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, "add", vec![rl(Register::EAX, 4)], vec![rl(Register::EAX, 4), rl(Register::ECX, 4)])), vec![], vec![]))
+}
+
+/// A dword sum and the extension of its low word, where the sum's register is zero above: the word sum.
+#[test]
+fn test_flat_dword_sum_and_its_extension_is_the_word_sum() {
+    // A compare after overwrites the flags the word sum would set differently.
+    let made = narrowed_arithmetic(flat(), &flat_body(vec![word_load(Register::EAX), dword_sum(), extension(Register::EAX, Register::AX), compared()]));
+    let kept = whats(&made.insns());
+    assert_eq!(kept.len(), 3, "{kept:?}");
+    assert_eq!((kept[1].dests.clone(), kept[1].sources.clone()), (vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::CX, 2)]));
+}
+
+/// Not where it is not: the word sum leaves the upper half as it was, which the extension would have cleared.
+/// Taking the word sum there left the old upper half in a register read as a dword.
+#[test]
+fn test_flat_dword_sum_stays_where_the_upper_half_may_not_be_zero() {
+    let made = narrowed_arithmetic(flat(), &flat_body(vec![partial_load(Register::EAX), dword_sum(), extension(Register::EAX, Register::AX), compared()]));
+    let kept = whats(&made.insns());
+    assert_eq!((kept[1].name.as_deref(), kept[2].name.as_deref()), (Some("add"), Some("movzx")), "{kept:?}");
+}
