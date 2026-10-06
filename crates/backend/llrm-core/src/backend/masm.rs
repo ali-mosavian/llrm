@@ -1,7 +1,7 @@
 //! Allocated LIR as jwasm source.
 //!
 //! Port of `qbopt/backend/masm.py`. `listing` is the procedure as emitted,
-//! frame and all; this prints it and omfwrite.rs encodes it, so the two
+//! frame and all; this prints it and objbuild.rs encodes it, so the two
 //! cannot drift. Every operand is already placed; an unplaced one is an
 //! error.
 
@@ -83,7 +83,7 @@ pub struct Procedure {
     pub interrupt: Option<Addr>,
     /// Tuned for size (-Os): fewer bytes at the price of clocks, as the frame's `push bp; mov
     /// bp,sp; sub sp,N` as `enter N,0` (4 bytes for 6, 14 clocks for 3 on the 486), and the
-    /// jumps `omfwrite` lays out.
+    /// jumps `objbuild` lays out.
     pub size: bool,
     /// Bytes the runtime's entry call (B$ENSA) takes below BP, which no instruction of the
     /// procedure shows: its header and the locals `cx` names.
@@ -456,7 +456,7 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
     Ok(emitted.iter().flatten().map(|one| one.code.len()).sum())
 }
 
-/// The procedure as emitted, frame included: what this prints and omfwrite
+/// The procedure as emitted, frame included: what this prints and objbuild
 /// encodes. A branch's target is still a block; `label(number, at)` names it.
 pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprintable> {
     let (mut enter, mut leave) = _frame_parts(procedure);

@@ -275,6 +275,7 @@ dependencies = [
  "llrm-bcmachine",
  "llrm-hir",
  "llrm-mir",
+ "llrm-object",
  "llrm-omf",
  "llrm-peepgen",
  "llrm-qbruntime",
@@ -355,10 +356,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-object"
+version = "0.1.0"
+
+[[package]]
 name = "llrm-omf"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-object",
  "llrm-support",
 ]
 

@@ -2876,7 +2876,7 @@ linkage.
 
 ### 77. Direct allocated-LIR OMF emission audit — 2026-09-18
 
-The architecture document still described an `omfwrite._as_mir` compatibility
+The architecture document still described an `objbuild._as_mir` compatibility
 seam even though that function no longer exists. The production BC path takes
 allocated `LirBody` objects directly into `layout.rebuild()` and fresh OMF
 serialization; `rewrite.py` invokes that route through `wholeseg.emitted()`.

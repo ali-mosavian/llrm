@@ -6,7 +6,8 @@
 use llrm_mir::{debuginfo as di, MetadataId};
 use llrm_omf::cvwrite::{self, Flavor, Reach, Scalar, Type, TypeId};
 
-use crate::backend::omfwrite::{Fixup, Segment, OFFSET, POINTER};
+use crate::backend::objbuild::{Fixup, Segment, OFFSET, POINTER};
+use llrm_object::{DebugKind, Role};
 use crate::backend::{globals, masm};
 use crate::model::ir::Space;
 use crate::support::hash::IndexMap;
@@ -185,9 +186,9 @@ pub fn segments(debug: &Debug, module: &masm::Module, source: &str, code: &Segme
         bytes[one.at..one.at + 2].copy_from_slice(&one.displacement.to_le_bytes());
     }
     let fixups: Vec<Fixup> = encoded.relocations.iter().map(|one| Fixup::new(one.at, if one.far { POINTER } else { OFFSET }, one.symbol.clone())).collect();
-    let mut symbols_segment = Segment::new("$$SYMBOLS", "DEBSYM", false);
+    let mut symbols_segment = Segment::new("$$SYMBOLS", Role::Debug(DebugKind::CodeViewSymbols), true);
     symbols_segment.put(&bytes, &fixups);
-    let mut types_segment = Segment::new("$$TYPES", "DEBTYP", false);
+    let mut types_segment = Segment::new("$$TYPES", Role::Debug(DebugKind::CodeViewTypes), true);
     types_segment.put(&encoded.types, &[]);
     Ok([symbols_segment, types_segment])
 }

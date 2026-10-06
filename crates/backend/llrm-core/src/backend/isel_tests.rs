@@ -40,7 +40,7 @@ fn assembled_on(cpu: &str, text: &str) -> String {
 /// The module's text under `abi` and `segments`, as `cpu` prices it.
 fn assembled_by(abi: &HirAbi, segments: &crate::backend::target::Segments, cpu: &str, text: &str) -> String {
     let module = assemble::assembled(&parsed(text), abi, "T_TEXT", ProfileOrName::Name(cpu), segments).expect("assembles");
-    crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+    crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
     masm::text(&module).expect("prints")
 }
 
@@ -3248,7 +3248,7 @@ fn test_dbg_lines_become_linnum() {
     assert_eq!(attached, 3, "the fixture carries its lines");
     let mut assembled = assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
     let records = |assembled: &crate::backend::masm::Module| {
-        let object = crate::backend::omfwrite::written_as(assembled, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+        let object = crate::backend::objbuild::written_as(assembled, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
         llrm_omf::omf::parse(&object).expect("parses")
     };
     // Lines alone are a BASIC statement table's, not -g.
@@ -3797,7 +3797,7 @@ fn sized_with(candidates: assemble::Candidates, text: &str) -> usize {
     assemble::trying(candidates, || {
         let profile = crate::backend::cpu::tuned("486", true).expect("the 486 profile");
         let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
-        crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes").len()
+        crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes").len()
     })
 }
 
@@ -3894,7 +3894,7 @@ fn far_branch_body() -> String {
 fn decoded_object(text: &str) -> (Vec<iced_x86::Instruction>, Vec<usize>, Vec<usize>) {
     use llrm_omf::omf;
     let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
-    let bytes = crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+    let bytes = crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
     let records = omf::parse(&bytes).expect("parses");
     let (code, _, size) = omf::code_segment(&records).expect("a code segment");
     let image = omf::segment_image(&records, code, size);
