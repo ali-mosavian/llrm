@@ -1528,6 +1528,50 @@ mod tests {
         assert!(!made.contains_key(&2), "the copy is read after the cell was written");
     }
 
+    /// A load the optimizer proved no write in the loop changes was held in a stack slot all the same: a store through a
+    /// far pointer has no address in LIR, so the cell never held (particle bas: +0.6% instructions, +30 B).
+    fn spared_body(spared: bool, store_address: Option<crate::model::ir::Addr>) -> LirBody {
+        use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
+        let cell = Mem { addr: Some(Addr::new(Space::Segment, 2)), ..Mem::new(None, 2) };
+        let held = |value| Loc::Held(Held { value, width: 2 });
+        let what = |op, name: &str, dests, sources| Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) });
+        let one = |at: i64, what, defines: Vec<u32>, uses: Vec<u32>| Arc::new(Insn::new(at, Some((at, at)), what, defines, uses));
+        let into = Mem { addr: store_address, ..Mem::new(None, 2) };
+        let insns = vec![
+            one(0, what(Operation::Move, "mov", vec![held(1)], vec![Loc::Mem(cell)]), vec![1], vec![]),
+            one(1, what(Operation::Move, "mov", vec![Loc::Mem(into)], vec![Loc::Imm(Imm { value: 9, width: 2, address: None })]), vec![], vec![]),
+            one(2, what(Operation::Binary, "add", vec![held(2)], vec![held(1), held(1)]), vec![2], vec![1]),
+        ];
+        let mut body = LirBody::new("t", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
+        if spared {
+            body.spares = Arc::new(BTreeSet::from([(0, 1)]));
+        }
+        body
+    }
+
+    #[test]
+    fn test_a_load_the_optimizer_proved_apart_from_a_write_holds_across_it() {
+        assert!(remakable(&spared_body(true, None), &BTreeSet::from([1])).contains_key(&1), "the unknown address is the pair's to answer");
+    }
+
+    #[test]
+    fn test_a_far_write_proved_apart_from_a_load_does_not_end_it() {
+        use crate::model::ir::{Addr, Space};
+        assert!(remakable(&spared_body(true, Some(Addr::new(Space::Far, 100))), &BTreeSet::from([1])).contains_key(&1));
+        assert!(!remakable(&spared_body(false, Some(Addr::new(Space::Far, 100))), &BTreeSet::from([1])).contains_key(&1));
+    }
+
+    #[test]
+    fn test_a_write_not_proved_apart_still_ends_the_load() {
+        assert!(!remakable(&spared_body(false, None), &BTreeSet::from([1])).contains_key(&1));
+    }
+
+    #[test]
+    fn test_a_proved_pair_does_not_excuse_a_write_to_the_cell_itself() {
+        use crate::model::ir::{Addr, Space};
+        assert!(!remakable(&spared_body(true, Some(Addr::new(Space::Segment, 2))), &BTreeSet::from([1])).contains_key(&1));
+    }
+
     /// Two values that may only sit in BX (each is the base of an address
     /// somewhere) were counted as a byte pair although only one acts: deedlines
     /// COPPER evicted down to three held values in a six-register machine, and

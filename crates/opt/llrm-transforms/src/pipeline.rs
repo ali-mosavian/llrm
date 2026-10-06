@@ -274,6 +274,8 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     if applied.options.wanted("addresssink") {
         manager.add(addresssink::AddressSink);
     }
+    // Last: what it names are the instructions selection sees.
+    manager.add_module(crate::spares::Spares);
     manager.run(program)
 }
 

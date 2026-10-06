@@ -300,6 +300,8 @@ pub struct LirBody {
     pub odds: BlockOdds,
     /// It calls a routine that returns twice (`setjmp`): no frame slot is shared.
     pub returns_twice: bool,
+    /// (load, write) by `at`: the optimizer proved the write leaves the load's cell as it was (`!llrm.spares`).
+    pub spares: Arc<BTreeSet<(i64, i64)>>,
 }
 
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
@@ -397,6 +399,7 @@ impl LirBody {
             variables: Vec::new(),
             odds: BlockOdds::default(),
             returns_twice: false,
+            spares: Arc::default(),
         }
     }
 
@@ -418,6 +421,7 @@ impl LirBody {
             variables: self.variables.clone(),
             odds: self.odds.clone(),
             returns_twice: self.returns_twice,
+            spares: Arc::clone(&self.spares),
         }
     }
 

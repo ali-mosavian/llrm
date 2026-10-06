@@ -408,6 +408,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     };
     let body = selector.body(name, &convention)?;
     let mut body = lined(module, function, &selector.ats, body);
+    body.spares = Arc::new(spared(module, function, &selector.ats));
     body.variables = parameters(module, name, &convention);
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     // An inlined callee's variables are not this procedure's.
@@ -424,6 +425,23 @@ fn parameters(module: &Module, name: &str, convention: &Convention) -> Vec<Debug
         .into_iter()
         .filter_map(|(index, name, r#type)| Some(DebugVariable { name, r#type, addr: Addr::new(Space::Frame, cell(index)?) }))
         .collect()
+}
+
+/// Each (load, write) the optimizer proved apart (`!llrm.spares`), by the `at` each became.
+fn spared(module: &Module, function: &Function, ats: &IndexMap<InstId, i64>) -> BTreeSet<(i64, i64)> {
+    let mut pairs = BTreeSet::new();
+    for (&inst, &load) in ats {
+        for (_, node) in function.instruction(inst).metadata.iter().filter(|(kind, _)| kind == llrm_transforms::spares::KIND) {
+            for operand in &module.metadata[node.0 as usize].operands {
+                let llrm_mir::MetadataOperand::Constant(value) = operand else { continue };
+                let ConstantKind::Int(write) = module.context.get(*value).kind else { continue };
+                if let Some(&write) = u32::try_from(write).ok().and_then(|write| ats.get(&InstId(write))) {
+                    pairs.insert((load, write));
+                }
+            }
+        }
+    }
+    pairs
 }
 
 /// `body` with each instruction's source line: that of the MIR instruction
