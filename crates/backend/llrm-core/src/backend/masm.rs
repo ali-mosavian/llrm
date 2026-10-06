@@ -155,8 +155,8 @@ pub struct Module {
     /// Bytes of the linker's stack this module adds to the others' (OMF stack
     /// segments concatenate): where its call graph is the whole program's.
     pub stack: i64,
-    /// The lines the listing opens with: the target's instruction set and model.
-    pub header: Vec<String>,
+    /// The target's object format: the listing's header, the writer's mode.
+    pub object: llrm_target::object::ObjectFormat,
 }
 
 impl Module {
@@ -174,7 +174,7 @@ pub fn text(module: &Module) -> Result<String, Unprintable> {
 
 /// `module`'s text, each procedure's items as `listed` gives them.
 pub fn text_by(module: &Module, listed: impl Fn(&Procedure, usize) -> Result<Vec<Item>, Unprintable>) -> Result<String, Unprintable> {
-    let mut out: Vec<String> = module.header.iter().cloned().chain([String::new()]).collect();
+    let mut out: Vec<String> = module.object.header.iter().cloned().chain([String::new()]).collect();
     out.extend(module.publics.iter().map(|name| format!("public {name}")));
     if module.stack > 0 {
         out.push(format!(".stack {}", module.stack));
@@ -1165,7 +1165,7 @@ mod tests {
     #[test]
     fn test_a_listing_opens_with_its_targets_header() {
         let module = Module {
-            header: vec![".386".to_owned(), ".model flat".to_owned()],
+            object: llrm_target::object::ObjectFormat { writer: "omf".into(), bitness: 32, header: vec![".386".to_owned(), ".model flat".to_owned()] },
             code: "T_TEXT".into(),
             names: no_names(),
             externs: Vec::new(),

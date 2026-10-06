@@ -1,0 +1,5 @@
+# x86-code32: OMF with USE32 segments and 32-bit offsets, linked as an LE
+# executable under a DOS extender, and the listing's MASM header.
+writer = "omf"
+bitness = 32
+header = [".386", ".model flat"]
