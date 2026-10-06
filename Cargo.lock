@@ -203,6 +203,7 @@ dependencies = [
  "llrm-mir",
  "llrm-omf",
  "llrm-qbruntime",
+ "llrm-target",
  "llrm-x86-code16",
 ]
 
@@ -229,6 +230,7 @@ dependencies = [
  "llrm-omf",
  "llrm-qbruntime",
  "llrm-support",
+ "llrm-target",
  "llrm-x86-code16",
  "toml",
 ]
@@ -387,6 +389,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-target"
+version = "0.1.0"
+dependencies = [
+ "toml",
+]
+
+[[package]]
 name = "llrm-transforms"
 version = "0.1.0"
 dependencies = [
@@ -406,6 +415,7 @@ dependencies = [
  "indexmap",
  "llrm-mir",
  "llrm-support",
+ "llrm-target",
  "num-bigint",
  "num-traits",
  "rustc-hash",

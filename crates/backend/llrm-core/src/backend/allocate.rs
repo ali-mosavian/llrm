@@ -520,7 +520,17 @@ pub fn rewritten(
     frame: &mut Frame,
     splitting: bool,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
-    _allocated(body, pinned, unspillable, protected, None, cpu, segments, Some((frame, splitting)))
+    // A value read once, from a cell that holds, by an instruction that takes the cell: never held in a register.
+    let wanted: BTreeSet<u32> = _values(body).into_iter().filter(|value| !unspillable.is_some_and(|set| set.contains(value)) && !pinned.is_some_and(|pins| pins.contains_key(value)) && !protected.is_some_and(|set| set.contains(value))).collect();
+    let read_at_use = spiller::_folded_reads(body, &wanted);
+    if read_at_use.is_empty() {
+        return _allocated(body, pinned, unspillable, protected, None, cpu, segments, Some((frame, splitting)));
+    }
+    let floor = splitkit::_next_value(body);
+    let (moved, made) = spiller::spilled_from(body, &read_at_use, Some(frame), floor)?;
+    let mut unspillable: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
+    unspillable.extend(made);
+    _allocated(&moved, pinned, Some(&unspillable), protected, None, cpu, segments, Some((frame, splitting)))
 }
 
 /// What the allocator knows of a body, recomputed whenever it rewrites it.
@@ -2137,6 +2147,36 @@ mod tests {
 
     fn body_of(name: &str, entry: i64, insns: Vec<Insn>) -> LirBody {
         LirBody::new(name, entry, vec![block(entry, insns)], IndexMap::default(), IndexMap::default())
+    }
+
+    /// lru bas `BENCHLRU&` at -Os: an argument loaded in the entry block and pushed after two loops sat in ax the whole
+    /// way (`mov ax,[bp+6]` ... `push ax`), where re-reading its cell at the push is the same memory operand and one
+    /// instruction fewer; the registers it held took the constants' (+1 instruction, +3 B).
+    #[test]
+    fn test_a_load_read_once_by_a_push_is_read_at_the_push() {
+        let cell = Mem { offset: 0, disp_width: 1, ..Mem::new(Some(Addr::new(Space::Frame, 6)), 2) };
+        let at = |at: i64, what: Semantics, defines: Vec<u32>, uses: Vec<u32>| Insn::new(at, Some((at, at + 1)), Some(what), defines, uses);
+        let load = at(0, semantics(Operation::Move, "mov", vec![held(1, 2)], vec![Loc::Mem(cell)]), vec![1], vec![]);
+        let enter = at(1, semantics(Operation::Jump, "jmp", vec![], vec![]), vec![], vec![]);
+        // A counted loop between the load and the push: the push's block runs as often as the load's.
+        let count = at(10, semantics(Operation::Binary, "add", vec![held(2, 2)], vec![held(2, 2), imm(1, 2)]), vec![2], vec![2]);
+        let test = at(11, semantics(Operation::Compare, "cmp", vec![], vec![held(2, 2), imm(3, 2)]), vec![], vec![2]);
+        let back = at(12, semantics(Operation::Branch, "jne", vec![], vec![]), vec![], vec![]);
+        let push = at(20, semantics(Operation::Push, "push", vec![], vec![held(1, 2)]), vec![], vec![1]);
+        let ret = at(21, semantics(Operation::Return, "retf", vec![], vec![]), vec![], vec![]);
+        let zero = at(2, semantics(Operation::Move, "mov", vec![held(2, 2)], vec![imm(0, 2)]), vec![2], vec![]);
+        let (count_again, test_again, back_again) = (at(15, semantics(Operation::Binary, "add", vec![held(2, 2)], vec![held(2, 2), imm(1, 2)]), vec![2], vec![2]), at(16, semantics(Operation::Compare, "cmp", vec![], vec![held(2, 2), imm(7, 2)]), vec![], vec![2]), at(17, semantics(Operation::Branch, "jne", vec![], vec![]), vec![], vec![]));
+        let (mut first, mut looping, mut again, mut last) = (block(0, vec![load, zero, enter]), block(10, vec![count, test, back]), block(15, vec![count_again, test_again, back_again]), block(20, vec![push, ret]));
+        first.succ = vec![10];
+        looping.succ = vec![10, 15];
+        again.succ = vec![15, 20];
+        last.succ = vec![];
+        let mut body = LirBody::new("t", 0, vec![first, looping, again, last], IndexMap::default(), IndexMap::default());
+        body.loop_trip_counts = vec![(10, 3), (15, 7)];
+        let got = _through_regalloc(body, &[]);
+        let loads_in = |at: i64| got.blocks.iter().find(|one| one.at == at).expect("a block").insns.iter().any(|one| one.what.as_ref().is_some_and(|what| matches!(what.sources.as_slice(), [Loc::Mem(_)]) && what.op == Operation::Move));
+        assert!(!loads_in(0), "the load stayed in the entry block: {:?}", got.blocks[0].insns);
+        assert!(loads_in(20), "the load is not at the push");
     }
 
     fn _one_block(insns: Vec<Insn>) -> LirBody {

@@ -73,7 +73,7 @@ fn output_and_assembly() {
 /// is not: qcport's sound IRQ calls C on a stack of its own.
 #[test]
 fn stack_is_data_only_when_asked() {
-    let machine = |arguments: &[&str]| parsed(arguments).unwrap().machine(crate::abi::machine::BUILT_IN.clone()).unwrap().segments.stack_is_data;
+    let machine = |arguments: &[&str]| parsed(arguments).unwrap().machine(crate::abi::machine::BUILT_IN.clone()).unwrap().segments.unwrap().stack_is_data;
     assert!(!machine(&[]));
     assert!(machine(&["-mstack-is-data"]));
     assert!(!machine(&["-mstack-is-data", "-mno-stack-is-data"]));

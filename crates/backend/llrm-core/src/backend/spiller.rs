@@ -76,11 +76,21 @@ impl Plan {
 
 /// `values` of `body` decided: how each is spilled, and the slots of those stored.
 pub fn planned(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame) -> Result<Plan, Error> {
-    let constants = _constants(body, values);
-    let addresses = _addresses(body, values);
+    // A plain copy of a value made again is made again the same way.
+    let copies = _copies(body, values);
+    let wide: BTreeSet<u32> = values.iter().chain(copies.values()).copied().collect();
+    let constants = _through_copies(_constants(body, &wide), values, &copies);
+    let addresses = _through_copies(_addresses(body, &wide), values, &copies);
     let extensions = _extensions(body, values);
     let mut frame_loads = _stable_loads(body, values);
     frame_loads.extend(_frame_loads(body, values));
+    // A copy of a load is made again as that load, unless the value has a frame home of its own (an argument's slot).
+    let apart: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
+    let homed = _frame_homes(body, &apart);
+    let copied = _through_copies(_stable_loads_through(body, &wide, &copies), &apart.iter().copied().filter(|value| !homed.contains_key(value)).collect(), &copies);
+    for (value, cell) in copied {
+        frame_loads.entry(value).or_insert(cell);
+    }
     let unloaded: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
     let frame_homes = _frame_homes(body, &unloaded);
     let mut rebuilt = frame_loads.clone();
@@ -857,21 +867,119 @@ pub fn recomputed(body: &LirBody, value: u32) -> Option<Arc<Insn>> {
     alone.then(|| Arc::clone(one))
 }
 
+/// Each of `values` that one plain same-width `mov` copies from another value, and that value: made once, so the
+/// copy is made again as its source is (the one answer SsaSpill and the allocator both read).
+pub fn _copies(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, u32> {
+    let mut defined: IndexMap<u32, usize> = IndexMap::default();
+    for one in body.insns() {
+        for value in &one.defines {
+            *defined.entry(*value).or_default() += 1;
+        }
+    }
+    let mut out = IndexMap::default();
+    for one in body.insns() {
+        let (Some(what), [value], [source]) = (&one.what, one.defines.as_slice(), one.uses.as_slice()) else { continue };
+        let ([Loc::Held(dest)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) else { continue };
+        if what.op == Operation::Move
+            && one.group.is_none()
+            && one.requires.is_empty()
+            && one.delivers.is_empty()
+            && one.clobbers.is_empty()
+            && what.name.as_deref() == Some("mov")
+            && dest.value == *value
+            && from.value == *source
+            && dest.width == from.width
+            && values.contains(value)
+            && defined.get(value) == Some(&1)
+            && defined.get(source) == Some(&1)
+        {
+            out.insert(*value, *source);
+        }
+    }
+    out
+}
+
+/// `found` (made for the values and their copies' sources) for `values`: a copy takes its source's.
+fn _through_copies<T: Clone>(found: IndexMap<u32, T>, values: &BTreeSet<u32>, copies: &IndexMap<u32, u32>) -> IndexMap<u32, T> {
+    values.iter().filter_map(|value| found.get(value).or_else(|| copies.get(value).and_then(|source| found.get(source))).map(|one| (*value, one.clone()))).collect()
+}
+
+/// Each of `values` that is loaded from a cell holding until its one reader, which runs no more often than the load
+/// (frequencies are products of floats: two blocks that run alike differ in the last digits)
+/// and takes that cell as its memory operand: read there it costs the same one memory operand and no instruction,
+/// and no register is held from the load to it, so holding it never pays.
+pub fn _folded_reads(body: &LirBody, values: &BTreeSet<u32>) -> BTreeSet<u32> {
+    let stable = _stable_loads(body, values);
+    if stable.is_empty() {
+        return BTreeSet::new();
+    }
+    let busy = crate::analysis::frequency::Frequency::of(body);
+    let mut readers: IndexMap<u32, Vec<(i64, &Arc<Insn>)>> = IndexMap::default();
+    let mut loads: IndexMap<u32, i64> = IndexMap::default();
+    for block in &body.blocks {
+        for one in &block.insns {
+            for value in one.uses.iter().filter(|value| stable.contains_key(*value)) {
+                readers.entry(*value).or_default().push((block.at, one));
+            }
+            for value in one.defines.iter().filter(|value| stable.contains_key(*value)) {
+                loads.insert(*value, block.at);
+            }
+        }
+    }
+    // A cell the body also writes is a variable: its loads and stores share frame homes and slots with other values.
+    let written: Vec<Mem> = body.insns().iter().flat_map(|one| one.what.iter().flat_map(|what| what.dests.iter())).filter_map(|place| if let Loc::Mem(cell) = place { Some(cell.clone()) } else { None }).collect();
+    stable
+        .iter()
+        .filter(|(value, cell)| {
+            if written.iter().any(|dest| dest.addr.is_none() || (dest.addr.zip(cell.addr).is_some_and(|(there, own)| there.space == own.space) && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width))) {
+                return false;
+            }
+            let ([(at, one)], Some(loaded)) = (readers.get(*value).map(Vec::as_slice).unwrap_or_default(), loads.get(*value)) else { return false };
+            let Some(what) = &one.what else { return false };
+            let held = |place: &Loc| matches!(place, Loc::Held(held) if held.value == **value);
+            let (read, written) = (what.sources.iter().filter(|place| held(place)).count(), what.dests.iter().filter(|place| held(place)).count());
+            if one.group.is_some() || read != 1 || written != 0 || one.defines.contains(value) || busy.block(*at) > busy.block(*loaded) * (1.0 + 1e-9) {
+                return false;
+            }
+            // The forms a reader takes a memory operand in: the spiller's own folds, and the push that peephole folds.
+            let only = BTreeSet::from([**value]);
+            let pushed = what.op == Operation::Push && what.name.as_deref() == Some("push") && one.defines.is_empty() && one.requires.is_empty() && one.delivers.is_empty();
+            // A copy is the coalescer's: the load it copies is the load it becomes.
+            pushed || (what.op != Operation::Move && folded_source_in(one, &only, false).is_some_and(|folded| folded.value == **value))
+        })
+        .map(|(value, _)| *value)
+        .collect()
+}
+
 /// Values loaded from a cell nothing changes before they are used again.
 pub fn _stable_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Mem> {
     _stable_loads_through(body, values, &IndexMap::default())
 }
 
-/// `_stable_loads`, and each of a load's copies (`copies`: copy -> source, a copy of a copy through its chain) whose own
-/// uses the cell holds to: the copy is made again as the load, which its source's last use does not decide.
+/// `_stable_loads`, where a load's copies (`copies`: copy -> source) are made again as it is: the cell must hold until
+/// the last use of any of them, not only of the load.
 pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &IndexMap<u32, u32>) -> IndexMap<u32, Mem> {
     if values.is_empty() {
         return IndexMap::default();
     }
     let mut definitions: IndexMap<u32, Vec<(Arc<Insn>, Option<Mem>)>> = IndexMap::default();
     let mut uses: IndexMap<u32, Vec<Arc<Insn>>> = values.iter().map(|value| (*value, Vec::new())).collect();
+    // The load a copy comes from, through copies of copies.
+    let root = |value: u32| {
+        let mut at = value;
+        while let Some(source) = copies.get(&at) {
+            at = *source;
+        }
+        at
+    };
     for block in &body.blocks {
         for one in &block.insns {
+            for value in _set(&one.uses) {
+                let owner = root(value);
+                if owner != value && values.contains(&owner) {
+                    uses[&owner].push(Arc::clone(one));
+                }
+            }
             for value in values.intersection(&_set(&one.uses)) {
                 uses[value].push(Arc::clone(one));
             }
@@ -888,6 +996,7 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
                                 && one.clobbers.is_empty()
                                 && one.group.is_none()
                                 && one.spread.is_empty()
+                                && !one.volatile
                                 && one.symbol != Some(true)
                             {
                                 cell = Some(source.clone());
@@ -919,27 +1028,14 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
             result.insert(*value, cell.clone());
         }
     }
-    // A copy of a stable load is made again as it where the cell holds to the copy's own last use.
-    for (copy, _) in copies {
-        let mut at = *copy;
-        while let Some(source) = copies.get(&at) {
-            at = *source;
-        }
-        let (Some(cell), Some(found)) = (result.get(&at).cloned(), definitions.get(&at)) else { continue };
-        if !values.contains(copy) || result.contains_key(copy) || uses[copy].is_empty() || uses[copy].iter().any(|one| one.group.is_some()) {
-            continue;
-        }
-        if _unchanged(body, &found[0].0, &cell, &uses[copy]) {
-            result.insert(*copy, cell);
-        }
-    }
     result
 }
 
 
 /// Whether `cell` still holds what it held at `define` after `one`.
-fn _keeps(one: &Arc<Insn>, define: &Arc<Insn>, cell: &Mem, holds: bool, body: &LirBody) -> bool {
-    if Arc::ptr_eq(one, define) {
+/// Whether `cell`, as the load `define` read it, still holds after `one`, given it held before.
+pub(crate) fn _keeps(one: &Arc<Insn>, define: &Insn, cell: &Mem, holds: bool, body: &LirBody) -> bool {
+    if std::ptr::eq(Arc::as_ptr(one), define) {
         return true;
     }
     let (sealed, apart) = (body.sealed_arguments, body.spares.contains(&(define.at, one.at)));
@@ -3056,6 +3152,31 @@ mod tests {
             assert_eq!(positions[1], positions[0] + 1);
             assert!(!insns.iter().any(|one| one.spill_reload));
         }
+    }
+
+    /// `mov v1, [global]` read back into `v2`, which is read once more: v2 is the load made again, not a slot.
+    #[test]
+    fn test_a_copy_of_a_global_load_is_made_again_not_stored() {
+        let cell = crate::model::ir::Mem { addr: Some(crate::model::ir::Addr::new(Space::Segment, 0)), ..crate::model::ir::Mem::new(None, 2) };
+        let load = insn(0, (0, 0), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![Loc::Mem(cell)]), &[1], &[]);
+        let body = _body(vec![load, _move(2, 1, None, 0x10), _add(21, 2, 0x12), _add(22, 1, 0x14)]);
+        let mut frame = Frame::new(0);
+        let (done, _) = spilled(&body, &set(&[2]), Some(&mut frame)).expect("spills");
+        assert_eq!(frame.size(), 0, "a slot for a copy of a load");
+        assert!(!done.insns().iter().any(|one| one.spill_store || one.spill_reload));
+    }
+
+    /// A copy of a load is made again as the load only while the cell holds until the copy's last use: the fuzz (seed 31)
+    /// stored an address through a copy whose cell had been written since.
+    #[test]
+    fn test_a_copy_of_a_load_is_not_made_again_after_its_cell_changes() {
+        let cell = crate::model::ir::Mem { addr: Some(crate::model::ir::Addr::new(Space::Segment, 0)), ..crate::model::ir::Mem::new(None, 2) };
+        let load = insn(0, (0, 0), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![Loc::Mem(cell.clone())]), &[1], &[]);
+        let write = insn(0x20, (0x20, 0x20), semantics(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![imm(9, 2)]), &[], &[]);
+        let body = _body(vec![load, _move(2, 1, None, 0x10), _add(21, 1, 0x12), write, _add(22, 2, 0x30)]);
+        let mut frame = Frame::new(0);
+        let (done, _) = spilled(&body, &set(&[2]), Some(&mut frame)).expect("spills");
+        assert!(done.insns().iter().any(|one| one.spill_store || one.spill_reload), "the copy was made again from a cell that changed");
     }
 
     #[test]

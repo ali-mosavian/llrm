@@ -211,14 +211,14 @@ impl Flags {
     /// `default`, or the `--machine` description, on the CPU named.
     pub fn machine(&self, default: Machine) -> Result<Machine, String> {
         let mut machine = match &self.machine {
-            Some(path) => Machine::load(path)?,
+            Some(path) => Machine::load(path, &crate::abi::machine::CPUS)?,
             None => default,
         };
         if let Some(cpu) = &self.cpu {
             machine.cpu = cpu.clone();
         }
         if let Some(stack_is_data) = self.stack_is_data {
-            machine.segments.stack_is_data = stack_is_data;
+            machine.segments.as_mut().ok_or("-mstack-is-data needs a segmented machine")?.stack_is_data = stack_is_data;
         }
         if let Some(far_bss) = self.far_bss {
             machine.far_bss = far_bss;

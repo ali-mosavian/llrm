@@ -1,0 +1,9 @@
+[package]
+name = "llrm-target"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "What every target states: its platform description, read from TOML"
+
+[dependencies]
+toml = { workspace = true }
