@@ -5,10 +5,10 @@
 //! halves of one value stays two word operations, as the old raise left it.
 
 use iced_x86::Register;
-use llrm_bcmachine::analysis::flags::Flag;
-use llrm_bcmachine::frontends::bc::declen::Insn;
-use llrm_bcmachine::model::ir::nodes::{Node, span};
-use llrm_bcmachine::objectfile::module::{Addr, Space};
+use llrm_x86_bcmachine::analysis::flags::Flag;
+use llrm_x86_bcmachine::frontends::bc::declen::Insn;
+use llrm_x86_bcmachine::model::ir::nodes::{Node, span};
+use llrm_x86_bcmachine::objectfile::module::{Addr, Space};
 use llrm_mir::{BinaryOp, CastOp, IntPredicate, Opcode, Operand, ValueDef};
 
 use crate::emit::{Bit, Desc, Emit, Emitter, Kind};

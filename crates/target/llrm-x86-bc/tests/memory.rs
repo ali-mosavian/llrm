@@ -11,7 +11,7 @@ use llrm_mir::{CastOp, Constant, ConstantKind, GlobalKind, GlobalVariable, InstI
 fn raised(fixture: &str) -> Module {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf").join(fixture);
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let module = llrm_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    let module = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}")).module;
     let errors = llrm_mir::verify::verify(&module);
     assert!(errors.is_empty(), "{errors:#?}\n{}", llrm_mir::print::module(&module));
     module
@@ -37,7 +37,7 @@ fn printed(mut module: Module, descriptor: &str, count: usize) -> Vec<i64> {
     let (printed, count_cell, heap, descriptor) = (global(&mut module, "printed"), global(&mut module, "count"), global(&mut module, "heap"), global(&mut module, descriptor));
     let routines: Vec<_> = module
         .functions()
-        .filter(|(_, one, function)| function.is_declaration() && one.name.as_deref().is_some_and(|name| name.starts_with(llrm_bc::RUNTIME)))
+        .filter(|(_, one, function)| function.is_declaration() && one.name.as_deref().is_some_and(|name| name.starts_with(llrm_x86_bc::RUNTIME)))
         .map(|(id, one, _)| (id, one.name.clone().unwrap()))
         .collect();
     for (id, name) in routines {
@@ -48,7 +48,7 @@ fn printed(mut module: Module, descriptor: &str, count: usize) -> Vec<i64> {
         let mut b = module.builder(id);
         let entry = b.block("entry");
         b.position(entry);
-        match name.trim_start_matches(llrm_bc::RUNTIME) {
+        match name.trim_start_matches(llrm_x86_bc::RUNTIME) {
             "B$PEI2" => {
                 let at = b.load(word, count_cell, false, "");
                 let slot = b.gep(word, printed, &[at], Default::default(), "");
@@ -192,7 +192,7 @@ fn the_heap_element_is_apart_from_every_variable() {
 fn def_seg_is_a_store_the_runtime_leaves_alone() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/qbdemo-fil2.obj");
     let found = llrm_omf::module::load(&path).expect("reads").expect("an object");
-    let raised = llrm_bc::raise_each(&found, &llrm_x86_m16::machine::BUILT_IN).expect("raises");
+    let raised = llrm_x86_bc::raise_each(&found, &llrm_x86_m16::machine::BUILT_IN).expect("raises");
     assert!(raised.outcomes.iter().any(|(name, outcome)| name == "RENDER" && outcome.is_ok()));
     let program = llrm_mir::program::Program::new(vec![raised.module], std::rc::Rc::new(llrm_mir::target::Neutral)).and_then(|one| one.with_runtime(raised.runtime)).expect("links");
     let module = &program.modules[0];
@@ -208,6 +208,6 @@ fn def_seg_is_a_store_the_runtime_leaves_alone() {
     let mut analyses = llrm_mir::passes::ModuleAnalyses::new(llrm_mir::program::ProgramAnalyses::default().proxy(&program, 0));
     let globals = llrm_analysis::globalsaa::analysis(module, &mut analyses).expect("analyzes");
     assert!(globals.tracked(cell));
-    let writes = |routine: &str| globals.unsummarized(module.named(&format!("{}{routine}", llrm_bc::RUNTIME))).1.contains(&cell);
+    let writes = |routine: &str| globals.unsummarized(module.named(&format!("{}{routine}", llrm_x86_bc::RUNTIME))).1.contains(&cell);
     assert!(!writes("B$ERAS") && writes("B$DSG0"));
 }

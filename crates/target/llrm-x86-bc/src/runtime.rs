@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 use iced_x86::Register;
 use llrm_qbruntime::{self as runtime, Contract, Control, Memory};
 
-use llrm_bcmachine::model::ir::nodes::{Node, span};
-use llrm_bcmachine::support::hash::IndexMap;
+use llrm_x86_bcmachine::model::ir::nodes::{Node, span};
+use llrm_x86_bcmachine::support::hash::IndexMap;
 use llrm_mir::{Attribute, ConstantId, GlobalId, Linkage, Module, Type, TypeId};
 
 pub use crate::machine::{Answer, Interface};

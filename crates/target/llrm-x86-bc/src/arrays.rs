@@ -12,9 +12,9 @@
 
 use std::collections::HashMap;
 
-use llrm_bcmachine::model::ir::nodes::Node;
-use llrm_bcmachine::model::ir::{Imm, Loc, Operation};
-use llrm_bcmachine::objectfile::module::{Family, Space};
+use llrm_x86_bcmachine::model::ir::nodes::Node;
+use llrm_x86_bcmachine::model::ir::{Imm, Loc, Operation};
+use llrm_x86_bcmachine::objectfile::module::{Family, Space};
 use llrm_mir::{BinaryOp, CastOp};
 
 use crate::emit::{Emit, Emitter};

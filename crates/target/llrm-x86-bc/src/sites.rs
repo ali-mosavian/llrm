@@ -6,7 +6,7 @@
 
 use iced_x86::Register;
 use llrm_qbruntime as runtime;
-use llrm_bcmachine::model::ir::nodes::Node;
+use llrm_x86_bcmachine::model::ir::nodes::Node;
 use llrm_mir::{BinaryOp, CastOp};
 
 use crate::emit::{Desc, Emit, Emitter, Kind};
