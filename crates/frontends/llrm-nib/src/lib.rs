@@ -79,7 +79,7 @@ impl Default for Frontend {
     }
 }
 
-/// What a target's OS layer and Nib's runtime description (`runtime/nib/nib.toml` of its crate) say.
+/// What a target's OS layer and Nib's runtime description (`runtime/nib/<target>/nib.toml`) say.
 #[derive(Clone, Debug)]
 pub struct Os {
     /// `std.os` and `os`: the module the runtime's routines call the operating system through,
@@ -147,7 +147,7 @@ impl Os {
             stack_base: table.get("stack_base").and_then(|one| one.as_integer()).ok_or("stack_base is not an integer")?,
             far_bss: layer_table.get("far_bss").and_then(|one| one.as_bool()).ok_or("far_bss is not a boolean")?,
             defines,
-            directory: layer.directory.to_owned(),
+            directory: std::fs::canonicalize(layer.directory).map_or_else(|_| layer.directory.to_owned(), |path| path.to_string_lossy().into_owned()),
             start: layer.string("start")?,
             implementation: layer.string("implementation")?,
         })

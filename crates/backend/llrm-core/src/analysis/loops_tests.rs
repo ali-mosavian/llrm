@@ -131,3 +131,49 @@ fn test_a_block_with_one_predecessor_is_never_a_frontier() {
     let chain = [block(0, &[1]), block(1, &[2]), block(2, &[])];
     assert!(frontiers(&chain, None).values().all(|where_| !where_.contains(&1) && !where_.contains(&2)));
 }
+
+/// The blocks of `graph` the entry reaches without passing through `removed`.
+fn reached(graph: &[LirBlock], removed: Option<i64>) -> BTreeSet<i64> {
+    let mut seen = BTreeSet::new();
+    let mut pending = vec![0];
+    while let Some(at) = pending.pop() {
+        if Some(at) == removed || !seen.insert(at) {
+            continue;
+        }
+        pending.extend(graph.iter().find(|one| one.at == at).map(|one| one.succ.clone()).unwrap_or_default());
+    }
+    seen
+}
+
+/// Dominators by the definition: `d` dominates `a` where `a` is unreachable once `d` is removed.
+#[test]
+fn test_dominators_are_what_the_definition_says_on_random_graphs() {
+    let mut seed = 12345_u64;
+    let mut next = |modulus: u64| {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (seed >> 33) % modulus
+    };
+    for _ in 0..300 {
+        let size = 1 + next(12) as i64;
+        let graph: Vec<LirBlock> = (0..size).map(|at| block(at, &(0..next(4)).map(|_| next(size as u64) as i64).collect::<Vec<_>>())).collect();
+        let found = dominators(&graph, Some(0));
+        let reachable = reached(&graph, None);
+        for a in 0..size {
+            let want: BTreeSet<i64> = if reachable.contains(&a) { (0..size).filter(|d| !reached(&graph, Some(*d)).contains(&a) || *d == a).collect() } else { BTreeSet::new() };
+            assert_eq!(found[&a], want, "block {a} of {:?}", graph.iter().map(|one| (one.at, one.succ.clone())).collect::<Vec<_>>());
+        }
+    }
+}
+
+/// The dominators were bit sets, iterated to a fixed point in layout order: a body laid out against its
+/// flow was a round of the body for each block. 4,000 blocks took 0.66 s, in `irreducible`, which `lir jumps`
+/// runs for every tail copy it tries (#560).
+#[test]
+fn test_dominance_of_a_body_laid_out_against_its_flow_is_not_quadratic() {
+    let n = 4000;
+    let reversed: Vec<LirBlock> = (0..n).rev().map(|at| block(at, &[(at + 1).min(n)])).chain([block(n, &[])]).collect();
+    let started = std::time::Instant::now();
+    let found = dominance(&reversed, Some(0));
+    assert!(found.dominates(0, n) && found.dominates(1500, 2000) && !found.dominates(2000, 1500));
+    assert!(started.elapsed().as_secs_f64() < 0.1, "{:?} for 4,000 blocks", started.elapsed());
+}

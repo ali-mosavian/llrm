@@ -89,14 +89,14 @@ impl llrm_target::Target for Code16 {
 
     fn runtime(&self, language: &str) -> Option<llrm_target::runtime::Description> {
         (language == "nib").then_some(llrm_target::runtime::Description {
-            directory: concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/nib"),
-            text: include_str!("../runtime/nib/nib.toml"),
-            files: &[("stack.toml", include_str!("../runtime/nib/stack.toml"))],
+            directory: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../runtime/nib/x86-code16"),
+            text: include_str!("../../../../runtime/nib/x86-code16/nib.toml"),
+            files: &[("stack.toml", include_str!("../../../../runtime/nib/x86-code16/stack.toml"))],
         })
     }
 
     fn os_layer(&self) -> Option<llrm_target::os::Layer> {
-        Some(llrm_target::os::Layer { directory: concat!(env!("CARGO_MANIFEST_DIR"), "/os/dos"), text: include_str!("../os/dos/os.toml"), facts: llrm_x86::DOS_FACTS })
+        Some(llrm_target::os::Layer { directory: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../runtime/shared/dos/x86-code16"), text: include_str!("../../../../runtime/shared/dos/x86-code16/os.toml"), facts: llrm_x86::DOS_FACTS })
     }
 
     /// A byte is pushed as a word.

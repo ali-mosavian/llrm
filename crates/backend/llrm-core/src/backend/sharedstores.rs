@@ -11,7 +11,7 @@ use crate::backend::cpu::Profile;
 use crate::backend::lanes::Lanes;
 use crate::backend::peephole::{DeadAfter, _flags_dead_after, _flags_live_out, _lanes, _register_effects, id};
 use crate::backend::{liveness, masm, regthrash, select, target};
-use llrm_x86_code16::GENERAL;
+use crate::backend::classes::RegisterClasses;
 
 use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBody};
@@ -34,14 +34,14 @@ fn bytes(bits: u32, what: &Semantics) -> Option<usize> {
 
 
 /// `body` with each run of equal literal stores that a dead register makes shorter shared.
-pub fn shared(body: &LirBody, cpu: &Profile, saved: &[Register]) -> LirBody {
+pub fn shared(body: &LirBody, cpu: &Profile, saved: &[Register], classes: &RegisterClasses) -> LirBody {
     if !cpu.size {
         return body.clone();
     }
     // What the epilogue saves is what its convention preserves of the registers the body names
     // (`masm::_frame_parts`): one it does not name would be pushed and popped for the run.
     let used = masm::_roots(body);
-    let scratch: Vec<Register> = GENERAL.iter().copied().filter(|one| !saved.contains(one) || used.contains(one)).collect();
+    let scratch: Vec<Register> = classes.available.iter().copied().filter(|one| !saved.contains(one) || used.contains(one)).collect();
     let exits = liveness::dead_at_exit(body);
     let flags_out = _flags_live_out(body);
     let blocks = body

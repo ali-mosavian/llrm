@@ -58,7 +58,7 @@ fn test_a_frame_no_stack_segment_holds_is_refused() {
 /// `STACK_BASE` is the stack `start.asm` links: a different one would size the object's wrongly.
 #[test]
 fn test_the_stack_base_is_the_one_start_links() {
-    let start = std::fs::read_to_string(crate::test_nib_frontend::root().join("crates/target/llrm-x86-code16/os/dos/start.asm")).unwrap();
+    let start = std::fs::read_to_string(crate::test_nib_frontend::root().join("runtime/shared/dos/x86-code16/start.asm")).unwrap();
     assert!(start.contains(&format!(".stack {}", crate::Frontend::default().os.stack_base)));
 }
 
@@ -100,7 +100,7 @@ fn test_the_stack_check_names_what_the_nib_runtime_defines() {
 
     let check = crate::Frontend::default().os.stack.clone();
     let runtime = |name: &str| {
-        let directory = if name.ends_with(".asm") { format!("{}/../../target/llrm-x86-code16/os/dos", env!("CARGO_MANIFEST_DIR")) } else { format!("{}/src/runtime", env!("CARGO_MANIFEST_DIR")) };
+        let directory = if name.ends_with(".asm") { format!("{}/../../../runtime/shared/dos/x86-code16", env!("CARGO_MANIFEST_DIR")) } else { format!("{}/src/runtime", env!("CARGO_MANIFEST_DIR")) };
         std::fs::read_to_string(format!("{directory}/{name}")).unwrap()
     };
     assert!(runtime("os.asm").contains(&format!("public {}", check.limit)) && runtime("start.asm").contains(&format!("mov {}, ax", check.limit)));

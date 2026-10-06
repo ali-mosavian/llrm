@@ -1,5 +1,5 @@
 # Nib's runtime on flat DOS under DOS/32A: what the language asks of the target's OS layer
-# (../../os/dos). Each field naming a file names one in this directory.
+# (runtime/shared/dos/x86-code32). Each field naming a file names one in this directory.
 
 # What `-fsanitize=stack` compares and calls.
 stack = "stack.toml"

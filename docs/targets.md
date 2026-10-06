@@ -280,7 +280,7 @@ and not a flag. A target without it has no rows, so its passes find nothing.
 | `far`, `huge`, `__based`, call distance in `llrm-c` | `hir.rs`, `translate.rs` (~90) | collapse; refuse `__based/__segment/__huge` |
 | Flags pick the machine: `--cpu`, `--machine` | `driver/flags.rs:163-230` | `--target` selects the `Target` |
 | QB, BC | `llrm-qb`, `llrm-bc*` | pinned to code16 |
-| Nib | `llrm-nib` | code16 and code32: layout, conventions and OS layer come from the target (`os/dos/`, `runtime/nib/`) |
+| Nib | `llrm-nib` | code16 and code32: layout, conventions and OS layer come from the target (`runtime/shared/`, `runtime/nib/`) |
 
 ## Interface
 
