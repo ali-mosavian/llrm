@@ -189,6 +189,8 @@ mod tests {
         fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)> { self.0.callee_saved() }
         fn cpu_table(&self, name: &str) -> Option<llrm_target::timings::CpuTable> { self.0.cpu_table(name) }
         fn forms_text(&self) -> String { self.0.forms_text() }
+        fn registers_text(&self) -> String { self.0.registers_text() }
+        fn operand_bytes(&self) -> i64 { self.0.operand_bytes() }
         fn default_cpu(&self) -> &'static str { self.0.default_cpu() }
         fn operation_costs(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> llrm_mir::target::OperationCosts { self.0.operation_costs(price, prefix) }
         fn register_capacity(&self) -> i64 { self.0.register_capacity() }

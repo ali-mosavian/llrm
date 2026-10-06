@@ -11,6 +11,7 @@ use iced_x86::Register;
 use crate::support::hash::IndexMap;
 
 use crate::analysis::intervals::{self as ranges, Interval, Segment};
+use crate::backend::classes::RegisterClasses;
 use crate::backend::{allocate, regclass};
 use crate::backend::target::{self, Segments};
 use crate::model::ir::{self, Held, Loc, Operation, Semantics};
@@ -20,13 +21,14 @@ use crate::model::passes::LIRTransform;
 pub struct Coalescer {
     pub pinned: IndexMap<u32, Register>,
     pub segments: Segments,
+    pub classes: std::rc::Rc<RegisterClasses>,
 }
 
 impl Coalescer {
     pub const NAME: &'static str = "coalesce";
 
-    pub fn new(pinned: Option<&IndexMap<u32, Register>>, segments: &Segments) -> Self {
-        Self { pinned: pinned.cloned().unwrap_or_default(), segments: segments.clone() }
+    pub fn new(pinned: Option<&IndexMap<u32, Register>>, segments: &Segments, classes: &std::rc::Rc<RegisterClasses>) -> Self {
+        Self { pinned: pinned.cloned().unwrap_or_default(), segments: segments.clone(), classes: std::rc::Rc::clone(classes) }
     }
 }
 
@@ -40,7 +42,7 @@ impl LIRTransform for Coalescer {
     }
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
-        Ok(joined(&body, Some(&self.pinned), &self.segments))
+        Ok(joined(&body, Some(&self.pinned), &self.segments, &self.classes))
     }
 }
 
@@ -61,7 +63,7 @@ fn _find(parent: &mut IndexMap<u32, u32>, one: u32) -> u32 {
 }
 
 /// `body` with every copy this can prove unnecessary removed.
-pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments: &Segments) -> LirBody {
+pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments: &Segments, classes: &RegisterClasses) -> LirBody {
     let mut every = body.pins.clone();
     every.extend(pinned.into_iter().flatten().map(|(value, register)| (*value, *register)));
     let pinned: IndexMap<u32, Register> =
@@ -71,11 +73,11 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
     let mut live = ranges::intervals(body, Some(&index));
     let masks = allocate::_masks(body, &index, segments);
     let mut widths = allocate::_widest(body);
-    let where_of = regclass::classes(body, &BTreeSet::new(), segments);
-    let everything: BTreeSet<Register> = target::AVAILABLE.into_iter().collect();
+    let where_of = regclass::classes(body, &BTreeSet::new(), segments, classes);
+    let everything: BTreeSet<Register> = classes.available.iter().copied().collect();
     let mut may: IndexMap<u32, BTreeSet<Register>> = live
         .keys()
-        .map(|one| (*one, target::order(where_of.get(one), segments).into_iter().collect()))
+        .map(|one| (*one, target::order(where_of.get(one), segments, classes).into_iter().collect()))
         .collect();
     for (value, register) in &pinned {
         if !everything.contains(register) && !where_of.contains_key(value) {
@@ -155,8 +157,8 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
             if significant >= k
                 && (held.contains_key(&here)
                     || held.contains_key(&there)
-                    || !(_george(here, there, &allowed, &near, &may, &held)
-                        || _george(there, here, &allowed, &near, &may, &held)))
+                    || !(_george(here, there, &allowed, &near, &may, &held, &everything)
+                        || _george(there, here, &allowed, &near, &may, &held, &everything)))
             {
                 continue; // Briggs and George: the merged class would not be colourable
             }
@@ -226,9 +228,9 @@ fn _george(
     near: &Graph,
     may: &IndexMap<u32, BTreeSet<Register>>,
     held: &IndexMap<u32, Register>,
+    everything: &BTreeSet<Register>,
 ) -> bool {
-    let everything: BTreeSet<Register> = target::AVAILABLE.into_iter().collect();
-    if allowed != may.get(&kept).unwrap_or(&everything) {
+    if allowed != may.get(&kept).unwrap_or(everything) {
         return false;
     }
     let empty = BTreeSet::new();
@@ -488,7 +490,7 @@ mod tests {
     #[test]
     fn test_retained_resource_identity_has_a_legal_encoding() {
         let body = body("resource-copy", vec![_move(3, 1, 1)], &[(1, Register::ES)]);
-        let result = allocate::applied(&body, &allocated(&body, &body.pins)).expect("applies");
+        let result = allocate::applied(&body, &allocated(&body, &body.pins), &crate::backend::classes::RegisterClasses::code16()).expect("applies");
         let insns = result.insns();
         assert_eq!(insns.len(), 1);
         assert_eq!(insns[0].covers, body.insns()[0].covers);
@@ -529,13 +531,13 @@ mod tests {
         insns.extend([_move(21, 2, 1), _use(26, 1), _use(28, 2)]);
         insns.extend((0..6).map(|index| _use(30 + index * 3, 10 + index as u32)));
         let body = body("resources", insns, &[(1, Register::ES), (2, Register::ES)]);
-        let done = joined(&body, None, &target::BUILT_IN);
+        let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
         assert_eq!(done.insns().len(), body.insns().len() - 1);
         let result = allocated(&done, &done.pins);
         assert!(result.spilled.is_empty());
         assert!(result.r#where.values().any(|register| *register == Register::ES));
         let wholes: BTreeSet<Register> = result.r#where.values().map(|register| allocate::_whole(*register)).collect();
-        assert!(target::AVAILABLE.iter().all(|register| wholes.contains(register)));
+        assert!(crate::backend::classes::RegisterClasses::code16().available.iter().all(|register| wholes.contains(register)));
     }
 
     #[test]
@@ -550,7 +552,7 @@ mod tests {
                 insns.insert(2, call);
             }
             let body = body("resource-safety", insns, &pins);
-            let done = joined(&body, None, &target::BUILT_IN);
+            let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
             assert_eq!(done.insns().len(), body.insns().len(), "{other}");
         }
     }
@@ -558,7 +560,7 @@ mod tests {
     #[test]
     fn test_a_copy_can_share_a_register_while_its_equal_source_is_still_read() {
         let body = body("equal", vec![_define(0, 1), _move(3, 2, 1), _use(5, 1), _use(6, 2)], &[]);
-        let done = joined(&body, None, &target::BUILT_IN);
+        let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
         let insns = done.insns();
         assert_eq!(insns.len(), 3);
         assert_eq!(insns[2].uses, insns[1].uses);
@@ -568,7 +570,7 @@ mod tests {
     fn test_a_source_redefined_while_its_copy_is_live_cannot_share() {
         let insns = vec![_define(0, 1), _move(3, 2, 1), _define(5, 1), _use(8, 1), _use(9, 2)];
         let count = insns.len();
-        let done = joined(&body("different", insns, &[]), None, &target::BUILT_IN);
+        let done = joined(&body("different", insns, &[]), None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
         let insns = done.insns();
         assert_eq!(insns.len(), count);
         assert_ne!(insns[count - 1].uses, insns[count - 2].uses);
@@ -598,7 +600,7 @@ mod tests {
             vec![_define(0, 1), grouped(_move(1, 2, 1), 1), grouped(_move(1, 3, 1), 1), _use(4, 2), _use(5, 3)];
         let body = body("parallel-destinations", insns, &[]);
         assert!(_interference(&body)[&2].contains(&3));
-        let done = joined(&body, None, &target::BUILT_IN);
+        let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
         let insns = done.insns();
         assert_ne!(insns[insns.len() - 2].uses, insns[insns.len() - 1].uses);
     }
@@ -607,7 +609,7 @@ mod tests {
     fn test_different_entry_values_cannot_share_even_if_copied_later() {
         let insns = vec![_use(0, 1), _use(1, 2), _move(2, 2, 1), _use(4, 2)];
         let count = insns.len();
-        assert_eq!(joined(&body("inputs", insns, &[]), None, &target::BUILT_IN).insns().len(), count);
+        assert_eq!(joined(&body("inputs", insns, &[]), None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).insns().len(), count);
     }
 
     #[test]
@@ -616,7 +618,7 @@ mod tests {
         wide.what = Some(semantics(Operation::Push, "push", vec![], vec![held(1, 4)]));
         let insns = vec![_define(0, 1), _move(3, 2, 1), wide, _use(6, 2)];
         let count = insns.len();
-        assert_eq!(joined(&body("partial", insns, &[]), None, &target::BUILT_IN).insns().len(), count);
+        assert_eq!(joined(&body("partial", insns, &[]), None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).insns().len(), count);
     }
 
     #[test]
@@ -630,7 +632,7 @@ mod tests {
             vec![2],
         );
         let insns = vec![_define(0, 1), _move(3, 2, 1), load, _use(7, 1), _use(8, 3)];
-        let done = joined(&body("address", insns, &[]), None, &target::BUILT_IN);
+        let done = joined(&body("address", insns, &[]), None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
         let made: BTreeSet<u32> = done.insns().iter().flat_map(|one| one.defines.clone()).collect();
         for one in done.insns() {
             let what = one.what.as_ref().expect("semantics");
@@ -656,22 +658,22 @@ mod tests {
         );
         let body = body("pointer", vec![_define(0, 1), _move(3, 2, 1), load], &[]);
         let pins: IndexMap<u32, Register> = IndexMap::from_iter([(1, Register::EAX)]);
-        assert_eq!(joined(&body, Some(&pins), &target::BUILT_IN).insns().len(), 3);
+        assert_eq!(joined(&body, Some(&pins), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).insns().len(), 3);
         let pinned = LirBody { pins: pins.clone(), ..body };
-        assert_eq!(joined(&pinned, None, &target::BUILT_IN).insns().len(), 3);
+        assert_eq!(joined(&pinned, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).insns().len(), 3);
     }
 
     #[test]
     fn test_coalescing_keeps_the_pinned_return_as_representative() {
         let body = body("return", vec![_define(0, 1), _move(3, 2, 1), _use(5, 2)], &[]);
-        let done = joined(&body, Some(&IndexMap::from_iter([(2, Register::EAX)])), &target::BUILT_IN);
+        let done = joined(&body, Some(&IndexMap::from_iter([(2, Register::EAX)])), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
         let insns = done.insns();
         assert_eq!(insns[0].defines, vec![2]);
         assert_eq!(insns[insns.len() - 1].uses, vec![2]);
         for register in [Register::EAX, Register::EBX, Register::ECX, Register::EDX] {
             let pins = IndexMap::from_iter([(2, register)]);
-            let joined = joined(&body, Some(&pins), &target::BUILT_IN);
-            let emitted = allocate::applied(&joined, &allocated(&joined, &pins)).expect("applies");
+            let joined = joined(&body, Some(&pins), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+            let emitted = allocate::applied(&joined, &allocated(&joined, &pins), &crate::backend::classes::RegisterClasses::code16()).expect("applies");
             let insns = emitted.insns();
             assert_eq!(
                 insns[insns.len() - 1].what.as_ref().expect("semantics").sources,
@@ -692,7 +694,7 @@ mod tests {
         };
         let last = LirBlock::new(0x20, vec![Arc::new(_use(0x20, 2))]);
         let body = LirBody::new("two arms", 0, vec![arm(0, 61), arm(0x10, 63), last], IndexMap::default(), IndexMap::default());
-        let done = joined(&body, None, &target::BUILT_IN);
+        let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
         let made: BTreeSet<u32> = done.insns().iter().flat_map(|one| one.defines.clone()).collect();
         let read: BTreeSet<u32> = done.insns().iter().flat_map(|one| one.uses.clone()).collect();
         let missing: Vec<u32> = read.difference(&made).copied().collect();
@@ -709,7 +711,7 @@ mod tests {
             let count = insns.len();
             let pins: Vec<(u32, Register)> = if pinned { vec![(50, Register::BX)] } else { vec![] };
             let body = body("counter", insns, &pins);
-            assert_eq!(joined(&body, None, &target::BUILT_IN).insns().len(), count - 1, "pinned={pinned}");
+            assert_eq!(joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).insns().len(), count - 1, "pinned={pinned}");
         }
     }
 }
