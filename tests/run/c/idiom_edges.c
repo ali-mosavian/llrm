@@ -1,4 +1,4 @@
-// flags: -O2 --cpu 486 | -Os --cpu 486
+// flags: -O2 --cpu 486 | -Os --cpu 486 | -O2 --cpu 486 --target x86-code32 | -Os --cpu 486 --target x86-code32
 /* The same moves at their edges: odd byte counts, starts that are not aligned, no trips and
    one, the far segment on either side of a copy and both sides of one. */
 extern void report(long value);

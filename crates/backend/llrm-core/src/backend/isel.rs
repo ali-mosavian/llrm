@@ -3062,6 +3062,11 @@ impl Selector<'_, '_, '_> {
         setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 }
     }
 
+    /// Whether a string operation names its segments: the target has selector registers.
+    fn segmented(&self) -> bool {
+        !self.segments.selectors.is_empty()
+    }
+
     /// A memcpy, as LLVM's getMemcpy lowers one: a constant length in at
     /// most `MEMCPY_MOVES` pairs, each a load into a register and a store
     /// from it, widest first, where only the bytes it names are read; else
@@ -3071,7 +3076,7 @@ impl Selector<'_, '_, '_> {
         let &[destination, source, length, volatile] = arguments else { return refuse("a memcpy of other than four operands") };
         let volatile = self.constant(volatile, 1) != Some(0);
         let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
-        let constant = self.constant(length, 2);
+        let constant = self.constant(length, self.address_bytes());
         if let Some(length) = constant
             && length / 4 + (length % 4).count_ones() as i64 <= MEMCPY_MOVES
         {
@@ -3101,7 +3106,7 @@ impl Selector<'_, '_, '_> {
         let through = |this: &mut Self, pointer: Pointer, out: &mut Vec<Arc<Insn>>| match pointer {
             Pointer::Based { base, index: None, offset: 0, .. } | Pointer::Far { base: Some(base), index: None, offset: 0, .. } => base,
             _ => {
-                let held = this.fresh_held(2);
+                let held = this.fresh_held(this.address_bytes());
                 out.push(Arc::new(Insn { volatile, ..insn_of(at, this.address(pointer, held)) }));
                 held
             }
@@ -3119,8 +3124,9 @@ impl Selector<'_, '_, '_> {
                 // A tail of no bytes starts at the last dword's own first byte: no step to take.
                 (Some(length), _) => through(this, pointer.moved(length - 1 - if length >= 4 && length % 4 == 0 { 3 } else { 0 }), out),
                 (None, Some(counted)) => {
-                    let (start, end, last) = (through(this, pointer, out), this.fresh_held(2), this.fresh_held(2));
-                    let imm = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
+                    let (start, end, last) = (through(this, pointer, out), this.fresh_held(this.address_bytes()), this.fresh_held(this.address_bytes()));
+                    let word = this.address_bytes();
+                    let imm = |value: i64| Loc::Imm(Imm { value, width: word, address: None });
                     out.push(Arc::new(Insn { volatile, ..insn_of(at, semantics(Operation::Binary, "add", vec![Loc::Held(end)], vec![Loc::Held(start), Loc::Held(counted)])) }));
                     out.push(Arc::new(Insn { volatile, ..insn_of(at, semantics(Operation::Binary, "sub", vec![Loc::Held(last)], vec![Loc::Held(end), imm(1)])) }));
                     last
@@ -3150,7 +3156,7 @@ impl Selector<'_, '_, '_> {
                 match length / 4 {
                     0 => {}
                     1 => parts.push(("movsd", None)),
-                    bulk => parts.push(("movsd", Some(imm(bulk, 2)))),
+                    bulk => parts.push(("movsd", Some(imm(bulk, self.address_bytes())))),
                 }
                 let mut tail = length % 4;
                 for (name, width) in [("movsw", 2), ("movsb", 1)] {
@@ -3169,22 +3175,22 @@ impl Selector<'_, '_, '_> {
                 match length / 4 {
                     0 => {}
                     1 => parts.push(("movsd", None)),
-                    bulk => parts.push(("movsd", Some(imm(bulk, 2)))),
+                    bulk => parts.push(("movsd", Some(imm(bulk, self.address_bytes())))),
                 }
             }
             (None, false) => {
                 let ty = self.function.operand_type(&self.module.context, length).expect("a typed length");
                 let counted = self.held(length, ty, at, out)?;
-                let (bulk, tail) = (self.fresh_held(2), self.fresh_held(2));
+                let (bulk, tail) = (self.fresh_held(self.address_bytes()), self.fresh_held(self.address_bytes()));
                 put(semantics(Operation::Binary, "shr", vec![Loc::Held(bulk)], vec![Loc::Held(counted), imm(2, 1)]), out);
-                put(semantics(Operation::Binary, "and", vec![Loc::Held(tail)], vec![Loc::Held(counted), imm(3, 2)]), out);
+                put(semantics(Operation::Binary, "and", vec![Loc::Held(tail)], vec![Loc::Held(counted), imm(3, self.address_bytes())]), out);
                 parts.extend([("movsd", Some(Loc::Held(bulk))), ("movsb", Some(Loc::Held(tail)))]);
             }
             (None, true) => {
                 let counted = counted.expect("a counted backward move");
-                let (bulk, tail) = (self.fresh_held(2), self.fresh_held(2));
+                let (bulk, tail) = (self.fresh_held(self.address_bytes()), self.fresh_held(self.address_bytes()));
                 put(semantics(Operation::Binary, "shr", vec![Loc::Held(bulk)], vec![Loc::Held(counted), imm(2, 1)]), out);
-                put(semantics(Operation::Binary, "and", vec![Loc::Held(tail)], vec![Loc::Held(counted), imm(3, 2)]), out);
+                put(semantics(Operation::Binary, "and", vec![Loc::Held(tail)], vec![Loc::Held(counted), imm(3, self.address_bytes())]), out);
                 parts.extend([("movsb", Some(Loc::Held(tail))), ("back", None), ("movsd", Some(Loc::Held(bulk)))]);
             }
         }
@@ -3193,36 +3199,42 @@ impl Selector<'_, '_, '_> {
         }
         for (name, count) in parts {
             if name == "back" {
-                let (si_after, di_after) = (self.fresh_held(2), self.fresh_held(2));
-                put(semantics(Operation::Binary, "sub", vec![Loc::Held(si_after)], vec![Loc::Held(si), imm(3, 2)]), out);
-                put(semantics(Operation::Binary, "sub", vec![Loc::Held(di_after)], vec![Loc::Held(di), imm(3, 2)]), out);
+                let (si_after, di_after) = (self.fresh_held(self.address_bytes()), self.fresh_held(self.address_bytes()));
+                put(semantics(Operation::Binary, "sub", vec![Loc::Held(si_after)], vec![Loc::Held(si), imm(3, self.address_bytes())]), out);
+                put(semantics(Operation::Binary, "sub", vec![Loc::Held(di_after)], vec![Loc::Held(di), imm(3, self.address_bytes())]), out);
                 (si, di) = (si_after, di_after);
                 continue;
             }
-            let (si_after, di_after) = (self.fresh_held(2), self.fresh_held(2));
+            let (si_after, di_after) = (self.fresh_held(self.address_bytes()), self.fresh_held(self.address_bytes()));
             let counted = count.map(|count| match count {
                 Loc::Held(held) => held,
                 other => {
-                    let held = self.fresh_held(2);
+                    let held = self.fresh_held(self.address_bytes());
                     put(semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![other]), out);
                     held
                 }
             });
-            let destination_segment = destination_segment.get_or_insert_with(|| self.near_selector(to, volatile, at, out)).clone();
+            // The segments are operands of the form where the target has selector registers.
+            let segments: Vec<Loc> = if self.segmented() {
+                let destination_segment = destination_segment.get_or_insert_with(|| self.near_selector(to, volatile, at, out)).clone();
+                vec![source_segment.clone(), destination_segment]
+            } else {
+                Vec::new()
+            };
             let what = match counted {
                 None => semantics(
                     Operation::Copy,
                     name,
                     vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(si_after), Loc::Held(di_after)],
-                    vec![Loc::Held(si), Loc::Held(di), source_segment.clone(), destination_segment],
+                    [vec![Loc::Held(si), Loc::Held(di)], segments].concat(),
                 ),
                 Some(counted) => {
-                    let emptied = self.fresh_held(2);
+                    let emptied = self.fresh_held(self.address_bytes());
                     semantics(
                         Operation::Copy,
                         name,
                         vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(si_after), Loc::Held(di_after), Loc::Held(emptied)],
-                        vec![Loc::Held(counted), Loc::Held(si), Loc::Held(di), source_segment.clone(), destination_segment],
+                        [vec![Loc::Held(counted), Loc::Held(si), Loc::Held(di)], segments].concat(),
                     )
                 }
             };
@@ -3250,7 +3262,7 @@ impl Selector<'_, '_, '_> {
         let pointer = self.pointer(destination)?;
         let put = |what: Semantics, out: &mut Vec<Arc<Insn>>| out.push(Arc::new(Insn { volatile, ..insn_of(at, what) }));
         let imm = |value: i64, width: u32| Loc::Imm(Imm { value, width, address: None });
-        let constant = byte.zip(self.constant(length, 2));
+        let constant = byte.zip(self.constant(length, self.address_bytes()));
         if let Some((byte, length)) = constant
             && length / 4 + (length % 4).count_ones() as i64 <= MEMSET_STORES
             && !(self.cpu.size && Self::stored_bytes(length) > FILL_BYTES)
@@ -3283,7 +3295,7 @@ impl Selector<'_, '_, '_> {
             // operand-size prefix.
             (Some(byte), _) if self.cpu.size => {
                 let count = match constant {
-                    Some((_, length)) => imm(length, 2),
+                    Some((_, length)) => imm(length, self.address_bytes()),
                     None => Loc::Held(self.held(length, self.function.operand_type(&self.module.context, length).expect("a typed length"), at, out)?),
                 };
                 let stored = self.fresh_held(1);
@@ -3293,7 +3305,7 @@ impl Selector<'_, '_, '_> {
             (Some(byte), Some((_, length))) => {
                 let stored = self.fresh_held(4);
                 put(semantics(Operation::Move, "mov", vec![Loc::Held(stored)], vec![imm(pattern(byte, 4), 4)]), out);
-                parts.push((stored, Some(imm(length / 4, 2)), 4));
+                parts.push((stored, Some(imm(length / 4, self.address_bytes())), 4));
                 let mut tail = length % 4;
                 for width in [2, 1] {
                     if tail >= width {
@@ -3304,9 +3316,9 @@ impl Selector<'_, '_, '_> {
             }
             (Some(byte), None) => {
                 let counted = self.held(length, self.function.operand_type(&self.module.context, length).expect("a typed length"), at, out)?;
-                let (bulk, tail, stored) = (self.fresh_held(2), self.fresh_held(2), self.fresh_held(4));
+                let (bulk, tail, stored) = (self.fresh_held(self.address_bytes()), self.fresh_held(self.address_bytes()), self.fresh_held(4));
                 put(semantics(Operation::Binary, "shr", vec![Loc::Held(bulk)], vec![Loc::Held(counted), imm(2, 1)]), out);
-                put(semantics(Operation::Binary, "and", vec![Loc::Held(tail)], vec![Loc::Held(counted), imm(3, 2)]), out);
+                put(semantics(Operation::Binary, "and", vec![Loc::Held(tail)], vec![Loc::Held(counted), imm(3, self.address_bytes())]), out);
                 put(semantics(Operation::Move, "mov", vec![Loc::Held(stored)], vec![imm(pattern(byte, 4), 4)]), out);
                 parts.extend([(stored, Some(Loc::Held(bulk)), 4), (stored, Some(Loc::Held(tail)), 1)]);
             }
@@ -3334,17 +3346,17 @@ impl Selector<'_, '_, '_> {
         let pointer = self.pointer(destination)?;
         let stored = self.held(value, ty, at, out)?;
         let counted = self.function.operand_type(&self.module.context, count).expect("a typed count");
-        if self.module.context.types.int_bits(counted).is_some_and(|bits| bits > 16) {
-            return refuse("a pattern fill counted past 16 bits");
+        if self.module.context.types.int_bits(counted).is_some_and(|bits| bits > self.address_bytes() * 8) {
+            return refuse("a pattern fill counted past an address");
         }
-        if let Some(count) = self.constant(count, 2).filter(|&count| count <= MEMSET_STORES) {
+        if let Some(count) = self.constant(count, self.address_bytes()).filter(|&count| count <= MEMSET_STORES) {
             for cell in 0..count {
                 let memory = Self::memory(pointer.moved(cell * i64::from(width)), width);
                 out.push(Arc::new(Insn { volatile, ..insn_of(at, semantics(Operation::Move, "mov", vec![Loc::Mem(memory)], vec![Loc::Held(stored)])) }));
             }
             return Ok(());
         }
-        let count = match self.constant(count, 2) {
+        let count = match self.constant(count, self.address_bytes()) {
             Some(count) => Loc::Imm(Imm { value: count, width: 2, address: None }),
             None => Loc::Held(self.held(count, counted, at, out)?),
         };
@@ -3359,7 +3371,7 @@ impl Selector<'_, '_, '_> {
         let mut through = match pointer {
             Pointer::Based { base, index: None, offset: 0, .. } | Pointer::Far { base: Some(base), index: None, offset: 0, .. } => base,
             _ => {
-                let through = self.fresh_held(2);
+                let through = self.fresh_held(self.address_bytes());
                 put(self.address(pointer, through), out);
                 through
             }
@@ -3375,26 +3387,26 @@ impl Selector<'_, '_, '_> {
                 2 => "stosw",
                 _ => "stosd",
             };
-            let stepped = self.fresh_held(2);
+            let stepped = self.fresh_held(self.address_bytes());
             let count = count.map(|count| match count {
                 Loc::Held(held) => held,
                 other => {
-                    let held = self.fresh_held(2);
+                    let held = self.fresh_held(self.address_bytes());
                     put(semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![other]), out);
                     held
                 }
             });
-            let segment = segment.get_or_insert_with(|| self.near_selector(pointer, volatile, at, out)).clone();
+            let segment: Vec<Loc> = if self.segmented() { vec![segment.get_or_insert_with(|| self.near_selector(pointer, volatile, at, out)).clone()] } else { Vec::new() };
             let what = match count {
                 // One store needs neither a count nor REP.
-                None => semantics(Operation::Fill, name, vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(stepped)], vec![Loc::Held(stored), Loc::Held(through), segment]),
+                None => semantics(Operation::Fill, name, vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(stepped)], [vec![Loc::Held(stored), Loc::Held(through)], segment].concat()),
                 Some(count) => {
-                    let emptied = self.fresh_held(2);
+                    let emptied = self.fresh_held(self.address_bytes());
                     semantics(
                         Operation::Fill,
                         name,
                         vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(stepped), Loc::Held(emptied)],
-                        vec![Loc::Held(stored), Loc::Held(count), Loc::Held(through), segment],
+                        [vec![Loc::Held(stored), Loc::Held(count), Loc::Held(through)], segment].concat(),
                     )
                 }
             };
@@ -3414,7 +3426,7 @@ impl Selector<'_, '_, '_> {
             let (space, index) = crate::hir::symbols::DGROUP;
             Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })
         };
-        let selector = self.fresh_held(2);
+        let selector = self.fresh_held(self.address_bytes());
         out.push(Arc::new(Insn { volatile, ..insn_of(at, semantics(Operation::Move, "mov", vec![Loc::Held(selector)], vec![from])) }));
         Loc::Held(selector)
     }

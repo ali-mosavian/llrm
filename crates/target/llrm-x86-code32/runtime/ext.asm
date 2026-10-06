@@ -5,8 +5,23 @@
 
 .data
 digits  db 12 dup (?)
+stkmsg  db 'Stack Overflow!', 13, 10
+
+public __STKOVERFLOW
 
 .code
+; Open Watcom's stack overflow (clib stk086.asm `__STKOVERFLOW`): the message and exit status 1,
+; which a checked function enters (-fsanitize=stack). On stdout, which a test captures.
+__STKOVERFLOW proc
+    mov edx, offset stkmsg
+    mov ecx, 17
+    mov ebx, 1
+    mov ah, 40h
+    int 21h
+    mov ax, 4C01h
+    int 21h
+__STKOVERFLOW endp
+
 ; void report(long v)
 public _report
 _report proc

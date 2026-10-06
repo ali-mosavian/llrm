@@ -24,6 +24,10 @@ Known departures today, each to be removed:
 |---|---|---|
 | `llrm-core`: the `target.rs` statics, `select.rs` bases, `masm`/`sharedstores` register lists | code16's registers read directly | PR 19 (a register-class description the allocator receives) |
 | `llrm-hir`, `llrm-mir`: the datalayout string, address-space numbers, `TargetProfile` variants | a target's layout in an IR crate | PR 14a, and the code32 session's HIR change (data layout and address spaces from the `Target`) |
+| `llrm-core` `select.rs`, `omfwrite.rs`: x86 instruction encoding and the OMF writer, in `llrm-core` and keyed by a described bitness (`At{ip,bits}`) | the encoder belongs in the x86 family layer | PR 5's encoder half (code32-prep, D) |
+| `llrm-core` `select::emit`: sizes every instruction as 16-bit code (`At::bits16`), for the passes that price code (allocator, peephole, jumps, spiller) | `-Os` for code32 is priced in the wrong mode | the same PR: passes ask the target's encoding |
+| `llrm-core` `flow.rs`: `LoopSlots` is dropped where `FrameRegisters.slot != 2` | its slots are words and it parks BP at word width | a `LoopSlots` that reads the slot width and frame register (code32 session, next) |
+| `llrm-core` `isel.rs` string operations (`memcpy`/`memset` lowering): segment operands, 16-bit counts | code16-shaped lowering | code32's flat rows and the `segmented()`/`address_bytes()` reading (code32 session) |
 
 ## Principle: a target is description
 

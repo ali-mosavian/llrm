@@ -1,4 +1,4 @@
-// flags: -O2 --cpu 486 | -Os --cpu 486 | -O2 --cpu 486 --target x86-code32 | -Os --cpu 486 --target x86-code32
+// flags: -O2 --cpu 486 | -Os --cpu 486
 /* A byte stored from a loop's index into a frame array: the index sat in si or di, which have no byte half, and
    the body was refused ("value may be in no register"). Here with a variable-length copy loop between two such arrays. */
 extern void report(long value);
