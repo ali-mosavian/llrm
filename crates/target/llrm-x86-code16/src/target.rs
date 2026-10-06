@@ -13,8 +13,8 @@ pub const GENERAL: [Register; 6] = [Register::EAX, Register::EBX, Register::ECX,
 
 /// The registers a 16-bit address is encoded with, `[bx+si]`: a base is BX or
 /// BP and an index SI or DI.
-pub const ENCODABLE_BASES: [Register; 2] = [Register::BX, Register::BP];
-pub const WORD_INDEXES: [Register; 2] = [Register::SI, Register::DI];
+pub const ENCODABLE_BASES: [Register; 2] = llrm_x86::addressing16::BASES;
+pub const WORD_INDEXES: [Register; 2] = llrm_x86::addressing16::INDEXES;
 
 /// The frame register: no value is held in it.
 pub const FRAME: Register = Register::BP;

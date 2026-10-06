@@ -317,8 +317,8 @@ pub fn operand_of(what: &ir::Mem, bits: u32) -> Option<(MemoryOperand, bool)> {
     }
 }
 
-pub const _WORD_BASES: [Register; 2] = llrm_x86_code16::ENCODABLE_BASES;
-pub const _WORD_INDEXES: [Register; 2] = llrm_x86_code16::WORD_INDEXES;
+pub const _WORD_BASES: [Register; 2] = llrm_x86::addressing16::BASES;
+pub const _WORD_INDEXES: [Register; 2] = llrm_x86::addressing16::INDEXES;
 
 /// `[base+index*scale+disp]`. A relocated cell takes only the word form,
 /// `[bx|bp+si|di+disp16]`: its fixup is 16 bits.
