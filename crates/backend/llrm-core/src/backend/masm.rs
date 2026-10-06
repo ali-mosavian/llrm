@@ -417,7 +417,7 @@ fn parts(procedure: &Procedure, omit: bool) -> (Vec<Semantics>, Vec<Semantics>) 
 
 /// Where the frame an interrupt handler saved starts above its own BP: the
 /// last register it saved, past what its entry pushes after those and the BP
-/// its frame pushes. `llrm_mir::opcode::X86_INTR_FRAME` is the frame.
+/// its frame pushes. the target's `interrupt_frame` (calling.toml) is the frame.
 pub fn interrupt_parameters() -> i64 {
     let (enter, _) = _interrupt_parts(Addr::new(Space::Group, 0));
     let pushed: i64 = enter[INTERRUPT_SAVED..]
@@ -438,7 +438,7 @@ const INTERRUPT_SAVED: usize = 5;
 
 /// What an interrupt handler wraps its frame in. It may interrupt anything,
 /// so it saves every register it or a callee may change once, as the frame
-/// `llrm_mir::opcode::X86_INTR_FRAME` lays out, and gives compiled code what
+/// the target's `interrupt_frame` (calling.toml) lays out, and gives compiled code what
 /// it assumes: DGROUP in DS and ES, the direction flag clear. A handler's
 /// register parameters are slots of that frame, so what it writes to them is
 /// what POPAD or `iret` goes back with. The x87 state is not saved.
@@ -1245,15 +1245,16 @@ mod tests {
         assert_eq!(names, ["bp", "bx", "cx", "di", "ds", "dx", "es", "fs", "gs", "ax", "si", "sp"].iter().map(|one| one.to_string()).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>());
     }
 
-    /// The frame MIR states (`X86_INTR_FRAME`) is the one the entry builds, so
+    /// The frame the target's calling.toml states (`interrupt_frame`) is the one the entry builds, so
     /// a handler's parameters read the registers they name.
     #[test]
     fn test_the_entry_builds_the_frame_mir_states() {
-        let stated: Vec<(String, i64)> = llrm_mir::opcode::X86_INTR_FRAME.iter().map(|&(name, size)| (name.to_owned(), size)).collect();
+        let calling = llrm_target::Target::calling(&llrm_x86_m16::M16);
+        let stated = calling.interrupt().expect("an interrupt convention").interrupt_frame.clone();
         assert_eq!(saved_by_the_entry()[..], stated[..12]);
         assert_eq!(interrupt_parameters(), 2);
-        assert_eq!(llrm_mir::opcode::x86_intr_slot("ax"), Some(36));
-        assert_eq!(llrm_mir::opcode::x86_intr_slot("ds"), Some(6));
+        assert_eq!(llrm_x86::calling::interrupt_slot(calling.interrupt().unwrap(), "ax"), Some(36));
+        assert_eq!(llrm_x86::calling::interrupt_slot(calling.interrupt().unwrap(), "ds"), Some(6));
     }
 
     fn _printed(sources: Vec<Loc>, reserve: i64) -> Vec<String> {

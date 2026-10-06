@@ -25,3 +25,6 @@ convention = "cdecl16"
 flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq"]
 # The header it includes first, from the repository root.
 header = "crates/frontends/llrm-c/src/borland.h"
+# Borland C's interrupt handler parameters, in order: the registers its handler saved, each at its slot of the frame
+# (`calling.toml`'s `interrupt_frame`); what it writes to them is what it returns to.
+interrupt_parameters = ["bp", "di", "si", "ds", "es", "dx", "cx", "bx", "ax", "ip", "cs", "flags"]

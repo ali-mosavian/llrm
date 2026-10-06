@@ -251,6 +251,7 @@ dependencies = [
  "llrm-mir",
  "llrm-target",
  "llrm-transforms",
+ "llrm-x86",
  "llrm-x86-m16",
  "llrm-x86-m32",
  "num-bigint",
