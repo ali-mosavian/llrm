@@ -1037,3 +1037,53 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
     assert!(given.contains_key(&1) && given.contains_key(&2), "the pair's values are confined to a base and an index");
     assert!(given.iter().eq(alone.iter()));
 }
+
+/// A mask at `slot` over registers, for the `_clobbered` tests.
+fn _mask_at(slot: i64, during: &[Register], high: &[Register], before: &[Register]) -> super::allocate::Mask {
+    super::allocate::Mask { slot, during: during.iter().copied().collect(), high: high.iter().copied().collect(), before: before.iter().copied().collect() }
+}
+
+/// `_clobbered` agrees with the look at every point it replaced, on random points and values.
+#[test]
+fn test_clobbered_agrees_with_a_look_at_every_point() {
+    use super::allocate::{Masks, _clobbered, _clobbered_reference};
+    use crate::analysis::intervals::{Interval, Segment};
+    let registers = [Register::AX, Register::BX, Register::CX, Register::DX, Register::SI];
+    let mut seed = 99_u64;
+    let mut next = |modulus: u64| {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (seed >> 33) % modulus
+    };
+    for _ in 0..200 {
+        let pick = |next: &mut dyn FnMut(u64) -> u64| -> Vec<Register> { registers.iter().copied().filter(|_| next(4) == 0).collect() };
+        let list: Vec<_> = (0..next(12)).map(|at| { let during = pick(&mut next); let high = pick(&mut next); let before = pick(&mut next); _mask_at(at as i64 * 4 + next(3) as i64, &during, &high, &before) }).collect();
+        let masks = Masks::new(list);
+        for _ in 0..30 {
+            let mut start = next(20) as i64;
+            let segments = (0..1 + next(3)).map(|_| { let end = start + 1 + next(8) as i64; let seg = Segment { start, end }; start = end + next(5) as i64; seg }).collect();
+            let one = Interval::new(1, segments);
+            for register in registers {
+                for width in [1, 2, 4] {
+                    assert_eq!(_clobbered(&one, register, &masks, width), _clobbered_reference(&one, register, &masks, width), "{register:?} width {width} over {:?}", one.segments);
+                }
+            }
+        }
+    }
+}
+
+/// Every query looked at every point: `_clobbered` was 5.8% of compiling `d_faces` (#559). 20,000 points and
+/// 20,000 questions took 1.2 s; they are answered by bisection now.
+#[test]
+fn test_clobbered_does_not_look_at_every_point() {
+    use super::allocate::{Masks, _clobbered};
+    use crate::analysis::intervals::{Interval, Segment};
+    let masks = Masks::new((0..20_000).map(|at| _mask_at(at * 3, &[Register::DX], &[], &[])).collect());
+    let started = std::time::Instant::now();
+    let mut clobbered = 0;
+    for at in 0..20_000 {
+        let one = Interval::new(1, vec![Segment { start: at * 3 + 1, end: at * 3 + 2 }]);
+        clobbered += usize::from(_clobbered(&one, Register::DX, &masks, 2));
+    }
+    assert_eq!(clobbered, 0, "a value live between two points is not across either");
+    assert!(started.elapsed().as_secs_f64() < 0.2, "{:?} for 20,000 questions", started.elapsed());
+}
