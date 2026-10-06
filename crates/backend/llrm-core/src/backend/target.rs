@@ -489,7 +489,7 @@ mod tests {
     /// target reached the allocator; a flat machine places no selector.
     #[test]
     fn test_a_flat_machine_has_no_selector_to_place() {
-        let flat = Machine::parse("addressing = \"flat\"\nsegment_end_faults = false\nfar_bss = false\ncpu = \"486\"\n", &["486"]).unwrap();
+        let flat = Machine::parse("addressing = \"flat\"\nsegment_end_faults = false\nfar_bss = false\n", "486").unwrap();
         let segments = Segments::of(&flat);
         assert!(segments.selectors.is_empty() && segments.through.is_none() && segments.huge_shift.is_none());
     }

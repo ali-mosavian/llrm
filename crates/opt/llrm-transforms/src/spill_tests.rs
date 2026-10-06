@@ -405,3 +405,16 @@ exit:
 ";
     assert_eq!(_peak(text, Room { registers: 2, across_call: 2, ..Room::default() }), 0);
 }
+
+/// Every access asked whether its pointer is folded, which looks at every user of the pointer, and a frame
+/// slot has a user for each access to it: 34% of compiling a function of 1600 statements (#560). Each
+/// pointer is asked once.
+#[test]
+fn test_each_pointer_is_asked_whether_it_is_folded_once_however_many_accesses_use_it() {
+    let accesses: String = (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
+    let module = crate::testing::parsed(&format!("{}define i16 @f() {{\nentry:\n  %slot = alloca i16\n{accesses}  ret i16 %v39\n}}\n", llrm_analysis::testing::DOS));
+    let function = llrm_analysis::testing::function(&module, "f");
+    let before = super::folded_runs();
+    super::addressed(function);
+    assert!(super::folded_runs() - before <= 2, "{} asks for 80 accesses of one slot", super::folded_runs() - before);
+}

@@ -12,7 +12,8 @@ fn compiled(channels: Option<&str>) -> String {
     std::fs::write(&source, PROGRAM).expect("writes the source");
     let mut command = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-qb")));
     command.args([source.to_str().unwrap(), "--dialect", "qb45", "--runtime", "qb45", "-O2", "-o", directory.path().join("t.obj").to_str().unwrap()]);
-    command.env_remove("LLRM_DEBUG").env_remove("LLRM_TIME_TOP");
+    // Every step is listed: under load, the top 30 by own time are not always the same 30.
+    command.env_remove("LLRM_DEBUG").env("LLRM_TIME_TOP", "1000");
     if let Some(channels) = channels {
         command.env("LLRM_DEBUG", channels);
     }
