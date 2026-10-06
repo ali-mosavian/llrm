@@ -56,9 +56,10 @@ pub struct Frontend {
     pub debug: bool,
     /// Each function compares SP with the runtime's limit on entry: `-fsanitize=stack`.
     pub checked_stack: bool,
-    /// Warn where `far` or `huge` is written for a target where far is near (`-Wno-distance` turns
-    /// it off, for the runtime, which writes `*far` for the targets that have one).
-    pub warn_distance: bool,
+    /// Warn where the source meets the target's widths: `far` or `huge` written where far is near, a
+    /// `usize` narrowed implicitly (`-Wno-target-width` turns both off, for the runtime, which writes
+    /// `*far` for the targets that have one and counts in words).
+    pub warn_target_width: bool,
     /// What the last compile warned of, for the caller to print.
     pub warnings: std::rc::Rc<std::cell::RefCell<Vec<Diagnostic>>>,
 }
@@ -66,7 +67,7 @@ pub struct Frontend {
 impl Default for Frontend {
     /// For real mode, where the language began: a caller that knows its target sets `layout`.
     fn default() -> Self {
-        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_distance: true, warnings: Default::default() }
+        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default() }
     }
 }
 
@@ -87,7 +88,26 @@ pub struct Os {
     pub dos: String,
 }
 
+impl Frontend {
+    /// The frontend for `target`: its layout, slot, code bits, conventions and OS layer.
+    pub fn for_target(target: &dyn llrm_target::Target) -> Result<Self, String> {
+        Ok(Self {
+            layout: target.layout(),
+            slot: u32::try_from(target.stack_slot_bytes()).expect("a slot is positive"),
+            bits: target.object().bitness,
+            conventions: target.conventions().iter().map(|one| (*one).to_owned()).collect(),
+            os: Os::for_target(target)?,
+            ..Self::default()
+        })
+    }
+}
+
 impl Os {
+    /// What the target's OS layer says of Nib's runtime; a target without one is refused.
+    pub fn for_target(target: &dyn llrm_target::Target) -> Result<Self, String> {
+        Self::of(target.runtime("nib").ok_or_else(|| format!("target {} has no Nib runtime", target.name()))?)
+    }
+
     pub fn of(description: llrm_target::runtime::Description) -> Result<Self, String> {
         let table = description.table()?;
         let text = |key: &str| description.string(key);
@@ -224,10 +244,10 @@ pub struct Checked {
     pub error: Option<modules::Located>,
 }
 
-pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>) -> Checked {
-    // An editor checks for the language's first target: `std.os` is its OS layer.
-    let mut read = |name: &str| if name == "std.os" { Ok(Frontend::default().os.module) } else { read(name) };
-    let loaded = match modules::read_all(source, &mut read) {
+pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>, frontend: &Frontend) -> Checked {
+    // An editor checks for its project's target: `std.os` is that target's OS layer.
+    let mut read = |name: &str| if name == "std.os" { Ok(frontend.os.module.clone()) } else { read(name) };
+    let loaded = match modules::read_all_for(source, &mut read, frontend.sizes().near) {
         Ok(loaded) => loaded,
         Err(error) => return Checked { loaded: None, facts: Vec::new(), error: Some(error) },
     };
@@ -235,7 +255,7 @@ pub fn check(source: &str, read: &mut dyn FnMut(&str) -> Result<String, String>)
     let prepared = loaded.clone().linked().and_then(|module| prepared(module).map_err(|error| in_module(&sources, error)));
     let (facts, error) = match prepared {
         Ok(module) => {
-            let (facts, checked) = semantic::check(&module);
+            let (facts, checked) = semantic::check(&module, frontend);
             (facts, checked.err().map(|error| in_module(&sources, error)))
         }
         Err(error) => (Vec::new(), Some(error)),

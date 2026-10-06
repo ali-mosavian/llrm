@@ -122,6 +122,10 @@ impl<'a> FunctionCompiler<'a> {
         if value.type_name == target {
             return Ok(value);
         }
+        // A word and its plain twin are one type to the code generator: no conversion is emitted.
+        if value.type_name.plain() == target.plain() {
+            return Ok(TypedOperand { type_name: target, ..value });
+        }
         if self.types.reads_through(value.type_name, target) {
             let read_only = self.value(target);
             self.emit("copy", vec![read_only], vec![required(value, span)?], None);
@@ -130,14 +134,14 @@ impl<'a> FunctionCompiler<'a> {
         if !conversions::implicit(value.type_name) || !conversions::implicit(target) {
             return Err(type_mismatch(span, target, value.type_name));
         }
-        // A length is usize, the target's word: a narrower integer cuts it, silently unless said.
-        if let Some(hir::Operand::Value(id)) = &value.operand
-            && self.lengths.contains(id)
+        // A word is the target's own width: a narrower integer cuts it, which is said once.
+        if let TypeName::Word { bytes, signed } = value.type_name
             && is_integer(target)
-            && width(self.types.sizes, target) < self.word_bytes()
+            && scalar_width(target) < u32::from(bytes)
         {
-            let name = self.types.types[(type_id(target) - 1) as usize].name.clone();
-            self.types.warn(span, format!("warning: a length is {} bytes and {name} holds fewer: write {name}(...) to cut it", self.word_bytes()));
+            let name = type_name_text(target);
+            let word = if signed { "isize" } else { "usize" };
+            self.types.warn(span, format!("warning: {word} is {bytes} bytes and {name} holds fewer: write {name}(...) to cut it"));
         }
         self.converted(value, target, span)
     }
@@ -302,6 +306,9 @@ impl<'a> FunctionCompiler<'a> {
         let source = value.type_name;
         if source == target {
             return Ok(value);
+        }
+        if source.plain() == target.plain() {
+            return Ok(TypedOperand { type_name: target, ..value });
         }
         if matches!(source, TypeName::Bits { .. }) {
             let backing = self.bits_backing(value, span)?;

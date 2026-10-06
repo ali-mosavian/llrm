@@ -152,7 +152,7 @@ def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level:
     _, (start, dos) = nib_runtime(target)
     runtime = work / (obj.stem + "R.obj")
     used = [word for one in (obj, *foreign) for word in ("--used-by", str(one))]
-    _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), "--target", target, "-o", str(runtime), level, "--procedure-segments", "-Wno-distance", *used])
+    _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), "--target", target, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used])
     return link_target(target, obj, exe, work, runtime=([start], [dos]), objects_after=(runtime, *foreign))
 
 

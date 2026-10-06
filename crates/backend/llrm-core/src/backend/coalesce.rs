@@ -243,7 +243,14 @@ fn _george(
 }
 
 pub fn _interference(body: &LirBody) -> Graph {
-    let (incoming, outgoing) = allocate::live(body);
+    _interference_among(body, None)
+}
+
+/// `_interference`, of the values in `only` alone where it is given: a caller that asks of a few
+/// values pays for the pairs among them, not for every pair live together.
+pub fn _interference_among(body: &LirBody, only: Option<&BTreeSet<u32>>) -> Graph {
+    let wanted = |value: u32| only.is_none_or(|only| only.contains(&value));
+    let rows = allocate::live_rows(body);
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         let mut held: Vec<Held> = match &one.what {
@@ -263,14 +270,15 @@ pub fn _interference(body: &LirBody) -> Graph {
     let mut graph: Graph = IndexMap::default();
 
     let edge = |graph: &mut Graph, one: u32, other: u32| {
-        if one != other {
+        if one != other && wanted(one) && wanted(other) {
             graph.entry(one).or_default().insert(other);
             graph.entry(other).or_default().insert(one);
         }
     };
     let all_pairs = |graph: &mut Graph, alive: &BTreeSet<u32>| {
-        for value in alive {
-            for other in alive {
+        let named: Vec<u32> = alive.iter().copied().filter(|one| wanted(*one)).collect();
+        for value in &named {
+            for other in &named {
                 edge(graph, *value, *other);
             }
         }
@@ -281,9 +289,9 @@ pub fn _interference(body: &LirBody) -> Graph {
     entries.extend(body.blocks.iter().map(|block| block.at).filter(|at| !targets.contains(at)));
     for block in &body.blocks {
         if entries.contains(&block.at) {
-            all_pairs(&mut graph, &incoming[&block.at]);
+            all_pairs(&mut graph, &rows.entering(block.at).filter(|one| wanted(*one)).collect());
         }
-        let mut alive = outgoing[&block.at].clone();
+        let mut alive: BTreeSet<u32> = rows.leaving(block.at).filter(|one| wanted(*one)).collect();
         let mut index = block.insns.len() as i64 - 1;
         while index >= 0 {
             let one = &block.insns[index as usize];
@@ -308,7 +316,9 @@ pub fn _interference(body: &LirBody) -> Graph {
                 all_pairs(&mut graph, &before);
                 for item in group {
                     for value in &item.defines {
-                        graph.entry(*value).or_default();
+                        if wanted(*value) {
+                            graph.entry(*value).or_default();
+                        }
                     }
                 }
                 alive = before;
@@ -342,7 +352,7 @@ pub fn _interference(body: &LirBody) -> Graph {
             for value in &one.defines {
                 alive.remove(value);
             }
-            alive.extend(one.uses.iter().copied());
+            alive.extend(one.uses.iter().copied().filter(|value| wanted(*value)));
             index -= 1;
         }
         for value in block.arrives() {

@@ -298,7 +298,7 @@ fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
 }
 
 /// Far and huge are near where a target has one address space, and the compiler says so, once for each
-/// place: code16 and a flat program that writes neither stay silent, and `-Wno-distance` (the runtime's
+/// place: code16 and a flat program that writes neither stay silent, and `-Wno-target-width` (the runtime's
 /// build, which writes `*far` for the targets that have one) silences it.
 #[test]
 fn test_far_and_huge_are_near_with_a_warning_on_code32() {
@@ -314,7 +314,7 @@ fn test_far_and_huge_are_near_with_a_warning_on_code32() {
     let warned = stderr("tests/run/nib/far_near.nib", &flat);
     assert!(warned.contains("far_near.nib:5:6: warning: 'huge' is near") && warned.contains("warning: 'far' is near"), "{warned}");
     assert_eq!(stderr("tests/run/nib/far_near.nib", &[]), "");
-    assert_eq!(stderr("tests/run/nib/far_near.nib", &["--target", "x86-code32", "-Wno-distance"]), "");
+    assert_eq!(stderr("tests/run/nib/far_near.nib", &["--target", "x86-code32", "-Wno-target-width"]), "");
     assert_eq!(stderr("tests/run/nib/flat_arith.nib", &flat), "");
 }
 
@@ -348,4 +348,25 @@ fn test_the_generated_header_is_far_only_where_far_code_is() {
     assert!(header(&[]).contains("extern short __far __cdecl weight(short value);"));
     let flat = header(&["--target", "x86-code32"]);
     assert!(flat.contains("extern short __cdecl weight(short value);") && !flat.contains("__far"), "{flat}");
+}
+
+/// A flat target's block clears and copies are `rep stos`/`rep movs` on dwords through DS=ES, as code16's
+/// are through ES: the lowering took segment operands and 16-bit counts (a departure row), and a constant
+/// fill or copy on code32 was a loop. Neither sets a segment register here.
+#[test]
+fn test_code32_block_operations_are_rep_string_instructions_without_segments() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("m.c");
+    std::fs::write(&source, "char a[300], b[300];\nvoid clear(void) { unsigned i; for (i = 0; i < 300; i++) a[i] = 0; }\nvoid copy(void) { int i; for (i = 0; i < 300; i++) b[i] = a[i]; }\nint main(void) { clear(); copy(); return b[5]; }\n").unwrap();
+    let listing = |target: &str| {
+        let out = scratch.path().join(format!("{target}.asm"));
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-c")).arg(&source).args(["--target", target, "-O2", "-S", "-o", out.to_str().unwrap()]).output().unwrap();
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+        std::fs::read_to_string(out).unwrap()
+    };
+    let flat = listing("x86-code32");
+    assert!(flat.contains("rep stosd") && flat.contains("rep movsd"), "{flat}");
+    assert!(!flat.contains("DGROUP") && flat.lines().all(|line| !matches!(line.trim(), "pop es" | "push es") && !line.trim().ends_with(", es")), "{flat}");
+    let real = listing("x86-code16");
+    assert!(real.contains("rep stosd") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
 }

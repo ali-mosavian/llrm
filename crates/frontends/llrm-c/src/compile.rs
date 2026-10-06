@@ -1103,6 +1103,18 @@ mod tests {
         assert!(body.iter().any(|line| line.starts_with("add eax, ")) && body.iter().any(|line| line == "movzx eax, ax"), "{body:#?}");
     }
 
+    /// The sieve's inner loop indexes its array with a word counter, and the counter's register is the
+    /// index: the zero extension of a word whose register is zero above it was a copy into another one
+    /// that the store read, one more instruction a trip than code16's `[bp+si]`.
+    #[test]
+    fn test_code32_indexes_through_the_counter_not_a_copy_of_it() {
+        let body = flat_body("sieve", "bench_sieve");
+        let from = body.iter().position(|line| line.starts_with("imul ")).expect("the counter starts as i*i");
+        let loop_ = &body[from..];
+        let copies = |line: &&String| line.starts_with("movzx e") || line.split_once(' ').is_some_and(|(operation, operands)| operation == "mov" && operands.split_once(", ").is_some_and(|(to, from)| to.len() == 3 && from.len() == 3 && to.starts_with('e') && from.starts_with('e')));
+        assert!(loop_.iter().filter(copies).count() == 0, "{loop_:#?}");
+    }
+
     /// A loop over `int *`: the pointer, the index and the sum are dwords in 32-bit registers,
     /// addressed `[base+index]` with no segment, selector or 16-bit register.
     #[test]
