@@ -44,7 +44,7 @@ fn compiled(inlined: bool) -> Vec<Rc<omf::Record>> {
     let pipeline = llrm_transforms::pipeline::Options { inline: threshold, ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("compiles");
-    omf::parse(&crate::compile::object(&module, Path::new("probe.nib"), CodeLayout::OneSegment).expect("writes")).expect("parses")
+    omf::parse(&crate::compile::object(&module, Path::new("probe.nib"), CodeLayout::OneSegment, llrm_target::object::Format::Omf).expect("writes")).expect("parses")
 }
 
 /// Each source parameter, local and module variable with its Nib type; no

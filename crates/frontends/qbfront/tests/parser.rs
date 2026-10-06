@@ -944,8 +944,8 @@ fn array_bounds_are_typed_descriptor_calls_not_array_element_syntax() {
     )
     .unwrap();
     let hir = compile(&module, "bounds", Dialect::QuickBasic45, "qb45").unwrap();
-    assert!(hir.contains("\"callee\":\"B$LBND\""));
-    assert!(hir.contains("\"callee\":\"B$UBND\""));
+    // Bounds DIM stated are folded (#380); no call remains.
+    assert!(!hir.contains("B$LBND") && !hir.contains("B$UBND"));
 }
 
 #[test]
@@ -966,7 +966,7 @@ fn array_order_is_an_explicit_compiler_option() {
 }
 
 #[test]
-fn huge_array_option_uses_the_measured_hary_contract() {
+fn huge_array_option_addresses_elements_inline_not_through_hary() {
     // PDHUGE wrapped its 80,802-byte index at 64 KiB because /Ah never
     // reached semantic lowering and the descriptor selector never advanced.
     let module = parse(
@@ -979,14 +979,14 @@ fn huge_array_option_uses_the_measured_hary_contract() {
     let huge = compile_with_options(&module, "huge", Dialect::Pds71, "pds71", &Options { huge_arrays: true, ..Options::default() })
     .unwrap();
     assert!(!ordinary.contains("\"callee\":\"B$HARY\""));
-    assert!(huge.contains("\"callee\":\"B$HARY\""));
-    assert!(huge.contains("\"address\":\"huge\""));
+    // #371: the element is a pointer plus a 32-bit offset, no B$HARY.
+    assert!(!huge.contains("B$HARY"));
     assert!(huge.contains("\"type\":1,\"value\":514"));
     assert_ne!(ordinary, huge);
 }
 
 #[test]
-fn checked_array_option_routes_static_access_through_hary() {
+fn checked_array_option_checks_static_access_in_code_not_through_hary() {
     // PDRTC printed its no-error sentinel when /D was dropped and the
     // out-of-range static-array store was lowered as unchecked arithmetic.
     let module = parse("dim a(1) as integer\na(2) = 7\n", Dialect::Pds71).unwrap();
@@ -995,8 +995,9 @@ fn checked_array_option_routes_static_access_through_hary() {
     let checked = compile_with_options(&module, "checked", Dialect::Pds71, "pds71", &Options { checked_arrays: true, ..Options::default() })
     .unwrap();
     assert!(!ordinary.contains("\"callee\":\"B$HARY\""));
-    assert!(checked.contains("\"callee\":\"B$HARY\""));
-    assert!(checked.contains("\"address\":\"huge\""));
+    // #371: the subscript is compared in code and raises ERROR 9.
+    assert!(!checked.contains("B$HARY"));
+    assert_ne!(ordinary, checked);
 }
 
 #[test]
