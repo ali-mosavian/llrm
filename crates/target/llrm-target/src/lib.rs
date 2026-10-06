@@ -2,6 +2,7 @@
 //! A target crate supplies the data; the passes read the type.
 
 pub mod addressing;
+pub mod calling;
 pub mod layout;
 pub mod machine;
 pub mod object;
