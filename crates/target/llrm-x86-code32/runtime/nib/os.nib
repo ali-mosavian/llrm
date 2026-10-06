@@ -25,3 +25,12 @@ const STANDARD_OUTPUT: i16 = 1
 pub fn write(text: *near u8, length: usize) -> void:
     unsafe:
         write_file(STANDARD_OUTPUT, text, length)
+
+# The colour text screen: 80x25 cells of a character and an attribute. Its physical address is a
+# linear address in the flat, zero-based space, so it is the pointer as it is.
+const SCREEN = PHYSICAL_TEXT_SCREEN
+
+pub fn text_screen() -> *mut u8:
+    unsafe:
+        let screen: *mut u8 = SCREEN
+        return screen

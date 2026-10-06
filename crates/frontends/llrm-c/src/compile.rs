@@ -238,7 +238,12 @@ pub fn main(argv: &[String]) -> i32 {
         let text = if args.source.extension().and_then(|one| one.to_str()) == Some("cgs") {
             fs::read_to_string(&args.source)?
         } else {
-            llrm_core::support::debug::timed("frontend wccq", || recorded_for(&args.source, &args.include, args.flags.debug, &args.watcom, args.codegen.arch.name() == "x86-code32"))?
+            llrm_core::support::debug::timed("frontend wccq", || {
+                // The target's physical addresses reach the program as `PHYSICAL_<NAME>`.
+                let defines: Vec<String> = args.codegen.arch.physical_addresses().iter().map(|(name, address)| format!("-dPHYSICAL_{}=0x{address:X}UL", name.to_uppercase())).collect();
+                let switches: Vec<&str> = args.watcom.iter().copied().chain(defines.iter().map(String::as_str)).collect();
+                recorded_for(&args.source, &args.include, args.flags.debug, &switches, args.codegen.arch.name() == "x86-code32")
+            })?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
         let module = args

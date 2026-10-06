@@ -212,3 +212,17 @@ fn test_a_length_narrowed_implicitly_warns() {
     assert_eq!(flat, ["3:warning: usize is 4 bytes and u16 holds fewer: write u16(...) to cut it", "4:warning: usize is 4 bytes and u8 holds fewer: write u8(...) to cut it", "7:warning: usize is 4 bytes and u16 holds fewer: write u16(...) to cut it"]);
     assert_eq!(warned(Default::default()), ["4:warning: usize is 2 bytes and u8 holds fewer: write u8(...) to cut it"]);
 }
+
+/// The machine's physical addresses are one fact in the platform description; a module names one as
+/// `PHYSICAL_<NAME>` (the text screen's video memory was typed as 0xB8000000 in each program).
+#[test]
+fn test_a_module_names_the_targets_physical_addresses() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let path = directory.path().join("p.nib");
+    std::fs::write(&path, "const SCREEN = PHYSICAL_TEXT_SCREEN\n\nfn main() -> i16:\n    print(i32(SCREEN))\n    return 0\n").expect("written");
+    let frontend = crate::Frontend::default();
+    let hir = crate::compile_file(&path, &frontend).unwrap_or_else(|(_, error)| panic!("{}", error.message));
+    let executed = llrm_core::hir::execute::run(&llrm_core::hir::codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
+    assert_eq!(executed.output, "753664\n");
+    assert!(crate::Frontend { physical: Vec::new(), ..Default::default() }.physical_constants().is_empty());
+}

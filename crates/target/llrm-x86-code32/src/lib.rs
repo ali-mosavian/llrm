@@ -49,6 +49,10 @@ impl llrm_target::Target for Code32 {
         &["cdecl32"]
     }
 
+    fn physical_addresses(&self) -> Vec<(String, u64)> {
+        llrm_x86::physical_addresses()
+    }
+
     fn runtime(&self, language: &str) -> Option<llrm_target::runtime::Description> {
         (language == "nib").then_some(llrm_target::runtime::Description {
             directory: concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/nib"),
