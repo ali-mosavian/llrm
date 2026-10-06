@@ -1,5 +1,7 @@
 # The operating system: what only assembly reaches (dos.asm). A file call
-# returns what DOS does, or its error code negated.
+# returns what DOS does, or its error code negated; `read` and `write_file` return a byte count or the
+# negated error code as an i32 on every target (one call moves at most i32 max bytes), so a program
+# that names the type is portable.
 
 @extern("cdecl16", name="N$OOPN")
 pub fn open(name: *far char, mode: u8) -> i16

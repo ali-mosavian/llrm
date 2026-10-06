@@ -12,12 +12,14 @@ fn main() -> i16:
     unsafe:
         let path: *far char = &name
         let out = os.create(path)
-        print(os.write_file(out, &buffer, 40000))
+        let wrote: i32 = os.write_file(out, &buffer, 40000)
+        print(wrote)
         os.close(out)
         for i in 0..40000:
             buffer[i] = 0
         let handle = os.open(path, 0)
-        print(os.read(handle, &mut buffer, 40000))
+        let got: i32 = os.read(handle, &mut buffer, 40000)
+        print(got)
         os.close(handle)
         print(os.read(99, &mut buffer, 10) < 0)
     let mut check: i32 = 0
