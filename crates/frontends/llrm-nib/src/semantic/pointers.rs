@@ -18,7 +18,7 @@ impl TypeRegistry {
                 id
             }
         };
-        TypeName::Pointer { type_id, width: if far { 4 } else { 2 }, mutable }
+        TypeName::Pointer { type_id, far, width: self.pointer_width(far), mutable }
     }
 
     /// `spec` when it is already registered: a primitive, a struct, or a raw
@@ -36,7 +36,7 @@ impl TypeRegistry {
                 let mutable = name.ends_with(" mut");
                 let spelled = format!("*{distance} {}{}", if mutable { "mut " } else { "" }, self.types[(target.id() - 1) as usize].name);
                 let type_id = *self.raw_pointers.get(&spelled)?;
-                Some(ElementType::Scalar(TypeName::Pointer { type_id, width: if distance == "near" { 2 } else { 4 }, mutable }))
+                Some(ElementType::Scalar(TypeName::Pointer { type_id, far: distance != "near", width: self.pointer_width(distance != "near"), mutable }))
             }
             _ => None,
         }
@@ -115,8 +115,9 @@ impl FunctionCompiler<'_> {
         self.keep_lent(&kept);
         let TypeName::Pointer {
             type_id: pointer_id,
-            width,
+            far,
             mutable: writes,
+            ..
         } = pointer
         else {
             unreachable!("a raw pointer type")
@@ -127,7 +128,7 @@ impl FunctionCompiler<'_> {
         if mutable {
             self.place_writable(operand, span)?;
         }
-        if width == 2 && !self.in_dgroup(operand) {
+        if !far && self.types.sizes.segmented && !self.in_dgroup(operand) {
             return Err(Diagnostic::new(
                 span,
                 "a near pointer reaches only static data; take a *far one",
@@ -230,7 +231,7 @@ impl FunctionCompiler<'_> {
                 let target = self.types.raw_target(type_name)?;
                 let name = format!("*{name} {}{}", if mutable { "mut " } else { "" }, self.types.types[(target.id() - 1) as usize].name);
                 let id = *self.types.raw_pointers.get(&name)?;
-                Some(TypeName::Pointer { type_id: id, width: if name.starts_with("*far") { 4 } else { 2 }, mutable })
+                Some(TypeName::Pointer { type_id: id, far: name.starts_with("*far"), width: self.types.pointer_width(name.starts_with("*far")), mutable })
             }
             ("cast", [target]) => {
                 let TypeName::Pointer { type_id: pointer_id, mutable, .. } = type_name else {
@@ -240,7 +241,7 @@ impl FunctionCompiler<'_> {
                 let target = self.types.resolved_element(target)?;
                 let name = format!("*{distance} {}{}", if mutable { "mut " } else { "" }, self.types.types[(target.id() - 1) as usize].name);
                 let id = *self.types.raw_pointers.get(&name)?;
-                Some(TypeName::Pointer { type_id: id, width: if distance == "near" { 2 } else { 4 }, mutable })
+                Some(TypeName::Pointer { type_id: id, far: distance != "near", width: self.types.pointer_width(distance != "near"), mutable })
             }
             _ => None,
         }

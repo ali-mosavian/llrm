@@ -42,7 +42,7 @@ impl TypeRegistry {
             fields.push((field.name.clone(), BitField { low, bits, read }));
             low += bits;
         }
-        if low > width(backing) * 8 {
+        if low > scalar_width(backing) * 8 {
             return Err(Diagnostic::new(
                 declaration.span,
                 format!(
@@ -57,13 +57,13 @@ impl TypeRegistry {
             type_id,
             &declaration.name,
             "integer",
-            width(backing),
+            scalar_width(backing),
             Some(false),
             "none",
         ));
         let type_name = TypeName::Bits {
             type_id,
-            width: width(backing) as u8,
+            width: scalar_width(backing) as u8,
         };
         self.bits.insert(
             declaration.name.clone(),
@@ -117,7 +117,7 @@ impl TypeRegistry {
             }
             // A bits struct, like an enum, is as wide as it is declared.
             if let Some(layout) = self.bits.get(name) {
-                return Ok((8 * width(layout.backing), layout.type_name));
+                return Ok((8 * scalar_width(layout.backing), layout.type_name));
             }
         }
         match self.resolve_element(spec, span)? {
@@ -255,7 +255,7 @@ impl FunctionCompiler<'_> {
         backing: TypeName,
         field: BitField,
     ) -> TypedOperand {
-        let backing_bits = width(backing) * 8;
+        let backing_bits = scalar_width(backing) * 8;
         let value = if field.signed() {
             // To the top, then an arithmetic shift down brings the sign.
             let signed = signed_of(backing);
@@ -319,7 +319,7 @@ impl FunctionCompiler<'_> {
             backing,
         );
         let value = self.bit_shift("shl", value, field.low, backing);
-        let kept = !(field.mask() << field.low) & ((1_i64 << (width(backing) * 8)) - 1);
+        let kept = !(field.mask() << field.low) & ((1_i64 << (scalar_width(backing) * 8)) - 1);
         let cleared = self.binary_op(
             "and",
             packed,

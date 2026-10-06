@@ -542,7 +542,7 @@ impl FunctionCompiler<'_> {
                 Binding { type_: BindingType::Struct(source.struct_id), mutable: false, storage: Storage::Reference(pointer) }
             }
             Subject::Scalar(operand, type_name, None) => {
-                let place = self.local_place(name, type_id(*type_name), width(*type_name), false);
+                let place = self.local_place(name, type_id(*type_name), width(self.types.sizes, *type_name), false);
                 self.emit(
                     "store",
                     Vec::new(),

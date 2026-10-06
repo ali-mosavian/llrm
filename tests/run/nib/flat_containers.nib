@@ -1,0 +1,22 @@
+# flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+# Dictionaries, vectors of strings, formatting and floats on both targets.
+struct Point:
+    x: i16
+    y: i16
+
+fn main() -> i16:
+    let mut counts: dict[string, i16] = {}
+    let words = ["a", "bb", "a", "ccc", "bb", "a"]
+    for w in words:
+        counts[w.copy()] = counts.get(w, 0) + 1
+    print(counts.get("a", 0))
+    print(counts.get("bb", 0))
+    print(counts.len)
+    let pts: vec[Point] = [Point(x=1, y=2), Point(x=3, y=4)]
+    let mut acc: i16 = 0
+    for p in pts:
+        acc += p.x * p.y
+    print(f"acc={acc} half={f32(acc) / 2.0}")
+    let d: f64 = 1.0 / 3.0
+    print(f"{d}")
+    return 0

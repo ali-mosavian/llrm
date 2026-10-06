@@ -27,6 +27,8 @@ Known departures today, each to be removed:
 | `llrm-core` `select.rs`, `omfwrite.rs`: x86 instruction encoding and the OMF writer, in `llrm-core` and keyed by a described bitness (`At{ip,bits}`) | the encoder belongs in the x86 family layer | PR 5's encoder half (code32-prep, D) |
 | `llrm-core` `select::emit`: sizes every instruction as 16-bit code (`At::bits16`), for the passes that price code (allocator, peephole, jumps, spiller) | `-Os` for code32 is priced in the wrong mode | the same PR: passes ask the target's encoding |
 | `llrm-core` `flow.rs`: `LoopSlots` is dropped where `FrameRegisters.slot != 2` | its slots are words and it parks BP at word width | a `LoopSlots` that reads the slot width and frame register (code32 session, next) |
+| `llrm-nib` `Frontend::default()`, the LSP and `std.os` shown to an editor | they use code16's layout, conventions and OS layer | the editor learns the project's target |
+| `llrm-nib` heap and `os.more`: blocks under 64 KB on code32 | sizes are `u16` | a size type that is the target's (usize-like) |
 | `llrm-core` `isel.rs` string operations (`memcpy`/`memset` lowering): segment operands, 16-bit counts | code16-shaped lowering | code32's flat rows and the `segmented()`/`address_bytes()` reading (code32 session) |
 
 ## Principle: a target is description
@@ -276,7 +278,8 @@ and not a flag. A target without it has no rows, so its passes find nothing.
 | `int`/pointer sizes, `medium_model()` clobbers | `raise_hir.rs:14-122` | target's type widths and ABI |
 | `far`, `huge`, `__based`, call distance in `llrm-c` | `hir.rs`, `translate.rs` (~90) | collapse; refuse `__based/__segment/__huge` |
 | Flags pick the machine: `--cpu`, `--machine` | `driver/flags.rs:163-230` | `--target` selects the `Target` |
-| QB, Nib, BC | `llrm-qb`, `llrm-nib`, `llrm-bc*` | pinned to code16 |
+| QB, BC | `llrm-qb`, `llrm-bc*` | pinned to code16 |
+| Nib | `llrm-nib` | code16 and code32: layout, conventions and OS layer come from the target (`runtime/nib/`) |
 
 ## Interface
 

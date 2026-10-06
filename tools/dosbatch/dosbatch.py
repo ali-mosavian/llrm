@@ -115,7 +115,7 @@ def target_link(target: str) -> dict:
         return tomllib.load(text)["link"]
 
 
-def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = ()) -> tuple[Path, ...]:
+def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = ()) -> tuple[Path, ...]:
     """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline, linked as
     `target` says; the files its executable needs beside it (an extender's loader)."""
     link = target_link(target)
@@ -133,11 +133,27 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
             out.append(path)
         return out
 
-    first, last, final = objects(link["first"]), objects(link["last"]), objects(link["final"])
+    first, last, final = objects(runtime[0] if runtime else link["first"]), objects(runtime[1] if runtime else link["last"]), objects(link["final"])
     mapping = ["option", f"map={listing}"] if listing else []
     files = lambda paths: [word for one in paths for word in ("file", str(one))]  # noqa: E731
-    _host([str(BIN / "jwlink"), "option", "quiet", *mapping, *before, *link["format"], "name", str(exe), *map(fill, link.get("options", [])), *files(first), "file", str(obj), *files(last), *after, *files(final)])
+    _host([str(BIN / "jwlink"), "option", "quiet", *mapping, *before, *link["format"], "name", str(exe), *map(fill, link.get("options", [])), *files(first), "file", str(obj), *files(objects_after), *files(last), *after, *files(final)])
     return (Path(fill(link["loader"])),) if "loader" in link else ()
+
+
+def nib_runtime(target: str) -> tuple[Path, list[str]]:
+    """The directory of `target`'s Nib OS layer, and the start-up and OS routines it names (`llrm-nib --os-layer`)."""
+    directory = Path(subprocess.run([str(BIN / "llrm-nib"), "--target", target, "--os-layer", "directory"], capture_output=True, text=True, check=True).stdout.strip())
+    names = [subprocess.run([str(BIN / "llrm-nib"), "--target", target, "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip() for field in ("start", "dos")]
+    return directory, [str((directory / name).relative_to(ROOT)) for name in names]
+
+
+def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level: str, foreign: tuple[Path, ...]) -> tuple[Path, ...]:
+    """A Nib program for `target`: its object, `runtime.nib` cut to what the program and the OS layer name, linked as the target says."""
+    _, (start, dos) = nib_runtime(target)
+    runtime = work / (obj.stem + "R.obj")
+    used = [word for one in (obj, *foreign) for word in ("--used-by", str(one))]
+    _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), "--target", target, "-o", str(runtime), level, "--procedure-segments", *used])
+    return link_target(target, obj, exe, work, runtime=([start], [dos]), objects_after=(runtime, *foreign))
 
 
 def link_c(obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = ()) -> None:

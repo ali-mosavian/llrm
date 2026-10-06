@@ -32,7 +32,7 @@ pub fn dumped(source: &Path, output: &Path, frontend: &super::Frontend, options:
     write(&output.join("03-hir.json"), &hir::encode(&program, Some(2)).map_err(|error| error.to_string())?)?;
     let stages = output.join("mir");
     std::fs::create_dir_all(&stages).map_err(|error| error.to_string())?;
-    nib::assembled(&program, entry, &codegen::Options { dump: Some(stages), ..options.clone() })?;
+    nib::assembled(&program, entry, &codegen::Options { dump: Some(stages), ..options.clone() }, &frontend.os)?;
     write(
         &output.join("README.txt"),
         "Nib frontend stage dumps\n========================\n\n\
@@ -55,7 +55,7 @@ mod tests {
     use llrm_core::support::pyjson::{self, Json};
 
     fn options() -> llrm_core::driver::Options {
-        llrm_core::driver::Options { dump: None, ..llrm_driver::code16_options(crate::compile::machine()) }
+        llrm_core::driver::Options { dump: None, ..llrm_driver::code16_options(crate::compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) }
     }
 
     #[test]

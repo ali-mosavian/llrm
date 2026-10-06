@@ -1,4 +1,4 @@
-reason = "shared remat of copied loads, a stable load folded into its single use (spiller::_folded_reads) and across writes its cell survives (peephole); queens c and parity/qbsp nib trade an instruction for memory operands at lower executed work (queens c -O2/-Os 271291 -> 270819, qbsp nib -O2 440 -> 438, -Os 441 -> 439), owner-approved"
+reason = "hoist is priced against the register file (#529): grep.bas -Os 989 to 976 B"
 blessed = "2026-10-06"
 
 [bas.O2]
@@ -8,7 +8,7 @@ bss_bytes = 0
 kernel_ms = 3887.2017
 
 [bas.Os]
-code_bytes = 989
+code_bytes = 976
 data_bytes = 113
 bss_bytes = 0
 kernel_ms = 3887.2018

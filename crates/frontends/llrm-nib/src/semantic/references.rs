@@ -9,7 +9,7 @@ impl TypeRegistry {
     pub(super) fn reference(&mut self, target: ElementType, mutable: bool) -> TypeName {
         let type_id = self.pointer(target.id(), 0);
         self.referents.insert(type_id, target);
-        TypeName::Pointer { type_id, width: 4, mutable }
+        TypeName::Pointer { type_id, far: true, width: self.pointer_width(true), mutable }
     }
 
     /// What a reference type refers to; `None` for any other type.

@@ -21,7 +21,7 @@ fn object_name(function: &model::Function) -> String {
 
 /// Compile one Nib module: the HIR emitted as MIR, optimized, then selected
 /// and assembled whole.
-pub fn assembled(program: &model::Program, entry: &str, options: &llrm_core::driver::Options) -> Result<masm::Module, String> {
+pub fn assembled(program: &model::Program, entry: &str, options: &llrm_core::driver::Options, os: &crate::Os) -> Result<masm::Module, String> {
     if program.modules.len() != 1 {
         return Err("native Nib compilation currently accepts one module".to_owned());
     }
@@ -40,19 +40,9 @@ pub fn assembled(program: &model::Program, entry: &str, options: &llrm_core::dri
         None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
     }
     let mut compiled = llrm_core::driver::compiled(&public, options)?.swap_remove(0);
-    compiled.stack = llrm_core::backend::stackusage::stack_to_add(&compiled, STACK_BASE)?;
+    compiled.stack = llrm_core::backend::stackusage::stack_to_add(&compiled, os.stack_base)?;
     Ok(compiled)
 }
-
-/// What Nib's runtime says of its stack: `runtime/stack.toml`, the word start-up fills and the
-/// panic it calls.
-pub fn stack_check() -> model::StackCheck {
-    let row = toml::Value::Table(include_str!("runtime/stack.toml").parse().expect("stack.toml parses"));
-    model::StackCheck::from_toml(&row).expect("stack.toml states a stack check")
-}
-
-/// The stack `runtime/start.asm` reserves; the object's own adds to it.
-pub const STACK_BASE: i64 = 4096;
 
 /// Makes each export no symbol in `used` names internal, so that it and
 /// what only it calls are dropped: a linker's own elimination keeps
@@ -68,10 +58,10 @@ pub fn keep_exports(program: &mut model::Program, used: &BTreeSet<String>) {
 /// The processor objects are compiled for.
 pub const CPU: &str = "486";
 
-/// The built-in machine, priced for `CPU`.
-pub fn machine() -> llrm_core::abi::machine::Machine {
-    // start.asm zeroes the far uninitialised data, as it does the near.
-    llrm_core::abi::machine::Machine { cpu: CPU.to_owned(), far_bss: true, ..llrm_core::abi::machine::BUILT_IN.clone() }
+/// `target`'s machine, priced for `CPU`, with the far uninitialised data zeroed where the
+/// target's OS layer under the runtime says its start-up does.
+pub fn machine(target: &dyn llrm_target::Target, os: &crate::Os) -> llrm_core::abi::machine::Machine {
+    llrm_core::abi::machine::Machine { cpu: CPU.to_owned(), far_bss: os.far_bss, ..target.machine() }
 }
 
 /// `module` as an OMF object, its code laid out as `layout` says.

@@ -39,7 +39,7 @@ impl<'a> FunctionCompiler<'a> {
             .into_iter()
             .collect();
         let instruction = self.emit("call", results.clone(), operands, Some(name.into()));
-        self.calls.push(hir::CallSite::new(instruction, callee, count as u32, Abi::Cdecl16));
+        self.calls.push(hir::CallSite::new(instruction, callee, count as u32, self.types.native));
         results.first().map(|one| hir::Operand::Value(*one))
     }
 
@@ -94,7 +94,7 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     pub(super) fn place(&mut self, name: &str, type_name: TypeName, mutable: bool) -> u32 {
-        self.local_place(name, type_id(type_name), width(type_name), mutable)
+        self.local_place(name, type_id(type_name), width(self.types.sizes, type_name), mutable)
     }
 
     pub(super) fn local_place(&mut self, name: &str, type_id: u32, extent: u32, mutable: bool) -> u32 {
@@ -191,7 +191,7 @@ impl<'a> FunctionCompiler<'a> {
             type_id: type_id(type_name),
             mutable: false,
             offset: 0,
-            extent: width(type_name),
+            extent: width(self.types.sizes, type_name),
             storage: "module",
             symbol,
             volatile: false,

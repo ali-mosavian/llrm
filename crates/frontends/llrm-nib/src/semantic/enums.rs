@@ -193,7 +193,7 @@ impl TypeRegistry {
             .iter()
             .any(|one| !one.fields.is_empty());
         let element = if payload {
-            let base = width(tag);
+            let base = scalar_width(tag);
             let mut fields = BTreeMap::from([(
                 TAG.to_owned(),
                 FieldLayout {
@@ -211,7 +211,7 @@ impl TypeRegistry {
                     let (field_layout, _, units) = self.place_field(field, offset, 2)?;
                     fields.insert(format!("${}.{}", variant.name, field.name), field_layout);
                     layout.fields.push((field.name.clone(), field_layout));
-                    arrays.extend(units.into_iter().filter(|(_, _, count)| *count > 1).map(|(start, type_name, count)| (start, start + width(type_name) * count)));
+                    arrays.extend(units.into_iter().filter(|(_, _, count)| *count > 1).map(|(start, type_name, count)| (start, start + scalar_width(type_name) * count)));
                     offset = field_layout.offset + self.field_width(field_layout);
                 }
                 size = size.max(offset);
@@ -238,13 +238,13 @@ impl TypeRegistry {
                 type_id,
                 &declaration.name,
                 "integer",
-                width(tag),
+                scalar_width(tag),
                 Some(false),
                 "none",
             ));
             ElementType::Scalar(TypeName::Enum {
                 type_id,
-                width: width(tag) as u8,
+                width: scalar_width(tag) as u8,
             })
         };
         self.enums.insert(

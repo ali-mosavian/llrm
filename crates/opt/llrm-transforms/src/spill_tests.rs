@@ -380,3 +380,28 @@ exit:
 ";
     assert_eq!(_peak(text, Room { registers: 4, across_call: 2, ..Room::default() }), 0, "%n, %i, %v and %u fit four registers; %a, %p and %q are [bp+disp]");
 }
+
+/// A frame object's address cast to the stack's space is a displacement from
+/// BP, made where it is read, as the alloca itself is. Counted as a value, one
+/// held across a loop forecast a spill the allocator never made, and hoist
+/// refused to leave it before the loop: scanner.nib +14 B at -Os (#529).
+#[test]
+fn test_a_frame_address_in_the_stack_space_takes_no_register_across_a_loop() {
+    let text = "declare void @g(ptr addrspace(5))
+define i16 @f(i16 %n) {
+entry:
+  %slot = alloca [8 x i8]
+  %s = addrspacecast ptr %slot to ptr addrspace(5)
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %j, %loop ]
+  call void @g(ptr addrspace(5) %s)
+  %j = add i16 %i, 1
+  %more = icmp ult i16 %j, %n
+  br i1 %more, label %loop, label %exit
+exit:
+  ret i16 %j
+}
+";
+    assert_eq!(_peak(text, Room { registers: 2, across_call: 2, ..Room::default() }), 0);
+}

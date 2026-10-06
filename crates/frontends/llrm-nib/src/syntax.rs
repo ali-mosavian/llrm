@@ -79,9 +79,11 @@ pub enum TypeName {
     Function {
         type_id: u32,
     },
-    /// `*far [mut] T` or `*near [mut] T`: its width, 4 or 2, and its HIR type.
+    /// `*far [mut] T` or `*near [mut] T`: whether it is a far one, its width in bytes (the
+    /// target's: 2 and 4 in real mode, 4 and 4 flat), and its HIR type.
     Pointer {
         type_id: u32,
+        far: bool,
         width: u8,
         mutable: bool,
     },
@@ -182,6 +184,8 @@ pub struct Module {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Abi {
     Cdecl16,
+    /// The same convention on the flat target: stack arguments in dwords, EAX results.
+    Cdecl32,
     /// Arguments pushed first to last; the callee removes them.
     Pascal16,
     /// Entered by INT or an IRQ, with nothing passed, and left by `iret`.
@@ -254,6 +258,7 @@ impl Abi {
     pub fn named(name: &str) -> Option<Self> {
         match name {
             "cdecl16" => Some(Self::Cdecl16),
+            "cdecl32" => Some(Self::Cdecl32),
             "pascal16" => Some(Self::Pascal16),
             "interrupt16" => Some(Self::Interrupt16),
             _ => Basic::ALL.into_iter().find(|one| one.name() == name).map(Self::Basic),
@@ -263,6 +268,7 @@ impl Abi {
     pub fn name(self) -> &'static str {
         match self {
             Self::Cdecl16 => "cdecl16",
+            Self::Cdecl32 => "cdecl32",
             Self::Pascal16 => "pascal16",
             Self::Basic(basic) => basic.name(),
             Self::Interrupt16 => "interrupt16",
@@ -272,13 +278,13 @@ impl Abi {
     /// The object symbol of `name`: C's `_name`, Pascal's and BASIC's `NAME`.
     pub fn symbol(self, name: &str) -> String {
         match self {
-            Self::Cdecl16 | Self::Interrupt16 => format!("_{name}"),
+            Self::Cdecl16 | Self::Cdecl32 | Self::Interrupt16 => format!("_{name}"),
             Self::Pascal16 | Self::Basic(_) => name.to_ascii_uppercase(),
         }
     }
 
     pub fn callee_cleans(self) -> bool {
-        self != Self::Cdecl16
+        !matches!(self, Self::Cdecl16 | Self::Cdecl32)
     }
 
     /// Where a float result goes, in the HIR's words: BASIC's through a
