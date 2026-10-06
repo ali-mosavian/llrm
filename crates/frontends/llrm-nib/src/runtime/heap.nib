@@ -112,26 +112,33 @@ fn fit(size: usize) -> *near mut u8:
         class += 1
     return heads[class]
 
-# The heap `size` bytes longer, or not when DOS or DGROUP has no more.
+# The heap `size` bytes longer, or not when DOS or DGROUP has no more. A grant that follows the last
+# one extends the heap; any other (the extender's next arena) starts a new run of blocks, which no
+# block of the old one merges with: the old run keeps its end block.
 fn grow(size: usize) -> void:
-    let mut wanted = size > GROWTH ? size : GROWTH
+    # An arena's own end block takes the last 4 bytes of its grant (a multiple of 4, as sizes are).
+    let mut wanted = size + 4 > GROWTH ? size + 4 : GROWTH
     unsafe:
         # The first grant also holds the end block; later ones reuse it.
         let first = end.is_null()
         let extra: usize = first ? HEADER : 0
         let mut more = os.more(wanted + extra)
         if more.is_null():
-            wanted = size
+            wanted = size + 4
             more = os.more(wanted + extra)
             if more.is_null():
                 return
-        let block = first ? more : end
-        if first:
+        let chained = !first && more != end.offset(isize(HEADER))
+        let block = (first || chained) ? more : end
+        let mut length = wanted
+        if first || chained:
             *header(block) = BEFORE_USED
-        end = block.offset(wanted)
+        if chained:
+            length = wanted - 4
+        end = block.offset(isize(length))
         *header(end) = USED | BEFORE_USED
-        *header(block) = wanted | USED | (*header(block) & BEFORE_USED)
-        release(block.offset(HEADER))
+        *header(block) = length | USED | (*header(block) & BEFORE_USED)
+        release(block.offset(isize(HEADER)))
 
 # Frees all of `block` past `size` bytes, when that is a block's worth.
 fn trim(block: *near mut u8, size: usize) -> void:
