@@ -13,6 +13,8 @@ assembler_defines = ["stack_base:STACK_BYTES"]
 watcom_cpu = "386"
 # What the front end calls `int`, in bytes: the C ABI's, which the data layout does not state.
 int_bytes = 4
+# The calling convention the front end compiles C under (`calling.toml`): -ecc is cdecl, not Watcom's registers.
+convention = "cdecl32"
 # The same switches but the model, packing and Borland's headers. Its C ABI is Open Watcom's 386
 # flat one (`calling.toml`): structs laid out at -zp4, cdecl as -ecc.
 flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-ecc", "-s", "-zl", "-zq"]

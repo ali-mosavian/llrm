@@ -6,6 +6,7 @@
 //!
 //! Python's `eval` returns one of a dozen types; that union is `Got`.
 
+use llrm_target::calling::Convention;
 use std::collections::BTreeSet;
 
 
@@ -102,9 +103,16 @@ pub(crate) fn classes_for(flat: bool, type_: &str) -> Option<&'static str> {
     })
 }
 
-/// A call's contract in Borland's medium model: stack arguments, the
-/// result in AX or DX:AX, and `pushed` bytes its caller or it pops.
-pub(crate) fn medium_model(name: String, caller_pops: bool, pushed: i64) -> runtime::Contract {
+/// A call's contract under `convention`, a target's C ABI (`calling.toml`): stack arguments, what it
+/// clobbers, what it keeps, and `pushed` bytes its caller or it pops. `Reg` names the 16-bit
+/// registers; each stands for its family, so `eax` is `ax`, and the x87 stack is not one.
+pub(crate) fn contract(convention: &Convention, name: String, caller_pops: bool, pushed: i64) -> runtime::Contract {
+    let family = |register: &str| -> Option<runtime::Reg> {
+        let word = if register.len() == 3 && register.starts_with('e') { &register[1..] } else { register };
+        runtime::Reg::from_value(word).ok()
+    };
+    let kept = |kept: &llrm_target::calling::Kept| kept.full.to_ascii_uppercase();
+    let results = |class: &str| convention.results.get(class).map(|one| one.join(":").to_ascii_uppercase());
     runtime::Contract {
         name,
         cleanup: Some(if caller_pops { 0 } else { pushed }),
@@ -114,18 +122,15 @@ pub(crate) fn medium_model(name: String, caller_pops: bool, pushed: i64) -> runt
         error_handling: false,
         writes: runtime::Memory::Any,
         reads: runtime::Memory::Any,
-        clobbers: BTreeSet::from([
-            runtime::Reg::Ax,
-            runtime::Reg::Bx,
-            runtime::Reg::Cx,
-            runtime::Reg::Dx,
-            runtime::Reg::Es,
-            runtime::Reg::Flags,
-        ]),
+        clobbers: convention.clobbered.iter().filter_map(|register| family(register)).collect(),
         established: true,
-        evidence: "Borland medium model: stack arguments, result in AX or DX:AX; \
-                   SI, DI, BP and DS kept as 16-bit registers"
-            .to_owned(),
+        evidence: format!(
+            "{}: stack arguments, result in {} or {}; {} kept",
+            convention.name,
+            results("1").unwrap_or_default(),
+            results("8").unwrap_or_default(),
+            convention.preserved.iter().map(kept).collect::<Vec<_>>().join(", ")
+        ),
         documented: None,
         inputs: Some(BTreeSet::new()),
         direct_inputs: None,
@@ -138,17 +143,51 @@ pub(crate) fn medium_model(name: String, caller_pops: bool, pushed: i64) -> runt
     }
 }
 
-/// A call's contract under cdecl32: stack arguments, the result in EAX (EDX:EAX
-/// for an i64), EBX, ESI, EDI and EBP kept, the rest clobbered. `Reg` names the
-/// 16-bit registers; each stands for its family.
-pub(crate) fn cdecl32(name: String, caller_pops: bool, pushed: i64) -> runtime::Contract {
-    runtime::Contract {
-        clobbers: BTreeSet::from([runtime::Reg::Ax, runtime::Reg::Cx, runtime::Reg::Dx, runtime::Reg::Flags]),
-        evidence: "cdecl32: stack arguments, result in EAX or EDX:EAX; EBX, ESI, EDI and EBP kept".to_owned(),
-        ..medium_model(name, caller_pops, pushed)
-    }
-}
-
 // Addresses the raise holds before any of them is a value.
 
 pub use llrm_core::backend::masm::InlinePart;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The clobber lists were `medium_model`'s and `cdecl32`'s, written in Rust beside `calling.toml`: a convention that
+    /// clobbers SI and keeps the rest says so, whichever target it is.
+    #[test]
+    fn a_contract_clobbers_what_the_targets_convention_says() {
+        let text = r#"[c]
+slot_bytes = 2
+order = "right-to-left"
+cleanup = "caller"
+argument_registers = []
+return_address_bytes = 2
+first_argument_offset = 4
+frame = "bp"
+stack = "sp"
+preserved = ["bp"]
+clobbered = ["esi", "st0", "flags"]
+entry_state = []
+promotion = "slot"
+wide_slots = 2
+variadic_float = "double"
+[c.result]
+1 = ["eax"]
+8 = ["eax", "edx"]
+"#;
+        let calling = llrm_target::calling::Calling::parse(&text).unwrap();
+        let contract = contract(calling.native(), "f".to_owned(), true, 0);
+        assert_eq!(contract.clobbers, BTreeSet::from([runtime::Reg::Si, runtime::Reg::Flags]));
+        assert!(runtime::preserves(&contract).contains(&runtime::Reg::Ax));
+        assert!(contract.evidence.starts_with("c: stack arguments"), "{}", contract.evidence);
+    }
+
+    /// Both real targets: m16 clobbers AX, BX, CX, DX, ES and the flags; m32 AX, CX, DX and the flags (EBX, ESI, EDI, EBP kept).
+    #[test]
+    fn the_real_targets_clobber_what_they_did() {
+        use llrm_target::Target;
+        use runtime::Reg::*;
+        let clobbers = |target: &dyn Target| contract(target.calling().named(&crate::compile::Profile::of(target).unwrap().convention).unwrap(), String::new(), true, 0).clobbers;
+        assert_eq!(clobbers(&llrm_x86_m16::M16), BTreeSet::from([Ax, Bx, Cx, Dx, Es, Flags]));
+        assert_eq!(clobbers(&llrm_x86_m32::M32), BTreeSet::from([Ax, Cx, Dx, Flags]));
+    }
+}

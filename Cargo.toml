@@ -31,8 +31,8 @@ llrm-elf = { path = "crates/target/llrm-elf" }
 llrm-elf32 = { path = "crates/target/llrm-elf32" }
 llrm-elf64 = { path = "crates/target/llrm-elf64" }
 llrm-macho = { path = "crates/target/llrm-macho" }
-llrm-bcmachine = { path = "crates/bc/llrm-bcmachine" }
-llrm-bc = { path = "crates/bc/llrm-bc" }
+llrm-x86-bcmachine = { path = "crates/target/llrm-x86-bcmachine" }
+llrm-x86-bc = { path = "crates/target/llrm-x86-bc" }
 llrm-bcdriver = { path = "crates/bc/llrm-bcdriver" }
 llrm-hir = { path = "crates/ir/llrm-hir" }
 llrm-mir = { path = "crates/ir/llrm-mir" }
