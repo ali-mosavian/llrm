@@ -24,6 +24,8 @@ toml = { workspace = true }
 
 [build-dependencies]
 toml = { workspace = true }
+llrm-mir = { workspace = true }
+llrm-target = { workspace = true }
 
 [features]
 # wccq, which build.rs bootstraps
