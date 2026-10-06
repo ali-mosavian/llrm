@@ -163,7 +163,7 @@ fn between<'t>(text: &'t str, start: &str, end: &str) -> &'t str {
 }
 
 /// The driver's options at `-{name}` on Nib's machine.
-fn level(name: &str) -> Options {
+pub(crate) fn level(name: &str) -> Options {
     let mut flags = llrm_core::driver::flags::Flags::default();
     flags.take(&[format!("-{name}")], &mut 0).expect("a level");
     flags.driver(nib_compile::machine())
