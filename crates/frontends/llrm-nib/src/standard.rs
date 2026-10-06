@@ -26,6 +26,15 @@ pub fn source(module: &str) -> Option<&'static str> {
     }
 }
 
+/// The source of `module` for a target whose OS layer is `os`: `std.os` and `os` are that layer, the
+/// rest as `source` has them.
+pub fn source_for(os: &str, module: &str) -> Option<String> {
+    match module {
+        "std.os" | "os" => Some(os.to_owned()),
+        _ => source(module).map(str::to_owned),
+    }
+}
+
 /// The source of `module` as a std module imports it: another of these,
 /// or the runtime's operating-system layer, which is not beside the program.
 pub fn imported(module: &str) -> Option<&'static str> {
