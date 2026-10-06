@@ -58,7 +58,6 @@ llrm-bcdriver = { workspace = true }
 llrm-nib = { workspace = true }
 llrm-qb = { workspace = true }
 llrm-c = { workspace = true }
-iced-x86 = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 

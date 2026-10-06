@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import json
 import threading
 import shutil
@@ -23,6 +24,8 @@ from pathlib import Path
 from dataclasses import dataclass
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+import linkrecipe  # noqa: E402
 BIN = Path(os.environ.get("LLRM_BIN", ROOT / "target" / "release"))
 QB45 = Path(os.environ.get("QB45_DIR", Path.home() / "work/42-labs/mini-qb/dosbox/qb45"))
 PDS71 = Path(os.environ.get("PDS71_DIR", Path.home() / "work/other/d32x/toolchains/pds71"))
@@ -97,7 +100,7 @@ def _host(command: list[str]) -> None:
 
 
 def assemble(source: Path, obj: Path, *defines: str) -> None:
-    _host([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", *(f"-D{one}" for one in defines), f"-Fo{obj}", str(source)])
+    _host([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", linkrecipe.assembler(REAL_MODE), *(f"-D{one}" for one in defines), f"-Fo{obj}", str(source)])
 
 
 def ow_root() -> Path:
@@ -132,10 +135,8 @@ def target_of(flags: list[str], default: str) -> str:
 
 
 def target_link(target: str) -> dict:
-    """How `target` links a C program: the `[link]` of its `object.toml` (crates/target/llrm-<target>)."""
-    crate = ROOT / "crates" / "target" / ("llrm-" + target)
-    with open(crate / "src" / "machines" / "object.toml", "rb") as text:
-        return tomllib.load(text)["link"]
+    """How `target` links a C program: the `[link]` of its `object.toml` (tools/linkrecipe.py)."""
+    return linkrecipe.recipe(target)["link"]
 
 
 _ASSEMBLED: set[tuple[Path, tuple[str, ...]]] = set()
