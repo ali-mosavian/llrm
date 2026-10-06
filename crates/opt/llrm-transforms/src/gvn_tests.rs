@@ -150,7 +150,7 @@ fn test_gvn_numbers_then_joins() {
     manager.verify_invalidation = true;
     manager.require::<Summaries>();
     manager.add(Gvn::default());
-    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let after = printed(&module);
     assert!(after.contains("  %s = add i16 %a, %a\n"), "{after}");
     assert!(after.contains("  %r.pre-phi = phi i16 [ %a, %b1 ], [ %b, %b2 ]\n  ret i16 %r.pre-phi\n"), "{after}");
@@ -180,7 +180,7 @@ b0:
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
     manager.add(Gvn::default());
-    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let after = printed(&module);
     assert!(after.contains("  %r = add i16 %a, %a\n"), "{after}");
 }
@@ -195,7 +195,7 @@ fn managed(text: &str) -> String {
     manager.verify_invalidation = true;
     manager.require::<Summaries>();
     manager.add(Gvn::default());
-    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let after = printed(&module);
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{after}");
     after
@@ -333,7 +333,7 @@ b0:
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
     manager.add(Gvn::default());
-    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let text = printed(&module);
     assert!(text.contains("%y = zext i8 7 to i16"), "{text}");
 }
@@ -430,7 +430,7 @@ b0:
     manager.verify_each = true;
     manager.require::<Summaries>();
     manager.add(Gvn::default());
-    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let after = printed(&module);
     assert!(after.matches("inttoptr").count() == 1 && after.contains("load i16, ptr addrspace(1) %f1"), "{after}");
 }
@@ -460,7 +460,7 @@ b0:
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
         manager.add(Gvn::default());
-        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
         printed(&module)
     };
     assert!(gvn("load i16, ptr @g").contains("  %r = add i16 %a, %b\n"), "a plain load is read again");
@@ -493,7 +493,7 @@ b0:
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
         manager.add(Gvn);
-        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
         let after = printed(&module);
         assert_eq!(after.matches("load i16, ptr @g").count() == 2, reloaded, "space {space}\n{after}");
     }
@@ -524,7 +524,7 @@ b0:
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
         manager.add(Gvn);
-        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
         let after = printed(&module);
         assert_eq!(after.matches(&format!("load i16, ptr addrspace({space})")).count() == 2, reloaded, "space {space}\n{after}");
     }
@@ -559,7 +559,7 @@ b0:
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
         manager.add(Gvn);
-        manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
         let after = printed(&module);
         assert_eq!(after.matches("load i16, ptr %q").count() == 2, reloaded, "{attribute:?}\n{after}");
     }
@@ -571,7 +571,7 @@ fn numbered(text: &str) -> String {
     let mut manager = PassManager::default();
     manager.require::<Summaries>();
     manager.add(Gvn);
-    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     printed(&module)
 }
 
