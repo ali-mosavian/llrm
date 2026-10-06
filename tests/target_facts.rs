@@ -70,6 +70,7 @@ fn facts() -> Regex {
 }
 
 fn is_test_file(path: &Path) -> bool {
+    // `path` is relative to the root: the root itself may sit under a `target/`.
     let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
     let text = path.to_string_lossy();
     name == "tests.rs"
@@ -77,20 +78,20 @@ fn is_test_file(path: &Path) -> bool {
         || name.starts_with("test_")
         || name.starts_with("testing")
         || name == "select_sweep.rs"
-        || text.contains("/tests/")
+        || text.contains("tests/")
         || text.contains("/testing/")
-        || text.contains("/target/")
+        || text.starts_with("target/")
         || text.contains("/fixtures/")
         || text.contains("/.venv/")
 }
 
-fn files(directory: &Path, into: &mut Vec<PathBuf>) {
+fn files(root: &Path, directory: &Path, into: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(directory) else { return };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            files(&path, into);
-        } else if matches!(path.extension().and_then(|ext| ext.to_str()), Some("rs" | "py" | "sh")) && !is_test_file(&path) {
+            files(root, &path, into);
+        } else if matches!(path.extension().and_then(|ext| ext.to_str()), Some("rs" | "py" | "sh")) && !is_test_file(path.strip_prefix(root).unwrap()) {
             into.push(path);
         }
     }
@@ -112,12 +113,11 @@ fn code(path: &Path) -> Vec<String> {
     lines
 }
 
-fn counts() -> BTreeMap<String, usize> {
+fn counts(root: &Path) -> BTreeMap<String, usize> {
     let facts = facts();
-    let root = Path::new(ROOT);
     let mut all = Vec::new();
     for directory in SHARED {
-        files(&root.join(directory), &mut all);
+        files(root, &root.join(directory), &mut all);
     }
     let mut found = BTreeMap::new();
     for path in all {
@@ -140,18 +140,9 @@ fn baseline() -> BTreeMap<String, usize> {
         .collect()
 }
 
-#[test]
-fn shared_code_holds_no_copy_of_a_target_fact() {
-    let found = counts();
-    if std::env::var_os("LLRM_BLESS").is_some() {
-        let mut text = String::from("# Copies of target facts left in shared code, per file: count path. Only shrinks.\n");
-        for (path, n) in &found {
-            text += &format!("{n} {path}\n");
-        }
-        fs::write(Path::new(ROOT).join(BASELINE), text).unwrap();
-        return;
-    }
-    let allowed = baseline();
+/// What is wrong in the tree at `root` given the `allowed` copies per file.
+fn problems(root: &Path, allowed: &BTreeMap<String, usize>) -> Vec<String> {
+    let found = counts(root);
     let mut wrong = Vec::new();
     for (path, n) in &found {
         match allowed.get(path) {
@@ -164,7 +155,62 @@ fn shared_code_holds_no_copy_of_a_target_fact() {
     for path in allowed.keys().filter(|path| !found.contains_key(*path)) {
         wrong.push(format!("{path}: none left, remove it from the baseline (LLRM_BLESS=1)"));
     }
+    wrong
+}
+
+#[test]
+fn shared_code_holds_no_copy_of_a_target_fact() {
+    let root = Path::new(ROOT);
+    if std::env::var_os("LLRM_BLESS").is_some() {
+        let mut text = String::from("# Copies of target facts left in shared code, per file: count path. Only shrinks.\n");
+        for (path, n) in &counts(root) {
+            text += &format!("{n} {path}\n");
+        }
+        fs::write(root.join(BASELINE), text).unwrap();
+        return;
+    }
+    let wrong = problems(root, &baseline());
     assert!(wrong.is_empty(), "read the target's description instead of copying it:\n{}", wrong.join("\n"));
+}
+
+/// A tree of one shared file holding `source`, under the build's scratch directory.
+fn tree(name: &str, source: &str) -> PathBuf {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("target_facts").join(name);
+    let directory = root.join("crates/ir/sample/src");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(directory.join("lib.rs"), source).unwrap();
+    root
+}
+
+const SAMPLE: &str = "crates/ir/sample/src/lib.rs";
+
+/// The guard is an instrument: a register name added to a shared crate must
+/// fail it, or a new copy would pass unseen.
+#[test]
+fn a_copy_added_to_shared_code_fails_the_guard() {
+    let root = tree("added", "fn f() { let _ = \"ax\"; }\n");
+    let wrong = problems(&root, &BTreeMap::new());
+    assert_eq!(wrong, vec![format!("{SAMPLE}: 1 copies of a target fact, none allowed")]);
+    let wrong = problems(&root, &BTreeMap::from([(SAMPLE.to_string(), 0)]));
+    assert_eq!(wrong, vec![format!("{SAMPLE}: 1 copies, was 0")]);
+}
+
+/// A copy removed without lowering the baseline must fail too, or the baseline
+/// goes stale and a later copy hides in the slack it left.
+#[test]
+fn a_copy_removed_without_shrinking_the_baseline_fails_the_guard() {
+    let allowed = BTreeMap::from([(SAMPLE.to_string(), 2)]);
+    let root = tree("removed", "fn f() { let _ = \"ax\"; }\n");
+    assert_eq!(problems(&root, &allowed), vec![format!("{SAMPLE}: 1 copies, baseline says 2: lower it (LLRM_BLESS=1)")]);
+    let root = tree("gone", "fn f() {}\n");
+    assert_eq!(problems(&root, &allowed), vec![format!("{SAMPLE}: none left, remove it from the baseline (LLRM_BLESS=1)")]);
+}
+
+/// Copies in a comment or a test module are not copies in the code.
+#[test]
+fn comments_and_test_modules_are_not_counted() {
+    let root = tree("quiet", "// the \"ax\" register\nfn f() {}\n#[cfg(test)]\nmod tests { fn g() { let _ = \"bx\"; } }\n");
+    assert!(problems(&root, &BTreeMap::new()).is_empty());
 }
 
 /// Cost of the first version: a pattern that matched nothing passed for "no
