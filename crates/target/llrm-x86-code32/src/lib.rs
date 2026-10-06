@@ -12,8 +12,8 @@ use llrm_target::CostModel;
 /// Flat DOS under an extender, and the PC ports it shares.
 pub const DOS32: &str = concat!(include_str!("machines/dos32.toml"), include_str!("../../llrm-target/src/machines/pc-ports.toml"));
 
-/// The processors flat code is priced for: those `timings.times` has.
-pub const CPUS: [&str; 2] = ["486", "P5"];
+/// The processors flat code is priced for: the columns of `timings.times`.
+pub static CPUS: LazyLock<Vec<&'static str>> = LazyLock::new(|| TIMINGS.cpus());
 
 /// The data layout and address spaces: `machines/datalayout.toml`.
 pub const DATALAYOUT_TOML: &str = include_str!("machines/datalayout.toml");
@@ -46,7 +46,7 @@ impl llrm_target::Target for Code32 {
     }
 
     fn machine(&self) -> Machine {
-        Machine::parse(DOS32, &CPUS).expect("the flat DOS description parses")
+        Machine::parse(DOS32, TIMINGS.default_cpu().expect("timings.times states a default CPU")).expect("the flat DOS description parses")
     }
 
     fn cpus(&self) -> &'static [&'static str] {

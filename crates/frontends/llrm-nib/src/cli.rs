@@ -35,7 +35,7 @@ struct Arguments {
     layout: CodeLayout,
     used_by: Vec<PathBuf>,
     frontend: super::Frontend,
-    /// The target, the built-in DOS on `nib::CPU` unless `--machine` names
+    /// The target, the built-in DOS on the target's default CPU unless `--machine` names
     /// another, and the pipeline.
     codegen: codegen::Options,
     /// `--os-layer FIELD`: print a field of the target's OS layer instead of compiling.

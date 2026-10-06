@@ -92,17 +92,28 @@ fn a_targets_operations_are_priced_from_its_own_timings_and_mapping() {
 /// Asking for another names the target's own.
 #[test]
 fn a_target_states_its_default_cpu_and_names_its_cpus_when_asked_for_another() {
-    for (arguments, default) in [(&[][..], "386"), (&["--target", "x86-code32"][..], "486")] {
+    for (arguments, default) in [(&[][..], "486"), (&["--target", "x86-code32"][..], "486")] {
         let flags = flags(arguments);
         let bound = target(&flags, Some(&["x86-code16", "x86-code32"])).unwrap();
         assert_eq!(bound.target.default_cpu(), default);
-        let options = bound.options(&flags, llrm_core::abi::machine::Machine { cpu: bound.target.default_cpu().to_owned(), ..bound.target.machine() });
+        let options = bound.options(&flags, bound.target.machine());
         assert_eq!(options.cpu().unwrap().name, default);
     }
     let flags = flags(&["--target", "x86-code32", "--cpu", "386"]);
     let bound = target(&flags, Some(&["x86-code32"])).unwrap();
     let machine = flags.machine(bound.target.machine()).unwrap();
     assert_eq!(bound.options(&flags, machine).cpu().err().unwrap(), "unknown CPU target: 386; x86-code32 has 486, P5");
+}
+
+/// Real-mode DOS said `cpu = "486"` and timings.times said `default_cpu 386`: a target had two
+/// defaults. Nib and BASIC priced for the machine's, C for the timings': one source went
+/// unread. A machine is priced for the one `timings.times` names, whichever target.
+#[test]
+fn a_targets_machine_is_priced_for_its_default_cpu() {
+    for target in crate::all() {
+        assert_eq!(target.machine().cpu, target.default_cpu(), "{}", target.name());
+        assert!(target.cpus().contains(&target.default_cpu()), "{}", target.name());
+    }
 }
 
 /// The registers an instruction pins come from the selected target's forms. They came from

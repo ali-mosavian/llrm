@@ -124,7 +124,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
     # The kernel stays a call: inlined into main it has no entry to count from.
     # LLRM_BENCH_FLAGS: more compiler flags for a measurement, `-fsanitize=stack`'s overhead; the gate fails on it.
     more = os.environ.get("LLRM_BENCH_FLAGS", "").split()
-    flags = [f"-{opt}", "--cpu", "486", "-fno-inline-functions", *more]
+    flags = [f"-{opt}", "-fno-inline-functions", *more]
     try:
         if variant.language == "nib":
             exe = work / f"{stem}.exe"
