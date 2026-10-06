@@ -17,11 +17,18 @@ pub struct Document {
     pub facts: Vec<Fact>,
 }
 
-#[derive(Default)]
 pub struct Documents {
     open: BTreeMap<PathBuf, Document>,
     /// The project's target, as the editor named it: what each check is for.
     pub frontend: crate::Frontend,
+}
+
+impl Default for Documents {
+    /// Checking for the driver's default target until the editor names the project's.
+    fn default() -> Self {
+        let bound = llrm_driver::target(&llrm_core::driver::flags::Flags::default(), None).expect("the default target is built in");
+        Self { open: BTreeMap::new(), frontend: crate::Frontend::for_target(&*bound.target).expect("the default target has a Nib runtime") }
+    }
 }
 
 impl Documents {

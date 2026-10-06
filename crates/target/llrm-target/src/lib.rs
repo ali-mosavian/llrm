@@ -162,6 +162,9 @@ pub trait Target {
     /// gives them; the first is the one a language's own functions use.
     fn conventions(&self) -> &'static [&'static str];
 
+    /// The calling conventions themselves, `calling.toml` read: where each passes arguments, what it keeps.
+    fn calling(&self) -> &'static calling::Calling;
+
     /// The machine's physical addresses by name (the text screen's video memory): one fact, which a
     /// target's address space turns into the pointer it has.
     fn physical_addresses(&self) -> Vec<(String, u64)> {

@@ -8,7 +8,6 @@
 1 crates/backend/llrm-core/src/backend/classes.rs
 1 crates/backend/llrm-core/src/backend/copyprop.rs
 7 crates/backend/llrm-core/src/backend/datagroup.rs
-1 crates/backend/llrm-core/src/backend/division.rs
 1 crates/backend/llrm-core/src/backend/ehprepare.rs
 1 crates/backend/llrm-core/src/backend/exactaddress.rs
 5 crates/backend/llrm-core/src/backend/floatalloc.rs
@@ -86,6 +85,8 @@
 2 tools/bench/bench.py
 5 tools/bench/icount.py
 2 tools/bench/maps.py
+1 tools/callconv/bas.sh
+2 tools/callconv/c.sh
 1 tools/dosbatch/dosbatch.py
 4 tools/dosbatch/run_tests.py
 9 tools/e2e/mkgolden.py
@@ -104,3 +105,5 @@
 8 tools/loops/quality.py
 1 tools/loops/run.py
 3 tools/msp430.py
+1 tools/nib-build.sh
+1 tools/returns_twice/run.sh

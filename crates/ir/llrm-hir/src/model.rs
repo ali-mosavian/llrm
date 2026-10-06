@@ -564,6 +564,8 @@ pub struct CallAbi {
     pub distance: CallDistance,
     pub callee: Option<i64>,
     pub float_return: FloatReturn,
+    /// The `cc` of the target's convention it follows (its `calling.toml`), where `cleanup` does not say.
+    pub convention: Option<String>,
 }
 
 /// One resolved language procedure symbol; calls refer to its stable id.
@@ -592,6 +594,8 @@ pub struct ProcedureAbi {
     pub float_return: FloatReturn,
     /// It takes arguments past its parameters, as C's `...` does.
     pub variadic: bool,
+    /// The `cc` of the target's convention it follows (its `calling.toml`), where `cleanup` does not say.
+    pub convention: Option<String>,
 }
 
 impl ProcedureAbi {

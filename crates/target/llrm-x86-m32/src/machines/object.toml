@@ -14,3 +14,7 @@ first = ["runtime/shared/dos/m32/start.asm"]
 last = ["runtime/c/x86-m32/ext.asm"]
 final = ["runtime/shared/dos/m32/os.asm"]
 loader = "{ow}/bld/redist/dos32a/dos32a.exe"
+
+# The ELF objects, linked by GNU ld: its emulation (`-m`).
+[link.elf]
+emulation = "elf_i386"

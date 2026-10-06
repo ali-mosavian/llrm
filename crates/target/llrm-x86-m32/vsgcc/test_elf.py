@@ -1,11 +1,16 @@
 """llrm's ELF objects, linked by GNU ld and run: alone, and with gcc's in one link."""
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 import harness
 
+sys.path.insert(0, str(harness.REPO / "tools"))
+import linkrecipe  # noqa: E402
+
+EMULATION = linkrecipe.ld_emulation("x86-m32")
 LLRM = harness.REPO / "target/release/llrm-c"
 STUB = Path(__file__).parent / "stub.s"
 
@@ -21,13 +26,13 @@ def work(tmp_path, monkeypatch):
     """A work directory shaped as harness.run reads it, with the stub built."""
     (tmp_path / "b").mkdir()
     sh("gcc", "-m32", "-c", STUB, "-o", tmp_path / "stub.o")
-    sh("ld", "-m", "elf_i386", "-static", "-e", "0", "-Ttext=0x8000", "-o", tmp_path / "stub.elf", tmp_path / "stub.o")
+    sh("ld", "-m", EMULATION, "-static", "-e", "0", "-Ttext=0x8000", "-o", tmp_path / "stub.elf", tmp_path / "stub.o")
     monkeypatch.setattr(harness, "OUT", tmp_path)
     return tmp_path
 
 
 def link(work, name, *objects):
-    sh("ld", "-m", "elf_i386", "-static", "-e", "0", "-Ttext=0x10000", f"--just-symbols={work / 'stub.elf'}", "-o", work / "b" / f"{name}.elf", *objects)
+    sh("ld", "-m", EMULATION, "-static", "-e", "0", "-Ttext=0x10000", f"--just-symbols={work / 'stub.elf'}", "-o", work / "b" / f"{name}.elf", *objects)
 
 
 def llrm_object(work, source, out, *flags):

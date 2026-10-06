@@ -48,6 +48,15 @@ pub fn signed_divide<'a>(
     Ok(stated(profile, &format!("sdiv_w{width}")).map(|clocks| Clocks { minimum: clocks, maximum: clocks }))
 }
 
+/// The unsigned divide's clocks, where the CPU's description has them.
+pub fn unsigned_divide<'a>(cpu: impl Into<ProfileOrName<'a>>, width: i64) -> Result<Option<Clocks>, String> {
+    if ![2, 4].contains(&width) {
+        return Ok(None);
+    }
+    let profile = targets::profile(cpu)?;
+    Ok(stated(profile, &format!("udiv_w{width}")).map(|clocks| Clocks { minimum: clocks, maximum: clocks }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -143,6 +143,7 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
             }
             let convention = match abi {
                 Abi::C | Abi::Cdecl16 | Abi::Cdecl32 => "__cdecl",
+                Abi::Watcall32 => "__watcall",
                 Abi::Interrupt16 => "__interrupt",
                 Abi::Pascal16 | Abi::Basic(_) => "__pascal",
             };
@@ -161,6 +162,9 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
                 .iter()
                 .map(|(name, spec)| basic_parameter(name, spec).ok_or_else(|| unsupported(name, "BASIC", span)))
                 .collect::<Result<Vec<_>, _>>()?;
+            if abi == Abi::Watcall32 {
+                return Err(unsupported(name, "BASIC", span));
+            }
             let convention = if matches!(abi, Abi::C | Abi::Cdecl16 | Abi::Cdecl32) { " CDECL" } else { "" };
             // BASIC names hold letters, digits and periods; any other takes its symbol as an alias.
             let (name, alias) = if name.chars().all(|one| one.is_ascii_alphanumeric() || one == '.') {
@@ -188,6 +192,7 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
             let cleanup = match abi {
                 Abi::C | Abi::Cdecl16 | Abi::Cdecl32 => "caller removes the arguments".to_owned(),
                 Abi::Interrupt16 => "iret".to_owned(),
+                Abi::Watcall32 => "the callee removes the stack arguments".to_owned(),
                 _ => format!("retf {words}"),
             };
             Ok(format!(
