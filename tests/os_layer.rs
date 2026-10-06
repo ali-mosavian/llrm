@@ -41,7 +41,7 @@ fn test_every_target_implements_every_operation_of_the_groups_it_declares() {
 }
 
 /// start.asm and os.asm each wrote DOS's function numbers (`mov ah, 3Dh`, `int 21h`) and the
-/// DPMI call as literals, once per target. They are the OS's facts, said once (llrm-x86/os/dos.toml).
+/// DPMI call as literals, once per target. They are the OS's facts, said once (runtime/shared/dos/facts.toml).
 #[test]
 fn test_no_os_assembly_names_an_os_function_number() {
     let literal = regex::Regex::new(r"(?i)\b(mov\s+(ah|al|eax)\s*,\s*[0-9][0-9a-f]*h\b|int\s+[0-9][0-9a-f]*h\b)").unwrap();
