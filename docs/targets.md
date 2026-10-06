@@ -537,3 +537,10 @@ lines in its crate and 837 description lines (`x86.instr` 88, `patterns.isel`
 
 - Whether `llrm-lir` is the family crate or its own: proposed its own, so the BC
   lifter and the backend both depend on it.
+- code16's legalizer actions emit target instructions directly (custom). That
+  is what byte identity needs under the oracle, and it is debt against "a target
+  is description". An action becomes generic ops plus patterns when the patterns
+  reproduce its output: costs that keep a constant half in a register where
+  `wide()` does, `add r, imm` where it does not, the same carry chains and the
+  same register pins. The oracle is the test; a family whose generic form is
+  byte-identical moves, the rest stay custom and are listed with the reason.
