@@ -210,3 +210,16 @@ fn a_counter_extended_past_the_index_width_stays() {
     let (changed, after) = widening(&text);
     assert!(!changed, "{after}");
 }
+
+/// bench/nbody: `for (unsigned short j = i + 1; j < 4; ++j) x[j]`: a start the loop does not define.
+/// The narrow counter was `inc bx; movzx esi,bx; cmp bx,4` each trip (38 instructions an
+/// iteration against gcc's 27); its zero extension is the counter of the index's width from the
+/// extended start.
+#[test]
+fn a_counter_from_a_start_the_loop_does_not_define_is_widened() {
+    let text = clearing("e-p:32:32-n8:16:32").replace("define i32 @f(i16 %n) {\nb0:", "define i32 @f(i16 %n) {\nb0:\n  %s = add i16 %n, 1").replace("[ 0, %b0 ]", "[ %s, %b0 ]").replace("icmp ult i16 %i, %n", "icmp ult i16 %i, 4");
+    let (changed, after) = widening(&text);
+    assert!(changed, "{after}");
+    assert!(after.contains("icmp ult i32 %widen.iv") && after.contains("zext i16 %s to i32"), "{after}");
+    assert!(!after.contains("zext i16 %i to i32"), "{after}");
+}

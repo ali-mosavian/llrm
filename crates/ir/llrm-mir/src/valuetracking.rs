@@ -106,8 +106,16 @@ fn _known_zero(context: &Context, function: &Function, operand: Operand, depth: 
             None => 0,
         },
         Opcode::Select => of(operands[1]) & of(operands[2]),
+        // The low bits a product of multiples of 2^a and 2^b leaves clear are a + b; a sum's, the least of a and b.
+        Opcode::Binary(BinaryOp::Mul) => low(of(operands[0]).trailing_ones() + of(operands[1]).trailing_ones(), width),
+        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) => low(of(operands[0]).trailing_ones().min(of(operands[1]).trailing_ones()), width),
         _ => 0,
     }
+}
+
+/// The `count` low bits of a `width`-bit integer.
+fn low(count: u32, width: u32) -> u128 {
+    if count >= width { if width == 128 { u128::MAX } else { (1_u128 << width) - 1 } } else { (1_u128 << count) - 1 }
 }
 
 /// The object `pointer` points into, through every GEP and address space
