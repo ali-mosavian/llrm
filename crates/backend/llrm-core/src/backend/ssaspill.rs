@@ -597,12 +597,42 @@ fn simulated_in(
     bridged: &BTreeSet<(i64, i64)>,
 ) -> Simulated {
     let weights = Weights { frequency, by_frequency: prices.by_frequency };
-    let attempt = |admit: bool| simulated_with(body, flow, machine, skip, remakes, order, place, frequency, headers, loops, prices, &weights, bridged, admit);
+    let attempt = |admit: &BTreeSet<i64>| simulated_with(body, flow, machine, skip, remakes, order, place, frequency, headers, loops, prices, &weights, bridged, admit);
+    let nothing: BTreeSet<i64> = BTreeSet::new();
+    let first = attempt(&nothing);
     if machine.file != File::Selector {
-        return attempt(false);
+        return first;
     }
-    let (with, without) = (attempt(true), attempt(false));
-    if traffic(&with, &weights, prices, &BTreeSet::new()) < traffic(&without, &weights, prices, &BTreeSet::new()) { with } else { without }
+    // Whether a loop's entry loads what the loop reads: none, all, or each loop by itself; priced by the level's
+    // measure (bytes at -Os), and by the trips where that measure ties.
+    let none: BTreeSet<(i64, i64)> = body.critical_edges().into_iter().collect();
+    let by_trips = Weights { frequency, by_frequency: true };
+    let cheaper = |tried: &Simulated, kept: &Simulated| {
+        let (now, then) = (traffic(tried, &weights, prices, &none), traffic(kept, &weights, prices, &none));
+        now < then || (now == then && traffic(tried, &by_trips, prices, &none) < traffic(kept, &by_trips, prices, &none))
+    };
+    let mut kept = first;
+    let everywhere = attempt(headers);
+    if cheaper(&everywhere, &kept) {
+        kept = everywhere;
+    }
+    if headers.len() > 1 {
+        let mut admitted: BTreeSet<i64> = BTreeSet::new();
+        let mut alone = attempt(&admitted);
+        for header in headers {
+            let mut trial = admitted.clone();
+            trial.insert(*header);
+            let tried = attempt(&trial);
+            if cheaper(&tried, &alone) {
+                admitted = trial;
+                alone = tried;
+            }
+        }
+        if cheaper(&alone, &kept) {
+            kept = alone;
+        }
+    }
+    kept
 }
 
 /// `simulated_in` with the entry load of a loop settled: the values a loop header does not keep, to a fixed point.
@@ -621,7 +651,7 @@ fn simulated_with(
     prices: Prices,
     weights: &Weights<'_>,
     bridged: &BTreeSet<(i64, i64)>,
-    admit: bool,
+    admit: &BTreeSet<i64>,
 ) -> Simulated {
     // A value a loop's back edge must reload each trip is not worth holding at its header.
     let mut dropped: IndexMap<i64, BTreeSet<u32>> = IndexMap::default();
@@ -839,7 +869,7 @@ fn simulated(
     room: &IndexMap<i64, usize>,
     frequency: &Frequency,
     headers: &BTreeSet<i64>,
-    admit: bool,
+    admit: &BTreeSet<i64>,
     memory: &BTreeSet<u32>,
 ) -> Simulated {
     let k = machine.general.len();
@@ -893,7 +923,7 @@ fn simulated(
         for (tier, near, value) in &candidates {
             // What no predecessor ends with is reloaded where it is read, never on the edge.
             let far = header && *near >= EXIT;
-            if (!far || spare > 0) && (*tier < 2 || (header && admit) || block.arrives().contains(value)) {
+            if (!far || spare > 0) && (*tier < 2 || (header && admit.contains(at)) || block.arrives().contains(value)) {
                 let mut next = held.clone();
                 next.insert(*value);
                 if machine.fits(&next, &BTreeSet::new(), top) {
