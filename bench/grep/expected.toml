@@ -1,4 +1,4 @@
-reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
+reason = "os.read/os.write_file return a 32-bit count on code16 (a read past 32 KB returned negative): +12 code bytes in grep.nib; executed instructions unchanged (#601)"
 blessed = "2026-10-06"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 3056
 kernel_ms = 3412.8726
 
 [nib.O2]
-code_bytes = 1576
+code_bytes = 1588
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4510.8239
 
 [nib.Os]
-code_bytes = 1480
+code_bytes = 1492
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4510.8539

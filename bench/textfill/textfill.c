@@ -1,3 +1,4 @@
+// targets: x86-code16   (writes the text screen at B800:0000, a real-mode segment address; the screen layer is next)
 /* Text screen at B800:0000 through a far pointer. */
 extern void report(long value);
 

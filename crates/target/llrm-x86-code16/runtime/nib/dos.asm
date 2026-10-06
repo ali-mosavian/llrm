@@ -104,13 +104,14 @@ N$OCRE proc far
     jmp short called
 N$OCRE endp
 
-; N$OREA(handle: i16, data: *far mut u8, count: u16) -> i16: bytes read.
+; N$OREA(handle: i16, data: *far mut u8, count: u16) -> i32: bytes read, or the error code negated: a count
+; to 65535 and a sign take 17 bits, so the result is DX:AX.
 N$OREA proc far
     mov ah, 3fh
     jmp short transfer
 N$OREA endp
 
-; N$OWRI(handle: i16, data: *far u8, count: u16) -> i16: bytes written.
+; N$OWRI(handle: i16, data: *far u8, count: u16) -> i32: bytes written, as N$OREA.
 N$OWRI proc far
     mov ah, 40h
 transfer::
@@ -123,7 +124,16 @@ transfer::
     mov cx, [bp+12]
     int 21h
     pop bx
-    jmp short checked
+    jc short failed
+    xor dx, dx
+    jmp short transferred
+failed:
+    neg ax
+    cwd
+transferred:
+    pop ds
+    pop bp
+    retf
 N$OWRI endp
 
 ; N$OCLO(handle: i16) -> i16

@@ -127,8 +127,9 @@ pub fn main(argv: &[String]) -> i32 {
             "directory" => println!("{}", os.directory),
             "start" => println!("{}", os.start),
             "dos" => println!("{}", os.dos),
+            "defines" => println!("{}", os.defines.iter().map(|(symbol, value)| format!("{symbol}={value}")).collect::<Vec<_>>().join(" ")),
             _ => {
-                eprintln!("llrm-nib: error: --os-layer takes directory, start or dos");
+                eprintln!("llrm-nib: error: --os-layer takes directory, start, dos or defines");
                 return 2;
             }
         }
