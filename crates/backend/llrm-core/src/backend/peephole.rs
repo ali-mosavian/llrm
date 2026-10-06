@@ -72,16 +72,19 @@ pub struct Peephole {
     pub cpu: Profile,
     /// The rule groups of the target, which its driver binds.
     pub rules: &'static peep::Rules,
+    /// The registers a callee keeps for its caller, whole: a run of stores may
+    /// not share them.
+    pub saved: Vec<Register>,
 }
 
 impl Peephole {
     /// With the 16-bit x86 rules.
     pub fn new<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>) -> Result<Self, String> {
-        Self::with_rules(frame, cpu, &peep::targets::x86_code16::RULES)
+        Self::with_rules(frame, cpu, &peep::targets::x86_code16::RULES, llrm_x86_code16::PRESERVED.iter().map(|(whole, _)| *whole).collect())
     }
 
-    pub fn with_rules<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>, rules: &'static peep::Rules) -> Result<Self, String> {
-        Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), rules })
+    pub fn with_rules<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>, rules: &'static peep::Rules, saved: Vec<Register>) -> Result<Self, String> {
+        Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), rules, saved })
     }
 
     /// Drop only synthetic reservations when no added stack storage remains.
@@ -160,7 +163,7 @@ impl LIRTransform for Peephole {
         let body = secondary_bases(&body, &self.cpu)?;
         let body = borrows(self.rules, &increments(self.rules, &body));
         let body = doubled(self.rules, &body, &self.cpu)?;
-        let body = sharedstores::shared(&body, &self.cpu, &crate::backend::masm::SAVED.keys().copied().collect::<Vec<_>>());
+        let body = sharedstores::shared(&body, &self.cpu, &self.saved);
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(self.rules, &tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
@@ -1334,7 +1337,7 @@ fn _root_get(register: Register) -> Option<Register> {
 /// and compares both the selected CPU cost and exact encoded byte totals.
 pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Result<LirBody, String> {
     let profile = targets::profile(cpu)?;
-    let Some(secondary) = profile.address_forms.iter().find(|form| form.secondary && form.index_width == 4) else {
+    let Some(secondary) = profile.dword_address_form() else {
         return Ok(body.clone());
     };
 
@@ -1568,7 +1571,7 @@ fn _affine_address(
     let Some(copy) = parts.first() else {
         return Ok(None);
     };
-    let Some(wide) = cpu.address_forms.iter().find(|form| form.secondary && form.index_width == 4) else {
+    let Some(wide) = cpu.dword_address_form() else {
         return Ok(None);
     };
     let Some((dest, affine::Step::Copy(source), mut old)) = affine::step(copy, cpu) else {

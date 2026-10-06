@@ -4090,3 +4090,18 @@ fn test_one_class_of_a_type_says_its_name_register_and_size() {
         &[("i1", Ok(1), Ok(1)), ("i8", Ok(1), Ok(1)), ("i16", Ok(2), Ok(2)), ("i32", Ok(4), Ok(4)), ("i64", Err(()), Ok(8)), ("ptr", Ok(4), Ok(4)), ("ptr", Ok(4), Ok(4)), ("float", Ok(10), Ok(4)), ("float", Ok(10), Ok(8)), ("float", Ok(10), Ok(10))],
     );
 }
+
+/// A pointer of 32 bits reaches `[base+index*4]` as it is, with no proof and no widening:
+/// the sum is as wide as the pointer, and its base a dword already. Selected for the
+/// 16-bit target's profile it was `shl index,2` and an access through `[base+index]`: the
+/// fold wanted a word range for the index and a word base to widen.
+#[test]
+fn test_a_dword_pointer_scales_its_index_in_the_access() {
+    let text = "target datalayout = \"e-p:32:32-i32:32-i64:32\"\ndefine i32 @f(ptr %p, i32 %i) {\nentry:\n  %e = getelementptr inbounds i32, ptr %p, i32 %i\n  %v = load i32, ptr %e\n  ret i32 %v\n}\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let selected = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::code16(), &llrm_x86_code16::Code16, false, 0).expect("selects");
+    let insns: Vec<_> = selected.body.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|insn| insn.what.as_ref()).collect();
+    assert!(!insns.iter().any(|what| what.name.as_deref() == Some("shl")), "{insns:?}");
+    let scaled = insns.iter().any(|what| what.sources.iter().any(|one| matches!(one, crate::model::ir::Loc::Mem(cell) if cell.scale == 4 && cell.base.is_some() && cell.index.is_some())));
+    assert!(scaled, "{insns:?}");
+}
