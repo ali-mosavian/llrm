@@ -18,7 +18,7 @@ use llrm_analysis::consts::{ARITH, masked};
 use llrm_analysis::induction::{self, AffineOperand, ControlReplacement, CountedLoop};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::Context;
 use num_bigint::BigInt;
 
@@ -47,6 +47,20 @@ impl Seeds<'_> {
         let inst = self.function.create_instruction(Opcode::Binary(kind), ty, operands, Flags::default(), None);
         self.function.insert(inst, Position::Before(self.at)).expect("`at` is placed");
         AffineOperand::Value(self.function.instruction(inst).result.expect("an integer result"), self.width)
+    }
+
+    /// `term`, unsigned, `to` bits wide where it is narrower: a trip count in an index's width.
+    pub fn widened(&mut self, term: &AffineOperand, to: u32) -> AffineOperand {
+        match term {
+            AffineOperand::Const(known) => AffineOperand::constant(known.n.clone(), to),
+            AffineOperand::Value(_, from) if *from >= to => term.clone(),
+            AffineOperand::Value(value, _) => {
+                let ty = self.context.types.int(to);
+                let inst = self.function.create_instruction(Opcode::Cast(CastOp::ZExt), ty, vec![Operand::Value(*value)], Flags::default(), None);
+                self.function.insert(inst, Position::Before(self.at)).expect("`at` is placed");
+                AffineOperand::Value(self.function.instruction(inst).result.expect("an integer result"), to)
+            }
+        }
     }
 
     /// `term` as an operand.

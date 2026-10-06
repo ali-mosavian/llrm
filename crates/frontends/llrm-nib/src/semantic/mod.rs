@@ -1521,7 +1521,8 @@ fn program(
                 &mut literals,
                 &mut types,
                 facts,
-                frontend,
+                frontend.unchecked_bounds,
+                frontend.debug,
             )?
             .compile(function)?,
         );
@@ -1553,7 +1554,8 @@ fn program(
                 &mut literals,
                 &mut types,
                 facts,
-                frontend,
+                frontend.unchecked_bounds,
+                frontend.debug,
             )?
             .compile(&function)?,
         );
@@ -1830,7 +1832,8 @@ impl<'a> FunctionCompiler<'a> {
         literals: &'a mut LiteralPool,
         types: &'a mut TypeRegistry,
         facts: Option<&'a RefCell<Vec<Fact>>>,
-        frontend: &crate::Frontend,
+        unchecked_bounds: bool,
+        debug: bool,
     ) -> Result<Self, Diagnostic> {
         let mut compiler = Self {
             signature,
@@ -1855,8 +1858,8 @@ impl<'a> FunctionCompiler<'a> {
             consumers: Vec::new(),
             hidden: Vec::new(),
             unsafe_depth: 0,
-            unchecked_bounds: frontend.unchecked_bounds,
-            debug: frontend.debug,
+            unchecked_bounds,
+            debug,
             line: 0,
             named_parameters: Vec::new(),
             next_value: 1,

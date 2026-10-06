@@ -557,20 +557,20 @@ Module {
                                                 arguments: [
                                                     Literal(
                                                         Integer(
-                                                            248,
+                                                            0,
                                                             Integer,
                                                         ),
                                                         Span {
                                                             line: 22,
                                                             start: 25,
-                                                            end: 28,
+                                                            end: 26,
                                                         },
                                                     ),
                                                 ],
                                                 span: Span {
                                                     line: 22,
                                                     start: 20,
-                                                    end: 29,
+                                                    end: 27,
                                                 },
                                             },
                                             right: Apply {
@@ -578,26 +578,26 @@ Module {
                                                 arguments: [
                                                     Literal(
                                                         Integer(
-                                                            255,
+                                                            0,
                                                             Integer,
                                                         ),
                                                         Span {
                                                             line: 22,
-                                                            start: 37,
-                                                            end: 40,
+                                                            start: 35,
+                                                            end: 36,
                                                         },
                                                     ),
                                                 ],
                                                 span: Span {
                                                     line: 22,
-                                                    start: 32,
-                                                    end: 41,
+                                                    start: 30,
+                                                    end: 37,
                                                 },
                                             },
                                             span: Span {
                                                 line: 22,
                                                 start: 20,
-                                                end: 41,
+                                                end: 37,
                                             },
                                         },
                                         right: Apply {
@@ -605,26 +605,26 @@ Module {
                                             arguments: [
                                                 Literal(
                                                     Integer(
-                                                        255,
+                                                        0,
                                                         Integer,
                                                     ),
                                                     Span {
                                                         line: 22,
-                                                        start: 49,
-                                                        end: 52,
+                                                        start: 45,
+                                                        end: 46,
                                                     },
                                                 ),
                                             ],
                                             span: Span {
                                                 line: 22,
-                                                start: 44,
-                                                end: 53,
+                                                start: 40,
+                                                end: 47,
                                             },
                                         },
                                         span: Span {
                                             line: 22,
                                             start: 20,
-                                            end: 53,
+                                            end: 47,
                                         },
                                     },
                                     right: Apply {
@@ -632,26 +632,26 @@ Module {
                                         arguments: [
                                             Literal(
                                                 Integer(
-                                                    255,
+                                                    0,
                                                     Integer,
                                                 ),
                                                 Span {
                                                     line: 22,
-                                                    start: 61,
-                                                    end: 64,
+                                                    start: 55,
+                                                    end: 56,
                                                 },
                                             ),
                                         ],
                                         span: Span {
                                             line: 22,
-                                            start: 56,
-                                            end: 65,
+                                            start: 50,
+                                            end: 57,
                                         },
                                     },
                                     span: Span {
                                         line: 22,
                                         start: 20,
-                                        end: 65,
+                                        end: 57,
                                     },
                                 },
                                 right: Apply {
@@ -659,26 +659,26 @@ Module {
                                     arguments: [
                                         Literal(
                                             Integer(
-                                                255,
+                                                0,
                                                 Integer,
                                             ),
                                             Span {
                                                 line: 22,
-                                                start: 73,
-                                                end: 76,
+                                                start: 65,
+                                                end: 66,
                                             },
                                         ),
                                     ],
                                     span: Span {
                                         line: 22,
-                                        start: 68,
-                                        end: 77,
+                                        start: 60,
+                                        end: 67,
                                     },
                                 },
                                 span: Span {
                                     line: 22,
                                     start: 20,
-                                    end: 77,
+                                    end: 67,
                                 },
                             },
                             right: Apply {
@@ -686,26 +686,26 @@ Module {
                                 arguments: [
                                     Literal(
                                         Integer(
-                                            255,
+                                            0,
                                             Integer,
                                         ),
                                         Span {
                                             line: 22,
-                                            start: 85,
-                                            end: 88,
+                                            start: 75,
+                                            end: 76,
                                         },
                                     ),
                                 ],
                                 span: Span {
                                     line: 22,
-                                    start: 80,
-                                    end: 89,
+                                    start: 70,
+                                    end: 77,
                                 },
                             },
                             span: Span {
                                 line: 22,
                                 start: 20,
-                                end: 89,
+                                end: 77,
                             },
                         },
                         right: Apply {
@@ -713,26 +713,26 @@ Module {
                             arguments: [
                                 Literal(
                                     Integer(
-                                        63,
+                                        64,
                                         Integer,
                                     ),
                                     Span {
                                         line: 22,
-                                        start: 97,
-                                        end: 99,
+                                        start: 85,
+                                        end: 87,
                                     },
                                 ),
                             ],
                             span: Span {
                                 line: 22,
-                                start: 92,
-                                end: 100,
+                                start: 80,
+                                end: 88,
                             },
                         },
                         span: Span {
                             line: 22,
                             start: 20,
-                            end: 100,
+                            end: 88,
                         },
                     },
                     right: Apply {
@@ -745,27 +745,27 @@ Module {
                                 ),
                                 Span {
                                     line: 22,
-                                    start: 108,
-                                    end: 111,
+                                    start: 96,
+                                    end: 99,
                                 },
                             ),
                         ],
                         span: Span {
                             line: 22,
-                            start: 103,
-                            end: 112,
+                            start: 91,
+                            end: 100,
                         },
                     },
                     span: Span {
                         line: 22,
                         start: 20,
-                        end: 112,
+                        end: 100,
                     },
                 },
                 span: Span {
                     line: 22,
                     start: 3,
-                    end: 112,
+                    end: 100,
                 },
             },
             then_branch: [

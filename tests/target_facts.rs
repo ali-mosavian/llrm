@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use regex::Regex;
 
@@ -89,13 +90,13 @@ fn is_test_file(path: &Path) -> bool {
         || text.contains("/.venv/")
 }
 
-fn files(root: &Path, directory: &Path, into: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(directory) else { return };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            files(root, &path, into);
-        } else if matches!(path.extension().and_then(|ext| ext.to_str()), Some("rs" | "py" | "sh")) && !is_test_file(path.strip_prefix(root).unwrap()) {
+/// The shared code git tracks: not a virtualenv, a build or an editor's leavings beside it.
+fn files(root: &Path, directory: &str, into: &mut Vec<PathBuf>) {
+    let listed = std::process::Command::new("git").arg("-C").arg(root).arg("ls-files").arg("--").arg(directory).output().expect("git runs");
+    assert!(listed.status.success(), "git ls-files: {}", String::from_utf8_lossy(&listed.stderr));
+    for line in String::from_utf8_lossy(&listed.stdout).lines() {
+        let path = root.join(line);
+        if matches!(path.extension().and_then(|ext| ext.to_str()), Some("rs" | "py" | "sh")) && !is_test_file(path.strip_prefix(root).unwrap()) {
             into.push(path);
         }
     }
@@ -121,7 +122,7 @@ fn counts(root: &Path) -> BTreeMap<String, usize> {
     let facts = facts();
     let mut all = Vec::new();
     for directory in SHARED {
-        files(root, &root.join(directory), &mut all);
+        files(root, directory, &mut all);
     }
     let mut found = BTreeMap::new();
     for path in all {
@@ -180,9 +181,13 @@ fn shared_code_holds_no_copy_of_a_target_fact() {
 /// A tree of one shared file holding `source`, under the build's scratch directory.
 fn tree(name: &str, source: &str) -> PathBuf {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("target_facts").join(name);
+    let _ = fs::remove_dir_all(&root);
     let directory = root.join("crates/ir/sample/src");
     fs::create_dir_all(&directory).unwrap();
     fs::write(directory.join("lib.rs"), source).unwrap();
+    for args in [&["init", "-q"][..], &["add", "-A"][..]] {
+        assert!(Command::new("git").arg("-C").arg(&root).args(args).output().unwrap().status.success());
+    }
     root
 }
 
@@ -228,4 +233,14 @@ fn the_search_is_built_from_the_descriptions() {
     for sample in ["let x = 4;", "\"ordinary\"", "65537"] {
         assert!(!facts.is_match(sample), "{sample} is not a target fact");
     }
+}
+
+/// A virtualenv or a build beside the checkout held what the guard counts, so a clean checkout and a
+/// working tree disagreed: only what git tracks is counted.
+#[test]
+fn an_untracked_copy_is_not_counted() {
+    let root = tree("untracked", "fn f() {}\n");
+    let stray = root.join("crates/ir/sample/src/stray.rs");
+    fs::write(&stray, "fn g() { let _ = \"ax\"; }\n").unwrap();
+    assert!(problems(&root, &BTreeMap::new()).is_empty());
 }
