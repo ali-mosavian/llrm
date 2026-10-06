@@ -37,7 +37,7 @@ impl Placed {
     /// one; the compiler's constants in `constants`, else the default. Each
     /// variable aligned as stated, public where external; each declared one
     /// an extern, near where it is in `data_space`.
-    pub fn lay_out(&self, built: &mut masm::Module, module: &Module, data_space: u32, constants: Option<&str>, far_bss: bool, segment_bytes: usize) -> Result<(), String> {
+    pub fn lay_out(&self, built: &mut masm::Module, module: &Module, data_space: u32, constants: Option<&str>, far_bss: bool, segment_bytes: Option<usize>) -> Result<(), String> {
         let (default, items) = built.data.pop().ok_or("an assembled module without its data segment")?;
         // What assembly adds after the globals' data: its constant pool.
         let pool: Vec<masm::Datum> = items.into_iter().skip_while(|one| !matches!(one, masm::Datum::Label(label) if label.name.starts_with("$K"))).collect();
@@ -134,14 +134,12 @@ impl Placed {
 }
 
 /// What one segment can hold: a 16-bit offset's range.
-/// A segment of a target that has them.
-pub const SEGMENT_BYTES: usize = 0x1_0000;
-
 /// `items` cut into segments of at most `limit` bytes (64K where segments are), each but the last full. Only
 /// the one object a huge segment holds may be cut: it is alone, so its
 /// bytes start at offset 0.
-fn split(items: Vec<masm::Datum>, segment: &str, limit: usize) -> Result<Vec<Vec<masm::Datum>>, String> {
+fn split(items: Vec<masm::Datum>, segment: &str, limit: Option<usize>) -> Result<Vec<Vec<masm::Datum>>, String> {
     use masm::Datum;
+    let limit = limit.unwrap_or(usize::MAX / 2);
     let mut parts: Vec<Vec<Datum>> = vec![Vec::new()];
     let mut used = 0;
     let mut total = 0;
@@ -249,41 +247,41 @@ mod tests {
     /// another), as a huge one is, so a flat program with a large array did not link.
     #[test]
     fn a_target_without_segments_does_not_cut_an_object() {
-        let parts = split(vec![label(), Datum::Fill(Fill { size: 80000, byte: None })], "S", usize::MAX / 2).unwrap();
+        let parts = split(vec![label(), Datum::Fill(Fill { size: 80000, byte: None })], "S", None).unwrap();
         assert_eq!(parts.len(), 1);
     }
 
     #[test]
     fn test_an_object_past_64k_is_cut_into_full_segments_and_a_rest() {
-        let parts = split(vec![label(), Datum::Fill(Fill { size: 80000, byte: None })], "S", SEGMENT_BYTES).unwrap();
+        let parts = split(vec![label(), Datum::Fill(Fill { size: 80000, byte: None })], "S", Some(0x1_0000)).unwrap();
         assert_eq!(parts.iter().map(|part| size(part)).collect::<Vec<_>>(), [65536, 14464]);
         assert!(matches!(parts[0][0], Datum::Label(_)) && !parts[1].iter().any(|one| matches!(one, Datum::Label(_))));
     }
 
     #[test]
     fn test_an_object_of_exactly_64k_is_one_segment() {
-        let parts = split(vec![label(), Datum::Bytes(vec![1; 65536])], "S", SEGMENT_BYTES).unwrap();
+        let parts = split(vec![label(), Datum::Bytes(vec![1; 65536])], "S", Some(0x1_0000)).unwrap();
         assert_eq!(parts.iter().map(|part| size(part)).collect::<Vec<_>>(), [65536]);
     }
 
     #[test]
     fn test_an_address_after_a_full_segment_starts_the_next() {
         let pointer = Datum::Pointer(Pointer { name: "_x".into(), offset: 0, far: true });
-        let parts = split(vec![label(), Datum::Bytes(vec![0; 65536]), pointer], "S", SEGMENT_BYTES).unwrap();
+        let parts = split(vec![label(), Datum::Bytes(vec![0; 65536]), pointer], "S", Some(0x1_0000)).unwrap();
         assert_eq!(parts.iter().map(|part| size(part)).collect::<Vec<_>>(), [65536, 4]);
     }
 
     #[test]
     fn test_a_huge_object_shares_its_segment_with_none() {
         let two = vec![label(), Datum::Bytes(vec![0; 40000]), label(), Datum::Bytes(vec![0; 40000])];
-        assert!(split(two, "S", SEGMENT_BYTES).unwrap_err().contains("shares its segment"));
+        assert!(split(two, "S", Some(0x1_0000)).unwrap_err().contains("shares its segment"));
     }
 
     /// A variable's `align 4` became bytes of fill before the object file
     /// saw it, so the segment never learned its widest request.
     #[test]
     fn test_an_align_request_survives_for_the_segment_to_keep() {
-        let parts = split(vec![label(), Datum::Bytes(vec![1]), Datum::Align(masm::Align { to: 4 }), Datum::Bytes(vec![2])], "S", SEGMENT_BYTES).unwrap();
+        let parts = split(vec![label(), Datum::Bytes(vec![1]), Datum::Align(masm::Align { to: 4 }), Datum::Bytes(vec![2])], "S", Some(0x1_0000)).unwrap();
         assert!(parts[0].iter().any(|one| matches!(one, Datum::Align(masm::Align { to: 4 }))), "{:?}", parts[0]);
     }
 }

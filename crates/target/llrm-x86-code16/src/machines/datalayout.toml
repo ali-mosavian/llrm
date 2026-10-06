@@ -6,6 +6,8 @@ datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i3
 # What a frontend's addresses are, by address space number.
 [spaces]
 near = 0
+# A data segment holds 64K: a larger object is cut into segments a huge pointer steps through.
+segment_bytes = 65536
 # Where the program's data and its stack are, for the passes that ask.
 data = 0
 stack = 5
