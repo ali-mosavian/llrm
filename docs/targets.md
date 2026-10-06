@@ -132,10 +132,15 @@ i16 pairs), not a refactor, and is not part of this task.
 
 code32 runs under a DOS extender: OMF with USE32 segments and 32-bit records, linked by
 JWlink as an LE executable behind DOS/32A's stub (`object.toml`'s `[link]`; the start-up
-and `report` are `llrm-x86-code32/runtime`). Its C ABI is cdecl32 with `llrm-c`'s Borland
-rule for aggregate returns (1, 2 or 4 bytes in EAX, else a pointer pushed after the
-arguments and returned in EAX), not Open Watcom's static result area or Win32's: the
-rule is revisited if code32 links a libc that has one of those.
+and `report` are `llrm-x86-code32/runtime`). Its C ABI is cdecl32,
+`calling.toml`: Open Watcom's 386 flat ABI as `wccq -ecc -zp4` has it. Arguments are
+pushed right to left in dword slots and the caller removes them; symbols are `_name`;
+EBX, ESI, EDI and EBP are preserved, the direction flag is clear and the x87 stack empty
+on entry and return; results are in EAX, EDX:EAX for 64 bits and ST0 for floats; structs
+are packed to 4 bytes. One deliberate difference: a struct return of other than 1, 2 or 4
+bytes goes through a pointer pushed after the arguments and returned in EAX (reentrant),
+where Open Watcom's `-ecc` returns the address of one static area. A call into an Open
+Watcom object that returns such a struct is the one call that does not match.
 
 ## Measured state
 
