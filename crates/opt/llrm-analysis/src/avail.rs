@@ -436,6 +436,15 @@ pub fn forwardable(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>) ->
     found
 }
 
+thread_local! {
+    static SAMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has compared a load's bytes with a missing one's in `memory_providers`.
+pub fn same_runs() -> usize {
+    SAMES.with(std::cell::Cell::get)
+}
+
 /// Recover dominating memory values the forward lattice lost at loops.
 fn memory_providers(unit: &Unit, accesses: &Accesses, missing: &[InstId]) -> Vec<Forward> {
     let function = unit.function;
@@ -449,6 +458,16 @@ fn memory_providers(unit: &Unit, accesses: &Accesses, missing: &[InstId]) -> Vec
         let ((source_block, source_index), (block, index)) = (places[&source], places[&site]);
         dominance.dominates(source_block, block) && (source_block != block || source_index < index)
     };
+
+    let mut groups: Vec<(&MemRef, Vec<usize>)> = Vec::new();
+    let mut group_of: HashMap<&MemRef, usize> = HashMap::default();
+    for (at, (_, (loaded, _))) in loads.iter().enumerate() {
+        let group = *group_of.entry(loaded).or_insert_with(|| {
+            groups.push((loaded, Vec::new()));
+            groups.len() - 1
+        });
+        groups[group].1.push(at);
+    }
 
     let mut found = Vec::new();
     for &site in missing {
@@ -466,8 +485,16 @@ fn memory_providers(unit: &Unit, accesses: &Accesses, missing: &[InstId]) -> Vec
             found.push(Forward { at: site, value });
             continue;
         }
-        for (source, (loaded, value)) in &loads {
-            if available(*source, site) && same_bytes(unit, loaded, &cell) && serves(unit, Operand::Value(*value), result) && graph.unchanged(*source, site, loaded) {
+        // Loads of one address are one group, whose bytes are compared with `cell` once; the candidates are
+        // then taken in load order, as when each was compared.
+        let mut candidates: Vec<usize> = groups.iter().filter(|(loaded, _)| {
+            SAMES.with(|runs| runs.set(runs.get() + 1));
+            same_bytes(unit, loaded, &cell)
+        }).flat_map(|(_, members)| members.iter().copied()).collect();
+        candidates.sort_unstable();
+        for at in candidates {
+            let (source, (loaded, value)) = &loads[at];
+            if available(*source, site) && serves(unit, Operand::Value(*value), result) && graph.unchanged(*source, site, loaded) {
                 found.push(Forward { at: site, value: Operand::Value(*value) });
                 break;
             }
