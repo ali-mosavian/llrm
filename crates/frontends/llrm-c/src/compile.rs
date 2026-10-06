@@ -151,9 +151,8 @@ pub fn recorded_for(source: &Path, includes: &[String], debug: bool, watcom: &[&
     // with no switch, since no other struct or call ABI exists here to match.
     let borland = format!("-fi={}", root.join("crates/frontends/llrm-c/src/borland.h").display());
     let medium = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
-    // Flat: the same switches but the model, packing and Borland's headers. Its structs
-    // are laid out as Watcom's 386 does at -zp4 (provisional until the C ABI is chosen
-    // with the extender), and cdecl as -ecc.
+    // Flat: the same switches but the model, packing and Borland's headers. Its C ABI is Open
+    // Watcom's 386 flat one (`calling.toml`): structs laid out at -zp4, cdecl as -ecc.
     let flat_header = format!("-fi={}", root.join("crates/frontends/llrm-c/src/flat.h").display());
     let flat_flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-ecc", "-s", "-zl", "-zq", flat_header.as_str()];
     let flags: &[&str] = if flat { &flat_flags } else { &medium };

@@ -6,9 +6,9 @@ pub fn open(name: *far char, mode: u8) -> i16
 @extern("cdecl16", name="N$OCRE")
 pub fn create(name: *far char) -> i16
 @extern("cdecl16", name="N$OREA")
-pub fn read(handle: i16, data: *far mut u8, count: usize) -> i16
+pub fn read(handle: i16, data: *far mut u8, count: usize) -> i32
 @extern("cdecl16", name="N$OWRI")
-pub fn write_file(handle: i16, data: *far u8, count: usize) -> i16
+pub fn write_file(handle: i16, data: *far u8, count: usize) -> i32
 @extern("cdecl16", name="N$OCLO")
 pub fn close(handle: i16) -> i16
 # Ends the program with `code`.

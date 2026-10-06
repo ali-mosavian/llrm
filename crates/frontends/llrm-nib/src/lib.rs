@@ -85,6 +85,9 @@ pub struct Os {
     pub stack_base: i64,
     /// Whether the start-up zeroes the far uninitialised data.
     pub far_bss: bool,
+    /// What the assembler is told of the description (`assembler_defines`): each symbol and the
+    /// value of the field it stands for, so the files that name no constant of their own.
+    pub defines: Vec<(String, i64)>,
     /// The directory the description is in, and the assembly files it names there.
     pub directory: String,
     pub start: String,
@@ -127,6 +130,17 @@ impl Os {
             stack: llrm_core::hir::model::StackCheck::from_toml(&stack)?,
             stack_base: table.get("stack_base").and_then(|one| one.as_integer()).ok_or("stack_base is not an integer")?,
             far_bss: table.get("far_bss").and_then(|one| one.as_bool()).ok_or("far_bss is not a boolean")?,
+            defines: table
+                .get("assembler_defines")
+                .and_then(|one| one.as_array())
+                .into_iter()
+                .flatten()
+                .map(|entry| {
+                    let (field, symbol) = entry.as_str().and_then(|one| one.split_once(':')).ok_or("assembler_defines are \"field:SYMBOL\"")?;
+                    let value = table.get(field).and_then(|one| one.as_integer()).ok_or_else(|| format!("{field} is not an integer"))?;
+                    Ok((symbol.to_owned(), value))
+                })
+                .collect::<Result<_, String>>()?,
             directory: description.directory.to_owned(),
             start: text("start")?,
             dos: text("dos")?,

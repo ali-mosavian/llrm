@@ -175,6 +175,15 @@ mod tests {
         assert_eq!((spaces.near, spaces.far, spaces.segment, spaces.huge, spaces.fixed, spaces.unmarked(4)), (0, 0, None, None, None, Ok(0)));
     }
 
+    /// The aggregate return was marked provisional while the C ABI was open: it is Open Watcom's flat ABI
+    /// with this one stated difference, and the description says so.
+    #[test]
+    fn test_the_c_abi_is_open_watcoms_with_one_stated_difference() {
+        let text = include_str!("machines/calling.toml");
+        assert!(!text.to_lowercase().contains("provisional"), "the aggregate rule is decided");
+        assert!(text.contains("Open Watcom's 386 flat ABI") && text.contains("THE DIFFERENCE FROM OPEN WATCOM") && text.contains("aggregate = \"hidden-pointer\""));
+    }
+
     /// cdecl32 (calling.toml): EBP and ESP frame, EBX/ESI/EDI kept whole, first argument at [ebp+8].
     #[test]
     fn test_code32_answers_cdecl32() {
