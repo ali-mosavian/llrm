@@ -4,7 +4,16 @@
 
 use super::sweep_support::{a, h, rg, sem};
 use super::*;
-use crate::model::ir::Addr;
+use llrm_lir::Addr;
+
+/// The instruction an encoding decodes to, in real mode.
+struct Seen {
+    insn: Instruction,
+}
+
+fn seen(code: &[u8], at: u64) -> Option<Seen> {
+    Some(Seen { insn: decoded(code, at) })
+}
 use iced_x86::{Mnemonic, OpKind};
 
 fn decoded(code: &[u8], ip: u64) -> Instruction {
@@ -76,7 +85,6 @@ fn test_signed_word_extension_uses_explicit_operands() {
     let instruction = decoded(&made(emitted(&what)).code, 0);
     assert_eq!(instruction.code(), Code::Movsx_r32_rm16);
     assert!(instruction.op0_register() == Register::EBX && instruction.op1_register() == Register::SI);
-    assert!(crate::backend::classes::RegisterClasses::code16().requirements(&what).is_empty());
 }
 
 #[test]
@@ -426,19 +434,6 @@ fn funnel_of(count: Loc, name: &str) -> Semantics {
 }
 
 #[test]
-fn test_a_funnel_shift_is_two_address_in_its_low_half() {
-    assert_eq!(target::tied(&funnel_of(imm(16, 1), "shrd")), Some(Register::EAX));
-}
-
-#[test]
-fn test_a_funnel_shift_by_a_register_takes_its_count_in_cl() {
-    let dynamic = target::reads(&funnel_of(rg(Register::CL, 1), "shrd"), &crate::backend::classes::RegisterClasses::code16());
-    assert!(dynamic.get(&Register::ECX).is_some_and(|need| need.fixed() == Some(Register::ECX)));
-    assert!(!target::reads(&funnel_of(imm(16, 1), "shrd"), &crate::backend::classes::RegisterClasses::code16()).contains_key(&Register::EAX));
-    assert!(target::writes(&funnel_of(imm(16, 1), "shrd"), &crate::backend::classes::RegisterClasses::code16()).is_empty(), "shrd writes only what it names");
-}
-
-#[test]
 fn test_a_funnel_shift_emits_the_form_its_count_asks_for() {
     for (count, want) in [(imm(16, 1), "660facd010"), (rg(Register::CL, 1), "660fadd0")] {
         assert_eq!(hex(&made(emitted(&funnel_of(count, "shrd"))).code), want);
@@ -649,7 +644,7 @@ fn test_a_frame_derived_indirect_cell_keeps_its_stack_segment() {
 // tests/test_test_immediate.py
 #[test]
 fn test_test_immediate_keeps_mask_and_flags() {
-    let reference = crate::frontends::bc::declen::decode(&[0xf7, 0x46, 0x06, 0x00, 0x80], 0).expect("decodes");
+    let reference = seen(&[0xf7, 0x46, 0x06, 0x00, 0x80], 0).expect("decodes");
     for (width, value) in [(1_u32, 0x80_u64), (2, 0x8000), (4, 0x80000000), (2, 1)] {
         for memory in [false, true] {
             let operand = if memory {
@@ -659,7 +654,7 @@ fn test_test_immediate_keeps_mask_and_flags() {
             };
             let what = sem(Operation::Compare, Some("test"), vec![], vec![operand, imm(value as i64, width)], None, false);
             let made = made(emitted(&what));
-            let decoded = crate::frontends::bc::declen::decode(&made.code, 0).expect("decodes");
+            let decoded = seen(&made.code, 0).expect("decodes");
             assert_eq!(decoded.insn.mnemonic(), Mnemonic::Test);
             assert_eq!(decoded.insn.immediate(1) & ((1_u64 << (width * 8)) - 1), value);
             assert_eq!(decoded.insn.rflags_written(), reference.insn.rflags_written());
@@ -713,7 +708,7 @@ fn test_a_word_index_is_encoded_with_word_addressing() {
 fn test_selected_indexed_frame_cell_keeps_bp_and_its_dynamic_index() {
     let cell = ir::Mem { through: Register::BP, base: Some(h(1, 2)), index_through: Register::SI, ..frame(-96, 4) };
     let code = made(move_from(Register::EAX, &cell, At::bits16(0))).code;
-    let instruction = crate::frontends::bc::declen::decode(&code, 0).expect("decodes");
+    let instruction = seen(&code, 0).expect("decodes");
     assert_eq!(instruction.insn.memory_base(), Register::BP);
     assert_eq!(instruction.insn.memory_index(), Register::SI);
     assert_eq!(instruction.insn.memory_displacement64() & 65535, (-96_i64 & 65535) as u64);

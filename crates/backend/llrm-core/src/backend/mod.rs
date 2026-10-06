@@ -61,7 +61,15 @@ pub mod exactaddress;
 pub mod executed;
 pub mod schedule;
 pub mod shrinkwrap;
-pub mod select;
+/// The x86 encoder is `llrm_x86::select`; the tests of this crate encode in real mode through `emit`.
+pub mod select {
+    pub use llrm_x86::select::*;
+
+    #[cfg(test)]
+    pub fn emit(what: &crate::model::ir::Semantics, at: u64, r#where: Option<Where<'_>>, short: bool, relocated: bool, held: Option<&HeldMap>) -> Option<Emitted> {
+        emit_in(BITNESS, what, at, r#where, short, relocated, held)
+    }
+}
 pub mod spiller;
 pub mod ssarepair;
 pub mod regclass;

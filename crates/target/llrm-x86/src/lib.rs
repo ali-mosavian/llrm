@@ -1,6 +1,8 @@
 //! What every x86 target shares. Each target's `x86.instr` holds only the forms
 //! it adds to `instructions::FAMILY`.
 
+pub mod select;
+
 /// The x86 general register file's views, in the order iced and the manuals list them: the architecture's, the
 /// same in every x86 target.
 pub mod registers {
@@ -20,6 +22,36 @@ pub mod registers {
     pub const WORDS: [Register; 8] = [Register::AX, Register::CX, Register::DX, Register::BX, Register::SI, Register::DI, Register::BP, Register::SP];
     /// The byte halves of the first four.
     pub const BYTES: [Register; 8] = [Register::AL, Register::CL, Register::DL, Register::BL, Register::AH, Register::CH, Register::DH, Register::BH];
+
+    /// A row by register number, as the tables built from it have always been walked.
+    fn in_order(row: &[Register; 8]) -> Vec<Register> {
+        let mut sorted = row.to_vec();
+        sorted.sort_by_key(|one| *one as u32);
+        sorted
+    }
+
+    /// The width in bytes each register names.
+    pub static WIDTHS: std::sync::LazyLock<llrm_support::hash::IndexMap<Register, i64>> = std::sync::LazyLock::new(|| {
+        let mut widths = llrm_support::hash::IndexMap::default();
+        for (row, size) in [(&DWORDS, 4), (&WORDS, 2), (&BYTES, 1)] {
+            for one in in_order(row) {
+                widths.insert(one, size);
+            }
+        }
+        widths
+    });
+
+    /// Each register file entry at each width, by its root: the first view of that width where several share it
+    /// (AL and AH both root to EAX: the later one resolved a width-1 value to AH).
+    pub static AT_WIDTH: std::sync::LazyLock<llrm_support::hash::IndexMap<Register, llrm_support::hash::IndexMap<i64, Register>>> = std::sync::LazyLock::new(|| {
+        let mut at_width: llrm_support::hash::IndexMap<Register, llrm_support::hash::IndexMap<i64, Register>> = llrm_support::hash::IndexMap::default();
+        for (row, size) in [(&DWORDS, 4), (&WORDS, 2), (&BYTES, 1)] {
+            for one in in_order(row) {
+                at_width.entry(llrm_lir::root(one)).or_default().entry(size).or_insert(one);
+            }
+        }
+        at_width
+    });
 
     #[cfg(test)]
     mod tests {
