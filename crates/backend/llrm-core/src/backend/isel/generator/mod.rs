@@ -35,11 +35,11 @@ pub const CONSTRUCTORS: [(&str, &str, usize); 13] = [
     ("imm", "i", 2),
 ];
 
-const OPERATIONS: [(&str, &str); 28] = [
+const OPERATIONS: [(&str, &str); 29] = [
     ("move", "Move"), ("xchg", "Exchange"), ("addr", "Address"), ("binary", "Binary"), ("mul", "Multiply"), ("div", "Divide"), ("cmp", "Compare"),
     ("unary", "Unary"), ("funnel", "Funnel"), ("extend", "Extend"), ("push", "Push"), ("pop", "Pop"), ("leave", "Leave"), ("fill", "Fill"), ("jump", "Jump"),
     ("branch", "Branch"), ("escape", "Escape"), ("call", "Call"), ("ret", "Return"), ("nothing", "Nothing"), ("restore", "Restore"), ("data", "Data"),
-    ("fload", "FloatLoad"), ("fstore", "FloatStore"), ("farith", "FloatArith"), ("farithp", "FloatArithPop"), ("funary", "FloatUnary"), ("barrier", "Barrier"),
+    ("fload", "FloatLoad"), ("fstore", "FloatStore"), ("farith", "FloatArith"), ("farithp", "FloatArithPop"), ("funary", "FloatUnary"), ("barrier", "Barrier"), ("copy", "Copy"),
 ];
 
 pub struct Generated {

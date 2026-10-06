@@ -75,10 +75,12 @@ mod tests {
     /// Splitting `x86.instr` into the family's rows and code16's must lose and
     /// repeat none of the 70 it had.
     #[test]
-    fn the_family_and_real_mode_rows_are_the_70_there_were() {
+    fn the_family_and_real_mode_rows_are_the_70_there_were_and_the_string_operations() {
         let rows = |text: &str| text.lines().filter(|line| !line.starts_with('#') && !line.trim().is_empty()).count();
-        assert_eq!(rows(&TEXT), 70);
-        assert_eq!(rows(llrm_x86::instructions::FAMILY) + rows(OWN), 70);
+        // 70 there were; the 3 `stos` rows are code16's now (their selector operands), and
+        // its string operations are the 3 + 3 + 3 + 3 of lowering's shapes.
+        assert_eq!(rows(&TEXT), 70 - 3 + 12);
+        assert_eq!(rows(llrm_x86::instructions::FAMILY) + rows(OWN), 70 - 3 + 12);
         assert!(forms("les").next().is_some() && forms("call").next().is_some());
     }
 }
