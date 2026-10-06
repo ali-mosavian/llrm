@@ -15,9 +15,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from iced_x86 import Decoder, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl
+from iced_x86 import Decoder, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc
-from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_ESP, UC_X86_REG_EIP
+from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBP, UC_X86_REG_ESI, UC_X86_REG_EDI, UC_X86_REG_ESP, UC_X86_REG_EIP
 
 REPO = Path(__file__).resolve().parents[4]
 OUT = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))   # build products and results, never in the tree
@@ -129,7 +129,41 @@ def omf_link(path, stub):
     return segs, syms
 
 
-def cost(ins, taken, first_rep, mem):
+UNICORN = {Register.EAX: UC_X86_REG_EAX, Register.EBX: UC_X86_REG_EBX, Register.ECX: UC_X86_REG_ECX, Register.EDX: UC_X86_REG_EDX,
+           Register.EBP: UC_X86_REG_EBP, Register.ESI: UC_X86_REG_ESI, Register.EDI: UC_X86_REG_EDI, Register.ESP: UC_X86_REG_ESP}
+
+
+def multiply_clocks(m, signed):
+    """The i486's MUL and IMUL clocks for multiplier `m` (Intel 240440-002, Table 10.1 note 3): 10 + max(log2|m|, n),
+    n = 3 for +m and 5 for -m, 13 for m = 0. The bits of |m| stand for log2|m|, rounded up."""
+    if signed and m >= 1 << 31:
+        m -= 1 << 32
+    return 10 + max(abs(m).bit_length(), 5 if m < 0 else 3)
+
+
+def multiplier_of(uc, ins):
+    """The operand the 486's early-out reads: the immediate of the three-operand form, else the source (`MUL r/m`,
+    `IMUL r, r/m`). The data sheet names it 'Multiplier' beside the register or memory operand, not the accumulator."""
+    last = ins.op_count - 1
+    kind = ins.op_kind(last)
+    if kind in (OpKind.IMMEDIATE8, OpKind.IMMEDIATE8TO32, OpKind.IMMEDIATE32, OpKind.IMMEDIATE16, OpKind.IMMEDIATE8TO16):
+        return ins.immediate(last) & 0xFFFFFFFF
+    if kind == OpKind.REGISTER:
+        reg = ins.op_register(last)
+        value = uc.reg_read(UNICORN[RegisterExt.full_register32(reg)])
+        return value & (0xFFFFFFFF if RegisterExt.is_gpr32(reg) else 0xFFFF if RegisterExt.is_gpr16(reg) else 0xFF)
+    if kind in MEMORY:
+        base = ins.memory_base
+        address = ins.memory_displacement
+        if base != Register.NONE:
+            address += uc.reg_read(UNICORN[base])
+        if ins.memory_index != Register.NONE:
+            address += uc.reg_read(UNICORN[ins.memory_index]) * ins.memory_index_scale
+        return int.from_bytes(bytes(uc.mem_read(address & 0xFFFFFFFF, 4)), "little")
+    return 0
+
+
+def cost(ins, taken, first_rep, mem, multiplier=None):
     m = ins.mnemonic
     n = ins.op_count
     k0 = ins.op_kind(0) if n else None
@@ -154,10 +188,9 @@ def cost(ins, taken, first_rep, mem):
         return 6 if dst_mem else 1
     if m in (Mnemonic.SHL, Mnemonic.SHR, Mnemonic.SAR, Mnemonic.ROL, Mnemonic.ROR):
         return (4 if dst_mem else 2) if k1 != OpKind.REGISTER else (5 if dst_mem else 3)
-    if m == Mnemonic.IMUL:
-        return 13 if (n == 2 or n == 3 or ins.op0_register) else 13
-    if m == Mnemonic.MUL:
-        return 13
+    if m in (Mnemonic.IMUL, Mnemonic.MUL):
+        # Data dependent: 13 to 42 by the multiplier; 13 was the least, which made every product cheap.
+        return multiply_clocks(multiplier if multiplier is not None else 0, m == Mnemonic.IMUL)
     if m == Mnemonic.DIV:
         return 40
     if m == Mnemonic.IDIV:
@@ -280,7 +313,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
             taken = False
         # clocks of the previous instruction need to know taken; charge it now
         if prev is not None and pins[0].mnemonic != Mnemonic.NOP:
-            total["clocks"] += cost(pins[0], taken, st.get("firstrep", True), pins[1])
+            total["clocks"] += cost(pins[0], taken, st.get("firstrep", True), pins[1], st.get("multiplier"))
         st["firstrep"] = not (rep and prev == address)
         if ins.mnemonic == Mnemonic.NOP:   # alignment padding (clang): counted apart, not work
             total["nops"] += 1
@@ -291,6 +324,8 @@ def run(prog, variant, hot=False, limit=300_000_000):
         total["mem"] += mem
         hits[address] += 1
         st["prev"] = address
+        # Read before it runs: the 486's multiply costs what its multiplier is.
+        st["multiplier"] = multiplier_of(uc, ins) if ins.mnemonic in (Mnemonic.MUL, Mnemonic.IMUL) else None
         if ret and uc.reg_read(UC_X86_REG_ESP) == st["sp"]:
             total["clocks"] += cost(ins, True, True, mem)
             st["active"] = False

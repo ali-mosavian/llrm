@@ -67,16 +67,25 @@ pub use matcher::{Compiled, selector};
 pub(crate) use matcher::m16;
 mod wide;
 
+/// Where one parameter arrives: a cell in the frame, by its displacement from BP, or the
+/// registers its convention passes it in (an i64's low half first).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Parameter {
+    Cell(i64),
+    Registers(Vec<Register>),
+}
+
 /// Where a function's parameters arrive and its result leaves, as its
 /// calling convention and address space say: LLVM's CC_X86 for ia16.
 #[derive(Clone, Debug)]
 pub struct Convention {
-    /// Each parameter's cell, by its displacement from BP.
-    pub parameters: Vec<i64>,
+    pub parameters: Vec<Parameter>,
     /// The registers a result leaves in, low part first.
     pub returns: Vec<Register>,
     /// The bytes the function pops as it returns.
     pub popped: i64,
+    /// The registers its prologue may save: the convention's, but those its parameters arrive in.
+    pub saved: Vec<(Register, Register)>,
 }
 
 /// How a calling convention pushes arguments and who pops them. C pushes
@@ -85,17 +94,36 @@ pub struct Convention {
 struct Passing {
     in_order: bool,
     pops: bool,
+    /// The description's entry, where the convention passes arguments in registers.
+    registers: Option<&'static llrm_target::calling::Convention>,
 }
 
-fn passing(convention: u32) -> Result<Passing, Unselected> {
+/// The entry of the target's `calling.toml` that `convention` is: `ccc` is the C one, a name MIR gives is the entry that states it by `cc`, and a variadic call takes the one its
+/// entry names.
+fn entry(arch: &dyn llrm_target::Target, convention: u32, variadic: bool) -> Option<&'static llrm_target::calling::Convention> {
+    let calling = arch.calling();
+    let found = match convention {
+        0 | llrm_mir::opcode::FAST => calling.by_cc("cdecl")?,
+        other => calling.by_cc(llrm_mir::opcode::CONVENTIONS.iter().find(|(_, number)| *number == other)?.0.trim_end_matches("cc"))?,
+    };
+    match found.variadic.as_deref().filter(|_| variadic) {
+        Some(name) => calling.named(name),
+        None => Some(found),
+    }
+}
+
+fn passing(arch: &dyn llrm_target::Target, convention: u32, variadic: bool) -> Result<Passing, Unselected> {
+    use llrm_target::calling::{Cleanup, Order};
     match convention {
-        0 => Ok(Passing { in_order: false, pops: false }),
-        llrm_mir::opcode::BASIC => Ok(Passing { in_order: true, pops: true }),
-        // The compiler's own, for a function it sees every caller of: C's order, the callee pops.
-        llrm_mir::opcode::FAST => Ok(Passing { in_order: false, pops: true }),
+        llrm_mir::opcode::BASIC => Ok(Passing { in_order: true, pops: true, registers: None }),
         // Its parameters are the registers its frame saved; iret pops the rest.
-        llrm_mir::opcode::X86_INTR => Ok(Passing { in_order: false, pops: false }),
-        other => refuse(format!("calling convention {other}")),
+        llrm_mir::opcode::X86_INTR => Ok(Passing { in_order: false, pops: false, registers: None }),
+        // The compiler's own, for a function it sees every caller of: the target's order, the callee pops.
+        _ => {
+            let Some(found) = entry(arch, convention, variadic) else { return refuse(format!("calling convention {convention}")) };
+            let pops = convention == llrm_mir::opcode::FAST || found.cleanup == Cleanup::Callee;
+            Ok(Passing { in_order: found.order == Order::LeftToRight, pops, registers: Some(found).filter(|found| !found.argument_registers.is_empty()) })
+        }
     }
 }
 
@@ -147,8 +175,11 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
         _ if interrupt => crate::backend::masm::interrupt_parameters(),
         _ => arch.first_argument_offset(far(global)?),
     };
-    let Passing { in_order, pops } = passing(function.calling_convention)?;
-    let mut widths = function.parameters().iter().map(|&one| size_of(module, layout, function.value(one).ty).map(|width| slot(arch, width))).collect::<Result<Vec<_>, _>>()?;
+    let (_, _, variadic) = module.signature(function.ty);
+    let Passing { in_order, pops, registers } = passing(arch, function.calling_convention, variadic)?;
+    let types = &module.context.types;
+    let sizes = function.parameters().iter().map(|&one| size_of(module, layout, function.value(one).ty)).collect::<Result<Vec<_>, _>>()?;
+    let mut widths = sizes.iter().map(|&width| slot(arch, width)).collect::<Vec<_>>();
     // The last pushed is nearest: C's first argument, BASIC's last.
     if in_order {
         widths.reverse();
@@ -158,14 +189,34 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
     }
     let mut parameters = Vec::new();
     let mut cursor = first;
-    for width in widths {
-        parameters.push(cursor);
-        cursor += width;
+    if let Some(entry) = registers {
+        let kinds: Vec<_> = function
+            .parameters()
+            .iter()
+            .zip(&sizes)
+            .map(|(&one, &size)| match types.get(function.value(one).ty) {
+                _ if types.int_bits(function.value(one).ty) == Some(64) => llrm_target::calling::Kind::Wide,
+                Type::Float(_) => llrm_target::calling::Kind::Memory(i64::from(size)),
+                _ => llrm_target::calling::Kind::Word,
+            })
+            .collect();
+        let placed = entry.place(&kinds);
+        for place in &placed.places {
+            parameters.push(match place {
+                llrm_target::calling::Place::Registers(names) => Parameter::Registers(names.iter().map(|name| llrm_x86::calling::register(name)).collect()),
+                llrm_target::calling::Place::Stack(offset) => Parameter::Cell(first + offset),
+            });
+        }
+        cursor = first + placed.stack_bytes;
+    } else {
+        for width in widths {
+            parameters.push(Parameter::Cell(cursor));
+            cursor += width;
+        }
+        if in_order {
+            parameters.reverse();
+        }
     }
-    if in_order {
-        parameters.reverse();
-    }
-    let types = &module.context.types;
     let (result, _, _) = module.signature(function.ty);
     if interrupt && !types.is_void(result) {
         return refuse("an interrupt handler that returns a value");
@@ -173,7 +224,17 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
     // A float leaves in st(0), which no register names.
     let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) { Vec::new() } else { arch.results(size_of(module, layout, result)?) };
     let popped = if pops { cursor - first } else { 0 };
-    Ok(Convention { parameters, returns, popped })
+    let saved = saved(arch, entry(arch, function.calling_convention, variadic), &parameters, &returns);
+    Ok(Convention { parameters, returns, popped, saved })
+}
+
+/// The registers `entry` keeps for its caller that a function with these parameters and results
+/// need save: all it keeps, but those its own parameters arrive in and its result leaves in.
+fn saved(arch: &dyn llrm_target::Target, entry: Option<&llrm_target::calling::Convention>, parameters: &[Parameter], returns: &[Register]) -> Vec<(Register, Register)> {
+    let kept = arch.callee_saved();
+    let Some(entry) = entry.filter(|entry| entry.arguments_clobbered || entry.results_clobbered) else { return kept };
+    let changed: Vec<Register> = parameters.iter().filter_map(|one| if let Parameter::Registers(registers) = one { Some(registers.iter().copied()) } else { None }).flatten().chain(returns.iter().copied().filter(|_| entry.results_clobbered)).collect();
+    kept.into_iter().filter(|(whole, _)| !changed.iter().any(|one| one.full_register32() == *whole)).collect()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -475,7 +536,10 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes them in.
 fn parameters(module: &Module, name: &str, convention: &Convention) -> Vec<DebugVariable> {
     let Some(function) = llrm_mir::debuginfo::functions(module).into_iter().find(|one| one.function == name) else { return Vec::new() };
-    let cell = |index: i64| usize::try_from(index).ok().and_then(|index| convention.parameters.get(index)).copied();
+    let cell = |index: i64| match usize::try_from(index).ok().and_then(|index| convention.parameters.get(index)) {
+        Some(Parameter::Cell(disp)) => Some(*disp),
+        _ => None,
+    };
     function
         .parameters
         .into_iter()
@@ -654,7 +718,7 @@ struct Selector<'m, 'c, 'p> {
 impl Selector<'_, '_, '_> {
     fn body(&mut self, name: &str, convention: &Convention) -> Result<LirBody, Unselected> {
         let function = self.function;
-        if let (Some(&last), Some(&disp)) = (function.parameters().last(), convention.parameters.last()) {
+        if let (Some(&last), Some(&Parameter::Cell(disp))) = (function.parameters().last(), convention.parameters.last()) {
             self.variadic = Some(disp + slot(self.arch, size_of(self.module, &self.layout, function.value(last).ty)?));
         }
         // Only what execution can reach is selected, as LLVM's code generator
@@ -734,18 +798,36 @@ impl Selector<'_, '_, '_> {
         }
         let entry = function.entry().expect("a body");
         let mut prologue = Vec::new();
-        for (&parameter, &disp) in function.parameters().iter().zip(&convention.parameters) {
+        let mut arrived: Vec<(Held, Register)> = Vec::new();
+        for (&parameter, place) in function.parameters().iter().zip(&convention.parameters) {
+            // Only a used argument is loaded, as a DAG has no node for an unused one.
+            if function.users(parameter).is_empty() && function.calling_convention != llrm_mir::opcode::X86_INTR {
+                continue;
+            }
+            let ty = function.value(parameter).ty;
+            let disp = match place {
+                Parameter::Cell(disp) => *disp,
+                // It arrives in registers: an instruction at entry delivers each value in its register.
+                Parameter::Registers(registers) => {
+                    let width = if registers.len() == 1 { self.width(ty)? } else { 4 };
+                    let mut halves = Vec::new();
+                    for &register in registers {
+                        let own = if registers.len() == 1 { Held { value: self.value(parameter), width } } else { self.fresh_held(4) };
+                        arrived.push((own, crate::backend::target::named(register, i64::from(width))));
+                        halves.push(own);
+                    }
+                    if let [low, high] = halves[..] {
+                        self.wides.insert(parameter, (low, high));
+                    }
+                    continue;
+                }
+            };
             // An interrupt handler's one parameter is the address of the registers it saved.
             if function.calling_convention == llrm_mir::opcode::X86_INTR {
                 self.pointers.insert(parameter, Pointer::Frame { disp, index: None, scale: 1 });
                 self.unsealed = true;
                 continue;
             }
-            // Only a used argument is loaded, as a DAG has no node for an unused one.
-            if function.users(parameter).is_empty() {
-                continue;
-            }
-            let ty = function.value(parameter).ty;
             if self.is_float(ty) {
                 let (held, size) = (Held { value: self.value(parameter), width: FLOAT }, self.size(ty)?);
                 self.float_loaded(held, "fld", Pointer::Frame { disp, index: None, scale: 1 }, size, false, block_at[&entry], &mut prologue);
@@ -769,6 +851,11 @@ impl Selector<'_, '_, '_> {
             let held = Held { value: self.value(parameter), width };
             let what = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(frame(disp, width))]);
             prologue.push(insn(block_at[&entry], what));
+        }
+        if !arrived.is_empty() {
+            let at = block_at[&entry];
+            let what = semantics(Operation::Nothing, "", vec![], vec![]);
+            prologue.insert(0, Arc::new(Insn { defines: arrived.iter().map(|(held, _)| held.value).collect(), delivers: arrived, ..Insn::new(at, Some((at, at)), Some(what), vec![], vec![]) }));
         }
         for &block in layout {
             for &inst in function.block(block).instructions() {
@@ -2283,13 +2370,19 @@ impl Selector<'_, '_, '_> {
         // A signed division by a constant is a multiply by its reciprocal
         // where the target prices that cheaper, as the old route's
         // division::reciprocal selects.
-        if let Some(constant) = self.constant(instruction.operands[1], width).filter(|_| signed) {
+        if let Some(constant) = self.constant(instruction.operands[1], width) {
             let mut next = self.next;
             let mut fresh = || {
                 next += 1;
                 next
             };
-            let reciprocal = division::reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, remainder == result || self.paired.contains_key(&inst)).map_err(Unselected)?;
+            let both = remainder == result || self.paired.contains_key(&inst);
+            let reciprocal = if signed {
+                division::reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, both)
+            } else {
+                division::unsigned_reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, both)
+            }
+            .map_err(Unselected)?;
             self.next = next;
             if let Some(parts) = reciprocal {
                 out.extend(parts.into_iter().map(|what| insn(at, what)));
@@ -2840,6 +2933,16 @@ impl Selector<'_, '_, '_> {
         self.called(inst, convention, Callee::Inline(name, bytes), &[], at, out)
     }
 
+    /// `held` widened to `width` bytes, as its `signext` says, where it is narrower.
+    fn extended(&mut self, held: Held, width: u32, signed: bool, at: i64, out: &mut Vec<Arc<Insn>>) -> Held {
+        if held.width >= width {
+            return held;
+        }
+        let word = Held { value: self.fresh(), width };
+        out.push(insn(at, semantics(Operation::Extend, if signed { "movsx" } else { "movzx" }, vec![Loc::Held(word)], vec![Loc::Held(held)])));
+        word
+    }
+
     fn called(&mut self, inst: InstId, convention: u32, callee: Callee, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let function = self.function;
         let instruction = function.instruction(inst);
@@ -2847,7 +2950,8 @@ impl Selector<'_, '_, '_> {
             Callee::Direct(name, _) | Callee::Inline(name, _) => name.clone(),
             Callee::Indirect(_) => String::new(),
         };
-        let Passing { in_order, pops } = passing(convention)?;
+        let variadic = matches!(&instruction.opcode, Opcode::Call(info) | Opcode::Invoke(info) if self.module.signature(info.function_type).2);
+        let Passing { in_order, pops, registers: entry } = passing(self.arch, convention, variadic)?;
         if convention == llrm_mir::opcode::X86_INTR {
             // An interrupt handler is entered with the flags pushed; its iret takes them.
             out.push(insn(at, semantics(Operation::Nothing, "pushf", vec![], vec![])));
@@ -2867,7 +2971,42 @@ impl Selector<'_, '_, '_> {
             }
             requires.push((held, register));
         }
-        let mut order: Vec<usize> = (0..arguments.len()).collect();
+        // The convention's own: each argument by where the description puts it.
+        let mut placed = None;
+        if let Some(entry) = entry {
+            let kinds = arguments
+                .iter()
+                .map(|&argument| {
+                    let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
+                    Ok(match self.types().get(ty) {
+                        _ if self.is_wide(ty) => llrm_target::calling::Kind::Wide,
+                        Type::Float(_) => llrm_target::calling::Kind::Memory(i64::from(self.size(ty)?)),
+                        _ => llrm_target::calling::Kind::Word,
+                    })
+                })
+                .collect::<Result<Vec<_>, Unselected>>()?;
+            placed = Some((entry, entry.place(&kinds)));
+        }
+        let mut stack_only: Vec<usize> = (0..arguments.len()).collect();
+        if let Some((_, placement)) = &placed {
+            for (index, place) in placement.places.iter().enumerate() {
+                let llrm_target::calling::Place::Registers(names) = place else { continue };
+                let argument = arguments[index];
+                let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
+                let registers: Vec<Register> = names.iter().map(|name| llrm_x86::calling::register(name)).collect();
+                if let [low, high] = registers[..] {
+                    let (lo, hi) = self.wide(argument, at, out)?;
+                    requires.extend([(lo, low), (hi, high)]);
+                } else {
+                    let held = self.held(argument, ty, at, out)?;
+                    let signed = matches!(&instruction.opcode, Opcode::Call(info) if info.argument_attrs.get(index).is_some_and(|attrs| llrm_mir::memory::has(attrs, "signext")));
+                    let held = self.extended(held, registers[0].size() as u32, signed, at, out);
+                    requires.push((held, registers[0]));
+                }
+            }
+            stack_only.retain(|&index| matches!(placement.places[index], llrm_target::calling::Place::Stack(_)));
+        }
+        let mut order = stack_only;
         if !in_order {
             order.reverse();
         }
@@ -2949,6 +3088,13 @@ impl Selector<'_, '_, '_> {
             Callee::Inline(..) => crate::abi::runtime::inline_code(&name),
             _ => self.abi.contract(&name, pops, pushed).map_err(Unselected)?,
         };
+        // A convention that passes in registers states what a call destroys, by the registers it used.
+        let changed = placed.as_ref().map(|(entry, placement)| {
+            let result = (!self.types().is_void(instruction.ty)).then(|| self.size(instruction.ty)).transpose()?.map(i64::from);
+            let names = entry.clobbers(&placement.used, result);
+            Ok::<_, Unselected>(names.iter().filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st")).map(|name| llrm_x86::calling::register(name)).collect::<BTreeSet<Register>>())
+        });
+        let changed = changed.transpose()?;
         let mut delivers = Vec::new();
         let mut result = None;
         let mut float = None;
@@ -3016,8 +3162,8 @@ impl Selector<'_, '_, '_> {
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {
             call: Some(self.listed(effects)),
-            clobbers: call_clobbers(&contract, self.segments),
-            clobbers_high: call_clobbered_high(&contract, self.segments),
+            clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments)),
+            clobbers_high: if changed.is_some() { BTreeSet::new() } else { call_clobbered_high(&contract, self.segments) },
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
             uses: requires.iter().map(|(held, _)| held.value).chain(through).collect(),

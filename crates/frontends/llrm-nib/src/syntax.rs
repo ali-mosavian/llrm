@@ -212,6 +212,8 @@ pub enum Abi {
     Cdecl16,
     /// The same convention on the flat target: stack arguments in dwords, EAX results.
     Cdecl32,
+    /// The flat target's default: Open Watcom's register convention (calling.toml's `watcall32`).
+    Watcall32,
     /// Arguments pushed first to last; the callee removes them.
     Pascal16,
     /// Entered by INT or an IRQ, with nothing passed, and left by `iret`.
@@ -286,6 +288,7 @@ impl Abi {
             "c" => Some(Self::C),
             "cdecl16" => Some(Self::Cdecl16),
             "cdecl32" => Some(Self::Cdecl32),
+            "watcall32" => Some(Self::Watcall32),
             "pascal16" => Some(Self::Pascal16),
             "interrupt16" => Some(Self::Interrupt16),
             _ => Basic::ALL.into_iter().find(|one| one.name() == name).map(Self::Basic),
@@ -297,6 +300,7 @@ impl Abi {
             Self::C => "c",
             Self::Cdecl16 => "cdecl16",
             Self::Cdecl32 => "cdecl32",
+            Self::Watcall32 => "watcall32",
             Self::Pascal16 => "pascal16",
             Self::Basic(basic) => basic.name(),
             Self::Interrupt16 => "interrupt16",
@@ -307,12 +311,18 @@ impl Abi {
     pub fn symbol(self, name: &str) -> String {
         match self {
             Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Interrupt16 => format!("_{name}"),
+            Self::Watcall32 => format!("{name}_"),
             Self::Pascal16 | Self::Basic(_) => name.to_ascii_uppercase(),
         }
     }
 
     pub fn callee_cleans(self) -> bool {
         !matches!(self, Self::C | Self::Cdecl16 | Self::Cdecl32)
+    }
+
+    /// The `cc` of the description's convention this is, where it is not the C one: what HIR names it by.
+    pub fn convention(self) -> Option<&'static str> {
+        matches!(self, Self::Watcall32).then_some("watcall")
     }
 
     /// Where a float result goes, in the HIR's words: BASIC's through a

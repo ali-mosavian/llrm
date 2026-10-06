@@ -239,6 +239,9 @@ impl _Plain for model::CallAbi {
         out.insert("distance".to_owned(), self.distance._plain());
         out.insert("callee".to_owned(), self.callee._plain());
         float_return(&mut out, self.float_return);
+        if self.convention.is_some() {
+            out.insert("convention".to_owned(), self.convention._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -271,6 +274,9 @@ impl _Plain for model::ProcedureAbi {
         float_return(&mut out, self.float_return);
         if self.variadic {
             out.insert("variadic".to_owned(), self.variadic._plain());
+        }
+        if self.convention.is_some() {
+            out.insert("convention".to_owned(), self.convention._plain());
         }
         Json::Dict(out)
     }
@@ -874,6 +880,7 @@ macro_rules! indices {
     };
 }
 const OPTIONAL_INT: _Hint = _Hint::Union(&[_Hint::Int, _Hint::NoneType]);
+const OPTIONAL_STR: _Hint = _Hint::Union(&[_Hint::Str, _Hint::NoneType]);
 const INTS: _Hint = _Hint::Tuple(&_Hint::Int);
 const BOOLS: _Hint = _Hint::Tuple(&_Hint::Bool);
 const OPERANDS: _Hint = _Hint::Tuple(&_Hint::Operand);
@@ -1129,6 +1136,7 @@ static CALL_ABI: _Record = _Record {
         ("distance", enum_hint!(CallDistance), true),
         ("callee", OPTIONAL_INT, false),
         ("float_return", enum_hint!(FloatReturn), false),
+        ("convention", OPTIONAL_STR, false),
     ],
     build: |args| {
         _object(model::CallAbi {
@@ -1138,6 +1146,7 @@ static CALL_ABI: _Record = _Record {
             distance: _required(args, "distance")?,
             callee: _default(args, "callee", None)?,
             float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
+            convention: _default(args, "convention", None)?,
         })
     },
 };
@@ -1180,6 +1189,7 @@ static PROCEDURE_ABI: _Record = _Record {
         ("parameter_bytes", _Hint::Int, true),
         ("float_return", enum_hint!(FloatReturn), false),
         ("variadic", _Hint::Bool, false),
+        ("convention", OPTIONAL_STR, false),
     ],
     build: |args| {
         _object(model::ProcedureAbi {
@@ -1188,6 +1198,7 @@ static PROCEDURE_ABI: _Record = _Record {
             parameter_bytes: _required(args, "parameter_bytes")?,
             float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
             variadic: _default(args, "variadic", false)?,
+            convention: _default(args, "convention", None)?,
         })
     },
 };

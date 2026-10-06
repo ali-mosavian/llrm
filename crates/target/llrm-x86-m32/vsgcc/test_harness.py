@@ -39,3 +39,14 @@ def test_build_script_flags_are_accepted_by_llrm_c():
     assert out.returncode == 0, out.stderr
     here = Path(__file__).parent
     assert "--target" not in (here / "build.sh").read_text() + (here / "ctime.py").read_text()
+
+
+def test_a_multiply_costs_what_its_multiplier_is():
+    """The 486's MUL and IMUL were priced at their least, 13 clocks, whatever the multiplier: gcc's reciprocal `mul` by
+    0xCCCCCCCD (42 clocks by the data sheet) read as cheap, and frames' `/ 10` as 2.2x for llrm's `div`."""
+    assert harness.multiply_clocks(0, False) == 13
+    assert harness.multiply_clocks(5, True) == 13
+    assert harness.multiply_clocks(0xFFFF, False) == 26
+    assert harness.multiply_clocks(25173, True) == 10 + 15
+    assert harness.multiply_clocks(0xCCCCCCCD, False) == 42
+    assert harness.multiply_clocks(0xFFFFFFFF, True) == 15      # -1: n = 5 for a negative multiplier
