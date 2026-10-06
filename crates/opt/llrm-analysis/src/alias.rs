@@ -153,7 +153,7 @@ pub fn nonnull_by_definition(unit: &Unit, value: ValueId) -> Option<bool> {
     // first bytes are the runtime's); a far one may be 0000:0000.
     if let ValueDef::Argument(at) = unit.function.value(value).def {
         let facts = Facts::param(unit.function, at as usize);
-        let near = unit.operand_type(Operand::Value(value)).is_some_and(|ty| matches!(unit.context.types.get(ty), Type::Pointer(0)));
+        let near = unit.operand_type(Operand::Value(value)).is_some_and(|ty| matches!(unit.context.types.get(ty), Type::Pointer(space) if *space == unit.spaces().near));
         if facts.non_null() || near && facts.dereferenceable().is_some_and(|bytes| bytes > 0) {
             return Some(true);
         }
@@ -1165,7 +1165,7 @@ fn _direct(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) ->
         }
         // A segment is no pointer to a program object: `segment:0` is a
         // new root.
-        Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if unit.space(op.operands[0]) != Some(2) => Ok(_operand(unit, op.operands[0], values)),
+        Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if !unit.spaces().is_segment(unit.space(op.operands[0])) => Ok(_operand(unit, op.operands[0], values)),
         Opcode::GetElementPtr { source } => {
             let Some(fact) = _operand(unit, op.operands[0], values) else {
                 return Ok(None);
@@ -1623,7 +1623,7 @@ fn _lost(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) -> V
     let op = unit.function.instruction(inst);
     let carried = match &op.opcode {
         Opcode::ICmp(_) => return Vec::new(),
-        Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => unit.space(op.operands[0]) != Some(2),
+        Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => !unit.spaces().is_segment(unit.space(op.operands[0])),
         Opcode::Load { .. } | Opcode::Store { .. } | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select => true,
         Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Ret | Opcode::Cast(CastOp::PtrToInt) => true,
         _ => false,
@@ -1847,7 +1847,7 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
         // memory, whatever its pointer was made from.
         // The frontend states it only where the target says the address is outside
         // the program; where the selector is a constant here, the target is asked again.
-        if reference.space == llrm_mir::datalayout::FIXED_SPACE && (reference.selector.is_none() || regions::foreign_provenance(reference, &BTreeMap::new(), unit.program).is_some()) {
+        if unit.spaces().is_fixed(reference.space) && (reference.selector.is_none() || regions::foreign_provenance(reference, &BTreeMap::new(), unit.program).is_some()) {
             got = Some(regions::fixed_provenance());
         }
         Ok(MemRef { provenance: got, ..reference.clone() })

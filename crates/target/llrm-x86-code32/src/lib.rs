@@ -18,6 +18,14 @@ pub static CPUS: LazyLock<Vec<&'static str>> = LazyLock::new(|| TIMINGS.cpus());
 /// The data layout and address spaces: `machines/datalayout.toml`.
 pub const DATALAYOUT_TOML: &str = include_str!("machines/datalayout.toml");
 
+/// `DATALAYOUT_TOML`, parsed once.
+static LAYOUT: LazyLock<llrm_target::layout::Layout> = LazyLock::new(|| llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("flat datalayout.toml parses"));
+
+/// The flat target's layout.
+pub fn layout() -> llrm_target::layout::Layout {
+    LAYOUT.clone()
+}
+
 /// The flat 32-bit x86 target as `llrm-driver` names it.
 pub struct Code32;
 
@@ -66,7 +74,7 @@ impl llrm_target::Target for Code32 {
     }
 
     fn layout(&self) -> llrm_target::layout::Layout {
-        llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("flat datalayout.toml parses")
+        LAYOUT.clone()
     }
 
     /// An argument takes a dword at least.
@@ -151,7 +159,7 @@ mod tests {
         let forms = Code32.address_forms(&OperationCosts::default(), 0);
         assert_eq!(forms.len(), 1);
         assert!(!forms[0].secondary && forms[0].index_width == 4 && forms[0].scales == std::collections::BTreeSet::from([1, 2, 4, 8]));
-        let model = (Code32.cost_model())(&llrm_target::CpuPrices { costs: Vec::new(), prefix: 1, address_stall: 0, registers: Code32.register_capacity(), call_registers: Code32.callee_saved().len() as i64, address_forms: forms.clone(), operations: OperationCosts::default() });
+        let model = (Code32.cost_model())(&llrm_target::CpuPrices { costs: Vec::new(), prefix: 1, address_stall: 0, registers: Code32.register_capacity(), call_registers: Code32.callee_saved().len() as i64, address_forms: forms.clone(), operations: OperationCosts::default(), spaces: layout().spaces.roles });
         assert_eq!((model.registers(), model.call_registers()), (6, 3));
         assert_eq!(model.address_forms(), forms);
     }

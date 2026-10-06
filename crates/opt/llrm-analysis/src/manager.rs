@@ -29,7 +29,7 @@ impl<'a> Unit<'a> {
     /// as `outer` holds them.
     pub fn within(context: &'a Context, layout: &'a DataLayout, function: &'a Function, outer: &'a Outer) -> Self {
         let globals_aa = outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok());
-        Self { program: Some(outer.program()), context, layout, metadata: &outer.metadata, tbaa: Some(outer.tbaa()), globals: &outer.globals, function, globals_aa, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, exposed: None }
+        Self { program: Some(outer.program()), spaces: outer.target().spaces(), context, layout, metadata: &outer.metadata, tbaa: Some(outer.tbaa()), globals: &outer.globals, function, globals_aa, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, exposed: None }
     }
 }
 
@@ -62,7 +62,7 @@ impl ModuleAnalysis for Summaries {
             None => None,
         };
         let shapes = bodies(module).map(|(id, _)| (id, analyses.function::<Shape>(module, id))).collect();
-        let exposures = exposures(module, &program.layout);
+        let exposures = exposures(module, &program.layout, program.target.spaces());
         alias::summaries(&procedures(module, &program, globals, &shapes, &exposures), known.as_ref())
     }
 }
@@ -74,8 +74,8 @@ fn bodies(module: &Module) -> impl Iterator<Item = (GlobalId, &Function)> {
 
 /// The exposed frames of each of `module`'s bodies, found once for the summaries that ask of every
 /// access.
-fn exposures(module: &Module, layout: &DataLayout) -> IndexMap<GlobalId, BTreeSet<ValueId>> {
-    bodies(module).map(|(id, function)| (id, crate::memory::exposed_frames(&Unit::of(module, layout, function)))).collect()
+fn exposures(module: &Module, layout: &DataLayout, spaces: llrm_mir::spaces::Spaces) -> IndexMap<GlobalId, BTreeSet<ValueId>> {
+    bodies(module).map(|(id, function)| (id, crate::memory::exposed_frames(&Unit::of(module, layout, function).with_spaces(spaces)))).collect()
 }
 
 /// `module`'s named bodies as alias summarizes them.
@@ -112,7 +112,7 @@ impl ProgramAnalysis for ProgramSummaries {
         let elsewhere = Result::as_ref(&*elsewhere).map_err(String::clone)?;
         let proxies: Vec<_> = (0..count).map(|at| analyses.proxy(program, at)).collect();
         let shapes: Vec<IndexMap<GlobalId, Rc<Shape>>> = program.modules.iter().map(|module| bodies(module).map(|(id, function)| (id, Rc::new(Shape::of(function)))).collect()).collect();
-        let exposures: Vec<IndexMap<GlobalId, BTreeSet<ValueId>>> = program.modules.iter().map(|module| exposures(module, &program.layout)).collect();
+        let exposures: Vec<IndexMap<GlobalId, BTreeSet<ValueId>>> = program.modules.iter().map(|module| exposures(module, &program.layout, program.target.spaces())).collect();
         let globals = (0..count)
             .map(|at| globalsaa::found(&program.modules[at], &proxies[at], &elsewhere[at], &mut |id| Rc::clone(&shapes[at][&id])))
             .collect::<Result<Vec<_>, String>>()?;

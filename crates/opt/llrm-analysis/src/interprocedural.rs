@@ -320,7 +320,7 @@ fn _access(function: &Function, inst: InstId) -> Option<(Operand, bool, bool)> {
 /// its frame (`frameescape::framed`) or a constant offset
 /// (`pointerfacts`) from a near global variable this module defines. A
 /// pointer, an external or far selector may name memory that is not there.
-pub fn cannot_fault(module: &Module, layout: &DataLayout, function: &Function) -> bool {
+pub fn cannot_fault(module: &Module, layout: &DataLayout, spaces: llrm_mir::spaces::Spaces, function: &Function) -> bool {
     let context = &module.context;
     let framed = frameescape::framed(function);
     let offsets = pointerfacts::offsets(context, layout, function);
@@ -329,7 +329,7 @@ pub fn cannot_fault(module: &Module, layout: &DataLayout, function: &Function) -
         let Some((Operand::Constant(base), _)) = offsets.relative(pointer) else { return false };
         let ConstantKind::Global(global) = context.get(base).kind else { return false };
         let global = module.global(global);
-        global.address_space == 0 && matches!(&global.kind, GlobalKind::Variable(variable) if variable.initializer.is_some())
+        global.address_space == spaces.near && matches!(&global.kind, GlobalKind::Variable(variable) if variable.initializer.is_some())
     };
     function.walk().all(|(_, inst)| _access(function, inst).is_none_or(|(pointer, volatile, _)| !volatile && (is_local(pointer) || is_static(pointer))))
 }

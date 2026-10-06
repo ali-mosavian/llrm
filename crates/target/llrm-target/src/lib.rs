@@ -32,12 +32,14 @@ pub struct CpuPrices {
     pub address_forms: Vec<AddressForm>,
     /// What each operation costs: the target's mapping applied to `costs`.
     pub operations: OperationCosts,
+    /// The target's address spaces by role.
+    pub spaces: llrm_mir::spaces::Spaces,
 }
 
 /// A cost model that is only what a target describes: its registers, address forms and
 /// operation prices.
 pub fn described(prices: &CpuPrices) -> Rc<dyn llrm_mir::target::Machine> {
-    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone(), operations: prices.operations.clone() })
+    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone(), operations: prices.operations.clone(), spaces: prices.spaces })
 }
 
 struct Described {
@@ -45,9 +47,14 @@ struct Described {
     call_registers: i64,
     address_forms: Vec<AddressForm>,
     operations: OperationCosts,
+    spaces: llrm_mir::spaces::Spaces,
 }
 
 impl llrm_mir::target::Machine for Described {
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.spaces
+    }
+
     /// Memory without segments is linear: no selector and offset reach foreign memory.
     fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
         None

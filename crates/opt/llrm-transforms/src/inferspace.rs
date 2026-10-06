@@ -9,7 +9,7 @@
 //! ```
 //!
 //! The near space a pointer narrows to follows where it points: DGROUP's for a global, the stack
-//! segment's (`NEAR_STACK`) for a stack object, whose far pointer is SS:offset and which a DGROUP
+//! segment's (the target's stack space) for a stack object, whose far pointer is SS:offset and which a DGROUP
 //! pointer, read through DS, would not reach unless SS were DS. No such assumption is made; a target
 //! that states it could let the two spaces meet. Phis and selects of such pointers follow, where every value
 //! they join is one, and nothing else reads them: a far copy kept beside the near one for a call would
@@ -24,10 +24,9 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{CastOp, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
-use llrm_mir::types::{NEAR_STACK, Type, TypeId};
+use llrm_mir::spaces::Spaces;
+use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::underlying;
-
-pub use llrm_mir::types::NEAR_DATA;
 
 pub struct InferAddressSpaces;
 
@@ -36,9 +35,9 @@ impl FunctionPass for InferAddressSpaces {
         "inferspace"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, _: &mut Analyses) -> PreservedAnalyses {
+    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         // Blocks and edges are as they were.
-        if inferred(unit.context, unit.layout, unit.function) { PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>() } else { PreservedAnalyses::all() }
+        if inferred(unit.context, unit.layout, unit.function, analyses.outer().target().spaces()) { PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -57,9 +56,9 @@ fn far(context: &Context, layout: &DataLayout, ty: TypeId) -> Option<u32> {
 }
 
 /// The near space `ty` is a pointer into, if it is one.
-fn near(context: &Context, ty: TypeId) -> Option<u32> {
+fn near(context: &Context, spaces: Spaces, ty: TypeId) -> Option<u32> {
     match context.types.get(ty) {
-        Type::Pointer(space @ (NEAR_DATA | NEAR_STACK)) => Some(*space),
+        Type::Pointer(space) if *space == spaces.data || *space == spaces.stack => Some(*space),
         _ => None,
     }
 }
@@ -93,7 +92,7 @@ fn met(one: Space, other: Space) -> Space {
     }
 }
 
-fn inferred(context: &mut Context, layout: &DataLayout, function: &mut Function) -> bool {
+fn inferred(context: &mut Context, layout: &DataLayout, function: &mut Function, spaces: Spaces) -> bool {
     let walk: Vec<(llrm_mir::module::BlockId, InstId)> = function.walk().collect();
     // The far pointers that are a near one cast: value -> the near pointer, the space it narrows to.
     let mut seeds: BTreeMap<ValueId, (Operand, u32)> = BTreeMap::new();
@@ -101,18 +100,18 @@ fn inferred(context: &mut Context, layout: &DataLayout, function: &mut Function)
         let instruction = function.instruction(inst);
         let (Opcode::Cast(CastOp::AddrSpaceCast), Some(result)) = (&instruction.opcode, instruction.result) else { continue };
         let source = instruction.operands[0];
-        let Some(from) = function.operand_type(context, source).and_then(|ty| near(context, ty)) else { continue };
+        let Some(from) = function.operand_type(context, source).and_then(|ty| near(context, spaces, ty)) else { continue };
         if far(context, layout, instruction.ty).is_none() {
             continue;
         }
         // Where its object is: the stack's selector is SS, DGROUP's is DS.
-        let space = if from == NEAR_STACK || on_stack(context, layout, function, source) { NEAR_STACK } else { NEAR_DATA };
+        let space = if from == spaces.stack || on_stack(context, layout, function, source) { spaces.stack } else { spaces.data };
         seeds.insert(result, (source, space));
     }
     if seeds.is_empty() {
         return false;
     }
-    let near_types: BTreeMap<u32, TypeId> = [NEAR_DATA, NEAR_STACK].into_iter().map(|space| (space, context.types.ptr(space))).collect();
+    let near_types: BTreeMap<u32, TypeId> = [spaces.data, spaces.stack].into_iter().map(|space| (space, context.types.ptr(space))).collect();
     let context: &Context = context;
     // Far steps, phis and selects that may follow: by value.
     let mut chain: BTreeMap<ValueId, InstId> = BTreeMap::new();
@@ -141,7 +140,7 @@ fn inferred(context: &mut Context, layout: &DataLayout, function: &mut Function)
             Opcode::Store { volatile: false, .. } if index == 1 => Reads::Narrows,
             Opcode::GetElementPtr { .. } if index == 0 => Reads::Narrows,
             Opcode::Phi | Opcode::Select if instruction.result.is_some_and(|one| chain.contains_key(&one)) => Reads::Narrows,
-            Opcode::Cast(CastOp::AddrSpaceCast) if near(context, instruction.ty).is_some() && function.value(value).ty != instruction.ty => Reads::Drops,
+            Opcode::Cast(CastOp::AddrSpaceCast) if near(context, spaces, instruction.ty).is_some() && function.value(value).ty != instruction.ty => Reads::Drops,
             _ => Reads::Needs,
         }
     };
@@ -192,7 +191,7 @@ fn inferred(context: &mut Context, layout: &DataLayout, function: &mut Function)
             function.users(value).iter().any(|one| {
                 let reads = usage(function, value, one.user, one.index);
                 matches!(function.instruction(one.user).opcode, Opcode::Load { .. } | Opcode::Store { .. }) && reads == Reads::Narrows
-                    || reads == Reads::Drops && near(context, function.instruction(one.user).ty) == space_of(value)
+                    || reads == Reads::Drops && near(context, spaces, function.instruction(one.user).ty) == space_of(value)
             })
         })
         .collect();
@@ -216,7 +215,7 @@ fn inferred(context: &mut Context, layout: &DataLayout, function: &mut Function)
         if !wanted.contains(&value) {
             continue;
         }
-        let from = function.operand_type(context, source).and_then(|ty| near(context, ty));
+        let from = function.operand_type(context, source).and_then(|ty| near(context, spaces, ty));
         if from == Some(space) {
             narrow.insert(value, source);
         } else {
@@ -299,7 +298,7 @@ fn inferred(context: &mut Context, layout: &DataLayout, function: &mut Function)
                 }
                 Reads::Drops => {
                     // Only to the space it is: a cast to the other near space has no business here.
-                    if near(context, function.instruction(one.user).ty) != space_of(value) {
+                    if near(context, spaces, function.instruction(one.user).ty) != space_of(value) {
                         continue;
                     }
                     let result = function.instruction(one.user).result.expect("a cast's value");

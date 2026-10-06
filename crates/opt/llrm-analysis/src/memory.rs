@@ -398,6 +398,8 @@ pub fn classes_may_alias(one: AliasClass, other: AliasClass) -> bool {
 #[derive(Clone, Copy)]
 pub struct Unit<'a> {
     pub program: Option<&'a ProgramProxy>,
+    /// The address spaces where no program names its target.
+    pub spaces: llrm_mir::spaces::Spaces,
     pub context: &'a Context,
     pub layout: &'a DataLayout,
     pub metadata: &'a [MetadataNode],
@@ -440,7 +442,11 @@ impl<'a> Unit<'a> {
     }
 
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { program: None, context: &module.context, layout, metadata: &module.metadata, tbaa: None, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, exposed: None }
+        Self { program: None, spaces: llrm_mir::spaces::Spaces::FLAT, context: &module.context, layout, metadata: &module.metadata, tbaa: None, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, exposed: None }
+    }
+
+    pub fn with_spaces(self, spaces: llrm_mir::spaces::Spaces) -> Self {
+        Self { spaces, ..self }
     }
 
     pub fn with_exposed(self, exposed: &'a BTreeSet<ValueId>) -> Self {
@@ -537,6 +543,11 @@ impl<'a> Unit<'a> {
             },
             _ => None,
         }
+    }
+
+    /// The address spaces by role: the program's target's, or one flat space where none is named.
+    pub fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.program.map_or(self.spaces, |program| program.target.spaces())
     }
 
     /// A pointer operand's address space.
@@ -874,7 +885,7 @@ fn step(unit: &Unit, pointer: Operand) -> Option<Step> {
     let types = &unit.context.types;
     let through = |from: Operand| {
         // A segment's cast to a far pointer is `segment:0`, a new root.
-        (unit.space(from).is_some_and(|space| space != 2)).then_some(Step::Through(from))
+        (unit.space(from).is_some() && !unit.spaces().is_segment(unit.space(from))).then_some(Step::Through(from))
     };
     match pointer {
         Operand::Value(_) => {
@@ -1030,6 +1041,20 @@ mod tests {
         MemoryObject::new(kind)
     }
 
+    /// Isel's unit named no program, so the spaces became one flat space: a QB program's
+    /// fixed-address pokes (`DEF SEG`) were no longer apart from every object and demo-qbdemo
+    /// grew 6 bytes. A unit asks the spaces it was given when no program names the target.
+    #[test]
+    fn a_unit_with_no_program_asks_the_spaces_it_was_given() {
+        let module = parsed(&format!("{DOS}define void @f() {{\nb0:\n  ret void\n}}\n"));
+        let layout = layout(&module);
+        let (_, _, f) = module.functions().next().unwrap();
+        let dos = llrm_x86_code16::spaces();
+        assert_eq!(Unit::of(&module, &layout, f).spaces(), llrm_mir::spaces::Spaces::FLAT);
+        assert_eq!(Unit::of(&module, &layout, f).with_spaces(dos).spaces(), dos);
+        assert!(Unit::of(&module, &layout, f).with_spaces(dos).spaces().is_fixed(4));
+    }
+
     #[test]
     fn object_kind_rules_keep_stack_and_global_separate() {
         assert!(!super::objects_may_alias(&object(MemoryKind::Stack), &object(MemoryKind::Global)));
@@ -1163,7 +1188,7 @@ b0:
         ));
         let layout = layout(&module);
         let f = function(&module, "f");
-        let unit = Unit::of(&module, &layout, f);
+        let unit = Unit::of(&module, &layout, f).with_spaces(llrm_x86_code16::spaces());
         let loads = f.walk().map(|(_, inst)| inst).filter_map(|inst| MemRef::of(&unit, inst)).collect::<Vec<_>>();
 
         let far = &loads[0];

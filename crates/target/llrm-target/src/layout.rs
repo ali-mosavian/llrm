@@ -4,26 +4,23 @@
 
 use std::collections::BTreeMap;
 
-/// The address spaces of a target, by what a frontend calls them. Where two are
-/// one space (`near` = `far`) the target is flat; one a target has no space for
-/// is `None`, and a program using it is refused.
+use llrm_mir::spaces::Spaces;
+
+/// A target's address spaces: the roles the passes ask (`llrm_mir::spaces::Spaces`, reached
+/// through `Deref`) and what an unmarked pointer is.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AddressSpaces {
-    pub near: u32,
-    pub far: u32,
-    /// Where the program's data is, for the passes that ask: its globals' and
-    /// escaping locals' space.
-    pub data: u32,
-    /// Where the stack is.
-    pub stack: u32,
-    /// A selector alone.
-    pub segment: Option<u32>,
-    /// A far pointer whose offset carries into its selector.
-    pub huge: Option<u32>,
-    /// Memory no program object occupies.
-    pub fixed: Option<u32>,
+    pub roles: Spaces,
     /// What an unmarked pointer of a width, in bytes, is: `near` or `far`.
     pub unmarked: BTreeMap<i64, Kind>,
+}
+
+impl std::ops::Deref for AddressSpaces {
+    type Target = Spaces;
+
+    fn deref(&self) -> &Spaces {
+        &self.roles
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,26 +40,6 @@ pub struct Layout {
 }
 
 impl AddressSpaces {
-    /// Whether `far` is the `near` space: the target is flat, and a far or huge pointer is a near one.
-    pub fn far_is_near(&self) -> bool {
-        self.far == self.near
-    }
-
-    /// The selector-alone space, or why the target has none.
-    pub fn segment_space(&self) -> Result<u32, String> {
-        self.segment.ok_or_else(|| "this target has no selector address space".to_owned())
-    }
-
-    /// The huge-pointer space, or why the target has none.
-    pub fn huge_space(&self) -> Result<u32, String> {
-        self.huge.ok_or_else(|| "this target has no huge address space".to_owned())
-    }
-
-    /// The fixed-address space, or why the target has none.
-    pub fn fixed_space(&self) -> Result<u32, String> {
-        self.fixed.ok_or_else(|| "this target has no fixed address space".to_owned())
-    }
-
     /// The space of an unmarked pointer `width` bytes wide.
     pub fn unmarked(&self, width: i64) -> Result<u32, String> {
         match self.unmarked.get(&width) {
@@ -107,7 +84,10 @@ impl Layout {
         Ok(Self {
             datalayout,
             segment_bytes,
-            spaces: AddressSpaces { near: required("near")?, far: required("far")?, data: required("data")?, stack: required("stack")?, segment: number("segment")?, huge: number("huge")?, fixed: number("fixed")?, unmarked },
+            spaces: AddressSpaces {
+                roles: Spaces { near: required("near")?, far: required("far")?, data: required("data")?, stack: required("stack")?, segment: number("segment")?, huge: number("huge")?, fixed: number("fixed")? },
+                unmarked,
+            },
         })
     }
 }

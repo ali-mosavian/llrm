@@ -321,11 +321,11 @@ pub fn _fragments(reference: &MemRef, fact: &Known) -> Cells {
 
 /// A far store's selector, where nothing yet says which segment it is
 /// and it is still one this run may take on faith.
-fn _selector(reference: &MemRef, known: &IndexMap<ValueId, Known>, allowed: Option<&BTreeSet<ValueId>>) -> Option<ValueId> {
+fn _selector(unit: &Unit, reference: &MemRef, known: &IndexMap<ValueId, Known>, allowed: Option<&BTreeSet<ValueId>>) -> Option<ValueId> {
     let Some(Operand::Value(segment)) = reference.segment else {
         return None;
     };
-    if reference.space != 1 || known.contains_key(&segment) || allowed.is_some_and(|allowed| !allowed.contains(&segment)) {
+    if reference.space != unit.spaces().far || known.contains_key(&segment) || allowed.is_some_and(|allowed| !allowed.contains(&segment)) {
         return None;
     }
     Some(segment)
@@ -424,7 +424,7 @@ fn _killed(
     for reference in &stores {
         let reference = queries.resolve(reference);
         if let Some(assume) = assume.as_deref_mut() {
-            if let Some(selector) = _selector(&reference, known, allowed) {
+            if let Some(selector) = _selector(&unit, &reference, known, allowed) {
                 // A cell in `here` is always in a program object, so an
                 // absolute segment reaches none of them.
                 assume.insert(selector);

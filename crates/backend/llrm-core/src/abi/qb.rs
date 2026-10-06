@@ -821,6 +821,10 @@ impl LoweredTarget {
 }
 
 impl llrm_mir::target::Machine for LoweredTarget {
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.machine.spaces()
+    }
+
     fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
         self.machine.foreign_span(selectors, offsets, width)
     }

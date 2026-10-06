@@ -4,6 +4,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::spaces::Spaces;
+
 /// Where the target keeps no program data, as linear addresses: old
 /// `abi::machine::Machine::foreign_span`. A real-mode target has some (its
 /// video memory and ROM); any other none.
@@ -11,6 +13,9 @@ pub trait Machine {
     /// The linear bytes that `width`-byte accesses at `selectors` and
     /// `offsets` (unsigned words) reach, where foreign memory holds them all.
     fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)>;
+
+    /// The address spaces by role: the numbers the target's description gives them.
+    fn spaces(&self) -> Spaces;
 
     /// What each operation costs on this target, for profitability.
     fn costs(&self) -> OperationCosts;
@@ -289,6 +294,10 @@ impl AddressForm {
 pub struct Neutral;
 
 impl Machine for Neutral {
+    fn spaces(&self) -> Spaces {
+        Spaces::FLAT
+    }
+
     fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
         None
     }
