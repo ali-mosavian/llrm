@@ -32,7 +32,7 @@ pub fn machine<'a>(
     segments: &Segments,
     spilling: bool,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
-    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, spilling.then(Rc::<ssaspill::Run>::default), &crate::backend::peep::targets::x86_code16::RULES)
+    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, spilling.then(Rc::<ssaspill::Run>::default), &crate::backend::peep::targets::x86_code16::RULES, &llrm_target::Target::frame_registers(&llrm_x86_code16::Code16))
 }
 
 /// `machine`, its peephole made of the rules `rules` holds; the spiller, where `spilling` names a run, reports to it.
@@ -47,6 +47,7 @@ pub fn machine_with<'a>(
     segments: &Segments,
     spilling: Option<Rc<ssaspill::Run>>,
     rules: &'static crate::backend::peep::Rules,
+    registers: &llrm_target::FrameRegisters,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     let target = targets::profile(cpu)?;
     let mut pinned = pinned.clone();
@@ -70,7 +71,7 @@ pub fn machine_with<'a>(
         // After allocation: which moves in a phi's copy conflict is a question about locations.
         Box::new(parcopy::ParallelCopy),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
-        Box::new(peephole::Peephole::with_rules(frame.clone(), target, rules)?),
+        Box::new(peephole::Peephole::with_rules(frame.clone(), target, rules, registers.saved.iter().map(|(whole, _)| *whole).collect())?),
         // Once spill traffic is final: which slots a loop still reaches.
         Box::new(loopslots::LoopSlots::new(frame.clone(), target)?),
         // Scheduling may only move fully allocated machine occurrences.

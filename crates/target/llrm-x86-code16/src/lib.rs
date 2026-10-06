@@ -41,6 +41,15 @@ impl llrm_target::Target for Code16 {
         if far { 6 } else { 4 }
     }
 
+    fn stack_pointer(&self) -> iced_x86::Register {
+        iced_x86::Register::SP
+    }
+
+    /// A Borland caller keeps SI and DI, not their upper halves.
+    fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)> {
+        PRESERVED.to_vec()
+    }
+
     /// A dword leaves in DX:AX and an i64 in EDX:EAX, so both name EAX and EDX.
     fn results(&self, width: u32) -> Vec<iced_x86::Register> {
         use iced_x86::Register::{EAX, EDX};
@@ -61,6 +70,8 @@ mod tests {
     fn test_code16_answers_the_literals_isel_had() {
         assert_eq!((Code16.stack_slot_bytes(), Code16.frame_register()), (2, iced_x86::Register::BP));
         assert_eq!((Code16.first_argument_offset(false), Code16.first_argument_offset(true)), (4, 6));
+        assert_eq!(Code16.stack_pointer(), iced_x86::Register::SP);
+        assert_eq!(Code16.callee_saved(), PRESERVED.to_vec());
         assert_eq!([1, 2, 4, 8].map(|width| Code16.results(width)), [vec![EAX], vec![EAX], vec![EAX, EDX], vec![EAX, EDX]]);
     }
 }
