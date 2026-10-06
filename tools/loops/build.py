@@ -18,24 +18,31 @@ OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/b
 IA16 = Path(os.environ.get("IA16_ROOT", Path.home() / "work/other/build-ia16"))
 LLVM = Path(os.environ.get("LLVM20", "/usr/lib/llvm-20/bin"))
 
-CPUS = ("386", "486", "P5", "Core")
-
-
-def march(cpu: str) -> str:
-    """The `-march` flag that names `cpu` to llrm: the `march` row of m16's timings.times, one column a CPU."""
+def _times() -> dict[str, list[str]]:
+    """The rows of m16's timings.times by name: `cpus`, `march` (one column a CPU), `default_cpu`."""
     rows = {}
     for line in (ROOT / "crates/target/llrm-x86-m16/src/timings.times").read_text().splitlines():
         columns = line.split()
-        if columns and columns[0] in ("cpus", "march"):
+        if columns and columns[0] in ("cpus", "march", "default_cpu"):
             rows[columns[0]] = columns[1:]
+    return rows
+
+
+def march(cpu: str) -> str:
+    """The `-march` flag that names `cpu` to llrm: the `march` row of timings.times."""
+    rows = _times()
     return "-march=" + rows["march"][rows["cpus"].index(cpu)]
+
+
+# The CPU a run is for when none is named: the target's own default.
+DEFAULT_CPU = _times()["default_cpu"][0]
 OPTS = ("-O2", "-O3", "-Os")
 EXT = {"c": ".c", "bas": ".bas", "nib": ".nib"}
 
 
 @dataclass(frozen=True)
 class Config:
-    cpu: str = "486"
+    cpu: str = DEFAULT_CPU
     opt: str = "-O2"
     nib_checked: bool = False
     # Whether the compiler may inline the function under test into its driver.
@@ -120,9 +127,11 @@ def stale_binaries(root: Path = ROOT, bin: Path = BIN) -> list[str]:
 # --- the references ------------------------------------------------------------
 
 OW_CPU = {"386": "-3", "486": "-4", "P5": "-5", "Core": "-6"}
+# The CPUs a run covers: those Open Watcom has a flag for, among the target's own.
+CPUS = tuple(cpu for cpu in _times()["cpus"] if cpu in OW_CPU)
 OW_OPT = {"-O2": ["-ox"], "-O3": ["-ox", "-ol+", "-oh"], "-Os": ["-os", "-ol"]}
 # gcc-ia16 stops at the 286: no 32-bit registers or addressing.
-IA16_ARCH = {"386": "i80286", "486": "i80286", "P5": "i80286", "Core": "i80286"}
+IA16_ARCH = "i80286"
 IA16_OPT = {"-O2": "-O2", "-O3": "-O3", "-Os": "-Os"}
 
 
@@ -136,7 +145,7 @@ def ia16(source: Path, obj: Path, config: Config) -> None:
     """gcc-ia16's cc1 and as (its driver does not build here), medium model."""
     cc1 = IA16 / "build/gcc/cc1"
     asm = obj.with_suffix(".s")
-    _run([str(cc1), "-quiet", str(source), "-o", str(asm), IA16_OPT[config.opt], f"-march={IA16_ARCH[config.cpu]}",
+    _run([str(cc1), "-quiet", str(source), "-o", str(asm), IA16_OPT[config.opt], f"-march={IA16_ARCH}",
           "-mcmodel=medium", "-msegment-relocation-stuff", "-fno-inline", "-w"])
     _run([str(IA16 / "prefix/bin/ia16-elf-as"), str(asm), "-o", str(obj)])
 
