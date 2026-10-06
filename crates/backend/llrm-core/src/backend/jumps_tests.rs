@@ -858,3 +858,15 @@ fn test_a_loops_proven_test_is_not_copied_into_a_loop_inside_it() {
     let after = work(&phases[0].transform(body).expect("places"));
     assert!(after >= 0.75 * before, "{before} before ControlFlow, {after} after");
 }
+
+/// Each change threading made copied every block, twice, and went back to the first: a body of n jumps to
+/// the next block was n copies of n blocks, 2.1 s of compiling 800 blocks (#560). A change edits in place.
+#[test]
+fn test_threading_a_long_run_of_jumps_does_not_copy_the_body_for_each() {
+    let n = 3000;
+    let blocks: Vec<LirBlock> = (0..n).map(|at| block(at, vec![_move(at * 2, imm(at)), _jump(at * 2 + 1, at + 1)], vec![at + 1])).chain([block(n, vec![_return(n * 2)], vec![])]).collect();
+    let started = std::time::Instant::now();
+    let threaded = threaded(&body("f", 0, blocks));
+    assert!(threaded.blocks.iter().take(n as usize).all(|one| _real(one).iter().all(|insn| insn.what.as_ref().is_none_or(|what| what.op != Operation::Jump))), "a fall-through jump is left");
+    assert!(started.elapsed().as_secs_f64() < 0.5, "{:?} for 3,000 blocks", started.elapsed());
+}
