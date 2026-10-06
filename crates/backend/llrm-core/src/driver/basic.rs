@@ -728,7 +728,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         debug,
         stack: 0,
         // BASIC is code16's.
-        header: llrm_target::Target::listing_header(&llrm_x86_code16::Code16),
+        object: llrm_target::Target::object(&llrm_x86_code16::Code16),
     })
 }
 

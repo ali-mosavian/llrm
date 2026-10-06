@@ -4,6 +4,7 @@
 pub mod addressing;
 pub mod layout;
 pub mod machine;
+pub mod object;
 pub mod opcosts;
 pub mod registers;
 pub mod timings;
@@ -132,8 +133,8 @@ pub trait Target {
     /// How this target's passes are given the prices of a CPU.
     fn cost_model(&self) -> CostModel;
 
-    /// The lines a listing opens with: its instruction set and memory model.
-    fn listing_header(&self) -> Vec<String>;
+    /// The object file and listing this target writes.
+    fn object(&self) -> object::ObjectFormat;
 
     /// What a frame is built of.
     fn frame_registers(&self) -> FrameRegisters {
