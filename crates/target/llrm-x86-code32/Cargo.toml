@@ -8,3 +8,8 @@ description = "The flat 32-bit x86 target: its descriptions and its platform"
 [dependencies]
 llrm-target = { workspace = true }
 iced-x86 = { workspace = true }
+
+[dev-dependencies]
+llrm-core = { workspace = true }
+llrm-mir = { workspace = true }
+llrm-x86-code16 = { workspace = true }
