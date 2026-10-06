@@ -4,3 +4,6 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "What every x86 target shares: the instruction forms"
+
+[dependencies]
+toml = { workspace = true }
