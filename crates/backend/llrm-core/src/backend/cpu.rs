@@ -9,6 +9,8 @@ use std::sync::LazyLock;
 
 use crate::support::hash::IndexMap;
 
+use llrm_target::Target;
+
 use llrm_x86_code16::timings;
 use crate::model::passes::{
     AddressForm, DEFAULT_MAX_UNROLL_ITERATIONS, DEFAULT_MAX_UNROLLED_OPERATIONS, OperationCosts,
@@ -43,12 +45,25 @@ pub struct Profile {
     pub address_prefix_stall: i64,
     // -Os: where the costs tie on nothing else, the shorter encoding.
     pub size: bool,
+    /// How the target this profile is for builds its cost model from the CPU's prices.
+    pub model: llrm_target::CostModel,
 }
 
 impl Profile {
-    /// The MIR target this profile prices: real-mode DOS on its CPU.
+    /// What the CPU prices, as a target builds its cost model from.
+    pub fn cpu_prices(&self) -> llrm_target::CpuPrices {
+        llrm_target::CpuPrices {
+            costs: self._costs.clone(),
+            prefix: self.prefix_cost,
+            address_stall: self.address_prefix_stall,
+            registers: self.register_capacity,
+            call_registers: self.call_register_capacity,
+        }
+    }
+
+    /// The MIR target this profile prices: its target's cost model on its CPU.
     pub fn target(&self) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
-        std::rc::Rc::new(llrm_x86_code16::Dos::priced(&self._costs, self.prefix_cost, self.address_prefix_stall, self.register_capacity, self.call_register_capacity))
+        (self.model)(&self.cpu_prices())
     }
 
     /// The form that indexes by a dword register: where a target has one, a
@@ -84,6 +99,7 @@ impl Profile {
             max_unrolled_operations: DEFAULT_MAX_UNROLLED_OPERATIONS,
             address_prefix_stall: 0,
             size: false,
+            model: llrm_target::Target::cost_model(&llrm_x86_code16::Code16),
         }
     }
 
@@ -263,16 +279,21 @@ fn _operation_costs(costs: &IndexMap<&str, i64>, prefix: i64) -> OperationCosts 
 /// Native medium-model addressing, then the legal secondary 67h form.
 /// The target's address forms, priced by `costs` and `prefix`: the 386's
 /// table has no prefix column, so its own is passed.
-fn _address_forms(costs: &OperationCosts, prefix: i64, address_stall: i64) -> Vec<AddressForm> {
-    llrm_x86_code16::target::address_forms(&OperationCosts { prefix, ..costs.clone() }, address_stall)
+fn _address_forms(arch: &dyn Target, costs: &OperationCosts, prefix: i64, address_stall: i64) -> Vec<AddressForm> {
+    arch.address_forms(&OperationCosts { prefix, ..costs.clone() }, address_stall)
 }
 
-fn _profile(name: &str) -> Result<Profile, String> {
+/// What the target states of its registers and prices, over the CPU's own.
+fn _of_target(arch: &dyn Target, profile: Profile) -> Profile {
+    Profile { register_capacity: arch.register_capacity(), call_register_capacity: arch.callee_saved().len() as i64, model: arch.cost_model(), ..profile }
+}
+
+fn _profile(arch: &dyn Target, name: &str) -> Result<Profile, String> {
     if name == "386" {
         let costs = _I386_COSTS.clone();
         let operations = _operation_costs(&costs, 0);
-        return Ok(Profile {
-            address_forms: _address_forms(&operations, 0, 0),
+        return Ok(_of_target(arch, Profile {
+            address_forms: _address_forms(arch, &operations, 0, 0),
             operations,
             _costs: costs
                 .iter()
@@ -283,7 +304,7 @@ fn _profile(name: &str) -> Result<Profile, String> {
                 .map(|(key, value)| ((*key).to_owned(), *value))
                 .collect(),
             ..Profile::new(name, 1, true, 0, 0)
-        });
+        }));
     }
     let at = timings::ARCHS
         .iter()
@@ -294,9 +315,9 @@ fn _profile(name: &str) -> Result<Profile, String> {
         .map(|(operation, values)| (*operation, values[at]))
         .collect();
     let operations = _operation_costs(&costs, timings::PREFIX[at]);
-    Ok(Profile {
+    Ok(_of_target(arch, Profile {
         pentium_pairing: name == "P5",
-        address_forms: _address_forms(&operations, timings::PREFIX[at], timings::LCP_STALL[at]),
+        address_forms: _address_forms(arch, &operations, timings::PREFIX[at], timings::LCP_STALL[at]),
         operations,
         _costs: costs
             .iter()
@@ -314,38 +335,34 @@ fn _profile(name: &str) -> Result<Profile, String> {
             timings::PREFIX[at],
             timings::PARTIAL_STALL[at],
         )
-    })
+    }))
 }
 
-/// A profile per CPU the machine layer lists.
-static _PROFILES: LazyLock<Vec<Profile>> = LazyLock::new(|| {
-    crate::abi::machine::CPUS
-        .iter()
-        .map(|name| _profile(name).expect("every listed CPU has a profile"))
-        .collect()
-});
+/// The profiles made so far, by target, CPU and size: each made once, as the passes hold them.
+static _MADE: LazyLock<std::sync::Mutex<std::collections::HashMap<(&'static str, String, bool), &'static Profile>>> = LazyLock::new(Default::default);
 
-static _BY_NAME: LazyLock<IndexMap<&'static str, &'static Profile>> = LazyLock::new(|| {
-    _PROFILES
-        .iter()
-        .map(|one| (one.name.as_str(), one))
-        .collect()
-});
-
-/// Each profile again, tuned for size.
-static _SIZED: LazyLock<IndexMap<&'static str, Profile>> =
-    LazyLock::new(|| _PROFILES.iter().map(|one| (one.name.as_str(), Profile { size: true, ..one.clone() })).collect());
-
-/// `name`'s profile, tuned for size where `size`.
-pub fn tuned(name: &str, size: bool) -> Result<&'static Profile, String> {
-    if !size {
-        return named(name);
+/// `name`'s profile on the target `arch`, tuned for size where `size`.
+pub fn tuned_for(arch: &dyn Target, name: &str, size: bool) -> Result<&'static Profile, String> {
+    if !arch.cpus().contains(&name) {
+        return Err(format!("unknown CPU target: {name}"));
     }
-    _SIZED.get(name).ok_or_else(|| format!("unknown CPU target: {name}"))
+    let mut made = _MADE.lock().expect("the profiles are not poisoned");
+    let key = (arch.name(), name.to_owned(), size);
+    if let Some(&one) = made.get(&key) {
+        return Ok(one);
+    }
+    let one: &'static Profile = Box::leak(Box::new(Profile { size, ..(_profile(arch, name)).expect("every listed CPU has a profile") }));
+    made.insert(key, one);
+    Ok(one)
+}
+
+/// `name`'s profile on 16-bit x86, tuned for size where `size`.
+pub fn tuned(name: &str, size: bool) -> Result<&'static Profile, String> {
+    tuned_for(&llrm_x86_code16::Code16, name, size)
 }
 
 pub fn names() -> Vec<&'static str> {
-    _BY_NAME.keys().copied().collect()
+    llrm_target::Target::cpus(&llrm_x86_code16::Code16).to_vec()
 }
 
 pub fn profile<'a>(value: impl Into<ProfileOrName<'a>>) -> Result<&'a Profile, String> {
@@ -356,7 +373,7 @@ pub fn profile<'a>(value: impl Into<ProfileOrName<'a>>) -> Result<&'a Profile, S
 }
 
 pub fn named(name: &str) -> Result<&'static Profile, String> {
-    _BY_NAME.get(name).copied().ok_or_else(|| format!("unknown CPU target: {name}"))
+    tuned(name, false)
 }
 
 #[cfg(test)]

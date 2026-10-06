@@ -3,7 +3,27 @@
 
 pub mod machine;
 
+use std::rc::Rc;
+
+use llrm_mir::target::{AddressForm, OperationCosts};
 use machine::Machine;
+
+/// What a CPU's profile states that a target prices its operations from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CpuPrices {
+    /// Clocks per kind of instruction form.
+    pub costs: Vec<(String, i64)>,
+    /// What an operand-size prefix costs.
+    pub prefix: i64,
+    /// What an address-size prefix costs besides.
+    pub address_stall: i64,
+    /// Registers an allocator may hold values in, and those a call keeps.
+    pub registers: i64,
+    pub call_registers: i64,
+}
+
+/// A target's cost model, built from a CPU's prices: what the passes ask of it.
+pub type CostModel = fn(&CpuPrices) -> Rc<dyn llrm_mir::target::Machine>;
 
 /// A target, as the driver picks one by name: what a frontend of it starts
 /// from. The passes' view of a target grows here as the backend stops naming
@@ -38,6 +58,16 @@ pub trait Target {
     /// The registers a callee keeps for its caller that an allocator may hold
     /// a value in: each by its full register and by the one a prologue pushes.
     fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)>;
+
+    /// The registers an allocator may hold values in.
+    fn register_capacity(&self) -> i64;
+
+    /// The indexed addresses a memory access may use, priced by `costs` (its
+    /// operand-size prefix in `prefix`) and `address_stall`: native form first.
+    fn address_forms(&self, costs: &OperationCosts, address_stall: i64) -> Vec<AddressForm>;
+
+    /// How this target's passes are given the prices of a CPU.
+    fn cost_model(&self) -> CostModel;
 
     /// What a frame is built of.
     fn frame_registers(&self) -> FrameRegisters {

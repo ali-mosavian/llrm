@@ -49,7 +49,7 @@ impl Options {
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
-        cpu::tuned(&self.machine.cpu, self.pipeline.prefers_size())
+        cpu::tuned_for(&*self.arch, &self.machine.cpu, self.pipeline.prefers_size())
     }
 }
 

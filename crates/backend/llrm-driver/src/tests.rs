@@ -49,3 +49,23 @@ fn code32_is_a_flat_target_with_its_own_selector() {
     assert_eq!(bound.selection.name, "x86-code32");
     assert_eq!(bound.target.machine().addressing, llrm_target::machine::Addressing::Flat);
 }
+
+/// The profile a target is compiled with is built from that target: the 16-bit
+/// one's dword index is behind the address-size prefix and costs a prefix; the flat
+/// one's is native. Both came from the 16-bit tables, whichever target was named.
+#[test]
+fn a_targets_cpu_profile_has_its_own_address_forms_and_registers() {
+    let profile = |arguments: &[&str]| {
+        let flags = flags(arguments);
+        let bound = target(&flags, &["x86-code16", "x86-code32"]).unwrap();
+        let options = bound.options(&flags, bound.target.machine());
+        options.cpu().unwrap()
+    };
+    let real = profile(&[]);
+    let flat = profile(&["--target", "x86-code32"]);
+    assert!(real.dword_address_form().unwrap().secondary);
+    assert!(!flat.dword_address_form().unwrap().secondary);
+    assert_eq!((real.register_capacity, real.call_register_capacity), (6, 2));
+    assert_eq!((flat.register_capacity, flat.call_register_capacity), (6, 3));
+    assert_eq!(flat.name, real.name);
+}
