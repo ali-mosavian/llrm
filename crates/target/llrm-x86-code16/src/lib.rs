@@ -14,7 +14,23 @@ pub use timings::ARCHS;
 /// The 16-bit x86 target as `llrm-driver` names it.
 pub struct Code16;
 
+fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
+    std::rc::Rc::new(Dos::priced(&prices.costs, prices.prefix, prices.address_stall, prices.registers, prices.call_registers))
+}
+
 impl llrm_target::Target for Code16 {
+    fn register_capacity(&self) -> i64 {
+        GENERAL.len() as i64
+    }
+
+    fn address_forms(&self, costs: &llrm_mir::target::OperationCosts, address_stall: i64) -> Vec<llrm_mir::target::AddressForm> {
+        target::address_forms(costs, address_stall)
+    }
+
+    fn cost_model(&self) -> llrm_target::CostModel {
+        cost_model
+    }
+
     fn name(&self) -> &'static str {
         "x86-code16"
     }
