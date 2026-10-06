@@ -1731,12 +1731,17 @@ fn _flags_before(bits: u32, one: &Insn, flags_dead: bool) -> bool {
     _ARITHMETIC_LANES.is_subset(&dead.or(&writes).minus(&reads))
 }
 
-/// What each conditional jump in the instruction description reads.
-static _BRANCH_READS: LazyLock<HashMap<&'static str, u32>> = LazyLock::new(|| {
-    instructions::FORMS
-        .iter()
-        .filter(|form| form.operation == "branch")
-        .filter_map(|form| Some((form.name.as_str(), instructions::flags(form)?.0)))
+/// What each conditional jump reads: the condition's own flags, which is x86's and the same for every
+/// target and operand size, so iced states it from the mnemonic, not from any target's rows.
+static _BRANCH_READS: LazyLock<HashMap<String, u32>> = LazyLock::new(|| {
+    iced_x86::Code::values()
+        .filter(|code| code.flow_control() == FlowControl::ConditionalBranch)
+        .filter_map(|code| {
+            let name = format!("{:?}", code.mnemonic()).to_lowercase();
+            let condition = name.strip_prefix('j')?;
+            instructions::parse::CONDITIONS.contains(&condition).then_some(())?;
+            Some((name, iced_x86::Instruction::with_branch(code, 0).ok()?.rflags_read()))
+        })
         .collect()
 });
 
