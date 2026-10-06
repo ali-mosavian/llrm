@@ -15,38 +15,38 @@ fn flags(arguments: &[&str]) -> Flags {
 
 #[test]
 fn no_flag_is_the_default_target() {
-    assert_eq!(target(&flags(&[]), Some(&["x86-code16"])).unwrap().target.name(), DEFAULT);
-    assert_eq!(target(&flags(&["-m16"]), Some(&["x86-code16"])).unwrap().target.name(), "x86-code16");
+    assert_eq!(target(&flags(&[]), Some(&["x86-m16"])).unwrap().target.name(), DEFAULT);
+    assert_eq!(target(&flags(&["-m16"]), Some(&["x86-m16"])).unwrap().target.name(), "x86-m16");
 }
 
 #[test]
 fn an_unknown_target_is_refused_with_the_known_ones() {
-    let error = target(&flags(&["-m64"]), Some(&["x86-code16"])).err().unwrap();
+    let error = target(&flags(&["-m64"]), Some(&["x86-m16"])).err().unwrap();
     assert_eq!(error, "no target for -m64; choose -m16, -m32");
 }
 
 /// A frontend built for one target does not take another's flag.
 #[test]
 fn a_target_the_frontend_does_not_build_for_is_refused() {
-    let error = target(&flags(&["-m16"]), Some(&["x86-code32"])).err().unwrap();
+    let error = target(&flags(&["-m16"]), Some(&["x86-m32"])).err().unwrap();
     assert_eq!(error, "this compiler builds for -m32 only, not -m16");
 }
 
 /// A target's options select with the selector built from its own definitions.
 #[test]
 fn a_target_is_bound_to_its_own_selector() {
-    let bound = target(&flags(&[]), Some(&["x86-code16"])).unwrap();
-    assert_eq!(bound.selection.name, "x86-code16");
+    let bound = target(&flags(&[]), Some(&["x86-m16"])).unwrap();
+    assert_eq!(bound.selection.name, "x86-m16");
     let options = bound.options(&flags(&[]), bound.target.machine());
     assert_eq!(options.selection.name, bound.target.name());
 }
 
-/// code32 is registered, flat, and bound to the selector made from its own
+/// m32 is registered, flat, and bound to the selector made from its own
 /// directory.
 #[test]
-fn code32_is_a_flat_target_with_its_own_selector() {
-    let bound = target(&flags(&["-m32"]), Some(&["x86-code32"])).unwrap();
-    assert_eq!(bound.selection.name, "x86-code32");
+fn m32_is_a_flat_target_with_its_own_selector() {
+    let bound = target(&flags(&["-m32"]), Some(&["x86-m32"])).unwrap();
+    assert_eq!(bound.selection.name, "x86-m32");
     assert_eq!(bound.target.machine().addressing, llrm_target::machine::Addressing::Flat);
 }
 
@@ -57,7 +57,7 @@ fn code32_is_a_flat_target_with_its_own_selector() {
 fn a_targets_cpu_profile_has_its_own_address_forms_and_registers() {
     let profile = |arguments: &[&str]| {
         let flags = flags(arguments);
-        let bound = target(&flags, Some(&["x86-code16", "x86-code32"])).unwrap();
+        let bound = target(&flags, Some(&["x86-m16", "x86-m32"])).unwrap();
         let options = bound.options(&flags, bound.target.machine());
         options.cpu().unwrap()
     };
@@ -77,7 +77,7 @@ fn a_targets_cpu_profile_has_its_own_address_forms_and_registers() {
 fn a_targets_operations_are_priced_from_its_own_timings_and_mapping() {
     let profile = |arguments: &[&str]| {
         let flags = flags(arguments);
-        let bound = target(&flags, Some(&["x86-code16", "x86-code32"])).unwrap();
+        let bound = target(&flags, Some(&["x86-m16", "x86-m32"])).unwrap();
         bound.options(&flags, bound.target.machine()).cpu().unwrap()
     };
     let (real, flat) = (profile(&[]), profile(&["-m32"]));
@@ -94,14 +94,14 @@ fn a_targets_operations_are_priced_from_its_own_timings_and_mapping() {
 fn a_target_states_its_default_cpu_and_names_its_cpus_when_asked_for_another() {
     for (arguments, default) in [(&[][..], "486"), (&["-m32"][..], "486")] {
         let flags = flags(arguments);
-        let bound = target(&flags, Some(&["x86-code16", "x86-code32"])).unwrap();
+        let bound = target(&flags, Some(&["x86-m16", "x86-m32"])).unwrap();
         assert_eq!(bound.target.default_cpu(), default);
         let options = bound.options(&flags, bound.target.machine());
         assert_eq!(options.cpu().unwrap().name, default);
     }
     let flags = flags(&["-m32", "-march=i386"]);
-    let bound = target(&flags, Some(&["x86-code32"])).unwrap();
-    assert_eq!(flags.machine(&*bound.target, bound.target.machine()).unwrap_err(), "unknown -march=i386; x86-code32 has i486, pentium");
+    let bound = target(&flags, Some(&["x86-m32"])).unwrap();
+    assert_eq!(flags.machine(&*bound.target, bound.target.machine()).unwrap_err(), "unknown -march=i386; x86-m32 has i486, pentium");
 }
 
 /// Real-mode DOS said `cpu = "486"` and timings.times said `default_cpu 386`: a target had two
@@ -119,7 +119,7 @@ fn a_targets_machine_is_priced_for_its_default_cpu() {
 /// table of names to numbers, and a number no target declares is refused.
 #[test]
 fn a_target_is_found_by_the_m_number_its_description_declares() {
-    for (flag, name) in [("-m16", "x86-code16"), ("-m32", "x86-code32")] {
+    for (flag, name) in [("-m16", "x86-m16"), ("-m32", "x86-m32")] {
         assert_eq!(target(&flags(&[flag]), None).unwrap().target.name(), name);
     }
     assert_eq!(target(&flags(&[]), None).unwrap().target.name(), DEFAULT);
@@ -145,8 +145,8 @@ fn a_targets_pins_come_from_its_own_forms() {
         sources: vec![held(1), held(2), held(3)],
         ..Semantics::new(Operation::Fill)
     };
-    let real = RegisterClasses::of(&llrm_x86_code16::Code16).requirements(&store);
-    let flat = RegisterClasses::of(&llrm_x86_code32::Code32).requirements(&store);
+    let real = RegisterClasses::of(&llrm_x86_m16::M16).requirements(&store);
+    let flat = RegisterClasses::of(&llrm_x86_m32::M32).requirements(&store);
     assert_eq!(real.len(), 4, "{real:?}");
     assert!(flat.is_empty(), "{flat:?}");
 }
@@ -157,7 +157,7 @@ fn a_targets_registers_come_from_its_description() {
     use iced_x86::Register;
     use llrm_core::backend::classes::RegisterClasses;
 
-    let flat = RegisterClasses::of(&llrm_x86_code32::Code32);
+    let flat = RegisterClasses::of(&llrm_x86_m32::M32);
     assert_eq!(flat.available, [Register::EAX, Register::ECX, Register::EDX, Register::EBX, Register::ESI, Register::EDI]);
     assert_eq!(flat.frame, Register::EBP);
 }
@@ -175,7 +175,7 @@ fn a_flat_dword_has_no_operand_size_prefix_in_the_size_prices() {
 /// answer, and arm64 would have edited each frontend to add itself.
 #[test]
 fn no_list_lets_any_registered_target_through() {
-    assert_eq!(target(&flags(&["-m32"]), None).unwrap().target.name(), "x86-code32");
+    assert_eq!(target(&flags(&["-m32"]), None).unwrap().target.name(), "x86-m32");
     assert!(target(&flags(&["-m64"]), None).err().unwrap().contains("no target for -m64"));
 }
 
@@ -187,7 +187,7 @@ fn the_audited_bounds_come_from_the_targets_timings() {
     use llrm_core::backend::timing::{Clocks, signed_divide, signed_multiply};
     let profile = |arguments: &[&str]| {
         let flags = flags(arguments);
-        let bound = target(&flags, Some(&["x86-code16", "x86-code32"])).unwrap();
+        let bound = target(&flags, Some(&["x86-m16", "x86-m32"])).unwrap();
         let machine = flags.machine(&*bound.target, bound.target.machine()).unwrap();
         bound.options(&flags, machine).cpu().unwrap()
     };

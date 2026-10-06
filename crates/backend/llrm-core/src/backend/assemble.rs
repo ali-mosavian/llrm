@@ -53,7 +53,7 @@ pub struct Registers {
 /// selector: what the tests of this crate are written for.
 #[cfg(test)]
 pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments) -> Result<masm::Module, String> {
-    assembled_by(module, abi, code, cpu, segments, isel::code16(), &llrm_x86_code16::Code16)
+    assembled_by(module, abi, code, cpu, segments, isel::m16(), &llrm_x86_m16::M16)
 }
 
 /// `module` as masm, its code in the segment `code`, selected by `selection`.

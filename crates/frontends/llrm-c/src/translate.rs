@@ -2092,7 +2092,7 @@ mod tests {
     fn raised(fixture: &str) -> Module {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
         let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test").unwrap();
-        let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).swap_remove(0);
+        let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         emitted.module
     }
@@ -2226,7 +2226,7 @@ mod tests {
     fn test_the_driver_refuses_what_the_verifier_refuses() {
         let mut program = program_of("bytes.cgs");
         let machine = llrm_core::abi::machine::BUILT_IN.clone();
-        let options = llrm_driver::code16_options(machine);
+        let options = llrm_driver::m16_options(machine);
         assert!(llrm_core::driver::emitted(&program, &options).is_ok(), "premise: valid as raised");
         let module = &mut program.modules[0];
         let byte = module.types.iter().find(|one| one.kind == llrm_core::hir::model::TypeKind::Integer && one.width == 1).map(|one| one.id).expect("a byte type");

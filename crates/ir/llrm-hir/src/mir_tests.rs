@@ -1,8 +1,8 @@
 use llrm_target::layout::Layout;
 
 /// Real mode's description and the flat one's, the targets' own files.
-const REAL: &str = include_str!("../../../target/llrm-x86-code16/src/machines/datalayout.toml");
-const FLAT: &str = include_str!("../../../target/llrm-x86-code32/src/machines/datalayout.toml");
+const REAL: &str = include_str!("../../../target/llrm-x86-m16/src/machines/datalayout.toml");
+const FLAT: &str = include_str!("../../../target/llrm-x86-m32/src/machines/datalayout.toml");
 
 fn emit(program: &Program) -> Vec<crate::mir::Emitted> {
     crate::mir::emit(program, &Layout::parse(REAL).unwrap())

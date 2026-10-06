@@ -688,7 +688,7 @@ fn test_a_pointer_beside_a_stored_counter() {
 fn test_the_pipeline_settles_a_pointer_beside_a_stored_counter() {
     let mut module = parsed(&format!("{DOS}{}", pointer_beside_a_stored_counter()));
     let before = results(&module, &[&[0]]);
-    llrm_mir::program::Program::lend(&mut module, Rc::new(llrm_x86_code16::Dos::default()), |program| crate::pipeline::applied(program, &crate::pipeline::Applied::default())).and_then(|done| done).unwrap();
+    llrm_mir::program::Program::lend(&mut module, Rc::new(llrm_x86_m16::Dos::default()), |program| crate::pipeline::applied(program, &crate::pipeline::Applied::default())).and_then(|done| done).unwrap();
     let after = printed(&module);
     assert_eq!(results(&module, &[&[0]]), before, "{after}");
 }
@@ -1317,7 +1317,7 @@ fn test_frame_arrays_keep_their_own_pointers() {
     let mut manager = PassManager::default();
     manager.verify_each = true;
     manager.add(Lsr);
-    manager.run_module(&mut after, Rc::new(llrm_x86_code16::Dos::default())).unwrap();
+    manager.run_module(&mut after, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     let printed = printed(&after);
     let inputs: &[&[i128]] = &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]];
     assert_eq!(results(&parsed(&printed), inputs), results(&before, inputs), "{printed}");
@@ -1495,8 +1495,8 @@ fn test_a_far_pointer_is_never_compared_for_the_exit() {
 
 /// `text` through `Lsr` on a Core: an address-size prefix stalls three clocks.
 fn on_core(text: &str) -> String {
-    let costs = llrm_x86_code16::target::costs("Core");
-    let machine = llrm_x86_code16::Dos { address_forms: llrm_x86_code16::target::address_forms(&costs, 3), costs, ..llrm_x86_code16::Dos::default() };
+    let costs = llrm_x86_m16::target::costs("Core");
+    let machine = llrm_x86_m16::Dos { address_forms: llrm_x86_m16::target::address_forms(&costs, 3), costs, ..llrm_x86_m16::Dos::default() };
     let mut module = parsed(&format!("{DOS}{text}"));
     let mut manager = PassManager::default();
     manager.verify_each = true;
@@ -1606,8 +1606,8 @@ b6:
 
 /// `text` through `Lsr` on a P5, as the rich route prices it.
 fn on_p5(text: &str) -> String {
-    let costs = llrm_x86_code16::target::costs("P5");
-    let machine = llrm_x86_code16::Dos { address_forms: llrm_x86_code16::target::address_forms(&costs, 0), costs, ..llrm_x86_code16::Dos::default() };
+    let costs = llrm_x86_m16::target::costs("P5");
+    let machine = llrm_x86_m16::Dos { address_forms: llrm_x86_m16::target::address_forms(&costs, 0), costs, ..llrm_x86_m16::Dos::default() };
     let mut module = parsed(&format!("{DOS}{text}"));
     let mut manager = PassManager::default();
     manager.verify_each = true;

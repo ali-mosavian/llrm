@@ -215,7 +215,7 @@ mod tests {
     const FLAT: &str = "addressing = \"flat\"\nsegment_end_faults = false\n";
 
     /// A flat machine had no way to be described: `segments` was required and
-    /// `addressing` was real or protected, so code32 could not state its platform.
+    /// `addressing` was real or protected, so m32 could not state its platform.
     #[test]
     fn test_a_flat_machine_parses_without_segments() {
         let flat = Machine::parse(FLAT, "486").expect("a flat machine parses");

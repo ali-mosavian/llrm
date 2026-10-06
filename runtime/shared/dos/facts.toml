@@ -7,12 +7,20 @@ create = 0x3C
 close = 0x3E
 read = 0x3F
 write = 0x40
+read_key = 0x08
+key_ready = 0x0B
 exit = 0x4C
 resize = 0x4A
 get_vector = 0x35
 set_vector = 0x25
 dpmi_int = 0x31
 dpmi_alloc = 0x0501
+
+# A handle is a word; a program starts with these three open.
+handle_bits = 16
+stdin = 0
+stdout = 1
+stderr = 2
 
 # DOS's own codes for the conditions the interface names: the layer returns them as they are, so
 # each must be the interface's number.

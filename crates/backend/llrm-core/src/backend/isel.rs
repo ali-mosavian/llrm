@@ -64,7 +64,7 @@ mod unwind;
 
 pub use matcher::{Compiled, selector};
 #[cfg(test)]
-pub(crate) use matcher::code16;
+pub(crate) use matcher::m16;
 mod wide;
 
 /// Where one parameter arrives: a cell in the frame, by its displacement from BP, or the

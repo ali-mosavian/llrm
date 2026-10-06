@@ -16,6 +16,7 @@ int main(void)
     report(llrm_os_close(in));
     report(llrm_os_open("NOSUCH.TMP", 0) == -LLRM_OS_NOT_FOUND);
     report(llrm_os_read(99, buffer, 1) < 0);
+    report(llrm_os_close(99) == -6);
     for (i = 0; i < 6; i++) report(buffer[i]);
     return 0;
 }

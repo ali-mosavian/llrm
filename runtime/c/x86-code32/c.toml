@@ -1,9 +1,0 @@
-# C's runtime on flat DOS under DOS/32A: what the language asks of the target's OS layer
-# (runtime/shared/dos/x86-code32). Each field naming a file names one in this directory.
-
-# What `-fsanitize=stack` compares and calls.
-stack = "stack.toml"
-# The stack the OS layer's start-up reserves.
-stack_base = 16384
-# Fields the assembler is told as `-DSYMBOL=value`; the OS layer's own come from its description.
-assembler_defines = ["stack_base:STACK_BYTES"]

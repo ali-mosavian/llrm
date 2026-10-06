@@ -1,21 +1,19 @@
-reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
+reason = "udiv/urem by a power of two are a shift and a mask, and sdiv/srem of a provably non-negative dividend by one too: histo.bas's MOD and \\ by a power of two"
 blessed = "2026-10-06"
 
 [bas.O2]
-instructions = 95903
+instructions = 83615
 memory_operands = 12675
-code_bytes = 256
+code_bytes = 245
 data_bytes = 8719
 bss_bytes = 0
-kernel_ms = 1.3654
 
 [bas.Os]
-instructions = 88095
+instructions = 75807
 memory_operands = 13059
-code_bytes = 250
+code_bytes = 239
 data_bytes = 8719
 bss_bytes = 0
-kernel_ms = 1.2625
 
 [c.O2]
 instructions = 79517

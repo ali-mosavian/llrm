@@ -19,7 +19,7 @@ fn the_pipeline_keeps_every_corpus_module_verifying_and_computing_the_same() {
             program.exports.entries.insert("main".to_owned());
             pipeline::applied(program, &applied)
         };
-        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), entered)
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), entered)
             .and_then(|done| done)
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         if let Some(Ok(before)) = before {
@@ -101,7 +101,7 @@ b3:
 !1 = !{!\"llvm.loop.unroll.full\"}
 ",
     );
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let text = llrm_mir::print::module(&module);
     for trip in 1..=3 {
         assert!(text.contains(&format!("call void @print(i16 {trip})")), "{text}");
@@ -145,7 +145,7 @@ b3:
 !1 = !{!\"llvm.loop.unroll.full\"}
 ",
     );
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let text = llrm_mir::print::module(&module);
     for trip in 1..=3 {
         assert!(text.contains(&format!("call void @print(i16 {trip})")), "{text}");
@@ -191,7 +191,7 @@ b3:
 ",
         llrm_analysis::testing::DOS
     ));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let text = llrm_mir::print::module(&module);
     let body = &text[text.find("b2:").expect("the loop")..];
     let body = &body[..body.find("br i1").expect("its latch")];
@@ -254,7 +254,7 @@ done:
 ";
     let mut module = llrm_analysis::testing::parsed(text);
     let before = interpret::run(&module, "main", Vec::new(), FUEL);
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let after = llrm_mir::print::module(&module);
     assert_eq!(interpret::run(&module, "main", Vec::new(), FUEL), before, "{after}");
     assert!(!after.contains(" phi "), "{after}");
@@ -308,7 +308,7 @@ b3:
         llrm_analysis::testing::DOS
     );
     let mut module = crate::testing::parsed(&text);
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let after = crate::testing::printed(&module);
     let body = after.split("b2:").nth(1).unwrap_or("");
     assert!(!body.split("\n\n").next().unwrap_or("").contains("store i16"), "{after}");
@@ -346,7 +346,7 @@ b3:
 ",
         llrm_analysis::testing::DOS
     ));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let text = llrm_mir::print::module(&module);
     let body = &text[text.find("b2:").expect("the loop")..];
     let body = &body[..body.find("br label").expect("its latch")];
@@ -382,7 +382,7 @@ b2:
         llrm_analysis::testing::DOS
     );
     let mut module = crate::testing::parsed(&text);
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let after = crate::testing::printed(&module);
     let body = after.split("b1:").nth(1).unwrap_or("").split("\n\n").next().unwrap_or("");
     assert!(body.contains("load volatile i16, ptr addrspace(4)"), "{after}");
@@ -410,7 +410,7 @@ b0:
 ";
     assert!(text.contains("store i8 1, ptr %q"), "the shape that was forwarded over");
     let mut module = llrm_analysis::testing::parsed(&format!("{}{text}", llrm_analysis::testing::DOS));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let printed = llrm_mir::print::module(&module);
     assert_eq!(printed.matches("load i16").count(), 2, "{printed}");
 }
@@ -449,7 +449,7 @@ b3:
 ",
     );
     let applied = Applied { options: pipeline::Options { inline: crate::inline::Threshold::new(0), ..pipeline::Options::default() }, ..Applied::default() };
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| {
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &applied)
     })
@@ -488,6 +488,6 @@ b:
 }
 ",
     );
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     assert_eq!(llrm_mir::print::module(&module).matches("call i16 @mix").count(), 3);
 }

@@ -10,7 +10,7 @@ llrm-core = { workspace = true }
 llrm-driver = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-target = { workspace = true }
-llrm-x86-code16 = { workspace = true }
+llrm-x86-m16 = { workspace = true }
 llrm-transforms = { workspace = true }
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }

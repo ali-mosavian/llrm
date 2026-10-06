@@ -41,9 +41,13 @@ fn facts() -> Regex {
         let name = target.name();
         parts.push(regex::escape(name));
         parts.push(regex::escape(&name.replace('-', "_")));
-        // `code16`, `Code16`, `code16_options`: the part after the family.
+        // The type (`M16`), what is named after the mode (`m16_options`, `m16()`); not `-m16`, the flag.
         if let Some(variant) = name.rsplit('-').next() {
-            parts.push(regex::escape(variant));
+            let mut type_name = variant.to_owned();
+            type_name[..1].make_ascii_uppercase();
+            parts.push(format!(r"(?-i:\b{}\b)", regex::escape(&type_name)));
+            parts.push(format!(r"(?-i:\b{}_)", regex::escape(variant)));
+            parts.push(format!(r"(?-i:(?:^|[^-\w]){}\b)", regex::escape(variant)));
         }
         for cpu in target.cpus() {
             parts.push(format!(r#"["']{}["']"#, regex::escape(cpu)));
@@ -218,7 +222,7 @@ fn comments_and_test_modules_are_not_counted() {
 #[test]
 fn the_search_is_built_from_the_descriptions() {
     let facts = facts();
-    for sample in ["\"x86-code16\"", "llrm_x86_code32::Code32", "\"486\"", "\"ax\"", "Register::BX", "0x10000", "0x1_0000", "65535", "0xFFFF"] {
+    for sample in ["\"x86-m16\"", "llrm_x86_m32::M32", "\"486\"", "\"ax\"", "Register::BX", "0x10000", "0x1_0000", "65535", "0xFFFF"] {
         assert!(facts.is_match(sample), "{sample} is a target fact and is not found");
     }
     for sample in ["let x = 4;", "\"ordinary\"", "65537"] {

@@ -79,7 +79,7 @@ fn listed(body: LirBody, name: &str) -> Vec<String> {
         size: false,
         entry: 0,
         stack_check: None,
-        registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16),
+        registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
     };
     masm::_procedure(&procedure, &IndexMap::default(), 0)
         .unwrap()

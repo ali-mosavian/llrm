@@ -51,8 +51,8 @@ impl Options {
 
     /// For 16-bit x86, which the tests of this crate are written for.
     #[cfg(test)]
-    pub fn code16(machine: Machine) -> Self {
-        Self::new(machine, std::rc::Rc::new(llrm_x86_code16::Code16), crate::backend::isel::code16())
+    pub fn m16(machine: Machine) -> Self {
+        Self::new(machine, std::rc::Rc::new(llrm_x86_m16::M16), crate::backend::isel::m16())
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
