@@ -41,6 +41,11 @@ pub struct Layout {
 }
 
 impl AddressSpaces {
+    /// Whether `far` is the `near` space: the target is flat, and a far or huge pointer is a near one.
+    pub fn far_is_near(&self) -> bool {
+        self.far == self.near
+    }
+
     /// The selector-alone space, or why the target has none.
     pub fn segment_space(&self) -> Result<u32, String> {
         self.segment.ok_or_else(|| "this target has no selector address space".to_owned())

@@ -296,3 +296,24 @@ fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
     let want: Vec<i64> = routines.iter().map(|(_, value)| *value).collect();
     assert_eq!(got, want, "{:?}", routines.map(|(name, _)| name));
 }
+
+/// Far and huge are near where a target has one address space, and the compiler says so, once for each
+/// place: code16 and a flat program that writes neither stay silent, and `-Wno-distance` (the runtime's
+/// build, which writes `*far` for the targets that have one) silences it.
+#[test]
+fn test_far_and_huge_are_near_with_a_warning_on_code32() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("p.obj");
+    let stderr = |source: &str, extra: &[&str]| {
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).arg(root.join(source)).args(extra).args(["-O2", "-o", object.to_str().unwrap()]).output().unwrap();
+        assert!(done.status.success(), "{source}: {}", String::from_utf8_lossy(&done.stderr));
+        String::from_utf8_lossy(&done.stderr).into_owned()
+    };
+    let flat = ["--target", "x86-code32"];
+    let warned = stderr("tests/run/nib/far_near.nib", &flat);
+    assert!(warned.contains("far_near.nib:5:6: warning: 'huge' is near") && warned.contains("warning: 'far' is near"), "{warned}");
+    assert_eq!(stderr("tests/run/nib/far_near.nib", &[]), "");
+    assert_eq!(stderr("tests/run/nib/far_near.nib", &["--target", "x86-code32", "-Wno-distance"]), "");
+    assert_eq!(stderr("tests/run/nib/flat_arith.nib", &flat), "");
+}

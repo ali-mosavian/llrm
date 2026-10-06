@@ -1939,10 +1939,13 @@ impl Parser {
         }
         // `*far T`, `*near mut T`: a raw pointer.
         if self.take(|kind| matches!(kind, TokenKind::Star)).is_some() {
-            let (distance, span) = self.identifier("expected 'near', 'far' or 'huge' after '*'")?;
-            if !["near", "far", "huge"].contains(&distance.as_str()) {
-                return Err(Diagnostic::new(span, "a raw pointer is '*near', '*far' or '*huge'"));
-            }
+            // No distance is the target's native pointer: near.
+            let distance = match &self.peek().kind {
+                TokenKind::Identifier(name) if ["near", "far", "huge"].contains(&name.as_str()) => {
+                    self.identifier("expected a distance")?.0
+                }
+                _ => "near".to_owned(),
+            };
             let mutable = if self.take(|kind| matches!(kind, TokenKind::Mut)).is_some() {
                 " mut"
             } else {

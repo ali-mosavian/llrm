@@ -7,6 +7,8 @@ impl TypeRegistry {
     /// `*far T`, `*near mut T` and the like. A huge pointer is a far one
     /// whose foreign user keeps it normalized.
     pub(super) fn raw_pointer(&mut self, target: ElementType, distance: &str, mutable: bool) -> TypeName {
+        // Where far is near, so is every pointer: one type, spelled near.
+        let distance = if self.sizes.segmented { distance } else { "near" };
         let name = format!("*{distance} {}{}", if mutable { "mut " } else { "" }, self.types[(target.id() - 1) as usize].name);
         let far = distance != "near";
         let type_id = match self.raw_pointers.get(&name) {
@@ -21,6 +23,19 @@ impl TypeRegistry {
         TypeName::Pointer { type_id, far, width: self.pointer_width(far), mutable }
     }
 
+    /// Warns, once for each place, that a `far` or `huge` written where the target has one space is near.
+    pub(super) fn warn_distance(&mut self, distance: &str, span: Span) {
+        let Some(warnings) = &self.warnings else { return };
+        if self.sizes.segmented || distance == "near" {
+            return;
+        }
+        let message = format!("warning: '{distance}' is near on this target: it has one address space");
+        let mut warnings = warnings.borrow_mut();
+        if !warnings.iter().any(|one| one.span == span && one.message == message) {
+            warnings.push(Diagnostic::new(span, message));
+        }
+    }
+
     /// `spec` when it is already registered: a primitive, a struct, or a raw
     /// pointer to one; unlike `resolve_element`, it registers nothing.
     pub(super) fn resolved_element(&self, spec: &TypeSpec) -> Option<ElementType> {
@@ -33,6 +48,7 @@ impl TypeRegistry {
                 };
                 let target = self.resolved_element(target)?;
                 let distance = name[1..].split(' ').next()?;
+                let distance = if self.sizes.segmented { distance } else { "near" };
                 let mutable = name.ends_with(" mut");
                 let spelled = format!("*{distance} {}{}", if mutable { "mut " } else { "" }, self.types[(target.id() - 1) as usize].name);
                 let type_id = *self.raw_pointers.get(&spelled)?;
