@@ -17,6 +17,10 @@ use crate::model::ir::{self, Addr, Loc, Operation, Semantics, Space};
 use crate::model::lir;
 use crate::support::pyrepr::Repr;
 
+/// What LIR calls the frame register and the stack pointer, whatever the target: `spelled` gives each its own.
+const FRAME: Register = Register::BP;
+const STACK: Register = Register::SP;
+
 /// `SIZES`.
 pub static SIZES: LazyLock<IndexMap<u32, &'static str>> =
     LazyLock::new(|| IndexMap::from_iter([(1, "byte"), (2, "word"), (4, "dword"), (8, "qword"), (10, "tbyte")]));
@@ -317,7 +321,7 @@ pub fn cold_at(body: &lir::LirBody) -> i64 {
 }
 
 fn sp_reg() -> Loc {
-    reg(Register::SP)
+    reg(STACK)
 }
 
 /// The registers `procedure` keeps for its caller: each one it names that the convention leaves to the
@@ -354,9 +358,9 @@ fn parts(procedure: &Procedure, omit: bool) -> (Vec<Semantics>, Vec<Semantics>) 
     // Inline code is bytes this printer cannot read, so it may address the frame.
     let framed = !omit
         && (reserve != 0
-            || roots.contains(&Register::EBP)
+            || roots.contains(&procedure.registers.pointer)
             || procedure.callees.values().any(|one| !one.code.is_empty()));
-    let (bp, sp) = (reg(Register::BP), reg(Register::SP));
+    let (bp, sp) = (reg(FRAME), reg(STACK));
     let mut leave: Vec<Semantics> =
         saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![])).collect();
     if omit && reserve != 0 {
@@ -632,7 +636,7 @@ fn stack_addressed(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
             Item::Semantics(mut what) => {
                 let here = depth?;
                 for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
-                    *place = match through_stack(place, here, slot) {
+                    *place = match through_stack(place, here, slot, registers.pointer) {
                         Some(placed) => placed,
                         None => return refused(procedure, &format!("the frame register is read as a value in {place:?}")),
                     };
@@ -676,7 +680,7 @@ fn stack_addressed(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
                     _ if what.dests.iter().any(writes_stack_pointer) => {
                         // Only `add sp, n` and `sub sp, n` are understood.
                         let amount = match (&what.dests[..], &what.sources[..]) {
-                            ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Imm(ir::Imm { value, address: None, .. })]) if dest.register == Register::SP && source.register == Register::SP => *value,
+                            ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Imm(ir::Imm { value, address: None, .. })]) if dest.register == STACK && source.register == STACK => *value,
                             _ => return refused(procedure, &format!("the stack pointer written by {what:?}")),
                         };
                         depth = Some(match what.name.as_deref() {
@@ -712,14 +716,14 @@ fn width_of(place: &Loc) -> Option<i64> {
 }
 
 fn writes_stack_pointer(place: &Loc) -> bool {
-    matches!(place, Loc::Reg(one) if one.register == Register::SP)
+    matches!(place, Loc::Reg(one) if one.register == STACK)
 }
 
 /// `place` with a frame cell addressed through the stack pointer; none where it reads the frame register
 /// as anything but a base. The frame register would have held the entry's stack pointer less `slot`.
-fn through_stack(place: &Loc, depth: i64, slot: i64) -> Option<Loc> {
+fn through_stack(place: &Loc, depth: i64, slot: i64, pointer: Register) -> Option<Loc> {
     let shift = |_disp: i64| depth - slot;
-    let is_pointer = |one: Register| matches!(one, Register::BP | Register::EBP);
+    let is_pointer = |one: Register| one == FRAME || one == pointer;
     // A frame place with no register, or a cell the frame register's own address names: a 32-bit
     // index has no frame space, only `[ebp+index+d]`.
     let based = |through: Register, addr: &Option<Addr>| match addr {
@@ -732,13 +736,13 @@ fn through_stack(place: &Loc, depth: i64, slot: i64) -> Option<Loc> {
         Loc::Mem(cell) if is_pointer(cell.index_through) => None,
         Loc::Mem(cell) if based(cell.through, &cell.addr) => {
             let addr = cell.addr.as_ref()?;
-            Some(Loc::Mem(ir::Mem { through: Register::SP, addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr.clone() }), disp_width: 0, ..cell.clone() }))
+            Some(Loc::Mem(ir::Mem { through: STACK, addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr.clone() }), disp_width: 0, ..cell.clone() }))
         }
         Loc::Mem(cell) if is_pointer(cell.through) => None,
         Loc::Address(address) if is_pointer(address.index) => None,
         Loc::Address(address) if based(address.through, &address.addr) => {
             let addr = address.addr.as_ref()?;
-            Some(Loc::Address(ir::Address { through: Register::SP, addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr.clone() }), disp_width: 0, ..address.clone() }))
+            Some(Loc::Address(ir::Address { through: STACK, addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr.clone() }), disp_width: 0, ..address.clone() }))
         }
         Loc::Address(address) if is_pointer(address.through) => None,
         other => Some(other.clone()),
