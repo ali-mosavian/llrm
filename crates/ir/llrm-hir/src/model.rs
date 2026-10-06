@@ -337,6 +337,18 @@ pub struct DescriptorPlace {
 }
 
 impl DescriptorPlace {
+    /// The bytes of a heap buffer's header before its data, each of its three fields (the flags,
+    /// the length, the capacity) a word of `width` bytes.
+    pub fn header_bytes(width: i64) -> i64 {
+        3 * width
+    }
+
+    /// `field`'s offset in a heap buffer whose words are `width` bytes: the one place the layout
+    /// is stated, for the code generator and the interpreter alike.
+    pub fn heap_offset(field: DescriptorField, width: i64) -> i64 {
+        Self { base: 0, field, r#type: 0 }.offset(None, width)
+    }
+
     /// The field's offset from the base pointer, whose pointee is
     /// `pointee`, the fields `width` bytes wide each (the type of the place): a scoped view
     /// (`$slice[..]`) holds its length then its capacity, and a heap string's header, the same

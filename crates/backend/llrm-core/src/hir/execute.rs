@@ -334,6 +334,9 @@ struct Machine<'p> {
     column: usize,
     /// A QB END stopped the program.
     ended: bool,
+    /// The bytes of a length, a capacity or a near address: what the program's own buffer
+    /// routines take as their count (`N$BRES`'s capacity), 2 where it has none.
+    word: usize,
 }
 
 impl<'p> Machine<'p> {
@@ -357,11 +360,19 @@ impl<'p> Machine<'p> {
                 )
             })
             .collect::<HashMap<i64, Memory>>();
+        let types: HashMap<i64, &model::Type> = module.types.iter().map(|one| (one.id, one)).collect();
+        let word = module
+            .callables
+            .iter()
+            .find(|one| one.name == rt::BUFFER_RESERVE)
+            .and_then(|one| one.parameter_types.get(1))
+            .and_then(|one| types.get(one))
+            .map_or(2, |one| one.width as usize);
         // A near or far relocation stores its target's address in the cell.
         for object in &module.data {
             for relocation in object.relocations.iter().filter(|one| !one.code) {
                 let width = match relocation.address {
-                    model::AddressKind::Near => 2,
+                    model::AddressKind::Near => word as i64,
                     model::AddressKind::Far => 4,
                     _ => continue,
                 };
@@ -391,6 +402,7 @@ impl<'p> Machine<'p> {
             files: Vec::new(),
             column: 0,
             ended: false,
+            word,
         })
     }
 
@@ -1021,8 +1033,8 @@ impl<'p> Machine<'p> {
         let (width, radix, fill, left) = self.field.take().unwrap_or((0, 10, b' ', false));
         let text = match name {
             rt::PRINT_NEWLINE => "\n".to_owned(),
-            rt::PRINT_STRING => cp437(&runtime::string_bytes(&arguments[0])?),
-            rt::PRINT_VIEW => cp437(&runtime::descriptor_bytes(&arguments[0])?),
+            rt::PRINT_STRING => cp437(&runtime::string_bytes(&arguments[0], self.word)?),
+            rt::PRINT_VIEW => cp437(&runtime::descriptor_bytes(&arguments[0], self.word)?),
             rt::PRINT_Q2 | rt::PRINT_Q4 => fixed_text(arguments[0].whole()?, arguments[1].whole()?)?,
             rt::PRINT_BOOL => if arguments[0].truthy() {
                 "true"
