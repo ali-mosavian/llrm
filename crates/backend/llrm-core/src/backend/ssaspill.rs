@@ -37,6 +37,8 @@ const EXIT: i64 = 1 << 20;
 
 thread_local! {
     static CHANGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ADMISSION_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MEMORY_PHIS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     static SHARED_SLOTS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
@@ -62,6 +64,20 @@ pub fn without_memory_phis<T>(run: impl FnOnce() -> T) -> T {
 /// How many bodies this phase has changed on this thread: what a caller reads to learn whether a run did anything.
 pub fn changes() -> usize {
     CHANGES.with(std::cell::Cell::get)
+}
+
+/// How many loops this thread's runs admitted on a tie in what the level counts (bytes at -Os): which the trips decided,
+/// and the encoded code may not agree with.
+pub fn admission_ties() -> usize {
+    TIES.with(std::cell::Cell::get)
+}
+
+/// `run` with no loop's entry loading what the loop reads, on this thread.
+pub fn without_admission<T>(run: impl FnOnce() -> T) -> T {
+    let before = ADMISSION_OFF.with(|one| one.replace(true));
+    let done = run();
+    ADMISSION_OFF.with(|one| one.set(before));
+    done
 }
 
 pub struct SsaSpill {
@@ -600,16 +616,19 @@ fn simulated_in(
     let attempt = |admit: &BTreeSet<i64>| simulated_with(body, flow, machine, skip, remakes, order, place, frequency, headers, loops, prices, &weights, bridged, admit);
     let nothing: BTreeSet<i64> = BTreeSet::new();
     let first = attempt(&nothing);
-    if machine.file != File::Selector {
+    if machine.file != File::Selector || ADMISSION_OFF.with(std::cell::Cell::get) {
         return first;
     }
     // Whether a loop's entry loads what the loop reads: none, all, or each loop by itself; priced by the level's
     // measure (bytes at -Os), and by the trips where that measure ties.
     let none: BTreeSet<(i64, i64)> = body.critical_edges().into_iter().collect();
     let by_trips = Weights { frequency, by_frequency: true };
+    let tied = std::cell::Cell::new(false);
     let cheaper = |tried: &Simulated, kept: &Simulated| {
-        let (now, then) = (traffic(tried, &weights, prices, &none), traffic(kept, &weights, prices, &none));
-        now < then || (now == then && traffic(tried, &by_trips, prices, &none) < traffic(kept, &by_trips, prices, &none))
+        let (now, then) = (traffic(tried, &weights, prices, &none, remakes), traffic(kept, &weights, prices, &none, remakes));
+        let by_clocks = now == then && traffic(tried, &by_trips, prices, &none, remakes) < traffic(kept, &by_trips, prices, &none, remakes);
+        tied.set(tied.get() || (by_clocks && !prices.by_frequency));
+        now < then || by_clocks
     };
     let mut kept = first;
     let everywhere = attempt(headers);
@@ -631,6 +650,9 @@ fn simulated_in(
         if cheaper(&alone, &kept) {
             kept = alone;
         }
+    }
+    if tied.get() {
+        TIES.with(|count| count.set(count.get() + 1));
     }
     kept
 }
@@ -703,13 +725,13 @@ fn simulated_with(
         // The jump a bridge on a loop's back edge takes runs every trip, unless another file's values already bring the bridge;
         // and what a loop that fits its registers does not hold, it need not bridge to hold.
         let critical: BTreeSet<(i64, i64)> = body.critical_edges().into_iter().filter(|edge| place[&edge.0] >= place[&edge.1] && !bridged.contains(edge) && room.get(&edge.1).is_some_and(|peak| *peak > machine.general.len())).collect();
-        let mut best = traffic(&result, weights, prices, &critical);
+        let mut best = traffic(&result, weights, prices, &critical, remakes);
         let letting: Vec<(i64, u32)> = dropped.iter().flat_map(|(header, values)| values.iter().map(move |value| (*header, *value))).collect();
         for (header, value) in letting {
             let mut trial = dropped.clone();
             trial.get_mut(&header).map(|values| values.remove(&value));
             let tried = simulated(body, flow, machine, skip, remakes, order, &trial, &room, frequency, headers, admit, &memory);
-            let moved = traffic(&tried, weights, prices, &critical);
+            let moved = traffic(&tried, weights, prices, &critical, remakes);
             if moved < best {
                 best = moved;
                 result = tried;
@@ -721,15 +743,40 @@ fn simulated_with(
 }
 
 /// What a simulation moves to and from memory, by block frequency: reloads, operands read in place, and edge reloads.
-fn traffic(result: &Simulated, weights: &Weights<'_>, prices: Prices, critical: &BTreeSet<(i64, i64)>) -> f64 {
+fn traffic(result: &Simulated, weights: &Weights<'_>, prices: Prices, critical: &BTreeSet<(i64, i64)>, remakes: &IndexMap<u32, Arc<Insn>>) -> f64 {
+    let price = |values: &mut dyn Iterator<Item = &u32>| -> f64 { values.map(|value| reload_price(*value, remakes, prices)).sum() };
     let blocks: f64 = result
         .edits
         .iter()
-        .map(|(at, edit)| weights.block(*at) * prices.load * (edit.before.values().map(Vec::len).sum::<usize>() + edit.at_end.len() + edit.folded.values().map(Vec::len).sum::<usize>()) as f64)
+        .map(|(at, edit)| {
+            let reads = price(&mut edit.before.values().flatten().chain(&edit.at_end).chain(edit.folded.values().flatten()));
+            weights.block(*at) * reads
+        })
         .sum();
     // A bridged edge takes its jump as well.
-    let edges: f64 = result.across.iter().map(|((from, to), values)| weights.edge(*from, *to) * (prices.load * values.len() as f64 + if critical.contains(&(*from, *to)) { prices.jump } else { 0.0 })).sum();
-    blocks + edges
+    let edges: f64 = result.across.iter().map(|((from, to), values)| weights.edge(*from, *to) * (price(&mut values.iter()) + if critical.contains(&(*from, *to)) { prices.jump } else { 0.0 })).sum();
+    // Each value kept in a slot is stored once where it is made.
+    let stores: f64 = result.stored.len() as f64 * prices.load;
+    // A value handed to a phi's slot on an edge is a load and a store there.
+    let moves: f64 = result.moves.iter().map(|((from, to), pairs)| weights.edge(*from, *to) * 2.0 * prices.load * pairs.len() as f64).sum();
+    blocks + edges + stores + moves
+}
+
+/// What reading `value` from memory costs: a load by `prices`; where the code is what counts (-Os), the bytes the
+/// load that makes it again encodes to, in a selector register and with its address registers as they will be.
+fn reload_price(value: u32, remakes: &IndexMap<u32, Arc<Insn>>, prices: Prices) -> f64 {
+    if prices.by_frequency {
+        return prices.load;
+    }
+    let Some(what) = remakes.get(&value).and_then(|one| one.what.as_ref()) else { return prices.load };
+    let mut held: crate::backend::select::HeldMap = IndexMap::default();
+    held.insert(value, Register::ES);
+    for place in what.sources.iter().chain(&what.dests) {
+        for used in crate::model::ir::values(place) {
+            held.entry(used.value).or_insert(Register::BX);
+        }
+    }
+    crate::backend::select::emit(what, 0, None, false, false, Some(&held)).map_or(prices.load, |code| code.code.len() as f64)
 }
 
 /// The values of `values` that are made again rather than stored and loaded:
