@@ -1,0 +1,14 @@
+# A 32-bit DOS program under an extender, flat. Joined at compile time with
+# llrm-target's pc-ports.toml (PC hardware). Draft against PR 3b's schema.
+
+addressing = "flat"
+
+# No segment is crossed: a flat access past 4 GB is the extender's fault, not
+# the CPU's wrap, and no far data exists.
+segment_end_faults = false
+far_bss = false
+
+cpu = "486"
+
+# [[foreign]] ranges depend on how the extender maps low memory and video:
+# decided with the extender choice (milestone 3), none until then.
