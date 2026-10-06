@@ -6,7 +6,7 @@ diff stdout with NAME.out.
 
 A header comment holds a program's settings:
 
-    ' flags: -Os --cpu P5      extra compiler flags (default: -O2 --cpu 486); `a | b` builds and runs the program once for each
+    ' flags: -Os --cpu P5      extra compiler flags (default: -O2); `a | b` builds and runs the program once for each
     ' dialect: pds71           qb45 (default), pds71 or vbdos: its compiler dialect and runtime; several, blank apart, run once each
     ' link: sortlib.nib        more sources built with it, beside the program (a .nib for BASIC; a .c or .asm for Nib); `@c-runtime` is the target's own file of the routines a program calls and does not define
     ' data: values.dat         a file the program reads, copied beside it; @dickens: a cached corpus, verified (skipped if unavailable)
@@ -38,7 +38,7 @@ from dosbatch import BIN, ROOT, Job  # noqa: E402
 RUN = ROOT / "tests" / "run"
 EXAMPLES = ROOT / "examples"
 BENCH = ROOT / "bench"
-DEFAULT_FLAGS = ["-O2", "--cpu", "486"]
+DEFAULT_FLAGS = ["-O2"]
 KEYS = ("flags", "known", "bc", "diverges", "dialect", "link", "data", "mask", "targets")
 FLAT = "x86-code32"
 HEADER = re.compile(rf"^\s*(?:'|//|#)\s*({'|'.join(KEYS)}):\s*(.*?)\s*$")

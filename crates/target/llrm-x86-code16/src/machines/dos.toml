@@ -16,9 +16,6 @@ segment_end_faults = true
 # keeps zero far data stored in the image. Nib's and the test runtimes' do.
 far_bss = false
 
-# The processor code is priced for.
-cpu = "486"
-
 # The segment registers the program model reserves: the data group every
 # unprefixed access reads, the stack and the code. The rest hold selectors.
 # The stack need not be in the data group: an interrupt handler may call

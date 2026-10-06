@@ -1388,7 +1388,7 @@ fn a_float_converts_to_every_integer_width() {
         "convert.nib",
         "@export(\"pascal16\")\nfn convert(x: f64, y: f64) -> i16:\n    print(f\"{u8(x)} {i8(x - 300.0)} {u16(x * 200.0)} {u32(y)} {i32(x)}\")\n    return 0\n",
     );
-    let text = listing_on(&parsed(&source), "convert", &level("Os"), crate::compile::CPU);
+    let text = listing_on(&parsed(&source), "convert", &level("Os"), llrm_target::Target::default_cpu(&llrm_x86_code16::Code16));
     assert!(text.contains("fistp qword"), "{text}");
 }
 
@@ -1421,7 +1421,7 @@ fn a_pointer_loaded_from_a_local_descriptor_still_reaches_its_array() {
         "enumerate.nib",
         "fn main() -> i16:\n    let values: i16[3] = [7, 8, 9]\n    for (i, x) in enumerate(values):\n        print(f\"{i}: {x}\")\n    return 0\n",
     );
-    let text = listing_on(&parsed(&source), "main", &level("Os"), crate::compile::CPU);
+    let text = listing_on(&parsed(&source), "main", &level("Os"), llrm_target::Target::default_cpu(&llrm_x86_code16::Code16));
     for value in [", 7", ", 8", ", 9"] {
         assert!(text.contains(value), "{value} is never stored:\n{text}");
     }

@@ -65,9 +65,9 @@ pub struct Machine {
 }
 
 impl Machine {
-    /// `cpus` are the processor names the target prices; a description naming
-    /// another is refused.
-    pub fn parse(text: &str, cpus: &[&str]) -> Result<Self, String> {
+    /// The machine `text` describes, priced for `cpu`: the target's `default_cpu`,
+    /// stated once in its `timings.times`, not by the machine.
+    pub fn parse(text: &str, cpu: &str) -> Result<Self, String> {
         let table: toml::Table = text.parse().map_err(|error: toml::de::Error| error.to_string())?;
         let addressing = match table.get("addressing").and_then(toml::Value::as_str) {
             Some("real") => Addressing::Real,
@@ -100,9 +100,8 @@ impl Machine {
                 .collect()
         };
         let segment_end_faults = table.get("segment_end_faults").and_then(toml::Value::as_bool).ok_or("segment_end_faults is not a boolean")?;
-        let cpu = table.get("cpu").and_then(toml::Value::as_str).ok_or("cpu is not a string")?;
-        if !cpus.contains(&cpu) {
-            return Err(format!("cpu {cpu:?} is not one of {cpus:?}"));
+        if table.contains_key("cpu") {
+            return Err("a machine states no cpu: the target's timings.times names the default".to_owned());
         }
         Ok(Self {
             addressing,
@@ -143,8 +142,8 @@ impl Machine {
         }
     }
 
-    pub fn load(path: &std::path::Path, cpus: &[&str]) -> Result<Self, String> {
-        Self::parse(&std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?, cpus)
+    pub fn load(path: &std::path::Path, cpu: &str) -> Result<Self, String> {
+        Self::parse(&std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?, cpu)
     }
 
     /// The linear [start, end) that `width`-byte accesses at every selector
@@ -213,13 +212,13 @@ fn ports(table: &toml::Table) -> Result<Vec<Port>, String> {
 mod tests {
     use super::*;
 
-    const FLAT: &str = "addressing = \"flat\"\nsegment_end_faults = false\ncpu = \"486\"\n";
+    const FLAT: &str = "addressing = \"flat\"\nsegment_end_faults = false\n";
 
     /// A flat machine had no way to be described: `segments` was required and
     /// `addressing` was real or protected, so code32 could not state its platform.
     #[test]
     fn test_a_flat_machine_parses_without_segments() {
-        let flat = Machine::parse(FLAT, &["486"]).expect("a flat machine parses");
+        let flat = Machine::parse(FLAT, "486").expect("a flat machine parses");
         assert_eq!(flat.addressing, Addressing::Flat);
         assert!(flat.segments.is_none());
         assert_eq!(flat.huge_shift(), None);
@@ -230,13 +229,13 @@ mod tests {
     #[test]
     fn test_a_flat_machine_with_segments_is_refused() {
         let text = format!("{FLAT}[segments]\ndata = \"ds\"\nstack = \"ss\"\ncode = \"cs\"\nstack_is_data = true\n");
-        assert_eq!(Machine::parse(&text, &["486"]), Err("a flat machine has no segments".to_owned()));
+        assert_eq!(Machine::parse(&text, "486"), Err("a flat machine has no segments".to_owned()));
     }
 
     /// The PC's ports are one file every PC platform appends to its own text.
     #[test]
     fn test_a_platform_takes_the_shared_pc_ports() {
-        let flat = Machine::parse(&format!("{FLAT}{}", crate::PC_PORTS), &["486"]).unwrap();
+        let flat = Machine::parse(&format!("{FLAT}{}", crate::PC_PORTS), "486").unwrap();
         assert_eq!(flat.port_memory((0x3C4, 0x3C5)), PortMemory::None);
         assert_eq!(flat.port_memory((0x0B, 0x0B)), PortMemory::Dma);
         assert_eq!(flat.port_memory((0x300, 0x300)), PortMemory::Any);
@@ -244,7 +243,17 @@ mod tests {
 
     #[test]
     fn test_a_segmented_machine_still_needs_its_segments() {
-        let text = "addressing = \"real\"\nsegment_end_faults = true\ncpu = \"486\"\n";
-        assert_eq!(Machine::parse(text, &["486"]), Err("segments is not a table".to_owned()));
+        let text = "addressing = \"real\"\nsegment_end_faults = true\n";
+        assert_eq!(Machine::parse(text, "486"), Err("segments is not a table".to_owned()));
+    }
+
+    /// dos.toml said `cpu = "486"` while timings.times said `default_cpu 386`: two
+    /// defaults, so Nib and BASIC compiled for one CPU and C for another. A machine
+    /// that states a CPU is refused; the target's timings.times is the one place.
+    #[test]
+    fn test_a_machine_states_no_cpu() {
+        let text = format!("{FLAT}cpu = \"486\"\n");
+        assert!(Machine::parse(&text, "486").unwrap_err().contains("timings.times"));
+        assert_eq!(Machine::parse(FLAT, "P5").unwrap().cpu, "P5");
     }
 }

@@ -55,13 +55,10 @@ pub fn keep_exports(program: &mut model::Program, used: &BTreeSet<String>) {
     }
 }
 
-/// The processor objects are compiled for.
-pub const CPU: &str = "486";
-
-/// `target`'s machine, priced for `CPU`, with the far uninitialised data zeroed where the
+/// `target`'s machine, priced for its default CPU, with the far uninitialised data zeroed where the
 /// target's OS layer under the runtime says its start-up does.
 pub fn machine(target: &dyn llrm_target::Target, os: &crate::Os) -> llrm_core::abi::machine::Machine {
-    llrm_core::abi::machine::Machine { cpu: CPU.to_owned(), far_bss: os.far_bss, ..target.machine() }
+    llrm_core::abi::machine::Machine { far_bss: os.far_bss, ..target.machine() }
 }
 
 /// `module` as an OMF object, its code laid out as `layout` says.
