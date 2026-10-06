@@ -190,3 +190,76 @@ b2:
     let after = managed(&mut parsed(&format!("{DOS}{text}")), TailRecursion);
     assert_eq!(calls(&after), 1, "{after}");
 }
+
+/// A `byval` parameter is the caller's copy in memory: the loop would store through the next trip's
+/// argument, `@g` itself, where the call stored through a copy. The call stays.
+#[test]
+fn a_byval_parameter_keeps_its_call() {
+    let text = "@g = global i16 0
+
+define void @f(ptr byval(i16) %p, i16 %n) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b1, label %b2
+
+b1:
+  ret void
+
+b2:
+  store i16 9, ptr %p
+  %m = sub i16 %n, 1
+  call void @f(ptr byval(i16) @g, i16 %m)
+  ret void
+}
+";
+    let after = managed(&mut parsed(&format!("{DOS}{text}")), TailRecursion);
+    assert!(after.contains("call void @f("), "{after}");
+}
+
+/// A function that calls `setjmp` returns into one frame a second time: it keeps one per level.
+#[test]
+fn a_function_that_calls_a_returns_twice_routine_keeps_its_call() {
+    let text = "declare i16 @setjmp(ptr) returns_twice
+
+define i16 @f(i16 %n) {
+b0:
+  %j = call i16 @setjmp(ptr @buf) returns_twice
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b1, label %b2
+
+b1:
+  ret i16 %j
+
+b2:
+  %m = sub i16 %n, 1
+  %v = call i16 @f(i16 %m)
+  ret i16 %v
+}
+
+@buf = global [8 x i16] zeroinitializer
+";
+    let after = managed(&mut parsed(&format!("{DOS}{text}")), TailRecursion);
+    assert_eq!(calls(&after), 1, "{after}");
+}
+
+/// An argument every call passes on as it got it needs no phi: `a` stays the parameter, where the
+/// loop passes would first find `phi [%a, entry], [%phi, latch]`.
+#[test]
+fn an_argument_passed_on_unchanged_gets_no_phi() {
+    let text = "define i16 @f(i16 %n, i16 %a) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b1, label %b2
+
+b1:
+  ret i16 %a
+
+b2:
+  %m = sub i16 %n, 1
+  %v = call i16 @f(i16 %m, i16 %a)
+  ret i16 %v
+}
+";
+    let after = eliminated(text, &[&[0, 5], &[3, 5]]);
+    assert_eq!(after.matches("phi i16").count(), 1, "{after}");
+}

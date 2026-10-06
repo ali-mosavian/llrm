@@ -17,18 +17,17 @@
 //!
 //! The loop is the ordinary loop passes' to improve: the pass names nothing about the machine.
 
-use llrm_analysis::frameescape;
+use llrm_analysis::manager::ExposedFrames;
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Callees};
-use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags, Opcode, Tail};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use num_bigint::BigInt;
 
 use crate::counting;
 use crate::edges;
-use crate::fill::pure;
 use crate::lcssa::{arms, from_arms};
 
 pub struct TailRecursion;
@@ -40,7 +39,12 @@ impl FunctionPass for TailRecursion {
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let Some(id) = unit.id else { return PreservedAnalyses::all() };
-        if eliminated(unit.context, analyses.outer().callees(), unit.function, id) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if unit.function.is_declaration() || !unit.function.walk().any(|(_, inst)| memory::callee(unit.context, unit.function, inst) == Some(id)) {
+            return PreservedAnalyses::all();
+        }
+        let exposed = analyses.get::<ExposedFrames>(unit.context, unit.layout, unit.function);
+        let outer = analyses.outer();
+        if eliminated(unit.context, outer.callees(), &outer.globals, unit.function, id, exposed.is_empty()) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -62,9 +66,10 @@ struct Step {
 }
 
 /// `function` with each call to itself that is the last thing it does made a branch to its entry;
-/// whether any was.
-pub fn eliminated(context: &mut Context, callees: &Callees, function: &mut Function, id: GlobalId) -> bool {
-    if function.is_declaration() || !function.walk().any(|(_, inst)| memory::callee(context, function, inst) == Some(id)) || !private_frame(context, callees, function) {
+/// whether any was. `private`: no frame object's address is exposed, so a callee cannot read what the
+/// frame holds and the next trip may reuse it.
+pub fn eliminated(context: &mut Context, callees: &Callees, globals: &[GlobalValue], function: &mut Function, id: GlobalId, private: bool) -> bool {
+    if !private || !fixed_frame(function) || by_copy(function) || returns_twice(context, globals, function) {
         return false;
     }
     let mut found = sites(context, callees, function, id);
@@ -78,16 +83,30 @@ pub fn eliminated(context: &mut Context, callees: &Callees, function: &mut Funct
     true
 }
 
-/// Whether no frame object is reached by anything but accesses of its own: a callee cannot read what
-/// the frame holds, so the next trip may reuse it. A dynamic `alloca` would grow with each trip.
-fn private_frame(context: &Context, callees: &Callees, function: &Function) -> bool {
+/// Whether every `alloca` is in the entry block and of one size: a dynamic one would grow with each trip.
+fn fixed_frame(function: &Function) -> bool {
     let entry = function.entry();
-    let fixed = function.walk().all(|(block, inst)| match function.instruction(inst).opcode {
+    function.walk().all(|(block, inst)| match function.instruction(inst).opcode {
         Opcode::Alloca { .. } => Some(block) == entry && function.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_))),
         _ => true,
-    });
-    let marker = |inst: InstId| memory::callee(context, function, inst).and_then(|callee| callees.get(&callee)).is_some_and(|summary| summary.lifetime);
-    fixed && frameescape::exposed_allocas(function, marker).is_empty()
+    })
+}
+
+/// Whether a parameter or an argument is a copy the caller makes in memory (`byval`, `sret`, ...): the next
+/// trip's would be a store to what the first trip's callee wrote through.
+fn by_copy(function: &Function) -> bool {
+    let copying = |attrs: &[Attribute]| attrs.iter().any(|attr| matches!(attr, Attribute::Type(name, _) if matches!(name.as_str(), "byval" | "byref" | "inalloca" | "sret")));
+    function.parameter_attrs.iter().any(|attrs| copying(attrs))
+        || function.walk().any(|(_, inst)| matches!(&function.instruction(inst).opcode, Opcode::Call(info) if info.argument_attrs.iter().any(|attrs| copying(attrs))))
+}
+
+/// Whether `function` calls a routine that returns twice (`setjmp`): one frame for every trip is not
+/// the frame a second return finds.
+fn returns_twice(context: &Context, globals: &[GlobalValue], function: &Function) -> bool {
+    function.walk().any(|(_, inst)| {
+        let Opcode::Call(info) = &function.instruction(inst).opcode else { return false };
+        memory::has(&info.attrs, "returns_twice") || memory::callee(context, function, inst).and_then(|one| globals[one.0 as usize].function()).is_some_and(|one| memory::has(&one.attrs, "returns_twice"))
+    })
 }
 
 /// The self calls of `function` that end a block.
@@ -124,7 +143,7 @@ fn site(context: &Context, callees: &Callees, function: &Function, id: GlobalId,
         _ => None,
     };
     let (call, step) = match value {
-        None => (work.iter().rposition(|&inst| !pure(context, callees, function, inst)).map(|at| work[at]).filter(|&inst| is_call(inst))?, None),
+        None => (work.iter().rposition(|&inst| !memory::speculatable(context, callees, function, inst)).map(|at| work[at]).filter(|&inst| is_call(inst))?, None),
         Some(returned) => {
             let made = defined(returned)?;
             if is_call(made) {
@@ -154,7 +173,7 @@ fn site(context: &Context, callees: &Callees, function: &Function, id: GlobalId,
     let at = work.iter().position(|&inst| inst == call)?;
     let after: Vec<InstId> = work[at + 1..].iter().copied().filter(|&inst| Some(inst) != step.as_ref().map(|step| step.inst)).collect();
     // Only work with no effect may stand between the call and the way out, and it moves above the call.
-    if !after.iter().all(|&inst| pure(context, callees, function, inst)) || step.as_ref().is_some_and(|step| !work[at + 1..].contains(&step.inst)) {
+    if !after.iter().all(|&inst| memory::speculatable(context, callees, function, inst)) || step.as_ref().is_some_and(|step| !work[at + 1..].contains(&step.inst)) {
         return None;
     }
     Some(Site { block, call, join, step, after })
@@ -198,16 +217,21 @@ fn rewrite(context: &mut Context, function: &mut Function, found: &[Site], opera
     function.insert(jump, Position::End(entry)).expect("a placed block");
     let first = first.expect("the call is in the body");
 
-    // One phi per parameter, and one for the accumulator.
+    // One phi per parameter the calls change, and one for the accumulator.
     let mut phis = Vec::new();
-    for parameter in function.parameters().to_vec() {
+    let unchanged: Vec<bool> = function.parameters().iter().enumerate().map(|(at, &parameter)| found.iter().all(|site| function.instruction(site.call).operands[at] == Operand::Value(parameter))).collect();
+    for (at, parameter) in function.parameters().to_vec().into_iter().enumerate() {
+        if unchanged[at] {
+            phis.push(None);
+            continue;
+        }
         let ty = function.value(parameter).ty;
         let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), None);
         function.insert(phi, Position::Before(first)).expect("a placed instruction");
         let value = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
         function.replace_all_uses_with(parameter, value);
         function.set_operands(phi, vec![Operand::Value(parameter), Operand::Block(entry)]);
-        phis.push(phi);
+        phis.push(Some(phi));
     }
     let accumulator = operation.map(|op| {
         let ty = function.instruction(found.iter().find(|site| site.step.is_some()).expect("an accumulating site").call).ty;
@@ -253,6 +277,7 @@ fn rewrite(context: &mut Context, function: &mut Function, found: &[Site], opera
         }
         function.erase(site.call).expect("its user is gone");
         for (&phi, &argument) in phis.iter().zip(&arguments) {
+            let Some(phi) = phi else { continue };
             let mut operands = function.instruction(phi).operands.clone();
             operands.extend([argument, Operand::Block(block)]);
             function.set_operands(phi, operands);

@@ -108,7 +108,7 @@ pub fn merged(context: &mut Context, layout: &DataLayout, callees: &Callees, fun
             for (order, &inst) in function.block(*block).instructions().iter().enumerate() {
                 if let Some(cell) = _cell(&unit, inst, order) {
                     open.push(cell);
-                } else if !pure(unit.context, callees, function, inst) || matches!(function.instruction(inst).opcode, Opcode::Store { .. }) {
+                } else if !memory::speculatable(unit.context, callees, function, inst) || matches!(function.instruction(inst).opcode, Opcode::Store { .. }) {
                     runs.extend(_adjacent(&unit, std::mem::take(&mut open)));
                 }
             }
@@ -304,7 +304,7 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop, costs: &OperationCosts, s
 
     // How many trips is `induction`'s to prove, whatever the counter's step or test.
     let tested = operations(function, header);
-    let plain = |inst: InstId| pure(unit.context, callees, function, inst);
+    let plain = |inst: InstId| memory::speculatable(unit.context, callees, function, inst);
     let proof = induction::counted(unit, loop_, None, true).into_iter().find(|proof| {
         !proof.posttested && tested.last() == Some(&proof.branch) && tested.contains(&proof.compare) && tested.iter().all(|&one| one == proof.branch || one == proof.compare || plain(one))
     })?;
@@ -667,14 +667,6 @@ fn _stepped(unit: &Unit, phis: &[InstId], latch: BlockId, inst: InstId) -> Optio
     let (AffineOperand::Value(stepped, _), AffineOperand::Const(_)) = induction::stepping(unit, op)? else { return None };
     let phi = phis.iter().copied().find(|&phi| function.instruction(phi).result == Some(stepped))?;
     (arms(function, phi).iter().any(|&(value, from)| from == latch && Some(value) == op.result.map(Operand::Value))).then_some(stepped)
-}
-
-/// Work that stores nothing, reads nothing and cannot trap.
-pub(crate) fn pure(context: &Context, callees: &Callees, function: &Function, inst: InstId) -> bool {
-    let op = function.instruction(inst);
-    let traps = matches!(op.opcode, Opcode::Binary(BinaryOp::SDiv | BinaryOp::UDiv | BinaryOp::SRem | BinaryOp::URem));
-    let reads = matches!(op.opcode, Opcode::Load { .. } | Opcode::Alloca { .. } | Opcode::Call(_));
-    !traps && !reads && memory::only_value(context, callees, function, inst)
 }
 
 #[cfg(test)]
