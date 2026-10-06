@@ -440,7 +440,7 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         stack_check: program.stack_check.clone(),
     };
     let mut compiled = basic::compiled(program, &object, codegen)?;
-    compiled.stack = stack_to_add(&compiled, STACK_BASE, Some(0xF000))?;
+    compiled.stack = stack_to_add(&compiled, STACK_BASE, llrm_core::backend::stackusage::stack_limit(codegen.arch.layout().segment_bytes()))?;
     Ok(compiled)
 }
 

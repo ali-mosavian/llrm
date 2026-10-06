@@ -2472,6 +2472,19 @@ fn test_a_module_array_past_64k_needs_huge() {
     assert!(error.contains("huge var"), "{error}");
 }
 
+/// The most a segment holds was the compiler's own 64K (65535 in the view check, a word's reach in
+/// the static check): a target whose segments hold 32K got an array past it accepted.
+#[test]
+fn a_target_states_how_much_a_segment_holds() {
+    let source = "var a: i16[20000] = [0] * 20000\n";
+    let compile = |frontend: &crate::Frontend| crate::compile_module(crate::parse(crate::lex(source).unwrap()).unwrap(), "m", frontend);
+    let mut frontend = crate::Frontend::default();
+    assert!(compile(&frontend).is_ok());
+    frontend.layout.spaces.roles.segment_bytes = Some(32768);
+    let error = compile(&frontend).unwrap_err().to_string();
+    assert!(error.contains("past DGROUP's 32768 bytes"), "{error}");
+}
+
 /// A view of a huge array was a far pointer, whose 16-bit offset wraps at
 /// 64K: the callee read the wrong elements.
 #[test]
