@@ -332,10 +332,12 @@ impl FunctionCompiler<'_> {
         let result = match (name, type_arguments, arguments) {
             // The count is signed: a pointer steps back as readily as on.
             ("offset", [], [count]) => {
-                let count = self.coerced(count, TypeName::I16)?;
-                let step = self.value(TypeName::I16);
+                // The count is the target's signed word: isize.
+                let word = if self.types.sizes.near == 4 { TypeName::I32 } else { TypeName::I16 };
+                let count = self.coerced(count, word)?;
+                let step = self.value(word);
                 let width = i64::from(self.types.width(target.id()));
-                self.emit("mul", vec![step], vec![required(count, span)?, hir::Operand::Constant(type_id(TypeName::I16), width)], None);
+                self.emit("mul", vec![step], vec![required(count, span)?, hir::Operand::Constant(type_id(word), width)], None);
                 let moved = self.value(type_name);
                 self.emit("ptr_offset", vec![moved], vec![pointer, hir::Operand::Value(step)], None);
                 TypedOperand { operand: Some(hir::Operand::Value(moved)), type_name }

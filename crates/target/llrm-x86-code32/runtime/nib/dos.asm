@@ -25,10 +25,9 @@ heap_next dd 0
 heap_arena db HEAP_BYTES dup (?)
 
 .code
-; N$OMEM(bytes: u16) -> *near mut u8: `bytes` more of the heap at its end, or 0 when it runs out.
+; N$OMEM(bytes: usize) -> *near mut u8: `bytes` more of the heap at its end, or 0 when it runs out.
 N$OMEM proc
     mov ecx, dword ptr [esp+4]
-    movzx ecx, cx
     mov eax, heap_next
     test eax, eax
     jnz started

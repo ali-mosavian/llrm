@@ -49,16 +49,22 @@ mod enums;
 mod patterns;
 
 pub fn parse(tokens: Vec<Token>) -> Result<Module, Diagnostic> {
-    parse_after(tokens, 0, &BTreeMap::new())
+    parse_after(tokens, 0, &BTreeMap::new(), 2)
 }
 
 /// The module, its fixed-point types numbered after the `fixed_before`
 /// other modules of its program declare, since a fixed-point type is its
 /// declaration. `imported` holds the public constants of the modules it
-/// imports, folded, each by its path here: `alias.NAME`.
-pub fn parse_after(tokens: Vec<Token>, fixed_before: u16, imported: &BTreeMap<String, Expr>) -> Result<Module, Diagnostic> {
+/// imports, folded, each by its path here: `alias.NAME`. The target's near pointer is `near_bytes`
+/// wide: `usize` and `isize` are the integers that wide, and `NEAR_BYTES` the constant.
+pub fn parse_after(tokens: Vec<Token>, fixed_before: u16, imported: &BTreeMap<String, Expr>, near_bytes: u32) -> Result<Module, Diagnostic> {
     let mut parser = Parser::new(tokens, fixed_before);
-    parser.module_constants(imported)?;
+    parser.seeded = 2;
+    parser.fixed_types.insert("usize".to_owned(), if near_bytes == 4 { TypeName::U32 } else { TypeName::U16 });
+    parser.fixed_types.insert("isize".to_owned(), if near_bytes == 4 { TypeName::I32 } else { TypeName::I16 });
+    let mut imported = imported.clone();
+    imported.insert("NEAR_BYTES".to_owned(), Expr::Integer(i64::from(near_bytes), Span::new(1, 1, 1)));
+    parser.module_constants(&imported)?;
     parser.module().map(|mut module| {
         super::desugar::local_declarations(&mut module);
         module
@@ -89,6 +95,8 @@ struct Parser {
     at: usize,
     fixed_types: BTreeMap<String, TypeName>,
     fixed_before: u16,
+    /// Entries of `fixed_types` that are the target's, not declarations: `usize`.
+    seeded: usize,
     /// Each constant declared so far, as the literal it stands for.
     consts: BTreeMap<String, Expr>,
 }
@@ -100,6 +108,7 @@ impl Parser {
             at: 0,
             fixed_types: BTreeMap::new(),
             fixed_before,
+            seeded: 0,
             consts: BTreeMap::new(),
         }
     }
@@ -445,7 +454,7 @@ impl Parser {
                 )
             })?;
         self.line_end()?;
-        let declaration = u16::try_from(self.fixed_types.len())
+        let declaration = u16::try_from(self.fixed_types.len() - self.seeded)
             .ok()
             .and_then(|own| own.checked_add(self.fixed_before))
             .ok_or_else(|| Diagnostic::new(span, "too many fixed-point types"))?;
@@ -2080,6 +2089,7 @@ fn parse_inline_expression(
         at: 0,
         fixed_types: fixed_types.clone(),
         fixed_before: 0,
+        seeded: 0,
         consts: BTreeMap::new(),
     };
     let expression = parser
