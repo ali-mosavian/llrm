@@ -165,11 +165,11 @@ fn survives(function: &Function, graph: &[cfg::Block], dominance: &cfg::Dominanc
     }
     // Of those, the ones `at` can be reached from, again without the store's block.
     let mut reaches: BTreeSet<i64> = BTreeSet::from([cfg::id(at)]);
-    let mut grew = true;
-    while grew {
-        grew = false;
+    loop {
         let joining: Vec<i64> = graph.iter().filter(|block| reached.contains(&block.at) && !reaches.contains(&block.at) && block.succ.iter().any(|next| reaches.contains(next))).map(|block| block.at).collect();
-        grew = !joining.is_empty();
+        if joining.is_empty() {
+            break;
+        }
         reaches.extend(joining);
     }
     reached.intersection(&reaches).all(|&block| after(cfg::block(block), None))
