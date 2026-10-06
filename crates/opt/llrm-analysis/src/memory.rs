@@ -1188,7 +1188,7 @@ b0:
         ));
         let layout = layout(&module);
         let f = function(&module, "f");
-        let unit = Unit::of(&module, &layout, f);
+        let unit = Unit::of(&module, &layout, f).with_spaces(llrm_x86_code16::spaces());
         let loads = f.walk().map(|(_, inst)| inst).filter_map(|inst| MemRef::of(&unit, inst)).collect::<Vec<_>>();
 
         let far = &loads[0];

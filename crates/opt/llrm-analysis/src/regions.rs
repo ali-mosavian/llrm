@@ -542,7 +542,7 @@ pub(crate) mod tests {
     /// Every access `@f` of `text` makes, in order.
     fn accesses(module: &Module, layout: &DataLayout) -> Vec<MemRef> {
         let f = function(module, "f");
-        let unit = Unit::of(module, layout, f);
+        let unit = Unit::of(module, layout, f).with_spaces(llrm_x86_code16::spaces());
         f.walk().filter_map(|(_, inst)| MemRef::of(&unit, inst)).collect()
     }
 
@@ -975,7 +975,7 @@ b0:
             ));
             let dl = layout(&module);
             let f = function(&module, "f");
-            let unit = Unit::of(&module, &dl, f);
+            let unit = Unit::of(&module, &dl, f).with_spaces(llrm_x86_code16::spaces());
             let found = crate::alias::annotated(&unit).unwrap();
             let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
             assert_eq!(!may_alias(load, store, None, None, None).unwrap(), apart, "space {space}");
@@ -1006,7 +1006,7 @@ b0:
             let dl = layout(&module);
             let f = function(&module, "f");
             let dos = dos(&module);
-            let mut unit = Unit::of(&module, &dl, f);
+            let mut unit = Unit::of(&module, &dl, f).with_spaces(llrm_x86_code16::spaces());
             unit.program = Some(&dos);
             let found = crate::alias::annotated(&unit).unwrap();
             let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
@@ -1039,7 +1039,7 @@ b0:
             let dl = layout(&module);
             let f = function(&module, "f");
             let dos = dos(&module);
-            let mut unit = Unit::of(&module, &dl, f);
+            let mut unit = Unit::of(&module, &dl, f).with_spaces(llrm_x86_code16::spaces());
             unit.program = Some(&dos);
             let found = crate::alias::annotated(&unit).unwrap();
             let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
