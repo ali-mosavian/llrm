@@ -5,6 +5,7 @@
 //! store into its frame slot, and every use a load into a fresh value that
 //! lives only across that one instruction.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -378,11 +379,20 @@ fn _reloaded(one: &Insn, stored: &BTreeSet<u32>, frame: &mut Frame, fresh: &mut 
 /// one move, beside it, rather than for the copy: it would live across all of
 /// them. A move that reads one value and writes another is as correct there,
 /// since a copy reads before it writes.
-fn _sunk_from_copies(body: &LirBody, reading: &BTreeSet<u32>) -> LirBody {
+fn _sunk_from_copies<'b>(body: &'b LirBody, reading: &BTreeSet<u32>) -> Cow<'b, LirBody> {
     let moved = |one: &Insn| _group_source(one).is_some_and(|source| reading.contains(&source.value));
-    if !body.insns().iter().any(|one| moved(one)) {
-        return body.clone();
+    // A copy of a value in `reading` reads it, so it is among that value's readers.
+    let any = postings::following(body, |postings| reading.iter().any(|value| postings.uses(*value).iter().any(|at| moved(_at(body, *at)))));
+    if check_postings() {
+        assert_eq!(any, body.insns().iter().any(|one| moved(one)), "{}: the copies to sink from the postings differ", body.name);
     }
+    if !any {
+        return Cow::Borrowed(body);
+    }
+    Cow::Owned(_sunk_whole(body, &moved))
+}
+
+fn _sunk_whole(body: &LirBody, moved: &dyn Fn(&Insn) -> bool) -> LirBody {
     let blocks = body
         .blocks
         .iter()
@@ -411,7 +421,24 @@ fn _sunk_from_copies(body: &LirBody, reading: &BTreeSet<u32>) -> LirBody {
 /// Keep a just-defined spilled value in a register through one update.
 ///
 /// Only a source that dies at the copy: the update now writes its register.
-fn _short_update_runs(
+fn _short_update_runs<'b>(body: &'b LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, fresh: u32) -> Result<(Cow<'b, LirBody>, u32), Error> {
+    // A run is a plain move into a stored value followed by something: only a definition of one can start it.
+    let possible = postings::following(body, |postings| {
+        stored.iter().any(|&value| {
+            postings.defs(value).iter().any(|at| {
+                let insns = &body.blocks[at.0 as usize].insns;
+                matches!(_plain_move(&insns[at.1 as usize]), Some((into, _)) if into == value) && insns.get(at.1 as usize + 1).is_some()
+            })
+        })
+    });
+    if !possible {
+        return Ok((Cow::Borrowed(body), fresh));
+    }
+    let (made, next) = _short_update_runs_whole(body, stored, frame, fresh)?;
+    Ok((Cow::Owned(made), next))
+}
+
+fn _short_update_runs_whole(
     body: &LirBody,
     stored: &BTreeSet<u32>,
     frame: &mut Frame,
@@ -474,7 +501,19 @@ fn _short_update_runs(
 /// as LLVM's local split: reloaded once, updated and read in a register,
 /// and stored only if still live after its last read there. Spilled whole,
 /// the update ran in memory and each read reloaded.
-fn _local_updates(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, mut fresh: u32) -> Result<(LirBody, u32), Error> {
+fn _local_updates<'b>(body: &'b LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, fresh: u32) -> Result<(Cow<'b, LirBody>, u32), Error> {
+    // An update defines a stored value and reads it.
+    let possible = postings::following(body, |postings| {
+        stored.iter().any(|&value| postings.defs(value).iter().any(|at| _at(body, *at).uses.contains(&value)))
+    });
+    if !possible {
+        return Ok((Cow::Borrowed(body), fresh));
+    }
+    let (made, next) = _local_updates_whole(body, stored, frame, fresh)?;
+    Ok((Cow::Owned(made), next))
+}
+
+fn _local_updates_whole(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Frame, mut fresh: u32) -> Result<(LirBody, u32), Error> {
     let index = ranges::indexed(body);
     let live = ranges::intervals(body, Some(&index));
     let register_only = |one: &Insn| {
@@ -3919,6 +3958,37 @@ mod tests {
         let result = _out(&_body(vec![_add(1, 2, 0x100), read]), &[1]);
         assert_eq!(result.iter().filter(|one| _folded_add(one)).count(), 1, "the fold is still made");
         assert_eq!(super::final_use_runs() - before, 1, "worked out once");
+    }
+
+    /// Three blocks, a value in the middle one, a value in the last.
+    fn _three_blocks() -> LirBody {
+        let block = |at: i64, insns: Vec<Insn>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns.into_iter().map(Arc::new).collect()) };
+        LirBody::new(
+            "three",
+            0,
+            vec![
+                block(0, vec![_move(10, 11, None, 0x10)], vec![1]),
+                block(1, vec![_add(1, 2, 0x100), _move(3, 1, None, 0x102)], vec![2]),
+                block(2, vec![_move(20, 21, None, 0x200), _move(22, 20, None, 0x202)], vec![]),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        )
+    }
+
+    /// Each spill scanned the body for the values it spills (copies, constants, addresses, extensions, widths):
+    /// 8% of compiling d_alias (#559). The occurrences follow the body, redoing only the blocks a rewrite changed.
+    #[test]
+    fn test_a_spill_redoes_the_occurrences_of_the_blocks_it_changed_only() {
+        let body = _three_blocks();
+        crate::backend::postings::following(&body, |_| ());
+        let (spilt, made) = spilled(&body, &set(&[1]), Some(&mut Frame::new(0)), &crate::backend::classes::RegisterClasses::m16()).expect("spills");
+        let before = crate::backend::postings::redone();
+        crate::backend::postings::following(&spilt, |found| assert!(*found == crate::backend::postings::Postings::of(&spilt), "the occurrences differ from working them out"));
+        assert!(crate::backend::postings::redone() - before <= 1, "{} blocks redone for a spill in one block", crate::backend::postings::redone() - before);
+        // The values the rewrite made are found in the next one.
+        let (again, _) = spilled(&spilt, &made, Some(&mut Frame::new(0)), &crate::backend::classes::RegisterClasses::m16()).expect("spills again");
+        crate::backend::postings::following(&again, |found| assert!(*found == crate::backend::postings::Postings::of(&again)));
     }
 
     /// The index fold may not move a second access through the same base.
