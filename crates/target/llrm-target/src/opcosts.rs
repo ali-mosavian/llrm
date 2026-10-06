@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn size_costs_replace_what_size_says_and_price_by_bytes() {
-        let text = format!("{ALL}[bytes]\n{}\n[size]\nprefix = 1\nargument = 2\n", ["a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd", "fl", "fs", "f", "fc", "cp", "cc"].iter().map(|one| format!("{one} = 4")).collect::<Vec<_>>().join("\n"));
+        let text = format!("{ALL}[bytes]\n{}\n[size]\nprefix = 1\nargument = 2\n", ["a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd", "fl", "fs", "fr", "f", "fc", "cp", "cc"].iter().map(|one| format!("{one} = 4")).collect::<Vec<_>>().join("\n"));
         let costs = Description::parse(&text).unwrap().size_costs();
         assert_eq!((costs.prefix, costs.argument, costs.add, costs.fill), (1, 2, 4, 4 + 8 + 3));
     }

@@ -29,7 +29,8 @@ float_multiply = x87_mul
 float_divide = x87_div
 float_load = x87_load
 float_store = x87_store
-# Unpriced in clocks: no audited price for the 386 to the Core.
+# Unpriced here, in clocks and bytes: no audited clocks for the 386 to the Core, and pricing the 2 bytes of `fstp st(0)`
+# made nbody -Os 7 B larger, the loop it then left being shaped worse by LSR (x86-m32 prices it: opcosts.txt).
 float_release = 0
 extend = movzx
 fill = rep_stos + 2*push_r + 2*pop_seg + 2*mov_ri
@@ -67,7 +68,6 @@ x87_mul = 6
 x87_div = 6
 x87_load = 6
 x87_store = 6
-x87_release = 2
 rep_stos = 2
 push_r = 1
 pop_seg = 1
@@ -82,4 +82,3 @@ rep_movs_cell = 0
 [size]
 prefix = 1
 argument = 2
-float_release = x87_release

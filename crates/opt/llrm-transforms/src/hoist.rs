@@ -76,7 +76,11 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses, size: bool) -> 
     let room = profit::registers(&outer);
     let costs = if size { outer.target().size_costs() } else { profit::costs(&outer) };
     // Moving instructions leaves every block and loop as they are.
-    let frequency = (room.priced() && !_slots_remain(unit)).then(|| _frequency(unit, analyses, &outer, size)).flatten();
+    // The registers are priced where the function is in SSA; before that, with scalar slots still in memory, only
+    // what a held value costs to release is.
+    let pressure = room.priced() && !_slots_remain(unit);
+    let frequency = (pressure || room.priced() && costs.float_release > 0).then(|| _frequency(unit, analyses, &outer, size)).flatten();
+    let room = if pressure { room } else { crate::spill::Room { registers: 0, ..room } };
     let mut changed = false;
     for one in found {
         let Some(into) = _preheader(&graph, one) else { continue };
