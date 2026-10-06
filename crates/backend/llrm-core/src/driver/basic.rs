@@ -702,7 +702,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
             None => data.push((object.constants.clone(), pooled)),
         }
     }
-    timed("stack checks", || crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names)));
+    timed("stack checks", || crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names), &*options.arch));
     let defined: BTreeSet<&str> = procedures.iter().map(|one| one.name.as_str()).collect();
     let mut externs: Vec<(String, String)> = referenced
         .iter()
@@ -732,8 +732,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         far_bss: BTreeSet::new(),
         debug,
         stack: 0,
-        // BASIC is m16's.
-        object: llrm_target::Target::object(&llrm_x86_m16::M16),
+        object: options.arch.object(),
     })
 }
 

@@ -11,3 +11,6 @@ implementation = "os.asm"
 far_bss = false
 # The most the heap grows to, taken from the extender (DPMI 0501h) the first time it is asked.
 heap_bytes = 16777216
+# What the runtime's routines, DOS and an interrupt use below the deepest chain of frames the program
+# makes: the stack limit is the bottom plus this, and the stack the object adds covers it.
+stack_reserve = 512

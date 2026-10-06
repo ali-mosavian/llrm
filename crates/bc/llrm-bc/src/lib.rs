@@ -26,15 +26,11 @@ use std::collections::BTreeMap;
 
 pub use llrm_hir::mir::RUNTIME;
 
-/// BC objects are real mode's: its far and selector address spaces, which
-/// `llrm_x86_m16::layout()` states (a test holds them equal).
-pub const FAR: u32 = 1;
-pub const SEGMENT: u32 = 2;
-
-/// Real mode's data layout string.
-pub fn datalayout() -> String {
-    llrm_x86_m16::layout().datalayout
+/// The selector-alone address space of `spaces`: BC's objects are real mode's, which has one.
+pub fn segment(spaces: &llrm_mir::spaces::Spaces) -> u32 {
+    spaces.segment.expect("a BC object's target has selectors")
 }
+
 use llrm_target::machine::Machine;
 use llrm_bcmachine::frontends::bc::blocks::has_header;
 use llrm_bcmachine::frontends::bc::extent::BodyKind;
@@ -92,7 +88,7 @@ impl Raised {
 /// The module raised whole, as a program of its own, with its runtime and
 /// where the object put its globals, or the first function refused.
 pub fn raise(found: &found_module::Module, machine: &Machine) -> Result<Raised, Refusal> {
-    raise_in(found, machine, &segments([found]))
+    raise_in(found, machine, &segments(machine, [found]))
 }
 
 /// `raise`, the module one of a program whose segments `segments` lays out.
@@ -108,8 +104,8 @@ pub fn raise_in(found: &found_module::Module, machine: &Machine, segments: &Segm
 /// The segments of the program `modules` are, as LINK lays them out: DGROUP
 /// what any module's GRPDEF puts there, COMMON what any combines so, by
 /// name; BC's code runs with SS = DS.
-pub fn segments<'m>(modules: impl IntoIterator<Item = &'m found_module::Module>) -> SegmentLayout {
-    let mut layout = SegmentLayout::of(&DataLayout::parse(&datalayout()).expect("llrm's layout"));
+pub fn segments<'m>(machine: &Machine, modules: impl IntoIterator<Item = &'m found_module::Module>) -> SegmentLayout {
+    let mut layout = SegmentLayout::of(&DataLayout::parse(&machine.layout().datalayout).expect("the target's layout"));
     for found in modules {
         let named = omf::segments(&found.records);
         let name = |index: &i64| named.get(*index as usize).cloned().flatten().map(|(name, _)| name);
@@ -146,7 +142,7 @@ fn main_frame(found: &found_module::Module) -> Option<(i64, i64)> {
 
 /// Every body raised, each refusal recorded against its function.
 pub fn raise_each(found: &found_module::Module, machine: &Machine) -> Result<Raised, Refusal> {
-    raise_each_in(found, machine, &segments([found]))
+    raise_each_in(found, machine, &segments(machine, [found]))
 }
 
 /// `raise_each`, the module one of a program whose segments `segments`
@@ -154,7 +150,7 @@ pub fn raise_each(found: &found_module::Module, machine: &Machine) -> Result<Rai
 pub fn raise_each_in(found: &found_module::Module, machine: &Machine, segments: &SegmentLayout) -> Result<Raised, Refusal> {
     let module_refusal = |reason: String| Refusal { function: MODULE.to_owned(), reason };
     let facts = Facts::new(found, machine).map_err(module_refusal)?;
-    let mut module = Module { datalayout: Some(datalayout()), ..Module::default() };
+    let mut module = Module { datalayout: Some(machine.layout().datalayout.clone()), ..Module::default() };
     let mut intrinsics = BTreeMap::new();
     for name in ["uadd", "usub"] {
         for bits in [8, 16, 32] {
@@ -192,7 +188,7 @@ pub fn raise_each_in(found: &found_module::Module, machine: &Machine, segments: 
         let ty = module.context.types.intern(Type::Function { returns, parameters: vec![word; (popped / 2) as usize], variadic: false });
         let linkage = if body.body.kind == BodyKind::Procedure || body.body.kind == BodyKind::Main { Linkage::External } else { Linkage::Internal };
         let global = objects::add_unique(&mut module, &name, |module, one| module.add_function(one, ty, linkage));
-        module.globals[global.0 as usize].address_space = FAR;
+        module.globals[global.0 as usize].address_space = facts.spaces.far;
         if body.body.kind == BodyKind::Procedure {
             let GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { unreachable!("a function") };
             function.calling_convention = llrm_mir::opcode::BASIC;
@@ -201,17 +197,17 @@ pub fn raise_each_in(found: &found_module::Module, machine: &Machine, segments: 
         }
         functions.push((index, name, global));
     }
-    let objects = Objects::build(&Carving::of(&facts, segments), found, &mut module).map_err(module_refusal)?;
+    let objects = Objects::build(&Carving::of(&facts, segments), found, &mut module, facts.spaces).map_err(module_refusal)?;
     let interfaces = runtime::interfaces(&facts);
     let callees = runtime::declare(&facts, &mut module, &interfaces);
     intrinsics.extend(access::declare(&facts, &mut module).map(|one| (access::declared(), one)));
     let family = found_module::family(&found.records);
-    let err = if found.calls.values().any(|name| name == "B$FERR") { Some(llrm_hir::onerror::err(&mut module, FAR).map_err(module_refusal)?) } else { None };
+    let err = if found.calls.values().any(|name| name == "B$FERR") { Some(llrm_hir::onerror::err(&mut module, facts.spaces.far).map_err(module_refusal)?) } else { None };
     let mut handled = BTreeMap::new();
     for &(index, _, global) in &functions {
         if facts.bodies[index].handler.is_some() {
             let lines: Vec<i64> = facts.statements.iter().map(|&(_, line)| line).collect();
-            handled.insert(index, llrm_hir::onerror::handled(&mut module, FAR, global, &lines, false).map_err(module_refusal)?);
+            handled.insert(index, llrm_hir::onerror::handled(&mut module, facts.spaces.far, global, &lines, false).map_err(module_refusal)?);
         }
     }
     // An intrinsic raises no BASIC error.
@@ -231,7 +227,7 @@ pub fn raise_each_in(found: &found_module::Module, machine: &Machine, segments: 
         let body = &facts.bodies[index];
         let outcome = {
             let mut builder = module.builder(global);
-            emit::function(&mut builder, &unit, body, handled.get(&index).copied()).map(|()| addresses::attribute(builder.function, builder.context, &objects))
+            emit::function(&mut builder, &unit, body, handled.get(&index).copied()).map(|()| addresses::attribute(builder.function, builder.context, &objects, &facts.spaces))
         };
         if outcome.is_err() {
             let GlobalKind::Function(function) = &mut module.globals[global.0 as usize].kind else { unreachable!("a function") };
@@ -242,17 +238,7 @@ pub fn raise_each_in(found: &found_module::Module, machine: &Machine, segments: 
         outcomes.push((name, outcome));
     }
     let runtime = cells::promise(&module, &facts, &objects).map_err(module_refusal)?;
-    tags::tag(&mut module);
+    tags::tag(&mut module, crate::segment(&facts.spaces));
     let placement = objects.placement();
     Ok(Raised { module, runtime, outcomes, placement })
-}
-
-#[cfg(test)]
-mod layout_tests {
-    /// The consts BC matches on are what real mode's description says.
-    #[test]
-    fn test_bc_spaces_are_real_modes_description() {
-        let spaces = llrm_x86_m16::layout().spaces;
-        assert_eq!((super::FAR, Some(super::SEGMENT)), (spaces.far, spaces.segment));
-    }
 }

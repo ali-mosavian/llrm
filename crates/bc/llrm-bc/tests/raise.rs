@@ -460,3 +460,18 @@ fn erl_is_the_line_bcs_statement_table_gives() {
         assert_eq!(lines, ["0", "100", "200"].into_iter().collect(), "{name}: {table}");
     }
 }
+
+/// BC matched address spaces 1 (far) and 2 (selector) as constants and held them equal to real mode's by a test: a machine
+/// of a target that numbers them 7 and 8 got its far globals in space 1. The machine's layout says which, once.
+#[test]
+fn the_far_and_selector_spaces_are_the_machines_layouts() {
+    let fixture = std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf")).unwrap().flatten().map(|one| one.path()).find(|path| path.extension().is_some_and(|ext| ext == "obj" || ext == "OBJ")).expect("an object");
+    let found = llrm_omf::module::load(&fixture).expect("reads").expect("an object");
+    let mut layout = llrm_x86_m16::layout();
+    layout.spaces.roles.far = 7;
+    layout.spaces.roles.segment = Some(8);
+    let machine = llrm_x86_m16::machine::BUILT_IN.clone().with_layout(layout);
+    let module = llrm_bc::raise(&found, &machine).unwrap_or_else(|refusal| panic!("{refusal}")).module;
+    let spaces: std::collections::BTreeSet<u32> = module.globals.iter().map(|one| one.address_space).collect();
+    assert!(spaces.contains(&7) && !spaces.contains(&1), "{spaces:?}");
+}

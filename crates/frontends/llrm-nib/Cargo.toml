@@ -23,6 +23,7 @@ toml = { workspace = true }
 
 [dev-dependencies]
 llrm-x86-m16 = { workspace = true }
+llrm-x86-m32 = { workspace = true }
 iced-x86 = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-hir = { workspace = true }

@@ -62,9 +62,22 @@ pub struct Machine {
     /// The program's start-up zeroes the far uninitialised data (class FAR_BSS), as DOS leaves
     /// memory past the image as it found it. Where it does not, zero far data is stored.
     pub far_bss: bool,
+    /// The data layout and address spaces of the target this machine is the platform of: a recompiler of
+    /// objects (BC's) reads them from the machine it is handed, not from a target it names.
+    pub layout: Option<crate::layout::Layout>,
 }
 
 impl Machine {
+    /// This machine as the platform of the target whose layout is `layout`.
+    pub fn with_layout(self, layout: crate::layout::Layout) -> Self {
+        Self { layout: Some(layout), ..self }
+    }
+
+    /// The layout the machine was given.
+    pub fn layout(&self) -> &crate::layout::Layout {
+        self.layout.as_ref().expect("a machine of a target states its layout")
+    }
+
     /// The machine `text` describes, priced for `cpu`: the target's `default_cpu`,
     /// stated once in its `timings.times`, not by the machine.
     pub fn parse(text: &str, cpu: &str) -> Result<Self, String> {
@@ -112,6 +125,7 @@ impl Machine {
             segment_end_faults,
             protected_huge_shift: table.get("huge_shift").and_then(toml::Value::as_integer).map(|shift| shift as u32),
             far_bss: table.get("far_bss").and_then(toml::Value::as_bool).unwrap_or(false),
+            layout: None,
         })
     }
 

@@ -52,7 +52,7 @@ impl llrm_target::Target for M32 {
     }
 
     fn machine(&self) -> Machine {
-        Machine::parse(DOS32, TIMINGS.default_cpu().expect("timings.times states a default CPU")).expect("the flat DOS description parses")
+        Machine::parse(DOS32, TIMINGS.default_cpu().expect("timings.times states a default CPU")).expect("the flat DOS description parses").with_layout(layout())
     }
 
     fn cpus(&self) -> &'static [&'static str] {
@@ -112,6 +112,10 @@ impl llrm_target::Target for M32 {
     /// Flat: no segments, one model.
     fn object(&self) -> llrm_target::object::ObjectFormat {
         llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml")).expect("flat object.toml parses")
+    }
+
+    fn return_address_bytes(&self, far: bool) -> i64 {
+        llrm_x86::calling::return_address_bytes(CALLING.native(), far)
     }
 
     fn stack_pointer(&self) -> Register {
@@ -248,6 +252,8 @@ mod tests {
         assert_eq!((frame.pointer, frame.stack), (EBP, ESP));
         assert_eq!(frame.saved, [(EBX, EBX), (ECX, ECX), (EDX, EDX), (ESI, ESI), (EDI, EDI)]);
         assert_eq!((M32.stack_slot_bytes(), M32.first_argument_offset(false)), (4, 8));
+        // No far call: the return address is a dword either way.
+        assert_eq!((M32.return_address_bytes(false), M32.return_address_bytes(true)), (4, 4));
         assert_eq!([4, 8].map(|width| M32.results(width)), [vec![EAX], vec![EAX, EDX]]);
         assert_eq!(llrm_x86::calling::callee_saved(CALLING.named("cdecl32").unwrap()), [(EBX, EBX), (ESI, ESI), (EDI, EDI)]);
     }

@@ -95,6 +95,8 @@ pub struct Os {
     pub stack: llrm_core::hir::model::StackCheck,
     /// The stack the start-up reserves; the object's own adds to it.
     pub stack_base: i64,
+    /// What the runtime's routines, DOS and an interrupt use below the deepest chain of frames: the OS layer's.
+    pub stack_reserve: i64,
     /// Whether the start-up zeroes the far uninitialised data.
     pub far_bss: bool,
     /// What the assembler is told of the description (`assembler_defines`): each symbol and the
@@ -152,6 +154,7 @@ impl Os {
             module: layer.nib_module()?,
             stack: llrm_core::hir::model::StackCheck::from_toml(&stack)?,
             stack_base: table.get("stack_base").and_then(|one| one.as_integer()).ok_or("stack_base is not an integer")?,
+            stack_reserve: layer.integer("stack_reserve")?,
             far_bss: layer_table.get("far_bss").and_then(|one| one.as_bool()).ok_or("far_bss is not a boolean")?,
             defines,
             directory: std::fs::canonicalize(layer.directory).map_or_else(|_| layer.directory.to_owned(), |path| path.to_string_lossy().into_owned()),

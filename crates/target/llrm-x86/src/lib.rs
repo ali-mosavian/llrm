@@ -33,6 +33,12 @@ pub mod calling {
         convention.result_registers(i64::from(width)).expect("calling.toml states a result for every width").iter().map(|name| register(name)).collect()
     }
 
+    /// The return address a call leaves: the convention's, and a far call's extra bytes (the far first argument
+    /// is that much further from the frame register).
+    pub fn return_address_bytes(convention: &Convention, far: bool) -> i64 {
+        convention.return_address_bytes + if far { first_argument_offset(convention, true) - convention.first_argument_offset } else { 0 }
+    }
+
     /// Where the first argument lies from the frame register.
     pub fn first_argument_offset(convention: &Convention, far: bool) -> i64 {
         if far { convention.first_argument_offset_far.unwrap_or(convention.first_argument_offset) } else { convention.first_argument_offset }
