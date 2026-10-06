@@ -11,7 +11,6 @@ llrm-driver = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-target = { workspace = true }
 llrm-transforms = { workspace = true }
-iced-x86 = { workspace = true }
 indexmap = { workspace = true }
 num-bigint = { workspace = true }
 num-traits = { workspace = true }
@@ -27,6 +26,7 @@ toml = { workspace = true }
 toolchain = []
 
 [dev-dependencies]
+iced-x86 = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
 regex = { workspace = true }

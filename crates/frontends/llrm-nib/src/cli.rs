@@ -50,7 +50,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut used_by = Vec::new();
     let mut os_layer = None;
     let mut declare = None;
-    let mut frontend = super::Frontend::default();
+    let (mut warn_target_width, mut unchecked_bounds) = (true, false);
     let mut at = 0;
     while at < argv.len() {
         if flags.take(argv, &mut at)? {
@@ -75,9 +75,9 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--procedure-segments" => layout = CodeLayout::PerProcedure,
             "--declare" => declare = Some(super::declarations::Language::named(&value("--declare")?).ok_or("--declare takes h, bi or inc")?),
             "--os-layer" => os_layer = Some(value("--os-layer")?),
-            "-Wno-target-width" => frontend.warn_target_width = false,
+            "-Wno-target-width" => warn_target_width = false,
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
-            "--unchecked-bounds" => frontend.unchecked_bounds = true,
+            "--unchecked-bounds" => unchecked_bounds = true,
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
             _ if source.is_none() => source = Some(PathBuf::from(argument)),
             _ => return Err(format!("unrecognized arguments: {argument}")),
@@ -90,10 +90,8 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         (None, Some(_)) => PathBuf::new(),
         (None, None) => return Err("the following arguments are required: source".to_owned()),
     };
-    frontend.debug = flags.debug;
-    frontend.checked_stack = flags.sanitize.stack;
     let bound = llrm_driver::target(&flags, None)?;
-    frontend = super::Frontend { debug: frontend.debug, checked_stack: frontend.checked_stack, unchecked_bounds: frontend.unchecked_bounds, warn_target_width: frontend.warn_target_width, ..super::Frontend::for_target(&*bound.target)? };
+    let frontend = super::Frontend { debug: flags.debug, checked_stack: flags.sanitize.stack, unchecked_bounds, warn_target_width, ..super::Frontend::for_target(&*bound.target)? };
     let codegen = bound.options(&flags, flags.machine(&*bound.target, nib::machine(&*bound.target, &frontend.os))?);
     let os_layer = field.map(|field| bound.target.os_layer().ok_or_else(|| "this target has no OS layer".to_owned()).and_then(|layer| layer.report(&bound.target.runtime("nib").ok_or("this target has no Nib runtime")?, &field)));
     Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen, os_layer, declare })
