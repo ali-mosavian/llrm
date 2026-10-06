@@ -8,19 +8,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use iced_x86::{Code, Register};
-use llrm_bcmachine::frontends::bc::declen::{READS, WRITES, instruction_info_factory};
-use llrm_bcmachine::abi::handlers;
+use llrm_x86_bcmachine::frontends::bc::declen::{READS, WRITES, instruction_info_factory};
+use llrm_x86_bcmachine::abi::handlers;
 use llrm_target::machine::Machine;
 use llrm_qbruntime::{self as runtime, Contract, Control, Reg};
-use llrm_bcmachine::frontends::bc::blocks::{self, Block};
-use llrm_bcmachine::frontends::bc::extent::{Body, BodyKind};
-use llrm_bcmachine::frontends::bc::raising_control;
-use llrm_bcmachine::model::ir::decode;
-use llrm_bcmachine::model::ir::nodes::{Node, span};
-use llrm_bcmachine::model::ir::{Loc, Operation, root};
-use llrm_bcmachine::objectfile::cvinfo;
-use llrm_bcmachine::objectfile::module::{self, Module};
-use llrm_bcmachine::support::hash::IndexMap;
+use llrm_x86_bcmachine::frontends::bc::blocks::{self, Block};
+use llrm_x86_bcmachine::frontends::bc::extent::{Body, BodyKind};
+use llrm_x86_bcmachine::frontends::bc::raising_control;
+use llrm_x86_bcmachine::model::ir::decode;
+use llrm_x86_bcmachine::model::ir::nodes::{Node, span};
+use llrm_x86_bcmachine::model::ir::{Loc, Operation, root};
+use llrm_x86_bcmachine::objectfile::cvinfo;
+use llrm_x86_bcmachine::objectfile::module::{self, Module};
+use llrm_x86_bcmachine::support::hash::IndexMap;
 
 use crate::pairs::{self, Pair};
 
@@ -298,7 +298,7 @@ impl<'m> Facts<'m> {
         let decoded = decode::decode_module(found, machine)?;
         let mapped = blocks::code_map(found)?;
         let all = blocks::partition(found, &mapped);
-        let mut contracts = llrm_bcmachine::abi::callsite::for_module(found, None).map_err(|error| error.to_string())?;
+        let mut contracts = llrm_x86_bcmachine::abi::callsite::for_module(found, None).map_err(|error| error.to_string())?;
         let header = blocks::has_header(found);
         let procedures: IndexMap<usize, cvinfo::Procedure> =
             if header { cvinfo::parse(&found.records).procedures.into_iter().map(|one| (one.offset as usize, one)).collect() } else { IndexMap::default() };

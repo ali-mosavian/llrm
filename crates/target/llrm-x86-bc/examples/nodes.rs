@@ -1,6 +1,6 @@
 //! nodes OBJ: each body's decoded nodes, one per line.
-use llrm_bcmachine::model::ir::decode;
-use llrm_bcmachine::model::ir::nodes::{Node, span};
+use llrm_x86_bcmachine::model::ir::decode;
+use llrm_x86_bcmachine::model::ir::nodes::{Node, span};
 
 fn main() {
     let path = std::env::args().nth(1).expect("an object");

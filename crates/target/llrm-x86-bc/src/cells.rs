@@ -12,8 +12,8 @@ use std::collections::HashMap;
 
 use iced_x86::Register;
 use llrm_qbruntime::{self as runtime, Control};
-use llrm_bcmachine::model::ir::nodes::Node;
-use llrm_bcmachine::objectfile::omf;
+use llrm_x86_bcmachine::model::ir::nodes::Node;
+use llrm_x86_bcmachine::objectfile::omf;
 use llrm_hir::model::RuntimePromises;
 use llrm_mir::{ConstantId, ConstantKind, Module, Operand};
 

@@ -9,10 +9,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_bcmachine::model::ir::Loc;
-use llrm_bcmachine::model::ir::nodes::Node;
-use llrm_bcmachine::objectfile::module::{self, Space};
-use llrm_bcmachine::objectfile::{cvinfo, omf};
+use llrm_x86_bcmachine::model::ir::Loc;
+use llrm_x86_bcmachine::model::ir::nodes::Node;
+use llrm_x86_bcmachine::objectfile::module::{self, Space};
+use llrm_x86_bcmachine::objectfile::{cvinfo, omf};
 use llrm_mir::{CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, GlobalId, GlobalVariable, Linkage, Module, Type, TypeId};
 
 use llrm_mir::program::SegmentLayout;

@@ -10,12 +10,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use iced_x86::{Code, Register};
-use llrm_bcmachine::frontends::bc::blocks::Block;
-use llrm_bcmachine::model::ir::lift::{self, Decoded, Kind as Lifted};
-use llrm_bcmachine::model::ir::Loc;
-use llrm_bcmachine::model::ir::nodes::{Long, Node, span};
-use llrm_bcmachine::objectfile::module::{Addr, Space};
-use llrm_bcmachine::support::hash::IndexMap;
+use llrm_x86_bcmachine::frontends::bc::blocks::Block;
+use llrm_x86_bcmachine::model::ir::lift::{self, Decoded, Kind as Lifted};
+use llrm_x86_bcmachine::model::ir::Loc;
+use llrm_x86_bcmachine::model::ir::nodes::{Long, Node, span};
+use llrm_x86_bcmachine::objectfile::module::{Addr, Space};
+use llrm_x86_bcmachine::support::hash::IndexMap;
 
 /// What a pair computes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -202,10 +202,10 @@ fn pushes(first: &Node, second: &Node) -> Option<(Source, Option<(usize, Addr)>)
 
 #[cfg(test)]
 mod tests {
-    use llrm_bcmachine::frontends::bc::blocks::Ends;
-    use llrm_bcmachine::frontends::bc::declen::decode;
-    use llrm_bcmachine::model::ir::Effects;
-    use llrm_bcmachine::objectfile::module::literal_only;
+    use llrm_x86_bcmachine::frontends::bc::blocks::Ends;
+    use llrm_x86_bcmachine::frontends::bc::declen::decode;
+    use llrm_x86_bcmachine::model::ir::Effects;
+    use llrm_x86_bcmachine::objectfile::module::literal_only;
 
     use super::*;
 

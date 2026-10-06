@@ -293,7 +293,7 @@ b4:
     assert_eq!(calls(&after), 1, "{after}");
 }
 
-/// bench/hanoi, bench/quicksort and bench/fib on code16 (six registers, two kept across a call) ran 8% to
+/// bench/hanoi, bench/quicksort and bench/fib on m16 (six registers, two kept across a call) ran 8% to
 /// 25% more memory operands as a loop whose carried values spilled than as the recursion: a call left in
 /// the loop keeps the values in the registers kept across it, with one to spare, or the recursion stays.
 #[test]
@@ -333,7 +333,7 @@ b4:
 
 /// Nib's `sort(a: &mut [i16], lo, hi)` passes `a` on as it got it: stripped of `noalias`, the loop could
 /// not keep the slice's header in registers over the partition's stores, and quicksort ran 57% more
-/// instructions on code16. The parameter the calls change loses it, the one they pass on keeps it.
+/// instructions on m16. The parameter the calls change loses it, the one they pass on keeps it.
 #[test]
 fn noalias_stays_on_the_parameter_the_calls_pass_on() {
     let text = "define i16 @f(ptr noalias %a, ptr noalias %b, i16 %n) {
