@@ -29,6 +29,11 @@ impl Language {
 /// The declarations of `module`'s exports and the represented structs they
 /// name, for callers written in `language`.
 pub fn declarations(module: &Module, name: &str, language: Language) -> Result<String, Diagnostic> {
+    declarations_on(module, name, language, true)
+}
+
+/// `declarations`, for a target whose far code is far (`segmented`) or near.
+pub fn declarations_on(module: &Module, name: &str, language: Language, segmented: bool) -> Result<String, Diagnostic> {
     let exports: Vec<(&Function, Abi)> = module
         .functions
         .iter()
@@ -56,7 +61,7 @@ pub fn declarations(module: &Module, name: &str, language: Language) -> Result<S
         out.push('\n');
     }
     for (function, abi) in exports {
-        writeln!(out, "{}", declaration(function, abi, language)?).unwrap();
+        writeln!(out, "{}", declaration(function, abi, language, segmented)?).unwrap();
     }
     if language == Language::C {
         writeln!(out, "\n#endif").unwrap();
@@ -104,7 +109,8 @@ fn structure(one: &Struct, language: Language) -> Result<String, Diagnostic> {
     Ok(out)
 }
 
-fn declaration(function: &Function, abi: Abi, language: Language) -> Result<String, Diagnostic> {
+fn declaration(function: &Function, abi: Abi, language: Language, segmented: bool) -> Result<String, Diagnostic> {
+    let distance = if segmented { "far" } else { "near" };
     // The name its source gives it, not the one it is linked under.
     let name = function.name.rsplit('.').next().expect("a name");
     let parameters: Vec<(&str, &TypeSpec)> = function
@@ -140,7 +146,8 @@ fn declaration(function: &Function, abi: Abi, language: Language) -> Result<Stri
                 .map(|(name, spec)| c_declarator(spec, name, span))
                 .collect::<Result<Vec<_>, _>>()?;
             let arguments = if arguments.is_empty() { "void".to_owned() } else { arguments.join(", ") };
-            Ok(format!("extern {} __far {convention} {}({arguments});", c_type(result, span)?, name))
+            let far = if segmented { "__far " } else { "" };
+            Ok(format!("extern {} {far}{convention} {}({arguments});", c_type(result, span)?, name))
         }
         // BASIC cannot name a handler's address: there is nothing to declare.
         Language::Basic if abi.interrupt() => Ok(format!("' {name}: an interrupt16 handler")),
@@ -179,7 +186,7 @@ fn declaration(function: &Function, abi: Abi, language: Language) -> Result<Stri
                 _ => format!("retf {words}"),
             };
             Ok(format!(
-                "extrn {}:far    ; {}({signature}) -> {}, {cleanup}",
+                "extrn {}:{distance}    ; {}({signature}) -> {}, {cleanup}",
                 abi.symbol(name),
                 abi.name(),
                 result.text()

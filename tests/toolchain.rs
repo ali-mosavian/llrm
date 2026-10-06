@@ -334,3 +334,18 @@ fn test_c_far_and_huge_are_near_with_a_warning_on_code32() {
     let large = compile(&["-ml"]);
     assert!(!large.status.success() && String::from_utf8_lossy(&large.stderr).contains("unrecognized arguments: -ml"));
 }
+
+/// The C header Nib generates for a program's exports said `__far` on every target: flat C code
+/// including it declared a far function and the flat compiler refused its call.
+#[test]
+fn test_the_generated_header_is_far_only_where_far_code_is() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let header = |extra: &[&str]| {
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).arg(root.join("examples/interop/main.nib")).args(["--declare", "h"]).args(extra).output().unwrap();
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+        String::from_utf8_lossy(&done.stdout).into_owned()
+    };
+    assert!(header(&[]).contains("extern short __far __cdecl weight(short value);"));
+    let flat = header(&["--target", "x86-code32"]);
+    assert!(flat.contains("extern short __cdecl weight(short value);") && !flat.contains("__far"), "{flat}");
+}

@@ -158,9 +158,10 @@ pub fn compile_file(path: &std::path::Path, frontend: &Frontend) -> Result<Strin
 pub fn declare_file(
     path: &std::path::Path,
     language: declarations::Language,
+    frontend: &Frontend,
 ) -> Result<String, (std::path::PathBuf, Diagnostic)> {
-    let module = load_file(path, &Frontend::default().os)?;
-    declarations::declarations(&module, module_name(path), language).map_err(|error| located(path, &module.sources, error))
+    let module = load_file(path, &frontend.os)?;
+    declarations::declarations_on(&module, module_name(path), language, frontend.sizes().segmented).map_err(|error| located(path, &module.sources, error))
 }
 
 fn module_name(path: &std::path::Path) -> &str {
