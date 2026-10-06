@@ -1,6 +1,6 @@
 ; The start-up under DOS/32A: flat, CS = DS = ES = SS. The extender enters with ES on the PSP, so
 ; ES is set to DS; it zero-fills the image's BSS and sets the stack `.stack` names. `_llrm_os_stack_low`, the
-; lowest ESP a checked function may reach, is the stack's bottom plus 512 for the panic's frames
+; lowest ESP a checked function may reach, is the stack's bottom plus STACK_RESERVE for the panic's frames
 ; and an interrupt.
 .386
 .model flat
@@ -13,8 +13,8 @@ ifdef LANG_INIT
 extrn LANG_INIT:near
 endif
 
-; STACK_BYTES comes from the language's description (nib.toml's stack_base), DOS_* from the OS's facts.
-STACK_RESERVE equ 512
+; STACK_BYTES comes from the language's description (nib.toml's stack_base), DOS_* from the OS's facts,
+; STACK_RESERVE from os.toml.
 
 .stack STACK_BYTES
 

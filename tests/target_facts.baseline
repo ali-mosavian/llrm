@@ -37,7 +37,7 @@
 2 crates/backend/llrm-core/src/backend/storecombine.rs
 7 crates/backend/llrm-core/src/backend/target.rs
 1 crates/backend/llrm-core/src/backend/upperzero.rs
-7 crates/backend/llrm-core/src/driver/basic.rs
+5 crates/backend/llrm-core/src/driver/basic.rs
 8 crates/backend/llrm-driver/src/lib.rs
 1 crates/backend/llrm-peepgen/src/table.rs
 1 crates/bc/llrm-bc/examples/gate.rs

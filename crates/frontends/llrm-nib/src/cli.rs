@@ -214,6 +214,7 @@ mod tests {
         fn stack_slot_bytes(&self) -> i64 { self.0.stack_slot_bytes() }
         fn frame_register(&self) -> iced_x86::Register { self.0.frame_register() }
         fn first_argument_offset(&self, far: bool) -> i64 { self.0.first_argument_offset(far) }
+        fn return_address_bytes(&self, far: bool) -> i64 { self.0.return_address_bytes(far) }
         fn results(&self, width: u32) -> Vec<iced_x86::Register> { self.0.results(width) }
         fn stack_pointer(&self) -> iced_x86::Register { self.0.stack_pointer() }
         fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)> { self.0.callee_saved() }
