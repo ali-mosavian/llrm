@@ -206,6 +206,17 @@ pub fn intervals_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency)
 }
 
 fn worked_out(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> IndexMap<u32, Interval> {
+    worked_out_by(body, index, busy, &|_| true)
+}
+
+/// The intervals of the values in `only` alone, as `intervals` finds them in `body`: nothing is numbered,
+/// walked or weighed for the others. For a caller that adds a few values of its own to a body and asks
+/// of those, the others' intervals being the body's, remembered.
+pub fn intervals_among(body: &LirBody, index: &Indexes, busy: &Frequency, only: &BTreeSet<u32>) -> IndexMap<u32, Interval> {
+    worked_out_by(body, Some(index), busy, &|value| only.contains(&value))
+}
+
+fn worked_out_by(body: &LirBody, index: Option<&Indexes>, busy: &Frequency, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
     WORKED.with(|worked| worked.set(worked.get() + 1));
     let owned;
     let index = match index {
@@ -215,8 +226,8 @@ fn worked_out(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> Inde
             &owned
         }
     };
-    let ranges = _ranges(body, index);
-    let weight = _weights(body, busy, &ranges);
+    let ranges = _ranges(body, index, keep);
+    let weight = _weights(body, busy, &ranges, keep);
     ranges
         .into_iter()
         .map(|(value, one)| {
@@ -242,12 +253,12 @@ fn _group_start(block: &LirBlock, position: usize) -> usize {
 ///
 /// Python builds `pieces` by iterating sets; only the map's order differs,
 /// and nothing reads it in order.
-fn _ranges(body: &LirBody, index: &Indexes) -> IndexMap<u32, Interval> {
-    let live = allocate::live_rows(body);
+fn _ranges(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
+    let live = allocate::live_rows_by(body, keep);
     let mut pieces: IndexMap<u32, Vec<Segment>> = IndexMap::default();
     for block in &body.blocks {
         let (first, last) = index.span[&block.at];
-        let mut alive: IndexMap<u32, i64> = live.leaving(block.at).map(|one| (one, last)).collect();
+        let mut alive: IndexMap<u32, i64> = live.leaving(block.at).filter(|one| keep(*one)).map(|one| (one, last)).collect();
         let mut written: BTreeSet<u32> = BTreeSet::new();
         let mut position = block.insns.len() as i64 - 1;
         while position >= 0 {
@@ -261,20 +272,20 @@ fn _ranges(body: &LirBody, index: &Indexes) -> IndexMap<u32, Interval> {
                 index.at[&key(one)]
             };
             let boundary = slot + DEF;
-            let defined: IndexSet<u32> = group.iter().flat_map(|item| item.defines.iter().copied()).collect();
+            let defined: IndexSet<u32> = group.iter().flat_map(|item| item.defines.iter().copied()).filter(|value| keep(*value)).collect();
             for value in defined {
                 written.insert(value);
                 let end = alive.shift_remove(&value).unwrap_or(boundary + 1);
                 pieces.entry(value).or_default().push(Segment { start: boundary, end });
             }
-            let used: IndexSet<u32> = group.iter().flat_map(|item| item.uses.iter().copied()).collect();
+            let used: IndexSet<u32> = group.iter().flat_map(|item| item.uses.iter().copied()).filter(|value| keep(*value)).collect();
             for value in used {
                 alive.entry(value).or_insert(boundary);
             }
             position = first_in_group as i64 - 1;
         }
         // A phi's result is defined at the top of the block.
-        for phi in &block.phis {
+        for phi in block.phis.iter().filter(|phi| keep(phi.result)) {
             written.insert(phi.result);
             let end = alive.shift_remove(&phi.result).unwrap_or(first + DEF + 1);
             pieces.entry(phi.result).or_default().push(Segment { start: first + DEF, end });
@@ -348,12 +359,12 @@ pub fn level(depth: u32) -> f64 {
 pub const GRACE: i64 = 25 * PER_INSN;
 
 /// `references weighted by block frequency / (live slots + grace)`.
-fn _weights(body: &LirBody, busy: &Frequency, ranges: &IndexMap<u32, Interval>) -> IndexMap<u32, f64> {
+fn _weights(body: &LirBody, busy: &Frequency, ranges: &IndexMap<u32, Interval>, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, f64> {
     let mut total: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = busy.block(block.at);
         for one in &block.insns {
-            for value in one.defines.iter().chain(&one.uses) {
+            for value in one.defines.iter().chain(&one.uses).filter(|value| keep(**value)) {
                 *total.entry(*value).or_insert(0.0) += each;
             }
         }

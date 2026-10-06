@@ -382,4 +382,22 @@ fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
     };
     assert_eq!(defines("x86-code32"), "STACK_BYTES=16384 HEAP_BYTES=16777216");
     assert_eq!(defines("x86-code16"), "");
+/// The identity gate is an instrument: a build compared with itself must say SAME of every
+/// program, and a build whose output differs must be reported DIFF with a failing exit, or a
+/// change that moved a target's code would pass the gate silently.
+#[test]
+fn test_the_identity_gate_passes_a_build_against_itself_and_fails_a_different_one() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let compiler = env!("CARGO_BIN_EXE_llrm-c");
+    let different = scratch.path().join("llrm-c-os");
+    std::fs::write(&different, format!("#!/bin/sh\nexec {compiler} \"$@\" -Os\n")).unwrap();
+    std::fs::set_permissions(&different, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let gate = |new: &Path| Command::new(root.join("tools/identity.sh")).args(["c", compiler, new.to_str().unwrap()]).env("TMPDIR", scratch.path()).output().unwrap();
+    let same = gate(Path::new(compiler));
+    let same_text = String::from_utf8_lossy(&same.stdout);
+    assert!(same.status.success() && same_text.contains("SAME") && !same_text.contains("DIFF"), "{same_text}");
+    let other = gate(&different);
+    let other_text = String::from_utf8_lossy(&other.stdout);
+    assert!(!other.status.success() && other_text.contains("DIFF "), "{other_text}");
 }
