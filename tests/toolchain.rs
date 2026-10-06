@@ -429,6 +429,19 @@ fn test_the_zed_extension_names_a_library_that_exists_and_passes_the_projects_ta
     assert!(source.contains("fn language_server_initialization_options") && source.contains("settings.initialization_options"));
 }
 
+/// The file calls' result was an `i32` on code16 and an `isize` on code32, so a program naming the type
+/// was written for one target; both OS layers declare the same one.
+#[test]
+fn test_both_targets_declare_the_same_file_call_result() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let results = |target: &str| -> Vec<String> {
+        let text = std::fs::read_to_string(root.join(format!("crates/target/llrm-{target}/runtime/nib/os.nib"))).unwrap();
+        ["pub fn read(", "pub fn write_file("].iter().map(|head| text.lines().find(|line| line.starts_with(head)).and_then(|line| line.rsplit_once("-> ")).map(|(_, result)| result.trim().to_owned()).expect("declared")).collect()
+    };
+    assert_eq!(results("x86-code16"), ["i32", "i32"]);
+    assert_eq!(results("x86-code32"), results("x86-code16"));
+}
+
 /// start.asm and dos.asm each named a constant of their own (the stack, the heap's arena) beside the
 /// description's; the assembler is now told the description's fields, and a target that lists none is told none.
 #[test]

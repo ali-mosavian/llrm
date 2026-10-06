@@ -22,33 +22,53 @@ N$OSLO dd 0
 ; extender for the arena.
 heap_next dd 0
 heap_end dd 0
+; The request being served and the arena size being tried, which DPMI 0501h's register use leaves in memory.
+heap_ask dd 0
+heap_try dd 0
 
 .code
 ; N$OMEM(bytes: usize) -> *near mut u8: `bytes` more of the heap at its end, or 0 when it runs out.
-; The first call takes the arena from the extender (DPMI 0501h, allocate memory block): HEAP_BYTES, or
-; the largest half of it the extender has, down to 64 KB. The heap grows inside it.
+; The heap grows inside an arena taken from the extender (DPMI 0501h, allocate memory block): the first
+; call takes HEAP_BYTES, or the largest half of it the extender has, down to the request. When the arena
+; cannot hold a request the next is another arena (at least the request), and the grant is at an address
+; that need not follow the last one's: the heap chains arenas.
 N$OMEM proc
     mov ecx, dword ptr [esp+4]
     mov eax, heap_next
     test eax, eax
-    jnz started
+    jz take
+    lea edx, [eax + ecx]
+    cmp edx, heap_end
+    ja take
+    mov heap_next, edx
+    ret
+take:
     push ebx
     push esi
     push edi
-    ; DPMI 0501h returns the block's handle in SI:DI, so the size being tried stays in heap_end.
-    mov heap_end, HEAP_BYTES
+    ; DPMI 0501h returns the block's handle in SI:DI, so the request and the size being tried stay in memory.
+    mov heap_ask, ecx
+    mov edx, HEAP_BYTES
+    cmp edx, ecx
+    jae sized
+    mov edx, ecx
+sized:
+    mov heap_try, edx
 arena:
-    mov ebx, heap_end
+    mov ebx, heap_try
     shr ebx, 16
-    mov ecx, heap_end
+    mov ecx, heap_try
     and ecx, 0FFFFh
     mov eax, 0501h
     int 31h
     jnc arena_got
-    shr heap_end, 1
-    cmp heap_end, 10000h
-    jae arena
-    mov heap_end, 0
+    mov edx, heap_try
+    shr edx, 1
+    cmp edx, heap_ask
+    jb arena_refused
+    mov heap_try, edx
+    jmp arena
+arena_refused:
     pop edi
     pop esi
     pop ebx
@@ -57,21 +77,15 @@ arena:
 arena_got:
     shl ebx, 16
     mov bx, cx
-    mov heap_next, ebx
-    add heap_end, ebx
     mov eax, ebx
+    add ebx, heap_try
+    mov heap_end, ebx
+    mov edx, eax
+    add edx, heap_ask
+    mov heap_next, edx
     pop edi
     pop esi
     pop ebx
-    mov ecx, dword ptr [esp+4]
-started:
-    lea edx, [eax + ecx]
-    cmp edx, heap_end
-    ja refused
-    mov heap_next, edx
-    ret
-refused:
-    xor eax, eax
     ret
 N$OMEM endp
 
