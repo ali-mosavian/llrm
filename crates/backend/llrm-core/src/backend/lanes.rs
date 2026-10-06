@@ -25,10 +25,10 @@ struct Table {
 
 static TABLE: LazyLock<Table> = LazyLock::new(|| {
     let mut lanes: Vec<Lane> = (0..32).map(|bit| (Register::None, bit)).collect();
-    for root in [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP] {
+    for root in llrm_x86::registers::ROOTS {
         lanes.extend((0..4).map(|byte| (root, byte)));
     }
-    for segment in [Register::ES, Register::CS, Register::SS, Register::DS, Register::FS, Register::GS] {
+    for segment in llrm_x86::registers::SEGMENTS {
         lanes.extend((0..2).map(|byte| (segment, byte)));
     }
     lanes.sort();

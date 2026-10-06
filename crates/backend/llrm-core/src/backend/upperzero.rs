@@ -21,7 +21,7 @@ use crate::support::hash::{HashMap, IndexMap};
 
 /// The roots a general register names, one bit each.
 pub const ROOTS: [Register; 7] =
-    [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP];
+    llrm_x86::registers::ROOTS;
 
 /// A set of roots, one bit per `ROOTS` entry.
 pub type Roots = u8;
