@@ -48,7 +48,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::memory::{self, MemRef};
+use llrm_analysis::memory;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{avail, cfg, regions, ssa};
 use llrm_mir::context::Context;
@@ -332,8 +332,7 @@ pub fn _undisturbed(one: InstId, between: &[InstId], accesses: &Accesses, progra
     let Some(read) = accesses.references.get(&one) else {
         return false;
     };
-    let overlaps = |wrote: &MemRef| regions::overlapping(read, wrote, None, None, program).unwrap_or(true);
-    between.iter().all(|&other| !llrm_analysis::memoryssa::changes(read, false, accesses.writes(other), overlaps))
+    between.iter().all(|&other| llrm_analysis::memoryssa::spares(accesses, program, read, other))
 }
 
 /// Store-to-load forwarding: each load a known value serves becomes that

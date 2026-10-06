@@ -743,7 +743,19 @@ fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>>
             out.insert(*value, Arc::clone(one));
         }
     }
-    for value in spiller::_stable_loads(body, values).keys() {
+    // A copy of a load is made again as that load, so the cell must hold to the copy's last use as well.
+    let copies: IndexMap<u32, u32> = body
+        .insns()
+        .iter()
+        .filter_map(|one| {
+            let (Some(what), [value], [source]) = (&one.what, one.defines.as_slice(), one.uses.as_slice()) else { return None };
+            let ([Loc::Held(dest)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
+            let plain = what.op == Operation::Move && what.name.as_deref() == Some("mov") && dest.value == *value && from.value == *source && dest.width == from.width;
+            (plain && values.contains(value) && defining.get(value).is_some_and(|found| found.len() == 1)).then_some((*value, *source))
+        })
+        .collect();
+    let stable = spiller::_stable_loads_through(body, values, &copies);
+    for value in stable.keys().filter(|value| !copies.contains_key(*value)) {
         if let Some([only]) = defining.get(value).map(Vec::as_slice) {
             out.insert(*value, Arc::clone(only));
         }
@@ -759,6 +771,11 @@ fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>>
             continue;
         }
         let Some(made) = out.get(source) else { continue };
+        // A load is made again for a copy only where the cell holds to the copy's own uses.
+        let loads = made.what.as_ref().is_some_and(|what| what.sources.iter().any(|place| matches!(place, Loc::Mem(_))));
+        if loads && !stable.contains_key(value) {
+            continue;
+        }
         // Made as wide as the copy is: the low word of a dword load is not that load.
         let made_width = made.what.as_ref().and_then(|what| match what.dests.as_slice() { [Loc::Held(held)] => Some(held.width), _ => None });
         if made_width != Some(dest.width) {
@@ -1502,6 +1519,72 @@ fn written(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A copy of a load was made again as that load, from the source's stability alone: the cell it read was written
+    /// before the copy's last use, and the fuzz of the shared predicate stored through a wrong address.
+    #[test]
+    fn test_a_copy_of_a_load_is_not_remade_after_its_cell_changes() {
+        use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
+        let cell = Mem { addr: Some(Addr::new(Space::Segment, 0)), ..Mem::new(None, 2) };
+        let held = |value| Loc::Held(Held { value, width: 2 });
+        let what = |op, name: &str, dests, sources| Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) });
+        let one = |at: i64, what, defines: Vec<u32>, uses: Vec<u32>| Arc::new(Insn::new(at, Some((at, at)), what, defines, uses));
+        let insns = vec![
+            one(0, what(Operation::Move, "mov", vec![held(1)], vec![Loc::Mem(cell.clone())]), vec![1], vec![]),
+            one(1, what(Operation::Move, "mov", vec![held(2)], vec![held(1)]), vec![2], vec![1]),
+            one(2, what(Operation::Binary, "add", vec![held(3)], vec![held(1), held(1)]), vec![3], vec![1]),
+            one(3, what(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![Loc::Imm(Imm { value: 9, width: 2, address: None })]), vec![], vec![]),
+            one(4, what(Operation::Binary, "add", vec![held(4)], vec![held(2), held(2)]), vec![4], vec![2]),
+        ];
+        let body = LirBody::new("t", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
+        let made = remakable(&body, &BTreeSet::from([1, 2]));
+        assert!(made.contains_key(&1), "premise: the load holds until its own last use");
+        assert!(!made.contains_key(&2), "the copy is read after the cell was written");
+    }
+
+    /// A load the optimizer proved no write in the loop changes was held in a stack slot all the same: a store through a
+    /// far pointer has no address in LIR, so the cell never held (particle bas: +0.6% instructions, +30 B).
+    fn spared_body(spared: bool, store_address: Option<crate::model::ir::Addr>) -> LirBody {
+        use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
+        let cell = Mem { addr: Some(Addr::new(Space::Segment, 2)), ..Mem::new(None, 2) };
+        let held = |value| Loc::Held(Held { value, width: 2 });
+        let what = |op, name: &str, dests, sources| Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) });
+        let one = |at: i64, what, defines: Vec<u32>, uses: Vec<u32>| Arc::new(Insn::new(at, Some((at, at)), what, defines, uses));
+        let into = Mem { addr: store_address, ..Mem::new(None, 2) };
+        let insns = vec![
+            one(0, what(Operation::Move, "mov", vec![held(1)], vec![Loc::Mem(cell)]), vec![1], vec![]),
+            one(1, what(Operation::Move, "mov", vec![Loc::Mem(into)], vec![Loc::Imm(Imm { value: 9, width: 2, address: None })]), vec![], vec![]),
+            one(2, what(Operation::Binary, "add", vec![held(2)], vec![held(1), held(1)]), vec![2], vec![1]),
+        ];
+        let mut body = LirBody::new("t", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
+        if spared {
+            body.spares = Arc::new(BTreeSet::from([(0, 1)]));
+        }
+        body
+    }
+
+    #[test]
+    fn test_a_load_the_optimizer_proved_apart_from_a_write_holds_across_it() {
+        assert!(remakable(&spared_body(true, None), &BTreeSet::from([1])).contains_key(&1), "the unknown address is the pair's to answer");
+    }
+
+    #[test]
+    fn test_a_far_write_proved_apart_from_a_load_does_not_end_it() {
+        use crate::model::ir::{Addr, Space};
+        assert!(remakable(&spared_body(true, Some(Addr::new(Space::Far, 100))), &BTreeSet::from([1])).contains_key(&1));
+        assert!(!remakable(&spared_body(false, Some(Addr::new(Space::Far, 100))), &BTreeSet::from([1])).contains_key(&1));
+    }
+
+    #[test]
+    fn test_a_write_not_proved_apart_still_ends_the_load() {
+        assert!(!remakable(&spared_body(false, None), &BTreeSet::from([1])).contains_key(&1));
+    }
+
+    #[test]
+    fn test_a_proved_pair_does_not_excuse_a_write_to_the_cell_itself() {
+        use crate::model::ir::{Addr, Space};
+        assert!(!remakable(&spared_body(true, Some(Addr::new(Space::Segment, 2))), &BTreeSet::from([1])).contains_key(&1));
+    }
 
     /// Two values that may only sit in BX (each is the base of an address
     /// somewhere) were counted as a byte pair although only one acts: deedlines

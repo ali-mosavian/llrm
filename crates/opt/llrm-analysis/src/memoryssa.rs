@@ -169,6 +169,13 @@ pub fn changes(cell: &MemRef, invariant: bool, writes: Option<&[MemRef]>, clobbe
     !invariant && !cell.unwritable() && writes.is_none_or(|stores| stores.iter().any(clobbers))
 }
 
+/// Whether running `write` leaves the bytes `read` reads as they were: it writes none of them, as `accesses` says
+/// and `regions::overlapping` decides on `program`; an answer it cannot give overlaps.
+pub fn spares(accesses: &Accesses, program: Option<&llrm_mir::program::ProgramProxy>, read: &MemRef, write: InstId) -> bool {
+    let overlaps = |wrote: &MemRef| overlapping(read, wrote, None, None, program).unwrap_or(true);
+    !changes(read, false, accesses.writes(write), overlaps)
+}
+
 /// Whether writing `store` may change a byte of `cell`: `regions` leaves
 /// it open and `pointerfacts` cannot place them apart.
 pub fn may_clobber(unit: &Unit, known: Option<&BTreeMap<ValueId, Interval>>, cell: &MemRef, store: &MemRef) -> bool {

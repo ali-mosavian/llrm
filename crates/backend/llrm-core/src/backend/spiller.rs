@@ -859,6 +859,12 @@ pub fn recomputed(body: &LirBody, value: u32) -> Option<Arc<Insn>> {
 
 /// Values loaded from a cell nothing changes before they are used again.
 pub fn _stable_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Mem> {
+    _stable_loads_through(body, values, &IndexMap::default())
+}
+
+/// `_stable_loads`, and each of a load's copies (`copies`: copy -> source, a copy of a copy through its chain) whose own
+/// uses the cell holds to: the copy is made again as the load, which its source's last use does not decide.
+pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &IndexMap<u32, u32>) -> IndexMap<u32, Mem> {
     if values.is_empty() {
         return IndexMap::default();
     }
@@ -913,25 +919,47 @@ pub fn _stable_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Me
             result.insert(*value, cell.clone());
         }
     }
+    // A copy of a stable load is made again as it where the cell holds to the copy's own last use.
+    for (copy, _) in copies {
+        let mut at = *copy;
+        while let Some(source) = copies.get(&at) {
+            at = *source;
+        }
+        let (Some(cell), Some(found)) = (result.get(&at).cloned(), definitions.get(&at)) else { continue };
+        if !values.contains(copy) || result.contains_key(copy) || uses[copy].is_empty() || uses[copy].iter().any(|one| one.group.is_some()) {
+            continue;
+        }
+        if _unchanged(body, &found[0].0, &cell, &uses[copy]) {
+            result.insert(*copy, cell);
+        }
+    }
     result
 }
 
 
 /// Whether `cell` still holds what it held at `define` after `one`.
-fn _keeps(one: &Arc<Insn>, define: &Arc<Insn>, cell: &Mem, holds: bool, sealed: bool) -> bool {
+fn _keeps(one: &Arc<Insn>, define: &Arc<Insn>, cell: &Mem, holds: bool, body: &LirBody) -> bool {
     if Arc::ptr_eq(one, define) {
         return true;
     }
+    let (sealed, apart) = (body.sealed_arguments, body.spares.contains(&(define.at, one.at)));
     let written = _written(one, cell);
     // Sealed, an incoming argument cell is reached by the frame's own stores alone.
     let meets = |dest: &Mem| {
         if sealed && _incoming_frame(cell) {
             _in_frame(dest) && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)
         } else {
-            dest.addr.is_none() || crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)
+            // The optimizer's proof of the pair answers a write whose address LIR cannot place.
+            let overlaps = crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width);
+            match (apart, cell.addr, dest.addr) {
+                (false, _, _) => dest.addr.is_none() || overlaps,
+                // What it proved is the MIR write's own: a far or unplaced address is its to answer, a place of the cell's own space is not.
+                (true, Some(own), Some(there)) => own.space == there.space && overlaps,
+                (true, _, _) => false,
+            }
         }
     };
-    holds && !_may_write(one, cell, sealed) && !written.iter().any(meets)
+    holds && !(!apart && _may_write(one, cell, sealed)) && !written.iter().any(meets)
 }
 
 /// Whether allocated LIR names one fixed BP-relative frame range.
@@ -1020,7 +1048,7 @@ fn _unchanged(body: &LirBody, define: &Arc<Insn>, cell: &Mem, uses: &[Arc<Insn>]
         for (at, block) in &blocks {
             let mut holds = into[at];
             for one in &block.insns {
-                holds = _keeps(one, define, cell, holds, body.sealed_arguments);
+                holds = _keeps(one, define, cell, holds, body);
             }
             if outof.get(at) != Some(&holds) {
                 outof.insert(*at, holds);
@@ -1046,7 +1074,7 @@ fn _unchanged(body: &LirBody, define: &Arc<Insn>, cell: &Mem, uses: &[Arc<Insn>]
             if wanted.contains(&key(one)) && !holds {
                 return false;
             }
-            holds = _keeps(one, define, cell, holds, body.sealed_arguments);
+            holds = _keeps(one, define, cell, holds, body);
         }
     }
     true
