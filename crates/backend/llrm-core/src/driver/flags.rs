@@ -54,7 +54,7 @@ impl Level {
 }
 
 /// gcc's `-f` pass names, each with the options it sets.
-const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 11] = [
+const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 12] = [
     ("unroll-loops", |options, on| options.unroll = on),
     ("peel-loops", |options, on| options.peel = on),
     ("inline-functions", |options, on| options.inline = if !on { Threshold::new(0) } else if options.inline.limit == 0 { Threshold { limit: Threshold::default().limit, ..options.inline } } else { options.inline }),
@@ -66,6 +66,7 @@ const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 11] = [
     ("tree-sra", |options, on| options.promote = on),
     ("move-loop-invariants", |options, on| options.hoist = on),
     ("tree-loop-distribute-patterns", |options, on| options.fill = on),
+    ("optimize-sibling-calls", |options, on| options.sibcalls = on),
 ];
 
 /// The run-time checks `-fsanitize` names, gcc's: what BC's /D checks.
