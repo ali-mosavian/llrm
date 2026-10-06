@@ -89,3 +89,16 @@ fn test_wccq_says_what_it_was_made_from() {
     let hash = Command::new("sh").arg(root().join("toolchain/owshim/hash.sh")).output().unwrap();
     assert_eq!(stamp.trim(), String::from_utf8(hash.stdout).unwrap().trim());
 }
+
+/// #512 stamped the i86 build `<hash>-i86` while hash.sh printed `<hash>`, so the
+/// test above failed on main. The stamp names its CPU, and the two never share one.
+#[test]
+fn test_stamp_names_its_cpu() {
+    let stamp = |cpu: &str| {
+        let out = Command::new("sh").arg(root().join("toolchain/owshim/hash.sh")).env("OWCPU", cpu).output().unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let (i86, flat) = (stamp("i86"), stamp("386"));
+    assert!(i86.ends_with("-i86") && flat.ends_with("-386"), "{i86} {flat}");
+    assert_ne!(i86, flat);
+}

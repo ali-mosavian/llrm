@@ -32,7 +32,7 @@ esac
 CC_OBJ="$OWROOT/bld/cc/$CPU/binbuild"
 OUT="${1:-$HERE/$BIN}"
 mkdir -p "$OUT"
-STAMP=$("$HERE/hash.sh")-$CPU
+STAMP=$(OWCPU=$CPU "$HERE/hash.sh")
 if [ -x "$OUT/wccq" ] && [ "$(cat "$OUT/stamp" 2>/dev/null)" = "$STAMP" ]; then
     echo "$OUT/wccq"
     exit 0
