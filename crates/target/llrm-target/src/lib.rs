@@ -3,7 +3,9 @@
 
 pub mod addressing;
 pub mod machine;
+pub mod opcosts;
 pub mod registers;
+pub mod timings;
 
 use std::rc::Rc;
 
@@ -24,18 +26,21 @@ pub struct CpuPrices {
     pub call_registers: i64,
     /// The indexed addresses the target states, native form first.
     pub address_forms: Vec<AddressForm>,
+    /// What each operation costs: the target's mapping applied to `costs`.
+    pub operations: OperationCosts,
 }
 
-/// A cost model that is only what a target describes: its registers and address forms.
-/// Its prices are the unit ones until a target's timings are mapped to operations.
+/// A cost model that is only what a target describes: its registers, address forms and
+/// operation prices.
 pub fn described(prices: &CpuPrices) -> Rc<dyn llrm_mir::target::Machine> {
-    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone() })
+    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone(), operations: prices.operations.clone() })
 }
 
 struct Described {
     registers: i64,
     call_registers: i64,
     address_forms: Vec<AddressForm>,
+    operations: OperationCosts,
 }
 
 impl llrm_mir::target::Machine for Described {
@@ -45,7 +50,7 @@ impl llrm_mir::target::Machine for Described {
     }
 
     fn costs(&self) -> OperationCosts {
-        OperationCosts::default()
+        self.operations.clone()
     }
 
     fn registers(&self) -> i64 {
@@ -101,6 +106,13 @@ pub trait Target {
     /// The registers a callee keeps for its caller that an allocator may hold
     /// a value in: each by its full register and by the one a prologue pushes.
     fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)>;
+
+    /// One CPU's timings (a column of the target's `timings.times`), if the target prices it.
+    fn cpu_table(&self, name: &str) -> Option<timings::CpuTable>;
+
+    /// The operations priced by `price` (the CPU's clocks of a form), as the target's
+    /// `opcosts.txt` makes them of forms; `prefix` is the CPU's operand-size prefix cost.
+    fn operation_costs(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> OperationCosts;
 
     /// The registers an allocator may hold values in.
     fn register_capacity(&self) -> i64;

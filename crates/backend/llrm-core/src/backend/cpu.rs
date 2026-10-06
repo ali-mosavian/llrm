@@ -11,7 +11,6 @@ use crate::support::hash::IndexMap;
 
 use llrm_target::Target;
 
-use llrm_x86_code16::timings;
 use crate::model::passes::{
     AddressForm, DEFAULT_MAX_UNROLL_ITERATIONS, DEFAULT_MAX_UNROLLED_OPERATIONS, OperationCosts,
 };
@@ -59,6 +58,7 @@ impl Profile {
             registers: self.register_capacity,
             call_registers: self.call_register_capacity,
             address_forms: self.address_forms.clone(),
+            operations: self.operations.clone(),
         }
     }
 
@@ -178,110 +178,6 @@ impl<'a> From<&'a Profile> for ProfileOrName<'a> {
     }
 }
 
-static _I386_COSTS: LazyLock<IndexMap<&'static str, i64>> = LazyLock::new(|| {
-    IndexMap::from_iter([
-        ("alu_rr", 2),
-        ("alu_ri", 2),
-        ("alu_rm", 6),
-        ("alu_mr", 8),
-        ("mov_rr", 2),
-        ("mov_rm", 4),
-        ("mov_mr", 2),
-        ("mov_ri", 2),
-        ("shift_ri", 3),
-        ("shift_r1", 3),
-        ("movzx", 4),
-        ("imul_r32", 22),
-        ("imul_m32", 26),
-        ("mul_r16", 22),
-        ("mul_r32", 38),
-        ("div_r16", 27),
-        ("idiv_r32", 43),
-        ("idiv_m32", 47),
-        ("cdq", 2),
-        ("push_r", 2),
-        ("push_m", 6),
-        ("push_i", 2),
-        ("pop_r", 4),
-        // Intel's 80386 table: POP m16/m32 is five clocks, not the
-        // four-unit register form.
-        ("pop_m", 5),
-        ("pop_seg", 8),
-        ("mov_seg_r", 8),
-        ("les", 8),
-        ("nop", 3),
-        ("jmp_short", 7),
-        ("jcc", 7),
-        // Intel's 80386 table: Jcc is 7+m taken, 3 not.
-        ("jcc_not_taken", 3),
-        ("call_far", 37),
-        ("ret_far", 18),
-        ("ret_pop", 18),
-        ("lahf", 2),
-        ("sahf", 3),
-        ("lea", 2),
-        ("leave", 6),
-        ("rep_stos", 5),
-        ("rep_stos_cell", 5),
-        // Intel's 80386 table: REP MOVS is 8+4n.
-        ("rep_movs", 8),
-        ("rep_movs_cell", 4),
-        // GCC's i386 table: x87 loads/stores eight units, arithmetic
-        // 23/27/88. Memory arithmetic includes both components.
-        ("x87_load", 8),
-        // 80387 register exchange is eighteen clocks.
-        ("x87_exchange", 18),
-        ("x87_store", 8),
-        ("x87_convert_store", 35),
-        ("x87_add", 23),
-        ("x87_add_m", 31),
-        ("x87_mul", 27),
-        ("x87_mul_m", 35),
-        ("x87_div", 88),
-        ("x87_div_m", 96),
-        ("x87_control_load", 8),
-        ("x87_control_store", 8),
-    ])
-});
-
-/// Translate backend instruction forms into MIR's semantic vocabulary.
-fn _operation_costs(costs: &IndexMap<&str, i64>, prefix: i64) -> OperationCosts {
-    OperationCosts {
-        add: costs["alu_rr"],
-        multiply: costs["mul_r16"],
-        divide: costs["div_r16"],
-        shift: costs["shift_ri"],
-        address: costs["lea"],
-        carry: llrm_mir::target::carry_cost(costs["movzx"], costs["alu_rr"], costs["shift_ri"], costs["mov_rr"]),
-        carry_step: llrm_mir::target::step_cost(costs["alu_rr"]),
-        load: costs["mov_rm"],
-        store: costs["mov_mr"],
-        memory_update: costs["alu_mr"],
-        branch: costs["jcc"],
-        prefix,
-        r#move: costs["mov_rr"],
-        call: costs["call_far"],
-        return_: costs["ret_far"],
-        argument: costs["mov_mr"] + costs["mov_rm"],
-        pop: costs["pop_r"],
-        adjust: costs["alu_ri"],
-        return_pops: costs["ret_pop"] - costs["ret_far"],
-        float_add: costs["x87_add"],
-        float_multiply: costs["x87_mul"],
-        float_divide: costs["x87_div"],
-        float_load: costs["x87_load"],
-        float_store: costs["x87_store"],
-        extend: costs["movzx"],
-        // The expansion saves ES, loads it from the cells' segment, and sets
-        // the value and count before `rep stos`; then restores ES.
-        fill: costs["rep_stos"] + 2 * costs["push_r"] + 2 * costs["pop_seg"] + 2 * costs["mov_ri"],
-        fill_cell: costs["rep_stos_cell"],
-        copy: costs["rep_movs"] + 2 * costs["push_r"] + 2 * costs["pop_seg"] + 3 * costs["mov_ri"],
-        copy_cell: costs["rep_movs_cell"],
-        direction: 2 * costs["alu_rr"],
-    }
-}
-
 /// Native medium-model addressing, then the legal secondary 67h form.
 /// The target's address forms, priced by `costs` and `prefix`: the 386's
 /// table has no prefix column, so its own is passed.
@@ -290,53 +186,17 @@ fn _address_forms(arch: &dyn Target, costs: &OperationCosts, prefix: i64, addres
 }
 
 fn _profile(arch: &dyn Target, name: &str) -> Result<Profile, String> {
-    if name == "386" {
-        let costs = _I386_COSTS.clone();
-        let operations = _operation_costs(&costs, 0);
-        return Ok(Profile {
-            address_forms: _address_forms(arch, &operations, 0, 0),
-            operations,
-            _costs: costs
-                .iter()
-                .map(|(key, value)| ((*key).to_owned(), *value))
-                .collect(),
-            _latencies: costs
-                .iter()
-                .map(|(key, value)| ((*key).to_owned(), *value))
-                .collect(),
-            ..Profile::new(arch, name, 1, true, 0, 0)
-        });
-    }
-    let at = timings::ARCHS
-        .iter()
-        .position(|one| *one == name)
-        .ok_or_else(|| "tuple.index(x): x not in tuple".to_owned())?;
-    let costs: IndexMap<&str, i64> = timings::COST
-        .iter()
-        .map(|(operation, values)| (*operation, values[at]))
-        .collect();
-    let operations = _operation_costs(&costs, timings::PREFIX[at]);
+    let table = arch.cpu_table(name).ok_or_else(|| format!("unknown CPU target: {name}"))?;
+    let costs: IndexMap<&str, i64> = table.clocks.iter().map(|(form, clocks)| (form.as_str(), *clocks)).collect();
+    let operations = arch.operation_costs(&|form| costs[form], table.prefix);
     Ok(Profile {
-        pentium_pairing: name == "P5",
-        address_forms: _address_forms(arch, &operations, timings::PREFIX[at], timings::LCP_STALL[at]),
+        pentium_pairing: table.pairing,
+        address_forms: _address_forms(arch, &operations, table.prefix, table.lcp_stall),
         operations,
-        _costs: costs
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), *value))
-            .collect(),
-        _latencies: timings::LATENCY
-            .iter()
-            .map(|(operation, values)| ((*operation).to_owned(), values[at]))
-            .collect(),
-        address_prefix_stall: timings::LCP_STALL[at],
-        ..Profile::new(
-            arch,
-            name,
-            timings::ISSUE[at],
-            timings::INORDER[at] != 0,
-            timings::PREFIX[at],
-            timings::PARTIAL_STALL[at],
-        )
+        _costs: table.clocks.clone(),
+        _latencies: table.latency.clone(),
+        address_prefix_stall: table.lcp_stall,
+        ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
     })
 }
 
@@ -535,3 +395,4 @@ mod tests {
         assert!(flat.dword_address_form().is_none());
     }
 }
+

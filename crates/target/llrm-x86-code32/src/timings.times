@@ -1,13 +1,79 @@
 # x86-code32 prices, clocks, per CPU. Keys are the cost keys of the forms; a
 # key absent here is the target having no such form (no far call, no segment
-# load). Values are code16's `timings.rs` 486 and P5 columns for the forms
+# load). Values are x86-code16's `timings.times` 486 and P5 columns for the forms
 # both have. call_near and ret_near are NOT from there: 3/5 (486) and 1/2 (P5)
 # and ret_pop 5/3 and leave 5/3 are recalled (a reviewer's figures), to be checked against the i486 data sheet and Agner Fog's
 # tables before any measurement uses them. `prefix` is paid by 16-bit forms
 # here, by 32-bit forms in code16.
 #
-# key        486 P5
-prefix       1   1
+#
+# The scalars: issue width, in-order (the 486 and P5 are), clocks decoding each
+# operand-size prefix (paid by 16-bit forms here), the partial-register and
+# length-changing-prefix stalls, and the P5's U/V pairing.
+cpus                  486   P5
+issue                   1    2
+in_order                1    1
+prefix                  1    1
+partial_stall           0    0
+lcp_stall               0    0
+pairing                 0    1
+
+[clocks]
+alu_rr       1   1
+alu_ri       1   1
+alu_rm       2   2
+alu_mr       3   3
+mov_rr       1   1
+mov_rm       1   1
+mov_mr       1   1
+mov_ri       1   1
+shift_ri     2   1
+shift_r1     3   1
+movzx        3   3
+cdq          3   2
+lea          2   1
+imul_r32     26  10
+imul_m32     27  11
+mul_r32      26  10
+idiv_r32     43  46
+idiv_m32     44  47
+push_r       1   1
+push_m       4   2
+push_i       1   1
+pop_r        4   1
+pop_m        6   1
+leave        5   3
+jmp_short    3   1
+jcc          3   1
+call_near    3   1
+ret_near     5   2
+ret_pop      5   3
+rep_stos     7   9
+rep_stos_cell 4  1
+rep_movs     12  13
+rep_movs_cell 3  1
+x87_load     3   1
+x87_exchange 4   1
+x87_store    8   2
+x87_add      8   3
+x87_mul      16  3
+x87_div      73  39
+x87_convert_store 35 7
+x87_add_m    8   3
+x87_mul_m    14  3
+x87_div_m    73  39
+x87_control_load 4 8
+x87_control_store 3 2
+mul_r16      13  11
+div_r16      24  25
+jcc_not_taken 1  1
+nop          1   1
+lahf         3   2
+sahf         2   1
+unknown      2   2
+
+# The latencies are the clocks, as the 386's are, until measured.
+[latency]
 alu_rr       1   1
 alu_ri       1   1
 alu_rm       2   2

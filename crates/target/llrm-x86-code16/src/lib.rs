@@ -23,6 +23,14 @@ impl llrm_target::Target for Code16 {
         GENERAL.len() as i64
     }
 
+    fn cpu_table(&self, name: &str) -> Option<llrm_target::timings::CpuTable> {
+        timings::TABLE.cpu(name).cloned()
+    }
+
+    fn operation_costs(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> llrm_mir::target::OperationCosts {
+        target::DESCRIPTION.operations(price, prefix)
+    }
+
     fn address_forms(&self, costs: &llrm_mir::target::OperationCosts, address_stall: i64) -> Vec<llrm_mir::target::AddressForm> {
         target::address_forms(costs, address_stall)
     }

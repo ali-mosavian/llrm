@@ -69,3 +69,19 @@ fn a_targets_cpu_profile_has_its_own_address_forms_and_registers() {
     assert_eq!((flat.register_capacity, flat.call_register_capacity), (6, 3));
     assert_eq!(flat.name, real.name);
 }
+
+/// A flat target's profile prices its own forms: a near call and return, no 66h on a
+/// dword. It had been priced by the 16-bit tables and mapping, a far call among them.
+#[test]
+fn a_targets_operations_are_priced_from_its_own_timings_and_mapping() {
+    let profile = |arguments: &[&str]| {
+        let flags = flags(arguments);
+        let bound = target(&flags, &["x86-code16", "x86-code32"]).unwrap();
+        bound.options(&flags, bound.target.machine()).cpu().unwrap()
+    };
+    let (real, flat) = (profile(&[]), profile(&["--target", "x86-code32"]));
+    assert_eq!((real.operations.call, real.operations.return_), (18, 13));
+    assert_eq!((flat.operations.call, flat.operations.return_), (3, 5));
+    assert_eq!(flat.operations.multiply, 26);
+    assert!(flat.cost("pop_seg").is_err() && real.cost("call_near").is_err());
+}
