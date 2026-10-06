@@ -175,6 +175,28 @@ def unavailable(program: Program) -> str | None:
     return None
 
 
+def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple[Path, ...]:
+    """The C and assembly files a Nib program links, built for `target`; C sees the declarations of the program's exports as NAME.h."""
+    if not program.link:
+        return ()
+    level = program.flags[0] if program.flags else "-O2"
+    include = work / f"{stem}_inc"
+    include.mkdir(exist_ok=True)
+    declared = subprocess.run([str(BIN / "llrm-nib"), str(program.source), "--declare", "h", "--target", target], capture_output=True, text=True)
+    if declared.returncode != 0:
+        raise dosbatch.BuildError("declare: " + declared.stderr.strip())
+    (include / f"{program.source.stem}.h").write_text(declared.stdout)
+    objects = []
+    for at, one in enumerate(program.link):
+        source, obj = program.source.parent / one, work / f"{stem}F{at}.obj"
+        if source.suffix == ".asm":
+            dosbatch.assemble(source, obj)
+        else:
+            dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(include), "--target", target, level, "-o", str(obj)])
+        objects.append(obj)
+    return tuple(objects)
+
+
 def build(program: Program, work: Path, stem: str) -> Job | str:
     """The job that runs `program`, or why it did not build."""
     target = program.flags[program.flags.index("--target") + 1] if "--target" in program.flags else "x86-code16"
@@ -184,7 +206,8 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
         if done.returncode != 0 or not obj.exists():
             return "compile: " + (done.stderr or done.stdout).strip()[-600:]
         try:
-            loaders = dosbatch.link_nib(target, program.source, obj, exe, work, program.flags[0] if program.flags else "-O2", ())
+            foreign = build_foreign(program, target, work, stem)
+            loaders = dosbatch.link_nib(target, program.source, obj, exe, work, program.flags[0] if program.flags else "-O2", foreign)
             dosbatch.check_loads(exe)
         except (dosbatch.BuildError, dosbatch.TooBig) as error:
             return f"link: {error}"

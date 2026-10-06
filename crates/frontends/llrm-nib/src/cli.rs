@@ -40,6 +40,8 @@ struct Arguments {
     codegen: codegen::Options,
     /// `--os-layer FIELD`: print a field of the target's OS layer instead of compiling.
     os_layer: Option<String>,
+    /// `--declare h|bi|inc`: print the declarations of the program's exports instead of compiling.
+    declare: Option<super::declarations::Language>,
 }
 
 fn parse_args(argv: &[String]) -> Result<Arguments, String> {
@@ -47,6 +49,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut layout = CodeLayout::OneSegment;
     let mut used_by = Vec::new();
     let mut os_layer = None;
+    let mut declare = None;
     let mut frontend = super::Frontend::default();
     let mut at = 0;
     while at < argv.len() {
@@ -70,6 +73,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--entry" => entry = value("--entry")?,
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--procedure-segments" => layout = CodeLayout::PerProcedure,
+            "--declare" => declare = Some(super::declarations::Language::named(&value("--declare")?).ok_or("--declare takes h, bi or inc")?),
             "--os-layer" => os_layer = Some(value("--os-layer")?),
             "-Wno-distance" => frontend.warn_distance = false,
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
@@ -94,7 +98,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.conventions = bound.target.conventions().iter().map(|one| (*one).to_owned()).collect();
     frontend.os = nib_os(&*bound.target)?;
     let codegen = bound.options(&flags, flags.machine(nib::machine(&*bound.target, &frontend.os))?);
-    Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen, os_layer })
+    Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen, os_layer, declare })
 }
 
 /// What the target's OS layer says of Nib's runtime; a target without one is refused.
@@ -133,6 +137,18 @@ pub fn main(argv: &[String]) -> i32 {
             }
         }
         return 0;
+    }
+    if let Some(language) = args.declare {
+        return match super::declare_file(&args.source, language, &args.frontend) {
+            Ok(text) => {
+                print!("{text}");
+                0
+            }
+            Err((path, error)) => {
+                eprintln!("{}", driver::refused(&path, &error).0);
+                1
+            }
+        };
     }
     let result = (|| -> Result<(), String> {
         if let Some(dump) = &args.dump {
