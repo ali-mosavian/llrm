@@ -348,6 +348,9 @@ fn parts(procedure: &Procedure, omit: bool) -> (Vec<Semantics>, Vec<Semantics>) 
     let saved = saved_of(procedure);
     let slot = procedure.registers.slot;
     let reserve = (procedure.reserve + slot - 1) / slot * slot;
+    // Where the frame register's own cell was stays reserved: a cell addressed through an index has
+    // no sign to say whether it lies above that cell or below it, so every one keeps its distance from it.
+    let reserve = if omit && reserve != 0 { reserve + slot } else { reserve };
     // Inline code is bytes this printer cannot read, so it may address the frame.
     let framed = !omit
         && (reserve != 0
@@ -713,12 +716,9 @@ fn writes_stack_pointer(place: &Loc) -> bool {
 }
 
 /// `place` with a frame cell addressed through the stack pointer; none where it reads the frame register
-/// as anything but a base. A local, below the frame register, lies `depth` under where the entry left the
-/// stack pointer less its own displacement: the saved frame register is not there to push it down. An
-/// argument is above it and past the return address, where its displacement has the saved register's
-/// `slot` in it.
+/// as anything but a base. The frame register would have held the entry's stack pointer less `slot`.
 fn through_stack(place: &Loc, depth: i64, slot: i64) -> Option<Loc> {
-    let shift = |disp: i64| if disp < 0 { depth } else { depth - slot };
+    let shift = |_disp: i64| depth - slot;
     let is_pointer = |one: Register| matches!(one, Register::BP | Register::EBP);
     // A frame place with no register, or a cell the frame register's own address names: a 32-bit
     // index has no frame space, only `[ebp+index+d]`.
@@ -1410,7 +1410,7 @@ mod tests {
 
     /// bench/fib's `push ebp; mov ebp,esp ... leave` cost three instructions a call. A function whose
     /// cells the stack pointer can name keeps no frame register: an argument, above the return address,
-    /// is `[esp + depth + 4]` and a local `[esp + depth - n]`, `depth` the bytes pushed so far, which
+    /// is `[esp + depth + 4]` and a local `[esp + depth - 4 - n]`, `depth` the bytes pushed so far, which
     /// a push moves and a callee's pop moves back.
     #[test]
     fn test_a_frame_the_stack_pointer_can_address_has_no_frame_register() {
@@ -1428,8 +1428,8 @@ mod tests {
         ];
         let lines = flat(true, 8, body, callees);
         assert!(!lines.iter().any(|one| one.contains("ebp")), "{lines:?}");
-        assert_eq!(lines.iter().filter(|one| one.starts_with("mov eax, dword ptr")).collect::<Vec<_>>(), ["mov eax, dword ptr [esp+12]", "mov eax, dword ptr [esp+16]", "mov eax, dword ptr [esp+8]", "mov eax, dword ptr [esp+12]"], "{lines:?}");
-        assert!(has(&lines, "sub esp, 8") && has(&lines, "add esp, 8"), "{lines:?}");
+        assert_eq!(lines.iter().filter(|one| one.starts_with("mov eax, dword ptr")).collect::<Vec<_>>(), ["mov eax, dword ptr [esp+16]", "mov eax, dword ptr [esp+20]", "mov eax, dword ptr [esp+8]", "mov eax, dword ptr [esp+16]"], "{lines:?}");
+        assert!(has(&lines, "sub esp, 12") && has(&lines, "add esp, 12"), "{lines:?}");
     }
 
     /// A target that does not let its frame register go, and a body that reads it as a value or calls

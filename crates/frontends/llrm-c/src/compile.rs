@@ -986,8 +986,8 @@ mod tests {
     fn test_m32_keeps_ebp_and_the_dword_stack() {
         let lines = flat_listing("bytes");
         assert!(lines.iter().all(|line| !line.starts_with("movzx ebp")), "{lines:#?}");
-        assert!(lines.contains(&"sub esp, 72".to_owned()), "{lines:#?}");
-        // 70 under the frame register, 72 reserved: 2 above the stack pointer.
+        assert!(lines.contains(&"sub esp, 76".to_owned()), "{lines:#?}");
+        // 70 under the frame register, 76 reserved with its cell: 2 above the stack pointer.
         assert!(lines.contains(&"mov byte ptr [esp+eax+2], al".to_owned()), "{lines:#?}");
     }
 
