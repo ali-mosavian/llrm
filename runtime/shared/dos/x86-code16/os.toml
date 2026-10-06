@@ -1,5 +1,5 @@
 # x86-code16's OS layer: real-mode DOS. start.asm and os.asm implement the interface
-# (llrm-target/os/interface.toml); the assembler is told every integer here and each of DOS's facts.
+# (runtime/shared/interface.toml); the assembler is told every integer here and each of DOS's facts.
 
 os = "dos"
 convention = "cdecl16"
