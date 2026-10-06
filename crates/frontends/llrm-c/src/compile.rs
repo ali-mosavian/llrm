@@ -116,15 +116,27 @@ struct Args {
 /// The code-generator stream wccq records for one C file; with `debug`,
 /// its debug types and symbols too (-d2).
 pub fn recorded(source: &Path, includes: &[String], debug: bool, watcom: &[&str]) -> Result<String, hir::Unsupported> {
+    recorded_for(source, includes, debug, watcom, false)
+}
+
+/// `recorded` by the 386 front end for the flat 32-bit target when `flat`, else
+/// by the 16-bit one.
+pub fn recorded_for(source: &Path, includes: &[String], debug: bool, watcom: &[&str], flat: bool) -> Result<String, hir::Unsupported> {
     let root = Path::new(env!("LLRM_ROOT"));
-    let wccq = Path::new(option_env!("LLRM_WCCQ").ok_or_else(|| hir::Unsupported("llrm was built without the toolchain feature".into()))?);
+    let unbuilt = || hir::Unsupported("llrm was built without the toolchain feature".into());
+    let wccq = Path::new(if flat { option_env!("LLRM_WCCQ386") } else { option_env!("LLRM_WCCQ") }.ok_or_else(unbuilt)?);
     // Borland's medium model: far code, near data, cdecl, signed char, 80-bit long
     // double, byte-packed structs, 16-bit enums, x87 inline, no stack probes, no
     // default library. -fp3 is for inline assembly: qcport's own uses 387 instructions.
     // Borland's ABI is the only one: wccq also lays bit fields out as BCC 3.1 does,
     // with no switch, since no other struct or call ABI exists here to match.
     let borland = format!("-fi={}", root.join("crates/frontends/llrm-c/src/borland.h").display());
-    let flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
+    let medium = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", borland.as_str()];
+    // Flat: the same switches but the model, packing and Borland's headers. Its structs
+    // are laid out as Watcom's 386 does at -zp4 (provisional until the C ABI is chosen
+    // with the extender), and cdecl as -ecc.
+    let flat_flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-ecc", "-s", "-zl", "-zq"];
+    let flags: &[&str] = if flat { &flat_flags } else { &medium };
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
     let out = scratch.path().join("unit.cgs");
@@ -182,7 +194,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         at += 1;
     }
     let source = source.ok_or("the following arguments are required: source")?;
-    let bound = llrm_driver::target(&flags, &["x86-code16"])?;
+    let bound = llrm_driver::target(&flags, &["x86-code16", "x86-code32"])?;
     let machine = flags.machine(llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..bound.target.machine() })?;
     Ok(Args {
         source,
@@ -207,7 +219,7 @@ pub fn main(argv: &[String]) -> i32 {
         let text = if args.source.extension().and_then(|one| one.to_str()) == Some("cgs") {
             fs::read_to_string(&args.source)?
         } else {
-            recorded(&args.source, &args.include, args.flags.debug, &args.watcom)?
+            recorded_for(&args.source, &args.include, args.flags.debug, &args.watcom, args.codegen.arch.name() == "x86-code32")?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
         let module = args
