@@ -778,3 +778,24 @@ fn test_dense_liveness_is_what_the_sorted_sets_gave() {
         }
     }
 }
+
+/// Every question of a body's intervals was worked out afresh: a spill was followed by the allocator's
+/// facts of the body it made, the spiller's steps and the class check, each asking the same (58% of the
+/// asks of compiling `d_faces`, #559). The same instructions are answered from memory; others are not.
+#[test]
+fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
+    use crate::analysis::intervals::{intervals, worked};
+    let (generated, _) = body(3, &Shape { pool: 8, ops: 10 });
+    let before = worked();
+    let first = intervals(&generated, None);
+    let again = intervals(&generated, None);
+    assert_eq!(worked() - before, 1, "the same body was worked out twice");
+    assert_eq!(first, again);
+    // A body with one instruction made afresh is another question.
+    let mut other = generated.clone();
+    let block = other.blocks.iter_mut().find(|block| !block.insns.is_empty()).expect("a block with instructions");
+    let copy = std::sync::Arc::new((*block.insns[0]).clone());
+    block.insns[0] = copy;
+    intervals(&other, None);
+    assert_eq!(worked() - before, 2, "another body was answered from the first");
+}

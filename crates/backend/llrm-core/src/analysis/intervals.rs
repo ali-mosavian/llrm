@@ -5,6 +5,7 @@
 //! where it writes.
 
 use std::collections::BTreeSet;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::analysis::frequency::Frequency;
@@ -120,6 +121,54 @@ pub fn indexed(body: &LirBody) -> Indexes {
     Indexes { at, span, order: body.blocks.iter().map(|block| block.at).collect() }
 }
 
+/// What an answer of `intervals_over` was made of: the body's instructions by identity (held, so
+/// that an address is not reused while it is remembered), its blocks and phis, and what its
+/// frequencies read.
+struct Remembered {
+    entry: i64,
+    blocks: Vec<(i64, Vec<i64>, Vec<crate::model::lir::Phi>, usize)>,
+    insns: Vec<Arc<Insn>>,
+    odds: crate::model::lir::BlockOdds,
+    trips: Vec<(i64, i64)>,
+    answer: Rc<IndexMap<u32, Interval>>,
+}
+
+impl Remembered {
+    fn of(body: &LirBody, answer: &IndexMap<u32, Interval>) -> Self {
+        Self {
+            entry: body.entry,
+            blocks: body.blocks.iter().map(|block| (block.at, block.succ.clone(), block.phis.clone(), block.insns.len())).collect(),
+            insns: body.blocks.iter().flat_map(|block| block.insns.iter().cloned()).collect(),
+            odds: body.odds.clone(),
+            trips: body.loop_trip_counts.clone(),
+            answer: Rc::new(answer.clone()),
+        }
+    }
+
+    fn is_of(&self, body: &LirBody) -> bool {
+        self.entry == body.entry
+            && self.blocks.len() == body.blocks.len()
+            && self.blocks.iter().zip(&body.blocks).all(|((at, succ, phis, count), block)| *at == block.at && *count == block.insns.len() && *succ == block.succ && *phis == block.phis)
+            && self.insns.iter().zip(body.blocks.iter().flat_map(|block| block.insns.iter())).all(|(held, one)| Arc::ptr_eq(held, one))
+            && self.odds == body.odds
+            && self.trips == body.loop_trip_counts
+    }
+}
+
+thread_local! {
+    static RECENT: std::cell::RefCell<Vec<Remembered>> = const { std::cell::RefCell::new(Vec::new()) };
+    static WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out intervals, for a test that asking again of one body does not.
+pub fn worked() -> usize {
+    WORKED.with(std::cell::Cell::get)
+}
+
+/// How many answers are remembered: the allocator's rewrites and its trial candidates alternate
+/// among a few bodies.
+const REMEMBERED: usize = 6;
+
 /// The live interval of every value in this body, weighted.
 pub fn intervals(body: &LirBody, index: Option<&Indexes>) -> IndexMap<u32, Interval> {
     intervals_over(body, index, &Frequency::of(body))
@@ -127,7 +176,37 @@ pub fn intervals(body: &LirBody, index: Option<&Indexes>) -> IndexMap<u32, Inter
 
 /// `intervals`, weighted by `busy`, the body's block frequencies, which a caller that asks for several
 /// facts of one body finds once.
+///
+/// An answer is remembered for the next question of the same instructions: a spill is followed by the
+/// facts of the body it made, which the spiller's own steps and the class check each asked of it
+/// (58% of the asks of compiling `d_faces` were of a body already asked, #559). `index` is
+/// `indexed(body)` of this body, as every caller makes it, or none.
 pub fn intervals_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> IndexMap<u32, Interval> {
+    if let Some(found) = RECENT.with(|recent| {
+        let mut recent = recent.borrow_mut();
+        let at = recent.iter().position(|held| held.is_of(body))?;
+        // Most recent first.
+        let held = recent.remove(at);
+        let answer = Rc::clone(&held.answer);
+        recent.insert(0, held);
+        Some(answer)
+    }) {
+        if std::env::var_os("LLRM_CHECK_INTERVALS").is_some() {
+            assert!(*found == worked_out(body, index, busy), "{}: a remembered answer differs from working it out", body.name);
+        }
+        return (*found).clone();
+    }
+    let answer = worked_out(body, index, busy);
+    RECENT.with(|recent| {
+        let mut recent = recent.borrow_mut();
+        recent.insert(0, Remembered::of(body, &answer));
+        recent.truncate(REMEMBERED);
+    });
+    answer
+}
+
+fn worked_out(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> IndexMap<u32, Interval> {
+    WORKED.with(|worked| worked.set(worked.get() + 1));
     let owned;
     let index = match index {
         Some(index) => index,
