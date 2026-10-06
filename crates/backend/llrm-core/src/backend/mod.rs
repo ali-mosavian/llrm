@@ -51,6 +51,7 @@ pub mod objbuild;
 pub mod overlap;
 pub mod parcopy;
 pub mod peep;
+pub mod postings;
 pub mod peephole;
 pub mod phielim;
 pub mod pointers;

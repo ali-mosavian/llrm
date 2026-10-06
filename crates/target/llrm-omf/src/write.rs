@@ -89,6 +89,8 @@ fn location(kind: Kind) -> Result<(u8, bool), Error> {
         Kind::SegmentBase => (BASE, false),
         Kind::FarPointer => (POINTER, false),
         Kind::PcRel { width, from } if width == from && matches!(width, 2 | 4) => (if width == 2 { OFFSET } else { OFFSET32 }, true),
+        Kind::Branch { width: 2 } => (OFFSET, true),
+        Kind::Branch { width: 4 } => (OFFSET32, true),
         other => return Err(unencodable(format!("OMF has no fixup for {other:?}"))),
     })
 }
@@ -96,7 +98,7 @@ fn location(kind: Kind) -> Result<(u8, bool), Error> {
 /// Bytes of a field that hold a value: a far pointer's offset is its first two.
 fn packed(kind: Kind) -> usize {
     match kind {
-        Kind::Abs { width: 4 } | Kind::PcRel { width: 4, .. } => 4,
+        Kind::Abs { width: 4 } | Kind::PcRel { width: 4, .. } | Kind::Branch { width: 4 } => 4,
         _ => 2,
     }
 }
@@ -229,6 +231,9 @@ fn ledata(object: &Object, extern_index: &[usize], index: usize) -> Result<Vec<R
 /// `object` as an OMF object file.
 pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
     let bits = object.arch.bits();
+    if !matches!(bits, 16 | 32) {
+        return Err(unencodable(format!("OMF has no {bits}-bit records")));
+    }
     let mut lnames: Vec<String> = vec![String::new()];
     let mut lname = |text: &str| -> i64 {
         lnames.push(text.to_owned());
@@ -379,6 +384,13 @@ mod tests {
         // self-relative, offset32, at 1.
         assert_eq!(fixupp.body[0] & 0x40, 0);
         assert_eq!((fixupp.body[0] >> 2) & 0xF, 9);
+    }
+
+    /// A 64-bit object was written with 16-bit records.
+    #[test]
+    fn a_64_bit_object_is_refused() {
+        let made = object(Arch::X8664, vec![section("T", vec![0xC3], vec![])], vec![]);
+        assert!(matches!(write(&made), Err(Error::Unencodable(text)) if text.contains("64-bit")));
     }
 
     /// A pc-relative field OMF has no fixup for was written near-ish; it is refused.
