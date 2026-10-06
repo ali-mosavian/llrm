@@ -748,11 +748,7 @@ fn _allocated(
     let empty = BTreeSet::new();
     let protected = protected.unwrap_or(&empty);
     let mut unspillable: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
-    // A rewrite inserts instructions in blocks, and a split may add a block: the frequencies are the
-    // body's until its blocks are more.
-    let mut busy = Frequency::of(&body);
-    let mut busy_blocks = body.blocks.len();
-    let mut facts = Facts::of(&body, profile, segments, &unspillable, protected, &busy);
+    let mut facts = Facts::of(&body, profile, segments, &unspillable, protected, &Frequency::of(&body));
     if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments) {
         return Err(Unplaced(why).into());
     }
@@ -1078,11 +1074,7 @@ fn _allocated(
         // the change left sharing a register competes again.
         let Some(made) = rewritten else { continue };
         floor = floor.max(splitkit::_next_value(&body));
-        if body.blocks.len() != busy_blocks {
-            busy = Frequency::of(&body);
-            busy_blocks = body.blocks.len();
-        }
-        facts = Facts::of(&body, profile, segments, &unspillable, protected, &busy);
+        facts = Facts::of(&body, profile, segments, &unspillable, protected, &Frequency::of(&body));
         placing = None;
         for (one, register) in constrain::required(&body, classes) {
             fixed.entry(one).or_insert(register);
