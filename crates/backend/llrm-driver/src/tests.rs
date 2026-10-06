@@ -188,16 +188,16 @@ fn the_audited_bounds_come_from_the_targets_timings() {
     let profile = |arguments: &[&str]| {
         let flags = flags(arguments);
         let bound = target(&flags, Some(&["x86-code16", "x86-code32"])).unwrap();
-        let machine = flags.machine(bound.target.machine()).unwrap();
+        let machine = flags.machine(&*bound.target, bound.target.machine()).unwrap();
         bound.options(&flags, machine).cpu().unwrap()
     };
-    for target in [&["--cpu", "486"][..], &["--target", "x86-code32", "--cpu", "486"][..]] {
+    for target in [&["-march=i486"][..], &["-m32", "-march=i486"][..]] {
         let cpu = profile(target);
         assert_eq!(signed_multiply(cpu, 4, true).unwrap(), Some(Clocks { minimum: 13, maximum: 42 }));
         assert_eq!(signed_divide(cpu, 2).unwrap(), Some(Clocks { minimum: 27, maximum: 27 }));
     }
-    let pentium = profile(&["--cpu", "P5"]);
+    let pentium = profile(&["-march=pentium"]);
     assert_eq!(signed_multiply(pentium, 2, true).unwrap(), Some(Clocks { minimum: 11, maximum: 11 }));
     assert_eq!(signed_multiply(pentium, 2, false).unwrap(), Some(Clocks { minimum: 10, maximum: 10 }));
-    assert_eq!(signed_multiply(profile(&["--cpu", "K6"]), 4, true).unwrap(), None);
+    assert_eq!(signed_multiply(profile(&["-march=k6"]), 4, true).unwrap(), None);
 }
