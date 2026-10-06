@@ -23,6 +23,9 @@ fn main() {
         .filter(|dir| dir.join("src/isel/patterns.isel").is_file())
         .collect();
     targets.sort();
+    let groups = rule_groups(&read(std::path::Path::new("src/backend/peep/groups.list")));
+    println!("cargo:rerun-if-changed=src/backend/peep/groups.list");
+    std::fs::write(out.join("peep_rules.rs"), rules_type(&groups)).unwrap();
     let mut index = String::new();
     let mut peep = String::new();
     let mut all = Vec::new();
@@ -38,7 +41,7 @@ fn main() {
         std::fs::write(out.join(format!("isel_{ident}.rs")), generated.code).unwrap();
         index.push_str(&format!("pub mod {ident} {{\n    use super::*;\n    include!(concat!(env!(\"OUT_DIR\"), \"/isel_{ident}.rs\"));\n}}\n\n"));
         all.push(format!("&{ident}::SELECTOR"));
-        peep.push_str(&peephole(dir, &ident, &forms_of(&forms), &out, &read));
+        peep.push_str(&peephole(dir, &ident, &forms_of(&forms), &out, &read, &groups));
     }
     std::fs::write(out.join("peep_targets.rs"), peep).unwrap();
     index.push_str(&format!("/// Every target's selector, by its directory's name.\npub static ALL: [&Compiled; {}] = [{}];\n", all.len(), all.join(", ")));
@@ -46,16 +49,9 @@ fn main() {
 
 }
 
-/// The rule groups `peep::Rules` has a field for, and those of them that also
-/// have a form over a window of instructions (`<group>_insns`).
-const GROUPS: [&str; 17] = [
-    "extensions", "pushed_constants", "pushes", "narrowed_moves", "commuted", "transferred", "shuttles", "restored_copies", "fused", "far_loads", "increments",
-    "borrows", "doubled", "zero_compares", "memory_arguments", "paired_pushes", "immediate_arguments",
-];
-
 /// The module `peep::targets::<ident>`: the target's rules, generated from its
 /// `peephole.peep` if it has one, and the `RULES` that name them.
-fn peephole(dir: &std::path::Path, ident: &str, forms: &str, out: &std::path::Path, read: &dyn Fn(&std::path::Path) -> String) -> String {
+fn peephole(dir: &std::path::Path, ident: &str, forms: &str, out: &std::path::Path, read: &dyn Fn(&std::path::Path) -> String, groups: &[(String, bool)]) -> String {
     let rules = dir.join("src/isel/peephole.peep");
     if !rules.is_file() {
         return format!("pub mod {ident} {{\n    use super::super::Rules;\n\n    pub static RULES: Rules = Rules::NONE;\n}}\n\n");
@@ -66,15 +62,22 @@ fn peephole(dir: &std::path::Path, ident: &str, forms: &str, out: &std::path::Pa
         std::process::exit(1);
     });
     for (group, _, _) in &made.groups {
-        assert!(GROUPS.contains(&group.as_str()), "{}: group `{group}` has no field in peep::Rules", rules.display());
+        assert!(groups.iter().any(|(name, _)| name == group), "{}: group `{group}` is not in peep/groups.list", rules.display());
     }
-    let field = |name: &str| if made.groups.iter().any(|(group, _, _)| group == name) { format!("Some(generated::{name})") } else { "None".to_owned() };
-    let window = |name: &str| if made.rules.contains(&format!("pub fn {name}_insns(")) { format!("Some(generated::{name}_insns)") } else { "None".to_owned() };
-    std::fs::write(out.join(format!("peephole_{ident}.rs")), &made.rules).unwrap();
     let mut rules_text = String::new();
-    for name in GROUPS {
-        rules_text.push_str(&format!("        {name}: {},\n        {name}_insns: {},\n", field(name), window(name)));
+    for (name, insns) in groups {
+        let function = if *insns { format!("{name}_insns") } else { name.clone() };
+        let made_here = made.groups.iter().any(|(group, _, _)| group == name);
+        let value = match made_here {
+            false => "None".to_owned(),
+            true => {
+                assert!(made.rules.contains(&format!("pub fn {function}(")), "{}: group `{name}` has no `{function}`, the form the schedule runs", rules.display());
+                format!("Some(generated::{function})")
+            }
+        };
+        rules_text.push_str(&format!("        {name}: {value},\n"));
     }
+    std::fs::write(out.join(format!("peephole_{ident}.rs")), &made.rules).unwrap();
     let zero_jcc = if made.rules.contains("pub static SET_ZERO_JCC") { "&generated::SET_ZERO_JCC" } else { "&super::super::NO_NAMES" };
     format!(
         "pub mod {ident} {{
@@ -101,5 +104,55 @@ fn peephole(dir: &std::path::Path, ident: &str, forms: &str, out: &std::path::Pa
 }}
 
 "
+    )
+}
+
+/// The groups of `peep/groups.list`: each name and whether the schedule runs its
+/// `insns` form (else its body form).
+fn rule_groups(text: &str) -> Vec<(String, bool)> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| match line.split_once(' ') {
+            Some((name, "body")) => (name.to_owned(), false),
+            Some((name, "insns")) => (name.to_owned(), true),
+            _ => panic!("peep/groups.list: `{line}` is not `<group> body|insns`"),
+        })
+        .collect()
+}
+
+/// `peep::Rules`, `Rules::NONE` and the group names, from the list.
+fn rules_type(groups: &[(String, bool)]) -> String {
+    let kind = |insns: bool| if insns { "InsnRule" } else { "BodyRule" };
+    let fields: String = groups.iter().map(|(name, insns)| format!("    pub {name}: Option<{}>,\n", kind(*insns))).collect();
+    let none: String = groups.iter().map(|(name, _)| format!("        {name}: None,\n")).collect();
+    let present: String = groups.iter().map(|(name, _)| format!("        if self.{name}.is_some() {{\n            out.push({name:?});\n        }}\n")).collect();
+    let names = groups.iter().map(|(name, _)| format!("{name:?}")).collect::<Vec<_>>().join(", ");
+    format!(
+        "/// What a target\'s `peephole.peep` made: each rule group the schedule runs, in the
+/// form it runs, or none where the target has no such group. Bound to a target
+/// by `llrm-driver` through its selector.
+pub struct Rules {{
+{fields}    /// The conditional jumps that test only a zero or a sign.
+    pub zero_jcc: &'static Set,
+}}
+
+impl Rules {{
+    /// A target with no peephole rules.
+    pub const NONE: Rules = Rules {{
+{none}        zero_jcc: &NO_NAMES,
+    }};
+
+    /// The groups the schedule runs.
+    pub const GROUPS: [&'static str; {count}] = [{names}];
+
+    /// The groups this target has.
+    pub fn present(&self) -> Vec<&'static str> {{
+        let mut out = Vec::new();
+{present}        out
+    }}
+}}
+",
+        count = groups.len()
     )
 }
