@@ -75,7 +75,7 @@ pub fn machine_with<'a>(
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
         Box::new(peephole::Peephole::with_rules(frame.clone(), target, rules, registers.saved.iter().map(|(whole, _)| *whole).collect(), Rc::clone(classes))?),
         // Once spill traffic is final: which slots a loop still reaches.
-        Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32)?),
+        Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
         // Last: this physical order decides which explicit edge is now fall-through.
