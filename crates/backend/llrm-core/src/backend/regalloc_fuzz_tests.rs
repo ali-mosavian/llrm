@@ -833,3 +833,36 @@ fn test_a_body_with_no_word_address_pairs_is_not_numbered_to_find_classes() {
     crate::backend::regclass::classes(&generated, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
     assert_eq!(crate::analysis::intervals::worked() - before, 0, "intervals were worked out for a body with no word pairs");
 }
+
+/// The interval walk looked each instruction's slot up in a map hashed by its address, built a set per group
+/// and shifted its live map on every removal: 7.6 s of compiling `d_faces` (#559). Slots counted in place, a
+/// live list with gaps: the same intervals in the same order.
+#[test]
+fn test_the_interval_walk_is_the_references_in_every_order() {
+    use crate::analysis::intervals::{_ranges_reference, _walked, indexed};
+    for seed in 0..200 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            let index = indexed(&body);
+            let all = |_: u32| true;
+            assert!(_walked(&body, &index, &all).iter().eq(_ranges_reference(&body, &index, &all).iter()), "seed {seed}");
+            let some = |value: u32| value % 3 != 0;
+            assert!(_walked(&body, &index, &some).iter().eq(_ranges_reference(&body, &index, &some).iter()), "seed {seed} among some");
+        }
+    }
+}
+
+/// Values live into a block come out of its walk in the order they were first read, last read first: two
+/// values read and never made in the block. The order of the intervals is part of what is the same.
+#[test]
+fn test_values_read_and_never_made_in_a_block_come_out_in_the_order_they_were_first_walked() {
+    use crate::analysis::intervals::{_ranges_reference, _walked, indexed};
+    let read = |at: i64, into: u32, from: u32| Insn::new(at, Some((at, 1)), Some(Semantics { name: Some("mov".to_owned()), dests: vec![held(into)], sources: vec![held(from)], ..Semantics::new(Operation::Move) }), vec![into], vec![from]);
+    let blocks = vec![LirBlock::new(1, vec![Arc::new(read(1, 3, 1)), Arc::new(read(2, 4, 2))])];
+    let body = LirBody::new("f", 1, blocks, Default::default(), Default::default());
+    let index = indexed(&body);
+    let walked = _walked(&body, &index, &|_| true);
+    assert_eq!(walked.keys().copied().collect::<Vec<_>>(), vec![4, 3, 2, 1]);
+    assert!(walked.iter().eq(_ranges_reference(&body, &index, &|_| true).iter()));
+}
