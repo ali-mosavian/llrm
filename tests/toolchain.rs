@@ -317,3 +317,20 @@ fn test_far_and_huge_are_near_with_a_warning_on_code32() {
     assert_eq!(stderr("tests/run/nib/far_near.nib", &["--target", "x86-code32", "-Wno-distance"]), "");
     assert_eq!(stderr("tests/run/nib/flat_arith.nib", &flat), "");
 }
+
+/// C's far and huge are near with a warning where the target has one address space, and an unmarked
+/// pointer is near in every model: `-ml` (default data pointers far) is not a switch.
+#[test]
+fn test_c_far_and_huge_are_near_with_a_warning_on_code32() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("p.obj");
+    let compile = |extra: &[&str]| Command::new(env!("CARGO_BIN_EXE_llrm-c")).arg(root.join("tests/run/c/huge_array.c")).args(extra).args(["-O2", "-o", object.to_str().unwrap()]).output().unwrap();
+    let flat = compile(&["--target", "x86-code32"]);
+    assert!(flat.status.success(), "{}", String::from_utf8_lossy(&flat.stderr));
+    assert!(String::from_utf8_lossy(&flat.stderr).contains("warning: __far and __huge pointers are near on this target"), "{}", String::from_utf8_lossy(&flat.stderr));
+    let real = compile(&[]);
+    assert!(real.status.success() && real.stderr.is_empty(), "{}", String::from_utf8_lossy(&real.stderr));
+    let large = compile(&["-ml"]);
+    assert!(!large.status.success() && String::from_utf8_lossy(&large.stderr).contains("unrecognized arguments: -ml"));
+}
