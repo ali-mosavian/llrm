@@ -285,7 +285,7 @@ fn free(
             let block = &body.blocks[index[at]];
             let mut reloaded = None;
             for (position, insn) in block.insns.iter().enumerate() {
-                let Some(effect) = liveness::effect(insn) else {
+                let Some(effect) = liveness::effect(body.bits, insn) else {
                     continue 'roots;
                 };
                 if effect.reads.is_disjoint(&lanes) && effect.writes.is_disjoint(&lanes) {
@@ -373,7 +373,7 @@ fn rewritten(m: u32, one: &Arc<Insn>, homes: &BTreeMap<i64, Loc>) -> Arc<Insn> {
 
 /// Whether `one` still encodes with slot `at` in a register: an x87 store
 /// or a far-pointer load takes only memory.
-fn registrable(m: u32, one: &Arc<Insn>, at: i64) -> bool {
+fn registrable(m: u32, bits: u32, one: &Arc<Insn>, at: i64) -> bool {
     let touched = touch(m, one);
     if touched.reaches(at, false) || touched.reaches(at, true) {
         return false;
@@ -382,7 +382,7 @@ fn registrable(m: u32, one: &Arc<Insn>, at: i64) -> bool {
         return true;
     }
     let homes = BTreeMap::from([(at, word(m, Register::DI))]);
-    rewritten(m, one, &homes).what.as_ref().is_some_and(|what| select::emit(what, 0, None, false, false, None).is_some())
+    rewritten(m, one, &homes).what.as_ref().is_some_and(|what| select::emit_in(bits, what, 0, None, false, false, None).is_some())
 }
 
 /// What holding a slot in a register saves each trip: a reload whose
@@ -416,10 +416,10 @@ fn invariant(m: u32, body: &LirBody, one: &Loop, index: &BTreeMap<i64, usize>, e
     let mut from = None;
     for at in &one.body {
         for insn in &body.blocks[index[at]].insns {
-            let effect = liveness::effect(insn)?;
+            let effect = liveness::effect(body.bits, insn)?;
             // A `rep movs` steps si and di only if it runs: a conditional write, but one
             // that makes the register unfit to hold its value from one trip to the next.
-            let may_write = peephole::_register_effects(insn, true, false).map_or(effect.writes, |(_, writes)| effect.writes.or(&writes));
+            let may_write = peephole::_register_effects(body.bits, insn, true, false).map_or(effect.writes, |(_, writes)| effect.writes.or(&writes));
             if may_write.is_disjoint(&lanes) {
                 continue;
             }
@@ -588,7 +588,7 @@ pub fn promoted(m: u32, body: &LirBody, spills: &BTreeSet<i64>, costs: &Operatio
         // Most saved first.
         let mut ranked = slots
             .iter()
-            .filter(|at| insns().all(|insn| registrable(m, insn, **at)))
+            .filter(|at| insns().all(|insn| registrable(m, body.bits, insn, **at)))
             .map(|at| {
                 let mut saved = 0;
                 for block in &one.body {

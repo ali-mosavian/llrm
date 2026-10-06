@@ -39,8 +39,8 @@ fn count(counter: &Counter, value: u32) -> i64 {
     counter.get(&value).copied().unwrap_or(0)
 }
 
-fn emit(what: &Semantics) -> Option<select::Emitted> {
-    select::emit(what, 0, None, false, false, None)
+fn emit(bits: u32, what: &Semantics) -> Option<select::Emitted> {
+    select::emit_in(bits, what, 0, None, false, false, None)
 }
 
 fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {
@@ -190,7 +190,7 @@ pub fn popped_arguments(body: &LirBody, cpu: &Profile) -> Result<LirBody, String
     let exits = liveness::dead_at_exit(body);
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
+        let dead_after = regthrash::_dead_after(body.bits, block, exits[&block.at].clone());
         let mut insns = Vec::with_capacity(block.insns.len());
         for one in &block.insns {
             let sp = Loc::Reg(reg(Register::SP, 2));
@@ -244,7 +244,7 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>, class
     let exits = liveness::dead_at_exit(body);
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
+        let dead_after = regthrash::_dead_after(body.bits, block, exits[&block.at].clone());
         let mut insns = block.insns.clone();
         for index in 0..insns.len().saturating_sub(1) {
             let (pushed, popped) = (Arc::clone(&insns[index]), Arc::clone(&insns[index + 1]));
@@ -314,8 +314,8 @@ pub fn frame_copies<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>, class
                 &popped,
                 semantics(Operation::Move, "mov", vec![Loc::Mem(destination)], vec![Loc::Reg(temporary)]),
             );
-            if emit(load.what.as_ref().expect("set above")).is_none()
-                || emit(store.what.as_ref().expect("set above")).is_none()
+            if emit(body.bits, load.what.as_ref().expect("set above")).is_none()
+                || emit(body.bits, store.what.as_ref().expect("set above")).is_none()
             {
                 continue;
             }
@@ -440,10 +440,10 @@ pub fn high_extracts<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> R
     let exits = liveness::dead_at_exit(body);
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
+        let dead_after = regthrash::_dead_after(body.bits, block, exits[&block.at].clone());
         let insns = _code_windows(&block.insns, 3, |run| -> Result<_, String> {
             if run.len() == 3 {
-                if let Some(changed) = _register_high_extract(run, &dead_after, &virtual_uses, profile)? {
+                if let Some(changed) = _register_high_extract(body.bits, run, &dead_after, &virtual_uses, profile)? {
                     return Ok(Some((3, changed)));
                 }
             }
@@ -451,9 +451,9 @@ pub fn high_extracts<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> R
                 return Ok(None);
             }
             let pair = &run[..2];
-            Ok(match _selected_register_high_extract(pair, &dead_after, &virtual_uses, profile)? {
+            Ok(match _selected_register_high_extract(body.bits, pair, &dead_after, &virtual_uses, profile)? {
                 Some(changed) => Some((2, changed)),
-                None => _high_extract(pair, &dead_after).map(|changed| (2, changed)),
+                None => _high_extract(body.bits, pair, &dead_after).map(|changed| (2, changed)),
             })
         })?;
         blocks.push(block.with_insns(insns));
@@ -462,6 +462,7 @@ pub fn high_extracts<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> R
 }
 
 fn _register_high_extract(
+    bits: u32,
     parts: &[Arc<Insn>],
     dead_after: &DeadAfter,
     virtual_uses: &Counter,
@@ -512,7 +513,7 @@ fn _register_high_extract(
         vec![Loc::Reg(wide_high), count.clone()],
     );
 
-    let Some(effects) = _register_effects(&with_what(kept, shift.clone()), false, true) else {
+    let Some(effects) = _register_effects(bits, &with_what(kept, shift.clone()), false, true) else {
         return Ok(None);
     };
     let upper: Lanes = _lanes(wide_high.register).minus(&_lanes(high.register));
@@ -531,7 +532,7 @@ fn _register_high_extract(
             .collect::<Lanes>()
             .is_subset(&dead_after[&id(kept)])
             && cpu.cost("shift_ri")? <= old_cost
-            && emit(&shift).is_some()
+            && emit(bits, &shift).is_some()
         {
             return Ok(Some(vec![Arc::new(Insn {
                 what: Some(shift),
@@ -551,7 +552,7 @@ fn _register_high_extract(
         vec![Loc::Reg(wide_high)],
         vec![Loc::Reg(wide_high), Loc::Reg(source), count],
     );
-    if cpu.cost("shift_ri")? > old_cost || emit(&extract).is_none() {
+    if cpu.cost("shift_ri")? > old_cost || emit(bits, &extract).is_none() {
         return Ok(None);
     }
     Ok(Some(vec![Arc::new(Insn { what: Some(extract), defines: kept.defines.clone(), ..(**pushed).clone() })]))
@@ -564,6 +565,7 @@ fn _register_high_extract(
 /// operation when only the destination's low word survives, so final machine
 /// selection must canonicalize both independently of frontend provenance.
 fn _selected_register_high_extract(
+    bits: u32,
     parts: &[Arc<Insn>],
     dead_after: &DeadAfter,
     virtual_uses: &Counter,
@@ -632,8 +634,8 @@ fn _selected_register_high_extract(
         vec![Loc::Reg(destination)],
         vec![Loc::Reg(destination), Loc::Reg(source), count],
     );
-    let old_effects = _register_effects(shift, false, true);
-    let new_effects = _register_effects(&with_what(moved, extract.clone()), false, true);
+    let old_effects = _register_effects(bits, shift, false, true);
+    let new_effects = _register_effects(bits, &with_what(moved, extract.clone()), false, true);
     let (Some(old_effects), Some(new_effects)) = (old_effects, new_effects) else {
         return Ok(None);
     };
@@ -665,7 +667,7 @@ fn _selected_register_high_extract(
     Ok(Some(folded))
 }
 
-fn _high_extract(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<Insn>>> {
+fn _high_extract(bits: u32, parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<Insn>>> {
     let (load, shift) = (&parts[0], &parts[1]);
     if parts.iter().any(|one| {
         one.what.is_none()
@@ -720,7 +722,7 @@ fn _high_extract(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<
 
     let low = reg(target::named(wide.register, 2), 2);
     let preserved: Lanes = _lanes(wide.register).minus(&_lanes(low.register));
-    let effects = _register_effects(shift, false, true)?;
+    let effects = _register_effects(bits, shift, false, true)?;
     let flags: Lanes = effects.1.and(&_flag_lanes(0xFFFF_FFFF));
     if !preserved.or(&flags).is_subset(&dead_after[&id(shift)]) {
         return None;
@@ -735,7 +737,7 @@ fn _high_extract(parts: &[Arc<Insn>], dead_after: &DeadAfter) -> Option<Vec<Arc<
     };
     let what = semantics(Operation::Move, "mov", vec![Loc::Reg(low)], vec![Loc::Mem(high)]);
 
-    emit(&what)?;
+    emit(bits, &what)?;
     Some(vec![Arc::new(with_what(load, what)), lir::anchor(Arc::clone(shift))])
 }
 
@@ -779,9 +781,9 @@ pub fn _register_operand(one: &Loc, before: Register, after: Register) -> Loc {
 }
 
 /// The machine instructions `what` encodes to.
-fn _decoded(what: &Semantics) -> Option<Vec<iced_x86::Instruction>> {
-    let encoded = emit(what)?;
-    let mut decoder = Decoder::new(select::encoding(), &encoded.code, DecoderOptions::NONE);
+fn _decoded(bits: u32, what: &Semantics) -> Option<Vec<iced_x86::Instruction>> {
+    let encoded = emit(bits, what)?;
+    let mut decoder = Decoder::new(bits, &encoded.code, DecoderOptions::NONE);
     Some((&mut decoder).into_iter().collect())
 }
 
@@ -791,8 +793,8 @@ fn _decoded(what: &Semantics) -> Option<Vec<iced_x86::Instruction>> {
 /// Each written byte reads only its sources; the rest of the operands are not
 /// read at all. `shld edx, eax, 16` moves DX into the upper half of EDX, so it
 /// reads DX only where that half is live. None for any other instruction.
-pub fn _moved_lanes(one: &Insn) -> Option<(Vec<(Lane, Lane)>, Lanes)> {
-    let instructions = one.what.as_ref().and_then(_decoded)?;
+pub fn _moved_lanes(bits: u32, one: &Insn) -> Option<(Vec<(Lane, Lane)>, Lanes)> {
+    let instructions = one.what.as_ref().and_then(|what| _decoded(bits, what))?;
     let [insn] = instructions.as_slice() else {
         return None;
     };
@@ -839,7 +841,7 @@ pub fn _moved_lanes(one: &Insn) -> Option<(Vec<(Lane, Lane)>, Lanes)> {
     Some((moved, _lanes(destination).or(&source.map(_lanes).unwrap_or_default())))
 }
 
-pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(Lanes, Lanes)> {
+pub fn _register_effects(bits: u32, one: &Insn, may_write: bool, flags: bool) -> Option<(Lanes, Lanes)> {
     // A symbol/source anchor is a placement fact, not an unknown machine
     // instruction.  Complete unrolling can leave many of these between a
     // definition and its ABI use; clearing liveness at each one kept dead
@@ -861,7 +863,7 @@ pub fn _register_effects(one: &Insn, may_write: bool, flags: bool) -> Option<(La
         // decoded-opaque fallback never applies and this is unknown.
         _ => return None,
     };
-    let instructions = _decoded(what)?;
+    let instructions = _decoded(bits, what)?;
     // A fixed-register ABI names the conventional register (AX, BX, ...)
     // separately from the value it carries.  The Held width is authoritative:
     // a dword in the BX slot occupies EBX, including its upper lanes.
@@ -975,7 +977,7 @@ pub fn overwritten(body: &LirBody) -> LirBody {
         let mut dead = exits[&block.at].clone();
         let mut redundant: HashSet<usize> = HashSet::default();
         for one in block.insns.iter().rev() {
-            let Some(effect) = liveness::effect(one) else {
+            let Some(effect) = liveness::effect(body.bits, one) else {
                 dead.clear();
                 continue;
             };
@@ -1159,8 +1161,8 @@ fn _loaded_scaled_add<'a>(
 }
 
 /// Select physically adjacent load/scale/add tails across inert anchors.
-fn _loaded_addresses(block: &LirBlock, flags_dead_out: bool, uses: &Counter, cpu: &Profile) -> Result<LirBlock, String> {
-    let dead = _flags_dead_after(block, flags_dead_out);
+fn _loaded_addresses(bits: u32, block: &LirBlock, flags_dead_out: bool, uses: &Counter, cpu: &Profile) -> Result<LirBlock, String> {
+    let dead = _flags_dead_after(bits, block, flags_dead_out);
     let mut insns = block.insns.clone();
     let work: Vec<usize> = insns
         .iter()
@@ -1212,14 +1214,14 @@ fn _loaded_addresses(block: &LirBlock, flags_dead_out: bool, uses: &Counter, cpu
 
 /// The instructions of `block` after which no arithmetic flag is read,
 /// given whether any is read after its end.
-pub(crate) fn _flags_dead_after(block: &LirBlock, dead_out: bool) -> HashSet<usize> {
+pub(crate) fn _flags_dead_after(bits: u32, block: &LirBlock, dead_out: bool) -> HashSet<usize> {
     let mut dead: HashSet<usize> = HashSet::default();
     let mut flags_dead = dead_out;
     for one in block.insns.iter().rev() {
         if flags_dead {
             dead.insert(id(one));
         }
-        flags_dead = _flags_before(one, flags_dead);
+        flags_dead = _flags_before(bits, one, flags_dead);
     }
     dead
 }
@@ -1300,11 +1302,11 @@ pub fn addresses<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Resul
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let flags_dead_out = flags_out.get(&block.at).is_some_and(Lanes::is_empty);
-        let block = _loaded_addresses(block, flags_dead_out, &virtual_uses, target_cpu)?;
-        let dead = _flags_dead_after(&block, flags_dead_out);
+        let block = _loaded_addresses(body.bits, block, flags_dead_out, &virtual_uses, target_cpu)?;
+        let dead = _flags_dead_after(body.bits, &block, flags_dead_out);
         let live_out = live_out.get(&block.at).cloned().unwrap_or_default();
         let insns = _code_windows(&block.insns, block.insns.len(), |rest| -> Result<_, String> {
-            Ok(match _affine_address(rest, &dead, target_cpu)? {
+            Ok(match _affine_address(body.bits, rest, &dead, target_cpu)? {
                 Some((taken, made)) if !_loses_live_definition(&rest[..taken], &made[0], &rest[taken..], &live_out) => {
                     Some((taken, made))
                 }
@@ -1521,8 +1523,8 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
         let after_parts: Vec<Semantics> = std::iter::once(extension.what.clone().expect("set above"))
             .chain(consumers.values().map(|one| one.what.clone().expect("a consumer")))
             .collect();
-        let before_encoded: Vec<Option<select::Emitted>> = before_parts.iter().map(emit).collect();
-        let after_encoded: Vec<Option<select::Emitted>> = after_parts.iter().map(emit).collect();
+        let before_encoded: Vec<Option<select::Emitted>> = before_parts.iter().map(|what| emit(body.bits, what)).collect();
+        let after_encoded: Vec<Option<select::Emitted>> = after_parts.iter().map(|what| emit(body.bits, what)).collect();
         if before_encoded.iter().chain(&after_encoded).any(Option::is_none) {
             continue;
         }
@@ -1575,6 +1577,7 @@ pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) ->
 /// A word result keeps only the low sixteen bits, which the upper halves of
 /// the registers read cannot reach. Returns the instructions consumed.
 fn _affine_address(
+    mode: u32,
     parts: &[Arc<Insn>],
     dead: &HashSet<usize>,
     cpu: &Profile,
@@ -1649,8 +1652,8 @@ fn _affine_address(
     }
     let what = semantics(Operation::Address, "lea", vec![Loc::Reg(dest)], vec![Loc::Address(address)]);
     let (Some(new), Some(before)) = (
-        emit(&what),
-        replaced.iter().map(|one| emit(one.what.as_ref().expect("checked plain"))).collect::<Option<Vec<_>>>(),
+        emit(mode, &what),
+        replaced.iter().map(|one| emit(mode, one.what.as_ref().expect("checked plain"))).collect::<Option<Vec<_>>>(),
     ) else {
         return Ok(None);
     };
@@ -1722,8 +1725,8 @@ pub fn zero_extensions(rules: &peep::Rules, body: &LirBody) -> LirBody {
     peep::rewritten(rules.zero_extensions, body, &Facts::new(body, None))
 }
 
-fn _flags_before(one: &Insn, flags_dead: bool) -> bool {
-    let (reads, writes) = _flag_effect(one);
+fn _flags_before(bits: u32, one: &Insn, flags_dead: bool) -> bool {
+    let (reads, writes) = _flag_effect(bits, one);
     let dead = if flags_dead { _ARITHMETIC_LANES.clone() } else { Lanes::new() };
     _ARITHMETIC_LANES.is_subset(&dead.or(&writes).minus(&reads))
 }
@@ -1829,7 +1832,7 @@ pub fn tested(rules: &peep::Rules, body: &LirBody) -> LirBody {
             line.extend((0..before.len() - usize::from(jumps)).map(|index| (one, index)));
         }
         line.extend((0..at(test_at)).map(|index| (block_index, index)));
-        let Some(source) = _flag_source(&blocks, &line, &register) else {
+        let Some(source) = _flag_source(body.bits, &blocks, &line, &register) else {
             continue;
         };
         let (from, from_index) = line[source];
@@ -1851,7 +1854,7 @@ pub fn tested(rules: &peep::Rules, body: &LirBody) -> LirBody {
 /// The position in `line` of what set `register` last, when nothing after it
 /// reads flags, touches its operands or its result, or accesses a register it
 /// reads: it may then run last, and its flags are `register`'s zero test.
-fn _flag_source(blocks: &[Vec<Arc<Insn>>], line: &[(usize, usize)], register: &Reg) -> Option<usize> {
+fn _flag_source(bits: u32, blocks: &[Vec<Arc<Insn>>], line: &[(usize, usize)], register: &Reg) -> Option<usize> {
     let registers = |lanes: &Lanes| {
         let mut lanes = *lanes;
         lanes.retain(|lane| lane.0 != Register::None);
@@ -1863,7 +1866,7 @@ fn _flag_source(blocks: &[Vec<Arc<Insn>>], line: &[(usize, usize)], register: &R
         if _skippable_nothing(one) {
             continue;
         }
-        let effect = liveness::effect(one)?;
+        let effect = liveness::effect(bits, one)?;
         if _sets_from(one, register) {
             let operands_in_registers = one.what.as_ref().is_some_and(|what| {
                 what.sources.iter().all(|source| matches!(source, Loc::Reg(_) | Loc::Imm(_)))
@@ -1894,13 +1897,13 @@ fn _exit_flags() -> Lanes {
     _flag_lanes(_ARITHMETIC).minus(&_ADJUST)
 }
 
-pub fn _flag_effect(one: &Insn) -> (Lanes, Lanes) {
+pub fn _flag_effect(bits: u32, one: &Insn) -> (Lanes, Lanes) {
     let every = _flag_lanes(_ARITHMETIC);
     if _nothing(one) {
         // One that clobbers is an opaque barrier, which may observe any flag.
         return if one.clobbers.is_empty() { (Lanes::new(), Lanes::new()) } else { (every, Lanes::new()) };
     }
-    if let Some(effect) = liveness::effect(one) {
+    if let Some(effect) = liveness::effect(bits, one) {
         let flags = |lanes: &Lanes| lanes.iter().copied().filter(|lane| lane.0 == Register::None).collect::<Lanes>();
         return (flags(&effect.reads), flags(&effect.writes));
     }
@@ -2031,7 +2034,7 @@ fn _sets_from(one: &Insn, register: &Reg) -> bool {
 /// Which flag lanes something may read after each block's last instruction.
 pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
     let exits = _exit_flags();
-    let effects = |one: &Insn| _flag_effect(one);
+    let effects = |one: &Insn| _flag_effect(body.bits, one);
 
     let steps: HashMap<i64, Vec<(Lanes, Lanes)>> = body
         .blocks
@@ -2074,7 +2077,7 @@ pub fn zeroes(body: &LirBody) -> LirBody {
         let mut insns = Vec::new();
         for one in block.insns.iter().rev() {
             let mut one = Arc::clone(one);
-            let previous = _flags_before(&one, flags_dead);
+            let previous = _flags_before(body.bits, &one, flags_dead);
             if let Some(what) = &one.what {
                 if one.clobbers.is_empty() {
                     if let (
@@ -2185,7 +2188,7 @@ pub fn constants(body: &LirBody) -> LirBody {
                     && what.dests.iter().chain(&what.sources).all(|arg| matches!(arg, Loc::Reg(_)))
             });
             if !moved && !extend {
-                match _register_effects(one, true, false) {
+                match _register_effects(body.bits, one, true, false) {
                     None => held.clear(),
                     Some((_reads, writes)) => held.retain(|dest, _| _lanes(dest.register).is_disjoint(&writes)),
                 }

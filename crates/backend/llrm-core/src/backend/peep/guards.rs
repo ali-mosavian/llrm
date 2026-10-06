@@ -98,33 +98,33 @@ pub fn disjoint(_: &Cx, one: Lanes, other: Lanes) -> bool {
     one.is_disjoint(&other)
 }
 
-fn emitted(one: &Insn) -> Option<select::Emitted> {
-    select::emit(one.what.as_ref()?, 0, None, false, false, None)
+fn emitted(bits: u32, one: &Insn) -> Option<select::Emitted> {
+    select::emit_in(bits, one.what.as_ref()?, 0, None, false, false, None)
 }
 
-pub fn encodable(_: &Cx, one: &Arc<Insn>) -> bool {
-    emitted(one).is_some()
+pub fn encodable(cx: &Cx, one: &Arc<Insn>) -> bool {
+    emitted(cx.bits(), one).is_some()
 }
 
 /// Both encode, `after` in no more bytes than `before`.
-pub fn no_longer(_: &Cx, before: &Arc<Insn>, after: &Arc<Insn>) -> bool {
-    matches!((emitted(before), emitted(after)), (Some(before), Some(after)) if after.code.len() <= before.code.len())
+pub fn no_longer(cx: &Cx, before: &Arc<Insn>, after: &Arc<Insn>) -> bool {
+    matches!((emitted(cx.bits(), before), emitted(cx.bits(), after)), (Some(before), Some(after)) if after.code.len() <= before.code.len())
 }
 
 /// Both encode, in as many bytes.
-pub fn same_length(_: &Cx, before: &Arc<Insn>, after: &Arc<Insn>) -> bool {
-    matches!((emitted(before), emitted(after)), (Some(before), Some(after)) if after.code.len() == before.code.len())
+pub fn same_length(cx: &Cx, before: &Arc<Insn>, after: &Arc<Insn>) -> bool {
+    matches!((emitted(cx.bits(), before), emitted(cx.bits(), after)), (Some(before), Some(after)) if after.code.len() == before.code.len())
 }
 
 /// A push of `value` as a dword is more bytes than its two word pushes (`select` sizes both).
-pub fn split_push_smaller(value: i64) -> bool {
+pub fn split_push_smaller(bits: u32, value: i64) -> bool {
     let push = |width: u32, value: i64| {
         let what = ir::Semantics {
             name: Some("push".to_owned()),
             sources: vec![Loc::Imm(Imm { value, width, address: None })],
             ..ir::Semantics::new(Operation::Push)
         };
-        select::emit(&what, 0, None, false, false, None).map(|code| code.code.len())
+        select::emit_in(bits, &what, 0, None, false, false, None).map(|code| code.code.len())
     };
     matches!(
         (push(4, value), push(2, (value >> 16) & 0xFFFF), push(2, value & 0xFFFF)),
@@ -135,12 +135,12 @@ pub fn split_push_smaller(value: i64) -> bool {
 /// Tuned for size, the dword push of `i` is more bytes than its two word pushes. Two pushes
 /// are a clock slower than one, so only there.
 pub fn splits_smaller(cx: &Cx, i: &Imm) -> bool {
-    cx.cpu().size && i.width == 4 && i.address.is_none() && split_push_smaller(i.value)
+    cx.cpu().size && i.width == 4 && i.address.is_none() && split_push_smaller(cx.bits(), i.value)
 }
 
 /// Two word pushes join into one dword push unless tuned for size and the dword is longer.
 pub fn joins_no_larger(cx: &Cx, high: &Imm, low: &Imm) -> bool {
-    !cx.cpu().size || !split_push_smaller(((high.value & 0xFFFF) << 16) | (low.value & 0xFFFF))
+    !cx.cpu().size || !split_push_smaller(cx.bits(), ((high.value & 0xFFFF) << 16) | (low.value & 0xFFFF))
 }
 
 /// The target prices `add r,r` below `shl r,1`.
@@ -214,26 +214,26 @@ pub fn independent(_: &Cx, first: &Insn, one: &Arc<Insn>) -> bool {
 /// instruction in `crossed` that observes or replaces a lane it newly
 /// writes. Source frontends batch their entry loads, so independent
 /// parameter loads commonly stand between a load and its extension.
-pub fn hoistable(_: &Cx, made: &Arc<Insn>, first: &Insn, crossed: &[Arc<Insn>]) -> bool {
+pub fn hoistable(cx: &Cx, made: &Arc<Insn>, first: &Insn, crossed: &[Arc<Insn>]) -> bool {
     if crossed.is_empty() {
         // Nothing to cross. Asking anyway refused every unrolled clone,
         // whose effects `_register_effects` will not read.
         return true;
     }
-    let (Some(original), Some(combined)) = (_register_effects(first, false, true), _register_effects(made, false, true)) else {
+    let (Some(original), Some(combined)) = (_register_effects(cx.bits(), first, false, true), _register_effects(cx.bits(), made, false, true)) else {
         return false;
     };
     let newly_written: Lanes = combined.1.minus(&original.1);
-    crossed.iter().all(|one| match _register_effects(one, false, true) {
+    crossed.iter().all(|one| match _register_effects(cx.bits(), one, false, true) {
         None => false,
         Some((reads, writes)) => !newly_written.iter().any(|lane| reads.contains(lane) || writes.contains(lane)),
     })
 }
 
 /// `one` writes neither register and does not read the temporary `t`.
-pub fn clear_of(_: &Cx, t: Reg, s: Reg, one: &Arc<Insn>) -> bool {
+pub fn clear_of(cx: &Cx, t: Reg, s: Reg, one: &Arc<Insn>) -> bool {
     let (temporary, source) = (_lanes(t.register), _lanes(s.register));
-    _register_effects(one, true, false)
+    _register_effects(cx.bits(), one, true, false)
         .is_some_and(|(reads, writes)| reads.is_disjoint(&temporary) && writes.is_disjoint(&temporary.or(&source)))
 }
 
@@ -275,7 +275,7 @@ pub fn delays(cx: &Cx, load: &Insn, crossed: &Arc<Insn>) -> bool {
         return false;
     }
     let (Some((load_reads, load_writes)), Some((crossed_reads, crossed_writes))) =
-        (_register_effects(load, false, true), _register_effects(crossed, false, true))
+        (_register_effects(cx.bits(), load, false, true), _register_effects(cx.bits(), crossed, false, true))
     else {
         return false;
     };
