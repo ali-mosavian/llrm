@@ -1,0 +1,9 @@
+[package]
+name = "llrm-elf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "llrm's ELF relocatable container: sections, symbols and relocations, for a machine that names its relocation types"
+
+[dependencies]
+llrm-object = { workspace = true }

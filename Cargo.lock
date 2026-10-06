@@ -272,7 +272,10 @@ dependencies = [
  "indexmap",
  "llrm-analysis",
  "llrm-bcmachine",
+ "llrm-elf32",
+ "llrm-elf64",
  "llrm-hir",
+ "llrm-macho",
  "llrm-mir",
  "llrm-object",
  "llrm-omf",
@@ -283,6 +286,7 @@ dependencies = [
  "llrm-transforms",
  "llrm-x86",
  "llrm-x86-m16",
+ "llrm-x86-m32",
  "num-bigint",
  "num-traits",
  "regex",
@@ -307,6 +311,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-elf"
+version = "0.1.0"
+dependencies = [
+ "llrm-object",
+]
+
+[[package]]
+name = "llrm-elf32"
+version = "0.1.0"
+dependencies = [
+ "llrm-elf",
+ "llrm-object",
+]
+
+[[package]]
+name = "llrm-elf64"
+version = "0.1.0"
+dependencies = [
+ "llrm-elf",
+ "llrm-object",
+ "tempfile",
+]
+
+[[package]]
 name = "llrm-hir"
 version = "0.1.0"
 dependencies = [
@@ -323,6 +351,14 @@ dependencies = [
  "iced-x86",
  "llrm-omf",
  "llrm-support",
+]
+
+[[package]]
+name = "llrm-macho"
+version = "0.1.0"
+dependencies = [
+ "llrm-object",
+ "tempfile",
 ]
 
 [[package]]
@@ -343,6 +379,7 @@ dependencies = [
  "llrm-target",
  "llrm-transforms",
  "llrm-x86-m16",
+ "llrm-x86-m32",
  "num-bigint",
  "num-traits",
  "regex",
@@ -536,6 +573,8 @@ name = "qbfront"
 version = "0.1.0"
 dependencies = [
  "buildprs",
+ "llrm-core",
+ "llrm-driver",
  "llrm-hir",
  "llrm-qbruntime",
 ]

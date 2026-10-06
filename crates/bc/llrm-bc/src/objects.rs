@@ -18,7 +18,6 @@ use llrm_mir::{CastOp, Constant, ConstantExpr, ConstantId, ConstantKind, GlobalI
 use llrm_mir::program::SegmentLayout;
 
 use crate::machine::Facts;
-use crate::{FAR, SEGMENT};
 
 /// What DGROUP is carved by: the program's segment layout -- DGROUP's
 /// segments, the COMMON ones other modules share, the code segment, whether
@@ -100,6 +99,8 @@ pub struct Object {
 
 #[derive(Clone, Debug, Default)]
 pub struct Objects {
+    /// The address spaces of the target the objects are recompiled for.
+    spaces: llrm_mir::spaces::Spaces,
     /// Each DGROUP segment's objects, by start.
     segments: BTreeMap<i64, BTreeMap<i64, Object>>,
     /// Each EXTDEF's global, by its index.
@@ -198,11 +199,11 @@ impl Objects {
         self.segments.iter().filter(|(segment, _)| !self.far.contains(segment)).flat_map(|(_, objects)| objects.values()).next()
     }
 
-    pub fn build(carving: &Carving, found: &module::Module, module: &mut Module) -> Result<Objects, String> {
+    pub fn build(carving: &Carving, found: &module::Module, module: &mut Module, spaces: llrm_mir::spaces::Spaces) -> Result<Objects, String> {
         let records = &found.records;
         let segments = omf::segments(records);
         let externals = omf::externals(records);
-        let mut objects = Objects { dgroup: carving.dgroup.clone(), stack_in_data: carving.stack_in_data, ..Objects::default() };
+        let mut objects = Objects { dgroup: carving.dgroup.clone(), stack_in_data: carving.stack_in_data, spaces, ..Objects::default() };
         for (index, name) in externals.iter().enumerate().skip(1) {
             // BC calls a procedure of its own through an EXTDEF of its name.
             if let Some(defined) = module.named(name) {
@@ -238,7 +239,7 @@ impl Objects {
             let byte = module.context.types.int(8);
             let variable = GlobalVariable { ty: byte, constant: true, initializer: None, align: None };
             let global = add_unique(module, name, |module, named| module.add_variable(named, variable.clone(), Linkage::External));
-            module.globals[global.0 as usize].address_space = FAR;
+            module.globals[global.0 as usize].address_space = spaces.far;
             objects.bases.insert(code, (global, module.reference(global)));
         }
         let mut carved: Vec<(i64, i64, i64, Option<String>)> = Vec::new();
@@ -283,7 +284,7 @@ impl Objects {
             let named = name.clone().unwrap_or_default();
             let global = add_unique(module, &named, |module, one| module.add_variable(one, variable.clone(), linkage));
             if objects.far.contains(segment) {
-                module.globals[global.0 as usize].address_space = FAR;
+                module.globals[global.0 as usize].address_space = spaces.far;
             }
             let reference = module.reference(global);
             objects.segments.entry(*segment).or_default().insert(*start, Object { start: *start, end: *end, global, reference });
@@ -347,7 +348,7 @@ impl Objects {
                 }
                 other => return Err(format!("a data relocation to a {other}")),
             };
-            let far = context.types.ptr(FAR);
+            let far = context.types.ptr(self.spaces.far);
             members.push(match relocation.loc {
                 // A near offset into a far segment is its far pointer as `i16`.
                 omf::LOC_OFF16 if context.get(target).ty == far => {
@@ -355,10 +356,10 @@ impl Objects {
                     context.constant(Constant { ty: word, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value: target }) })
                 }
                 omf::LOC_OFF16 => target,
-                omf::LOC_PTR32 => cast(context, CastOp::AddrSpaceCast, target, FAR),
+                omf::LOC_PTR32 => cast(context, CastOp::AddrSpaceCast, target, self.spaces.far),
                 omf::LOC_BASE => {
-                    let far = cast(context, CastOp::AddrSpaceCast, target, FAR);
-                    cast(context, CastOp::AddrSpaceCast, far, SEGMENT)
+                    let far = cast(context, CastOp::AddrSpaceCast, target, self.spaces.far);
+                    cast(context, CastOp::AddrSpaceCast, far, crate::segment(&self.spaces))
                 }
                 other => return Err(format!("a data relocation of kind {other}")),
             });

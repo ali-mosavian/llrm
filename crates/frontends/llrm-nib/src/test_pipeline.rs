@@ -27,7 +27,7 @@ fn _stack_of(fixture: &str) -> Result<(String, Vec<u8>), String> {
     let program = nib::parsed(&nib::fixture(&format!("{fixture}.nib")));
     let options = nib::O2();
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os)?;
-    let object = crate::compile::object(&module, &nib::fixture(&format!("{fixture}.nib")), llrm_core::backend::objbuild::CodeLayout::OneSegment)?;
+    let object = crate::compile::object(&module, &nib::fixture(&format!("{fixture}.nib")), llrm_core::backend::objbuild::CodeLayout::OneSegment, llrm_target::object::Format::Omf)?;
     Ok((llrm_core::backend::masm::text(&module).expect("prints"), object))
 }
 
@@ -107,7 +107,7 @@ fn test_the_stack_check_names_what_the_nib_runtime_defines() {
     assert!(runtime("os.asm").contains(&format!("public {}", check.limit)) && runtime("start.asm").contains(&format!("mov {}, ax", check.limit)));
     assert!(runtime("errors.nib").contains(&format!("@export(name=\"{}\")", check.handler)));
     // The limit sits the reserve `stack_to_add` leaves above the stack's bottom.
-    assert!(runtime("start.asm").contains(&format!("add ax, {}", llrm_core::backend::stackusage::STACK_RESERVE)));
+    assert!(runtime("start.asm").contains(&"add ax, STACK_RESERVE".to_owned()));
     let mut program = nib::parsed(&nib::fixture("sum.nib"));
     program.stack_check = Some(llrm_core::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check });
     let sum = _procedure(&nib::listing(&program, "sum", &nib::O2()), "_sum");
@@ -126,7 +126,7 @@ fn test_a_loop_admitted_on_a_tie_in_counted_bytes_does_not_grow_the_object() {
     let program = nib::parsed(&source);
     let options = nib::level("Os");
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
-    let object = crate::compile::object(&module, &source, llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("an object").len();
+    let object = crate::compile::object(&module, &source, llrm_core::backend::objbuild::CodeLayout::OneSegment, llrm_target::object::Format::Omf).expect("an object").len();
     // 2517 bytes before the loop was admitted on the tie; 2532 with it.
     assert!(object <= 2517, "{object} bytes");
 }
@@ -256,4 +256,17 @@ fn test_a_module_names_the_targets_physical_addresses() {
     let executed = llrm_core::hir::execute::run(&llrm_core::hir::codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
     assert_eq!(executed.output, "753664\n");
     assert!(crate::Frontend { physical: Vec::new(), ..crate::real_mode() }.physical_constants().is_empty());
+}
+
+/// The reserve below the deepest chain was `STACK_RESERVE = 512` in the compiler and a `512` in each start-up: the OS layer
+/// states it once (`os.toml`), the compiler reads it and the assembler is told it, and no start-up has a number of its own.
+#[test]
+fn the_stack_reserve_is_the_os_layers_and_no_startup_names_one() {
+    use llrm_target::Target;
+    for (target, start) in [(&llrm_x86_m16::M16 as &dyn Target, "runtime/shared/dos/m16/start.asm"), (&llrm_x86_m32::M32, "runtime/shared/dos/m32/start.asm")] {
+        let os = crate::Os::for_target(target).unwrap();
+        assert_eq!(os.stack_reserve, target.os_layer().unwrap().integer("stack_reserve").unwrap());
+        let text = std::fs::read_to_string(std::path::Path::new(env!("LLRM_ROOT")).join(start)).unwrap();
+        assert!(text.contains("STACK_RESERVE") && !text.contains("512"), "{start}");
+    }
 }

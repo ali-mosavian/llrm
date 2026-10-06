@@ -11,6 +11,8 @@ use llrm_object::{Arch, Binding, Definition, Kind, Object, OmfGroup, Reloc, Role
 
 use crate::support::hash::IndexMap;
 
+use llrm_target::object::Format;
+
 use crate::backend::masm;
 use crate::objectfile::omf;
 use crate::backend::select;
@@ -26,7 +28,7 @@ pub const OFFSET32: Kind = Kind::Abs { width: 4 };
 
 /// A call's field: relative to its own end.
 fn relative(width: usize) -> Kind {
-    Kind::PcRel { width, from: width }
+    Kind::Branch { width }
 }
 
 /// The role of a data segment `name` that the object's classes name, and that it is otherwise.
@@ -72,6 +74,8 @@ pub enum Error {
     Unencodable(Unencodable),
     Value(omf::ValueError),
     Survived(Survived),
+    /// The object says something its format cannot.
+    Unsupported(llrm_object::Unsupported),
 }
 
 impl fmt::Display for Error {
@@ -81,6 +85,7 @@ impl fmt::Display for Error {
             Error::Unencodable(one) => one.fmt(formatter),
             Error::Value(one) => formatter.write_str(&one.0),
             Error::Survived(one) => one.fmt(formatter),
+            Error::Unsupported(one) => one.fmt(formatter),
         }
     }
 }
@@ -96,6 +101,12 @@ impl From<masm::Unprintable> for Error {
 impl From<Unencodable> for Error {
     fn from(one: Unencodable) -> Self {
         Error::Unencodable(one)
+    }
+}
+
+impl From<llrm_object::Unsupported> for Error {
+    fn from(one: llrm_object::Unsupported) -> Self {
+        Error::Unsupported(one)
     }
 }
 
@@ -349,7 +360,21 @@ pub fn written(module: &masm::Module, source: &str) -> Result<Vec<u8>, Error> {
 }
 
 pub fn written_as(module: &masm::Module, source: &str, layout: CodeLayout) -> Result<Vec<u8>, Error> {
-    llrm_support::debug::timed("omf write", || llrm_omf::write::write(&built_inner(module, source, layout)?).map_err(Error::from))
+    written_in(module, source, layout, Format::Omf)
+}
+
+/// `module` as an object file of `format`.
+pub fn written_in(module: &masm::Module, source: &str, layout: CodeLayout, format: Format) -> Result<Vec<u8>, Error> {
+    llrm_support::debug::timed("object write", || {
+        let object = built_inner(module, source, layout)?;
+        match format {
+            Format::Omf => Ok(llrm_omf::write::write(&object)?),
+            Format::Elf if object.arch == Arch::I386 => Ok(llrm_elf32::write(&object)?),
+            Format::Elf if object.arch == Arch::X8664 => Ok(llrm_elf64::write(&object)?),
+            Format::MachO if object.arch == Arch::X8664 => Ok(llrm_macho::write(&object)?),
+            Format::Elf | Format::MachO => Err(Error::Unsupported(llrm_object::Unsupported(format!("no {} writer for {:?} yet", format.name(), object.arch)))),
+        }
+    })
 }
 
 /// `module` laid out as an object.

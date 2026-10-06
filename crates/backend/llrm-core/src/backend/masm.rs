@@ -1361,7 +1361,7 @@ mod tests {
     #[test]
     fn test_a_listing_opens_with_its_targets_header() {
         let module = Module {
-            object: llrm_target::object::ObjectFormat { writer: "omf".into(), bitness: 32, header: vec![".386".to_owned(), ".model flat".to_owned()] },
+            object: llrm_target::object::ObjectFormat { formats: vec![llrm_target::object::Format::Omf], default: llrm_target::object::Format::Omf, bitness: 32, header: vec![".386".to_owned(), ".model flat".to_owned()] },
             code: "T_TEXT".into(),
             names: no_names(),
             externs: Vec::new(),

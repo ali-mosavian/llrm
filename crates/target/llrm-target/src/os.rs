@@ -91,6 +91,11 @@ impl Layer {
         self.text.parse().map_err(|error: toml::de::Error| format!("os.toml: {error}"))
     }
 
+    /// The integer field `key` of `os.toml`.
+    pub fn integer(&self, key: &str) -> Result<i64, String> {
+        self.table()?.get(key).and_then(toml::Value::as_integer).ok_or_else(|| format!("the OS layer has no integer {key}"))
+    }
+
     pub fn string(&self, key: &str) -> Result<String, String> {
         self.table()?.get(key).and_then(|one| one.as_str()).map(str::to_owned).ok_or_else(|| format!("os.toml has no string {key}"))
     }

@@ -182,7 +182,7 @@ pub fn main(argv: &[String]) -> i32 {
         let bytes = if args.flags.assembly {
             masm::text(&module).map_err(|error| error.to_string())?.into_bytes()
         } else {
-            nib::object(&module, &args.source, args.layout)?
+            nib::object(&module, &args.source, args.layout, args.flags.format(&*args.codegen.arch)?)?
         };
         llrm_core::support::debug::timed("write output", || std::fs::write(&output, &bytes)).map_err(|error| error.to_string())?;
         println!("{} ({} bytes)", output.display(), bytes.len());
@@ -214,6 +214,7 @@ mod tests {
         fn stack_slot_bytes(&self) -> i64 { self.0.stack_slot_bytes() }
         fn frame_register(&self) -> iced_x86::Register { self.0.frame_register() }
         fn first_argument_offset(&self, far: bool) -> i64 { self.0.first_argument_offset(far) }
+        fn return_address_bytes(&self, far: bool) -> i64 { self.0.return_address_bytes(far) }
         fn results(&self, width: u32) -> Vec<iced_x86::Register> { self.0.results(width) }
         fn stack_pointer(&self) -> iced_x86::Register { self.0.stack_pointer() }
         fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)> { self.0.callee_saved() }

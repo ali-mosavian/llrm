@@ -40,7 +40,7 @@ pub fn assembled(program: &model::Program, entry: &str, options: &llrm_core::dri
         None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
     }
     let mut compiled = llrm_core::driver::compiled(&public, options)?.swap_remove(0);
-    compiled.stack = llrm_core::backend::stackusage::stack_to_add(&compiled, os.stack_base, llrm_core::backend::stackusage::stack_limit(options.arch.layout().segment_bytes()))?;
+    compiled.stack = llrm_core::backend::stackusage::stack_to_add(&compiled, os.stack_base, os.stack_reserve, llrm_core::backend::stackusage::stack_limit(options.arch.layout().segment_bytes()), &*options.arch)?;
     Ok(compiled)
 }
 
@@ -61,9 +61,9 @@ pub fn machine(target: &dyn llrm_target::Target, os: &crate::Os) -> llrm_core::a
     llrm_core::abi::machine::Machine { far_bss: os.far_bss, ..target.machine() }
 }
 
-/// `module` as an OMF object, its code laid out as `layout` says.
-pub fn object(module: &masm::Module, source: &Path, layout: objbuild::CodeLayout) -> Result<Vec<u8>, String> {
+/// `module` as an object file of `format`, its code laid out as `layout` says.
+pub fn object(module: &masm::Module, source: &Path, layout: objbuild::CodeLayout, format: llrm_target::object::Format) -> Result<Vec<u8>, String> {
     let name = source.file_name().map(|one| one.to_string_lossy().into_owned()).unwrap_or_default();
-    objbuild::written_as(module, &name, layout).map_err(|error| error.to_string())
+    objbuild::written_in(module, &name, layout, format).map_err(|error| error.to_string())
 }
 

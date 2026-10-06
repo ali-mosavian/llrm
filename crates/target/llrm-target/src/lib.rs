@@ -119,6 +119,10 @@ pub trait Target {
     /// frame register and the return address, which a far call makes longer.
     fn first_argument_offset(&self, far: bool) -> i64;
 
+    /// What a call leaves on the stack before the callee's frame: the return address, which a far call
+    /// makes longer.
+    fn return_address_bytes(&self, far: bool) -> i64;
+
     /// The registers a result of `width` bytes leaves in, low part first.
     fn results(&self, width: u32) -> Vec<iced_x86::Register>;
 
