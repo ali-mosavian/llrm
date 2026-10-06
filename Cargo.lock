@@ -330,6 +330,7 @@ dependencies = [
  "llrm-driver",
  "llrm-hir",
  "llrm-mir",
+ "llrm-target",
  "llrm-transforms",
  "llrm-x86-code16",
  "num-bigint",

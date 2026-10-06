@@ -72,7 +72,7 @@ impl FunctionCompiler<'_> {
     /// Panics unless the float `value` truncates into the integer `target`:
     /// strictly between its minimum less one and its maximum plus one.
     pub(super) fn check_truncation(&mut self, value: &hir::Operand, source: TypeName, target: TypeName, span: Span) -> Result<(), Diagnostic> {
-        let bits = 8 * width(target);
+        let bits = 8 * width(self.types.sizes, target);
         let signed = matches!(target, TypeName::I8 | TypeName::I16 | TypeName::I32);
         let (minimum, maximum) = if signed { (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1) } else { (0, (1i64 << bits) - 1) };
         // An f32 holds no value strictly between -2^31 - 1 and -2^31.

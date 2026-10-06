@@ -71,6 +71,23 @@ impl llrm_target::Target for Code16 {
         layout()
     }
 
+    fn conventions(&self) -> &'static [&'static str] {
+        &["cdecl16", "pascal16", "interrupt16", "qb45", "pds71", "vbdos"]
+    }
+
+    fn runtime(&self, language: &str) -> Option<llrm_target::runtime::Description> {
+        (language == "nib").then_some(llrm_target::runtime::Description {
+            directory: concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/nib"),
+            text: include_str!("../runtime/nib/nib.toml"),
+            files: &[
+                ("os.nib", include_str!("../runtime/nib/os.nib")),
+                ("start.asm", include_str!("../runtime/nib/start.asm")),
+                ("dos.asm", include_str!("../runtime/nib/dos.asm")),
+                ("stack.toml", include_str!("../runtime/nib/stack.toml")),
+            ],
+        })
+    }
+
     /// A byte is pushed as a word.
     fn stack_slot_bytes(&self) -> i64 {
         2

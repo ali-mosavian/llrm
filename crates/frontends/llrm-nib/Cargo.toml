@@ -9,6 +9,8 @@ description = "The Nib language frontend and language server"
 llrm-core = { workspace = true }
 llrm-driver = { workspace = true }
 llrm-mir = { workspace = true }
+llrm-target = { workspace = true }
+llrm-x86-code16 = { workspace = true }
 llrm-transforms = { workspace = true }
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }
@@ -22,7 +24,6 @@ tempfile = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
-llrm-x86-code16 = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-hir = { workspace = true }
 regex = { workspace = true }

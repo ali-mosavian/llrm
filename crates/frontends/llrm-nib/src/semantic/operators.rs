@@ -384,7 +384,7 @@ impl<'a> FunctionCompiler<'a> {
             integer => (integer, 0),
         };
         // Scale in the wider storage, so rescaling up loses nothing it keeps.
-        let work = if width(to_storage) > width(stored.type_name) {
+        let work = if width(self.types.sizes, to_storage) > width(self.types.sizes, stored.type_name) {
             to_storage
         } else {
             stored.type_name
@@ -470,7 +470,7 @@ impl<'a> FunctionCompiler<'a> {
             return self.shifted("shr", value, count, span);
         }
         let type_name = value.type_name;
-        let bits = u8::try_from(8 * width(type_name) - 1).expect("an integer is under 256 bits");
+        let bits = u8::try_from(8 * width(self.types.sizes, type_name) - 1).expect("an integer is under 256 bits");
         let sign = self.shifted("sar", value.clone(), bits, span)?;
         let bias = self.value(type_name);
         self.emit(
@@ -528,7 +528,7 @@ impl<'a> FunctionCompiler<'a> {
             if !is_integer(left.type_name) || !is_integer(right.type_name) {
                 return Err(Diagnostic::new(span, "a shift requires integer operands"));
             }
-            let bits = 8 * width(self.rules.promoted(left.type_name));
+            let bits = 8 * width(self.types.sizes, self.rules.promoted(left.type_name));
             if let Some(hir::Operand::Constant(_, count)) = right.operand {
                 if !(0..i64::from(bits)).contains(&count) {
                     return Err(Diagnostic::new(

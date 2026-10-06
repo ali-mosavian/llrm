@@ -188,6 +188,12 @@ impl LiteralPool {
 }
 
 struct TypeRegistry {
+    /// The bytes of a near and of a far pointer on the target.
+    sizes: crate::Sizes,
+    /// The convention the language's own functions have here: the target's first.
+    native: Abi,
+    /// The names of the conventions the target defines: any other is refused.
+    conventions: Vec<String>,
     types: Vec<hir::Type>,
     arrays: BTreeMap<(u32, Shape), u32>,
     /// Each fixed array type, by id: its element and shape.
@@ -276,8 +282,18 @@ impl ElementType {
 }
 
 impl TypeRegistry {
-    fn new() -> Self {
+    /// The bytes of a pointer of the language: the target's near or far one.
+    pub(super) fn pointer_width(&self, far: bool) -> u8 {
+        u8::try_from(if far { self.sizes.far } else { self.sizes.near }).expect("a pointer is under 256 bytes")
+    }
+
+    /// The language's types, its pointers `sizes` bytes wide, its own functions in the
+    /// convention `native` and the conventions the target defines `conventions`.
+    fn new(sizes: crate::Sizes, native: Abi, conventions: Vec<String>) -> Self {
         Self {
+            sizes,
+            native,
+            conventions,
             types: vec![
                 plain_type(VOID, "void", "void", 0, None, "none"),
                 plain_type(BOOL, "bool", "boolean", 1, Some(false), "none"),
@@ -294,7 +310,7 @@ impl TypeRegistry {
                     id: STRING,
                     name: "string".into(),
                     kind: "pointer",
-                    width: 2,
+                    width: sizes.near,
                     signed: None,
                     evaluation: "none",
                     element: Some(CHAR),
@@ -306,7 +322,7 @@ impl TypeRegistry {
                     id: ADDR,
                     name: "addr".into(),
                     kind: "pointer",
-                    width: 4,
+                    width: sizes.far,
                     signed: None,
                     evaluation: "none",
                     element: Some(U8),
@@ -682,7 +698,7 @@ impl TypeRegistry {
     fn referent_bytes(&self, target: BindingType) -> Option<u32> {
         match target {
             BindingType::Scalar(TypeName::String | TypeName::Vector { .. } | TypeName::Dictionary { .. } | TypeName::Function { .. } | TypeName::Void) => None,
-            BindingType::Scalar(type_name) => Some(width(type_name)),
+            BindingType::Scalar(type_name) => Some(width(self.sizes, type_name)),
             BindingType::Struct(id) => Some(self.width(id)),
             BindingType::Array { element, shape } => Some(shape.len() * self.width(element.id())),
             BindingType::Slice { .. } => None,
@@ -706,7 +722,7 @@ impl TypeRegistry {
             id,
             name,
             kind: "pointer",
-            width: if far { 4 } else { 2 },
+            width: if far { self.sizes.far } else { self.sizes.near },
             signed: None,
             evaluation: "none",
             element: Some(target),
@@ -851,7 +867,7 @@ impl Signature {
     /// The bytes its arguments take on the stack, each at least a word.
     fn argument_bytes(&self, types: &TypeRegistry) -> u32 {
         let hidden = self.result_pointer.map_or(0, |one| types.width(type_id(one)));
-        self.parameters.iter().map(|one| types.width(one.hir_type()).max(2)).sum::<u32>() + hidden
+        self.parameters.iter().map(|one| types.width(one.hir_type()).max(types.sizes.slot)).sum::<u32>() + hidden
     }
 
     /// Whether it takes and gives what `other` does, a value matching a
@@ -1275,7 +1291,7 @@ fn signature(
         slot,
         foreign: false,
         exported: false,
-        abi: Abi::Cdecl16,
+        abi: types.native,
         view,
         method: function.is_method(),
         result_pointer: None,
@@ -1345,7 +1361,7 @@ fn program(
     facts: Option<&RefCell<Vec<Fact>>>,
     frontend: &super::Frontend,
 ) -> Result<hir::Program, Diagnostic> {
-    let mut types = TypeRegistry::new();
+    let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.conventions.clone());
     types.register_fixed_types(&module.fixed_types)?;
     types.register_aggregates(&module.structs, &module.enums)?;
     types.register_drops(&module.functions.iter().collect::<Vec<_>>())?;
@@ -2327,7 +2343,7 @@ fn is_float_literal(expression: &Expr) -> bool {
 
 /// `value`'s low bits as `target` reads them.
 fn wrapped(value: i64, target: TypeName) -> i64 {
-    let bits = 8 * width(target);
+    let bits = 8 * scalar_width(target);
     let low = value & ((1_i64 << bits) - 1);
     if is_signed(target) && low >> (bits - 1) != 0 {
         low - (1_i64 << bits)
@@ -2434,15 +2450,25 @@ fn type_id(type_name: TypeName) -> u32 {
     }
 }
 
-pub(crate) fn width(type_name: TypeName) -> u32 {
+/// What `type_name` takes, a pointer of the target being `sizes` wide.
+pub(crate) fn width(sizes: crate::Sizes, type_name: TypeName) -> u32 {
+    match type_name {
+        TypeName::String | TypeName::Vector { .. } | TypeName::Dictionary { .. } | TypeName::Function { .. } => sizes.near,
+        TypeName::Addr => sizes.far,
+        other => scalar_width(other),
+    }
+}
+
+/// The width of a type that is no pointer: an integer, a float, a fixed-point, an enum, a
+/// bits struct.
+pub(crate) fn scalar_width(type_name: TypeName) -> u32 {
     match type_name {
         TypeName::Void => 0,
         TypeName::Bool | TypeName::Char | TypeName::I8 | TypeName::U8 => 1,
         TypeName::I16 | TypeName::U16 => 2,
         TypeName::I32 | TypeName::U32 | TypeName::F32 => 4,
         TypeName::F64 => 8,
-        TypeName::String | TypeName::Vector { .. } | TypeName::Dictionary { .. } | TypeName::Function { .. } => 2,
-        TypeName::Addr => 4,
+        TypeName::String | TypeName::Vector { .. } | TypeName::Dictionary { .. } | TypeName::Function { .. } | TypeName::Addr => unreachable!("a pointer's width is the target's"),
         TypeName::I64 => 8,
         TypeName::Fixed { storage, .. } => match storage {
             FixedStorage::I16 => 2,
@@ -2484,7 +2510,7 @@ fn type_name_text(type_name: TypeName) -> String {
         TypeName::Dictionary { .. } => "dict".into(),
         TypeName::Function { .. } => "function".into(),
         TypeName::Bits { .. } => "bits struct".into(),
-        TypeName::Pointer { width: 4, .. } => "*far pointer".into(),
+        TypeName::Pointer { far: true, .. } => "*far pointer".into(),
         TypeName::Pointer { .. } => "*near pointer".into(),
     }
 }

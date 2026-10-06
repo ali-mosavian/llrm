@@ -135,7 +135,8 @@ fn visit(
         if loaded.contains_key(&import.module) {
             continue;
         }
-        let source = if standard::supplied(&import.module) {
+        // `std.os` is the runtime's OS layer, which the target says: `read` gives it.
+        let source = if standard::supplied(&import.module) && import.module != "std.os" {
             standard::source(&import.module).map(str::to_owned).ok_or_else(|| "the compiler supplies no such module".to_owned())
         } else {
             read(&import.module)

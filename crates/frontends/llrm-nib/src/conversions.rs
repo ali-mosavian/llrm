@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use super::semantic::is_float;
 use super::semantic::is_integer;
 use super::semantic::is_signed;
-use super::semantic::width;
+use super::semantic::scalar_width;
 use super::syntax::TypeName;
 
 pub struct Rules {
@@ -17,7 +17,7 @@ pub const I386_REAL_MODE: Rules = Rules { int: TypeName::I16 };
 
 impl Rules {
     pub fn promoted(&self, type_name: TypeName) -> TypeName {
-        if is_integer(type_name) && width(type_name) < width(self.int) {
+        if is_integer(type_name) && scalar_width(type_name) < scalar_width(self.int) {
             self.int
         } else {
             type_name
@@ -44,7 +44,7 @@ impl Rules {
             return Some(if wide { TypeName::F64 } else { TypeName::F32 });
         }
         let (promoted_left, promoted_right) = (self.promoted(left), self.promoted(right));
-        Some(match width(promoted_left).cmp(&width(promoted_right)) {
+        Some(match scalar_width(promoted_left).cmp(&scalar_width(promoted_right)) {
             Ordering::Greater => promoted_left,
             Ordering::Less => promoted_right,
             Ordering::Equal if is_signed(promoted_left) == is_signed(promoted_right) => promoted_left,
