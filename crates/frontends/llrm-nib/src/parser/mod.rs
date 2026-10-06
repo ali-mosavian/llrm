@@ -2348,21 +2348,32 @@ fn foreign(attributes: &[Attribute]) -> Result<Option<Foreign>, Diagnostic> {
     Ok(found)
 }
 
-/// The field alignment `@repr("c16", pack=N)` sets, if the attributes give one.
+/// What `@repr("c")` without `pack=` stands for: the most the target's C aligns a field to.
+pub const TARGET_PACK: u32 = 0;
+
+/// The field alignment `@repr("c16", pack=N)` or `@repr("c", pack=N)` sets, if the attributes give
+/// one: `c16` is real mode's layout, `c` the target's own, whose default pack is `TARGET_PACK`.
 fn repr_pack(attributes: &[Attribute]) -> Result<Option<u32>, Diagnostic> {
     let Some(repr) = attributes.iter().find(|one| one.name == "repr") else {
         return Ok(None);
     };
     let mut pack = 2;
+    let mut target = false;
     for argument in &repr.arguments {
         match argument {
-            Expr::String(abi, span) if abi.as_slice() != b"c16" => {
-                return Err(Diagnostic::new(*span, "only the \"c16\" layout is known"));
+            Expr::String(abi, span) if !matches!(abi.as_slice(), b"c16" | b"c") => {
+                return Err(Diagnostic::new(*span, "the layouts known are \"c16\" and \"c\""));
             }
-            Expr::String(..) => {}
+            Expr::String(abi, _) => {
+                target = abi.as_slice() == b"c";
+                if target {
+                    pack = TARGET_PACK;
+                }
+            }
             Expr::NamedArgument { name, value, span } if name == "pack" => match value.as_ref() {
                 Expr::Integer(value @ (1 | 2), _) => pack = *value as u32,
-                _ => return Err(Diagnostic::new(*span, "pack is 1 or 2")),
+                Expr::Integer(4, _) if target => pack = 4,
+                _ => return Err(Diagnostic::new(*span, if target { "pack is 1, 2 or 4" } else { "pack is 1 or 2" })),
             },
             other => {
                 return Err(Diagnostic::new(
