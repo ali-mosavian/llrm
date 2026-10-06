@@ -837,3 +837,17 @@ fn a_body_in_no_cycle_of_calls_is_visited_once() {
     summaries(&procedures, None).unwrap();
     assert!(super::visits() - before >= 2, "a cycle is visited until nothing changes");
 }
+
+/// Each call to something unknown built what it may do besides what its arguments reach (every
+/// tracked global, the callbacks) afresh: `_unknown_visible` was 28% of compiling deedlines, and
+/// `analysis summaries` 12 s of it (#558). Calls to one routine with the same escaped objects are
+/// worked out once.
+#[test]
+fn test_calls_alike_to_something_unknown_are_worked_out_once() {
+    let calls: String = (0..12).map(|_| "  call void @ext(ptr %p)\n".to_owned()).collect();
+    let parsed = Parsed::new(&format!("declare void @ext(ptr)\n\ndefine void @f(ptr %p) {{\nb0:\n{calls}  ret void\n}}\n"));
+    let procedures = IndexMap::from_iter([("f".to_owned(), Procedure::of(parsed.unit()))]);
+    let before = super::other_runs();
+    summaries(&procedures, None).unwrap();
+    assert_eq!(super::other_runs() - before, 1);
+}

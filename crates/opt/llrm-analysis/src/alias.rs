@@ -104,6 +104,11 @@ impl EscapedBefore {
         self.at.get(at).map(|bits| bits.iter().map(|one| self.objects[one].clone()).collect())
     }
 
+    /// What escaped before `at`, unnamed: two instructions with equal bits have the same objects.
+    pub fn bits(&self, at: &InstId) -> Option<&Bits> {
+        self.at.get(at)
+    }
+
     /// Whether the access `reference` at `at`, through a pointer no fact
     /// follows or one only to what escaped, cannot reach `cell`: every byte
     /// of it is in frame objects not escaped before `at`. LLVM's
@@ -421,6 +426,19 @@ fn _borrowed(unit: &Unit, at: InstId, index: usize) -> bool {
 fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual: &[Provenance], callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
     let unit = &procedure.unit;
     let allowed = _allowed(unit, at);
+    let (mut reads, mut writes) = _through_arguments(&allowed, actual);
+    let (other_reads, other_writes) = _unknown_other(unit, facts, at, callbacks)?;
+    if allowed.other.reads {
+        reads.extend(other_reads);
+    }
+    if allowed.other.writes {
+        writes.extend(other_writes);
+    }
+    Ok((reads, writes))
+}
+
+/// What a callee nobody summarized may read and write through each of `actual`, as `allowed` says.
+fn _through_arguments(allowed: &Allowed, actual: &[Provenance]) -> (BTreeSet<Slice>, BTreeSet<Slice>) {
     let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
     for (index, one) in actual.iter().enumerate() {
         let through = allowed.through.get(index).copied().unwrap_or(allowed.arguments);
@@ -432,19 +450,13 @@ fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual:
             writes.extend(objects);
         }
     }
-    let (other_reads, other_writes) = _unknown_other(unit, facts, at, callbacks)?;
-    if allowed.other.reads {
-        reads.extend(other_reads);
-    }
-    if allowed.other.writes {
-        writes.extend(other_writes);
-    }
-    Ok((reads, writes))
+    (reads, writes)
 }
 
 /// What an unsummarized callee may read and write at `at` other than
 /// through its arguments.
 fn _unknown_other(unit: &Unit, facts: &PointsTo, at: InstId, callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
+    OTHER_RUNS.with(|runs| runs.set(runs.get() + 1));
     let mut reads = NONLOCAL.slices.clone();
     reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default()));
     // A port `ports` left reaching memory reaches it as its device does, by
@@ -531,8 +543,15 @@ fn from_integer(unit: &Unit, inst: InstId) -> bool {
 }
 
 thread_local! {
+    static OTHER_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static DIRECT_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out what an unknown call does other than through its
+/// arguments, for a test that calls alike are worked out once.
+pub fn other_runs() -> usize {
+    OTHER_RUNS.with(std::cell::Cell::get)
 }
 
 /// How many direct summaries this thread has made, for a test that a procedure's is made once.
@@ -758,12 +777,38 @@ fn _summarized(
     // What the calls to something unknown may do, all of them together, depends on the facts and on
     // what a call back into the module may do, and on nothing a revisit changes.
     if visit.version != Some(version) {
+        let unit = &procedure.unit;
         let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
-        for at in call_sites(&procedure.unit) {
-            if procedure.calls.get(&at).and_then(|target| _summary(&procedure.unit, result, target)).is_none() {
-                let (read, written) = _unknown_visible(procedure, &facts, at, &_actuals(procedure, &facts, at), callbacks)?;
-                reads.extend(read);
-                writes.extend(written);
+        // What a call may do other than through its arguments depends on its callee and on what escaped
+        // before it, and a body calls the same few routines again and again: each pair is worked out
+        // once, and added to the whole once.
+        let mut others: Vec<(Option<GlobalId>, Option<&Bits>, bool, bool, (BTreeSet<Slice>, BTreeSet<Slice>))> = Vec::new();
+        for at in call_sites(unit) {
+            if procedure.calls.get(&at).and_then(|target| _summary(unit, result, target)).is_some() {
+                continue;
+            }
+            let allowed = _allowed(unit, at);
+            let (read, written) = _through_arguments(&allowed, &_actuals(procedure, &facts, at));
+            reads.extend(read);
+            writes.extend(written);
+            if !(allowed.other.reads || allowed.other.writes) {
+                continue;
+            }
+            let (callee, escaped) = (llrm_mir::memory::callee(unit.context, unit.function, at), facts.escaped_before.bits(&at));
+            match others.iter_mut().find(|(one, bits, ..)| *one == callee && *bits == escaped) {
+                Some((_, _, wants_reads, wants_writes, _)) => {
+                    *wants_reads |= allowed.other.reads;
+                    *wants_writes |= allowed.other.writes;
+                }
+                None => others.push((callee, escaped, allowed.other.reads, allowed.other.writes, _unknown_other(unit, &facts, at, callbacks)?)),
+            }
+        }
+        for (_, _, wants_reads, wants_writes, (other_reads, other_writes)) in others {
+            if wants_reads {
+                reads.extend(other_reads);
+            }
+            if wants_writes {
+                writes.extend(other_writes);
             }
         }
         visit.unknown = (reads, writes);
