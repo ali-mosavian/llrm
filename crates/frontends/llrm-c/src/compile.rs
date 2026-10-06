@@ -135,7 +135,8 @@ pub fn recorded_for(source: &Path, includes: &[String], debug: bool, watcom: &[&
     // Flat: the same switches but the model, packing and Borland's headers. Its structs
     // are laid out as Watcom's 386 does at -zp4 (provisional until the C ABI is chosen
     // with the extender), and cdecl as -ecc.
-    let flat_flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-ecc", "-s", "-zl", "-zq"];
+    let flat_header = format!("-fi={}", root.join("crates/frontends/llrm-c/src/flat.h").display());
+    let flat_flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-ecc", "-s", "-zl", "-zq", flat_header.as_str()];
     let flags: &[&str] = if flat { &flat_flags } else { &medium };
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
@@ -195,7 +196,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     }
     let source = source.ok_or("the following arguments are required: source")?;
     let bound = llrm_driver::target(&flags, &["x86-code16", "x86-code32"])?;
-    let machine = flags.machine(llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..bound.target.machine() })?;
+    let machine = flags.machine(llrm_core::abi::machine::Machine { cpu: bound.target.default_cpu().to_owned(), ..bound.target.machine() })?;
     Ok(Args {
         source,
         dump,
@@ -933,6 +934,17 @@ mod tests {
         let lines = flat_listing("args");
         assert!(lines.iter().filter(|line| line.starts_with("push ")).all(|line| line.split_whitespace().nth(1).is_some_and(|operand| operand.starts_with('e') || operand.starts_with("offset"))), "{lines:#?}");
         assert!(lines.contains(&"add esp, 8".to_owned()), "{lines:#?}");
+    }
+
+    /// Native 32-bit addressing reads whole registers: the pass that zeroed EBP's upper half for a
+    /// cell read 32 bits wide (a 16-bit frame's `[bp]` under 32-bit addressing) wrote `movzx ebp, ebp`
+    /// into a flat frame, and the reserve was 70 bytes, not a multiple of the dword stack.
+    #[test]
+    fn test_code32_keeps_ebp_and_the_dword_stack() {
+        let lines = flat_listing("bytes");
+        assert!(lines.iter().all(|line| !line.starts_with("movzx ebp")), "{lines:#?}");
+        assert!(lines.contains(&"sub esp, 72".to_owned()), "{lines:#?}");
+        assert!(lines.contains(&"mov byte ptr [ebp+eax-70], al".to_owned()), "{lines:#?}");
     }
 
     /// A loop over `int *`: the pointer, the index and the sum are dwords in 32-bit registers,

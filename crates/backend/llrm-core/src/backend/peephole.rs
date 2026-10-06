@@ -168,8 +168,11 @@ impl LIRTransform for Peephole {
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(self.rules, &tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
-        // Last: EBP zeroed above for each cell reading it 32 bits wide.
-        Ok(crate::backend::upperzero::established(&self._frame(body)))
+        // Last: EBP zeroed above for each cell reading it 32 bits wide, where a 32-bit address
+        // is the prefixed form of a 16-bit one. A native one reads whole registers.
+        let body = self._frame(body);
+        let native = self.cpu.dword_address_form().is_some_and(|form| !form.secondary);
+        Ok(if native { body } else { crate::backend::upperzero::established(&body) })
     }
 }
 

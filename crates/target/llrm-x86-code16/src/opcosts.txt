@@ -1,0 +1,81 @@
+# What real-mode code costs by operation: each MIR operation as a sum of the
+# prices of the instruction forms it becomes (`timings.times` has them per CPU).
+# `prefix` is the CPU's operand-size prefix cost: every widened instruction
+# carries a 66h in 16-bit code. A call is a far call and a return a far return;
+# a fill sets ES from the cells' segment and saves it around `rep stos` (and a
+# copy the same, with three registers set), which is the pushes and pops.
+[operations]
+add = alu_rr
+multiply = mul_r16
+divide = div_r16
+shift = shift_ri
+address = lea
+carry = carry(movzx, alu_rr, shift_ri, mov_rr)
+carry_step = step(alu_rr)
+load = mov_rm
+store = mov_mr
+memory_update = alu_mr
+branch = jcc
+prefix = prefix
+move = mov_rr
+call = call_far
+return = ret_far
+argument = mov_mr + mov_rm
+pop = pop_r
+adjust = alu_ri
+return_pops = ret_pop - ret_far
+float_add = x87_add
+float_multiply = x87_mul
+float_divide = x87_div
+float_load = x87_load
+float_store = x87_store
+extend = movzx
+fill = rep_stos + 2*push_r + 2*pop_seg + 2*mov_ri
+fill_cell = rep_stos_cell
+copy = rep_movs + 2*push_r + 2*pop_seg + 3*mov_ri
+copy_cell = rep_movs_cell
+direction = 2*alu_rr
+
+# What each operation comes to in code bytes: the instruction's bytes, twice
+# where an operation becomes more than the instruction (the extensions, copies,
+# address calculations and spill code around it; `-fno-inline-functions`
+# QCport -Os measured against the functions it built, 2 puts the estimate
+# within a few percent). A call, a return, a branch and a stack operation are
+# the instruction itself. A register form is 2 bytes, one with a displacement
+# 3, a far call 5.
+[bytes]
+alu_rr = 4
+mul_r16 = 6
+div_r16 = 6
+shift_ri = 6
+lea = 6
+movzx = 6
+mov_rr = 4
+mov_rm = 6
+mov_mr = 6
+alu_mr = 6
+jcc = 2
+call_far = 5
+ret_far = 1
+pop_r = 1
+alu_ri = 3
+ret_pop = 3
+x87_add = 6
+x87_mul = 6
+x87_div = 6
+x87_load = 6
+x87_store = 6
+rep_stos = 2
+push_r = 1
+pop_seg = 1
+mov_ri = 6
+rep_stos_cell = 0
+rep_movs = 2
+rep_movs_cell = 0
+
+# What differs when the sums are over bytes. A word of argument is its push and
+# its share of the cleanup: 2.1 bytes measured over QCport's calls (5.2 for
+# none, 7.4 for one word, 9.0 for two, 11.1 for three).
+[size]
+prefix = 1
+argument = 2
