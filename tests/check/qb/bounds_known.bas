@@ -1,4 +1,4 @@
-' RUN: llrm-qb %s -O2 --cpu 486 -S -o /dev/stdout
+' RUN: llrm-qb %s -O2 -march=i486 -S -o /dev/stdout
 ' A bound a dominating DIM or REDIM states is that value: a constant, or the
 ' variable it was handed, also across a call. LBOUND and UBOUND read the
 ' descriptor and called B$LBND/B$UBND where it might be unallocated. No load reads the

@@ -40,7 +40,6 @@
 6 crates/backend/llrm-core/src/backend/timing.rs
 1 crates/backend/llrm-core/src/backend/upperzero.rs
 7 crates/backend/llrm-core/src/driver/basic.rs
-3 crates/backend/llrm-core/src/driver/flags.rs
 8 crates/backend/llrm-driver/src/lib.rs
 1 crates/backend/llrm-peepgen/src/table.rs
 1 crates/bc/llrm-bc/examples/gate.rs
@@ -57,7 +56,7 @@
 7 crates/bc/llrm-bc/src/pairs.rs
 2 crates/bc/llrm-bc/src/runtime.rs
 2 crates/bc/llrm-bc/src/sites.rs
-1 crates/bc/llrm-bcdriver/src/lib.rs
+2 crates/bc/llrm-bcdriver/src/lib.rs
 2 crates/bc/llrm-bcmachine/src/abi/callsite.rs
 6 crates/bc/llrm-bcmachine/src/frontends/bc/blocks.rs
 2 crates/bc/llrm-bcmachine/src/frontends/bc/stack.rs
@@ -93,7 +92,7 @@
 9 tools/e2e/mkgolden.py
 1 tools/e2e/qbprint.py
 2 tools/innerloops.py
-13 tools/loops/build.py
+15 tools/loops/build.py
 3 tools/loops/cases/adversarial.py
 5 tools/loops/cases/concurrent.py
 1 tools/loops/cases/cross.py

@@ -1,4 +1,4 @@
-# flags: -O2 --cpu 486 --target x86-code32
+# flags: -O2 -march=i486 -m32
 # The near heap past 64 KB: its sizes, headers and size classes are as wide as the target's near
 # pointer. A 200000-byte block is taken, written at both ends, freed, and taken again where it was;
 # a small one splits off it. heap.nib and errors.nib are the runtime's own (links here).

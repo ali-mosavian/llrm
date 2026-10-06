@@ -9,7 +9,7 @@ use llrm_transforms::pipeline;
 use crate::abi::machine::Machine;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [-m[no-]far-bss] [--clocks-per-byte N] [--cpu CPU] [--machine MACHINE] [--target TARGET] [-fstack-usage] [-Wstack-usage=N] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [-m[no-]far-bss] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,9 +99,6 @@ impl Sanitize {
     }
 }
 
-/// gcc's `-march`/`-mtune` names for the CPUs priced.
-const CPUS: [(&str, &str); 3] = [("i386", "386"), ("i486", "486"), ("pentium", "P5")];
-
 /// The options, as given.
 #[derive(Clone, Debug)]
 pub struct Flags {
@@ -109,10 +106,13 @@ pub struct Flags {
     /// Each `-f` as (index into `PASSES`, on), in order. gcc applies them
     /// over the level wherever they stand.
     passes: Vec<(usize, bool)>,
-    cpu: Option<String>,
+    /// `-march=`: the CPU, by the name the target's `timings.times` gives gcc's.
+    march: Option<String>,
+    /// `-mtune=`: the CPU the code is priced for, where that is not the `-march` one.
+    mtune: Option<String>,
     machine: Option<PathBuf>,
-    /// `--target`: the target to build for, by name.
-    target: Option<String>,
+    /// `-m16`, `-m32`, `-m64`: the target to build for, by the number its description gives.
+    mode: Option<u32>,
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
     far_bss: Option<bool>,
@@ -132,7 +132,7 @@ pub struct Flags {
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, target: None, stack_is_data: None, far_bss: None, milliclocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, stack_usage: false, stack_limit: None }
+        Self { level: Level::O2, passes: Vec::new(), march: None, mtune: None, machine: None, mode: None, stack_is_data: None, far_bss: None, milliclocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, stack_usage: false, stack_limit: None }
     }
 }
 
@@ -162,20 +162,16 @@ impl Flags {
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "-mfar-bss" => self.far_bss = Some(true),
             "-mno-far-bss" => self.far_bss = Some(false),
-            "--cpu" => self.cpu = Some(value("--cpu")?),
             "--clocks-per-byte" => {
                 let text = value("--clocks-per-byte")?;
                 let clocks = text.parse::<f64>().ok().filter(|clocks| clocks.is_finite() && *clocks >= 0.0);
                 self.milliclocks_per_byte = Some((clocks.ok_or_else(|| format!("--clocks-per-byte {text}: expected a number of clocks"))? * 1000.0).round() as i64);
             }
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
-            "--target" => self.target = Some(value("--target")?),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
-            _ if flag.starts_with("-march=") || flag.starts_with("-mtune=") => {
-                let (option, name) = flag.split_once('=').expect("an =");
-                let cpu = CPUS.iter().find(|(gcc, _)| *gcc == name).ok_or_else(|| format!("unknown {option}={name}; choose i386, i486 or pentium"))?;
-                self.cpu = Some(cpu.1.to_owned());
-            }
+            _ if Self::mode_flag(flag).is_some() => self.mode = Self::mode_flag(flag),
+            _ if flag.starts_with("-march=") => self.march = Some(flag["-march=".len()..].to_owned()),
+            _ if flag.starts_with("-mtune=") => self.mtune = Some(flag["-mtune=".len()..].to_owned()),
             "-fstack-usage" => self.stack_usage = true,
             _ if flag.starts_with("-Wstack-usage=") => {
                 let limit = &flag["-Wstack-usage=".len()..];
@@ -199,9 +195,18 @@ impl Flags {
         Ok(true)
     }
 
-    /// The target `--target` named, if any.
-    pub fn target(&self) -> Option<&str> {
-        self.target.as_deref()
+    /// The number `-m16`, `-m32`, `-m64` give: the one parser of the flag.
+    pub fn mode_flag(argument: &str) -> Option<u32> {
+        let digits = argument.strip_prefix("-m")?;
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        digits.parse().ok()
+    }
+
+    /// The `-m` number given, if any: the target whose description names it.
+    pub fn mode(&self) -> Option<u32> {
+        self.mode
     }
 
     /// The pipeline's options: the level's, then each `-f`.
@@ -216,14 +221,27 @@ impl Flags {
         options
     }
 
-    /// `default`, or the `--machine` description, on the CPU named.
-    pub fn machine(&self, default: Machine) -> Result<Machine, String> {
+    /// The CPU `-mtune`, else `-march`, names for `target`, if either is given.
+    fn cpu(&self, target: &dyn llrm_target::Target) -> Result<Option<String>, String> {
+        let (option, name) = match (&self.mtune, &self.march) {
+            (Some(name), _) => ("-mtune", name),
+            (None, Some(name)) => ("-march", name),
+            _ => return Ok(None),
+        };
+        match target.march(name) {
+            Some(cpu) => Ok(Some(cpu.to_owned())),
+            None => Err(format!("unknown {option}={name}; {} has {}", target.name(), target.marches().join(", "))),
+        }
+    }
+
+    /// `default`, or the `--machine` description, on the CPU `-march` or `-mtune` names for `target`.
+    pub fn machine(&self, target: &dyn llrm_target::Target, default: Machine) -> Result<Machine, String> {
         let mut machine = match &self.machine {
             Some(path) => Machine::load(path, &default.cpu)?,
             None => default,
         };
-        if let Some(cpu) = &self.cpu {
-            machine.cpu = cpu.clone();
+        if let Some(cpu) = self.cpu(target)? {
+            machine.cpu = cpu;
         }
         if let Some(stack_is_data) = self.stack_is_data {
             machine.segments.as_mut().ok_or("-mstack-is-data needs a segmented machine")?.stack_is_data = stack_is_data;

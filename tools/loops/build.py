@@ -19,6 +19,16 @@ IA16 = Path(os.environ.get("IA16_ROOT", Path.home() / "work/other/build-ia16"))
 LLVM = Path(os.environ.get("LLVM20", "/usr/lib/llvm-20/bin"))
 
 CPUS = ("386", "486", "P5", "Core")
+
+
+def march(cpu: str) -> str:
+    """The `-march` flag that names `cpu` to llrm: the `march` row of code16's timings.times, one column a CPU."""
+    rows = {}
+    for line in (ROOT / "crates/target/llrm-x86-code16/src/timings.times").read_text().splitlines():
+        columns = line.split()
+        if columns and columns[0] in ("cpus", "march"):
+            rows[columns[0]] = columns[1:]
+    return "-march=" + rows["march"][rows["cpus"].index(cpu)]
 OPTS = ("-O2", "-O3", "-Os")
 EXT = {"c": ".c", "bas": ".bas", "nib": ".nib"}
 
@@ -65,7 +75,7 @@ def llrm(lang: str, source: Path, obj: Path, config: Config, stages: Path | None
         env["LLRM_MIR_STAGES"] = str(stages)
     # no unrolling or peeling: each case keeps one loop to measure, and compiles faster;
     # no inlining unless the config asks: the function under test stays a call, else the driver's constants fold it
-    common = [config.opt, "--cpu", config.cpu, "-fno-unroll-loops", "-fno-peel-loops", "-o", str(obj)]
+    common = [config.opt, march(config.cpu), "-fno-unroll-loops", "-fno-peel-loops", "-o", str(obj)]
     if not config.inline:
         common.insert(-2, "-fno-inline-functions")
     if lang == "c":

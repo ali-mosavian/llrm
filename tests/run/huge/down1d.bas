@@ -1,5 +1,5 @@
 ' dialect: pds71
-' flags: -O2 --cpu 486 --huge-arrays
+' flags: -O2 -march=i486 --huge-arrays
 ' 30000 LONGs (120000 bytes) REDIM'd /AH, summed from the top down.
 DEFINT A-Z
 DECLARE FUNCTION BenchDown1d& ()

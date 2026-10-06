@@ -77,7 +77,7 @@ impl Lab {
         self.assemble(&Path::new(layer.directory).join(layer.string("start").unwrap()), &format!("{name}-start.obj"), &defines);
         self.assemble(&Path::new(c.directory).join(c.string("init_file").unwrap()), &format!("{name}-init.obj"), &defines);
         std::fs::write(self.path("t.c"), PROGRAM).unwrap();
-        self.run("llrm-c", &["-Os", flag, "--cpu", "486", "t.c", "-o", &format!("{name}.obj")]);
+        self.run("llrm-c", &["-Os", flag, "-march=i486", "t.c", "-o", &format!("{name}.obj")]);
         let exe = self.path(&format!("{name}.exe"));
         let (start, init, program) = (format!("{name}-start.obj"), format!("{name}-init.obj"), format!("{name}.obj"));
         self.run("jwlink", &["option", "quiet", "format", "dos", "name", exe.to_str().unwrap(), "file", &start, "file", &init, "file", &program, "file", "ext.obj", "file", "os.obj"]);

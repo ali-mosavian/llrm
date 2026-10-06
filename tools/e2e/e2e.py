@@ -282,14 +282,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="e2e")
     ap.add_argument("config", choices=list(CONFIGS))
     ap.add_argument("--prog")
-    ap.add_argument("--cpu", default=None, help="default: the target's")
+    ap.add_argument("--march", default=None, help="gcc's -march name of the CPU (default: the target's)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--timeout", type=int, default=300)
     args = ap.parse_args(argv)
 
     command = rewriter_command()
     print(f"rewriter: {' '.join(command)}")
-    options = (["--cpu", args.cpu] if args.cpu else []) + (["--dry-run"] if args.dry_run else [])
+    options = ([f"-march={args.march}"] if args.march else []) + (["--dry-run"] if args.dry_run else [])
     change = driver(command, CONFIGS[args.config], *options)
     result = run(args.config, args.prog, timeout=args.timeout, transform=change)
     for v in result.verdicts:

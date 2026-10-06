@@ -94,9 +94,26 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.checked_stack = flags.sanitize.stack;
     let bound = llrm_driver::target(&flags, None)?;
     frontend = super::Frontend { debug: frontend.debug, checked_stack: frontend.checked_stack, unchecked_bounds: frontend.unchecked_bounds, warn_target_width: frontend.warn_target_width, ..super::Frontend::for_target(&*bound.target)? };
-    let codegen = bound.options(&flags, flags.machine(nib::machine(&*bound.target, &frontend.os))?);
+    let codegen = bound.options(&flags, flags.machine(&*bound.target, nib::machine(&*bound.target, &frontend.os))?);
     let os_layer = field.map(|field| bound.target.os_layer().ok_or_else(|| "this target has no OS layer".to_owned()).and_then(|layer| layer.report(&bound.target.runtime("nib").ok_or("this target has no Nib runtime")?, &field)));
     Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen, os_layer, declare })
+}
+
+/// The frontend for the target `-m<N>` among `arguments` names, those arguments taken out of
+/// them: for the tools that run or declare a program and take no other target flag.
+pub fn frontend_with_mode(arguments: &mut Vec<String>) -> Result<super::Frontend, String> {
+    let mut flags = llrm_core::driver::flags::Flags::default();
+    let mut rest = Vec::new();
+    for argument in std::mem::take(arguments) {
+        if llrm_core::driver::flags::Flags::mode_flag(&argument).is_some() {
+            flags.take(&[argument], &mut 0)?;
+        } else {
+            rest.push(argument);
+        }
+    }
+    *arguments = rest;
+    let bound = llrm_driver::target(&flags, None)?;
+    super::Frontend::for_target(&*bound.target)
 }
 
 /// What the target's OS layer says of Nib's runtime; a target without one is refused.
@@ -193,6 +210,8 @@ mod tests {
         fn name(&self) -> &'static str { self.0.name() }
         fn machine(&self) -> llrm_core::abi::machine::Machine { self.0.machine() }
         fn cpus(&self) -> &'static [&'static str] { self.0.cpus() }
+        fn march(&self, name: &str) -> Option<&'static str> { self.0.march(name) }
+        fn marches(&self) -> Vec<&'static str> { self.0.marches() }
         fn layout(&self) -> llrm_target::layout::Layout { self.0.layout() }
         fn stack_slot_bytes(&self) -> i64 { self.0.stack_slot_bytes() }
         fn frame_register(&self) -> iced_x86::Register { self.0.frame_register() }
@@ -213,7 +232,7 @@ mod tests {
         fn object(&self) -> llrm_target::object::ObjectFormat { self.0.object() }
     }
 
-    /// `--target` was a list the frontend kept by hand; a target without a Nib runtime is refused
+    /// `-m` was a list the frontend kept by hand; a target without a Nib runtime is refused
     /// by saying so, whatever else it is.
     #[test]
     fn a_target_without_a_nib_runtime_is_refused_by_that_message() {

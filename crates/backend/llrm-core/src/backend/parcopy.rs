@@ -553,7 +553,7 @@ mod tests {
         assert_eq!(got[got.len() - 1].covers, Some((0x100, 0x102)));
     }
 
-    /// `conc7` at `--cpu Core` was refused ("need a temporary", #106): a slot
+    /// `conc7` at `-march=core2` was refused ("need a temporary", #106): a slot
     /// written from edx and read back into dx as a word is a two-place cycle
     /// no exchange takes, since the places are read at two widths.
     #[test]

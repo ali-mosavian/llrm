@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -O2 --cpu 486 -S -o /dev/stdout
+// RUN: llrm-c %s -O2 -march=i486 -S -o /dev/stdout
 // A loop storing one word that no one byte repeats is one rep stosw.
 // CHECK-LABEL: _fillw proc
 // CHECK: rep stosw

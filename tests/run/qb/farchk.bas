@@ -1,5 +1,5 @@
 ' dialect: pds71
-' flags: -O2 --cpu 486 -fsanitize=bounds,signed-integer-overflow
+' flags: -O2 -march=i486 -fsanitize=bounds,signed-integer-overflow
 ' /D: each subscript is checked against its dimension and an unallocated
 ' array is refused, ERROR 9, as B$HARY checked them, here in code. A LONG
 ' subscript is narrowed to INTEGER first, ERROR 6. The .out is BC /D's.

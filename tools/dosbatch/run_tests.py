@@ -6,13 +6,13 @@ diff stdout with NAME.out.
 
 A header comment holds a program's settings:
 
-    ' flags: -Os --cpu P5      extra compiler flags (default: -O2); `a | b` builds and runs the program once for each
+    ' flags: -Os -march=pentium      extra compiler flags (default: -O2); `a | b` builds and runs the program once for each
     ' dialect: pds71           qb45 (default), pds71 or vbdos: its compiler dialect and runtime; several, blank apart, run once each
     ' link: sortlib.nib        more sources built with it, beside the program (a .nib for BASIC; a .c or .asm for Nib); `@c-runtime` is the target's own file of the routines a program calls and does not define
     ' data: values.dat         a file the program reads, copied beside it; @dickens: a cached corpus, verified (skipped if unavailable)
     ' mask: \d+(?= spins)       text of the output that varies: each match reads as N
     ' known: #123              fails today, tracked by issue 123
-    # targets: x86-code16     a Nib or C program runs on code16 and, unless it says so, on x86-code32 too (same .out, a --target configuration)
+    # targets: x86-code16     a Nib or C program runs on code16 and, unless it says so, on x86-code32 too (same .out, a -m32 configuration)
 
 A known program that passes fails the run: remove its mark.
 """
@@ -87,7 +87,7 @@ def header(source: Path) -> dict[str, str]:
 def configurations(settings: dict[str, str]) -> list[tuple[str, list[str], str]]:
     """Each way a header asks for a program to be built: its label, its `flags:` and its `dialect:`.
 
-    `flags: -O2 | -Os --cpu P5` is two, `dialect: qb45 pds71 vbdos` three, and both make their product; the
+    `flags: -O2 | -Os -march=pentium` is two, `dialect: qb45 pds71 vbdos` three, and both make their product; the
     label names what differs. One of each is one configuration with no label."""
     alternatives = [one.split() for one in settings["flags"].split("|")] if "flags" in settings else [DEFAULT_FLAGS]
     dialects = settings.get("dialect", "qb45").split()
@@ -101,7 +101,7 @@ def configurations(settings: dict[str, str]) -> list[tuple[str, list[str], str]]
 
 def kept_flags(flags: list[str]) -> list[str]:
     """`flags` less the optimization level and cpu, which the caller sets."""
-    return [one for at, one in enumerate(flags) if not one.startswith("-O") and one != "--cpu" and flags[at - 1 : at] != ["--cpu"]]
+    return [one for one in flags if not one.startswith("-O") and not one.startswith(("-march=", "-mtune="))]
 
 
 def compiler_arguments(source: Path, flags: list[str] | None = None, dialect: str | None = None) -> list[str]:
@@ -119,9 +119,9 @@ def discover(selected: list[str]) -> list[Program]:
         if source.suffix in COMPILERS:
             settings = header(source)
             configured = configurations(settings)
-            if source.suffix in (".nib", ".c") and "targets" not in settings and set(settings.get("link", "").split()) <= {dosbatch.C_RUNTIME} and not any("--target" in flags for _, flags, _ in configured):
+            if source.suffix in (".nib", ".c") and "targets" not in settings and set(settings.get("link", "").split()) <= {dosbatch.C_RUNTIME} and not any(dosbatch.target_of(flags, "") for _, flags, _ in configured):
                 # Where a Nib program runs on code32 too, with the same output.
-                configured += [(f"{label}{' ' if label else ''}[{FLAT}]", [*flags, "--target", FLAT], dialect) for label, flags, dialect in configured]
+                configured += [(f"{label}{' ' if label else ''}[{FLAT}]", [*flags, dosbatch.m_flag(FLAT)], dialect) for label, flags, dialect in configured]
             for label, flags, dialect in configured:
                 program = Program(source, flags, settings.get("known"), dialect, tuple(settings.get("link", "").split()), tuple(settings.get("data", "").split()), settings.get("mask", ""), label)
                 if program.out.exists():
@@ -153,7 +153,7 @@ def compile_one(program: Program, obj: Path) -> str | None:
     tool, *rest = COMPILERS[program.source.suffix]
     dialect = ["--dialect", program.dialect, "--runtime", program.dialect] if program.source.suffix == ".bas" else []
     if program.source.suffix == ".c":
-        target = program.flags[program.flags.index("--target") + 1] if "--target" in program.flags else dosbatch.REAL_MODE
+        target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
         dialect = ["-I", str(dosbatch.c_include(target, obj.parent))]
     done = subprocess.run([str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, "-o", str(obj)],
                           capture_output=True, text=True, timeout=300)
@@ -190,7 +190,7 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
     level = program.flags[0] if program.flags else "-O2"
     include = work / f"{stem}_inc"
     include.mkdir(exist_ok=True)
-    declared = subprocess.run([str(BIN / "llrm-nib"), str(program.source), "--declare", "h", "--target", target], capture_output=True, text=True)
+    declared = subprocess.run([str(BIN / "llrm-nib"), str(program.source), "--declare", "h", dosbatch.m_flag(target)], capture_output=True, text=True)
     if declared.returncode != 0:
         raise dosbatch.BuildError("declare: " + declared.stderr.strip())
     (include / f"{program.source.stem}.h").write_text(declared.stdout)
@@ -200,14 +200,14 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
         if source.suffix == ".asm":
             dosbatch.assemble(source, obj)
         else:
-            dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(include), "--target", target, level, "-o", str(obj)])
+            dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(include), dosbatch.m_flag(target), level, "-o", str(obj)])
         objects.append(obj)
     return tuple(objects)
 
 
 def build(program: Program, work: Path, stem: str) -> Job | str:
     """The job that runs `program`, or why it did not build."""
-    target = program.flags[program.flags.index("--target") + 1] if "--target" in program.flags else "x86-code16"
+    target = dosbatch.target_of(program.flags, "x86-code16")
     if program.source.suffix == ".nib" and target != "x86-code16":
         exe, obj = work / f"{stem}.exe", work / f"{stem}.obj"
         done = subprocess.run([str(BIN / "llrm-nib"), str(program.source), *program.flags, "-o", str(obj), "--procedure-segments"], capture_output=True, text=True, timeout=300)
@@ -238,7 +238,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
         return problem
     if program.source.suffix == ".c":
         exe = work / f"{stem}.exe"
-        target = program.flags[program.flags.index("--target") + 1] if "--target" in program.flags else "x86-code16"
+        target = dosbatch.target_of(program.flags, "x86-code16")
         try:
             loaders = dosbatch.link_target(target, obj, exe, work)
             dosbatch.check_loads(exe)
@@ -263,7 +263,7 @@ def main() -> int:
     args = parser.parse_args()
     programs = discover(args.select)
     if args.retarget:
-        programs = [dataclasses.replace(p, flags=[*p.flags, "--target", args.retarget]) for p in programs if p.source.suffix == ".nib" and "--target" not in p.flags]
+        programs = [dataclasses.replace(p, flags=[*p.flags, dosbatch.m_flag(args.retarget)]) for p in programs if p.source.suffix == ".nib" and dosbatch.target_of(p.flags, "") == ""]
     for program in [one for one in programs if unavailable(one)]:
         print(f"SKIP  {program.name}: {unavailable(program)}")
         programs.remove(program)

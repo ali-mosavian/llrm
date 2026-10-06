@@ -4,19 +4,19 @@
 # this against a build of the base, and fails on any DIFF, or STATUS (one build refused what the
 # other accepted). A program both refuse is REFUSED and counts for neither.
 #
-#   tools/identity.sh KIND BASE_BIN NEW_BIN [--target TARGET]
+#   tools/identity.sh KIND BASE_BIN NEW_BIN [-m16|-m32]
 #
 # KIND: nib    llrm-nib over examples/, tests/run/nib, bench/, at -O2 and -Os, procedure segments
 #       c      llrm-c over bench/ and tests/run/c, at -O2
 #       qcport llrm-c over QCport's modules at -O2 and -Os; QCPORT names its src/ and QCPORT_INC the
 #              Borland headers it builds with (neither is in this repository)
-# TARGET is passed to the compiler (default: its own, code16).
+# The -m flag is passed to the compiler (default: its own, code16).
 #
 # Prints a count of each outcome and the programs that are not SAME; exit 1 if any DIFF or STATUS.
 set -u
 kind=${1:?kind: nib, c or qcport}; base=${2:?base compiler}; new=${3:?new compiler}; shift 3
 target=()
-[ "${1:-}" = "--target" ] && target=(--target "${2:?target}")
+case "${1:-}" in -m[0-9]*) target=("$1") ;; esac
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
 export base new out root
