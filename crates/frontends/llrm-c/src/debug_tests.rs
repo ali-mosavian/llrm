@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::rc::Rc;
 
-use llrm_core::backend::omfwrite;
+use llrm_core::backend::objbuild;
 use llrm_core::objectfile::{cvinfo, omf};
 
 /// tests/fixtures/c/debug.cgs, recorded from debug.c (and its debug.h)
@@ -18,9 +18,9 @@ fn object_of(name: &str) -> Vec<Rc<omf::Record>> {
     let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
     // Not inlined: `twice` is a symbol to read.
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(machine) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
     let built = super::compile::selected(&text, name, None, &options).expect("compiles");
-    omf::parse(&omfwrite::written(&built, &format!("{name}.c")).expect("writes")).expect("parses")
+    omf::parse(&objbuild::written(&built, &format!("{name}.c")).expect("writes")).expect("parses")
 }
 
 /// Every parameter, local, static and global with its C type; `(void)`

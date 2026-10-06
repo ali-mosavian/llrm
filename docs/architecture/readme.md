@@ -42,7 +42,7 @@ flowchart LR
         Isel["Instruction selection<br/>crates/backend/llrm-core/src/backend/isel.rs"] --> LIR["LirBody<br/>virtual values + constraints"]
         LIR --> Machine["Machine phases<br/>crates/backend/llrm-core/src/flow.rs"]
         Machine --> Physical["Allocated LIR<br/>physical registers + frame slots"]
-        Physical --> Write["Layout, fresh OMF<br/>crates/backend/llrm-core/src/backend/masm.rs, omfwrite.rs"]
+        Physical --> Write["Layout, fresh OMF<br/>crates/backend/llrm-core/src/backend/masm.rs, objbuild.rs"]
     end
 
     Write -->|"OMF .OBJ"| Link["LINK.EXE"]
@@ -408,7 +408,7 @@ the MIR boundary.
 | `allocate.py` | `RegAllocGreedy` + `VirtRegRewriter` | IRA + LRA |
 | `spiller.py` | `InlineSpiller` | LRA spill/reload insertion |
 | `prologue.py` | `PrologEpilogInserter` | prologue/epilogue RTL passes |
-| `asm.py`, `select.py`, `omfwrite.py` | MC assembler, code emitter and object writer | final / assembler output |
+| `asm.py`, `select.py`, `objbuild.py` | MC assembler, code emitter and object writer | final / assembler output |
 
 Machine-specific ideas copied from either compiler belong in lowering, target
 description, allocation or peephole. Their high-level proofs and value
@@ -427,7 +427,7 @@ flowchart TD
     Tables["inline tables and preserved padding"] --> Layout
     Layout --> Image["new code image + movement map"]
 
-    Frontend["BC object declarations,<br/>data, symbols and relocations"] --> Write["omfwrite.py<br/>fresh OMF serialization"]
+    Frontend["BC object declarations,<br/>data, symbols and relocations"] --> Write["objbuild.py<br/>fresh OMF serialization"]
     Image --> Write
     Write --> Fix["emit explicit FIXUPP sites and zero addends"]
     Write --> Symbols["emit moved PUBDEF and LINNUM offsets"]
@@ -447,7 +447,7 @@ Important invariants:
 - LINK adds the encoded addend to a fixup target, so a generated relocated field
   is zero-filled before its fixup is applied.
 - A branch target may not land inside a replaced region.
-- A phi reaching `omfwrite` is a hard bug: phis have no encoding.
+- A phi reaching `objbuild` is a hard bug: phis have no encoding.
 
 Layout and selection consume `LirBody` directly. There is no LIR-to-MIR
 back-conversion or duplicate assignment channel in the production emitter;
@@ -473,7 +473,7 @@ flowchart TD
     Analysis --> Mir
     Core["llrm-core<br/>driver, isel, machine phases, OMF writing"] --> Trans
     Core --> Mir
-    Core --> Target["llrm-x86-code16<br/>target description and costs"]
+    Core --> Target["llrm-x86-m16<br/>target description and costs"]
     Core --> Obj["llrm-omf<br/>OMF records, modules, CodeView"]
     Target --> Mir
 ```

@@ -27,13 +27,13 @@ use std::collections::BTreeMap;
 pub use llrm_hir::mir::RUNTIME;
 
 /// BC objects are real mode's: its far and selector address spaces, which
-/// `llrm_x86_code16::layout()` states (a test holds them equal).
+/// `llrm_x86_m16::layout()` states (a test holds them equal).
 pub const FAR: u32 = 1;
 pub const SEGMENT: u32 = 2;
 
 /// Real mode's data layout string.
 pub fn datalayout() -> String {
-    llrm_x86_code16::layout().datalayout
+    llrm_x86_m16::layout().datalayout
 }
 use llrm_target::machine::Machine;
 use llrm_bcmachine::frontends::bc::blocks::has_header;
@@ -252,7 +252,7 @@ mod layout_tests {
     /// The consts BC matches on are what real mode's description says.
     #[test]
     fn test_bc_spaces_are_real_modes_description() {
-        let spaces = llrm_x86_code16::layout().spaces;
+        let spaces = llrm_x86_m16::layout().spaces;
         assert_eq!((super::FAR, Some(super::SEGMENT)), (spaces.far, spaces.segment));
     }
 }

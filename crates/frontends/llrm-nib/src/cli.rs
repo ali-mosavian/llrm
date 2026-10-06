@@ -20,7 +20,7 @@ use super::compile as nib;
 use super::driver;
 use super::nibstages;
 use llrm_core::backend::masm;
-use llrm_core::backend::omfwrite::CodeLayout;
+use llrm_core::backend::objbuild::CodeLayout;
 use llrm_core::driver::{self as codegen, flags::{self, Flags}};
 
 fn usage() -> String {
@@ -203,8 +203,8 @@ pub fn main(argv: &[String]) -> i32 {
 mod tests {
     use llrm_target::Target;
 
-    /// Code16 without its Nib runtime: what a target not yet given one is.
-    struct Bare(llrm_x86_code16::Code16);
+    /// M16 without its Nib runtime: what a target not yet given one is.
+    struct Bare(llrm_x86_m16::M16);
 
     impl Target for Bare {
         fn name(&self) -> &'static str { self.0.name() }
@@ -236,8 +236,8 @@ mod tests {
     /// by saying so, whatever else it is.
     #[test]
     fn a_target_without_a_nib_runtime_is_refused_by_that_message() {
-        let error = super::nib_os(&Bare(llrm_x86_code16::Code16)).expect_err("refused");
-        assert_eq!(error, "target x86-code16 has no Nib runtime");
-        assert!(super::nib_os(&llrm_x86_code16::Code16).is_ok());
+        let error = super::nib_os(&Bare(llrm_x86_m16::M16)).expect_err("refused");
+        assert_eq!(error, "target x86-m16 has no Nib runtime");
+        assert!(super::nib_os(&llrm_x86_m16::M16).is_ok());
     }
 }

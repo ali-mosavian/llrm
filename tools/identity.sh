@@ -10,7 +10,7 @@
 #       c      llrm-c over bench/ and tests/run/c, at -O2
 #       qcport llrm-c over QCport's modules at -O2 and -Os; QCPORT names its src/ and QCPORT_INC the
 #              Borland headers it builds with (neither is in this repository)
-# The -m flag is passed to the compiler (default: its own, code16).
+# The -m flag is passed to the compiler (default: its own, m16).
 #
 # Prints a count of each outcome and the programs that are not SAME; exit 1 if any DIFF or STATUS.
 set -u

@@ -504,14 +504,14 @@ mod tests {
     }
 
     fn allocated(body: &LirBody, pins: &IndexMap<u32, Register>) -> allocate::Assignment {
-        allocate::allocate(body, Some(pins), None, None, None, ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("allocates")
+        allocate::allocate(body, Some(pins), None, None, None, ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("allocates")
     }
 
     /// HARR's hoisted selector copy became unencodable mov es,es across a coverage gap.
     #[test]
     fn test_retained_resource_identity_has_a_legal_encoding() {
         let body = body("resource-copy", vec![_move(3, 1, 1)], &[(1, Register::ES)]);
-        let result = allocate::applied(&body, &allocated(&body, &body.pins), &crate::backend::classes::RegisterClasses::code16()).expect("applies");
+        let result = allocate::applied(&body, &allocated(&body, &body.pins), &crate::backend::classes::RegisterClasses::m16()).expect("applies");
         let insns = result.insns();
         assert_eq!(insns.len(), 1);
         assert_eq!(insns[0].covers, body.insns()[0].covers);
@@ -552,13 +552,13 @@ mod tests {
         insns.extend([_move(21, 2, 1), _use(26, 1), _use(28, 2)]);
         insns.extend((0..6).map(|index| _use(30 + index * 3, 10 + index as u32)));
         let body = body("resources", insns, &[(1, Register::ES), (2, Register::ES)]);
-        let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+        let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
         assert_eq!(done.insns().len(), body.insns().len() - 1);
         let result = allocated(&done, &done.pins);
         assert!(result.spilled.is_empty());
         assert!(result.r#where.values().any(|register| *register == Register::ES));
         let wholes: BTreeSet<Register> = result.r#where.values().map(|register| allocate::_whole(*register)).collect();
-        assert!(crate::backend::classes::RegisterClasses::code16().available.iter().all(|register| wholes.contains(register)));
+        assert!(crate::backend::classes::RegisterClasses::m16().available.iter().all(|register| wholes.contains(register)));
     }
 
     #[test]
@@ -573,7 +573,7 @@ mod tests {
                 insns.insert(2, call);
             }
             let body = body("resource-safety", insns, &pins);
-            let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+            let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
             assert_eq!(done.insns().len(), body.insns().len(), "{other}");
         }
     }
@@ -581,7 +581,7 @@ mod tests {
     #[test]
     fn test_a_copy_can_share_a_register_while_its_equal_source_is_still_read() {
         let body = body("equal", vec![_define(0, 1), _move(3, 2, 1), _use(5, 1), _use(6, 2)], &[]);
-        let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+        let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
         let insns = done.insns();
         assert_eq!(insns.len(), 3);
         assert_eq!(insns[2].uses, insns[1].uses);
@@ -591,7 +591,7 @@ mod tests {
     fn test_a_source_redefined_while_its_copy_is_live_cannot_share() {
         let insns = vec![_define(0, 1), _move(3, 2, 1), _define(5, 1), _use(8, 1), _use(9, 2)];
         let count = insns.len();
-        let done = joined(&body("different", insns, &[]), None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+        let done = joined(&body("different", insns, &[]), None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
         let insns = done.insns();
         assert_eq!(insns.len(), count);
         assert_ne!(insns[count - 1].uses, insns[count - 2].uses);
@@ -621,7 +621,7 @@ mod tests {
             vec![_define(0, 1), grouped(_move(1, 2, 1), 1), grouped(_move(1, 3, 1), 1), _use(4, 2), _use(5, 3)];
         let body = body("parallel-destinations", insns, &[]);
         assert!(_interference(&body)[&2].contains(&3));
-        let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+        let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
         let insns = done.insns();
         assert_ne!(insns[insns.len() - 2].uses, insns[insns.len() - 1].uses);
     }
@@ -630,7 +630,7 @@ mod tests {
     fn test_different_entry_values_cannot_share_even_if_copied_later() {
         let insns = vec![_use(0, 1), _use(1, 2), _move(2, 2, 1), _use(4, 2)];
         let count = insns.len();
-        assert_eq!(joined(&body("inputs", insns, &[]), None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).insns().len(), count);
+        assert_eq!(joined(&body("inputs", insns, &[]), None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).insns().len(), count);
     }
 
     #[test]
@@ -639,7 +639,7 @@ mod tests {
         wide.what = Some(semantics(Operation::Push, "push", vec![], vec![held(1, 4)]));
         let insns = vec![_define(0, 1), _move(3, 2, 1), wide, _use(6, 2)];
         let count = insns.len();
-        assert_eq!(joined(&body("partial", insns, &[]), None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).insns().len(), count);
+        assert_eq!(joined(&body("partial", insns, &[]), None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).insns().len(), count);
     }
 
     #[test]
@@ -653,7 +653,7 @@ mod tests {
             vec![2],
         );
         let insns = vec![_define(0, 1), _move(3, 2, 1), load, _use(7, 1), _use(8, 3)];
-        let done = joined(&body("address", insns, &[]), None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+        let done = joined(&body("address", insns, &[]), None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
         let made: BTreeSet<u32> = done.insns().iter().flat_map(|one| one.defines.clone()).collect();
         for one in done.insns() {
             let what = one.what.as_ref().expect("semantics");
@@ -679,22 +679,22 @@ mod tests {
         );
         let body = body("pointer", vec![_define(0, 1), _move(3, 2, 1), load], &[]);
         let pins: IndexMap<u32, Register> = IndexMap::from_iter([(1, Register::EAX)]);
-        assert_eq!(joined(&body, Some(&pins), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).insns().len(), 3);
+        assert_eq!(joined(&body, Some(&pins), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).insns().len(), 3);
         let pinned = LirBody { pins: pins.clone(), ..body };
-        assert_eq!(joined(&pinned, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).insns().len(), 3);
+        assert_eq!(joined(&pinned, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).insns().len(), 3);
     }
 
     #[test]
     fn test_coalescing_keeps_the_pinned_return_as_representative() {
         let body = body("return", vec![_define(0, 1), _move(3, 2, 1), _use(5, 2)], &[]);
-        let done = joined(&body, Some(&IndexMap::from_iter([(2, Register::EAX)])), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+        let done = joined(&body, Some(&IndexMap::from_iter([(2, Register::EAX)])), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
         let insns = done.insns();
         assert_eq!(insns[0].defines, vec![2]);
         assert_eq!(insns[insns.len() - 1].uses, vec![2]);
         for register in [Register::EAX, Register::EBX, Register::ECX, Register::EDX] {
             let pins = IndexMap::from_iter([(2, register)]);
-            let joined = joined(&body, Some(&pins), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
-            let emitted = allocate::applied(&joined, &allocated(&joined, &pins), &crate::backend::classes::RegisterClasses::code16()).expect("applies");
+            let joined = joined(&body, Some(&pins), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
+            let emitted = allocate::applied(&joined, &allocated(&joined, &pins), &crate::backend::classes::RegisterClasses::m16()).expect("applies");
             let insns = emitted.insns();
             assert_eq!(
                 insns[insns.len() - 1].what.as_ref().expect("semantics").sources,
@@ -715,7 +715,7 @@ mod tests {
         };
         let last = LirBlock::new(0x20, vec![Arc::new(_use(0x20, 2))]);
         let body = LirBody::new("two arms", 0, vec![arm(0, 61), arm(0x10, 63), last], IndexMap::default(), IndexMap::default());
-        let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+        let done = joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
         let made: BTreeSet<u32> = done.insns().iter().flat_map(|one| one.defines.clone()).collect();
         let read: BTreeSet<u32> = done.insns().iter().flat_map(|one| one.uses.clone()).collect();
         let missing: Vec<u32> = read.difference(&made).copied().collect();
@@ -732,7 +732,7 @@ mod tests {
             let count = insns.len();
             let pins: Vec<(u32, Register)> = if pinned { vec![(50, Register::BX)] } else { vec![] };
             let body = body("counter", insns, &pins);
-            assert_eq!(joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).insns().len(), count - 1, "pinned={pinned}");
+            assert_eq!(joined(&body, None, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).insns().len(), count - 1, "pinned={pinned}");
         }
     }
 }

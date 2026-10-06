@@ -3527,8 +3527,8 @@ fn main() -> i16:
     assert_eq!(refused("fn one() -> i16:\n    return 1\nfn f() -> void:\n    return one()\nfn main() -> i16:\n    f()\n    return 0\n"), "void function cannot return a value");
 }
 
-/// `@repr("c")` without `pack=` packs to the target's own alignment, its stack slot (2 on code16, 4
-/// on code32); `@repr("c16")` stays 2 and may not ask for 4.
+/// `@repr("c")` without `pack=` packs to the target's own alignment, its stack slot (2 on m16, 4
+/// on m32); `@repr("c16")` stays 2 and may not ask for 4.
 #[test]
 fn repr_c_packs_to_the_targets_alignment() {
     let source = |layout: &str| format!("@repr(\"{layout}\")\nstruct S:\n    a: u8\n    b: i32\n\nfn main() -> i16:\n    print(size_of[S]())\n    return 0\n");

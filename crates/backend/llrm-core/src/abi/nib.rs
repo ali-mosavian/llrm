@@ -42,11 +42,18 @@ pub const VIEW_COMPARE: &str = "N$VCMP";
 
 pub const DICT_RESERVE: &str = "N$DRES";
 
-/// The OS layer's operation a runtime symbol implements, by its name in the interface
-/// (`open`, `create`, `read`, `write_file`, `close`), when it is a file call.
-pub fn file_operation(symbol: &str) -> Option<&'static str> {
+/// The OS layer's operation a runtime symbol implements, by its name in the interface, when it is a
+/// file call (`open`, `create`, `read`, `write_file`, `close`) or a console one.
+pub fn os_operation(symbol: &str) -> Option<&'static str> {
     static INTERFACE: std::sync::LazyLock<llrm_target::os::Interface> = std::sync::LazyLock::new(llrm_target::os::Interface::shipped);
-    ["open", "create", "read", "write_file", "close"].into_iter().find(|name| INTERFACE.ops.iter().any(|op| op.name == *name && INTERFACE.symbol(op) == symbol))
+    let files = ["open", "create", "read", "write_file", "close"];
+    INTERFACE.ops.iter().find(|op| INTERFACE.symbol(op) == symbol && (op.group == "console" || files.contains(&op.name.as_str()))).map(|op| op.name.as_str())
+}
+
+/// The number of the standard handle `name` (`stdin`, `stdout`, `stderr`): the operating system's fact.
+pub fn standard_handle(name: &str) -> usize {
+    let facts: toml::Table = llrm_x86::DOS_FACTS.parse().expect("the OS facts parse");
+    usize::try_from(facts[name].as_integer().expect("a standard handle is a number")).expect("a handle is not negative")
 }
 
 /// The interface's code of the error condition `name`.

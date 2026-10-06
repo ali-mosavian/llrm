@@ -1668,7 +1668,7 @@ mod tests {
     fn test_two_base_only_values_fit_while_one_acts() {
         let bx = BTreeSet::from([Register::EBX]);
         let confined: Classes = [(1, bx.clone()), (2, bx), (3, BTreeSet::from([Register::ESI, Register::EDI]))].into_iter().collect();
-        let classes = crate::backend::classes::RegisterClasses::code16();
+        let classes = crate::backend::classes::RegisterClasses::m16();
         let machine = Machine::of(&confined, File::General, &target::BUILT_IN, &classes);
         let held: BTreeSet<u32> = [1, 2, 3].into_iter().collect();
         assert!(machine.fits(&held, &BTreeSet::from([1]), 6), "one acting BX value leaves the other waiting");

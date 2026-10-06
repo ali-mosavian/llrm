@@ -14,7 +14,7 @@ use automaton::{Automaton, State};
 use parse::{Call, Expr, OperandPattern, Pattern, Step};
 
 /// The instruction description's reader.
-#[path = "../../../../../../target/llrm-x86-code16/src/instructions/parse.rs"]
+#[path = "../../../../../../target/llrm-x86-m16/src/instructions/parse.rs"]
 pub mod description;
 
 /// What each operand constructor may make, as `x86.instr` spells kinds,
@@ -224,7 +224,7 @@ fn body(checker: &mut Checker) -> Result<String, String> {
     Ok(code)
 }
 
-/// The selector of the target `name` (`x86-code16`): its tables and a `SELECTOR`
+/// The selector of the target `name` (`x86-m16`): its tables and a `SELECTOR`
 /// that holds them with the methods the patterns became, those named for it.
 pub fn generate(forms_text: &str, patterns_text: &str, name: &str) -> Result<Generated, String> {
     let ident = name.replace('-', "_");
@@ -379,8 +379,8 @@ mod tests {
     #[test]
     fn each_targets_selector_has_methods_named_for_it() {
         let patterns = "pattern any\n  match add.i16(a, b)\n  nothing\nend\n";
-        let (first, second) = (generate(FORMS, patterns, "x86-code16").unwrap().code, generate(FORMS, patterns, "x86-code32").unwrap().code);
-        assert!(first.contains("fn x86_code16_holds(") && !first.contains("x86_code32"));
-        assert!(second.contains("fn x86_code32_holds(") && second.contains("name: \"x86-code32\""));
+        let (first, second) = (generate(FORMS, patterns, "x86-m16").unwrap().code, generate(FORMS, patterns, "x86-m32").unwrap().code);
+        assert!(first.contains("fn x86_m16_holds(") && !first.contains("x86_m32"));
+        assert!(second.contains("fn x86_m32_holds(") && second.contains("name: \"x86-m32\""));
     }
 }

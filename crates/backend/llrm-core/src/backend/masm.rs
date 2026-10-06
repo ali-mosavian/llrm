@@ -1,7 +1,7 @@
 //! Allocated LIR as jwasm source.
 //!
 //! Port of `qbopt/backend/masm.py`. `listing` is the procedure as emitted,
-//! frame and all; this prints it and omfwrite.rs encodes it, so the two
+//! frame and all; this prints it and objbuild.rs encodes it, so the two
 //! cannot drift. Every operand is already placed; an unplaced one is an
 //! error.
 
@@ -83,7 +83,7 @@ pub struct Procedure {
     pub interrupt: Option<Addr>,
     /// Tuned for size (-Os): fewer bytes at the price of clocks, as the frame's `push bp; mov
     /// bp,sp; sub sp,N` as `enter N,0` (4 bytes for 6, 14 clocks for 3 on the 486), and the
-    /// jumps `omfwrite` lays out.
+    /// jumps `objbuild` lays out.
     pub size: bool,
     /// Bytes the runtime's entry call (B$ENSA) takes below BP, which no instruction of the
     /// procedure shows: its header and the locals `cx` names.
@@ -456,7 +456,7 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
     Ok(emitted.iter().flatten().map(|one| one.code.len()).sum())
 }
 
-/// The procedure as emitted, frame included: what this prints and omfwrite
+/// The procedure as emitted, frame included: what this prints and objbuild
 /// encodes. A branch's target is still a block; `label(number, at)` names it.
 pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprintable> {
     let (mut enter, mut leave) = _frame_parts(procedure);
@@ -1075,7 +1075,7 @@ mod tests {
         let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
         let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
         let procedure =
-            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: enter, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16) };
+            Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: enter, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16) };
         _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
     }
 
@@ -1124,7 +1124,7 @@ mod tests {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
         let leave = insn(1, semantics(Operation::Return, "retf", vec![], vec![]));
         let body = lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, vec![r#move, leave])], IndexMap::default(), IndexMap::default());
-        let procedure = Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: true, entry: 0, stack_check: check, registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16) };
+        let procedure = Procedure { name: "_get".into(), public: true, far: true, body, reserve, callees: IndexMap::default(), interrupt: None, size: true, entry: 0, stack_check: check, registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16) };
         let mut names = no_names();
         let externs = stack_externs(std::slice::from_ref(&procedure), &mut names);
         (_procedure(&procedure, &names, 0).unwrap().iter().map(|line| line.trim().to_owned()).collect(), externs)
@@ -1163,7 +1163,7 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: None,
-            registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16),
+            registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         };
 
         assert_eq!(return_overhead_bytes(&procedure(0)).unwrap(), 1);
@@ -1240,7 +1240,7 @@ mod tests {
             lir::LirBlock::new(3, vec![insn(5, semantics(Operation::Return, "ret", vec![], vec![]))]),
         ];
         let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
-        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 0, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16) };
+        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 0, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16) };
         let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
         let at = |text: &str| lines.iter().position(|one| one == text).unwrap_or_else(|| panic!("{text} in {lines:?}"));
         assert_eq!(lines.iter().filter(|one| *one == "push si").count(), 1, "{lines:?}");
@@ -1262,7 +1262,7 @@ mod tests {
             lir::LirBlock::new(3, vec![insn(5, semantics(Operation::Return, "ret", vec![], vec![]))]),
         ];
         let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
-        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 0, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_code16::Code16) };
+        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 0, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16) };
         let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
         assert!(lines.iter().position(|one| one == "push si").unwrap() < lines.iter().position(|one| one == "L0_1:").unwrap(), "{lines:?}");
     }

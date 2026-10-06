@@ -49,7 +49,7 @@ fn every_load_of_an_enums_tag_has_its_range_from_one_statement() {
     let fields: Vec<_> = module.facts.iter().filter(|one| matches!(one.subject, Subject::Field { .. })).collect();
     assert_eq!(fields.len(), 1, "one statement for the one enum");
     assert!(module.facts.iter().all(|one| !(matches!(one.subject, Subject::Instruction { .. }) && matches!(one.fact, llrm_mir::facts::Fact::Range(bounds) if bounds.hi == 2))), "no load is stated of its own");
-    let emitted = hir::mir::emit(&program, &llrm_x86_code16::layout());
+    let emitted = hir::mir::emit(&program, &llrm_x86_m16::layout());
     let text: String = emitted.iter().map(|one| llrm_mir::print::module(&one.module)).collect();
     let tag_loads: Vec<&str> = text.lines().filter(|one| one.contains("load i8")).collect();
     assert!(tag_loads.len() >= 2, "{text}");
@@ -64,7 +64,7 @@ fn a_views_dimension_load_states_what_its_segment_holds() {
     let directory = tempfile::tempdir().expect("a directory");
     let program = |element: &str| {
         let source = written(&directory, &format!("view_{element}.nib"), &format!("fn at(a: &[{element}], i: i16) -> {element}:\n    return a[i]\n\nfn main() -> i16:\n    let a: {element}[4] = [1] * 4\n    return i16(at(a, 2))\n"));
-        let text: String = hir::mir::emit(&parsed(&source), &llrm_x86_code16::layout()).iter().map(|one| llrm_mir::print::module(&one.module)).collect();
+        let text: String = hir::mir::emit(&parsed(&source), &llrm_x86_m16::layout()).iter().map(|one| llrm_mir::print::module(&one.module)).collect();
         text.lines().filter(|one| one.contains("load i16") && one.contains("!range")).count()
     };
     assert_eq!(program("i16"), 1, "the length of a view of i16 is stated at most 32767");
@@ -105,7 +105,7 @@ fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
     assert!(loads >= 3 && stores >= 2 && reference >= 2 && local >= 3, "loads {loads} stores {stores} reference {reference} local {local}");
     program.modules[0].facts.push(llrm_core::hir::facts::Stated { subject: Subject::Field { owner, offset: 2 }, fact: Fact::Range(Bounds { lo: 0, hi: 100 }), source: None });
     program.modules[0].facts.push(llrm_core::hir::facts::Stated { subject: Subject::Field { owner, offset: 2 }, fact: Fact::Align(2), source: None });
-    let text: String = hir::mir::emit(&program, &llrm_x86_code16::layout()).iter().map(|one| llrm_mir::print::module(&one.module)).collect();
+    let text: String = hir::mir::emit(&program, &llrm_x86_m16::layout()).iter().map(|one| llrm_mir::print::module(&one.module)).collect();
     let ranged = text.lines().filter(|one| one.contains("load i16") && one.contains("!range")).count();
     let aligned_loads = text.lines().filter(|one| one.contains("load i16") && one.contains("align 2")).count();
     let aligned_stores = text.lines().filter(|one| one.contains("store i16") && one.contains("align 2")).count();
@@ -118,7 +118,7 @@ fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
 #[test]
 fn the_mir_of_sum_three_lints_clean() {
     let program = parsed(&fixture("sum_three.nib"));
-    for emitted in hir::mir::emit(&program, &llrm_x86_code16::layout()) {
+    for emitted in hir::mir::emit(&program, &llrm_x86_m16::layout()) {
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         assert_eq!(llrm_mir::lint::poison(&emitted.module), Vec::<String>::new());
     }
@@ -129,7 +129,7 @@ fn the_mir_of_sum_three_lints_clean() {
 /// undefined bytes (#290); `lint::poison` finds a load that reads them.
 fn lint_of(name: &str) -> Vec<String> {
     let program = parsed(&PathBuf::from(env!("LLRM_ROOT")).join(name));
-    hir::mir::emit(&program, &llrm_x86_code16::layout()).iter().flat_map(|emitted| llrm_mir::lint::poison(&emitted.module)).collect()
+    hir::mir::emit(&program, &llrm_x86_m16::layout()).iter().flat_map(|emitted| llrm_mir::lint::poison(&emitted.module)).collect()
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn between<'t>(text: &'t str, start: &str, end: &str) -> &'t str {
 pub(crate) fn level(name: &str) -> Options {
     let mut flags = llrm_core::driver::flags::Flags::default();
     flags.take(&[format!("-{name}")], &mut 0).expect("a level");
-    { let bound = llrm_driver::target(&flags, Some(&["x86-code16"])).unwrap(); bound.options(&flags, nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) }
+    { let bound = llrm_driver::target(&flags, Some(&["x86-m16"])).unwrap(); bound.options(&flags, nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) }
 }
 
 /// -Os with no inlining: the function under test stays a function, as it does where more than
@@ -198,7 +198,7 @@ pub(crate) fn O2() -> Options {
 }
 
 /// `program` compiled to an object.
-fn object_of(program: &model::Program, entry: &str, source: &Path, options: &Options, layout: llrm_core::backend::omfwrite::CodeLayout) -> Result<Vec<u8>, String> {
+fn object_of(program: &model::Program, entry: &str, source: &Path, options: &Options, layout: llrm_core::backend::objbuild::CodeLayout) -> Result<Vec<u8>, String> {
     nib_compile::object(&nib_compile::assembled(program, entry, options, &crate::Frontend::default().os)?, source, layout)
 }
 
@@ -212,7 +212,7 @@ fn function<'p>(program: &'p model::Program, name: &str) -> &'p model::Function 
 
 /// `program`'s MIR as its HIR emits it, before any pass.
 fn emitted_text(program: &model::Program) -> String {
-    hir::mir::emit(program, &llrm_x86_code16::layout()).iter().map(|one| llrm_mir::print::module(&one.module)).collect()
+    hir::mir::emit(program, &llrm_x86_m16::layout()).iter().map(|one| llrm_mir::print::module(&one.module)).collect()
 }
 
 /// `@name`'s definition in `text`.
@@ -568,7 +568,7 @@ fn main() -> i16:
 ",
     );
     let bytes = |options: &Options| -> usize {
-        object_of(&parsed(&source), "main", &source, options, llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").len()
+        object_of(&parsed(&source), "main", &source, options, llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").len()
     };
     let uncopied = unrolled_or_peeled_none();
     assert_ne!(listing(&parsed(&source), "main", &level("O2")), listing(&parsed(&source), "main", &uncopied), "premise: -O2 copies the loop");
@@ -637,7 +637,7 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     // `bump` is internal and called directly: it pops its own view, a stack pointer of one word, `ret 2`.
     assert!(!main.contains("add sp, 2") && bump.contains("ret 2"), "{main}{bump}");
     assert!(bump.contains("es:["));
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -771,7 +771,7 @@ fn test_data_is_an_explicit_pointer_escape_hatch() {
     let types = types(&program);
     assert_eq!(types["addr"].kind, model::TypeKind::Pointer);
     assert_eq!((types["addr"].width, types["addr"].address), (4, model::AddressKind::Far));
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -798,7 +798,7 @@ fn test_return_inside_sequence_iteration_reaches_object_generation() {
     );
 
     let program = parsed(&source);
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -812,7 +812,7 @@ fn test_bounded_comprehension_materializes_and_generator_fuses() {
 
     let program = parsed(&source);
     assert!(program.modules[0].callables.iter().all(|one| !["iter", "next", "collect", "append"].contains(&one.name.as_str())));
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -825,7 +825,7 @@ fn test_dictionary_comprehension_deduplicates_and_has_explicit_lookup() {
     );
 
     let program = parsed(&source);
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -1149,7 +1149,7 @@ fn test_a_vec_view_names_dgroup_in_the_object() {
         "view.nib",
         "fn total(values: &[i16]) -> i16:\n    let mut sum = 0\n    for value in values:\n        sum += value\n    return sum\n\nfn main() -> i16:\n    let values = [x * x for x in [1, 2, 3]]\n    return total(values)\n",
     );
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
 }
 
 /// `v[0].bump()` passed the element's near pointer where `&mut T` is far:
@@ -1211,7 +1211,7 @@ fn test_float_arguments_comparisons_and_truncation_reach_the_object() {
         "floats.nib",
         "fn unused(x: f32) -> i16:\n    return 1\n\nfn above(x: f32) -> i16:\n    if x > 1.0:\n        return i16(x)\n    return 0\n\nfn main() -> i16:\n    return above(2.5) + unused(1.5)\n",
     );
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
 }
 
 #[test]
@@ -1288,7 +1288,7 @@ fn test_any_integer_operand_converts_to_a_float() {
         "floats.nib",
         "@export(\"pascal16\")\nfn mixed(small: i8, byte: u8, word: u16, long: u32, high: i16) -> f64:\n    return f64(high) + f64(small) + f64(byte) + f64(word) + f64(long) + f64(high + 1) + f64(u16(7))\n",
     );
-    let options = llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os));
+    let options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os));
     let module = nib_compile::assembled(&parsed(&source), "main", &options, &crate::Frontend::default().os).unwrap_or_else(|error| panic!("{error}"));
     let text = masm::text(&module).expect("prints");
     let mixed = between(&text, "MIXED proc far", "MIXED endp");
@@ -1315,7 +1315,7 @@ fn test_an_unsigned_integer_converts_to_its_value() {
          @export(\"cdecl16\")\nfn long(x: u32) -> f64:\n    return f64(x)\n",
     );
     let program = parsed(&source);
-    let options = llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os));
+    let options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os));
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     for (name, width, bits, value) in [("byte", 8, 0xff, 255.0), ("word", 16, 0xffff, 65535.0), ("long", 32, 0xffff_ffff, 4294967295.0_f64)] {
@@ -1345,7 +1345,7 @@ fn test_small_aggregates_return_in_registers() {
         (function.parameters.len(), types(&program).values().find(|one| one.id == function.result_type).expect("a type").width)
     };
     assert_eq!([shape("point"), shape("cell"), shape("box")], [(2, 4), (1, 4), (2, 0)]);
-    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
 }
 
 #[test]
@@ -1375,7 +1375,7 @@ fn test_a_panic_path_reaches_the_object() {
         "checked.nib",
         "fn at(values: &[i16], i: u16) -> i16:\n    return values[i]\n\nfn main() -> i16:\n    let v: i16[3] = [1, 2, 3]\n    return at(&v, 1)\n",
     );
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
 }
 
 #[test]
@@ -1388,7 +1388,7 @@ fn a_float_converts_to_every_integer_width() {
         "convert.nib",
         "@export(\"pascal16\")\nfn convert(x: f64, y: f64) -> i16:\n    print(f\"{u8(x)} {i8(x - 300.0)} {u16(x * 200.0)} {u32(y)} {i32(x)}\")\n    return 0\n",
     );
-    let text = listing_on(&parsed(&source), "convert", &level("Os"), llrm_target::Target::default_cpu(&llrm_x86_code16::Code16));
+    let text = listing_on(&parsed(&source), "convert", &level("Os"), llrm_target::Target::default_cpu(&llrm_x86_m16::M16));
     assert!(text.contains("fistp qword"), "{text}");
 }
 
@@ -1421,7 +1421,7 @@ fn a_pointer_loaded_from_a_local_descriptor_still_reaches_its_array() {
         "enumerate.nib",
         "fn main() -> i16:\n    let values: i16[3] = [7, 8, 9]\n    for (i, x) in enumerate(values):\n        print(f\"{i}: {x}\")\n    return 0\n",
     );
-    let text = listing_on(&parsed(&source), "main", &level("Os"), llrm_target::Target::default_cpu(&llrm_x86_code16::Code16));
+    let text = listing_on(&parsed(&source), "main", &level("Os"), llrm_target::Target::default_cpu(&llrm_x86_m16::M16));
     for value in [", 7", ", 8", ", 9"] {
         assert!(text.contains(value), "{value} is never stored:\n{text}");
     }
@@ -1465,7 +1465,7 @@ fn test_each_procedure_has_a_code_segment_the_linker_may_drop() {
     // runtime even when it called one routine.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "two.nib", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
-    let object = object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::PerProcedure).expect("writes");
+    let object = object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::PerProcedure).expect("writes");
     let records = llrm_core::objectfile::omf::parse(&object).expect("parses");
     let segments = records.iter().filter(|one| one.r#type & 0xFE == llrm_core::objectfile::omf::SEGDEF).count();
     // Two procedures, and _DATA.
@@ -1478,7 +1478,7 @@ fn test_an_object_defines_each_segment_once_unless_asked_for_one_per_procedure()
     // LINK 3.69 read them as one and refused SORTLIB.OBJ with L1103.
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "two.nib", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
-    let object = object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes");
+    let object = object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes");
     let records = llrm_core::objectfile::omf::parse(&object).expect("parses");
     let segments = records.iter().filter(|one| one.r#type & 0xFE == llrm_core::objectfile::omf::SEGDEF).count();
     // The code, and _DATA.
@@ -1490,7 +1490,7 @@ fn test_a_computed_float_argument_is_passed_through_memory() {
     // x87 cannot push: "floating instruction has no allocation rule".
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "pushed.nib", "fn half(x: f64) -> f64:\n    return x / 2.0\n\n@export(\"cdecl16\")\nfn quarter(x: f32, y: f64) -> f64:\n    print(x * 2.0)\n    return half(y) / 2.0\n\nfn main() -> i16:\n    return 0\n");
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
 }
 
 #[test]
@@ -1584,7 +1584,7 @@ fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
     );
     assert_eq!(lines[lines.len() - 6..], ["pop gs", "pop fs", "pop es", "pop ds", "popad", "iret"], "{text}");
     assert!(text.contains("dd _tick"), "{text}");
-    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
 }
 
 #[test]
@@ -1722,7 +1722,7 @@ fn test_inline_assembly_outputs_survive_unrolling() {
 /// `source` through the rich MIR, as masm.
 fn rich(directory: &tempfile::TempDir, name: &str, source: &str) -> String {
     let program = parsed(&written(directory, name, source));
-    let module = nib_compile::assembled(&program, "main", &llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)), &crate::Frontend::default().os).unwrap_or_else(|error| panic!("{error}"));
+    let module = nib_compile::assembled(&program, "main", &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)), &crate::Frontend::default().os).unwrap_or_else(|error| panic!("{error}"));
     masm::text(&module).expect("prints")
 }
 
@@ -1869,7 +1869,7 @@ fn test_an_export_without_an_abi_takes_what_a_nib_function_takes() {
 fn test_a_program_compiles_through_the_rich_mir() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "twice.nib", "fn twice(x: i16) -> i16:\n    return x + x\n\nfn main() -> i16:\n    return twice(21)\n");
-    let module = nib_compile::assembled(&parsed(&source), "main", &llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)), &crate::Frontend::default().os).expect("assembles");
+    let module = nib_compile::assembled(&parsed(&source), "main", &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)), &crate::Frontend::default().os).expect("assembles");
     let text = masm::text(&module).expect("prints");
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
     assert_eq!(
@@ -1890,7 +1890,7 @@ fn test_the_rich_route_prices_the_configured_cpu() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "logic.nib", "fn logic(a: i16, b: i16) -> bool:\n    return (a < b && a * 3 + b == 0) || (b == 7 && a + b * 5 == 2)\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n");
     let calls = |cpu: &'static str| {
-        let module = nib_compile::assembled(&parsed(&source), "main", &llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os) }), &crate::Frontend::default().os).expect("assembles");
+        let module = nib_compile::assembled(&parsed(&source), "main", &llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os) }), &crate::Frontend::default().os).expect("assembles");
         masm::text(&module).expect("prints").lines().filter(|line| line.contains("call") && line.contains("_logic")).count()
     };
     assert_eq!((calls("486"), calls("386")), (4, 0));
@@ -1995,7 +1995,7 @@ fn test_a_reference_lets_its_field_load_leave_the_loop() {
     let directory = tempfile::tempdir().unwrap();
     let source = "struct V:\n    mut a: i16\n    b: i16\n\nfn sum(v: &V, n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += v.b\n    return s\n\nfn main() -> i16:\n    return 0\n";
     let program = parsed(&written(&directory, "refsum.nib", source));
-    let module = nib_compile::assembled(&program, "sum", &llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)), &crate::Frontend::default().os).expect("assembles");
+    let module = nib_compile::assembled(&program, "sum", &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)), &crate::Frontend::default().os).expect("assembles");
     let asm = masm::text(&module).expect("prints");
     let from = asm.find("_sum proc").expect("the function");
     let body: Vec<&str> = asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).collect();
@@ -2056,7 +2056,7 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
     };
     // Unrolled, the 4-trip loop is gone and there is nothing to count.
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), unroll: false, peel: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) };
     let module = nib_compile::assembled(&program, "main", &options, &crate::Frontend::default().os).expect("assembles");
     assert_eq!(looped(&masm::text(&module).expect("prints")), 1);
 }
@@ -2066,7 +2066,7 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
 #[test]
 fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
     let program = parsed(&fixture("league.nib"));
-    let result = nib_compile::assembled(&program, "main", &Options { machine: llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os) }, ..level("O2") }, &crate::Frontend::default().os);
+    let result = nib_compile::assembled(&program, "main", &Options { machine: llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os) }, ..level("O2") }, &crate::Frontend::default().os);
     assert!(result.is_ok(), "{:?}", result.err());
 }
 
@@ -2090,7 +2090,7 @@ fn test_mir_infers_what_a_nib_function_touches() {
         }
     }
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let module = &mir.modules[0];
@@ -2112,7 +2112,7 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "trip.nib", source));
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) };
     let module = nib_compile::assembled(&program, "main", &options, &crate::Frontend::default().os).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
     let body = between(&assembly, "_total proc near\n", "_total endp");
@@ -2138,7 +2138,7 @@ fn test_a_nib_program_does_not_claim_zeroed_frames() {
     let program = parsed(&written(&directory, "zeroed.nib", source));
     assert!(!program.zeroed_locals, "the premise: the program says its frames are not zeroed");
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) };
     let module = nib_compile::assembled(&program, "main", &options, &crate::Frontend::default().os).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
     let body = between(&assembly, "_f proc near\n", "_f endp");
@@ -2194,7 +2194,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     for optimize in [false, true] {
         let pipeline = llrm_transforms::pipeline::Options { optimize, ..Default::default() };
-        let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) };
+        let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) };
         let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
         llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
         let score = interpret::run(&mir.modules[0], "main", vec![], 1_000_000).unwrap_or_else(|trap| panic!("{trap:?}"));
@@ -2226,7 +2226,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2263,7 +2263,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2300,7 +2300,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2337,7 +2337,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2377,7 +2377,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2413,7 +2413,7 @@ fn main() -> i16:
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2432,7 +2432,7 @@ fn test_a_far_pointer_literal_stores_at_its_segment_and_offset() {
     let mut program = parsed(&written(&directory, "poke.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions[0].linkage = llrm_core::hir::model::FunctionLinkage::External;
-    let options = llrm_driver::code16_options(nib_compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os));
+    let options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os));
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "poke", vec![], 1_000);
@@ -2513,5 +2513,5 @@ fn test_a_near_call_reaches_a_procedure_in_another_code_segment_of_the_object() 
     // With a segment per procedure, a near call between them was refused: "a near call to _down in another code segment".
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "near.nib", RECURSIVE);
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::omfwrite::CodeLayout::PerProcedure).expect("writes");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::PerProcedure).expect("writes");
 }

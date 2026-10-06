@@ -1,4 +1,4 @@
-reason = "os.read/os.write_file return a 32-bit count on code16 (a read past 32 KB returned negative): +12 code bytes in grep.nib; executed instructions unchanged (#601)"
+reason = "os.read/os.write_file return a 32-bit count on m16 (a read past 32 KB returned negative): +12 code bytes in grep.nib; executed instructions unchanged (#601)"
 blessed = "2026-10-06"
 
 [bas.O2]

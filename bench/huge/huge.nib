@@ -1,4 +1,4 @@
-# targets: x86-code16   (a huge array: real mode's 64K segments)
+# targets: x86-m16   (a huge array: real mode's 64K segments)
 # 200x201 i16 array (80400 bytes) in huge memory; mirrors huge.c.
 huge var h: i16[200, 201] = [[0] * 201] * 200
 

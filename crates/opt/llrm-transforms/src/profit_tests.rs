@@ -346,3 +346,16 @@ fn a_select_is_priced() {
     let select = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Select).unwrap();
     assert_eq!(operation(&module.context, &layout, function, &Default::default(), select, &costs), Some(5));
 }
+
+/// Each site asked `spill::integer` of every value live at it, and `folded` looks at every user of the value:
+/// 6% of compiling matmul at -O2 (#560). A value is asked about once for the whole forecast.
+#[test]
+fn test_a_forecast_asks_whether_a_value_is_folded_once_however_many_sites_it_is_live_at() {
+    let values: String = (0..12).map(|at| format!("  %a{at} = add i16 {at}, 0\n")).collect();
+    let calls: String = (0..12).map(|_| "  call void @use(i16 %a0, i16 %a1, i16 %a2)\n".to_owned()).collect();
+    let uses: String = (0..12).map(|at| format!("  call void @use(i16 %a{at}, i16 %a{at}, i16 %a{at})\n")).collect();
+    let text = format!("declare void @use(i16, i16, i16)\n\ndefine void @f() {{\nb0:\n{values}{calls}{uses}  ret void\n}}\n");
+    let before = crate::spill::folded_runs();
+    risk(&text, 4);
+    assert!(crate::spill::folded_runs() - before <= 12 + 1, "{} asks for 12 values", crate::spill::folded_runs() - before);
+}

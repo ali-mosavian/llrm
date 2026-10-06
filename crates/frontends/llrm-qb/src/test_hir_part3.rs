@@ -1117,7 +1117,7 @@ fn capture_program() -> hir::Program {
 #[test]
 fn test_stage_observer_sees_the_hir_once_and_preserves_object_bytes() {
     let program = capture_program();
-    let codegen = llrm_driver::code16_options(llrm_core::abi::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options(llrm_core::abi::machine::BASIC.clone());
     let uncaptured = qb_compile::object_bytes(&program, Path::new("capture.bas"), None, &codegen).expect("emits");
     let mut seen: Vec<hir::Program> = Vec::new();
     let mut observer = |program: &hir::Program| {
@@ -2006,7 +2006,7 @@ fn test_a_module_compiles_through_the_rich_mir() {
     let source = tmp.path().join("RICH.BAS");
     std::fs::write(&source, "DECLARE SUB Fade (level%)\r\nSUB Fade (level%)\r\nOUT &H3C8, 0\r\nv% = INP(&H3C9)\r\nIF COMMAND$ > \"A\" THEN OUT &H3C9, level% + v%\r\nEND SUB\r\n").unwrap();
     let program = parsed_as(&source, "qb45", "qb45");
-    let module = qb_compile::assembled(&program, None, &llrm_driver::code16_options(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
+    let module = qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
     let text = masm::text(&module).expect("prints");
     let fade = between(&text, "FADE proc", "endp");
     let call = fade.find("call far ptr B$SCMP").expect("the comparison's call");
@@ -2022,7 +2022,7 @@ fn test_the_runtime_frame_zeroes_the_locals() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "zeroed.bas", b"DECLARE SUB Report (n AS LONG)\nCALL Report(1)\nSUB Report (n AS LONG)\nDIM buffer AS STRING * 4096\nDIM counts(3) AS INTEGER\nbuffer = \"X\"\ncounts(n) = 1\nPRINT buffer; counts(1)\nEND SUB\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend { runtime_frames: true, ..qb_driver::Frontend::new("qb45", "qb45") }, None).expect("parses");
-    let module = qb_compile::assembled(&program, None, &llrm_driver::code16_options(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
+    let module = qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
     let text = masm::text(&module).expect("prints");
     let report = between(&text, "REPORT proc", "endp");
     assert!(report.contains("call far ptr B$ENRA"), "{report}");
@@ -2035,7 +2035,7 @@ fn test_data_statements_compile_through_the_rich_mir() {
     for name in ["fpcalc", "fpcsex", "fpi2cs", "fpicse", "hotlpx", "lngmxx", "pressx"] {
         let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../../tests/run/qb/{name}.bas"));
         let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-        qb_compile::assembled(&program, None, &llrm_driver::code16_options(llrm_core::abi::machine::BASIC.clone())).unwrap_or_else(|error| panic!("{name}: {error}"));
+        qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_core::abi::machine::BASIC.clone())).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
 }
 
@@ -2047,7 +2047,7 @@ fn test_rich_route_keys_data_rows_by_position() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "rstend.bas", b"DEFINT A-Z\nDATA 1, 2\nREAD a, b\nRESTORE second\nREAD c\nRESTORE\nREAD d\nPRINT a; b; c; d\nEND\nsecond:\nDATA 3, 4\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-    let rich = qb_compile::assembled(&program, None, &llrm_driver::code16_options(llrm_core::abi::machine::BASIC.clone())).expect("compiles");
+    let rich = qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_core::abi::machine::BASIC.clone())).expect("compiles");
     let text = masm::text(&rich).expect("prints");
     let rows = between(&text, "$QB$DS label byte\n", "BC_DS ends");
     assert_eq!(rows, "db 000h,000h\ndb 020h,031h,02ch,020h,032h,000h\ndb 001h,000h\ndb 020h,033h,02ch,020h,034h,000h\ndb 0ffh,0ffh,001h\n");
@@ -2061,7 +2061,7 @@ fn a_fixed_length_assignment_fills_its_destination() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "fixed.bas", b"SUB s\nDIM t AS STRING * 8\nt = \"X\"\nPRINT t\nEND SUB\n");
     let program = parsed(&source);
-    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).swap_remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("@llrm.qb.B$ASSN(ptr addrspace(1) %") && text.contains(", i16 1, ptr addrspace(1) nocapture writeonly initializes((0, 8)) %"), "{text}");
 }
@@ -2078,7 +2078,7 @@ fn test_a_floating_function_returns_through_its_hidden_destination() {
         let basic = format!("DECLARE FUNCTION Half{suffix} (x AS {kind})\nDIM y AS {kind}\ny = Half{suffix}(3)\nPRINT y\nFUNCTION Half{suffix} (x AS {kind})\nHalf{suffix} = x / 2\nEND FUNCTION\n", kind = if bytes == 4 { "SINGLE" } else { "DOUBLE" });
         let source = written(&directory, "fret.bas", basic.as_bytes());
         let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("vbdos", "vbdos"), None).expect("parses");
-        let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).swap_remove(0);
+        let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
         let text = llrm_mir::print::module(&emitted.module);
         let half = between(&text, &format!("define cc1000 ptr @\"HALF{suffix}\"(ptr dereferenceable({bytes}) %0, ptr %1)"), "\n}");
         assert!(half.lines().any(|line| line.trim().starts_with(&format!("store {mir}")) && line.trim().ends_with(", ptr %1")), "{half}");
@@ -2101,7 +2101,7 @@ fn test_a_frontend_cold_block_stays_cold_in_the_rich_mir() {
     let program = qb_driver::parsed(&source, &checked, None).expect("parses");
     let expected: BTreeSet<String> = program.modules[0].functions.iter().flat_map(|function| &function.blocks).filter(|block| block.cold).map(|block| format!("b{}", block.id)).collect();
     assert!(!expected.is_empty(), "no cold HIR block");
-    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).swap_remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let declarations = emitted.module.declarations();
     let mut found = BTreeSet::new();
@@ -2121,7 +2121,7 @@ fn an_error_handler_is_the_main_bodys_landing_pad() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "HANDLED.BAS", b"DEFINT A-Z\nON ERROR GOTO h\nERROR 5\nPRINT c\nEND\nh:\nc = ERR\nRESUME NEXT\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
-    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0);
     assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
     assert!(llrm_mir::verify::verify(&emitted.module).is_empty());
     let main = emitted.module.functions().find(|(_, global, _)| global.name.as_deref() == Some("__main")).expect("__main").2;
@@ -2139,7 +2139,7 @@ fn erl_is_the_faulting_statements_line() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "ERL.BAS", b"DEFINT A-Z\nON ERROR GOTO h\n100 ERROR 5\nEND\nh:\nc = ERL\nRESUME NEXT\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
-    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0);
     assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
     let text = llrm_mir::print::module(&emitted.module);
     let table = text.lines().find(|line| line.starts_with("@\"$QB$ERL$__main\" =") || line.starts_with("@$QB$ERL$__main =")).expect("the ERL table");
@@ -2154,7 +2154,7 @@ fn the_pad_goes_to_the_handler_named_last() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "TWO.BAS", b"ON ERROR GOTO first\nERROR 5\nON ERROR GOTO second\nERROR 6\nEND\nfirst:\nPRINT 1\nRESUME NEXT\nsecond:\nPRINT 2\nRESUME NEXT\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
-    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0);
     assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
     let main = emitted.module.functions().find(|(_, global, _)| global.name.as_deref() == Some("__main")).expect("__main").2;
     let pad = main.layout().iter().copied().find(|&block| main.block(block).instructions().iter().any(|&one| matches!(main.instruction(one).opcode, llrm_mir::Opcode::LandingPad { .. }))).expect("the pad");
@@ -2170,7 +2170,7 @@ fn a_procedures_own_handler_is_its_landing_pad() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "LOCAL.BAS", b"DECLARE SUB s ()\nCALL s\nEND\nSUB s\nON LOCAL ERROR GOTO h\nERROR 53\nEXIT SUB\nh:\nRESUME NEXT\nEND SUB\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("pds71", "pds71"), None).expect("parses");
-    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0);
     assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
     let text = llrm_mir::print::module(&emitted.module);
     assert!(text.contains("@llrm.qb.onlocalerror(i1 true)") && !text.contains("@llrm.qb.onerror("), "{text}");
@@ -2187,7 +2187,7 @@ fn a_subs_error_lands_on_its_own_pad_and_runs_the_module_handler() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "SUBERR.BAS", b"DECLARE SUB r ()\nON ERROR GOTO h\nCALL r\nEND\nh:\nRESUME NEXT\nSUB r\nERROR 5\nPRINT 1\nEND SUB\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
-    let mut emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
+    let mut emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0);
     assert!(emitted.refused.is_empty(), "{:?}", emitted.refused);
     let sub = emitted.module.functions().find(|(_, global, _)| global.name.as_deref() == Some("R")).expect("R").2;
     assert!(sub.walk().any(|(_, inst)| matches!(sub.instruction(inst).opcode, llrm_mir::Opcode::LandingPad { .. })));
@@ -2209,7 +2209,7 @@ fn erl_outside_the_handler_is_the_line_the_handler_took() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "ERL.BAS", b"DEFINT A-Z\nON ERROR GOTO h\n100 ERROR 5\nPRINT ERL\nEND\nh:\nRESUME NEXT\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
-    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_code16::layout()).remove(0);
+    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
     let body = text.split("define ").find(|one| one.contains("void @__main()")).expect("the body");
@@ -2224,7 +2224,7 @@ fn test_def_seg_stores_the_runtime_segment_cell() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "defseg.bas", b"DEF SEG = &HA000\nBSAVE \"V.BIN\", 0, 64000\n");
     let program = parsed_as(&source, "qb45", "qb45");
-    let module = qb_compile::assembled(&program, None, &llrm_driver::code16_options(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
+    let module = qb_compile::assembled(&program, None, &llrm_driver::m16_options(llrm_core::abi::machine::BASIC.clone())).expect("assembles");
     assert!(module.externs.iter().any(|(name, _)| name == "b$seg"), "{}", masm::text(&module).expect("prints"));
 }
 
@@ -2235,7 +2235,7 @@ fn test_a_word_array_after_an_odd_object_lies_at_an_even_offset() {
     let directory = tempfile::tempdir().expect("a directory");
     let text = "DEFINT A-Z\r\nDIM SHARED s AS STRING * 3, f3(10)\r\ns = \"abc\"\r\nf3(1) = LEN(s)\r\nPRINT f3(1), s\r\n";
     let program = parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45");
-    let codegen = llrm_driver::code16_options(llrm_core::abi::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options(llrm_core::abi::machine::BASIC.clone());
     let module = qb_compile::assembled(&program, None, &codegen).expect("assembles");
     let (_, items) = module.data.iter().find(|(name, _)| name == "BC_DATA").expect("BC_DATA");
     let mut offset = 0;
@@ -2287,7 +2287,7 @@ fn test_the_listing_is_the_code_the_object_holds() {
     let directory = tempfile::TempDir::new().unwrap();
     let source = written(&directory, "shell.bas", b"DECLARE SUB Keep (x AS INTEGER)\nSUB Keep (x AS INTEGER)\nx = x + 1\nEND SUB\n");
     let program = qb_driver::parsed(&source, &qb_driver::Frontend { runtime_frames: true, ..qb_driver::Frontend::new("vbdos", "vbdos") }, None).expect("parses");
-    let codegen = llrm_driver::code16_options(llrm_core::abi::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options(llrm_core::abi::machine::BASIC.clone());
     let module = qb_compile::assembled(&program, None, &codegen).expect("assembles");
     let text = llrm_core::driver::basic::text(&module).unwrap();
     let keep = between(&text, "KEEP proc far", "KEEP endp");
