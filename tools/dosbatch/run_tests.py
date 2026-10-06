@@ -12,6 +12,7 @@ A header comment holds a program's settings:
     ' data: values.dat         a file the program reads, copied beside it; @dickens: a cached corpus, verified (skipped if unavailable)
     ' mask: \d+(?= spins)       text of the output that varies: each match reads as N
     ' known: #123              fails today, tracked by issue 123
+    # targets: x86-code16     a Nib program runs on code16 and, unless it says so, on x86-code32 too (same .out, a --target configuration)
 
 A known program that passes fails the run: remove its mark.
 """
@@ -38,7 +39,8 @@ RUN = ROOT / "tests" / "run"
 EXAMPLES = ROOT / "examples"
 BENCH = ROOT / "bench"
 DEFAULT_FLAGS = ["-O2", "--cpu", "486"]
-KEYS = ("flags", "known", "bc", "diverges", "dialect", "link", "data", "mask")
+KEYS = ("flags", "known", "bc", "diverges", "dialect", "link", "data", "mask", "targets")
+FLAT = "x86-code32"
 HEADER = re.compile(rf"^\s*(?:'|//|#)\s*({'|'.join(KEYS)}):\s*(.*?)\s*$")
 COMPILERS = {".bas": ["llrm-qb"], ".nib": [], ".c": ["llrm-c"]}
 TOOLS = {"qb45": dosbatch.QB45_TOOLS, "pds71": dosbatch.PDS71_TOOLS, "vbdos": dosbatch.VBDOS_TOOLS}
@@ -116,7 +118,11 @@ def discover(selected: list[str]) -> list[Program]:
     for source in [*sorted(RUN.glob("*/*")), *sorted(EXAMPLES.glob("*.nib")), *sorted(EXAMPLES.glob("*/*")), *sorted(BENCH.glob("*/*")), *sorted(BENCH.glob("parity/*/*"))]:
         if source.suffix in COMPILERS:
             settings = header(source)
-            for label, flags, dialect in configurations(settings):
+            configured = configurations(settings)
+            if source.suffix == ".nib" and "targets" not in settings and "link" not in settings and not any("--target" in flags for _, flags, _ in configured):
+                # Where a Nib program runs on code32 too, with the same output.
+                configured += [(f"{label}{' ' if label else ''}[{FLAT}]", [*flags, "--target", FLAT], dialect) for label, flags, dialect in configured]
+            for label, flags, dialect in configured:
                 program = Program(source, flags, settings.get("known"), dialect, tuple(settings.get("link", "").split()), tuple(settings.get("data", "").split()), settings.get("mask", ""), label)
                 if program.out.exists():
                     programs.append(program)
