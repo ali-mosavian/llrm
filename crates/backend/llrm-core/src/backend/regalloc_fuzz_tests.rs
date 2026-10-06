@@ -759,3 +759,16 @@ fn test_a_value_that_cannot_be_spilled_takes_a_register_by_force() {
     assert!(done.is_ok(), "{done:?}");
     assert!(crate::backend::allocate::last_resorts() > before, "premise: the allocation needed the last resort");
 }
+
+/// `allocate::live` was built from per-block sorted sets and converted to bit rows for the fixed point:
+/// 24% of compiling QCport's `d_faces` (#559). Dense rows all the way give the same sets.
+#[test]
+fn test_dense_liveness_is_what_the_sorted_sets_gave() {
+    for seed in 0..200 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            assert_eq!(crate::backend::allocate::live(&body), crate::backend::allocate::live_reference(&body), "seed {seed}");
+        }
+    }
+}
