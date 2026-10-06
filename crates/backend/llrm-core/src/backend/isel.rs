@@ -60,6 +60,9 @@ pub(crate) fn _read(what: &ir::Semantics) -> Vec<u32> {
 mod generator;
 mod matcher;
 mod unwind;
+
+pub use matcher::{Compiled, selector};
+pub(crate) use matcher::code16;
 mod wide;
 
 /// Where a function's parameters arrive and its result leaves, as its
@@ -95,15 +98,9 @@ fn passing(convention: u32) -> Result<Passing, Unselected> {
 }
 
 /// The bytes an argument of `width` takes on the stack: a byte is pushed
-/// as a word.
-fn slot(width: u32) -> i64 {
-    i64::from(width.max(2))
-}
-
-/// The registers a result of `width` leaves in: a dword in DX:AX, an i64
-/// in EDX:EAX.
-fn returned(width: u32) -> Vec<Register> {
-    if matches!(width, 4 | 8) { vec![Register::EAX, Register::EDX] } else { vec![Register::EAX] }
+/// as a slot.
+fn slot(arch: &dyn llrm_target::Target, width: u32) -> i64 {
+    i64::from(width).max(arch.stack_slot_bytes())
 }
 
 /// Whether a function's code is far: in addrspace(1), entered by a far call.
@@ -139,18 +136,17 @@ fn in_the_frame(attributes: &[Vec<llrm_mir::Attribute>]) -> Result<(), Unselecte
 
 /// `function`'s convention: the return address, BP, then its arguments,
 /// the last pushed nearest.
-fn convention(module: &Module, layout: &DataLayout, global: GlobalId) -> Result<Convention, Unselected> {
+fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn llrm_target::Target) -> Result<Convention, Unselected> {
     let global = module.global(global);
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
     in_the_frame(&function.parameter_attrs)?;
     let interrupt = function.calling_convention == llrm_mir::opcode::X86_INTR;
     let first = match () {
         _ if interrupt => crate::backend::masm::interrupt_parameters(),
-        _ if far(global)? => 6,
-        _ => 4,
+        _ => arch.first_argument_offset(far(global)?),
     };
     let Passing { in_order, pops } = passing(function.calling_convention)?;
-    let mut widths = function.parameters().iter().map(|&one| size_of(module, layout, function.value(one).ty).map(slot)).collect::<Result<Vec<_>, _>>()?;
+    let mut widths = function.parameters().iter().map(|&one| size_of(module, layout, function.value(one).ty).map(|width| slot(arch, width))).collect::<Result<Vec<_>, _>>()?;
     // The last pushed is nearest: C's first argument, BASIC's last.
     if in_order {
         widths.reverse();
@@ -173,7 +169,7 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId) -> Result<
         return refuse("an interrupt handler that returns a value");
     }
     // A float leaves in st(0), which no register names.
-    let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) { Vec::new() } else { returned(size_of(module, layout, result)?) };
+    let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) { Vec::new() } else { arch.results(size_of(module, layout, result)?) };
     let popped = if pops { cursor - first } else { 0 };
     Ok(Convention { parameters, returns, popped })
 }
@@ -327,14 +323,14 @@ enum Pointer {
 }
 
 /// `hole` bytes below BP are left free, above the allocas, for spill slots.
-pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, zeroed: bool, hole: i64) -> Result<Selected, Unselected> {
+pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, compiled: &'static Compiled, arch: &'c dyn llrm_target::Target, zeroed: bool, hole: i64) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
     };
     let Some(layout) = module.datalayout.as_deref() else { return refuse("a module with no datalayout") };
     let layout = DataLayout::parse(layout).map_err(Unselected)?;
-    let convention = convention(module, &layout, global)?;
+    let convention = convention(module, &layout, global, arch)?;
     let unit = Unit::of(module, &layout, function);
     let exact = ranges::exact_offsets(&unit).map_err(Unselected)?;
     let wide = cpu.address_forms.iter().find(|form| form.secondary && form.index_width == 4);
@@ -350,6 +346,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     let mut selector = Selector {
         module,
         function,
+        arch,
         layout,
         values: IndexMap::default(),
         next: 0,
@@ -372,6 +369,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         callees: llrm_mir::memory::callees(module),
         private: Vec::new(),
         cpu,
+        compiled,
         segments,
         exact,
         exact_sums: BTreeSet::new(),
@@ -477,6 +475,7 @@ fn lined(module: &Module, function: &Function, ats: &IndexMap<InstId, i64>, body
 struct Selector<'m, 'c, 'p> {
     module: &'m Module,
     function: &'m Function,
+    arch: &'c dyn llrm_target::Target,
     layout: DataLayout,
     values: IndexMap<ValueId, u32>,
     next: u32,
@@ -520,6 +519,7 @@ struct Selector<'m, 'c, 'p> {
     private: Vec<(crate::model::ir::Addr, u32)>,
     /// What each instruction costs, where a choice depends on it.
     cpu: &'c Profile,
+    compiled: &'static Compiled,
     /// Which segment registers the machine's program model leaves free.
     segments: &'c Segments,
     /// Index values every access names exactly at any wider width.
@@ -595,7 +595,7 @@ impl Selector<'_, '_, '_> {
     fn body(&mut self, name: &str, convention: &Convention) -> Result<LirBody, Unselected> {
         let function = self.function;
         if let (Some(&last), Some(&disp)) = (function.parameters().last(), convention.parameters.last()) {
-            self.variadic = Some(disp + slot(size_of(self.module, &self.layout, function.value(last).ty)?));
+            self.variadic = Some(disp + slot(self.arch, size_of(self.module, &self.layout, function.value(last).ty)?));
         }
         // Only what execution can reach is selected, as LLVM's code generator
         // drops unreachable blocks.
@@ -822,7 +822,7 @@ impl Selector<'_, '_, '_> {
                 chain.into_iter().map(|one| LirBlock { cold: cold.contains(block), ..one })
             })
             .collect();
-        let blocks = self.widen(combined::combined(self.unread_halves_dropped(blocks), self.cpu))?;
+        let blocks = self.widen(combined::combined(self.unread_halves_dropped(blocks), self.cpu, self.compiled.rules()))?;
         let (blocks, root) = self.rooted(blocks, block_at[&entry], pads.first().map(|pad| block_at[pad]), at);
         let mut body = LirBody::new(name, root, blocks, IndexMap::default(), self.pins.clone());
         body.sealed_arguments = !self.unsealed;
@@ -2871,7 +2871,7 @@ impl Selector<'_, '_, '_> {
                 pushed += 4;
                 continue;
             }
-            pushed += slot(held.width);
+            pushed += slot(self.arch, held.width);
             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
         }
         let contract = match callee {
@@ -2921,7 +2921,7 @@ impl Selector<'_, '_, '_> {
         } else if let Some(value) = instruction.result {
             let width = self.width(instruction.ty)?;
             let held = Held { value: self.value(value), width };
-            match returned(width)[..] {
+            match self.arch.results(width)[..] {
                 // dx:ax, joined into the dword register the value lives in.
                 // Delivered as dwords: `shrd` reads each whole register, and
                 // neither upper word reaches the joined value.

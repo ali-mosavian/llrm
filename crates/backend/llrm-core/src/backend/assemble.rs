@@ -47,8 +47,14 @@ pub struct Registers {
     pub results: Vec<iced_x86::Register>,
 }
 
-/// `module` as masm, its code in the segment `code`.
+/// `module` as masm, its code in the segment `code`, selected by the 16-bit x86
+/// selector.
 pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments) -> Result<masm::Module, String> {
+    assembled_by(module, abi, code, cpu, segments, isel::code16(), &llrm_x86_code16::Code16)
+}
+
+/// `module` as masm, its code in the segment `code`, selected by `selection`.
+pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments, selection: &'static isel::Compiled, arch: &dyn llrm_target::Target) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
     let module = &*crate::backend::nearcode::placed(module);
     let mut names = globals::names(module, &|name| abi.linked(name))?;
@@ -57,7 +63,7 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
     let mut referenced: IndexMap<String, bool> = IndexMap::default();
     let mut data = Vec::new();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
-    let target = Target { cpu, segments, runtime: "", basic: false, zeroed: false };
+    let target = Target { cpu, segments, selection, arch, runtime: "", basic: false, zeroed: false };
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         let name = global.name.as_deref().unwrap_or_default();
@@ -143,6 +149,10 @@ pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<
 pub struct Target<'t> {
     pub cpu: &'t Profile,
     pub segments: &'t Segments,
+    /// The instruction selector of the target, which its driver binds.
+    pub selection: &'static isel::Compiled,
+    /// The target the selection is for.
+    pub arch: &'t dyn llrm_target::Target,
     pub runtime: &'t str,
     pub basic: bool,
     /// A framed function's locals start zeroed: B$ENRA zero-fills them.
@@ -277,7 +287,7 @@ fn far_frame(body: &LirBody) -> usize {
 /// `machined` with `hole` bytes left above the allocas; and the frame.
 fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64, spilling: bool) -> Result<(Machined, frame::Frame), String> {
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
-    let selected = isel::selected(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, zeroed, hole);
+    let selected = isel::selected(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole);
     let Selected { body, convention, calls, inline, far, depth, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut body = flow::verified(body, "isel", true).map_err(|error| error.0)?;
     let mut frame = frame::of(&body, Some(&calls), target.runtime, None).map_err(|error| error.0)?;
@@ -286,7 +296,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let frame = Rc::new(RefCell::new(frame));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, spilling)? {
+    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, spilling, target.selection.rules())? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
             continue;

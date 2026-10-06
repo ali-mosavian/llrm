@@ -27,7 +27,7 @@ fn before(file: &str, function: &str) -> (LirBody, Frame) {
     };
     let cpu = crate::backend::cpu::profile("486").unwrap();
     let pool = Rc::new(RefCell::new(Pool::new(0)));
-    let selected = isel::selected(&module, function, &abi, &mut pool.borrow_mut(), cpu, &target::BUILT_IN, false, 0).expect("selects");
+    let selected = isel::selected(&module, function, &abi, &mut pool.borrow_mut(), cpu, &target::BUILT_IN, isel::code16(), &llrm_x86_code16::Code16, false, 0).expect("selects");
     let mut made = frame::of(&selected.body, Some(&selected.calls), "", None).unwrap();
     made.floor = made.floor.min(-selected.depth);
     let shared = Rc::new(RefCell::new(made));

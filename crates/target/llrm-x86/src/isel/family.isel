@@ -146,15 +146,9 @@ pattern float_cast_from
   call float_cast
 end
 
-pattern far_load
-  match load.far(p)
-  call far_load(p)
-end
-
-pattern far_store
-  match store(v.far, p)
-  call far_store(v, p)
-end
+# Where a target's own patterns for memory go: after the conversions above, which
+# no memory pattern of its own competes with, and before the general ones.
+own memory
 
 pattern load
   match load(p)
@@ -224,15 +218,9 @@ pattern extractvalue
   call extractvalue
 end
 
-pattern far_cast_to
-  match cast.far
-  call far_cast
-end
-
-pattern far_cast_from
-  match cast(_.far)
-  call far_cast
-end
+# Where a target's own casts go: after the i64 and float casts, which are not
+# those of its own types, and before the general ones.
+own casts
 
 pattern truncate_to_boolean
   match trunc.i1(x)

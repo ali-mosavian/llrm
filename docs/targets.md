@@ -272,8 +272,10 @@ llrm-omf        OMF 16 today; 32-bit records later
 ```
 
 Dependencies point down: target crates depend on `llrm-core`, never the
-reverse; the driver depends on both. Generated code lives in the target crate and
-only calls downward, so there is no cycle. Tests in `llrm-core` that need code16
+reverse; the driver depends on both. That is the end state (PR 19b): generated code
+lives in the target crate and only calls downward, so there is no cycle. Until
+`llrm-core` stops using code16 (PRs 5 to 19), the selectors are generated in
+`llrm-core` from each target's definition directory and bound by `llrm-driver`. Tests in `llrm-core` that need code16
 move to the target crate.
 
 `Target` gives: `data_layout()`, `address_spaces()`, `registers()`,
@@ -493,7 +495,8 @@ code16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | 3a | `llrm-target`: the platform description (`Machine`, its parser) out of code16, which keeps `dos.toml`, `BUILT_IN`, `BASIC`, `CPUS`; the BC crates stop depending on code16 | production uses 20 to 17 |
 | 3b | the platform is flat-capable (`addressing = "flat"`, optional `[segments]`), `dos.toml` parses to an identical value; the PC ports in one shared file | `llrm-target` |
 | 3c | `llrm-driver`, `trait Target` (in `llrm-target`: `llrm-core` cannot be below code16 while `llrm-bcmachine` was above it), `--target` (default code16), the target in `Options`; `llrm-core` stays on code16 for the statics that `allocate`, `regclass`, `constrain` and `ssaspill` read (until PR 19) and for the profile tables (until PR 5); metric baseline | about 12 uses in `llrm-core` left |
-| 4 | generated code per target: `llrm-iselgen`, hooks resolved at generation, `CONSTRUCTORS` into the `.isel` header, generators run from the target's `build.rs` | `build.rs`, `matcher.rs`, `peephole.rs` |
+| 4 | one selector per target definition directory: `build.rs` generates a `Compiled` for each `crates/target/<name>/src/isel/` (`patterns.isel`, forms in `src/instructions/x86.instr`), found by the directory's name; `llrm-driver` binds a target to its selector and hands it in through `Options`; code16's `patterns.isel` moved there. The generated code and its hooks stay in `llrm-core` until the inversion (after 19) | `build.rs`, `matcher.rs`, `isel.rs`, `assemble.rs` |
+| 4b | the same for the peephole rules (`peephole.peep`) | `build.rs`, `peep/` |
 | 5 | `llrm-x86` family crate: schema, parser, condition codes, encoder; byte sizes from the encoder | `parse.rs`, `isel/matcher.rs:366` |
 | 6 | the form table is the only list of fixed registers, flags, ties and implicit defs/uses; string-op rows | `target.rs:67-162` (~100 lines) |
 | 7 | shadow oracle: old and new selector compared per function (isel LIR dump with every field, pool snapshot) | test tool only |
@@ -511,6 +514,7 @@ code16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | 17 | schema edits (four) and language features (i) to (v), one per PR, each deleting its hooks | `isel.rs`, `patterns.isel` |
 | 18 | `ObjectWriter` and listing syntax read from the object-format description | `compile.rs`, `basic.rs`, `masm.rs` header |
 | 19 | class routing in `regclass`, `allocate`, `ssaspill`, `constrain` | **after cost-spill lands, agreed with it first** |
+| 19b | the inversion: generated code and hooks move into the target crates, which then depend on `llrm-core`; nothing in `llrm-core` names code16 by then | `llrm-core/Cargo.toml`, `build.rs`, hooks |
 | 20 | owned by the code32 session: `llrm-x86-code32` skeleton, the first client of the generic pipeline (generic opcodes, legalizer table, complex patterns, RegBankSelect): descriptions, 32-bit `wccq`, HIR profile, `--target x86-code32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
 
 PRs 2 to 4 are the structural ones and go first: every later "where does this go"
@@ -519,7 +523,15 @@ depends on them. code32 (20) has no baseline to match, so the generic pipeline i
 descriptions, not code. Not in this task: running or linking code32, a 32-bit object
 writer, code64, arm64.
 
-PRs 2 to 19 and code16's migration belong to the target-refactor session. The
+The code32 session also makes the shared edits its listing needs, each as a
+`Target` query whose code16 answer is today's literal (so byte-identical), one PR
+per row: A, `Options` carries the target, with `stack_slot_bytes`, `frame_register`,
+`first_argument_offset` and `returns`; B, `callee_saved`; C, the datalayout and HIR
+profile into HIR to MIR; D, `bitness` and the listing header and frame in `masm`;
+E, the width in `allocate.rs` (cost-spill's file: mechanical, agreed with it first);
+and PR 5's data half, the family/code16 split of `x86.instr`, after PR 4b.
+
+PRs 2 to 19 and code16's migration otherwise belong to the target-refactor session. The
 code32 session owns PR 20 and what follows: the crate and its descriptions, the
 32-bit `wccq`, the 32-bit HIR profile, and the generic-pipeline pieces as its
 first client. Its crate stays out of the workspace until PR 3c, it edits no

@@ -35,12 +35,17 @@ pub struct Options {
     pub stack_usage: bool,
     /// `-Wstack-usage=N`: warn of each entry that can reach more than N bytes.
     pub stack_limit: Option<i64>,
+    /// The target's instruction selector, which `llrm-driver` binds to it; the
+    /// 16-bit x86 one unless it is handed another.
+    pub selection: &'static crate::backend::isel::Compiled,
+    /// The target `selection` is for.
+    pub arch: std::rc::Rc<dyn llrm_target::Target>,
 }
 
 impl Options {
     /// For `machine` at -O2, the stages written where `LLRM_MIR_STAGES` names.
     pub fn of(machine: Machine) -> Self {
-        Self { machine, pipeline: Default::default(), dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), stack_usage: false, stack_limit: None }
+        Self { machine, pipeline: Default::default(), dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), stack_usage: false, stack_limit: None, selection: crate::backend::isel::code16(), arch: std::rc::Rc::new(llrm_x86_code16::Code16) }
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
@@ -60,7 +65,7 @@ pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm:
     let segments = Segments::of(&options.machine);
     let mut out = Vec::new();
     for ((module, hir), placed) in mir.modules.iter().zip(&program.modules).zip(&placed) {
-        let mut assembled = assemble::assembled(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments)?;
+        let mut assembled = assemble::assembled_by(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments, options.selection, &*options.arch)?;
         placed.lay_out(&mut assembled, module, mir.segments.data_space, program.constant_segment.as_deref(), options.machine.far_bss)?;
         if let Some(directory) = &options.dump {
             let suffix = if program.modules.len() > 1 { format!("-{}", hir.name) } else { String::new() };
