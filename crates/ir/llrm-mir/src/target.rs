@@ -159,10 +159,10 @@ impl OperationCosts {
         (words * self.pop).min(self.adjust)
     }
 
-    /// `price` for an operation on `width`-byte values: a dword one in real
-    /// mode runs under the operand-size prefix.
-    pub fn sized(&self, price: i64, width: i64) -> i64 {
-        price + if width == 4 { self.prefix } else { 0 }
+    /// `price` for an operation on `width`-byte values where the code's own operand size is `operand` bytes:
+    /// a word or dword that is not that size runs under the operand-size prefix (a dword in real mode, a word in flat code).
+    pub fn sized(&self, price: i64, width: i64, operand: i64) -> i64 {
+        price + if width != operand && width > 1 { self.prefix } else { 0 }
     }
 }
 
@@ -171,12 +171,12 @@ impl OperationCosts {
 /// index, unscaled, no prefix); any other takes a form that scales, which
 /// costs its address-size prefix, and runs under the operand-size prefix a
 /// dword does.
-pub fn three_operand(costs: &OperationCosts, forms: &[AddressForm], width: i64, scale: i64, word: bool) -> Option<i64> {
+pub fn three_operand(costs: &OperationCosts, forms: &[AddressForm], width: i64, operand: i64, scale: i64, word: bool) -> Option<i64> {
     if word {
-        return forms.iter().any(|form| !form.secondary).then_some(costs.address);
+        return forms.iter().any(|form| !form.secondary && form.index_width == 2).then_some(costs.address);
     }
-    let form = forms.iter().find(|form| form.secondary && form.scales.contains(&scale))?;
-    Some(costs.sized(costs.address, width) + form.use_cost)
+    let form = forms.iter().find(|form| form.index_width == 4 && form.scales.contains(&scale))?;
+    Some(costs.sized(costs.address, width, operand) + form.use_cost)
 }
 
 impl Default for OperationCosts {
@@ -317,5 +317,34 @@ impl Machine for Neutral {
     /// An address adds one index, unscaled and free.
     fn address_forms(&self) -> Vec<AddressForm> {
         vec![AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("no fallback to disagree")]
+    }
+}
+
+#[cfg(test)]
+mod operand_size_tests {
+    use super::*;
+
+    fn form(index_width: i64, secondary: bool, use_cost: i64) -> AddressForm {
+        AddressForm::new(index_width, BTreeSet::from([1, 2, 4, 8]), 0, use_cost, 0, secondary, None).expect("a form")
+    }
+
+    /// The operand-size prefix is for the size that is not the code's own: a dword in real mode, a word when flat.
+    #[test]
+    fn the_prefix_is_for_the_size_that_is_not_the_codes_own() {
+        let costs = OperationCosts { prefix: 1, ..OperationCosts::default() };
+        assert_eq!((costs.sized(5, 4, 2), costs.sized(5, 2, 2), costs.sized(5, 4, 4), costs.sized(5, 2, 4), costs.sized(5, 1, 4)), (6, 5, 5, 6, 5));
+    }
+
+    /// A flat target's dword address has no prefix and its price is the `lea`'s; it had none, because only the
+    /// prefixed (secondary) form was looked for. A word address needs a form of index width 2.
+    #[test]
+    fn a_native_dword_address_is_priced_and_a_word_one_needs_a_word_form() {
+        let costs = OperationCosts { address: 2, prefix: 1, ..OperationCosts::default() };
+        let flat = [form(4, false, 0)];
+        assert_eq!(three_operand(&costs, &flat, 4, 4, 2, false), Some(2));
+        assert_eq!(three_operand(&costs, &flat, 2, 4, 1, true), None);
+        let real = [form(2, false, 0), form(4, true, 1)];
+        assert_eq!(three_operand(&costs, &real, 4, 2, 2, false), Some(2 + 1 + 1));
+        assert_eq!(three_operand(&costs, &real, 2, 2, 1, true), Some(2));
     }
 }

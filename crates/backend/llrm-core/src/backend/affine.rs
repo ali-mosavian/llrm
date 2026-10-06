@@ -68,7 +68,7 @@ pub fn step(one: &Insn, cpu: &Profile) -> Option<(Reg, Step, i64)> {
         (Operation::Binary, Some("add"), [_, Loc::Reg(other)]) if register(other) => (Step::AddRegister(*other), costs.add),
         _ => return None,
     };
-    Some((*dest, step, costs.sized(cost, width)))
+    Some((*dest, step, costs.sized(cost, width, i64::from(cpu.operand_bytes))))
 }
 
 /// The 67h address naming `terms` plus `disp`, if one does.

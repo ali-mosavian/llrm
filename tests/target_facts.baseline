@@ -20,7 +20,7 @@
 1 crates/backend/llrm-core/src/backend/isel/unwind.rs
 11 crates/backend/llrm-core/src/backend/isel/wide.rs
 2 crates/backend/llrm-core/src/backend/liveness.rs
-12 crates/backend/llrm-core/src/backend/loopslots.rs
+5 crates/backend/llrm-core/src/backend/loopslots.rs
 2 crates/backend/llrm-core/src/backend/machinedce.rs
 11 crates/backend/llrm-core/src/backend/masm.rs
 8 crates/backend/llrm-core/src/backend/omfwrite.rs
@@ -37,7 +37,6 @@
 1 crates/backend/llrm-core/src/backend/spillforward.rs
 2 crates/backend/llrm-core/src/backend/storecombine.rs
 7 crates/backend/llrm-core/src/backend/target.rs
-6 crates/backend/llrm-core/src/backend/timing.rs
 1 crates/backend/llrm-core/src/backend/upperzero.rs
 7 crates/backend/llrm-core/src/driver/basic.rs
 8 crates/backend/llrm-driver/src/lib.rs
