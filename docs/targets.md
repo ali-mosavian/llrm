@@ -27,8 +27,6 @@ Known departures today, each to be removed:
 | `llrm-core` `select.rs`, `omfwrite.rs`: x86 instruction encoding and the OMF writer, in `llrm-core` and keyed by a described bitness (`At{ip,bits}`) | the encoder belongs in the x86 family layer | PR 5's encoder half (code32-prep, D) |
 | `llrm-core` `select::emit`: the mode it encodes and decodes in is a thread-local set at the two compile entries from the target's `object.bitness` (`select::encoding_in`), read by ~14 passes that price code or read register effects (`peephole::_register_effects` decodes emitted bytes, 30 uses) | a target fact held as ambient state; two targets compiling on one thread at once would share it | the effects read from the forms' `reads`/`writes` columns, so nothing decodes, and the mode passed where the encoder is asked (the encoder PR); issue #581 |
 | `llrm-core` `flow.rs`: `LoopSlots` is dropped where `FrameRegisters.slot != 2` | its slots are words and it parks BP at word width | a `LoopSlots` that reads the slot width and frame register (code32 session, next) |
-| `llrm-nib` heap and `os.more`: blocks under 64 KB on code32 | sizes are `u16` | a size type that is the target's (usize-like) |
-| `llrm-core` `isel.rs` string operations (`memcpy`/`memset` lowering): segment operands, 16-bit counts | code16-shaped lowering | code32's flat rows and the `segmented()`/`address_bytes()` reading (code32 session) |
 
 ## Principle: a target is description
 
