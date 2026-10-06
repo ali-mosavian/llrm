@@ -9,7 +9,7 @@ use llrm_qbruntime::INLINE_TABLE;
 use super::nodes::{Call, Data, Long, Node, Opaque, RESTORE_EFFECTS, Restore, TableKind, span};
 use super::semantics::{instruction_effects, instruction_semantics};
 use super::{Imm, Loc, NO_EFFECT, Operation, Reg, Semantics};
-use llrm_x86_code16::machine::{Machine, PortMemory};
+use llrm_target::machine::{Machine, PortMemory};
 use crate::frontends::bc::blocks::{Block, CodeMap, code_map, partition as block_partition};
 use crate::frontends::bc::declen::Insn;
 use crate::frontends::bc::extent::{Body, Partition, partition as body_partition};

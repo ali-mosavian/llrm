@@ -9,10 +9,11 @@ description = "llrm's machine layer for BC objects: x86 decode into machine IR, 
 llrm-support = { workspace = true }
 llrm-omf = { workspace = true }
 llrm-lir = { workspace = true }
-llrm-x86-code16 = { workspace = true }
+llrm-target = { workspace = true }
 llrm-qbruntime = { workspace = true }
 iced-x86 = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
 llrm-omf = { workspace = true, features = ["testing"] }
+llrm-x86-code16 = { workspace = true }
