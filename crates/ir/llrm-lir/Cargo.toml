@@ -1,0 +1,11 @@
+[package]
+name = "llrm-lir"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "llrm's machine operand model: registers, memory operands, effects and selected semantics"
+
+[dependencies]
+llrm-support = { workspace = true }
+llrm-omf = { workspace = true }
+iced-x86 = { workspace = true }
