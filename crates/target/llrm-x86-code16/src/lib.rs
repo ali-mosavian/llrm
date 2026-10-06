@@ -105,6 +105,10 @@ impl llrm_target::Target for Code16 {
         &CONVENTIONS
     }
 
+    fn calling(&self) -> &'static llrm_target::calling::Calling {
+        &CALLING
+    }
+
     fn physical_addresses(&self) -> Vec<(String, u64)> {
         llrm_x86::physical_addresses()
     }

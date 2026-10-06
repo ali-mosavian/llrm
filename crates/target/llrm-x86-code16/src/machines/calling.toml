@@ -2,6 +2,7 @@
 # symbols). A far call (a procedure that is exported) leaves a 4-byte return address.
 
 [cdecl16]
+cc = "cdecl"
 slot_bytes = 2
 order = "right-to-left"
 cleanup = "caller"

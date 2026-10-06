@@ -658,7 +658,7 @@ impl<'a, 't> Body<'a, 't> {
         let linkage = if symbol.exported() { h::FunctionLinkage::External } else { h::FunctionLinkage::Internal };
         let mut function = h::Function {
             parameters,
-            abi: Some(h::ProcedureAbi { cleanup, distance: distance(symbol), parameter_bytes, float_return: FloatReturn::Register, variadic: symbol.variadic() }),
+            abi: Some(h::ProcedureAbi { convention: None, cleanup, distance: distance(symbol), parameter_bytes, float_return: FloatReturn::Register, variadic: symbol.variadic() }),
             calls: body.calls,
             linkage,
             ..h::Function::new(id, &symbol.object_name(), result_type, body.values, body.places, blocks, 1)
@@ -1916,7 +1916,7 @@ impl<'a, 't> Body<'a, 't> {
         let instruction = self.instruction(Op::Call, results, operands);
         instruction.callee = callee.map(str::to_owned);
         let id = instruction.id;
-        self.calls.push(h::CallAbi { instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register });
+        self.calls.push(h::CallAbi { convention: None, instruction: id, order, cleanup, distance, callee: None, float_return: FloatReturn::Register });
     }
 
     /// Inline code as a call of `llrm.ia16.code`, each frame place it names

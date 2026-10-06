@@ -2,7 +2,7 @@
 //! Its descriptions are the files beside this one; this answers what they
 //! cannot say.
 
-use iced_x86::Register::{self, EAX, EBP, EBX, EDI, EDX, ESI, ESP};
+use iced_x86::Register::{self, EBP, ESP};
 use std::sync::LazyLock;
 
 use llrm_mir::target::{AddressForm, OperationCosts};
@@ -61,6 +61,10 @@ impl llrm_target::Target for Code32 {
 
     fn conventions(&self) -> &'static [&'static str] {
         &CONVENTIONS
+    }
+
+    fn calling(&self) -> &'static llrm_target::calling::Calling {
+        &CALLING
     }
 
     fn physical_addresses(&self) -> Vec<(String, u64)> {
@@ -170,6 +174,7 @@ impl llrm_target::Target for Code32 {
 
 #[cfg(test)]
 mod tests {
+    use iced_x86::Register::{EAX, EBX, ECX, EDI, EDX, ESI};
     use llrm_target::Target;
 
     use super::*;
@@ -181,7 +186,7 @@ mod tests {
         assert_eq!(forms.len(), 1);
         assert!(!forms[0].secondary && forms[0].index_width == 4 && forms[0].scales == std::collections::BTreeSet::from([1, 2, 4, 8]));
         let model = (Code32.cost_model())(&llrm_target::CpuPrices { costs: Vec::new(), prefix: 1, address_stall: 0, registers: Code32.register_capacity(), call_registers: Code32.callee_saved().len() as i64, address_forms: forms.clone(), operations: OperationCosts::default(), spaces: layout().spaces.roles });
-        assert_eq!((model.registers(), model.call_registers()), (6, 3));
+        assert_eq!((model.registers(), model.call_registers()), (6, 5));
         assert_eq!(model.address_forms(), forms);
     }
 
@@ -203,14 +208,14 @@ mod tests {
         assert_eq!((spaces.near, spaces.far, spaces.segment, spaces.huge, spaces.fixed, spaces.unmarked(4)), (0, 0, None, None, None, Ok(0)));
     }
 
-    /// The calling.toml was never read, and its aggregate and promotion keys sat inside the result table
-    /// (a table opened above them): read, each is the convention's.
+    /// The register default comes first: the language's own functions use it, and `cdecl32` is named after it.
     #[test]
-    fn test_calling_toml_states_cdecl32_at_the_top_of_its_table() {
+    fn test_calling_toml_states_watcall32_at_the_top_of_its_table() {
         let one = CALLING.native();
-        assert_eq!((one.name.as_str(), CONVENTIONS.as_slice()), ("cdecl32", &["cdecl32"][..]));
+        assert_eq!((one.name.as_str(), CONVENTIONS.as_slice()), ("watcall32", &["watcall32", "cdecl32"][..]));
         assert_eq!(one.aggregate.as_ref().map(|one| one.style.as_str()), Some("hidden-pointer"));
         assert_eq!((one.promotion.as_str(), one.wide_slots, one.results.keys().cloned().collect::<Vec<_>>()), ("slot", 2, vec!["1", "2", "4", "8", "float", "pointer"].into_iter().map(String::from).collect::<Vec<_>>()));
+        assert_eq!(CALLING.by_cc("cdecl").map(|one| one.name.as_str()), Some("cdecl32"));
     }
 
     /// The aggregate return was marked provisional while the C ABI was open: it is Open Watcom's flat ABI
@@ -222,14 +227,16 @@ mod tests {
         assert!(text.contains("Open Watcom's 386 flat ABI") && text.contains("THE DIFFERENCE FROM OPEN WATCOM") && text.contains("aggregate = \"hidden-pointer\""));
     }
 
-    /// cdecl32 (calling.toml): EBP and ESP frame, EBX/ESI/EDI kept whole, first argument at [ebp+8].
+    /// watcall32 (calling.toml): EBP and ESP frame, every register but EAX kept by a callee that is not given one in an
+    /// argument, first stack argument at [ebp+8]; cdecl32 keeps EBX/ESI/EDI.
     #[test]
-    fn test_code32_answers_cdecl32() {
+    fn test_code32_answers_watcall32() {
         let frame = Code32.frame_registers();
         assert_eq!((Code32.object().bitness, Code32.object().header), (32, vec![".386".to_owned(), ".model flat".to_owned()]));
         assert_eq!((frame.pointer, frame.stack), (EBP, ESP));
-        assert_eq!(frame.saved, [(EBX, EBX), (ESI, ESI), (EDI, EDI)]);
+        assert_eq!(frame.saved, [(EBX, EBX), (ECX, ECX), (EDX, EDX), (ESI, ESI), (EDI, EDI)]);
         assert_eq!((Code32.stack_slot_bytes(), Code32.first_argument_offset(false)), (4, 8));
         assert_eq!([4, 8].map(|width| Code32.results(width)), [vec![EAX], vec![EAX, EDX]]);
+        assert_eq!(llrm_x86::calling::callee_saved(CALLING.named("cdecl32").unwrap()), [(EBX, EBX), (ESI, ESI), (EDI, EDI)]);
     }
 }
