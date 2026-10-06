@@ -2620,7 +2620,7 @@ fn test_frame_copy_uses_a_dead_register_before_the_stack() {
     let scheduled =
         parcopy::scheduled(&one_block(vec![group_move(destination.clone(), source.clone(), Some(1), 0x100), reset()])).unwrap();
 
-    let instructions = frame_copies(&scheduled, "386").unwrap().blocks[0].insns.clone();
+    let instructions = frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::code16()).unwrap().blocks[0].insns.clone();
 
     assert_eq!(names(&instructions), ["mov", "mov", "mov"]);
     assert_eq!(instructions[0].what, Some(sem(Operation::Move, "mov", vec![rl(Register::EAX, 4)], vec![source])));
@@ -2633,7 +2633,7 @@ fn test_frame_copy_keeps_the_stack_when_no_register_is_dead() {
     let (source, destination) = frame_slots(2);
     let scheduled = parcopy::scheduled(&one_block(vec![group_move(destination, source, Some(1), 0x100)])).unwrap();
 
-    let instructions = frame_copies(&scheduled, "386").unwrap().blocks[0].insns.clone();
+    let instructions = frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::code16()).unwrap().blocks[0].insns.clone();
 
     assert_eq!(names(&instructions), ["push", "pop"]);
 }
@@ -2648,7 +2648,7 @@ fn test_source_push_pop_is_not_treated_as_a_parallel_copy() {
     pair[1] = Arc::new(Insn { at: 0x101, covers: Some((0x101, 0x102)), ..(*pair[1]).clone() });
     pair.push(reset());
 
-    let instructions = frame_copies(&one_block(pair), "386").unwrap().blocks[0].insns.clone();
+    let instructions = frame_copies(&one_block(pair), "386", &crate::backend::classes::RegisterClasses::code16()).unwrap().blocks[0].insns.clone();
 
     assert_eq!(names(&instructions[..2]), ["push", "pop"]);
 }

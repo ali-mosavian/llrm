@@ -25,6 +25,10 @@ pub struct RegisterClasses {
     pub word_bases: BTreeSet<Register>,
     pub word_indexes: BTreeSet<Register>,
     pub frame: Register,
+    /// Every register an address may be made of, the frame's included: `[bx+si]`, `[bp+di]`.
+    pub addressing: BTreeSet<Register>,
+    /// The bases the encoding permits, the frame's included.
+    pub encodable_bases: BTreeSet<Register>,
 }
 
 impl RegisterClasses {
@@ -50,7 +54,10 @@ impl RegisterClasses {
         let word = |root: &str| file.iter().find(|one| one.root == root && one.bits == 16).map(|one| iced(&one.name)).expect("a register has a word view");
         let held = |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(named).collect::<Vec<_>>();
         let words = |class: &str| llrm_target::registers::of_class(&file, class).into_iter().filter(|root| !file.iter().any(|one| one.name == *root && one.is("reserved"))).map(word).collect();
-        Self { pins, available: held("gpr"), word_bases: words("base"), word_indexes: words("index"), frame: arch.frame_register() }
+        let every = |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(word).collect::<BTreeSet<_>>();
+        let (encodable_bases, indexes) = (every("base"), every("index"));
+        let addressing = encodable_bases.union(&indexes).copied().collect();
+        Self { pins, available: held("gpr"), word_bases: words("base"), word_indexes: words("index"), frame: arch.frame_register(), addressing, encodable_bases }
     }
 
     /// 16-bit x86's, which the tests of this crate are written for.
@@ -128,5 +135,7 @@ mod tests {
         assert_eq!(classes.word_bases, llrm_x86_code16::word_bases().into_iter().collect());
         assert_eq!(classes.word_indexes, llrm_x86_code16::WORD_INDEXES.into_iter().collect());
         assert_eq!(classes.frame, llrm_x86_code16::FRAME);
+        assert_eq!(classes.encodable_bases, llrm_x86_code16::ENCODABLE_BASES.into_iter().collect());
+        assert_eq!(classes.addressing, [Register::BX, Register::BP, Register::SI, Register::DI].into_iter().collect());
     }
 }

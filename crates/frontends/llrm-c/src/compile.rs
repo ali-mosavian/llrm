@@ -1040,7 +1040,8 @@ mod tests {
     fn test_code32_lists_a_loop_over_int_pointers() {
         let lines = flat_listing("sum");
         let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_sum proc near").skip(1).take_while(|line| *line != "_sum endp").map(String::as_str).collect();
-        assert!(body.contains(&"mov edx, dword ptr [ebx+ecx]") && body.contains(&"add ecx, 4"), "{body:#?}");
+        // Which registers is the target's allocation order, not this test's concern.
+        assert!(body.iter().any(|line| line.starts_with("mov e") && line.contains("dword ptr [e") && line.contains("+e")) && body.iter().any(|line| line.starts_with("add e") && line.ends_with(", 4")), "{body:#?}");
         assert!(body.iter().all(|line| !line.contains(" bp") && !line.contains("[bx") && !line.contains("es:") && !line.contains("far")), "{body:#?}");
         assert_eq!(body.last(), Some(&"ret"));
     }

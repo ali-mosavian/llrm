@@ -345,7 +345,7 @@ struct Machine<'a> {
 impl<'a> Machine<'a> {
     fn of(confined: &'a Classes, file: File, segments: &Segments, classes: &'a RegisterClasses) -> Self {
         let general: BTreeSet<Register> = match file {
-            File::General => target::AVAILABLE.iter().map(|one| _whole(*one)).collect(),
+            File::General => classes.available.iter().map(|one| _whole(*one)).collect(),
             File::Selector => segments.selectors.iter().copied().collect(),
         };
         let pools: BTreeSet<BTreeSet<Register>> = confined
@@ -510,7 +510,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, classes: 
     // The loops, found once: depths, headers and each loop's pressure all come from them.
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let flow = Flow::of(body, &loops);
-    let confined = regclass::classes(body, &BTreeSet::new(), segments);
+    let confined = regclass::classes(body, &BTreeSet::new(), segments, classes);
     let skip = untouchable(body);
     let order = reverse_postorder(body);
     let place: IndexMap<i64, usize> = order.iter().enumerate().map(|(at, block)| (*block, at)).collect();

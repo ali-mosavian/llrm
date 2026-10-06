@@ -655,7 +655,7 @@ fn spilled_and_allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), Stri
         Box::new(SsaSpill { frame: frame.clone(), segments: segments.clone(), classes: crate::backend::classes::RegisterClasses::code16(), prices: crate::backend::ssaspill::Prices::clocks(), run: Default::default() }),
         Box::new(PhiElimination),
         Box::new(TwoAddress),
-        Box::new(Coalescer::new(None, segments)),
+        Box::new(Coalescer::new(None, segments, &crate::backend::classes::RegisterClasses::code16())),
         Box::new(RegAlloc::new(None, Some(frame), ProfileOrName::Name(cpu), segments, &crate::backend::classes::RegisterClasses::code16())?),
         Box::new(ParallelCopy),
     ];
