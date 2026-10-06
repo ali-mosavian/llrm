@@ -73,6 +73,7 @@
 1 crates/frontends/qbfront/crates/buildprs/src/buildprs_generator.rs
 1 crates/frontends/qbfront/crates/buildprs/src/buildprs_lowering.rs
 1 crates/frontends/qbfront/src/generated_parser/lexer.rs
+1 crates/frontends/qbfront/src/main.rs
 1 crates/ir/llrm-hir/src/bin/hir-mir.rs
 2 crates/ir/llrm-lir/src/lib.rs
 8 crates/ir/llrm-lir/src/root.rs
