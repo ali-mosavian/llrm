@@ -364,11 +364,12 @@ impl<'u> Types<'u> {
     fn c(&mut self, type_: &str) -> R<i64> {
         let type_ = self.unit.canonical_type(type_);
         let big = |flag| if self.unit.target & flag != 0 { 4 } else { 2 };
-        if self.flat && matches!(type_.as_str(), "TY_LONG_POINTER" | "TY_HUGE_POINTER" | "TY_LONG_CODE_PTR") {
+        // A far or huge data pointer is the flat space's own; a far code pointer is a far call.
+        if self.flat && type_ == "TY_LONG_CODE_PTR" {
             return refuse(format!("{type_} in flat code"));
         }
         let shape = match type_.as_str() {
-            "TY_POINTER" | "TY_CODE_PTR" | "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" if self.flat => Shape::Pointer(4),
+            "TY_POINTER" | "TY_CODE_PTR" | "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" | "TY_LONG_POINTER" | "TY_HUGE_POINTER" if self.flat => Shape::Pointer(4),
             "TY_POINTER" => Shape::Pointer(big(hir::BIG_DATA)),
             "TY_CODE_PTR" => Shape::Pointer(big(hir::BIG_CODE)),
             "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" => Shape::Pointer(2),
