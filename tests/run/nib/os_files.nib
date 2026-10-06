@@ -22,6 +22,7 @@ fn main() -> i16:
         let absent: *far char = &missing
         print(os.open(absent, 0) == -os.NOT_FOUND)
         print(os.read(99, &mut buffer, 1) < 0)
+        print(os.close(99) == -6)
     for i in 0..6:
         print(buffer[i])
     match io.File.open("NOSUCH.TMP"):
