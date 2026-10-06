@@ -1,0 +1,23 @@
+# flags: -O2 --cpu 486 --target x86-code32
+# The flat heap past the old 1 MB static arena: it asks the extender for memory (an arena of
+# `heap_bytes` in the target's runtime description), so 6 MB of blocks are taken, written at both ends
+# and read back. heap.nib and errors.nib are the runtime's own (links here).
+import heap
+
+fn main() -> i16:
+    unsafe:
+        let first = heap.allocate(2000000)
+        let second = heap.allocate(2000000)
+        let third = heap.allocate(2000000)
+        *first = 1
+        *first.offset(1999999) = 2
+        *second = 3
+        *second.offset(1999999) = 4
+        *third = 5
+        *third.offset(1999999) = 6
+        print(*first + *first.offset(1999999) + *second + *second.offset(1999999) + *third + *third.offset(1999999))
+        print(first != second && second != third)
+        heap.release(second)
+        let again = heap.allocate(1500000)
+        print(again == second)
+    return 0
