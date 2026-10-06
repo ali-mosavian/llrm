@@ -110,7 +110,11 @@ pub struct Fill {
 pub struct Pointer {
     pub name: String,
     pub offset: i64,
+    /// A selector and an offset, where the target has selectors.
     pub far: bool,
+    /// The bytes of the cell it fills: the target's pointer width (or the offset's, for a far one made of an offset
+    /// word and a selector word).
+    pub bytes: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -213,8 +217,8 @@ pub fn datum(item: &Datum) -> Vec<String> {
         Datum::Fill(Fill { size, byte }) => {
             vec![format!("    db {size} dup ({})", byte.map_or_else(|| "?".to_owned(), |one| one.to_string()))]
         }
-        Datum::Pointer(Pointer { name, offset, far }) => {
-            vec![format!("    {} {name}{}", if *far { "dd" } else { "dw" }, _signed(*offset))]
+        Datum::Pointer(Pointer { name, offset, bytes, .. }) => {
+            vec![format!("    {} {name}{}", match bytes { 4 => "dd", 2 => "dw", other => panic!("a pointer of {other} bytes") }, _signed(*offset))]
         }
         Datum::Align(Align { to }) => vec![format!("    align {to}")],
         Datum::Bytes(item) => _code(&[InlinePart::Bytes(item.clone())]),
