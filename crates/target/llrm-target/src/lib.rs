@@ -4,6 +4,7 @@
 pub mod addressing;
 pub mod layout;
 pub mod machine;
+pub mod object;
 pub mod opcosts;
 pub mod registers;
 pub mod timings;
@@ -115,6 +116,9 @@ pub trait Target {
     /// One CPU's timings (a column of the target's `timings.times`), if the target prices it.
     fn cpu_table(&self, name: &str) -> Option<timings::CpuTable>;
 
+    /// The target's instruction forms: the family's and its own, in `x86.instr`'s format.
+    fn forms_text(&self) -> String;
+
     /// The CPU a compile is priced for where none is asked.
     fn default_cpu(&self) -> &'static str;
 
@@ -132,8 +136,8 @@ pub trait Target {
     /// How this target's passes are given the prices of a CPU.
     fn cost_model(&self) -> CostModel;
 
-    /// The lines a listing opens with: its instruction set and memory model.
-    fn listing_header(&self) -> Vec<String>;
+    /// The object file and listing this target writes.
+    fn object(&self) -> object::ObjectFormat;
 
     /// What a frame is built of.
     fn frame_registers(&self) -> FrameRegisters {

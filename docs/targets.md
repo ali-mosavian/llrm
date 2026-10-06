@@ -128,6 +128,13 @@ i16 pairs), not a refactor, and is not part of this task.
   ops read it or set ES. FS and GS are never assumed (TLS). Any GPR is a base,
   any but ESP an index. Word ops pay 66h.
 
+code32 runs under a DOS extender: OMF with USE32 segments and 32-bit records, linked by
+JWlink as an LE executable behind DOS/32A's stub (`object.toml`'s `[link]`; the start-up
+and `report` are `llrm-x86-code32/runtime`). Its C ABI is cdecl32 with `llrm-c`'s Borland
+rule for aggregate returns (1, 2 or 4 bytes in EAX, else a pointer pushed after the
+arguments and returned in EAX), not Open Watcom's static result area or Win32's: the
+rule is revisited if code32 links a libc that has one of those.
+
 ## Measured state
 
 - `llrm_x86_code16` is named on 65 lines outside its crate: 20 in production

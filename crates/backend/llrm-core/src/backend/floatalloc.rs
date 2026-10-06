@@ -118,7 +118,7 @@ pub(super) fn _memory_name(name: &str, cell_is_left: bool, load: &Insn) -> Optio
     if name_is(load.what.as_ref().expect("a home load has semantics"), "fild") {
         name = format!("fi{}", &name[1..]);
     }
-    select::float_memory(&name, cell_of(load), 0).is_some().then_some(name)
+    select::float_memory(&name, cell_of(load), select::At::bits16(0)).is_some().then_some(name)
 }
 
 /// A stack slot whose value is overwritten: popped at once.

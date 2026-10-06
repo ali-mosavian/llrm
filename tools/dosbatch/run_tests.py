@@ -188,12 +188,13 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
         return problem
     if program.source.suffix == ".c":
         exe = work / f"{stem}.exe"
+        target = program.flags[program.flags.index("--target") + 1] if "--target" in program.flags else "x86-code16"
         try:
-            dosbatch.link_c(obj, exe, work)
+            loaders = dosbatch.link_target(target, obj, exe, work)
             dosbatch.check_loads(exe)
         except (dosbatch.BuildError, dosbatch.TooBig) as error:
             return f"link: {error}"
-        return Job(stem, "exe", exe, files=data_files(program))
+        return Job(stem, "exe", exe, files=(*data_files(program), *loaders))
     extras = []
     for at, one in enumerate(program.link):
         extra = work / f"{stem}L{at}.obj"

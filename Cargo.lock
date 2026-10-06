@@ -457,6 +457,7 @@ dependencies = [
  "iced-x86",
  "llrm-mir",
  "llrm-target",
+ "llrm-x86",
 ]
 
 [[package]]
