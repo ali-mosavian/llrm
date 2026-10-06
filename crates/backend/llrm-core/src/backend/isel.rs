@@ -333,7 +333,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     let convention = convention(module, &layout, global, arch)?;
     let unit = Unit::of(module, &layout, function);
     let exact = ranges::exact_offsets(&unit).map_err(Unselected)?;
-    let wide = cpu.address_forms.iter().find(|form| form.secondary && form.index_width == 4);
+    let wide = cpu.dword_address_form();
     let secondary = wide.filter(|form| form.before_spill(&cpu.operations));
     let dword_indexed = wide.is_some() && function.walk().any(|(_, inst)| dword_indexed(module, function, inst));
     let (facts, typed) = match secondary.is_some() || dword_indexed {
@@ -2026,7 +2026,10 @@ impl Selector<'_, '_, '_> {
         // A word index is zero-extended, so it must be non-negative; a dword
         // one is truncated to the word the gep adds, so it must be one.
         let bits = if dword { 32 } else { 16 };
-        let proven = self.accesses(address).into_iter().all(|access| {
+        // The wide sum names the byte the pointer's own offset sum does where that sum is as
+        // wide: a dword pointer needs no proof, a word one the facts below.
+        let exact = matches!(self.types().get(function.value(address).ty), Type::Pointer(space) if self.layout.pointer(*space).index_bits >= 32);
+        let proven = exact || self.accesses(address).into_iter().all(|access| {
             let fact = function.parent(access).and_then(|block| self.facts.get(&cfg::id(block))).and_then(|known| known.get(&index));
             let word = |fact: &ranges::Interval| fact.low.clone() * factor >= i16::MIN.into() && fact.high.clone() * factor <= i16::MAX.into();
             let sound = |fact: &ranges::Interval| if dword { word(fact) } else { fact.low >= 0.into() && (factor == 1 || word(fact)) };
@@ -2042,8 +2045,9 @@ impl Selector<'_, '_, '_> {
         let wide = Held { value: self.value(index), width: 4 };
         let (scaled, base) = match pointer {
             Pointer::Frame { disp, index: None, .. } => (Pointer::Frame { disp, index: Some(wide), scale }, None),
-            Pointer::Based { base, index: None, offset, segment, .. } if root.is_some_and(|root| self.promotable(root)) => {
-                (Pointer::Based { base: Held { width: 4, ..base }, index: Some(wide), scale, offset, segment }, Some(base))
+            // A dword base is the wide register already; a word one is widened where defined.
+            Pointer::Based { base, index: None, offset, segment, .. } if base.width == 4 || root.is_some_and(|root| self.promotable(root)) => {
+                (Pointer::Based { base: Held { width: 4, ..base }, index: Some(wide), scale, offset, segment }, (base.width != 4).then_some(base))
             }
             Pointer::Far { selector, base: Some(base), index: None, offset, .. } if root.is_some_and(|root| self.promotable(root)) => {
                 (Pointer::Far { selector, base: Some(Held { width: 4, ..base }), index: Some(wide), scale, offset }, Some(base))

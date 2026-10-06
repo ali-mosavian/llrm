@@ -1334,7 +1334,7 @@ fn _root_get(register: Register) -> Option<Register> {
 /// and compares both the selected CPU cost and exact encoded byte totals.
 pub fn secondary_bases<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Result<LirBody, String> {
     let profile = targets::profile(cpu)?;
-    let Some(secondary) = profile.address_forms.iter().find(|form| form.secondary && form.index_width == 4) else {
+    let Some(secondary) = profile.dword_address_form() else {
         return Ok(body.clone());
     };
 
@@ -1568,7 +1568,7 @@ fn _affine_address(
     let Some(copy) = parts.first() else {
         return Ok(None);
     };
-    let Some(wide) = cpu.address_forms.iter().find(|form| form.secondary && form.index_width == 4) else {
+    let Some(wide) = cpu.dword_address_form() else {
         return Ok(None);
     };
     let Some((dest, affine::Step::Copy(source), mut old)) = affine::step(copy, cpu) else {
