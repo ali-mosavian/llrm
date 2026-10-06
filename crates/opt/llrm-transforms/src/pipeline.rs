@@ -61,6 +61,7 @@ pub struct Options {
     pub unroll: bool,
     pub peel: bool,
     pub fill: bool,
+    pub sibcalls: bool,
     pub unswitch: bool,
 }
 
@@ -84,6 +85,7 @@ impl Default for Options {
             unroll: true,
             peel: true,
             fill: true,
+            sibcalls: true,
             unswitch: false,
         }
     }
@@ -142,6 +144,7 @@ impl Options {
             "unroll" => self.unroll,
             "peel" => self.peel,
             "fill" | "merge" => self.fill,
+            "tailrec" => self.sibcalls,
             _ => true,
         }
     }
