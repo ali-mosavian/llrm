@@ -367,6 +367,16 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         after
     );
     if llrm_support::debug::enabled("lsr") {
+        for (label, set) in [("standing", Some(current.clone())), ("chosen", chosen.clone())] {
+            let Some(set) = set else { continue };
+            for index in 0..problem.sites.len() {
+                if let Some((Some((one, fit, price)), _)) = problem.choice(&set, index) {
+                    llrm_support::debug!("lsr", "  {label} site {index}: from {one}, cost {} x{}, k {}, held {:?}, product {:?}", price.cost, problem.sites[index].frequency, fit.k, price.held, price.product);
+                } else {
+                    llrm_support::debug!("lsr", "  {label} site {index}: exit-tested");
+                }
+            }
+        }
         for (at, site) in problem.sites.iter().enumerate() {
             let op = function.instruction(site.one.user);
             llrm_support::debug!("lsr", "  site {at}: {:?} operand {} of {:?} {:?}, {:?} + {:?}*t, x{}", site.one.kind, site.one.index, op.opcode, op.result, site.one.of.start, site.one.of.step.known(), site.frequency);
@@ -776,20 +786,28 @@ fn _latch_arm(function: &Function, phi: ValueId, latch: BlockId) -> Option<Opera
     function.instruction(inst).operands.chunks(2).find(|pair| pair[1] == Operand::Block(latch)).map(|pair| pair[0])
 }
 
-/// What `k * r` costs a trip: nothing, a negation, a shift or a multiply.
+/// What `k * r` costs a trip: nothing, a negation, a shift or a multiply. On a two-address target the
+/// candidate stays live, so a negation or a shift is made in a copy of it, unless `lea` scales it.
 fn _scaling(target: &Target, k: &BigInt) -> i64 {
     let costs = &target.costs;
     let magnitude = BigInt::from(k.magnitude().clone());
+    let copy = if target.room.two_address && !_leas(target, k) { costs.r#move } else { 0 };
     if *k == BigInt::from(1) || *k == BigInt::from(0) {
         0
     } else if *k == BigInt::from(-1) {
-        costs.add
+        costs.add + copy
     } else if (&magnitude & (&magnitude - 1)) == BigInt::from(0) {
-        costs.shift + if *k < BigInt::from(0) { costs.add } else { 0 }
+        costs.shift + copy + if *k < BigInt::from(0) { costs.add } else { 0 }
     } else {
         let multiply = magnitude.to_i64().map_or(costs.multiply, |factor| target.machine.multiply_by(factor));
         multiply + if *k < BigInt::from(0) { costs.add } else { 0 }
     }
+}
+
+/// Whether one `lea` makes `k * r + rest + constant`: where any register may be a base and an index
+/// (`[bx+si]` is no `lea` of `ax`), and its scales hold `k`.
+fn _leas(target: &Target, k: &BigInt) -> bool {
+    target.forms.iter().any(|form| form.bases.is_none() && form.indices.is_none() && (*k == BigInt::from(1) || k.to_i64().is_some_and(|scale| scale > 1 && form.scales.contains(&scale))))
 }
 
 /// `site`'s price from `candidate`.
@@ -943,9 +961,8 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             // A two-address target makes a result in its first operand's register: the candidate stays
             // live, as a counter does, so a form no address takes (a negation, a general scale) is
             // copied first. `lea` makes `cand * k + rest + constant` in one, where its scales hold `k`.
-            // Only where any register may be a base and an index: `[bx+si]` is no `lea` of `ax`.
-            let addressable = target.forms.iter().any(|form| form.bases.is_none() && form.indices.is_none() && (fit.k == BigInt::from(1) || small(&fit.k) > 1 && form.scales.contains(&small(&fit.k))));
-            let copy = if target.room.two_address && !addressable { costs.r#move } else { 0 };
+            // (A scaled one is made in a copy already, which the add then makes its result in.)
+            let copy = if target.room.two_address && fit.k == BigInt::from(1) && !_leas(target, &fit.k) { costs.r#move } else { 0 };
             let made = |constant| {
                 let ty = view.function.value(site.one.value).ty;
                 copy + if pointer { costs.add } else { profit::advance(view.context, view.layout, ty, costs.add, constant, costs) }
