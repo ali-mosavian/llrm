@@ -145,7 +145,7 @@ fn test_scheduler_keeps_symbolic_or_nonframe_addresses_out_of_its_window() {
     };
     let lea = _insn(1, Operation::Address, "lea", vec![reg(Register::DI, 2)], vec![Loc::Address(address)]);
 
-    assert!(_safe(&lea).is_none());
+    assert!(_safe(16, &lea).is_none());
 }
 
 /// A flag-producing add must not cross imul before a later flag reader.

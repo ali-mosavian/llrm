@@ -691,7 +691,7 @@ fn test_for_size_a_diamonds_likelier_arm_goes_second_where_size_allows() {
     let order = |body: LirBody| _placed(&body, true).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
     // The premise: both arms are a few bytes, so either order uses short jumps.
     let small = weighted_diamond(0.7);
-    assert!(small.blocks.iter().filter(|one| [10, 20].contains(&one.at)).all(|one| _arm_bytes(one).is_some_and(|bytes| bytes < 16)));
+    assert!(small.blocks.iter().filter(|one| [10, 20].contains(&one.at)).all(|one| _arm_bytes(16, one).is_some_and(|bytes| bytes < 16)));
     assert_eq!(order(small), vec![1, 20, 10, 30]);
     // Arm 10 past a short jump's reach: the order stays the source's.
     let mut large = weighted_diamond(0.7);
@@ -699,7 +699,7 @@ fn test_for_size_a_diamonds_likelier_arm_goes_second_where_size_allows() {
     let mut insns: Vec<Arc<Insn>> = (0..60).map(|_| _move(10, imm(4660))).collect();
     insns.push(_jump(11, 30));
     arm.insns = insns;
-    assert!(_arm_bytes(large.blocks.iter().find(|one| one.at == 10).unwrap()).is_some_and(|bytes| bytes > 127));
+    assert!(_arm_bytes(16, large.blocks.iter().find(|one| one.at == 10).unwrap()).is_some_and(|bytes| bytes > 127));
     assert_eq!(order(large), vec![1, 10, 20, 30]);
 }
 

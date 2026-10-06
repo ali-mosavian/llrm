@@ -59,12 +59,12 @@ fn zeroing(one: &Insn) -> Roots {
 }
 
 /// The roots whose upper half `one` may leave other than it found it.
-fn disturbed(one: &Insn) -> Roots {
+fn disturbed(bits: u32, one: &Insn) -> Roots {
     // A jump or branch writes no register; no decoder answers for it.
     if liveness::_terminator(one.what.as_ref()) {
         return 0;
     }
-    let effects = _register_effects(one, true, false).or_else(|| liveness::_declared(one));
+    let effects = _register_effects(bits, one, true, false).or_else(|| liveness::_declared(one));
     let Some((_, writes)) = effects else {
         return ALL;
     };
@@ -76,9 +76,9 @@ fn disturbed(one: &Insn) -> Roots {
 }
 
 /// What `one` makes of `zero`, the roots known zero before it.
-pub fn after(one: &Insn, zero: Roots) -> Roots {
+pub fn after(bits: u32, one: &Insn, zero: Roots) -> Roots {
     let zeroed = zeroing(one) | copied(one, zero);
-    (zero & !disturbed(one)) | zeroed
+    (zero & !disturbed(bits, one)) | zeroed
 }
 
 /// The root a whole-register copy writes, where the root it copies from has a zero upper half.
@@ -112,7 +112,7 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
                 zero &= out[from];
             }
             into.insert(block.at, zero);
-            let leaving = block.insns.iter().fold(zero, |zero, one| after(one, zero));
+            let leaving = block.insns.iter().fold(zero, |zero, one| after(body.bits, one, zero));
             if leaving != out[&block.at] {
                 out.insert(block.at, leaving);
                 changing = true;
@@ -124,7 +124,7 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
         let mut zero = into[&block.at];
         for one in &block.insns {
             result.insert(id(one), zero);
-            zero = after(one, zero);
+            zero = after(body.bits, one, zero);
         }
     }
     result
@@ -222,7 +222,7 @@ pub fn established(body: &LirBody) -> LirBody {
     let graph = &body.blocks;
     let natural = loops::loops(&graph, Some(body.entry));
     let untouched = |inside: &BTreeSet<i64>, roots: Roots| {
-        body.blocks.iter().filter(|block| inside.contains(&block.at)).all(|block| block.insns.iter().all(|one| disturbed(one) & roots == 0))
+        body.blocks.iter().filter(|block| inside.contains(&block.at)).all(|block| block.insns.iter().all(|one| disturbed(body.bits, one) & roots == 0))
     };
     let outermost = |at: i64, roots: Roots| {
         let around = natural.iter().filter(|one| one.body.contains(&at));

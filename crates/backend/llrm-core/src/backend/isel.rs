@@ -879,9 +879,10 @@ impl Selector<'_, '_, '_> {
                 chain.into_iter().map(|one| LirBlock { cold: cold.contains(block), ..one })
             })
             .collect();
-        let blocks = self.widen(combined::combined(self.unread_halves_dropped(blocks), self.cpu, self.compiled.rules()))?;
+        let blocks = self.widen(combined::combined(self.arch.object().bitness, self.unread_halves_dropped(blocks), self.cpu, self.compiled.rules()))?;
         let (blocks, root) = self.rooted(blocks, block_at[&entry], pads.first().map(|pad| block_at[pad]), at);
         let mut body = LirBody::new(name, root, blocks, IndexMap::default(), self.pins.clone());
+        body.bits = self.arch.object().bitness;
         body.sealed_arguments = !self.unsealed;
         body.inputs = self.inputs.clone();
         body.ordered = true;
@@ -2883,7 +2884,7 @@ impl Selector<'_, '_, '_> {
                     for by in (0..i64::from(size) / 4).rev() {
                         let value = (bits >> (32 * by)) as u32 as i64;
                         // Tuned for size, the two words where they are fewer bytes.
-                        let words = if self.cpu.size && peep::guards::split_push_smaller(value) { vec![(value >> 16, 2), (value & 0xFFFF, 2)] } else { vec![(value, 4)] };
+                        let words = if self.cpu.size && peep::guards::split_push_smaller(self.arch.object().bitness, value) { vec![(value >> 16, 2), (value & 0xFFFF, 2)] } else { vec![(value, 4)] };
                         for (value, width) in words {
                             let push = Loc::Imm(Imm { value, width, address: None });
                             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![push])));

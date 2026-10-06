@@ -301,7 +301,7 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
         let block = &by_at[&at];
         order.push(block.clone());
         done.insert(at);
-        (current, source) = (_onward(block, &done, inside.get(&block.at).unwrap_or(&empty), Some(&by_at), odds, ties), Some(at));
+        (current, source) = (_onward(body.bits, block, &done, inside.get(&block.at).unwrap_or(&empty), Some(&by_at), odds, ties), Some(at));
     }
     Ok(body.with_blocks(order))
 }
@@ -310,6 +310,7 @@ fn _placed(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintable> {
 ///
 /// The branch's target second, so that `jcc target; jmp placed` becomes one inverted branch.
 pub fn _onward(
+    bits: u32,
     block: &LirBlock,
     done: &HashSet<i64>,
     inside: &BTreeSet<i64>,
@@ -365,7 +366,7 @@ pub fn _onward(
         let arm = |at: &i64| by_at.get(at).filter(|arm| arm.succ.len() == 1);
         if let (Some(one), Some(other)) = (arm(first), arm(second))
             && one.succ == other.succ
-            && [one, other].into_iter().all(|arm| _arm_bytes(arm).is_some_and(|bytes| short_reaches(bytes + SHORT_JUMP)))
+            && [one, other].into_iter().all(|arm| _arm_bytes(bits, arm).is_some_and(|bytes| short_reaches(bytes + SHORT_JUMP)))
             && busy.edge(block.at, *first) > busy.edge(block.at, *second)
         {
             targets.reverse();
@@ -765,7 +766,7 @@ pub fn duplicated_returns(body: LirBody, return_overhead: i64) -> LirBody {
                 .flatten()
                 .filter_map(|at| by_at.get(at).copied())
                 .collect();
-            let tail_size = _duplicable_return_size(tail, return_overhead);
+            let tail_size = _duplicable_return_size(body.bits, tail, return_overhead);
             if tail.at == body.entry
                 || tail_size.is_none()
                 || parents.len() < 2
@@ -775,7 +776,7 @@ pub fn duplicated_returns(body: LirBody, return_overhead: i64) -> LirBody {
             }
             let tail_size = tail_size.expect("checked above");
             let prepared: Vec<Option<(&LirBlock, i64)>> =
-                parents.iter().map(|parent| _return_parent(parent, tail.at)).collect();
+                parents.iter().map(|parent| _return_parent(body.bits, parent, tail.at)).collect();
             if prepared.iter().any(Option::is_none) {
                 continue;
             }
@@ -806,14 +807,14 @@ pub fn duplicated_returns(body: LirBody, return_overhead: i64) -> LirBody {
 
 /// An arm's bytes but its final jump, as selected; none where an
 /// instruction has no encoding here.
-fn _arm_bytes(block: &LirBlock) -> Option<i64> {
+fn _arm_bytes(bits: u32, block: &LirBlock) -> Option<i64> {
     let real = _real(block);
     let body = real.split_last().map_or(&real[..], |(last, rest)| if last.what.as_ref().is_some_and(|what| what.op == Operation::Jump) { rest } else { &real[..] });
-    body.iter().map(|one| select::emit(one.what.as_ref()?, 0, None, false, false, None).map(|made| made.code.len() as i64)).sum()
+    body.iter().map(|one| select::emit_in(bits, one.what.as_ref()?, 0, None, false, false, None).map(|made| made.code.len() as i64)).sum()
 }
 
 /// Selected bytes in a source-unowned terminal return block.
-pub fn _duplicable_return_size(block: &LirBlock, return_overhead: i64) -> Option<i64> {
+pub fn _duplicable_return_size(bits: u32, block: &LirBlock, return_overhead: i64) -> Option<i64> {
     let real = _real(block);
     if !block.phis.is_empty()
         || !block.succ.is_empty()
@@ -837,7 +838,7 @@ pub fn _duplicable_return_size(block: &LirBlock, return_overhead: i64) -> Option
     }
     let emitted: Vec<Option<select::Emitted>> = real
         .iter()
-        .map(|one| select::emit(one.what.as_ref().expect("checked above"), 0, None, false, false, None))
+        .map(|one| select::emit_in(bits, one.what.as_ref().expect("checked above"), 0, None, false, false, None))
         .collect();
     if emitted.iter().any(Option::is_none) {
         return None;
@@ -846,7 +847,7 @@ pub fn _duplicable_return_size(block: &LirBlock, return_overhead: i64) -> Option
 }
 
 /// A dedicated edge to target and the shortest jump bytes it can save.
-pub fn _return_parent(block: &LirBlock, target: i64) -> Option<(&LirBlock, i64)> {
+pub fn _return_parent(bits: u32, block: &LirBlock, target: i64) -> Option<(&LirBlock, i64)> {
     let real = _real(block);
     let last = real.last()?;
     let what = last.what.as_ref()?;
@@ -859,7 +860,7 @@ pub fn _return_parent(block: &LirBlock, target: i64) -> Option<(&LirBlock, i64)>
         {
             return None;
         }
-        let emitted = select::emit(&Semantics { target: Some(2), ..what.clone() }, 0, None, true, false, None);
+        let emitted = select::emit_in(bits, &Semantics { target: Some(2), ..what.clone() }, 0, None, true, false, None);
         return emitted.map(|emitted| (block, emitted.code.len() as i64));
     }
     if matches!(what.op, Operation::Branch | Operation::Call | Operation::Data | Operation::Return) {
