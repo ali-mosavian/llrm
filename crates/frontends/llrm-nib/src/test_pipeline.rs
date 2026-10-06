@@ -55,11 +55,12 @@ fn test_a_frame_no_stack_segment_holds_is_refused() {
     assert!(error.contains("bytes of stack"), "{error}");
 }
 
-/// `STACK_BASE` is the stack `start.asm` links: a different one would size the object's wrongly.
+/// `stack_base` is the stack `start.asm` links (STACK_BYTES, which the assembler is told): a different one would size the object's wrongly.
 #[test]
 fn test_the_stack_base_is_the_one_start_links() {
     let start = std::fs::read_to_string(crate::test_nib_frontend::root().join("runtime/shared/dos/x86-code16/start.asm")).unwrap();
-    assert!(start.contains(&format!(".stack {}", crate::Frontend::default().os.stack_base)));
+    let os = crate::Frontend::default().os;
+    assert!(start.contains(".stack STACK_BYTES") && os.defines.contains(&("STACK_BYTES".to_owned(), os.stack_base.to_string())));
 }
 
 /// The listing's innermost loops, each as the lines from the label a later

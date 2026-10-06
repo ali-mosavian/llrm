@@ -93,8 +93,8 @@ impl TypeRegistry {
             if declared.huge && dims.is_empty() {
                 return Err(Diagnostic::new(declared.span, "only an array is 'huge var'"));
             }
-            if !declared.huge && u64::from(extent) > (1_u64 << (8 * self.sizes.near)) - 1 {
-                return Err(Diagnostic::new(declared.span, format!("{} takes {extent} bytes, past DGROUP's 64K: declare it 'huge var'", declared.name)));
+            if !declared.huge && u64::from(extent) > self.sizes.max_object {
+                return Err(Diagnostic::new(declared.span, format!("{} takes {extent} bytes, past DGROUP's {} bytes: declare it 'huge var'", declared.name, self.sizes.max_object + 1)));
             }
             // Where far is near a huge object is in the one space: no segment of its own.
             let huge = declared.huge && self.sizes.segmented;

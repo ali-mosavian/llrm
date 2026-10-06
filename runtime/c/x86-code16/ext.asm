@@ -1,7 +1,12 @@
-; The loop corpus's externals for C and Nib: the report stream (one signed
-; decimal per line) and the opaque calls of spec.OPAQUE.
+; The C run tests' externals, on the OS layer: the report stream (one signed decimal per line), the
+; benchmark's input and the opaque calls of spec.OPAQUE.
 .model medium
 .386
+
+extrn _llrm_os_open:far
+extrn _llrm_os_read:far
+extrn _llrm_os_write_file:far
+extrn _llrm_os_exit:far
 
 .data
 ticks   dw 0
@@ -13,18 +18,18 @@ stkmsg  db 'Stack Overflow!', 13, 10
 
 .code
 ; Open Watcom's stack overflow (clib stk086.asm `__STKOVERFLOW`): the message and exit status 1,
-; which a checked function enters (-fsanitize=stack). Here on stdout, which a test captures.
+; which a checked function enters (-fsanitize=stack). On stdout, which a test captures.
 public __STKOVERFLOW
 __STKOVERFLOW proc far
     mov ax, @data
     mov ds, ax
-    mov dx, offset stkmsg
-    mov cx, 17
-    mov bx, 1
-    mov ah, 40h
-    int 21h
-    mov ax, 4c01h
-    int 21h
+    push 17
+    push ds
+    push offset stkmsg
+    push 1
+    call far ptr _llrm_os_write_file
+    push 1
+    call far ptr _llrm_os_exit
 __STKOVERFLOW endp
 
 ; void report(long v)
@@ -58,12 +63,14 @@ more:
     dec di
     mov byte ptr [di], '-'
 unsigned:
-    mov dx, di
     mov cx, offset digits + 12
     sub cx, di
-    mov bx, 1
-    mov ah, 40h
-    int 21h
+    push cx
+    push ds
+    push di
+    push 1
+    call far ptr _llrm_os_write_file
+    add sp, 8
     pop di
     pop si
     pop bp
@@ -78,18 +85,23 @@ _input_read proc far
     mov bp, sp
     cmp inhandle, 0FFFFh
     jne opened
-    mov ax, 3D00h
-    mov dx, offset inname
-    int 21h
-    jc failed
+    push 0
+    push ds
+    push offset inname
+    call far ptr _llrm_os_open
+    add sp, 6
+    test ax, ax
+    js failed
     mov inhandle, ax
 opened:
-    mov bx, inhandle
-    mov cx, [bp+8]
-    mov dx, [bp+6]
-    mov ah, 3Fh
-    int 21h
-    jnc done
+    push word ptr [bp+8]
+    push ds
+    push word ptr [bp+6]
+    push inhandle
+    call far ptr _llrm_os_read
+    add sp, 8
+    test dx, dx
+    jns done
 failed:
     xor ax, ax
 done:

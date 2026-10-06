@@ -45,11 +45,49 @@ fn test_every_target_implements_every_operation_of_the_groups_it_declares() {
 #[test]
 fn test_no_os_assembly_names_an_os_function_number() {
     let literal = regex::Regex::new(r"(?i)\b(mov\s+(ah|al|eax)\s*,\s*[0-9][0-9a-f]*h\b|int\s+[0-9][0-9a-f]*h\b)").unwrap();
+    let check = |name: String, text: String| {
+        let code: Vec<&str> = text.lines().map(|line| line.split(';').next().unwrap()).filter(|line| literal.is_match(line)).collect();
+        assert!(code.is_empty(), "{name} names an OS fact: {code:?}");
+    };
     for target in targets() {
         for field in ["start", "implementation"] {
-            let text = source(&*target, field);
-            let code: Vec<&str> = text.lines().map(|line| line.split(';').next().unwrap()).filter(|line| literal.is_match(line)).collect();
-            assert!(code.is_empty(), "{} {field} names an OS fact: {code:?}", target.name());
+            check(format!("{} {field}", target.name()), source(&*target, field));
+        }
+        // The languages' own assembly reaches the OS through the layer too: C's externals and both hooks.
+        for language in ["nib", "c"] {
+            let description = target.runtime(language).unwrap();
+            for file in ["ext.asm", "init.asm"] {
+                if let Ok(text) = std::fs::read_to_string(format!("{}/{file}", description.directory)) {
+                    check(format!("{} {language} {file}", target.name()), text);
+                }
+            }
+        }
+    }
+}
+
+/// Each language's runtime on each target names what the layer and its own files define: the stack check's
+/// limit is a public of the layer, its handler of the language's externals, and a start-up hook is defined by
+/// the file that names it and handed to the assembler as LANG_INIT. A language that named a word the
+/// start-up never fills would compare with zero.
+#[test]
+fn test_each_languages_runtime_names_symbols_that_are_defined() {
+    for target in targets() {
+        let implementation = source(&*target, "implementation");
+        for language in ["nib", "c"] {
+            let description = target.runtime(language).unwrap();
+            let table = description.table().unwrap();
+            let stack: toml::Table = description.file(&description.string("stack").unwrap()).unwrap().parse().unwrap();
+            let limit = stack["limit"].as_str().unwrap();
+            assert!(implementation.contains(&format!("public {limit}")), "{} {language}: the layer does not define {limit}", target.name());
+            if language == "c" {
+                let externals = std::fs::read_to_string(format!("{}/ext.asm", description.directory)).unwrap();
+                assert!(externals.contains(&format!("public {}", stack["handler"].as_str().unwrap())), "{} c: no handler", target.name());
+            }
+            if let Some(hook) = table.get("init").and_then(|one| one.as_str()) {
+                let file = std::fs::read_to_string(format!("{}/{}", description.directory, description.string("init_file").unwrap())).unwrap();
+                assert!(file.contains(&format!("public {hook}")), "{} {language}: init_file does not define {hook}", target.name());
+                assert!(description.defines().unwrap().contains(&("LANG_INIT".to_owned(), hook.to_owned())), "{} {language}: LANG_INIT is not defined for the assembler", target.name());
+            }
         }
     }
 }

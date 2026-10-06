@@ -67,11 +67,10 @@
 4 crates/bc/llrm-bcmachine/src/model/ir/nodes.rs
 27 crates/bc/llrm-bcmachine/src/model/ir/semantics.rs
 1 crates/frontends/llrm-c/build.rs
-5 crates/frontends/llrm-c/src/compile.rs
+3 crates/frontends/llrm-c/src/compile.rs
 9 crates/frontends/llrm-c/src/translate.rs
 1 crates/frontends/llrm-nib/src/library.rs
 1 crates/frontends/llrm-nib/src/semantic/assembly.rs
-1 crates/frontends/llrm-nib/src/semantic/checks.rs
 1 crates/frontends/llrm-qb/src/cli.rs
 1 crates/frontends/llrm-qb/src/compile.rs
 18 crates/frontends/llrm-qbruntime/src/lib.rs
@@ -84,7 +83,6 @@
 1 crates/ir/llrm-mir/src/interpret.rs
 17 crates/ir/llrm-mir/src/opcode.rs
 1 crates/opt/llrm-analysis/src/generated.rs
-3 crates/opt/llrm-analysis/src/regions.rs
 4 crates/opt/llrm-transforms/src/ports.rs
 1 crates/support/llrm-support/src/pyjson.rs
 1 crates/support/llrm-support/src/pyrepr.rs
