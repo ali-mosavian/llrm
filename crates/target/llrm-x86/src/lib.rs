@@ -46,6 +46,9 @@ pub mod instructions {
     }
 }
 
+/// What DOS gives a program (function numbers, the extender's calls), shared by the targets that run under it.
+pub const DOS_FACTS: &str = include_str!("../os/dos.toml");
+
 /// The physical addresses `platform.toml` names, each by its name.
 pub fn physical_addresses() -> Vec<(String, u64)> {
     let table: toml::Table = include_str!("../platform.toml").parse().expect("platform.toml parses");

@@ -9,16 +9,26 @@ use std::process::Command;
 fn test_jwasm_and_jwlink_are_built_beside_llrm() {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
-    let start = Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/target/llrm-x86-code16/runtime/nib/start.asm");
-    let assembled = Command::new(bin.join("jwasm"))
-        .args(["-q", "-c", "-Cp", "-Zg", "-omf"])
-        .arg(format!("-Fo{}", scratch.path().join("START.OBJ").display()))
-        .arg(start)
-        .status()
-        .expect("jwasm is in target/<profile>");
-    assert!(assembled.success() && scratch.path().join("START.OBJ").exists());
+    os_layer_objects(bin, scratch.path());
+    assert!(scratch.path().join("start.obj").exists());
     let linker = Command::new(bin.join("jwlink")).stdin(std::process::Stdio::null()).output().expect("jwlink is in target/<profile>");
     assert!(String::from_utf8_lossy(&linker.stdout).contains("JWlink"));
+}
+
+/// The real-mode OS layer assembled in `dir` as start.obj and os.obj, told its description's defines.
+fn os_layer_objects(bin: &Path, dir: &Path) {
+    let layer = |field: &str| {
+        let done = Command::new(bin.join("llrm-nib")).args(["--os-layer", field]).output().unwrap();
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+        String::from_utf8_lossy(&done.stdout).trim().to_owned()
+    };
+    let directory = layer("directory");
+    let defines: Vec<String> = layer("defines").split_whitespace().map(|one| format!("-D{one}")).collect();
+    for (field, object) in [("start", "start.obj"), ("implementation", "os.obj")] {
+        let source = format!("{directory}/{}", layer(field));
+        let done = Command::new(bin.join("jwasm")).args(["-q", "-c", "-Cp", "-Zg", "-omf"]).args(&defines).arg(format!("-Fo{object}")).arg(source).current_dir(dir).status().unwrap();
+        assert!(done.success(), "{field}");
+    }
 }
 
 /// The dosrun DOSBox-X only built on macOS (pthread_threadid_np, a missing
@@ -82,16 +92,13 @@ fn test_nib_start_puts_the_stack_in_dgroup() {
     let run = |program: &Path, args: &[&str]| {
         assert!(Command::new(program).args(args).current_dir(dir).status().unwrap().success(), "{}", program.display());
     };
-    let runtime = root.join("crates/target/llrm-x86-code16/runtime/nib");
-    for part in ["start", "dos"] {
-        run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-Zg", "-omf", &format!("-Fo{part}.obj"), runtime.join(format!("{part}.asm")).to_str().unwrap()]);
-    }
+    os_layer_objects(&bin, dir);
     // The divide fault's handler, which runtime.nib otherwise supplies.
     std::fs::write(dir.join("fault.asm"), ".model medium\n.code\npublic N$EDIV\nN$EDIV proc far\nmov ax, 4c63h\nint 21h\nN$EDIV endp\nend\n").unwrap();
     run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-omf", "-Fofault.obj", "fault.asm"]);
     let slice = root.join("tests/fixtures/nib/port/c7e7588fa1/slice.nib");
     run(&bin.join("llrm-nib"), &[slice.to_str().unwrap(), "-o", "slice.obj"]);
-    run(&bin.join("jwlink"), &["format", "dos", "name", "SLICE.EXE", "file", "start.obj", "file", "slice.obj", "file", "dos.obj", "file", "fault.obj", "op", "quiet"]);
+    run(&bin.join("jwlink"), &["format", "dos", "name", "SLICE.EXE", "file", "start.obj", "file", "slice.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]);
     let conf = format!(
         "[autoexec]\nmount c {}\nc:\nSLICE\nif errorlevel 6 goto other\nif errorlevel 5 goto five\n:other\necho other > OUT.TXT\ngoto end\n:five\necho 5 > OUT.TXT\n:end\nexit\n",
         dir.display()
@@ -113,10 +120,7 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
     let run = |program: &Path, args: &[&str]| {
         assert!(Command::new(program).args(args).current_dir(dir).status().unwrap().success(), "{}", program.display());
     };
-    let runtime = root.join("crates/target/llrm-x86-code16/runtime/nib");
-    for part in ["start", "dos"] {
-        run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-Zg", "-omf", &format!("-Fo{part}.obj"), runtime.join(format!("{part}.asm")).to_str().unwrap()]);
-    }
+    os_layer_objects(&bin, dir);
     std::fs::write(dir.join("fault.asm"), ".model medium\n.code\npublic N$EDIV\nN$EDIV proc far\nmov ax, 4c63h\nint 21h\nN$EDIV endp\nend\n").unwrap();
     run(&bin.join("jwasm"), &["-q", "-c", "-Cp", "-omf", "-Fofault.obj", "fault.asm"]);
     std::fs::write(
@@ -126,7 +130,7 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
     )
     .unwrap();
     run(&bin.join("llrm-nib"), &["frame.nib", "-o", "frame.obj"]);
-    run(&bin.join("jwlink"), &["format", "dos", "name", "FRAME.EXE", "file", "start.obj", "file", "frame.obj", "file", "dos.obj", "file", "fault.obj", "op", "quiet"]);
+    run(&bin.join("jwlink"), &["format", "dos", "name", "FRAME.EXE", "file", "start.obj", "file", "frame.obj", "file", "os.obj", "file", "fault.obj", "op", "quiet"]);
     let conf = format!(
         "[autoexec]\nmount c {}\nc:\nFRAME\nif errorlevel 6 goto other\nif errorlevel 5 goto five\n:other\necho other > OUT.TXT\ngoto end\n:five\necho 5 > OUT.TXT\n:end\nexit\n",
         dir.display()
@@ -435,24 +439,30 @@ fn test_the_zed_extension_names_a_library_that_exists_and_passes_the_projects_ta
 fn test_both_targets_declare_the_same_file_call_result() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let results = |target: &str| -> Vec<String> {
-        let text = std::fs::read_to_string(root.join(format!("crates/target/llrm-{target}/runtime/nib/os.nib"))).unwrap();
+        let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).args(["--target", target, "--os-layer", "module"]).output().unwrap();
+        assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+        let text = String::from_utf8_lossy(&done.stdout).into_owned();
         ["pub fn read(", "pub fn write_file("].iter().map(|head| text.lines().find(|line| line.starts_with(head)).and_then(|line| line.rsplit_once("-> ")).map(|(_, result)| result.trim().to_owned()).expect("declared")).collect()
     };
     assert_eq!(results("x86-code16"), ["i32", "i32"]);
     assert_eq!(results("x86-code32"), results("x86-code16"));
 }
 
-/// start.asm and dos.asm each named a constant of their own (the stack, the heap's arena) beside the
-/// description's; the assembler is now told the description's fields, and a target that lists none is told none.
+/// start.asm and os.asm each named a constant of their own (the stack, the heap's arena, DOS's function
+/// numbers) beside the descriptions'; the assembler is now told every fact, and a target is told only its own.
 #[test]
 fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
     let defines = |target: &str| {
         let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).args(["--target", target, "--os-layer", "defines"]).output().unwrap();
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
-        String::from_utf8_lossy(&done.stdout).trim().to_owned()
+        String::from_utf8_lossy(&done.stdout).split_whitespace().map(str::to_owned).collect::<Vec<_>>()
     };
-    assert_eq!(defines("x86-code32"), "STACK_BYTES=16384 HEAP_BYTES=16777216");
-    assert_eq!(defines("x86-code16"), "");
+    let flat = defines("x86-code32");
+    for told in ["STACK_BYTES=16384", "HEAP_BYTES=16777216", "DOS_OPEN=61", "DOS_INT=33", "DOS_DPMI_ALLOC=1281"] {
+        assert!(flat.contains(&told.to_owned()), "{told} in {flat:?}");
+    }
+    let real = defines("x86-code16");
+    assert!(real.contains(&"DOS_OPEN=61".to_owned()) && !real.iter().any(|one| one.starts_with("HEAP_BYTES")), "{real:?}");
 }
 
 /// The identity gate is an instrument: a build compared with itself must say SAME of every

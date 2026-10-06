@@ -168,18 +168,22 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
 def nib_runtime(target: str) -> tuple[Path, list[str]]:
     """The directory of `target`'s Nib OS layer, and the start-up and OS routines it names (`llrm-nib --os-layer`)."""
     directory = Path(subprocess.run([str(BIN / "llrm-nib"), "--target", target, "--os-layer", "directory"], capture_output=True, text=True, check=True).stdout.strip())
-    names = [subprocess.run([str(BIN / "llrm-nib"), "--target", target, "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip() for field in ("start", "dos")]
+    names = [subprocess.run([str(BIN / "llrm-nib"), "--target", target, "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip() for field in ("start", "implementation")]
     return directory, [str((directory / name).relative_to(ROOT)) for name in names]
+
+
+def nib_defines(target: str) -> tuple[str, ...]:
+    """What the assembler is told of `target`'s OS layer (`llrm-nib --os-layer defines`): `SYMBOL=value` each."""
+    return tuple(subprocess.run([str(BIN / "llrm-nib"), "--target", target, "--os-layer", "defines"], capture_output=True, text=True, check=True).stdout.split())
 
 
 def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level: str, foreign: tuple[Path, ...]) -> tuple[Path, ...]:
     """A Nib program for `target`: its object, `runtime.nib` cut to what the program and the OS layer name, linked as the target says."""
-    _, (start, dos) = nib_runtime(target)
+    _, (start, implementation) = nib_runtime(target)
     runtime = work / (obj.stem + "R.obj")
     used = [word for one in (obj, *foreign) for word in ("--used-by", str(one))]
     _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), "--target", target, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used])
-    defines = subprocess.run([str(BIN / "llrm-nib"), "--target", target, "--os-layer", "defines"], capture_output=True, text=True, check=True).stdout.split()
-    return link_target(target, obj, exe, work, runtime=([start], [dos]), objects_after=(runtime, *foreign), defines=tuple(defines))
+    return link_target(target, obj, exe, work, runtime=([start], [implementation]), objects_after=(runtime, *foreign), defines=nib_defines(target))
 
 
 def link_c(obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = ()) -> None:

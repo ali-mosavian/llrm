@@ -287,7 +287,7 @@ impl Machine<'_> {
                 Some(sink) => Some(Scalar::Address(sink)),
                 None => return fail(format!("{} without {}", rt::PRINT_END, rt::PRINT_BEGIN)),
             },
-            rt::FILE_OPEN | rt::FILE_CREATE | rt::FILE_READ | rt::FILE_WRITE | rt::FILE_CLOSE => {
+            symbol if rt::file_operation(symbol).is_some() => {
                 Some(Scalar::Int(i128::from(self.file(name, arguments)?)))
             }
             _ => return Ok(None),
@@ -296,26 +296,27 @@ impl Machine<'_> {
     }
 
     /// The DOS file calls on host files: a handle or count, or DOS's error
-    /// code negated, as crates/target/llrm-x86-code16/runtime/nib/dos.asm returns them.
+    /// code negated, as the OS layer's operations return them (llrm-target/os/interface.toml).
     fn file(&mut self, name: &str, arguments: &[Scalar]) -> Outcome<i16> {
         use std::io::{Read, Write};
         const FIRST: usize = 5;
         const STANDARD_OUTPUT: usize = 1;
         let failed = |error: std::io::Error| -> i16 {
             match error.kind() {
-                std::io::ErrorKind::NotFound => -2,
-                std::io::ErrorKind::PermissionDenied => -5,
+                std::io::ErrorKind::NotFound => -rt::error_code("not_found"),
+                std::io::ErrorKind::PermissionDenied => -rt::error_code("denied"),
                 _ => -31,
             }
         };
-        if name == rt::FILE_OPEN || name == rt::FILE_CREATE {
+        let operation = rt::file_operation(name);
+        if matches!(operation, Some("open" | "create")) {
             let Some(path) = pointer(&arguments[0])? else {
                 return fail(format!("{name} of null"));
             };
             let bytes = path.memory.borrow().bytes[path.offset as usize..].to_vec();
             let path: String = bytes.iter().take_while(|one| **one != 0).map(|one| *one as char).collect();
             let mut options = std::fs::OpenOptions::new();
-            match name == rt::FILE_CREATE {
+            match operation == Some("create") {
                 true => options.write(true).create(true).truncate(true),
                 false => match size(&arguments[1])? {
                     0 => options.read(true),
@@ -332,7 +333,7 @@ impl Machine<'_> {
             });
         }
         let handle = size(&arguments[0])?;
-        if name == rt::FILE_WRITE && handle == STANDARD_OUTPUT {
+        if operation == Some("write_file") && handle == STANDARD_OUTPUT {
             let bytes = view_bytes(&arguments[1], &arguments[2])?;
             self.emit(&cp437(&bytes))?;
             return Ok(bytes.len() as i16);
@@ -340,8 +341,8 @@ impl Machine<'_> {
         let Some(Some(file)) = handle.checked_sub(FIRST).and_then(|at| self.files.get_mut(at)) else {
             return Ok(-6);
         };
-        Ok(match name {
-            rt::FILE_READ => {
+        Ok(match operation {
+            Some("read") => {
                 let Some(data) = pointer(&arguments[1])? else {
                     return fail(format!("{name} of null"));
                 };
@@ -359,7 +360,7 @@ impl Machine<'_> {
                     Err(error) => failed(error),
                 }
             }
-            rt::FILE_WRITE => {
+            Some("write_file") => {
                 let bytes = view_bytes(&arguments[1], &arguments[2])?;
                 match file.write_all(&bytes) {
                     Ok(()) => bytes.len() as i16,

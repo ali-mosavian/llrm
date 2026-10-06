@@ -31,7 +31,7 @@ class RuntimeObjectTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as work, mock.patch.object(dosbatch, "assemble", assembled), mock.patch.object(dosbatch, "_ASSEMBLED", set()):
             path = Path(work) / "START.OBJ"
-            asked = [threading.Thread(target=dosbatch.runtime_object, args=("crates/target/llrm-x86-code32/runtime/nib/start.asm", path, ("STACK_BYTES=16384",))) for _ in range(16)]
+            asked = [threading.Thread(target=dosbatch.runtime_object, args=("crates/target/llrm-x86-code32/os/dos/start.asm", path, ("STACK_BYTES=16384",))) for _ in range(16)]
             for one in asked:
                 one.start()
             for one in asked:

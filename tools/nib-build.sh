@@ -32,9 +32,14 @@ for part in "$@"; do
     objects="$objects file $work/$name.obj"
     used="$used --used-by $work/$name.obj"
 done
-for part in start dos; do
-    "$toolchain/jwasm" -q -c -Cp -Zg -omf "-Fo$work/$part.obj" "$root/crates/target/llrm-x86-code16/runtime/nib/$part.asm"
-    used="$used --used-by $work/$part.obj"
+layer=$("$bin/llrm-nib" --os-layer directory)
+defines=""
+for one in $("$bin/llrm-nib" --os-layer defines); do defines="$defines -D$one"; done
+for field in start implementation; do
+    part=$("$bin/llrm-nib" --os-layer $field)
+    # shellcheck disable=SC2086
+    "$toolchain/jwasm" -q -c -Cp -Zg -omf $defines "-Fo$work/$field.obj" "$layer/$part"
+    used="$used --used-by $work/$field.obj"
 done
 # jwlink keeps whatever any segment references, even one it drops, so the
 # runtime keeps only the routines the other objects name.
@@ -42,7 +47,7 @@ done
 objects="file $work/runtime.obj$objects"
 "$toolchain/jwlink" option quiet option eliminate ${NIB_MAP:+option map=$NIB_MAP} format dos name "$work/program.exe" \
     file "$work/start.obj" file "$work/program.obj" $objects \
-    file "$work/dos.obj" >"$work/link.out" || {
+    file "$work/implementation.obj" >"$work/link.out" || {
     cat "$work/link.out" >&2
     exit 1
 }

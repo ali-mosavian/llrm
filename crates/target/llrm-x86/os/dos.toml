@@ -1,0 +1,22 @@
+# What DOS gives a program, which every DOS target's OS layer reads, once: the software
+# interrupts and the function number each is called with in AH. The assembler is told each as
+# DOS_<NAME>. The DPMI ones are the extender's (DOS/32A), reached through its own interrupt.
+int = 0x21
+open = 0x3D
+create = 0x3C
+close = 0x3E
+read = 0x3F
+write = 0x40
+exit = 0x4C
+resize = 0x4A
+get_vector = 0x35
+set_vector = 0x25
+dpmi_int = 0x31
+dpmi_alloc = 0x0501
+
+# DOS's own codes for the conditions the interface names: the layer returns them as they are, so
+# each must be the interface's number.
+[errors]
+not_found = 2
+path_not_found = 3
+denied = 5
