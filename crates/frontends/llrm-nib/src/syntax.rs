@@ -87,6 +87,30 @@ pub enum TypeName {
         width: u8,
         mutable: bool,
     },
+    /// `usize` or `isize`: the integer as wide as the target's near pointer, which is `plain()` to
+    /// the code generator and to every rule but one: a conversion that narrows warns.
+    Word {
+        bytes: u8,
+        signed: bool,
+    },
+}
+
+impl TypeName {
+    /// The integer type this stands for, itself unless it is a word.
+    pub fn plain(self) -> Self {
+        match self {
+            Self::Word { bytes: 4, signed: false } => Self::U32,
+            Self::Word { bytes: 4, signed: true } => Self::I32,
+            Self::Word { bytes: _, signed: false } => Self::U16,
+            Self::Word { bytes: _, signed: true } => Self::I16,
+            other => other,
+        }
+    }
+
+    /// The target's unsigned word, `usize`, `bytes` wide.
+    pub fn usize(bytes: u32) -> Self {
+        Self::Word { bytes: bytes as u8, signed: false }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

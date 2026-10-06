@@ -36,6 +36,12 @@ impl Rules {
     /// width, there is none, unless that operand was promoted from an unsigned
     /// type and so cannot be negative.
     pub fn common(&self, left: TypeName, right: TypeName) -> Option<TypeName> {
+        let common = self.common_plain(left, right)?;
+        // Where a word and its plain twin meet, the word is the type: usize stays usize.
+        Some([left, right].into_iter().find(|one| matches!(one, TypeName::Word { .. }) && one.plain() == common.plain()).unwrap_or(common))
+    }
+
+    fn common_plain(&self, left: TypeName, right: TypeName) -> Option<TypeName> {
         if !implicit(left) || !implicit(right) {
             return (left == right).then_some(left);
         }
@@ -65,7 +71,7 @@ impl Rules {
 
 /// Whether `value` is one of `type_name`'s values.
 pub fn fits(value: i64, type_name: TypeName) -> bool {
-    match type_name {
+    match type_name.plain() {
         TypeName::Char | TypeName::U8 => u8::try_from(value).is_ok(),
         TypeName::I8 => i8::try_from(value).is_ok(),
         TypeName::I16 => i16::try_from(value).is_ok(),

@@ -229,9 +229,6 @@ impl<'a> FunctionCompiler<'a> {
         let id = self.next_instruction;
         self.next_instruction += 1;
         let line = self.line;
-        if op == "load" && matches!(operands.first(), Some(hir::Operand::DescriptorPlace { .. })) {
-            self.lengths.extend(results.iter().copied());
-        }
         if op == "address" && operands.first().is_some_and(|one| self.in_huge(one)) {
             self.huge_address = true;
         }
