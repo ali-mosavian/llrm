@@ -1,11 +1,12 @@
-//! hir-mir HIR.json: the MIR each HIR module emits, on stdout; each
-//! refusal, and anything the verifier or the poison lint rejects, on stderr.
+//! hir-mir HIR.json [DATALAYOUT.toml]: the MIR each HIR module emits under the
+//! target's data layout (real mode's by default), on stdout; each refusal, and
+//! anything the verifier or the poison lint rejects, on stderr.
 
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let Some(path) = std::env::args().nth(1) else {
-        eprintln!("usage: hir-mir HIR.json");
+        eprintln!("usage: hir-mir HIR.json [DATALAYOUT.toml]");
         return ExitCode::from(2);
     };
     let program = match std::fs::read_to_string(&path).map_err(|error| error.to_string()).and_then(|text| llrm_hir::codec::decode(&text).map_err(|error| error.to_string())) {
@@ -15,8 +16,19 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let text = match std::env::args().nth(2) {
+        Some(path) => std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}")),
+        None => include_str!("../../../../target/llrm-x86-code16/src/machines/datalayout.toml").to_owned(),
+    };
+    let layout = match llrm_target::layout::Layout::parse(&text) {
+        Ok(layout) => layout,
+        Err(error) => {
+            eprintln!("the data layout: {error}");
+            return ExitCode::from(2);
+        }
+    };
     let mut invalid = false;
-    for emitted in llrm_hir::mir::emit(&program) {
+    for emitted in llrm_hir::mir::emit(&program, &layout) {
         print!("{}", llrm_mir::print::module(&emitted.module));
         for (name, why) in &emitted.refused {
             eprintln!("refused @{name}: {why}");

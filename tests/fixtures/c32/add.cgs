@@ -1,0 +1,32 @@
+INIT sw=0x808000 target=0x458 size=50 rev=0x23 flat=1
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=4
+SEG 3 attr=0xc name="CONST2" align=4
+SEG 4 attr=0x6 name="_DATA" align=4
+START
+TYPE T25 size=28 align=1
+f1 DBSrcFile "add.c" main=1
+- DBSrcCue f1 1 1
+SYM y1 name="add" base="add" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x602 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_INTEGER
+SYM y3 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_INTEGER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+n4 CGFEName y2 TY_INTEGER
+n5 CGUnary O_POINTS n4 TY_INTEGER
+n6 CGFEName y3 TY_INTEGER
+n7 CGUnary O_POINTS n6 TY_INTEGER
+n8 CGBinary O_PLUS n5 n7 TY_INTEGER
+n9 CGUnary O_CONVERT n8 TY_INTEGER
+n10 CGTempName t3 TY_INTEGER
+n11 CGAssign n10 n9 TY_INTEGER
+- CGDone n11
+n12 CGTempName t3 TY_INTEGER
+n13 CGUnary O_POINTS n12 TY_INTEGER
+- CGReturn n13 TY_INTEGER
+STOP
+FINI

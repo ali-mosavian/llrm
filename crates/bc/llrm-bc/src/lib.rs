@@ -24,7 +24,17 @@ pub mod tags;
 
 use std::collections::BTreeMap;
 
-pub use llrm_hir::mir::{DATALAYOUT, FAR, RUNTIME, SEGMENT};
+pub use llrm_hir::mir::RUNTIME;
+
+/// BC objects are real mode's: its far and selector address spaces, which
+/// `llrm_x86_code16::layout()` states (a test holds them equal).
+pub const FAR: u32 = 1;
+pub const SEGMENT: u32 = 2;
+
+/// Real mode's data layout string.
+pub fn datalayout() -> String {
+    llrm_x86_code16::layout().datalayout
+}
 use llrm_target::machine::Machine;
 use llrm_bcmachine::frontends::bc::blocks::has_header;
 use llrm_bcmachine::frontends::bc::extent::BodyKind;
@@ -99,7 +109,7 @@ pub fn raise_in(found: &found_module::Module, machine: &Machine, segments: &Segm
 /// what any module's GRPDEF puts there, COMMON what any combines so, by
 /// name; BC's code runs with SS = DS.
 pub fn segments<'m>(modules: impl IntoIterator<Item = &'m found_module::Module>) -> SegmentLayout {
-    let mut layout = SegmentLayout::of(&DataLayout::parse(DATALAYOUT).expect("llrm's layout"));
+    let mut layout = SegmentLayout::of(&DataLayout::parse(&datalayout()).expect("llrm's layout"));
     for found in modules {
         let named = omf::segments(&found.records);
         let name = |index: &i64| named.get(*index as usize).cloned().flatten().map(|(name, _)| name);
@@ -144,7 +154,7 @@ pub fn raise_each(found: &found_module::Module, machine: &Machine) -> Result<Rai
 pub fn raise_each_in(found: &found_module::Module, machine: &Machine, segments: &SegmentLayout) -> Result<Raised, Refusal> {
     let module_refusal = |reason: String| Refusal { function: MODULE.to_owned(), reason };
     let facts = Facts::new(found, machine).map_err(module_refusal)?;
-    let mut module = Module { datalayout: Some(DATALAYOUT.to_owned()), ..Module::default() };
+    let mut module = Module { datalayout: Some(datalayout()), ..Module::default() };
     let mut intrinsics = BTreeMap::new();
     for name in ["uadd", "usub"] {
         for bits in [8, 16, 32] {
@@ -196,12 +206,12 @@ pub fn raise_each_in(found: &found_module::Module, machine: &Machine, segments: 
     let callees = runtime::declare(&facts, &mut module, &interfaces);
     intrinsics.extend(access::declare(&facts, &mut module).map(|one| (access::declared(), one)));
     let family = found_module::family(&found.records);
-    let err = if found.calls.values().any(|name| name == "B$FERR") { Some(llrm_hir::onerror::err(&mut module).map_err(module_refusal)?) } else { None };
+    let err = if found.calls.values().any(|name| name == "B$FERR") { Some(llrm_hir::onerror::err(&mut module, FAR).map_err(module_refusal)?) } else { None };
     let mut handled = BTreeMap::new();
     for &(index, _, global) in &functions {
         if facts.bodies[index].handler.is_some() {
             let lines: Vec<i64> = facts.statements.iter().map(|&(_, line)| line).collect();
-            handled.insert(index, llrm_hir::onerror::handled(&mut module, global, &lines, false).map_err(module_refusal)?);
+            handled.insert(index, llrm_hir::onerror::handled(&mut module, FAR, global, &lines, false).map_err(module_refusal)?);
         }
     }
     // An intrinsic raises no BASIC error.
@@ -235,4 +245,14 @@ pub fn raise_each_in(found: &found_module::Module, machine: &Machine, segments: 
     tags::tag(&mut module);
     let placement = objects.placement();
     Ok(Raised { module, runtime, outcomes, placement })
+}
+
+#[cfg(test)]
+mod layout_tests {
+    /// The consts BC matches on are what real mode's description says.
+    #[test]
+    fn test_bc_spaces_are_real_modes_description() {
+        let spaces = llrm_x86_code16::layout().spaces;
+        assert_eq!((super::FAR, Some(super::SEGMENT)), (spaces.far, spaces.segment));
+    }
 }
