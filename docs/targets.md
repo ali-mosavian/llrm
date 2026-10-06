@@ -22,7 +22,6 @@ Known departures today, each to be removed:
 
 | Where | What | Removed by |
 |---|---|---|
-| `llrm-core`: `isel::code16()`, `Options::of`, `Flags::driver`, `assemble::assembled`, `flow::machine`, `Peephole::new`, `Profile::new` | defaults that name the 16-bit selector, rules or model, kept so tests need no target | PR 4c: explicit parameters; the tests take them from a helper |
 | `llrm-core`: the `target.rs` statics, `select.rs` bases, `masm`/`sharedstores` register lists, `cpu.rs` tables | code16's registers and prices read directly | PRs 5, 9 to 11, 19 |
 | `llrm-hir`, `llrm-mir`: the datalayout string, address-space numbers, `TargetProfile` variants | a target's layout in an IR crate | PR 14a, and the code32 session's HIR change (data layout and address spaces from the `Target`) |
 
