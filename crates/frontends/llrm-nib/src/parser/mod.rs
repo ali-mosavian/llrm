@@ -49,7 +49,12 @@ mod enums;
 mod patterns;
 
 pub fn parse(tokens: Vec<Token>) -> Result<Module, Diagnostic> {
-    parse_after(tokens, 0, &BTreeMap::new(), 2, &BTreeMap::new())
+    parse_for(tokens, 2)
+}
+
+/// `parse` for a target whose near pointer is `near_bytes` wide: what `usize` is.
+pub fn parse_for(tokens: Vec<Token>, near_bytes: u32) -> Result<Module, Diagnostic> {
+    parse_after(tokens, 0, &BTreeMap::new(), near_bytes, &BTreeMap::new())
 }
 
 /// The module, its fixed-point types numbered after the `fixed_before`

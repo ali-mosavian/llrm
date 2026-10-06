@@ -157,8 +157,8 @@ pub fn main(argv: &[String]) -> i32 {
             (None, Some(_)) => return Ok(()),
         };
         let mut program = llrm_core::support::debug::timed("frontend", || driver::parsed(&args.source, &args.frontend, None)).map_err(|error| error.0)?;
-        for warning in args.frontend.warnings.borrow().iter() {
-            eprintln!("{}", driver::refused(&args.source, warning).0);
+        for (file, warning) in args.frontend.reported.borrow().iter() {
+            eprintln!("{}", driver::refused(file, warning).0);
         }
         if !args.used_by.is_empty() {
             nib::keep_exports(&mut program, &used(&args.used_by)?);

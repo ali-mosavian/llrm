@@ -1,7 +1,7 @@
 # flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 # link: geometry.c
 # Calls a C library through the target's C convention ("c": cdecl16 or cdecl32), and exports the
-# rule it calls back. On code32 the far pointers are near, with a warning.
+# rule it calls back. The arrays are static: a near pointer reaches only static data on code16.
 
 @repr("c", pack=1)
 struct CPoint:
@@ -9,11 +9,11 @@ struct CPoint:
     y: i16
 
 @extern("c")
-fn checksum(data: *far u8, count: u16) -> u16
+fn checksum(data: *u8, count: u16) -> u16
 @extern("c")
-fn weighted_sum(values: *far i16, count: u16) -> i32
+fn weighted_sum(values: *i16, count: u16) -> i32
 @extern("c")
-fn centroid(points: *far CPoint, count: u16, out: *far mut CPoint) -> void
+fn centroid(points: *CPoint, count: u16, out: *mut CPoint) -> void
 
 @export("c")
 fn weight(value: i16) -> i16:
@@ -21,11 +21,12 @@ fn weight(value: i16) -> i16:
         return -value * 3
     return value
 
+var bytes: u8[4] = [0x51, 0x42, 0x2A, 0x07]
+var samples: i16[5] = [3, -1, 4, -1, 5]
+var corners: CPoint[3] = [CPoint(x=0, y=0), CPoint(x=30, y=6), CPoint(x=6, y=30)]
+var middle: CPoint = CPoint(x=0, y=0)
+
 fn main() -> i16:
-    let bytes: u8[4] = [0x51, 0x42, 0x2A, 0x07]
-    let samples: i16[5] = [3, -1, 4, -1, 5]
-    let corners: CPoint[3] = [CPoint(x=0, y=0), CPoint(x=30, y=6), CPoint(x=6, y=30)]
-    let mut middle = CPoint(x=0, y=0)
     unsafe:
         print(f"checksum {checksum(&bytes, 4)}")
         print(f"weighted {weighted_sum(&samples, 5)}")
