@@ -38,5 +38,6 @@ llrm-peepgen = { workspace = true }
 testing = ["llrm-omf/testing"]
 
 [dev-dependencies]
+llrm-x86-m32 = { workspace = true }
 llrm-omf = { workspace = true, features = ["testing"] }
 regex = { workspace = true }

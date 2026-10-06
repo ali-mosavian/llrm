@@ -84,7 +84,7 @@ pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm:
         out.push(assembled);
     }
     if options.stack_usage || options.stack_limit.is_some() {
-        let usage = crate::backend::stackusage::Usage::of(&out);
+        let usage = crate::backend::stackusage::Usage::of(&out, &*options.arch);
         if options.stack_usage {
             eprint!("{}", usage.report());
         }
