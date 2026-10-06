@@ -397,13 +397,8 @@ mod tests {
     /// tests/fixtures/c/`path`.cgs's MIR as the front end emits it.
     fn emitted(path: &str) -> String {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{path}.cgs"))).unwrap();
-<<<<<<< HEAD
         let program = crate::translate::program(&crate::hir::unit(&crate::stream::parse(&text)).unwrap(), "t", llrm_target::Target::calling(&llrm_x86_m16::M16).named("cdecl16").unwrap()).unwrap();
-        let options = llrm_driver::m16_options(llrm_core::abi::machine::BUILT_IN.clone());
-=======
-        let program = crate::translate::program(&crate::hir::unit(&crate::stream::parse(&text)).unwrap(), "t").unwrap();
         let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
->>>>>>> origin/main
         let (mir, _) = llrm_core::driver::emitted(&program, &options).unwrap();
         llrm_mir::print::module(&mir.modules[0])
     }
