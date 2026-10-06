@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 /* Integer Q8 Mandelbrot work count: deterministic, with no floating ambiguity. */
 extern void report(long value);
 

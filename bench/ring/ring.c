@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 /* Fill and sum a 1024-entry long ring, in the kernel; Nib has no globals. */
 extern void report(long value);
 

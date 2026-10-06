@@ -1,3 +1,4 @@
+// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
 /* Six-body Q9 fixed-point integrator, 1000 steps; long is 32-bit, / truncates toward zero. */
 extern void report(long value);
 
