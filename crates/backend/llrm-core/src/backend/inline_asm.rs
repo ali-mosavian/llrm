@@ -1,7 +1,8 @@
-//! Intel-syntax inline assembly to 16-bit real-mode machine code.
+//! Intel-syntax inline assembly to machine code for a target's bitness: 16 (real mode) or 32 (flat).
 //!
 //! `MNEMONICS` says what a block may use; iced's opcode tables say which
-//! forms each mnemonic has and which operands each form takes, so a new
+//! forms each mnemonic has and which operands each form takes (iced is the encoder every x86 target
+//! encodes with, so a bitness is a filter on its forms and not a second table), so a new
 //! instruction is one row. Of the forms that take the operands written, the
 //! shortest is kept, and iced's block encoder sizes the jumps.
 
@@ -43,18 +44,27 @@ const MNEMONICS: &[Mnemonic] = &[
     Mnemonic::Shr,
     Mnemonic::Movsb,
     Mnemonic::Movsw,
+    Mnemonic::Movsd,
     Mnemonic::Stosb,
     Mnemonic::Stosw,
+    Mnemonic::Stosd,
     Mnemonic::Lodsb,
     Mnemonic::Lodsw,
+    Mnemonic::Lodsd,
     Mnemonic::Insb,
     Mnemonic::Insw,
+    Mnemonic::Insd,
     Mnemonic::Outsb,
     Mnemonic::Outsw,
+    Mnemonic::Outsd,
     Mnemonic::Cmpsb,
     Mnemonic::Cmpsw,
+    Mnemonic::Cmpsd,
     Mnemonic::Scasb,
     Mnemonic::Scasw,
+    Mnemonic::Scasd,
+    Mnemonic::Pushfd,
+    Mnemonic::Popfd,
     Mnemonic::Jmp,
     Mnemonic::Je,
     Mnemonic::Jne,
@@ -165,6 +175,7 @@ struct Memory {
     segment: Option<Register>,
     base: Option<Register>,
     index: Option<Register>,
+    scale: u32,
     displacement: i64,
 }
 
@@ -183,16 +194,22 @@ static SPELLED: LazyLock<HashMap<String, Mnemonic>> = LazyLock::new(|| {
     spelled
 });
 
-/// Each allowed mnemonic's forms a 16-bit block can encode.
-static FORMS: LazyLock<HashMap<Mnemonic, Vec<Code>>> = LazyLock::new(|| {
+/// Each allowed mnemonic's forms a block of `bits` bits can encode.
+fn forms(bits: u32) -> &'static HashMap<Mnemonic, Vec<Code>> {
+    static REAL: LazyLock<HashMap<Mnemonic, Vec<Code>>> = LazyLock::new(|| forms_of(16));
+    static FLAT: LazyLock<HashMap<Mnemonic, Vec<Code>>> = LazyLock::new(|| forms_of(32));
+    if bits == 32 { &FLAT } else { &REAL }
+}
+
+fn forms_of(bits: u32) -> HashMap<Mnemonic, Vec<Code>> {
     let mut forms: HashMap<Mnemonic, Vec<Code>> = HashMap::new();
     for code in Code::values() {
         let info = code.op_code();
+        // A 32-bit block takes the 16-bit operand forms too (a 66h prefix), but only 32-bit addresses.
+        let mode = if bits == 32 { info.mode32() && matches!(info.operand_size(), 0 | 16 | 32) && matches!(info.address_size(), 0 | 32) } else { info.mode16() && matches!(info.operand_size(), 0 | 16) && matches!(info.address_size(), 0 | 16) };
         let usable = info.encoding() == EncodingKind::Legacy
             && info.is_instruction()
-            && info.mode16()
-            && matches!(info.operand_size(), 0 | 16)
-            && matches!(info.address_size(), 0 | 16)
+            && mode
             // Control leaves the block only by falling out of its end.
             && matches!(
                 code.flow_control(),
@@ -203,12 +220,21 @@ static FORMS: LazyLock<HashMap<Mnemonic, Vec<Code>>> = LazyLock::new(|| {
         }
     }
     forms
-});
+}
 
-fn register(name: &str, line: usize) -> Result<Option<Register>, Refusal> {
+fn register(name: &str, line: usize, bits: u32) -> Result<Option<Register>, Refusal> {
     let Some(register) = REGISTERS.get(&name.to_lowercase()).copied() else {
         return Ok(None);
     };
+    if bits == 32 {
+        if register.is_segment_register() {
+            return refusal(line, format!("flat code has one segment: {name} is not available"));
+        }
+        if register.is_gpr8() || register.is_gpr16() || register.is_gpr32() {
+            return Ok(Some(register));
+        }
+        return refusal(line, format!("register {name} is not available"));
+    }
     if register.is_gpr8() || register.is_gpr16() || matches!(register, Register::ES | Register::CS | Register::SS | Register::DS)
     {
         return Ok(Some(register));
@@ -242,11 +268,11 @@ fn is_label(name: &str) -> bool {
         && name.chars().all(|one| one.is_ascii_alphanumeric() || matches!(one, '_' | '.'))
 }
 
-fn memory(text: &str, line: usize) -> Result<Memory, Refusal> {
+fn memory(text: &str, line: usize, bits: u32) -> Result<Memory, Refusal> {
     let mut rest = text.trim();
-    let mut made = Memory::default();
+    let mut made = Memory { scale: 1, ..Memory::default() };
     let lower = rest.to_ascii_lowercase();
-    for (word, size) in [("byte", 1), ("word", 2)] {
+    for (word, size) in [("byte", 1), ("word", 2), ("dword", 4)] {
         if lower.starts_with(word) && !lower[word.len()..].starts_with(|one: char| one.is_ascii_alphanumeric()) {
             made.size = Some(size);
             rest = rest[word.len()..].trim_start();
@@ -256,7 +282,7 @@ fn memory(text: &str, line: usize) -> Result<Memory, Refusal> {
         }
     }
     if let Some((segment, after)) = rest.split_once(':').filter(|(segment, _)| !segment.contains('[')) {
-        let segment = register(segment.trim(), line)?.filter(|one| one.is_segment_register()).ok_or_else(|| Refusal {
+        let segment = register(segment.trim(), line, bits)?.filter(|one| one.is_segment_register()).ok_or_else(|| Refusal {
             line,
             message: format!("{} is not a segment register", segment.trim()),
         })?;
@@ -286,7 +312,28 @@ fn memory(text: &str, line: usize) -> Result<Memory, Refusal> {
             made.displacement += sign * value;
             continue;
         }
-        let register = register(term, line)?;
+        if bits == 32 {
+            // `reg`, or `reg*scale`: any 32-bit register is a base, any but esp an index.
+            let (name, scale) = match term.split_once('*') {
+                Some((name, scale)) => (name.trim(), number(scale.trim())),
+                None => (term, None),
+            };
+            let wrong = || Refusal { line, message: format!("'{text}' is not a 32-bit address: [reg + reg*1|2|4|8 + number]") };
+            let Some(one) = register(name, line, bits)?.filter(|one| one.is_gpr32() && sign > 0) else {
+                return Err(wrong());
+            };
+            match scale {
+                Some(scale @ (1 | 2 | 4 | 8)) if one != Register::ESP && made.index.is_none() => {
+                    made.index = Some(one);
+                    made.scale = scale as u32;
+                }
+                None if made.base.is_none() => made.base = Some(one),
+                None if made.index.is_none() && one != Register::ESP => made.index = Some(one),
+                _ => return Err(wrong()),
+            }
+            continue;
+        }
+        let register = register(term, line, bits)?;
         let slot = match register {
             Some(Register::BX | Register::BP) if sign > 0 && made.base.is_none() => &mut made.base,
             Some(Register::SI | Register::DI) if sign > 0 && made.index.is_none() => &mut made.index,
@@ -294,19 +341,19 @@ fn memory(text: &str, line: usize) -> Result<Memory, Refusal> {
         };
         *slot = register;
     }
-    if made.base.is_none() {
+    if bits == 16 && made.base.is_none() {
         // iced spells a lone si or di as the base.
         made.base = made.index.take();
     }
     Ok(made)
 }
 
-fn operand(text: &str, line: usize) -> Result<Operand, Refusal> {
+fn operand(text: &str, line: usize, bits: u32) -> Result<Operand, Refusal> {
     let text = text.trim();
     if text.contains('[') {
-        return Ok(Operand::Memory(memory(text, line)?));
+        return Ok(Operand::Memory(memory(text, line, bits)?));
     }
-    if let Some(register) = register(text, line)? {
+    if let Some(register) = register(text, line, bits)? {
         return Ok(Operand::Register(register));
     }
     if let Some(value) = number(text) {
@@ -319,17 +366,20 @@ fn operand(text: &str, line: usize) -> Result<Operand, Refusal> {
 }
 
 /// Operands a string instruction names by its mnemonic alone.
-fn implicit(kind: Kind) -> Option<OpKind> {
-    match kind {
-        Kind::seg_rSI => Some(OpKind::MemorySegSI),
-        Kind::es_rDI => Some(OpKind::MemoryESDI),
-        Kind::seg_rDI => Some(OpKind::MemorySegDI),
+fn implicit(kind: Kind, bits: u32) -> Option<OpKind> {
+    match (kind, bits) {
+        (Kind::seg_rSI, 32) => Some(OpKind::MemorySegESI),
+        (Kind::es_rDI, 32) => Some(OpKind::MemoryESEDI),
+        (Kind::seg_rDI, 32) => Some(OpKind::MemorySegEDI),
+        (Kind::seg_rSI, _) => Some(OpKind::MemorySegSI),
+        (Kind::es_rDI, _) => Some(OpKind::MemoryESDI),
+        (Kind::seg_rDI, _) => Some(OpKind::MemorySegDI),
         _ => None,
     }
 }
 
 /// `operand` in slot `at` of `instruction`, when `kind` takes it.
-fn placed(instruction: &mut Instruction, at: u32, kind: Kind, operand: &Operand, bytes: usize) -> bool {
+fn placed(instruction: &mut Instruction, at: u32, kind: Kind, operand: &Operand, bytes: usize, bits: u32) -> bool {
     match operand {
         Operand::Register(register) => {
             let fits = match kind {
@@ -337,10 +387,12 @@ fn placed(instruction: &mut Instruction, at: u32, kind: Kind, operand: &Operand,
                 Kind::r16_reg | Kind::r16_or_mem | Kind::r16_opcode | Kind::r16_rm | Kind::r16_reg_mem => {
                     register.is_gpr16()
                 }
+                Kind::r32_reg | Kind::r32_or_mem | Kind::r32_opcode | Kind::r32_rm | Kind::r32_reg_mem => register.is_gpr32(),
                 Kind::seg_reg => register.is_segment_register(),
                 Kind::al => *register == Register::AL,
                 Kind::cl => *register == Register::CL,
                 Kind::ax => *register == Register::AX,
+                Kind::eax => *register == Register::EAX,
                 Kind::dx => *register == Register::DX,
                 Kind::es => *register == Register::ES,
                 Kind::cs => *register == Register::CS,
@@ -359,11 +411,15 @@ fn placed(instruction: &mut Instruction, at: u32, kind: Kind, operand: &Operand,
                 Kind::imm8_const_1 => (value == 1, OpKind::Immediate8),
                 Kind::imm16 => ((-0x8000..=0xFFFF).contains(&value), OpKind::Immediate16),
                 Kind::imm8sex16 => ((-0x80..=0x7F).contains(&value) || (0xFF80..=0xFFFF).contains(&value), OpKind::Immediate8to16),
+                Kind::imm32 if bits == 32 => ((-0x8000_0000..=0xFFFF_FFFF).contains(&value), OpKind::Immediate32),
+                Kind::imm8sex32 if bits == 32 => ((-0x80..=0x7F).contains(&value) || (0xFFFF_FF80..=0xFFFF_FFFF).contains(&value), OpKind::Immediate8to32),
                 _ => (false, OpKind::Immediate8),
             };
             instruction.set_op_kind(at, kind);
             match kind {
                 OpKind::Immediate16 => instruction.set_immediate16(value as u16),
+                OpKind::Immediate32 => instruction.set_immediate32(value as u32),
+                OpKind::Immediate8to32 => instruction.set_immediate8to32(i32::from(value as i8)),
                 OpKind::Immediate8to16 => instruction.set_immediate8to16(i16::from(value as i8)),
                 _ => instruction.set_immediate8(value as u8),
             }
@@ -373,26 +429,47 @@ fn placed(instruction: &mut Instruction, at: u32, kind: Kind, operand: &Operand,
             let sized = match kind {
                 Kind::r8_or_mem => 1,
                 Kind::r16_or_mem => 2,
-                Kind::mem_offs if memory.base.is_none() => bytes,
+                Kind::r32_or_mem => 4,
+                Kind::mem_offs if memory.base.is_none() && memory.index.is_none() => bytes,
                 _ => return false,
             };
             instruction.set_op_kind(at, OpKind::Memory);
             instruction.set_memory_base(memory.base.unwrap_or(Register::None));
             instruction.set_memory_index(memory.index.unwrap_or(Register::None));
-            instruction.set_memory_index_scale(1);
+            instruction.set_memory_index_scale(memory.scale);
             instruction.set_segment_prefix(memory.segment.unwrap_or(Register::None));
-            let displacement = memory.displacement as i16;
-            instruction.set_memory_displacement32(displacement as u16 as u32);
-            instruction.set_memory_displ_size(if memory.base.is_none() {
-                2
-            } else if displacement == 0 {
-                0
-            } else if i8::try_from(displacement).is_ok() {
-                1
+            let within = if bits == 32 {
+                instruction.set_memory_displacement32(memory.displacement as i32 as u32);
+                let displacement = memory.displacement as i32;
+                instruction.set_memory_displ_size(if memory.base.is_none() {
+                    4
+                } else if displacement == 0 {
+                    0
+                } else if i8::try_from(displacement).is_ok() {
+                    1
+                } else {
+                    4
+                });
+                (-0x8000_0000..=0xFFFF_FFFF).contains(&memory.displacement)
             } else {
-                2
-            });
-            (-0x8000..=0xFFFF).contains(&memory.displacement) && memory.size.is_none_or(|size| size == sized) && sized == bytes
+                let displacement = memory.displacement as i16;
+                instruction.set_memory_displacement32(displacement as u16 as u32);
+                instruction.set_memory_displ_size(if memory.base.is_none() {
+                    2
+                } else if displacement == 0 {
+                    0
+                } else if i8::try_from(displacement).is_ok() {
+                    1
+                } else {
+                    2
+                });
+                (-0x8000..=0xFFFF).contains(&memory.displacement)
+            };
+            within && memory.size.is_none_or(|size| size == sized) && sized == bytes
+        }
+        Operand::Label(_) if bits == 32 => {
+            instruction.set_op_kind(at, OpKind::NearBranch32);
+            matches!(kind, Kind::br32_1 | Kind::br32_4)
         }
         Operand::Label(_) => {
             instruction.set_op_kind(at, OpKind::NearBranch16);
@@ -402,23 +479,24 @@ fn placed(instruction: &mut Instruction, at: u32, kind: Kind, operand: &Operand,
 }
 
 /// `code` with `operands`, when it takes them.
-fn built(code: Code, operands: &[Operand]) -> Option<Instruction> {
+fn built(code: Code, operands: &[Operand], bits: u32) -> Option<Instruction> {
     let info = code.op_code();
     let kinds = info.op_kinds();
     let mut instruction = Instruction::default();
     instruction.set_code(code);
-    instruction.set_code_size(CodeSize::Code16);
-    if kinds.iter().any(|kind| implicit(*kind).is_some()) {
+    instruction.set_code_size(if bits == 32 { CodeSize::Code32 } else { CodeSize::Code16 });
+    if kinds.iter().any(|kind| implicit(*kind, bits).is_some()) {
         if !operands.is_empty() {
             return None;
         }
         for (at, kind) in kinds.iter().enumerate() {
-            match implicit(*kind) {
+            match implicit(*kind, bits) {
                 Some(memory) => instruction.set_op_kind(at as u32, memory),
                 None => {
                     let register = match kind {
                         Kind::al => Register::AL,
                         Kind::ax => Register::AX,
+                        Kind::eax => Register::EAX,
                         Kind::dx => Register::DX,
                         _ => return None,
                     };
@@ -437,20 +515,22 @@ fn built(code: Code, operands: &[Operand]) -> Option<Instruction> {
         .iter()
         .zip(operands)
         .enumerate()
-        .all(|(at, (kind, operand))| placed(&mut instruction, at as u32, *kind, operand, bytes))
+        .all(|(at, (kind, operand))| placed(&mut instruction, at as u32, *kind, operand, bytes, bits))
         .then_some(instruction)
 }
 
-fn length(instruction: &Instruction) -> usize {
+fn length(instruction: &Instruction, bits: u32) -> usize {
     let mut probe = *instruction;
-    if probe.op0_kind() == OpKind::NearBranch16 {
-        probe.set_near_branch16(0x100);
+    match probe.op0_kind() {
+        OpKind::NearBranch16 => probe.set_near_branch16(0x100),
+        OpKind::NearBranch32 => probe.set_near_branch32(0x100),
+        _ => {}
     }
-    Encoder::new(16).encode(&probe, 0x100).unwrap_or(usize::MAX)
+    Encoder::new(bits).encode(&probe, 0x100).unwrap_or(usize::MAX)
 }
 
 /// One line's instruction and the label it jumps to.
-fn instruction(text: &str, line: usize) -> Result<(Instruction, Option<String>), Refusal> {
+fn instruction(text: &str, line: usize, bits: u32) -> Result<(Instruction, Option<String>), Refusal> {
     let (mut head, mut rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     let mut prefix = None;
     if matches!(head.to_ascii_lowercase().as_str(), "rep" | "repe" | "repz" | "repne" | "repnz") {
@@ -463,16 +543,16 @@ fn instruction(text: &str, line: usize) -> Result<(Instruction, Option<String>),
     let operands = if rest.trim().is_empty() {
         Vec::new()
     } else {
-        rest.split(',').map(|one| operand(one, line)).collect::<Result<Vec<_>, _>>()?
+        rest.split(',').map(|one| operand(one, line, bits)).collect::<Result<Vec<_>, _>>()?
     };
     let fitting: Vec<Instruction> =
-        FORMS.get(&mnemonic).into_iter().flatten().filter_map(|code| built(*code, &operands)).collect();
+        forms(bits).get(&mnemonic).into_iter().flatten().filter_map(|code| built(*code, &operands, bits)).collect();
     let sizeless = operands.iter().any(|one| matches!(one, Operand::Memory(Memory { size: None, .. })));
     let sizes: std::collections::BTreeSet<usize> = fitting.iter().map(|one| one.op_code().memory_size().size()).collect();
     if sizeless && sizes.len() > 1 {
         return refusal(line, format!("say 'byte' or 'word': the size of {head}'s memory operand is ambiguous"));
     }
-    let Some(mut chosen) = fitting.into_iter().min_by_key(length) else {
+    let Some(mut chosen) = fitting.into_iter().min_by_key(|one| length(one, bits)) else {
         return refusal(line, format!("no form of '{head}' takes the operands '{}'", rest.trim()));
     };
     match prefix.as_deref() {
@@ -489,10 +569,10 @@ fn instruction(text: &str, line: usize) -> Result<(Instruction, Option<String>),
 }
 
 /// The machine code of `lines`, one statement each, for code of `bits` bits; `;` starts a comment.
-/// Only 16-bit code is assembled.
+/// Real mode (16) and flat (32) code are assembled.
 pub fn assembled(lines: &[&str], bits: u32) -> Result<Vec<u8>, Refusal> {
-    if bits != 16 {
-        return refusal(0, format!("inline assembly is 16-bit only: this target's code is {bits}-bit"));
+    if !matches!(bits, 16 | 32) {
+        return refusal(0, format!("inline assembly is for 16-bit and 32-bit code: this target's code is {bits}-bit"));
     }
     let mut instructions: Vec<(Instruction, Option<String>, usize)> = Vec::new();
     // Each label's instruction, by index; the end of the block is one past the last.
@@ -512,7 +592,7 @@ pub fn assembled(lines: &[&str], bits: u32) -> Result<Vec<u8>, Refusal> {
         if text.is_empty() {
             continue;
         }
-        let (made, target) = instruction(text, line)?;
+        let (made, target) = instruction(text, line, bits)?;
         instructions.push((made, target, line));
     }
     // An instruction's IP names it: a branch targets the IP of the one after its label.
@@ -525,7 +605,11 @@ pub fn assembled(lines: &[&str], bits: u32) -> Result<Vec<u8>, Refusal> {
             let Some(at) = labels.get(&target.to_lowercase()) else {
                 return refusal(line, format!("unknown label '{target}'"));
             };
-            made.set_near_branch16(ip(*at) as u16);
+            if bits == 32 {
+                made.set_near_branch32(ip(*at) as u32);
+            } else {
+                made.set_near_branch16(ip(*at) as u16);
+            }
         }
         block.push(made);
     }
@@ -533,7 +617,7 @@ pub fn assembled(lines: &[&str], bits: u32) -> Result<Vec<u8>, Refusal> {
     let mut placeholder = Instruction::with(Code::Nopw);
     placeholder.set_ip(ip(end));
     block.push(placeholder);
-    let encoded = BlockEncoder::encode(16, InstructionBlock::new(&block, 0), BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS)
+    let encoded = BlockEncoder::encode(bits, InstructionBlock::new(&block, 0), BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS)
         .map_err(|error| Refusal { line: lines.len().saturating_sub(1), message: error.to_string() })?;
     let mut code = encoded.code_buffer;
     code.truncate(encoded.new_instruction_offsets[end] as usize);
