@@ -27,7 +27,12 @@ fn fill(text: &str, inputs: &[&[i128]]) -> (String, bool) {
 /// `text` under the pass manager, which declares what fill calls: its
 /// printed form, run as before.
 fn managed_fill(text: &str, inputs: &[&[i128]]) -> String {
-    let before = parsed(&format!("{DOS}{text}"));
+    managed_fill_on(DOS, text, inputs)
+}
+
+/// `managed_fill` on the datalayout `target` names.
+fn managed_fill_on(target: &str, text: &str, inputs: &[&[i128]]) -> String {
+    let before = parsed(&format!("{target}{text}"));
     let mut module = before.clone();
     let after = managed(&mut module, Fill { size: false });
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
@@ -440,4 +445,62 @@ fn a_copy_is_priced_against_its_loop() {
     // they are, so a loop of 30 bytes stays. Priced as `rep movs` it grew lru.nib by 39 bytes.
     let size = llrm_x86_code16::Dos::default().size_costs();
     assert!(!super::_cheaper(30, Some(7), None, &size, true, Some((2, false))));
+}
+
+const FLAT: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-n8:16:32\"\n\n";
+
+/// bench/scroll on -m32: a `short` counter, its cell addressed `2 * sext(i + k)` off an
+/// i8 GEP. The loops were not made `memmove`: the counter's width (16) is not the index's
+/// (32), and scroll ran 1196306 instructions against gcc's 176970.
+fn scroll(up: bool) -> String {
+    let cells = (0..64).map(|at| format!("i16 {}", 100 + at)).collect::<Vec<_>>().join(", ");
+    let (start, test, step, from, to) = if up { ("0", "icmp slt i16 %i, 20", "1", "%j", "%w") } else { ("19", "icmp sge i16 %i, 0", "-1", "%w", "%j") };
+    format!(
+        "@a = global [128 x i16] [{cells}, {cells}]
+
+define i32 @f(i16 %n, i32 %q) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ {start}, %b0 ], [ %next, %b2 ]
+  %c = {test}
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %w = sext i16 %i to i32
+  %j = add nsw i32 %w, 8
+  %x = mul i32 {from}, 2
+  %s = getelementptr inbounds i8, ptr @a, i32 %x
+  %v = load i16, ptr %s
+  %y = mul i32 {to}, 2
+  %d = getelementptr inbounds i8, ptr @a, i32 %y
+  store i16 %v, ptr %d
+  %next = add nsw i16 %i, {step}
+  br label %b1
+
+b3:
+  %r = getelementptr i16, ptr @a, i32 %q
+  %out = load i16, ptr %r
+  %z = sext i16 %out to i32
+  ret i32 %z
+}}
+"
+    )
+}
+
+const SCROLL_INPUTS: &[&[i128]] = &[&[0, 0], &[1, 3], &[20, 0], &[20, 8], &[20, 27], &[30, 40], &[40, 70]];
+
+/// `a[i] = a[i + 8]` on a 16-bit counter over 32-bit pointers is one forward `llvm.memmove`.
+#[test]
+fn a_short_counter_scroll_up_is_one_memmove() {
+    let after = managed_fill_on(FLAT, &scroll(true), SCROLL_INPUTS);
+    assert!(after.contains("llvm.memmove") && after.contains("!llrm.forward"), "{after}");
+}
+
+/// `a[i + 8] = a[i]` with `i` falling is one backward `llvm.memmove`.
+#[test]
+fn a_short_counter_scroll_down_is_one_memmove() {
+    let after = managed_fill_on(FLAT, &scroll(false), SCROLL_INPUTS);
+    assert!(after.contains("llvm.memmove") && after.contains("!llrm.backward"), "{after}");
 }
