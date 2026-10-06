@@ -197,6 +197,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             // Watcom's: relaxed alias checking; relaxed floating point.
             "-oa" => watcom.push("-oa"),
             "-on" => watcom.push("-on"),
+            // Watcom's large model, after medium's: what a program asks for where default data pointers were far.
+            "-ml" => watcom.push("-ml"),
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unrecognized arguments: {flag}"));
             }
