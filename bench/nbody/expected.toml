@@ -1,4 +1,4 @@
-reason = "x87 homes: a stored loop-carried float is spilled to its own cell"
+reason = "nbody c -Os +7 B: x87 release is priced on x86-m16 too; the unhoisted loop leaves LSR a worse shape (#698)"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -15,7 +15,7 @@ memory_operands = 26085
 code_bytes = 865
 data_bytes = 31
 bss_bytes = 0
-kernel_ms = 0.9404
+kernel_ms = 0.9406
 
 [c.O2]
 instructions = 54283
@@ -26,12 +26,12 @@ bss_bytes = 0
 kernel_ms = 0.7254
 
 [c.Os]
-instructions = 57659
-memory_operands = 20845
-code_bytes = 498
+instructions = 58459
+memory_operands = 21645
+code_bytes = 505
 data_bytes = 16
 bss_bytes = 0
-kernel_ms = 0.7702
+kernel_ms = 0.7811
 
 [nib.O2]
 instructions = 54285
@@ -47,7 +47,7 @@ memory_operands = 20846
 code_bytes = 528
 data_bytes = 28
 bss_bytes = 0
-kernel_ms = 0.7712
+kernel_ms = 0.7715
 
 [ow.O2]
 instructions = 53725
