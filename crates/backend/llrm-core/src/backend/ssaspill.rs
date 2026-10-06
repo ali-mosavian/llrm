@@ -729,50 +729,26 @@ fn remakable(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>>
             out.insert(*value, Arc::clone(one));
         }
     }
-    // A copy of a load is made again as that load, so the cell must hold to the copy's last use as well.
-    let copies: IndexMap<u32, u32> = body
-        .insns()
-        .iter()
-        .filter_map(|one| {
-            let (Some(what), [value], [source]) = (&one.what, one.defines.as_slice(), one.uses.as_slice()) else { return None };
-            let ([Loc::Held(dest)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
-            let plain = what.op == Operation::Move && what.name.as_deref() == Some("mov") && dest.value == *value && from.value == *source && dest.width == from.width;
-            (plain && values.contains(value) && defining.get(value).is_some_and(|found| found.len() == 1)).then_some((*value, *source))
-        })
-        .collect();
-    let stable = spiller::_stable_loads_through(body, values, &copies);
-    for value in stable.keys().filter(|value| !copies.contains_key(*value)) {
+    let copies = spiller::_copies(body, values);
+    for value in spiller::_stable_loads_through(body, values, &copies).keys() {
         if let Some([only]) = defining.get(value).map(Vec::as_slice) {
             out.insert(*value, Arc::clone(only));
         }
     }
-    // A plain copy of a value made again is made again the same way: its own.
-    for one in body.insns() {
-        let (Some(what), [value], [source]) = (&one.what, one.defines.as_slice(), one.uses.as_slice()) else { continue };
-        let ([Loc::Held(dest)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) else { continue };
-        if what.op != Operation::Move || what.name.as_deref() != Some("mov") || dest.value != *value || from.value != *source || dest.width != from.width || !values.contains(value) {
-            continue;
-        }
-        if defining.get(value).is_none_or(|found| found.len() != 1) || out.contains_key(value) {
-            continue;
-        }
-        let Some(made) = out.get(source) else { continue };
-        // A load is made again for a copy only where the cell holds to the copy's own uses.
-        let loads = made.what.as_ref().is_some_and(|what| what.sources.iter().any(|place| matches!(place, Loc::Mem(_))));
-        if loads && !stable.contains_key(value) {
-            continue;
-        }
-        // Made as wide as the copy is: the low word of a dword load is not that load.
-        let made_width = made.what.as_ref().and_then(|what| match what.dests.as_slice() { [Loc::Held(held)] => Some(held.width), _ => None });
-        if made_width != Some(dest.width) {
-            continue;
-        }
+    // A plain copy of a value made again is made again the same way: its own, as wide as it is.
+    for (value, source) in copies {
+        let Some(made) = out.get(&source) else { continue };
+        let width = made.what.as_ref().and_then(|what| match what.dests.as_slice() {
+            [Loc::Held(held)] => Some(held.width),
+            _ => None,
+        });
+        let Some(width) = width.filter(|_| !out.contains_key(&value)) else { continue };
         let mut copy = (**made).clone();
-        copy.defines = vec![*value];
+        copy.defines = vec![value];
         if let Some(what) = &mut copy.what {
-            what.dests = vec![Loc::Held(crate::model::ir::Held { value: *value, width: dest.width })];
+            what.dests = vec![Loc::Held(crate::model::ir::Held { value, width })];
         }
-        out.insert(*value, Arc::new(copy));
+        out.insert(value, Arc::new(copy));
     }
     out
 }
@@ -1524,8 +1500,9 @@ mod tests {
         ];
         let body = LirBody::new("t", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
         let made = remakable(&body, &BTreeSet::from([1, 2]));
-        assert!(made.contains_key(&1), "premise: the load holds until its own last use");
+        // The load is made again for its copies too, so it holds only to the last of their uses.
         assert!(!made.contains_key(&2), "the copy is read after the cell was written");
+        assert!(!made.contains_key(&1), "the load is made again for a copy read after the write");
     }
 
     /// A load the optimizer proved no write in the loop changes was held in a stack slot all the same: a store through a
