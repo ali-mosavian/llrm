@@ -227,6 +227,11 @@ fn _word_address_roles(
     segments: &Segments,
     registers: &RegisterClasses,
 ) {
+    // No pair, no component: nothing below would run, and it numbers the body, finds every
+    // interval and builds the masks first.
+    if pairs.is_empty() {
+        return;
+    }
     let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
     for (base, index) in pairs {
         adjacent.entry(*base).or_default().insert(*index);

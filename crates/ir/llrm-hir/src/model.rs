@@ -993,6 +993,10 @@ pub struct Program {
     /// A frame's locals start zeroed; false where the language leaves them
     /// indeterminate.
     pub zeroed_locals: bool,
+    /// The bytes of each word of a buffer's or view's descriptor (its flags, length and capacity): the
+    /// language's promise, which the descriptor places' field type states too. 2 for every language
+    /// but Nib on a target whose near pointer is wider.
+    pub descriptor_word: i64,
     pub frames: Frames,
     pub promises: RuntimePromises,
     /// The functions code outside the program calls whatever their
@@ -1021,6 +1025,7 @@ impl Program {
             float_mode: FloatMode::Inline,
             float_semantics: FloatSemantics::Declared,
             zeroed_locals: true,
+            descriptor_word: 2,
             frames: Frames::Runtime,
             promises: RuntimePromises::default(),
             entries: Vec::new(),

@@ -823,3 +823,13 @@ fn test_interference_among_some_values_is_the_whole_graphs_among_them() {
         }
     }
 }
+
+/// The class of every value was found with the body numbered, its intervals found and the clobber masks
+/// built for the `[word+word]` roles, in bodies with none: 3.8 s of compiling `d_faces` (#559).
+#[test]
+fn test_a_body_with_no_word_address_pairs_is_not_numbered_to_find_classes() {
+    let (generated, _) = body(5, &Shape { pool: 8, ops: 6 });
+    let before = crate::analysis::intervals::worked();
+    crate::backend::regclass::classes(&generated, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+    assert_eq!(crate::analysis::intervals::worked() - before, 0, "intervals were worked out for a body with no word pairs");
+}

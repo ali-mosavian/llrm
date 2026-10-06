@@ -423,6 +423,9 @@ impl _Plain for model::Program {
         if !self.zeroed_locals {
             out.insert("zeroed_locals".to_owned(), self.zeroed_locals._plain());
         }
+        if self.descriptor_word != 2 {
+            out.insert("descriptor_word".to_owned(), self.descriptor_word._plain());
+        }
         if self.frames != model::Frames::Runtime {
             out.insert("frames".to_owned(), self.frames._plain());
         }
@@ -1478,6 +1481,7 @@ static PROGRAM: _Record = _Record {
         ("float_mode", enum_hint!(FloatMode), false),
         ("float_semantics", enum_hint!(FloatSemantics), false),
         ("zeroed_locals", _Hint::Bool, false),
+        ("descriptor_word", _Hint::Int, false),
         ("frames", enum_hint!(Frames), false),
         ("promises", _Hint::Record(&RUNTIME_PROMISES), false),
         ("entries", _Hint::Tuple(&_Hint::Str), false),
@@ -1495,6 +1499,7 @@ static PROGRAM: _Record = _Record {
             float_mode: _default(args, "float_mode", model::FloatMode::Inline)?,
             float_semantics: _default(args, "float_semantics", model::FloatSemantics::Declared)?,
             zeroed_locals: _default(args, "zeroed_locals", true)?,
+            descriptor_word: _default(args, "descriptor_word", 2)?,
             frames: _default(args, "frames", model::Frames::Runtime)?,
             promises: _default(args, "promises", model::RuntimePromises::default())?,
             entries: _default(args, "entries", Vec::new())?,

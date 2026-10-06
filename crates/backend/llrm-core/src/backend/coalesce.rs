@@ -46,7 +46,7 @@ impl LIRTransform for Coalescer {
     }
 }
 
-type Graph = IndexMap<u32, BTreeSet<u32>>;
+pub type Graph = IndexMap<u32, BTreeSet<u32>>;
 
 fn _find(parent: &mut IndexMap<u32, u32>, one: u32) -> u32 {
     let mut root = one;
@@ -242,6 +242,16 @@ fn _george(
     })
 }
 
+thread_local! {
+    static ASKED: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// How many values the last interference graph of this thread was asked for, none for all, for a test
+/// that `siblings` asks of the webs it grows from only.
+pub fn last_asked() -> Option<usize> {
+    ASKED.with(std::cell::Cell::get)
+}
+
 pub fn _interference(body: &LirBody) -> Graph {
     _interference_among(body, None)
 }
@@ -249,6 +259,7 @@ pub fn _interference(body: &LirBody) -> Graph {
 /// `_interference`, of the values in `only` alone where it is given: a caller that asks of a few
 /// values pays for the pairs among them, not for every pair live together.
 pub fn _interference_among(body: &LirBody, only: Option<&BTreeSet<u32>>) -> Graph {
+    ASKED.with(|asked| asked.set(only.map(BTreeSet::len)));
     let wanted = |value: u32| only.is_none_or(|only| only.contains(&value));
     let rows = allocate::live_rows(body);
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
