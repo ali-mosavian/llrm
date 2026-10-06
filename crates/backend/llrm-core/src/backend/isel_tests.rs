@@ -1774,7 +1774,8 @@ join:
   ret i16 %v
 }
 ";
-    assert_eq!(listing(text, "f")[3..7], ["mov bx, word ptr [bp+6]", "mov al, byte ptr [bp+8]", "add bx, bx", "add bx, offset a"]);
+    // The byte test reads its cell where it runs: the load crosses the address arithmetic.
+    assert_eq!(listing(text, "f")[3..7], ["mov bx, word ptr [bp+6]", "add bx, bx", "add bx, offset a", "cmp byte ptr [bp+8], 0"]);
 }
 
 /// A signed dword divided by a constant is a multiply by its reciprocal

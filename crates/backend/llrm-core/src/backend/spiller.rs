@@ -985,8 +985,9 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
 
 
 /// Whether `cell` still holds what it held at `define` after `one`.
-fn _keeps(one: &Arc<Insn>, define: &Arc<Insn>, cell: &Mem, holds: bool, body: &LirBody) -> bool {
-    if Arc::ptr_eq(one, define) {
+/// Whether `cell`, as the load `define` read it, still holds after `one`, given it held before.
+pub(crate) fn _keeps(one: &Arc<Insn>, define: &Insn, cell: &Mem, holds: bool, body: &LirBody) -> bool {
+    if std::ptr::eq(Arc::as_ptr(one), define) {
         return true;
     }
     let (sealed, apart) = (body.sealed_arguments, body.spares.contains(&(define.at, one.at)));
