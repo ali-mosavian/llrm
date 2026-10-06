@@ -2495,7 +2495,7 @@ fn test_a_huge_module_array_is_not_borrowed() {
     assert!(error.contains("only indexed"), "{error}");
 }
 
-const RECURSIVE: &str = "fn down(n: i16) -> i16:\n    if n == 0:\n        return 0\n    return down(n - 1) + n\n\n@export(\"cdecl16\")\nfn up(n: i16) -> i16:\n    return down(n)\n\nfn main() -> i16:\n    print(up(3))\n    return 0\n";
+const RECURSIVE: &str = "fn down(n: i16) -> i16:\n    if n == 0:\n        return 0\n    return n - down(n - 1)\n\n@export(\"cdecl16\")\nfn up(n: i16) -> i16:\n    return down(n)\n\nfn main() -> i16:\n    print(up(3))\n    return 0\n";
 
 #[test]
 fn test_an_internal_function_only_called_directly_is_entered_by_a_near_call() {

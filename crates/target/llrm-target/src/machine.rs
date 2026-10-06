@@ -68,6 +68,12 @@ pub struct Machine {
 }
 
 impl Machine {
+    /// This machine with the stack in the data group (SS is DS): the runtime of a language that keeps its stack in
+    /// DGROUP says so; the flag `-mstack-is-data` says it of a program.
+    pub fn with_stack_in_data(self) -> Self {
+        Self { segments: self.segments.map(|segments| Segments { stack_is_data: true, ..segments }), ..self }
+    }
+
     /// This machine as the platform of the target whose layout is `layout`.
     pub fn with_layout(self, layout: crate::layout::Layout) -> Self {
         Self { layout: Some(layout), ..self }
@@ -253,6 +259,17 @@ mod tests {
         assert_eq!(flat.port_memory((0x3C4, 0x3C5)), PortMemory::None);
         assert_eq!(flat.port_memory((0x0B, 0x0B)), PortMemory::Dma);
         assert_eq!(flat.port_memory((0x300, 0x300)), PortMemory::Any);
+    }
+
+    /// BASIC's machine was a second static beside the built-in one (`BASIC`), made by hand from it: the runtime that
+    /// keeps its stack in the data group asks for it of any machine, and a flat one has no segments to change.
+    #[test]
+    fn test_a_machine_keeps_its_stack_in_the_data_group_when_asked() {
+        let real = "addressing = \"real\"\nsegment_end_faults = true\n[segments]\ndata = \"ds\"\nstack = \"ss\"\ncode = \"cs\"\nstack_is_data = false\n";
+        let machine = Machine::parse(real, "486").unwrap();
+        assert!(!machine.segments.as_ref().unwrap().stack_is_data);
+        assert!(machine.with_stack_in_data().segments.unwrap().stack_is_data);
+        assert!(Machine::parse(FLAT, "486").unwrap().with_stack_in_data().segments.is_none());
     }
 
     #[test]

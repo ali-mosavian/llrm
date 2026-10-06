@@ -157,10 +157,10 @@ impl CountedLoop {
 
     /// The header's unsigned values only rise from a constant start to the
     /// bound, or stay at the start, and never pass the width's largest: a unit
-    /// step tested before each trip by `ult`. Its zero extension is a counter
-    /// of the wider width.
+    /// step tested before each trip by `ult`, from any start: one past it the
+    /// loop has left. Its zero extension is a counter of the wider width.
     pub fn rises_unsigned(&self) -> bool {
-        !self.posttested && !self.stepped && self.test == IntPredicate::Ult && self.step == BigInt::from(1) && matches!(self.start, AffineOperand::Const(_))
+        !self.posttested && !self.stepped && self.test == IntPredicate::Ult && self.step == BigInt::from(1)
     }
 
     /// The signed values the header's counter takes on a trip, lowest first.

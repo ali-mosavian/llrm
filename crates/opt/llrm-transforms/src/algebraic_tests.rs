@@ -717,3 +717,50 @@ fn test_a_signed_division_of_an_unknown_sign_stays_signed() {
     unchanged("define i32 @f(i32 range(i32 0, 100) %x) {\nb0:\n  %r = sdiv i32 %x, -10\n  ret i32 %r\n}\n");
     unchanged("define i32 @f(i32 range(i32 0, 100) %x, i32 %d) {\nb0:\n  %r = sdiv i32 %x, %d\n  ret i32 %r\n}\n");
 }
+
+/// bench/tile: `tile[(x + 7) & 63]` of `x < 40` on -m32 kept `mov esi,ebx; and esi,7Eh` per element
+/// (7 instructions an iteration against clang's 4): the range of `x` makes the mask a no-op.
+fn masked_loop(bound: i32, mask: i32) -> String {
+    format!(
+        "define i32 @f(i32 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b2 ]
+  %s = phi i32 [ 0, %b0 ], [ %sum, %b2 ]
+  %c = icmp slt i32 %i, {bound}
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %a = add nsw i32 %i, 7
+  %m = and i32 %a, {mask}
+  %sum = add i32 %s, %m
+  %next = add nsw i32 %i, 1
+  br label %b1
+
+b3:
+  ret i32 %s
+}}
+"
+    )
+}
+
+#[test]
+fn a_mask_the_range_of_a_counter_makes_redundant_is_removed() {
+    let text = checked(&masked_loop(40, 63), &[vec![0]]);
+    assert!(!text.contains("and i32"), "{text}");
+}
+
+#[test]
+fn a_mask_that_clears_a_bit_the_range_reaches_is_kept() {
+    let text = checked(&masked_loop(60, 63), &[vec![0]]);
+    assert!(text.contains("and i32"), "{text}");
+}
+
+/// A scale's low bit is known clear: `(x * 2) & 126` of `x < 64` drops the mask though the range reaches 126.
+#[test]
+fn a_mask_that_only_clears_a_scaled_low_bit_is_removed() {
+    let text = checked(&masked_loop(40, 63).replace("%a = add nsw i32 %i, 7", "%t = add nsw i32 %i, 7\n  %a = mul i32 %t, 2").replace("and i32 %a, 63", "and i32 %a, 126"), &[vec![0]]);
+    assert!(!text.contains("and i32"), "{text}");
+}

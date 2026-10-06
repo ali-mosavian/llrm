@@ -63,3 +63,14 @@ fn test_known_zero_bits_follow_masks_extensions_and_shifts() {
     assert_eq!(zeros("  %m = and i64 %w, 15\n  %n = and i64 %w, 3\n  %x = or i64 %m, %n\n  ret i64 %x"), high(4));
     assert_eq!(zeros("  ret i64 %w"), 0);
 }
+
+/// A scale by 2 or 4 clears the low bits, and a sum of two such multiples keeps the least: tile's
+/// `(x + 7) * 2 & 126` kept its mask because `mul` and `add` proved no bit.
+#[test]
+fn test_known_zero_low_bits_follow_products_and_sums() {
+    assert_eq!(zeros("  %x = mul i64 %w, 8\n  ret i64 %x"), 7);
+    assert_eq!(zeros("  %m = mul i64 %w, 4\n  %n = mul i64 %w, 2\n  %x = mul i64 %m, %n\n  ret i64 %x"), 7);
+    assert_eq!(zeros("  %m = mul i64 %w, 4\n  %n = mul i64 %w, 16\n  %x = add i64 %m, %n\n  ret i64 %x"), 3);
+    assert_eq!(zeros("  %m = mul i64 %w, 4\n  %x = sub i64 %m, 1\n  ret i64 %x"), 0);
+    assert_eq!(zeros("  %x = mul i64 %w, 3\n  ret i64 %x"), 0);
+}
