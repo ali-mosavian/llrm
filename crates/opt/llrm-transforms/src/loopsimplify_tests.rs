@@ -443,3 +443,28 @@ fn every_corpus_loop_ends_with_one_latch_at_a_fixed_point() {
         assert!(!again, "{name}: a second run changed it");
     }
 }
+
+/// Every loop was tried on a copy of the whole function and its graph rebuilt, though it needed nothing:
+/// 39% of compiling 100 sequential loops, and the cost of `mir lsr` grew with the square of them (#556). A
+/// loop already in the form makes no copy.
+#[test]
+fn loops_already_in_simplified_form_make_no_copy_of_the_function() {
+    let loops = 30;
+    let mut text = String::from("define i16 @f(i16 %x) {\nentry:\n  br label %p0\n");
+    for at in 0..loops {
+        let next = if at + 1 == loops { "done".to_owned() } else { format!("p{}", at + 1) };
+        let before = if at == 0 { "p0".to_owned() } else { format!("h{}", at - 1) };
+        let _ = before;
+        text += &format!("p{at}:\n  br label %h{at}\nh{at}:\n  %i{at} = phi i16 [ 0, %p{at} ], [ %n{at}, %b{at} ]\n  %c{at} = icmp slt i16 %i{at}, %x\n  br i1 %c{at}, label %b{at}, label %{next}\nb{at}:\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n");
+    }
+    text += "done:\n  ret i16 0\n}\n";
+    let mut module = parsed(&text);
+    let before = super::copies();
+    let function = module.named("f").expect("@f");
+    let changed = {
+        let llrm_mir::GlobalKind::Function(function) = &mut module.globals[function.0 as usize].kind else { panic!("a function") };
+        simplified(function)
+    };
+    assert!(!changed, "a loop in the form was changed");
+    assert_eq!(super::copies() - before, 0, "the function was copied for a loop that needed nothing");
+}
