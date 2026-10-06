@@ -539,6 +539,11 @@ impl<'a> Unit<'a> {
         }
     }
 
+    /// The address spaces by role: the program's target's, or one flat space where none is named.
+    pub fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.program.map_or(llrm_mir::spaces::Spaces::FLAT, |program| program.target.spaces())
+    }
+
     /// A pointer operand's address space.
     pub fn space(&self, operand: Operand) -> Option<u32> {
         match self.context.types.get(self.operand_type(operand)?) {
@@ -874,7 +879,7 @@ fn step(unit: &Unit, pointer: Operand) -> Option<Step> {
     let types = &unit.context.types;
     let through = |from: Operand| {
         // A segment's cast to a far pointer is `segment:0`, a new root.
-        (unit.space(from).is_some_and(|space| space != 2)).then_some(Step::Through(from))
+        (unit.space(from).is_some() && !unit.spaces().is_segment(unit.space(from))).then_some(Step::Through(from))
     };
     match pointer {
         Operand::Value(_) => {

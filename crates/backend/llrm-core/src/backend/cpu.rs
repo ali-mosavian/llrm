@@ -23,6 +23,8 @@ pub struct Profile {
     pub prefix_cost: i64,
     pub partial_register_stall: i64,
     pub register_capacity: i64,
+    /// The target's address spaces by role.
+    pub spaces: llrm_mir::spaces::Spaces,
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
     pub call_register_capacity: i64,
@@ -61,6 +63,7 @@ impl Profile {
             call_registers: self.call_register_capacity,
             address_forms: self.address_forms.clone(),
             operations: self.operations.clone(),
+            spaces: self.spaces,
         }
     }
 
@@ -93,6 +96,7 @@ impl Profile {
             prefix_cost,
             partial_register_stall,
             register_capacity: arch.register_capacity(),
+            spaces: arch.layout().spaces.roles,
             operand_bytes: arch.operand_bytes(),
             call_register_capacity: arch.callee_saved().len() as i64,
             address_scales: BTreeSet::from([1]),

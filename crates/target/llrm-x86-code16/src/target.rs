@@ -72,6 +72,10 @@ impl Dos {
 }
 
 impl Machine for Dos {
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        crate::spaces()
+    }
+
     /// The description's foreign memory: `dos.toml` states it once.
     fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
         crate::machine::BUILT_IN.foreign_span(selectors, offsets, width)
@@ -122,7 +126,7 @@ impl Machine for Dos {
     /// from it, less that step's last byte, never carries.
     fn huge_window(&self) -> Option<(u32, i64)> {
         let step = 1_i64 << (16 - crate::machine::BUILT_IN.huge_shift()?);
-        Some((1, (1 << 16) - (step - 1)))
+        Some((crate::spaces().far, (1 << 16) - (step - 1)))
     }
 
     /// The description's: `dos.toml` states each device's reach.

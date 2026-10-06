@@ -6,9 +6,13 @@ use crate::narrowspace::narrowed;
 use crate::testing::{parsed, printed};
 
 fn run(text: &str) -> String {
+    on(text, llrm_x86_code16::spaces())
+}
+
+fn on(text: &str, spaces: llrm_mir::spaces::Spaces) -> String {
     let mut module = parsed(&format!("{}{text}", llrm_analysis::testing::DOS));
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("parses");
-    narrowed(&mut module, &layout);
+    narrowed(&mut module, &layout, spaces);
     printed(&module)
 }
 
@@ -101,4 +105,20 @@ b0:
 }}
 ", CALLEE.replace("internal ", "")));
     assert!(after.contains("@sum(ptr addrspace(1) %a"), "{after}");
+}
+
+/// The stack's space was 5 in the pass: a target that numbers it 6 got a stack object's parameter
+/// narrowed to the data space's near pointer, read through DS.
+#[test]
+fn a_target_names_the_space_of_the_stack_a_parameter_narrows_to() {
+    let spaces = llrm_mir::spaces::Spaces { stack: 6, ..llrm_x86_code16::spaces() };
+    let after = on(&format!("{CALLEE}define i16 @top() {{
+b0:
+  %s = alloca [16 x i16]
+  %w = addrspacecast ptr %s to ptr addrspace(1)
+  %r = call i16 @sum(ptr addrspace(1) %w, i16 3)
+  ret i16 %r
+}}
+"), spaces);
+    assert!(after.contains("@sum(ptr addrspace(6) %"), "{after}");
 }

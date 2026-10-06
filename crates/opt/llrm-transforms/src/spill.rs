@@ -36,11 +36,13 @@ pub struct Room {
     pub addresses: i64,
     /// Whether a result is made in its first operand's register.
     pub two_address: bool,
+    /// The target's address spaces by role.
+    pub spaces: llrm_mir::spaces::Spaces,
 }
 
 impl Room {
     pub fn of(outer: &Outer) -> Room {
-        Room { registers: outer.target().registers(), across_call: outer.target().call_registers(), far_access: outer.target().far_access_registers(), segments: outer.target().segment_registers(), addresses: outer.target().address_registers(), two_address: outer.target().two_address() }
+        Room { registers: outer.target().registers(), across_call: outer.target().call_registers(), far_access: outer.target().far_access_registers(), segments: outer.target().segment_registers(), addresses: outer.target().address_registers(), two_address: outer.target().two_address(), spaces: outer.target().spaces() }
     }
 
     pub fn priced(&self) -> bool {
@@ -227,7 +229,7 @@ fn address_values_by(function: &Function, pointer: ValueId, is_folded: &mut dyn 
 
 /// Whether `value` is a far pointer of offset zero, a selector cast to the
 /// far space: held in a segment register, where the target has one.
-pub fn segment_view(context: &Context, layout: &DataLayout, function: &Function, value: ValueId) -> bool {
+pub fn segment_view(context: &Context, layout: &DataLayout, spaces: llrm_mir::spaces::Spaces, function: &Function, value: ValueId) -> bool {
     let ValueDef::Instruction(def) = function.value(value).def else { return false };
     let op = function.instruction(def);
     let (Opcode::Cast(CastOp::AddrSpaceCast), [from]) = (&op.opcode, &op.operands[..]) else { return false };
@@ -236,7 +238,7 @@ pub fn segment_view(context: &Context, layout: &DataLayout, function: &Function,
         _ => None,
     });
     let far = |space: u32| layout.pointer(space).bits > layout.pointer(space).index_bits;
-    matches!((space(Operand::Value(value)), space(*from)), (Some(to), Some(from)) if far(to) && from != 0 && !far(from))
+    matches!((space(Operand::Value(value)), space(*from)), (Some(to), Some(from)) if far(to) && from != spaces.near && !far(from))
 }
 
 /// Whether `value` takes an integer register: floating values do not, nor

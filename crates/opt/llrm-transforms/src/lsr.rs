@@ -534,7 +534,7 @@ fn _fixed(
     let found = liveness::live(function);
     let across = |inst: InstId| spill::kept_across(outer, view.context, function, inst);
     let transient = |inst: InstId, live: &BTreeSet<ValueId>| spill::transient(view.context, view.layout, function, inst, room, live);
-    let segment = |value: ValueId| spill::segment_view(view.context, view.layout, function, value);
+    let segment = |value: ValueId| spill::segment_view(view.context, view.layout, room.spaces, function, value);
     let addressed = spill::addressed(function);
     let routed = |value: ValueId| addressed.contains(&value);
     loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted, &segment, &routed))).collect()
@@ -651,7 +651,7 @@ fn _frames(function: &Function) -> BTreeSet<ValueId> {
 /// The function's far views of a segment, which the segment registers hold.
 fn _views(view: &memory::Unit) -> BTreeSet<ValueId> {
     let function = view.function;
-    function.walk().filter_map(|(_, inst)| function.instruction(inst).result).filter(|&value| spill::segment_view(view.context, view.layout, function, value)).collect()
+    function.walk().filter_map(|(_, inst)| function.instruction(inst).result).filter(|&value| spill::segment_view(view.context, view.layout, view.spaces(), function, value)).collect()
 }
 
 /// How many registers of an address cannot be where it needs them: each

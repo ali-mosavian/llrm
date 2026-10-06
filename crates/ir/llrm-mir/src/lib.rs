@@ -28,6 +28,7 @@ pub mod passes;
 pub mod print;
 pub mod program;
 pub mod scalarevolution;
+pub mod spaces;
 pub mod target;
 pub mod tbaa;
 pub mod types;

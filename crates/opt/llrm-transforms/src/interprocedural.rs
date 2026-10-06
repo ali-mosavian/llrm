@@ -467,7 +467,7 @@ pub fn optimized<E: From<String>>(
 
     // A far pointer every call fills from DGROUP is passed as its offset.
     for at in 0..count {
-        for id in crate::narrowspace::narrowed(&mut program.modules[at], &program.layout) {
+        for id in crate::narrowspace::narrowed(&mut program.modules[at], &program.layout, program.target.spaces()) {
             edited(&mut modules[at], &[id]);
             reoptimised(&mut program.modules[at], &mut modules[at], id, "narrow.")?;
         }
@@ -714,7 +714,7 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
             shape.loops.iter().all(|one| proofs(one).iter().any(|proof| !proof.stops && (proof.count.is_some() || proof.step.magnitude() == &num_bigint::BigUint::from(1_u8))))
         };
         let returns = ((facts::returns_without_looping(function) || counted()) && states(Fact::WillReturn)) || promised;
-        let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, function);
+        let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, program.target.spaces(), function);
         let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
         for &inst in &calls {
             let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { continue };
