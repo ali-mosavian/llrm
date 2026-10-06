@@ -166,6 +166,11 @@ impl LiveRows {
         self.values(&self.out, self.position[&at])
     }
 
+    fn holds(&self, rows: &[u64], block: i64, value: u32) -> bool {
+        let (Some(&at), Ok(bit)) = (self.position.get(&block), self.numbered.binary_search(&value)) else { return false };
+        rows[at * self.words + bit / 64] >> (bit % 64) & 1 == 1
+    }
+
     fn values<'a>(&'a self, rows: &'a [u64], block: usize) -> impl Iterator<Item = u32> + 'a {
         rows[block * self.words..(block + 1) * self.words]
             .iter()
@@ -175,6 +180,33 @@ impl LiveRows {
 
     fn sets(&self, rows: &[u64]) -> Live {
         self.blocks.iter().enumerate().map(|(at, block)| (*block, self.values(rows, at).collect())).collect()
+    }
+}
+
+/// Whether a value is live at the entry or exit of a block: what a caller that asks of one value at a time reads,
+/// whether it has the sets of every block (`Live`) or the rows.
+pub trait LiveAt {
+    fn live_in(&self, block: i64, value: u32) -> bool;
+    fn live_out(&self, block: i64, value: u32) -> bool;
+}
+
+impl LiveAt for LiveRows {
+    fn live_in(&self, block: i64, value: u32) -> bool {
+        self.holds(&self.into, block, value)
+    }
+
+    fn live_out(&self, block: i64, value: u32) -> bool {
+        self.holds(&self.out, block, value)
+    }
+}
+
+impl LiveAt for (&Live, &Live) {
+    fn live_in(&self, block: i64, value: u32) -> bool {
+        self.0.get(&block).is_some_and(|live| live.contains(&value))
+    }
+
+    fn live_out(&self, block: i64, value: u32) -> bool {
+        self.1.get(&block).is_some_and(|live| live.contains(&value))
     }
 }
 
@@ -802,7 +834,7 @@ fn _allocated(
     let mut fixed: IndexMap<u32, Register> = pinned.cloned().unwrap_or_default();
     // Values a split made or left behind, never split again: LLVM's `RS_Split2` and `RS_Spill`.
     let mut pieces: BTreeSet<u32> = BTreeSet::new();
-    let mut placing: Option<(spillplacement::Bundles, (Live, Live))> = None;
+    let mut placing: Option<(spillplacement::Bundles, LiveRows)> = None;
     let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
 
@@ -962,9 +994,9 @@ fn _allocated(
         let mut rewritten: Option<Vec<u32>> = None;
         if splitting && at == Stage::Split && !pieces.contains(&value) && !bound {
             let _split = llrm_support::debug::span("regalloc split");
-            let (bundles, live_sets) = placing.get_or_insert_with(|| (spillplacement::bundles(&body), self::live(&body)));
-            let spread = splitkit::live_blocks(&body, value, (&live_sets.0, &live_sets.1));
-            let occupied = splitkit::Occupied {
+            let (bundles, live_sets) = placing.get_or_insert_with(|| llrm_support::debug::timed("split placing", || (spillplacement::bundles(&body), live_rows(&body))));
+            let spread = llrm_support::debug::timed("split spread", || splitkit::live_blocks(&body, value, &*live_sets));
+            let occupied = llrm_support::debug::timed("split occupied", || splitkit::Occupied {
                 segments: union
                     .iter()
                     .map(|(register, held)| {
@@ -972,24 +1004,25 @@ fn _allocated(
                     })
                     .collect(),
                 masks: &facts.masks,
-            };
-            let sets = (&live_sets.0, &live_sets.1);
+            });
+            let sets: &dyn LiveAt = &*live_sets;
             // A range in one block splits locally; any other by region, and
             // failing that block by block. Only a piece that pays is carved.
-            let regions: Vec<splitkit::Region> = match splitkit::local(&body, value, &facts.index, sets, &order, &occupied, width) {
+            let regions: Vec<splitkit::Region> = match llrm_support::debug::timed("split local", || splitkit::local(&body, value, &facts.index, sets, &order, &occupied, width)) {
                 Some(found) => vec![found],
                 None => {
-                    let placed = splitkit::placed(&body, value, &facts.index, sets, bundles, &order, &occupied, width);
-                    if placed.is_empty() { splitkit::per_block(&body, value, sets) } else { placed }
+                    let placed = llrm_support::debug::timed("split placed", || splitkit::placed(&body, value, &facts.index, sets, bundles, &order, &occupied, width));
+                    if placed.is_empty() { llrm_support::debug::timed("split per block", || splitkit::per_block(&body, value, sets)) } else { placed }
                 }
             };
-            let regions: Vec<splitkit::Region> = regions.into_iter().filter(|region| splitkit::pays(&body, value, region, sets)).collect();
+            let regions: Vec<splitkit::Region> = llrm_support::debug::timed("split pays", || regions.into_iter().filter(|region| splitkit::pays(&body, value, region, sets)).collect());
             for region in &regions {
                 llrm_support::debug!("split", "{}: split {value} at {:?}", body.name, region.spans);
             }
             let mut cut = body.clone();
             let mut moves: Vec<splitkit::Moved> = Vec::new();
             let mut made: Vec<u32> = Vec::new();
+            let _carving = llrm_support::debug::span("split carving");
             for region in regions {
                 let fresh = splitkit::_next_value(&cut).max(floor);
                 floor = fresh + 1;
@@ -1003,8 +1036,10 @@ fn _allocated(
             if !made.is_empty() {
                 // As LLVM's RS_Split2: a piece splits again only while its
                 // live blocks strictly shrink, so splitting ends.
-                let after = self::live(&cut);
-                pieces.extend(made.iter().copied().filter(|one| splitkit::live_blocks(&cut, *one, (&after.0, &after.1)) >= spread));
+                drop(_carving);
+                // Only the pieces made are asked of.
+                let after = llrm_support::debug::timed("split after liveness", || live_rows_by(&cut, |one| made.contains(&one)));
+                pieces.extend(made.iter().copied().filter(|one| splitkit::live_blocks(&cut, *one, &after) >= spread));
                 pieces.insert(value);
                 body = cut;
                 for one in &made {
