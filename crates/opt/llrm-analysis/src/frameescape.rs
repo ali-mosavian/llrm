@@ -116,11 +116,59 @@ pub fn analysed(function: &Function) -> Escapes {
     Escapes { origins, exposed }
 }
 
+thread_local! {
+    static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has asked `exposes` of one alloca, for a test that a function's
+/// answers are found once.
+pub fn scans() -> usize {
+    SCANS.with(std::cell::Cell::get)
+}
+
+/// Every alloca of `function` whose address is exposed, as `exposes` says of each, in one pass: a value
+/// is exposing where a use of it is neither a move, an access through it, nor a marker, and an
+/// address that reaches an exposing value through moves is exposed too.
+pub fn exposed_allocas(function: &Function, marker: impl Fn(InstId) -> bool) -> BTreeSet<ValueId> {
+    let mut exposing = vec![false; function.value_count()];
+    // The values a value moves into, reversed: who feeds each.
+    let mut feeds: Vec<Vec<ValueId>> = vec![Vec::new(); function.value_count()];
+    let mut allocas = Vec::new();
+    for (_, inst) in function.walk() {
+        let instruction = function.instruction(inst);
+        if let (Opcode::Alloca { .. }, Some(result)) = (&instruction.opcode, instruction.result) {
+            allocas.push(result);
+        }
+        for (index, operand) in instruction.operands.iter().enumerate() {
+            let Operand::Value(value) = operand else { continue };
+            let moves = instruction.opcode == Opcode::Phi || source(function, inst) == Some(Operand::Value(*value)) && index == 0;
+            if moves {
+                if let Some(result) = instruction.result {
+                    feeds[result.0 as usize].push(*value);
+                }
+            } else if !(accessed(function, inst) == Some(index) || marker(inst)) {
+                exposing[value.0 as usize] = true;
+            }
+        }
+    }
+    let mut work: Vec<ValueId> = (0..exposing.len()).filter(|&at| exposing[at]).map(|at| ValueId(at as u32)).collect();
+    while let Some(value) = work.pop() {
+        for &feeder in &feeds[value.0 as usize] {
+            if !exposing[feeder.0 as usize] {
+                exposing[feeder.0 as usize] = true;
+                work.push(feeder);
+            }
+        }
+    }
+    allocas.into_iter().filter(|one| exposing[one.0 as usize]).collect()
+}
+
 /// Whether `alloca`'s address is exposed, as `analysed` finds it: it
 /// reaches, through moves and phis, an operand that is not an access's
 /// own pointer. A lifetime marker (`marker` says which instructions are
 /// one) names an object without handing out its address.
 pub fn exposes(function: &Function, alloca: ValueId, marker: impl Fn(InstId) -> bool) -> bool {
+    SCANS.with(|scans| scans.set(scans.get() + 1));
     let mut seen = BTreeSet::from([alloca]);
     let mut pending = vec![alloca];
     while let Some(value) = pending.pop() {

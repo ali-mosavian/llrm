@@ -421,6 +421,9 @@ pub struct Unit<'a> {
     pub annotated: Option<&'a Result<IndexMap<InstId, MemRef>, String>>,
     /// What each block assumes; without it each ask finds it.
     pub assumptions: Option<&'a Assumptions>,
+    /// The allocas whose address is exposed, the manager's `ExposedFrames`; without it each ask scans
+    /// the alloca's uses.
+    pub exposed: Option<&'a BTreeSet<ValueId>>,
 }
 
 impl<'a> Unit<'a> {
@@ -437,7 +440,11 @@ impl<'a> Unit<'a> {
     }
 
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { program: None, context: &module.context, layout, metadata: &module.metadata, tbaa: None, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None }
+        Self { program: None, context: &module.context, layout, metadata: &module.metadata, tbaa: None, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, exposed: None }
+    }
+
+    pub fn with_exposed(self, exposed: &'a BTreeSet<ValueId>) -> Self {
+        Self { exposed: Some(exposed), ..self }
     }
 
     pub fn with_globals_aa(self, globals_aa: &'a Globals) -> Self {
@@ -550,6 +557,17 @@ impl<'a> Unit<'a> {
     }
 }
 
+/// Whether `inst` marks an object's lifetime, which names it without handing out its address.
+pub fn is_lifetime_marker(unit: &Unit, inst: InstId) -> bool {
+    matches!(unit.intrinsic(inst), Some(llrm_mir::intrinsics::Intrinsic::LifetimeStart | llrm_mir::intrinsics::Intrinsic::LifetimeEnd))
+}
+
+/// The allocas of `unit`'s function whose address is exposed, in one pass: what `object_of` reads of
+/// `Unit::exposed` instead of asking each alloca's uses.
+pub fn exposed_frames(unit: &Unit) -> BTreeSet<ValueId> {
+    crate::frameescape::exposed_allocas(unit.function, |inst| is_lifetime_marker(unit, inst))
+}
+
 /// The object `root` is the address of, where it is an object's own: an
 /// alloca (`Frame`) or a global variable (`Global`).
 pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
@@ -564,7 +582,10 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
             };
             // Only a reference naming an alloca reaches it until its address
             // is exposed.
-            let exposed = crate::frameescape::exposes(unit.function, value, |inst| matches!(unit.intrinsic(inst), Some(llrm_mir::intrinsics::Intrinsic::LifetimeStart | llrm_mir::intrinsics::Intrinsic::LifetimeEnd)));
+            let exposed = match unit.exposed {
+                Some(found) => found.contains(&value),
+                None => crate::frameescape::exposes(unit.function, value, |inst| is_lifetime_marker(unit, inst)),
+            };
             Some(MemoryObject {
                 identity: Some(Identity::Value(value.0)),
                 extent: count.map(|count| size * count),
