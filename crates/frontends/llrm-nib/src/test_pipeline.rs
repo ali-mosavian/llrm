@@ -129,3 +129,20 @@ fn test_a_loop_admitted_on_a_tie_in_counted_bytes_does_not_grow_the_object() {
     // 2517 bytes before the loop was admitted on the tie; 2532 with it.
     assert!(object <= 2517, "{object} bytes");
 }
+
+/// A flat target's program naming `cdecl16` compiled as if it were real mode's: the frame it
+/// described had 2-byte slots. A target's conventions are its own, so each is refused on the other.
+#[test]
+fn test_a_convention_the_target_does_not_define_is_refused() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let write = |name: &str, convention: &str| {
+        let path = directory.path().join(name);
+        std::fs::write(&path, format!("@extern(\"{convention}\", name=\"f\")\nfn f(a: i16) -> i16\n\nfn main() -> i16:\n    unsafe:\n        return f(1)\n")).expect("written");
+        path
+    };
+    let flat = crate::Frontend { conventions: vec!["cdecl32".into()], ..Default::default() };
+    let refused = |frontend: &crate::Frontend, path: std::path::PathBuf| crate::driver::parsed(&path, frontend, None).expect_err("refused").0;
+    assert!(refused(&flat, write("a.nib", "cdecl16")).contains("defines no \"cdecl16\" calling convention"));
+    assert!(refused(&Default::default(), write("b.nib", "cdecl32")).contains("defines no \"cdecl32\" calling convention"));
+    crate::driver::parsed(&write("c.nib", "cdecl32"), &flat, None).unwrap_or_else(|error| panic!("{}", error.0));
+}

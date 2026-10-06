@@ -170,6 +170,18 @@ def unavailable(program: Program) -> str | None:
 
 def build(program: Program, work: Path, stem: str) -> Job | str:
     """The job that runs `program`, or why it did not build."""
+    target = program.flags[program.flags.index("--target") + 1] if "--target" in program.flags else "x86-code16"
+    if program.source.suffix == ".nib" and target != "x86-code16":
+        exe, obj = work / f"{stem}.exe", work / f"{stem}.obj"
+        done = subprocess.run([str(BIN / "llrm-nib"), str(program.source), *program.flags, "-o", str(obj), "--procedure-segments"], capture_output=True, text=True, timeout=300)
+        if done.returncode != 0 or not obj.exists():
+            return "compile: " + (done.stderr or done.stdout).strip()[-600:]
+        try:
+            loaders = dosbatch.link_nib(target, program.source, obj, exe, work, program.flags[0] if program.flags else "-O2", ())
+            dosbatch.check_loads(exe)
+        except (dosbatch.BuildError, dosbatch.TooBig) as error:
+            return f"link: {error}"
+        return Job(stem, "exe", exe, files=(*data_files(program), *loaders))
     if program.source.suffix == ".nib":
         exe = work / f"{stem}.exe"
         extras = [str(program.source.parent / one) for one in program.link]

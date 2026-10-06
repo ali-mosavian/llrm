@@ -49,6 +49,19 @@ impl llrm_target::Target for Code32 {
         &["cdecl32"]
     }
 
+    fn runtime(&self, language: &str) -> Option<llrm_target::runtime::Description> {
+        (language == "nib").then_some(llrm_target::runtime::Description {
+            directory: concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/nib"),
+            text: include_str!("../runtime/nib/nib.toml"),
+            files: &[
+                ("os.nib", include_str!("../runtime/nib/os.nib")),
+                ("start.asm", include_str!("../runtime/nib/start.asm")),
+                ("dos.asm", include_str!("../runtime/nib/dos.asm")),
+                ("stack.toml", include_str!("../runtime/nib/stack.toml")),
+            ],
+        })
+    }
+
     fn layout(&self) -> llrm_target::layout::Layout {
         llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("flat datalayout.toml parses")
     }

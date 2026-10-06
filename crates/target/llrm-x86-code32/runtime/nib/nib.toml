@@ -1,0 +1,14 @@
+# Nib's runtime on flat DOS under DOS/32A: the OS layer the language's runtime
+# (llrm-nib/src/runtime/*.nib) is built on. Each field names a file in this directory.
+
+# `std.os` and `os`: what only assembly reaches.
+os = "os.nib"
+# The start-up and the operating-system routines `os` declares, assembled and linked in.
+start = "start.asm"
+dos = "dos.asm"
+# What `-fsanitize=stack` compares and calls.
+stack = "stack.toml"
+# The stack start.asm reserves; the object's own adds to it.
+stack_base = 16384
+# There is no far data: the extender zero-fills the image's BSS, and no far BSS exists.
+far_bss = false

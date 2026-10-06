@@ -1,0 +1,27 @@
+# flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+# Hello and arithmetic end to end: strings, i16 and i32 maths, recursion, a loop. Code16 and
+# code32 print the same.
+fn fib(n: i32) -> i32:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+fn gcd(x: i16, y: i16) -> i16:
+    let mut a = x
+    let mut b = y
+    while b != 0:
+        let t = a % b
+        a = b
+        b = t
+    return a
+
+fn main() -> i16:
+    print("hello")
+    print(fib(20))
+    print(i32(100000) * 3 - 7)
+    print(gcd(1071, 462))
+    let mut sum: i32 = 0
+    for i in 1..101:
+        sum += i32(i) * i
+    print(sum)
+    return 0

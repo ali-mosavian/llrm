@@ -38,12 +38,15 @@ struct Arguments {
     /// The target, the built-in DOS on `nib::CPU` unless `--machine` names
     /// another, and the pipeline.
     codegen: codegen::Options,
+    /// `--os-layer FIELD`: print a field of the target's OS layer instead of compiling.
+    os_layer: Option<String>,
 }
 
 fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let (mut source, mut flags, mut entry, mut dump) = (None, Flags::default(), "main".to_owned(), None);
     let mut layout = CodeLayout::OneSegment;
     let mut used_by = Vec::new();
+    let mut os_layer = None;
     let mut frontend = super::Frontend::default();
     let mut at = 0;
     while at < argv.len() {
@@ -67,6 +70,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--entry" => entry = value("--entry")?,
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--procedure-segments" => layout = CodeLayout::PerProcedure,
+            "--os-layer" => os_layer = Some(value("--os-layer")?),
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
             "--unchecked-bounds" => frontend.unchecked_bounds = true,
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
@@ -75,15 +79,20 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         }
         at += 1;
     }
-    let source = source.ok_or("the following arguments are required: source")?;
+    let source = match (source, &os_layer) {
+        (Some(source), _) => source,
+        (None, Some(_)) => PathBuf::new(),
+        (None, None) => return Err("the following arguments are required: source".to_owned()),
+    };
     frontend.debug = flags.debug;
     frontend.checked_stack = flags.sanitize.stack;
     let bound = llrm_driver::target(&flags, &["x86-code16", "x86-code32"])?;
     frontend.layout = bound.target.layout();
     frontend.slot = u32::try_from(bound.target.stack_slot_bytes()).expect("a slot is positive");
+    frontend.conventions = bound.target.conventions().iter().map(|one| (*one).to_owned()).collect();
     frontend.os = super::Os::of(bound.target.runtime("nib").ok_or("this target has no Nib runtime")?)?;
     let codegen = bound.options(&flags, flags.machine(nib::machine(&*bound.target, &frontend.os))?);
-    Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen })
+    Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen, os_layer })
 }
 
 /// The symbols `objects` import.
@@ -105,6 +114,19 @@ pub fn main(argv: &[String]) -> i32 {
             return 2;
         }
     };
+    if let Some(field) = &args.os_layer {
+        let os = &args.frontend.os;
+        match field.as_str() {
+            "directory" => println!("{}", os.directory),
+            "start" => println!("{}", os.start),
+            "dos" => println!("{}", os.dos),
+            _ => {
+                eprintln!("llrm-nib: error: --os-layer takes directory, start or dos");
+                return 2;
+            }
+        }
+        return 0;
+    }
     let result = (|| -> Result<(), String> {
         if let Some(dump) = &args.dump {
             nibstages::dumped(&args.source, dump, &args.frontend, &args.codegen, &args.entry)?;
