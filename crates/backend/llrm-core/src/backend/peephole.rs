@@ -169,7 +169,7 @@ impl LIRTransform for Peephole {
         let body = narrowed_arithmetic(self.rules, &body);
         // A zero upper half proven by the first is what the second reads, and the copies it makes are forwarded.
         let body = if self.rules.zero_extensions.is_some() { copyprop::forwarded(&zero_extensions(self.rules, &widened_moves(self.rules, &body))) } else { body };
-        let body = sharedstores::shared(&body, &self.cpu, &self.saved);
+        let body = sharedstores::shared(&body, &self.cpu, &self.saved, &self.classes);
         let body = machinecse::eliminated(&body)?;
         let body = waits(&zero_compares(self.rules, &tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))));
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;

@@ -1189,7 +1189,7 @@ fn test_stores_of_one_literal_share_a_dead_register_when_that_is_fewer_bytes() {
         let next = after_stores(flags_read, &live);
         let input = body("stores", 0, vec![block(0, std::mem::take(&mut insns), vec![1]), block(1, next, vec![])]);
 
-        let result = sharedstores::shared(&input, size, &saved());
+        let result = sharedstores::shared(&input, size, &saved(), &crate::backend::classes::RegisterClasses::code16());
 
         let got = names(&result.blocks[0].insns);
         assert_eq!(got, expected, "{label}");
@@ -1220,9 +1220,9 @@ fn test_a_shared_store_takes_no_register_the_convention_preserves_unless_the_bod
     };
     let preserving_bx = [Register::ESI, Register::EDI, Register::EBX];
 
-    assert_eq!(names(&sharedstores::shared(&input(false), size, &preserving_bx).blocks[0].insns), ["mov", "mov"]);
-    assert_eq!(names(&sharedstores::shared(&input(false), size, &saved()).blocks[0].insns), ["xor", "mov", "mov"]);
-    assert_eq!(names(&sharedstores::shared(&input(true), size, &preserving_bx).blocks[0].insns), ["mov", "xor", "mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(false), size, &preserving_bx, &crate::backend::classes::RegisterClasses::code16()).blocks[0].insns), ["mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(false), size, &saved(), &crate::backend::classes::RegisterClasses::code16()).blocks[0].insns), ["xor", "mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(true), size, &preserving_bx, &crate::backend::classes::RegisterClasses::code16()).blocks[0].insns), ["mov", "xor", "mov", "mov"]);
 }
 
 /// Two pushes of a clock are not a size choice: -O2 keeps the stores.
@@ -1231,7 +1231,7 @@ fn test_stores_of_one_literal_are_not_shared_at_o2() {
     let o2 = crate::backend::cpu::tuned("486", false).unwrap();
     let input = body("stores", 0, vec![block(0, vec![literal_store(0, 4, -4, 0), literal_store(1, 4, -8, 0)], vec![1]), block(1, after_stores(false, &[]), vec![])]);
 
-    assert_eq!(sharedstores::shared(&input, o2, &saved()), input);
+    assert_eq!(sharedstores::shared(&input, o2, &saved(), &crate::backend::classes::RegisterClasses::code16()), input);
 }
 
 #[test]

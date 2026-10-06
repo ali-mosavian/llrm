@@ -189,50 +189,11 @@ pub fn writes(what: &Semantics, classes: &RegisterClasses) -> IndexMap<Register,
 }
 
 
-pub static WIDE: LazyLock<PySet<Register>> = LazyLock::new(|| {
-    [
-        Register::EAX,
-        Register::ECX,
-        Register::EDX,
-        Register::EBX,
-        Register::ESI,
-        Register::EDI,
-        Register::EBP,
-        Register::ESP,
-    ]
-    .into_iter()
-    .collect()
-});
-pub static NARROW: LazyLock<PySet<Register>> = LazyLock::new(|| {
-    [
-        Register::AX,
-        Register::CX,
-        Register::DX,
-        Register::BX,
-        Register::SI,
-        Register::DI,
-        Register::BP,
-        Register::SP,
-    ]
-    .into_iter()
-    .collect()
-});
+pub static WIDE: LazyLock<PySet<Register>> = LazyLock::new(|| llrm_x86::registers::DWORDS.into_iter().collect());
+pub static NARROW: LazyLock<PySet<Register>> = LazyLock::new(|| llrm_x86::registers::WORDS.into_iter().collect());
 // The byte halves. BC reaches for them to clear a high byte and to read one
 // byte of an array.
-pub static BYTE: LazyLock<PySet<Register>> = LazyLock::new(|| {
-    [
-        Register::AL,
-        Register::CL,
-        Register::DL,
-        Register::BL,
-        Register::AH,
-        Register::CH,
-        Register::DH,
-        Register::BH,
-    ]
-    .into_iter()
-    .collect()
-});
+pub static BYTE: LazyLock<PySet<Register>> = LazyLock::new(|| llrm_x86::registers::BYTES.into_iter().collect());
 
 // The width each register names, and the register file at each width.
 // Built from the three rows rather than from ir.ROOT, which has no
