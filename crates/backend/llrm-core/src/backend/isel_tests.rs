@@ -16,7 +16,7 @@ fn parsed(text: &str) -> llrm_mir::Module {
 }
 
 fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
-    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::code16(), false, 0)
+    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::code16(), &llrm_x86_code16::Code16, false, 0)
 }
 
 /// The module's text, once its object is written: a listing that does not
@@ -3650,7 +3650,7 @@ fn test_a_fixed_address_pointer_selects_as_a_far_one() {
     let layout = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16\"\n";
     let listing = |space| {
         let module = llrm_mir::parse::module(&format!("{layout}{}", body(space))).expect("parses");
-        let chosen = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::code16(), false, 0).expect("selected");
+        let chosen = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::code16(), &llrm_x86_code16::Code16, false, 0).expect("selected");
         format!("{chosen:?}")
     };
     assert_eq!(listing(4), listing(1));
