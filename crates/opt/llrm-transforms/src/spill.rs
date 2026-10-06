@@ -159,6 +159,9 @@ pub fn copied(function: &Function, inst: InstId, past: &BTreeSet<ValueId>, room:
 /// of: the pointer it is an offset from and each variable index.
 pub fn addressed(function: &Function) -> BTreeSet<ValueId> {
     let mut found = BTreeSet::new();
+    // Whether a pointer is folded depends on all its users, and a frame slot has one user for each access
+    // to it: asked once for each pointer, not once for each access.
+    let mut memo: std::collections::HashMap<ValueId, bool> = std::collections::HashMap::new();
     for &block in function.layout() {
         for &inst in function.block(block).instructions() {
             let op = function.instruction(inst);
@@ -168,7 +171,7 @@ pub fn addressed(function: &Function) -> BTreeSet<ValueId> {
                 _ => None,
             };
             if let Some(Operand::Value(pointer)) = address {
-                found.extend(address_values(function, *pointer));
+                found.extend(address_values_by(function, *pointer, &mut |value| *memo.entry(value).or_insert_with(|| folded(function, value))));
             }
         }
     }
@@ -181,6 +184,12 @@ pub fn addressed(function: &Function) -> BTreeSet<ValueId> {
 /// unless that is a symbol or frame object, a displacement. Any other
 /// `pointer` is itself a value.
 pub fn address_values(function: &Function, pointer: ValueId) -> Vec<ValueId> {
+    address_values_by(function, pointer, &mut |value| folded(function, value))
+}
+
+/// `address_values`, asking `folded` of each value through `is_folded`, which a caller that asks of many
+/// pointers can answer from what it has found.
+fn address_values_by(function: &Function, pointer: ValueId, is_folded: &mut dyn FnMut(ValueId) -> bool) -> Vec<ValueId> {
     let defined = |operand: Operand| match operand {
         Operand::Value(value) => match function.value(value).def {
             ValueDef::Instruction(def) => Some(function.instruction(def)),
@@ -191,7 +200,7 @@ pub fn address_values(function: &Function, pointer: ValueId) -> Vec<ValueId> {
     let mut read = Vec::new();
     let mut base = Operand::Value(pointer);
     while let Operand::Value(value) = base
-        && folded(function, value)
+        && is_folded(value)
         && let Some(op) = defined(base)
         && let (Opcode::GetElementPtr { .. }, [from, indices @ ..]) = (&op.opcode, &op.operands[..])
     {
@@ -257,10 +266,21 @@ pub fn address_only(function: &Function, value: ValueId, depth: u32) -> bool {
         })
 }
 
+thread_local! {
+    static FOLDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has asked whether a value is folded, for a test that `addressed` asks of each
+/// pointer once.
+pub fn folded_runs() -> usize {
+    FOLDED.with(std::cell::Cell::get)
+}
+
 /// Whether `value` is an address only memory accesses of its own block, and
 /// `getelementptr`s that are such addresses, take: folded into their
 /// addressing modes, it takes no register.
 pub fn folded(function: &Function, value: ValueId) -> bool {
+    FOLDED.with(|runs| runs.set(runs.get() + 1));
     let ValueDef::Instruction(def) = function.value(value).def else { return false };
     let block = function.parent(def);
     let users = function.users(value);

@@ -295,3 +295,15 @@ fn test_a_functions_exposed_frames_are_found_once_not_per_access() {
     let names: Vec<_> = exposed.iter().map(|one| function.value(*one).name.clone()).collect();
     assert_eq!(names.len(), 1, "only @hidden's address is handed out: {names:?}");
 }
+
+/// GlobalsAA ran points-to over every body without the exposure table, so each access scanned its alloca's
+/// uses: 34% of compiling a function of 1600 statements (#560). The table is made once per body.
+#[test]
+fn test_globals_aa_asks_each_bodys_exposed_frames_once() {
+    let accesses: String = (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
+    let module = parsed(&format!("{DOS}@g = global i16 0\n\ndefine i16 @f() {{\nentry:\n  %slot = alloca i16\n{accesses}  store i16 %v39, ptr @g\n  ret i16 %v39\n}}\n"));
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    let before = crate::frameescape::scans();
+    analyses.get::<super::GlobalsAA>(&module);
+    assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
+}
