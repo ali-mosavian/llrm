@@ -16,6 +16,7 @@ use crate::analysis::intervals::{self as ranges, Interval, Segment, key};
 use crate::backend::allocate::Error;
 use crate::backend::coalesce;
 use crate::backend::frame::{self as frames, Frame, SlotKey};
+use crate::backend::postings::{self, At, Postings};
 use crate::backend::target;
 use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
@@ -78,12 +79,16 @@ impl Plan {
 
 /// `values` of `body` decided: how each is spilled, and the slots of those stored.
 pub fn planned(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame) -> Result<Plan, Error> {
+    postings::following(body, |postings| planned_with(body, values, frame, postings))
+}
+
+fn planned_with(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame, postings: &Postings) -> Result<Plan, Error> {
     // A plain copy of a value made again is made again the same way.
-    let copies = llrm_support::debug::timed("spill copies", || _copies(body, values));
+    let copies = llrm_support::debug::timed("spill copies", || _copies_by(body, values, postings));
     let wide: BTreeSet<u32> = values.iter().chain(copies.values()).copied().collect();
-    let constants = _through_copies(llrm_support::debug::timed("spill constants", || _constants(body, &wide)), values, &copies);
-    let addresses = _through_copies(llrm_support::debug::timed("spill addresses", || _addresses(body, &wide)), values, &copies);
-    let extensions = llrm_support::debug::timed("spill extensions", || _extensions(body, values));
+    let constants = _through_copies(llrm_support::debug::timed("spill constants", || _literals_by(body, &wide, false, postings)), values, &copies);
+    let addresses = _through_copies(llrm_support::debug::timed("spill addresses", || _addresses_by(body, &wide, postings)), values, &copies);
+    let extensions = llrm_support::debug::timed("spill extensions", || _extensions_by(body, values, postings));
     let mut frame_loads = llrm_support::debug::timed("spill stable loads", || _stable_loads(body, values));
     frame_loads.extend(llrm_support::debug::timed("spill frame loads", || _frame_loads(body, values)));
     // A copy of a load is made again as that load, unless the value has a frame home of its own (an argument's slot).
@@ -111,8 +116,8 @@ pub fn planned(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame) -> Res
         })
         .collect();
     // Before any cell names a slot.
-    llrm_support::debug::timed("spill color slots", || _color_slots(body, &stored, &_widest(body, &stored), frame))?;
-    let narrow = llrm_support::debug::timed("spill literals", || _literals(body, &stored, true));
+    llrm_support::debug::timed("spill color slots", || _color_slots(body, &stored, &_widest_by(body, &stored, postings), frame))?;
+    let narrow = llrm_support::debug::timed("spill literals", || _literals_by(body, &stored, true, postings));
     Ok(Plan { constants, addresses, extensions, frame_loads, frame_homes, rebuilt, stored, narrow })
 }
 
@@ -1971,6 +1976,178 @@ pub fn _constants(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Imm> 
     _literals(body, values, false)
 }
 
+fn check_postings() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_POSTINGS").is_some())
+}
+
+fn _at<'b>(body: &'b LirBody, at: At) -> &'b Arc<Insn> {
+    &body.blocks[at.0 as usize].insns[at.1 as usize]
+}
+
+/// `_copies`, from the occurrences of `values` and of their sources alone.
+fn _copies_by(body: &LirBody, values: &BTreeSet<u32>, postings: &Postings) -> IndexMap<u32, u32> {
+    let mut found: Vec<(At, u32, u32)> = Vec::new();
+    for &value in values {
+        let [at] = postings.defs(value) else { continue };
+        let one = _at(body, *at);
+        let (Some(what), [defined], [source]) = (&one.what, one.defines.as_slice(), one.uses.as_slice()) else { continue };
+        let ([Loc::Held(dest)], [Loc::Held(from)]) = (what.dests.as_slice(), what.sources.as_slice()) else { continue };
+        if what.op == Operation::Move
+            && one.group.is_none()
+            && one.requires.is_empty()
+            && one.delivers.is_empty()
+            && one.clobbers.is_empty()
+            && what.name.as_deref() == Some("mov")
+            && dest.value == *defined
+            && from.value == *source
+            && dest.width == from.width
+            && *defined == value
+            && postings.defs(*source).len() == 1
+        {
+            found.push((*at, value, *source));
+        }
+    }
+    found.sort_unstable();
+    let out: IndexMap<u32, u32> = found.into_iter().map(|(_, value, source)| (value, source)).collect();
+    if check_postings() {
+        assert!(out.iter().eq(_copies(body, values).iter()), "{}: the copies from the postings differ", body.name);
+    }
+    out
+}
+
+/// `_addresses`, from the definitions of `values` alone.
+fn _addresses_by(body: &LirBody, values: &BTreeSet<u32>, postings: &Postings) -> IndexMap<u32, Address> {
+    let mut order: Vec<(At, usize, u32)> = Vec::new();
+    for &value in values {
+        let Some(&first) = postings.defs(value).first() else { continue };
+        let at = body.blocks[first.0 as usize].insns[first.1 as usize].defines.iter().position(|one| *one == value).unwrap_or(0);
+        order.push((first, at, value));
+    }
+    order.sort_unstable();
+    let mut result = IndexMap::default();
+    for (_, _, value) in order {
+        let defining: Vec<Arc<Insn>> = postings.defs(value).iter().map(|at| Arc::clone(_at(body, *at))).collect();
+        if let Some(source) = _address_of(value, &defining) {
+            result.insert(value, source);
+        }
+    }
+    if check_postings() {
+        assert!(result.iter().eq(_addresses(body, values).iter()), "{}: the addresses from the postings differ", body.name);
+    }
+    result
+}
+
+/// `_extensions`, from the occurrences of `values` and of their sources alone.
+fn _extensions_by(body: &LirBody, values: &BTreeSet<u32>, postings: &Postings) -> IndexMap<u32, Arc<Insn>> {
+    let mut result = IndexMap::default();
+    for value in values {
+        let found = postings.defs(*value);
+        let mut consumers: Vec<At> = postings.uses(*value).to_vec();
+        consumers.dedup();
+        if found.len() != 1 || consumers.len() != 1 {
+            continue;
+        }
+        let (block_index, insn_index) = found[0];
+        let one = _at(body, found[0]);
+        let consumer_at = consumers[0];
+        let consumer = _at(body, consumer_at);
+        if consumer.group.is_some() || consumer_at.0 != block_index || consumer_at.1 <= insn_index {
+            continue;
+        }
+        let defs_of = |source: u32| -> Vec<(usize, usize)> { postings.defs(source).iter().map(|at| (at.0 as usize, at.1 as usize)).collect() };
+        if let Some(extended) = _extension_of(*value, one, values, (block_index as usize, insn_index as usize), &defs_of) {
+            result.insert(*value, extended);
+        }
+    }
+    if check_postings() {
+        assert!(result.iter().map(|(value, one)| (*value, key(one))).eq(_extensions(body, values).iter().map(|(value, one)| (*value, key(one)))), "{}: the extensions from the postings differ", body.name);
+    }
+    result
+}
+
+/// `_widest`, from the occurrences of `values` alone.
+fn _widest_by(body: &LirBody, values: &BTreeSet<u32>, postings: &Postings) -> IndexMap<u32, u32> {
+    let mut order: Vec<(At, u32, u32)> = Vec::new();
+    for &value in values {
+        let mut at: Vec<At> = postings.defs(value).iter().chain(postings.uses(value)).copied().collect();
+        at.sort_unstable();
+        at.dedup();
+        let Some(&first) = at.first() else { continue };
+        let width = at.iter().map(|one| _width(_at(body, *one), value)).max().unwrap_or(0);
+        order.push((first, value, width));
+    }
+    order.sort_unstable();
+    let out: IndexMap<u32, u32> = order.into_iter().map(|(_, value, width)| (value, width)).collect();
+    if check_postings() {
+        assert!(out.iter().eq(_widest(body, values).iter()), "{}: the widths from the postings differ", body.name);
+    }
+    out
+}
+
+/// `_literals` of the values in `values`, from their definitions and those of what they are copies of:
+/// the answer for a value reads its own definition and, for a copy, its source's, and so down the chain.
+fn _literals_by(body: &LirBody, values: &BTreeSet<u32>, any_width: bool, postings: &Postings) -> IndexMap<u32, Imm> {
+    enum Step {
+        Visiting,
+        Is(Option<Imm>),
+    }
+    // What a value is made from, where it is one single plain move of a constant or of another value.
+    let source_of = |value: u32| -> Option<Loc> {
+        let defining: Vec<Arc<Insn>> = postings.defs(value).iter().map(|at| Arc::clone(_at(body, *at))).collect();
+        if defining.is_empty() || defining.iter().any(|one| one.group.is_some() && (one.defines.contains(&value))) {
+            return None;
+        }
+        if postings.uses(value).iter().any(|at| {
+            let one = _at(body, *at);
+            one.group.is_some() && _group_source(one).is_none()
+        }) {
+            return None;
+        }
+        let one = _one_definition(&defining)?;
+        let what = one.what.as_ref()?;
+        if what.op != Operation::Move || what.dests.len() != 1 || what.sources.len() != 1 || one.defines != [value] || !one.clobbers.is_empty() {
+            return None;
+        }
+        let (into, source) = (&what.dests[0], &what.sources[0]);
+        let Loc::Held(into) = into else { return None };
+        let (source_width, source_uses) = match source {
+            Loc::Imm(imm) => (imm.width, Vec::new()),
+            Loc::Held(held) => (held.width, vec![held.value]),
+            _ => return None,
+        };
+        let widest = postings.uses(value).iter().map(|at| _width(_at(body, *at), value)).max().unwrap_or(0);
+        (into.width == source_width && one.uses == source_uses && (any_width || widest <= source_width)).then(|| source.clone())
+    };
+    let mut steps: IndexMap<u32, Step> = IndexMap::default();
+    fn resolve(value: u32, source_of: &dyn Fn(u32) -> Option<Loc>, steps: &mut IndexMap<u32, Step>) -> Option<Imm> {
+        match steps.get(&value) {
+            Some(Step::Is(known)) => return known.clone(),
+            Some(Step::Visiting) => return None,
+            None => {}
+        }
+        steps.insert(value, Step::Visiting);
+        let found = match source_of(value) {
+            Some(Loc::Imm(imm)) => Some(imm),
+            Some(Loc::Held(held)) => resolve(held.value, source_of, steps),
+            _ => None,
+        };
+        steps.insert(value, Step::Is(found.clone()));
+        found
+    }
+    let mut result: IndexMap<u32, Imm> = IndexMap::default();
+    for &value in values {
+        if let Some(constant) = resolve(value, &source_of, &mut steps) {
+            result.insert(value, constant);
+        }
+    }
+    if check_postings() {
+        let reference = _literals(body, values, any_width);
+        assert!(result.len() == reference.len() && result.iter().all(|(value, one)| reference.get(value) == Some(one)), "{}: the literals from the postings differ", body.name);
+    }
+    result
+}
+
 /// `_constants`, and also those some instruction reads wider than the literal:
 /// those are remade only where read at its width.
 fn _literals(body: &LirBody, values: &BTreeSet<u32>, any_width: bool) -> IndexMap<u32, Imm> {
@@ -2061,53 +2238,51 @@ pub fn _addresses(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Addre
 
     let mut result = IndexMap::default();
     for (value, defining) in &definitions {
-        let Some(one) = _one_definition(defining) else {
-            continue;
-        };
-        let Some(what) = &one.what else {
-            continue;
-        };
-        if what.op != Operation::Address || what.name.as_deref() != Some("lea") {
-            continue;
-        }
-        // A cell's address is an address like any other once nothing held is in it.
-        let source = match what.sources.as_slice() {
-            [Loc::Address(source)] => source.clone(),
-            [Loc::Mem(cell)] if cell.base.is_none() && cell.index.is_none() => Address {
-                addr: cell.addr,
-                through: cell.through,
-                index: Register::None,
-                scale: 1,
-                offset: cell.offset,
-                disp_width: cell.disp_width,
-            },
-            _ => continue,
-        };
-        let [Loc::Held(destination)] = what.dests.as_slice() else {
-            continue;
-        };
-        if destination.value == *value
-            && matches!(destination.width, 2 | 4)
-            && one.defines == [*value]
-            && one.uses.is_empty()
-            && one.requires.is_empty()
-            && one.delivers.is_empty()
-            && one.clobbers.is_empty()
-            && one.group.is_none()
-            && one.symbol != Some(true)
-            && source.addr.is_some_and(|addr| {
-                addr.space == Space::Frame && source.through == Register::BP
-                    || matches!(addr.space, Space::Segment | Space::External) && source.through == Register::None
-            })
-            && source.index == Register::None
-        {
+        if let Some(source) = _address_of(*value, defining) {
             result.insert(*value, source);
         }
     }
     result
 }
 
-/// One-use integer extensions that are cheaper to recreate than spill.
+/// The address `value` is made again from, where its definitions are one `lea` of a frame cell or a symbol.
+fn _address_of(value: u32, defining: &[Arc<Insn>]) -> Option<Address> {
+    let one = _one_definition(defining)?;
+    let what = one.what.as_ref()?;
+    if what.op != Operation::Address || what.name.as_deref() != Some("lea") {
+        return None;
+    }
+    // A cell's address is an address like any other once nothing held is in it.
+    let source = match what.sources.as_slice() {
+        [Loc::Address(source)] => source.clone(),
+        [Loc::Mem(cell)] if cell.base.is_none() && cell.index.is_none() => Address {
+            addr: cell.addr,
+            through: cell.through,
+            index: Register::None,
+            scale: 1,
+            offset: cell.offset,
+            disp_width: cell.disp_width,
+        },
+        _ => return None,
+    };
+    let [Loc::Held(destination)] = what.dests.as_slice() else { return None };
+    (destination.value == value
+        && matches!(destination.width, 2 | 4)
+        && one.defines == [value]
+        && one.uses.is_empty()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty()
+        && one.group.is_none()
+        && one.symbol != Some(true)
+        && source.addr.is_some_and(|addr| {
+            addr.space == Space::Frame && source.through == Register::BP
+                || matches!(addr.space, Space::Segment | Space::External) && source.through == Register::None
+        })
+        && source.index == Register::None)
+        .then_some(source)
+}
+
 fn _extensions(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn>> {
     let mut definitions: IndexMap<u32, Vec<(usize, usize, Arc<Insn>)>> = IndexMap::default();
     let mut uses: IndexMap<u32, Vec<(usize, usize, Arc<Insn>)>> =
@@ -2136,42 +2311,44 @@ fn _extensions(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Arc<Insn
         if consumer.group.is_some() || consumer_block != block_index || consumer_index <= insn_index {
             continue;
         }
-        let Some(what) = &one.what else {
-            continue;
-        };
-        if what.op != Operation::Extend || !matches!(what.name.as_deref(), Some("movsx" | "movzx")) {
-            continue;
-        }
-        let ([Loc::Held(destination)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
-            continue;
-        };
-        if destination.value == *value
-            && destination.width > source.width
-            && one.defines == [*value]
-            && one.uses == [source.value]
-            && !values.contains(&source.value)
-            && one.requires.is_empty()
-            && one.delivers.is_empty()
-            && one.clobbers.is_empty()
-            && one.clobbers_high.is_empty()
-            && one.group.is_none()
-            && one.spread.is_empty()
-            && one.symbol != Some(true)
-        {
-            let source_definitions = definitions.get(&source.value).unwrap_or(&none);
-            let unchanged = source_definitions.is_empty()
-                || (source_definitions.len() == 1
-                    && source_definitions[0].0 == *block_index
-                    && source_definitions[0].1 < *insn_index);
-            if unchanged {
-                result.insert(*value, Arc::clone(one));
-            }
+        let defs_of = |source: u32| -> Vec<(usize, usize)> { definitions.get(&source).unwrap_or(&none).iter().map(|(block, at, _)| (*block, *at)).collect() };
+        if let Some(extended) = _extension_of(*value, one, values, (*block_index, *insn_index), &defs_of) {
+            result.insert(*value, extended);
         }
     }
     result
 }
 
-/// How wide each value is read or written anywhere, which is how big its slot has to be.
+/// The instruction `value` is made again by, where it is the one definition of a zero or sign extension of
+/// a value not spilled with it, read once after it in its block, its source defined at most once before it.
+fn _extension_of(value: u32, one: &Arc<Insn>, values: &BTreeSet<u32>, at: (usize, usize), definitions_of: &dyn Fn(u32) -> Vec<(usize, usize)>) -> Option<Arc<Insn>> {
+    let what = one.what.as_ref()?;
+    if what.op != Operation::Extend || !matches!(what.name.as_deref(), Some("movsx" | "movzx")) {
+        return None;
+    }
+    let ([Loc::Held(destination)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
+    if destination.value == value
+        && destination.width > source.width
+        && one.defines == [value]
+        && one.uses == [source.value]
+        && !values.contains(&source.value)
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty()
+        && one.clobbers_high.is_empty()
+        && one.group.is_none()
+        && one.spread.is_empty()
+        && one.symbol != Some(true)
+    {
+        let source_definitions = definitions_of(source.value);
+        let unchanged = source_definitions.is_empty() || (source_definitions.len() == 1 && source_definitions[0].0 == at.0 && source_definitions[0].1 < at.1);
+        if unchanged {
+            return Some(Arc::clone(one));
+        }
+    }
+    None
+}
+
 pub fn _widest(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, u32> {
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
