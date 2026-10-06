@@ -126,3 +126,14 @@ fn a_targets_pins_come_from_its_own_forms() {
     assert_eq!(real.len(), 4, "{real:?}");
     assert!(flat.is_empty(), "{flat:?}");
 }
+
+/// A flat target's registers are its own, not real mode's: six values, ebp the frame.
+#[test]
+fn a_targets_registers_come_from_its_description() {
+    use iced_x86::Register;
+    use llrm_core::backend::classes::RegisterClasses;
+
+    let flat = RegisterClasses::of(&llrm_x86_code32::Code32);
+    assert_eq!(flat.available, [Register::EAX, Register::ECX, Register::EDX, Register::EBX, Register::ESI, Register::EDI]);
+    assert_eq!(flat.frame, Register::EBP);
+}

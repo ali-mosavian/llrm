@@ -3,7 +3,7 @@
 //! register. Built from the selected target (`RegisterClasses::of`) and handed
 //! down beside `Segments`; no pass reads another target's.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use iced_x86::Register;
 use llrm_target::Target;
@@ -19,6 +19,12 @@ pub struct RegisterClasses {
     /// Each form's pins, by the mnemonic, the operation and the operand counts that
     /// pick it out.
     pins: HashMap<Key, Vec<(Side, usize, Register)>>,
+    /// The registers a value may be placed in, whole, in allocation order.
+    pub available: Vec<Register>,
+    /// The word registers an address is made of (`[bx+si]`): the bases, the indexes and the frame.
+    pub word_bases: BTreeSet<Register>,
+    pub word_indexes: BTreeSet<Register>,
+    pub frame: Register,
 }
 
 impl RegisterClasses {
@@ -39,7 +45,12 @@ impl RegisterClasses {
             let required = form.fixed.iter().filter(|(side, index, root)| !chosen(*side, *index, root)).map(|(side, index, root)| (*side, *index, root_register(root))).collect();
             pins.entry((form.name.clone(), operations[form.operation.as_str()], form.dests.len(), form.sources.len())).or_insert(required);
         }
-        Self { pins }
+        let file = llrm_target::registers::parse(&arch.registers_text()).expect("the target's registers parse");
+        let named = |name: &str| iced(name);
+        let word = |root: &str| file.iter().find(|one| one.root == root && one.bits == 16).map(|one| iced(&one.name)).expect("a register has a word view");
+        let held = |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(named).collect::<Vec<_>>();
+        let words = |class: &str| llrm_target::registers::of_class(&file, class).into_iter().filter(|root| !file.iter().any(|one| one.name == *root && one.is("reserved"))).map(word).collect();
+        Self { pins, available: held("gpr"), word_bases: words("base"), word_indexes: words("index"), frame: arch.frame_register() }
     }
 
     /// 16-bit x86's, which the tests of this crate are written for.
@@ -97,5 +108,25 @@ fn root_register(root: &str) -> Register {
         "fs" => Register::FS,
         "gs" => Register::GS,
         other => unreachable!("x86.instr names no register `{other}`"),
+    }
+}
+
+/// The iced register a description names.
+fn iced(name: &str) -> Register {
+    Register::values().find(|one| format!("{one:?}").eq_ignore_ascii_case(name)).unwrap_or_else(|| panic!("no register {name}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What `registers.regs` says of code16 is what the allocator's statics and `llrm_x86_code16`'s constants say.
+    #[test]
+    fn code16_registers_are_its_description() {
+        let classes = RegisterClasses::of(&llrm_x86_code16::Code16);
+        assert_eq!(classes.available, llrm_x86_code16::GENERAL);
+        assert_eq!(classes.word_bases, llrm_x86_code16::word_bases().into_iter().collect());
+        assert_eq!(classes.word_indexes, llrm_x86_code16::WORD_INDEXES.into_iter().collect());
+        assert_eq!(classes.frame, llrm_x86_code16::FRAME);
     }
 }

@@ -77,6 +77,10 @@ impl llrm_target::Target for Code32 {
         vec![(EBX, EBX), (ESI, ESI), (EDI, EDI)]
     }
 
+    fn registers_text(&self) -> String {
+        include_str!("registers.regs").to_owned()
+    }
+
     fn forms_text(&self) -> String {
         llrm_x86::instructions::joined(include_str!("instructions/x86.instr"))
     }

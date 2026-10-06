@@ -31,6 +31,10 @@ impl llrm_target::Target for Code16 {
         GENERAL.len() as i64
     }
 
+    fn registers_text(&self) -> String {
+        include_str!("registers.regs").to_owned()
+    }
+
     fn forms_text(&self) -> String {
         instructions::TEXT.clone()
     }
