@@ -1549,6 +1549,26 @@ mod tests {
         assert!(!remakable(&spared_body(true, Some(Addr::new(Space::Segment, 2))), &BTreeSet::from([1])).contains_key(&1));
     }
 
+    /// Before #516 nothing in `remakable` or `_stable_loads_through` looked at `volatile` (the #507 path included): a load
+    /// of a device cell, read twice, was made again at its second use, a second read the program never asked for. No
+    /// bench or QCport object differs with the guard removed, so no blessed row since #507 depended on it.
+    #[test]
+    fn test_a_volatile_load_is_never_made_again() {
+        use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
+        let cell = Mem { addr: Some(Addr::new(Space::Segment, 0)), ..Mem::new(None, 2) };
+        let held = |value| Loc::Held(Held { value, width: 2 });
+        let what = |op, name: &str, dests, sources| Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) });
+        let load = Insn { volatile: true, ..Insn::new(0, Some((0, 0)), what(Operation::Move, "mov", vec![held(1)], vec![Loc::Mem(cell)]), vec![1], vec![]) };
+        let insns = vec![
+            Arc::new(load),
+            Arc::new(Insn::new(1, Some((1, 1)), what(Operation::Binary, "add", vec![held(2)], vec![held(1), held(1)]), vec![2], vec![1])),
+            Arc::new(Insn::new(2, Some((2, 2)), what(Operation::Binary, "add", vec![held(3)], vec![held(1), held(2)]), vec![3], vec![1, 2])),
+        ];
+        let body = LirBody::new("t", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
+        assert!(!remakable(&body, &BTreeSet::from([1])).contains_key(&1));
+        assert!(spiller::_stable_loads(&body, &BTreeSet::from([1])).is_empty());
+    }
+
     /// Two values that may only sit in BX (each is the base of an address
     /// somewhere) were counted as a byte pair although only one acts: deedlines
     /// COPPER evicted down to three held values in a six-register machine, and
