@@ -13,17 +13,13 @@ argument_registers = []
 return_address_bytes = 4
 # From EBP after `push ebp; mov ebp, esp`; from ESP on entry it is 4.
 first_argument_offset = 8
+# The frame register: a cell is addressed through it, and no value is held in it.
+frame = "ebp"
+stack = "esp"
 preserved = ["ebx", "esi", "edi", "ebp"]
 clobbered = ["eax", "ecx", "edx", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "flags"]
 # Direction flag clear and the x87 stack empty on entry and on return.
 entry_state = ["df_clear", "x87_empty"]
-# Integers and pointers of at most 32 bits; i64 in edx:eax, low in eax;
-# floats in st(0).
-[cdecl32.result]
-int = ["eax"]
-i64 = ["eax", "edx"]
-pointer = ["eax"]
-float = ["st0"]
 # THE DIFFERENCE FROM OPEN WATCOM. Its -ecc returns a struct larger than a register by the address
 # of one static result area in EAX: not reentrant. cdecl32 returns it as Borland's rule has it (llrm-c's
 # `returned_as_integer` on code16): a struct of 1, 2 or 4 bytes in AL, AX or EAX; any other is
@@ -40,3 +36,12 @@ promotion = "slot"
 # i64 and double take two slots, low half first; a variadic float is a double.
 wide_slots = 2
 variadic_float = "double"
+
+# By the bytes a result takes: at most 32 bits in eax, an i64 in edx:eax, low in eax; floats in st(0).
+[cdecl32.result]
+1 = ["eax"]
+2 = ["eax"]
+4 = ["eax"]
+8 = ["eax", "edx"]
+pointer = ["eax"]
+float = ["st0"]
