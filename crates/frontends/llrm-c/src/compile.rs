@@ -69,15 +69,12 @@ pub fn selected(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_co
     selected_checking(text, module, dump, codegen, None)
 }
 
-/// What C's runtime says of its stack: `stack.toml`, Open Watcom's `_STACKLOW` and
-/// `__STKOVERFLOW`, which `__STK` compares and enters.
-pub fn stack_check() -> llrm_core::hir::model::StackCheck {
-    stack_check_of(include_str!("stack.toml"))
-}
-
-/// The flat runtime's: `llrm-x86-code32/runtime/stack.toml`.
-pub fn flat_stack_check() -> llrm_core::hir::model::StackCheck {
-    stack_check_of(include_str!("../../../target/llrm-x86-code32/runtime/stack.toml"))
+/// What C's runtime says of its stack on `target`: the `stack.toml` its description names, the OS layer's
+/// stack limit and Open Watcom's `__STKOVERFLOW`, which a checked function compares with and enters.
+pub fn stack_check(target: &dyn llrm_target::Target) -> llrm_core::hir::model::StackCheck {
+    let description = target.runtime("c").expect("a C target has a C runtime");
+    let name = description.string("stack").expect("c.toml names its stack check");
+    stack_check_of(description.file(&name).expect("the stack check is shipped"))
 }
 
 fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
@@ -122,6 +119,8 @@ pub(crate) fn hex_bytes(raw: &str) -> Vec<u8> {
 
 struct Args {
     source: PathBuf,
+    /// `--os-layer FIELD`: what the target's OS layer says of C's runtime, printed instead of compiling.
+    os_layer: Option<Result<String, String>>,
     flags: Flags,
     dump: Option<PathBuf>,
     include: Vec<String>,
@@ -181,12 +180,13 @@ pub fn recorded_for(source: &Path, includes: &[String], debug: bool, watcom: &[&
 }
 
 fn usage() -> String {
-    format!("usage: llrm-c [-h] [-I INCLUDE] [--dump DUMP] {} source", flags::USAGE)
+    format!("usage: llrm-c [-h] [-I INCLUDE] [--dump DUMP] [--os-layer FIELD] {} source", flags::USAGE)
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let (mut source, mut flags, mut dump) = (None, Flags::default(), None);
     let (mut include, mut watcom) = (Vec::new(), Vec::new());
+    let mut os_layer = None;
     let mut at = 0;
     while at < argv.len() {
         if flags.take(argv, &mut at)? {
@@ -201,6 +201,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         match argument {
             "-I" | "--include" => include.push(value("-I/--include")?),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
+            "--os-layer" => os_layer = Some(value("--os-layer")?),
             // Watcom's: relaxed alias checking; relaxed floating point.
             "-oa" => watcom.push("-oa"),
             "-on" => watcom.push("-on"),
@@ -212,11 +213,17 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         }
         at += 1;
     }
-    let source = source.ok_or("the following arguments are required: source")?;
+    let source = match (source, &os_layer) {
+        (Some(source), _) => source,
+        (None, Some(_)) => PathBuf::new(),
+        (None, None) => return Err("the following arguments are required: source".to_owned()),
+    };
     let bound = llrm_driver::target(&flags, Some(&["x86-code16", "x86-code32"]))?;
+    let os_layer = os_layer.map(|field| bound.target.os_layer().ok_or_else(|| "this target has no OS layer".to_owned()).and_then(|layer| layer.report(&bound.target.runtime("c").ok_or("this target has no C runtime")?, &field)));
     let machine = flags.machine(bound.target.machine())?;
     Ok(Args {
         source,
+        os_layer,
         dump,
         include,
         watcom,
@@ -234,6 +241,18 @@ pub fn main(argv: &[String]) -> i32 {
             return 2;
         }
     };
+    if let Some(report) = &args.os_layer {
+        return match report {
+            Ok(text) => {
+                println!("{}", text.trim_end());
+                0
+            }
+            Err(message) => {
+                eprintln!("llrm-c: error: {message}");
+                2
+            }
+        };
+    }
     let result = (|| -> Result<(), CompileError> {
         let text = if args.source.extension().and_then(|one| one.to_str()) == Some("cgs") {
             fs::read_to_string(&args.source)?
@@ -251,7 +270,7 @@ pub fn main(argv: &[String]) -> i32 {
             .file_stem()
             .and_then(|one| one.to_str())
             .unwrap_or_default();
-        let built = selected_checking(&text, module, args.dump.as_deref(), &args.codegen, args.flags.sanitize.stack.then(|| if args.codegen.arch.name() == "x86-code32" { flat_stack_check() } else { stack_check() }))?;
+        let built = selected_checking(&text, module, args.dump.as_deref(), &args.codegen, args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)))?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if !args.flags.assembly && output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref() == Some("obj") {
             let bytes = omfwrite::written(&built, name)?;
@@ -302,16 +321,16 @@ mod tests {
     #[test]
     fn the_stack_check_names_what_the_c_runtime_defines() {
         let root = Path::new(env!("LLRM_ROOT"));
-        let check = super::stack_check();
-        let runtime = |name: &str| std::fs::read_to_string(root.join("tools/loops/runtime").join(name)).unwrap();
-        assert!(runtime("crt.asm").contains(&format!("public {}", check.limit)) && runtime("crt.asm").contains(&format!("mov {}, ax", check.limit)));
-        assert!(runtime("ext.asm").contains(&format!("public {}", check.handler)));
+        let check = super::stack_check(&llrm_x86_code16::Code16);
+        let runtime = |name: &str| std::fs::read_to_string(root.join("runtime").join(name)).unwrap();
+        assert!(runtime("shared/dos/x86-code16/os.asm").contains(&format!("public {}", check.limit)) && runtime("shared/dos/x86-code16/start.asm").contains(&format!("mov {}, ax", check.limit)));
+        assert!(runtime("c/x86-code16/ext.asm").contains(&format!("public {}", check.handler)));
         let text = std::fs::read_to_string(root.join("tests/fixtures/c/anims.cgs")).unwrap();
         let options = llrm_driver::code16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() });
         let listing = |check| llrm_core::backend::masm::text(&super::selected_checking(&text, "anims", None, &options, check).unwrap()).unwrap();
         let named = llrm_core::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check };
         let checked = listing(Some(named));
-        assert!(checked.contains("cmp sp, word ptr FOO") && checked.contains("call far ptr BAR") && !checked.contains("_STACKLOW"), "{checked}");
+        assert!(checked.contains("cmp sp, word ptr FOO") && checked.contains("call far ptr BAR") && !checked.contains("_llrm_os_stack_low"), "{checked}");
         assert!(!listing(None).contains("cmp sp"));
     }
 
@@ -1036,9 +1055,9 @@ mod tests {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32/add.cgs")).unwrap();
         let argv: Vec<String> = ["--target", "x86-code32", "-O2", "x.c"].map(str::to_owned).to_vec();
         let args = super::parse_args(&argv).unwrap();
-        let built = super::selected_checking(&text, "add", None, &args.codegen, Some(super::flat_stack_check())).unwrap();
+        let built = super::selected_checking(&text, "add", None, &args.codegen, Some(super::stack_check(&llrm_x86_code32::Code32))).unwrap();
         let listing = llrm_core::backend::masm::text(&built).unwrap();
-        assert!(listing.contains("cmp esp, dword ptr _STACKLOW") && listing.contains("call __STKOVERFLOW"), "{listing}");
+        assert!(listing.contains("cmp esp, dword ptr _llrm_os_stack_low") && listing.contains("call __STKOVERFLOW"), "{listing}");
         assert!(!listing.contains("far ptr") && listing.contains("extern __STKOVERFLOW:near"), "{listing}");
     }
 

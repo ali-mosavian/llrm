@@ -41,12 +41,19 @@ for field in start implementation; do
     "$toolchain/jwasm" -q -c -Cp -Zg -omf $defines "-Fo$work/$field.obj" "$layer/$part"
     used="$used --used-by $work/$field.obj"
 done
+hook=$("$bin/llrm-nib" --os-layer language_file)
+if [ -n "$hook" ]; then
+    # shellcheck disable=SC2086
+    "$toolchain/jwasm" -q -c -Cp -Zg -omf $defines "-Fo$work/hook.obj" "$hook"
+    used="$used --used-by $work/hook.obj"
+    hookobj="file $work/hook.obj"
+fi
 # jwlink keeps whatever any segment references, even one it drops, so the
 # runtime keeps only the routines the other objects name.
 "$bin/llrm-nib" "$root/crates/frontends/llrm-nib/src/runtime/runtime.nib" -o "$work/runtime.obj" "$level" --procedure-segments $used >/dev/null
 objects="file $work/runtime.obj$objects"
 "$toolchain/jwlink" option quiet option eliminate ${NIB_MAP:+option map=$NIB_MAP} format dos name "$work/program.exe" \
-    file "$work/start.obj" file "$work/program.obj" $objects \
+    file "$work/start.obj" ${hookobj:-} file "$work/program.obj" $objects \
     file "$work/implementation.obj" >"$work/link.out" || {
     cat "$work/link.out" >&2
     exit 1

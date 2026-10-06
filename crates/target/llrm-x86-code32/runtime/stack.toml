@@ -1,8 +1,0 @@
-# What `-fsanitize=stack` compares and calls under the flat runtime: `_STACKLOW`, a dword
-# the start-up (crt.asm) fills with the stack's bottom plus the handler's room, and
-# `__STKOVERFLOW`, the near routine it enters, which prints "Stack Overflow!" and exits
-# with status 1 (ext.asm). The one flat segment makes ESP an offset in it.
-limit = "_STACKLOW"
-handler = "__STKOVERFLOW"
-far = false
-red_zone = 0

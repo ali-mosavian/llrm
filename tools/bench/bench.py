@@ -197,13 +197,11 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     done = subprocess.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", *flags, str(variant.source), f"-fo={obj}"], capture_output=True, text=True, timeout=300)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
-    ext = work / "EXT.OBJ"
     try:
-        if not ext.exists():
-            dosbatch.assemble(dosbatch.C_RUNTIME / "ext.asm", ext)
+        support = dosbatch.c_support(dosbatch.REAL_MODE, work)
         # Watcom names main `main_`; its start-up asks for `_cstart_` and the library calls it
         dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", "stack=16k", "format", "dos", "name", str(exe),
-                        "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), "file", str(ext),
+                        "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *[word for one in support for word in ("file", str(one))],
                         "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
     except dosbatch.BuildError as error:
         return f"build: {error}"
@@ -234,8 +232,7 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
         (folder / f"{stem}.c").write_bytes(text)
     subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]}".strip() for _, stem in variants_]],
                    env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, capture_output=True, timeout=1800)
-    ext = folder / "EXT.OBJ"
-    dosbatch.assemble(dosbatch.C_RUNTIME / "ext.asm", ext)
+    support = [word for one in dosbatch.c_support(dosbatch.REAL_MODE, folder) for word in ("file", str(one))]
     out: dict[str, tuple[Path, Path] | str] = {}
     for _, stem in variants_:
         obj, exe, listing = folder / f"{stem}.OBJ", folder / f"{stem}.exe", folder / f"{stem}.map"
@@ -245,7 +242,7 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
             continue
         lib = home / "lib"
         try:
-            dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "format", "dos", "name", str(exe), "file", str(lib / "C0M.OBJ"), "file", str(obj), "file", str(ext),
+            dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "format", "dos", "name", str(exe), "file", str(lib / "C0M.OBJ"), "file", str(obj), *support,
                             "library", str(lib / "CM.LIB"), "library", str((BCC / "lib" if language == "tcpp" else lib) / "FP87.LIB"), "library", str(lib / "MATHM.LIB")])
         except dosbatch.BuildError as error:
             out[stem] = f"link: {error}"
