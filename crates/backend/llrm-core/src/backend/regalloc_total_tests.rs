@@ -45,7 +45,7 @@ fn longest_copy(body: &LirBody) -> usize {
     body.blocks.iter().map(|block| block.insns.iter().filter(|one| one.group.is_some()).count()).max().unwrap_or(0)
 }
 
-/// `conc7` at `--cpu Core`: a far-pointer loop spills a dword and the word
+/// `conc7` at `-march=core2`: a far-pointer loop spills a dword and the word
 /// of it another value reads, and the loop's parallel copy exchanges them.
 /// ParallelCopy refused it ("need a temporary", #106). Which cycles the
 /// allocator leaves depends on how it spills, so the premise is the loop's
@@ -85,7 +85,7 @@ fn far_pointer_slot_also_read_as_words(body: &LirBody) -> bool {
     })
 }
 
-/// `conc9` at `--cpu Core` reloads a far pointer's halves as words, which
+/// `conc9` at `-march=core2` reloads a far pointer's halves as words, which
 /// the peephole fuses into `les`; LoopSlots then held the low word's slot in
 /// a register and rewrote the `les` to read it ("les si, dx": no encoding,
 /// llrm-nib stopped, #107).
@@ -108,7 +108,7 @@ fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_words_in_r
     }
 }
 
-/// Seven pointers walking 24-byte records at `--cpu Core`: the loop's
+/// Seven pointers walking 24-byte records at `-march=core2`: the loop's
 /// parallel copy has a move for each, each reading an address made again.
 /// A value made for the copy lives across all of it, and seven of them left
 /// no register for the eighth ("value#125 cannot be spilled and ...", found

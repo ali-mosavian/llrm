@@ -32,6 +32,8 @@ pub enum Kind {
 /// A target's data layout.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Layout {
+    /// gcc's `-m` number that names this target: `-m16`, `-m32`, `-m64`.
+    pub mode: u32,
     /// LLVM's datalayout string.
     pub datalayout: String,
     pub spaces: AddressSpaces,
@@ -59,6 +61,7 @@ impl Layout {
     /// to `"near"` or `"far"`).
     pub fn parse(text: &str) -> Result<Self, String> {
         let value: toml::Table = text.parse().map_err(|error: toml::de::Error| error.to_string())?;
+        let mode = value.get("mode").and_then(|one| one.as_integer()).and_then(|one| u32::try_from(one).ok()).filter(|one| *one > 0).ok_or("mode is not a positive number")?;
         let datalayout = value.get("datalayout").and_then(|one| one.as_str()).ok_or("datalayout is not a string")?.to_owned();
         let spaces = value.get("spaces").and_then(|one| one.as_table()).ok_or("[spaces] is missing")?;
         let number = |name: &str| -> Result<Option<u32>, String> {
@@ -85,6 +88,7 @@ impl Layout {
             Some(one) => Some(one.as_integer().and_then(|one| u64::try_from(one).ok()).filter(|one| *one > 0).ok_or("spaces.segment_bytes is not a positive size")?),
         };
         Ok(Self {
+            mode,
             datalayout,
             spaces: AddressSpaces {
                 roles: Spaces { near: required("near")?, far: required("far")?, data: required("data")?, stack: required("stack")?, segment: number("segment")?, huge: number("huge")?, fixed: number("fixed")?, segment_bytes },
@@ -98,7 +102,7 @@ impl Layout {
 mod tests {
     use super::*;
 
-    const FLAT: &str = "datalayout = \"e-p:32:32\"\n[spaces]\nnear = 0\nfar = 0\ndata = 0\nstack = 0\n[pointers]\n4 = \"near\"\n";
+    const FLAT: &str = "mode = 32\ndatalayout = \"e-p:32:32\"\n[spaces]\nnear = 0\nfar = 0\ndata = 0\nstack = 0\n[pointers]\n4 = \"near\"\n";
 
     #[test]
     fn a_flat_layout_has_one_space_and_none_of_the_pair_kinds() {
@@ -119,7 +123,7 @@ mod tests {
 
     #[test]
     fn a_malformed_layout_is_refused_with_what_is_wrong() {
-        assert_eq!(Layout::parse("datalayout = \"e\"\n[pointers]\n").unwrap_err(), "[spaces] is missing");
+        assert_eq!(Layout::parse("mode = 16\ndatalayout = \"e\"\n[pointers]\n").unwrap_err(), "[spaces] is missing");
         assert_eq!(Layout::parse(&FLAT.replace("near = 0", "near = \"x\"")).unwrap_err(), "spaces.near is not an address space number");
     }
 }

@@ -1,7 +1,7 @@
 ' ASC("") and a MID$ start outside the string raise error 5 under -fsanitize=bounds, in every
 ' dialect. The program handles errors, so each call is an invoke and the runtime raises it.
 ' dialect: vbdos
-' flags: -O2 --cpu 486 -fsanitize=bounds
+' flags: -O2 -march=i486 -fsanitize=bounds
 DEFINT A-Z
 DECLARE FUNCTION Probe% (s AS STRING, i AS INTEGER)
 DIM caught AS INTEGER, p AS STRING, e AS STRING, v AS INTEGER, n AS INTEGER

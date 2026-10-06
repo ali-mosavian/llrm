@@ -10,9 +10,10 @@
 # The scalars: issue width, in-order (the 486 and P5 are), clocks decoding each
 # operand-size prefix (paid by 16-bit forms here), the partial-register and
 # length-changing-prefix stalls, and the P5's U/V pairing.
-# The CPU a compile is priced for with no --cpu or -march.
+# The CPU a compile is priced for with no -march.
 default_cpu           486
 cpus                  486   P5
+march                i486 pentium
 issue                   1    2
 in_order                1    1
 prefix                  1    1

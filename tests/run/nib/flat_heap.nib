@@ -1,4 +1,4 @@
-# flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32
 # The heap's free lists: strings and vectors grown, dropped in an order that leaves holes, and
 # reused, so a block's list links are read back after its neighbours were written.
 fn build(n: i16) -> string:

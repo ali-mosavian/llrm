@@ -1,4 +1,4 @@
-// flags: -Os --cpu 486 | -O2 --cpu 486 --target x86-code32 | -Os --cpu 486 --target x86-code32
+// flags: -Os -march=i486 | -O2 -march=i486 -m32 | -Os -march=i486 -m32
 /* A `rep stosb` in a loop counts cx down to 0: its `mov cx, n` stayed outside the loop, so only the first
    row of each pass was cleared. */
 extern void report(long value);

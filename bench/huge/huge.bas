@@ -1,5 +1,5 @@
 ' dialect: pds71
-' flags: -O2 --cpu 486 --huge-arrays
+' flags: -O2 -march=i486 --huge-arrays
 ' REDIM'd 201x200 INTEGER array, 80400 bytes, /AH. Column-major, so h(c, r) walks memory in C's order.
 DEFINT A-Z
 DECLARE FUNCTION BenchHuge& ()

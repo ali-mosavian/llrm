@@ -28,9 +28,11 @@
 # recovers most); `lcp_stall` a 66h on an instruction with an immediate,
 # which stalls the decoder on P6 and Core; `pairing` the P5's U/V pairing.
 #
-# The CPU every frontend prices for with no --cpu or -march. The one place that says so.
+# The CPU every frontend prices for with no -march. The one place that says so.
 default_cpu           486
 cpus                  386  486   P5   P6   K5   K6   K7 Core
+# What gcc's -march and -mtune call each (K5 has no gcc name).
+march                i386 i486 pentium pentiumpro k5 k6 athlon core2
 issue                   1    1    2    3    4    3    3    4
 in_order                1    1    1    0    0    0    0    0
 prefix                  0    1    1    0    0    0    0    0
