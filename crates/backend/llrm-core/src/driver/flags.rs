@@ -9,7 +9,7 @@ use llrm_transforms::pipeline;
 use crate::abi::machine::Machine;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [-m[no-]far-bss] [--clocks-per-byte N] [--cpu CPU] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [-m[no-]far-bss] [--clocks-per-byte N] [--cpu CPU] [--machine MACHINE] [--target TARGET] [-fstack-usage] [-Wstack-usage=N] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -111,6 +111,8 @@ pub struct Flags {
     passes: Vec<(usize, bool)>,
     cpu: Option<String>,
     machine: Option<PathBuf>,
+    /// `--target`: the target to build for, by name.
+    target: Option<String>,
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
     far_bss: Option<bool>,
@@ -130,7 +132,7 @@ pub struct Flags {
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, stack_is_data: None, far_bss: None, milliclocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, stack_usage: false, stack_limit: None }
+        Self { level: Level::O2, passes: Vec::new(), cpu: None, machine: None, target: None, stack_is_data: None, far_bss: None, milliclocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, stack_usage: false, stack_limit: None }
     }
 }
 
@@ -167,6 +169,7 @@ impl Flags {
                 self.milliclocks_per_byte = Some((clocks.ok_or_else(|| format!("--clocks-per-byte {text}: expected a number of clocks"))? * 1000.0).round() as i64);
             }
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
+            "--target" => self.target = Some(value("--target")?),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
             _ if flag.starts_with("-march=") || flag.starts_with("-mtune=") => {
                 let (option, name) = flag.split_once('=').expect("an =");
@@ -194,6 +197,11 @@ impl Flags {
             _ => return Ok(false),
         }
         Ok(true)
+    }
+
+    /// The target `--target` named, if any.
+    pub fn target(&self) -> Option<&str> {
+        self.target.as_deref()
     }
 
     /// The pipeline's options: the level's, then each `-f`.

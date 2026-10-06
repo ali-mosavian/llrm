@@ -182,7 +182,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         at += 1;
     }
     let source = source.ok_or("the following arguments are required: source")?;
-    let machine = flags.machine(llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() })?;
+    let target = llrm_driver::target(&flags, &["x86-code16"])?;
+    let machine = flags.machine(llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..target.machine() })?;
     Ok(Args {
         source,
         dump,

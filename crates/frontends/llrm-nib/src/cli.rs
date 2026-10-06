@@ -78,6 +78,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let source = source.ok_or("the following arguments are required: source")?;
     frontend.debug = flags.debug;
     frontend.checked_stack = flags.sanitize.stack;
+    llrm_driver::target(&flags, &["x86-code16"])?;
     let codegen = flags.driver(flags.machine(nib::machine())?);
     Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen })
 }

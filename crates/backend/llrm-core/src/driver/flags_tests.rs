@@ -129,3 +129,12 @@ fn clocks_per_byte_limits_the_growth_an_inline_may_buy() {
     assert!(parsed(&["--clocks-per-byte", "-1"]).is_err());
     assert!(parsed(&["--clocks-per-byte", "lots"]).is_err());
 }
+
+/// `--target` was refused by every frontend ("unrecognized arguments"): a
+/// target could not be named at all.
+#[test]
+fn a_target_is_named_by_its_flag() {
+    assert_eq!(parsed(&[]).unwrap().target(), None);
+    assert_eq!(parsed(&["--target", "x86-code16"]).unwrap().target(), Some("x86-code16"));
+    assert!(parsed(&["--target"]).unwrap_err().contains("expected one argument"));
+}

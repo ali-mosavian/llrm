@@ -242,6 +242,7 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-core",
+ "llrm-driver",
  "llrm-mir",
  "llrm-transforms",
  "num-bigint",
@@ -283,6 +284,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-driver"
+version = "0.1.0"
+dependencies = [
+ "llrm-core",
+ "llrm-target",
+ "llrm-x86-code16",
+]
+
+[[package]]
 name = "llrm-hir"
 version = "0.1.0"
 dependencies = [
@@ -312,6 +322,7 @@ dependencies = [
  "indexmap",
  "llrm-analysis",
  "llrm-core",
+ "llrm-driver",
  "llrm-hir",
  "llrm-mir",
  "llrm-transforms",
@@ -352,6 +363,7 @@ dependencies = [
  "indexmap",
  "llrm-analysis",
  "llrm-core",
+ "llrm-driver",
  "llrm-mir",
  "llrm-transforms",
  "num-bigint",
