@@ -1,5 +1,5 @@
-reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
-blessed = "2026-10-06"
+reason = "x87 homes: a stored loop-carried float is spilled to its own cell"
+blessed = "2026-10-07"
 
 [bas.O2]
 instructions = 63828
@@ -15,15 +15,15 @@ memory_operands = 26085
 code_bytes = 865
 data_bytes = 31
 bss_bytes = 0
-kernel_ms = 0.9406
+kernel_ms = 0.9404
 
 [c.O2]
-instructions = 56679
-memory_operands = 25450
-code_bytes = 655
+instructions = 54283
+memory_operands = 20847
+code_bytes = 595
 data_bytes = 20
 bss_bytes = 0
-kernel_ms = 0.7574
+kernel_ms = 0.7254
 
 [c.Os]
 instructions = 57659
@@ -31,15 +31,15 @@ memory_operands = 20845
 code_bytes = 498
 data_bytes = 16
 bss_bytes = 0
-kernel_ms = 0.7705
+kernel_ms = 0.7702
 
 [nib.O2]
-instructions = 56681
-memory_operands = 25448
-code_bytes = 660
+instructions = 54285
+memory_operands = 20847
+code_bytes = 606
 data_bytes = 32
 bss_bytes = 0
-kernel_ms = 0.7584
+kernel_ms = 0.7263
 
 [nib.Os]
 instructions = 57669
@@ -47,7 +47,7 @@ memory_operands = 20846
 code_bytes = 528
 data_bytes = 28
 bss_bytes = 0
-kernel_ms = 0.7716
+kernel_ms = 0.7712
 
 [ow.O2]
 instructions = 53725
