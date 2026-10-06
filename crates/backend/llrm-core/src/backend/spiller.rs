@@ -857,13 +857,21 @@ fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<In
     let found = _existing_colors_by(body, frame, false);
     if std::env::var_os("LLRM_CHECK_COLORS").is_some() {
         let whole = _existing_colors_by(body, frame, true);
-        assert!(found.0 == whole.0, "{}: the slot colors differ from working them out whole", body.name);
+        assert!(_same_colors(&found.0, &whole.0), "{}: the slot colors differ from working them out whole", body.name);
         // What is asked of a value is where it is live (`slots::fits` overlaps segments). Its weight is not read, and
         // counts a value an instruction names twice once more than the body made of the homes does.
         assert!(found.1.iter().all(|(value, interval)| whole.1.get(value).is_some_and(|other| other.segments == interval.segments)), "{}: where a value is live differs from working it out whole", body.name);
         assert!(found.1.len() == whole.1.len(), "{}: a value has no interval where working it out whole gives one", body.name);
     }
     found
+}
+
+/// Whether two sets of slot colors are the same where each home is live: the weights of the occupants are not read.
+fn _same_colors(one: &[(i64, u32, Vec<Interval>)], other: &[(i64, u32, Vec<Interval>)]) -> bool {
+    one.len() == other.len()
+        && one.iter().zip(other).all(|(left, right)| {
+            left.0 == right.0 && left.1 == right.1 && left.2.len() == right.2.len() && left.2.iter().zip(&right.2).all(|(a, b)| a.value == b.value && a.segments == b.segments)
+        })
 }
 
 /// `_existing_colors`, with the intervals of the homes' pseudo-values found among themselves and the body's
@@ -906,42 +914,108 @@ fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(
     };
 
     // Only an instruction that names a home is made again with it among its values; the others are the body's.
+    // Only those with a frame cell among their operands can, which the occurrences hold by block.
     let mut flipped = false;
-    let mut blocks = Vec::new();
-    for block in &body.blocks {
-        let mut insns: Vec<Arc<Insn>> = Vec::new();
-        for one in &block.insns {
-            let Some(what) = &one.what else {
-                insns.push(Arc::clone(one));
-                continue;
-            };
-            let defined: BTreeSet<u32> = what.dests.iter().filter_map(|operand| slot(operand, &mut capacities)).collect();
-            let used: BTreeSet<u32> = what.sources.iter().filter_map(|operand| slot(operand, &mut capacities)).collect();
-            if defined.is_empty() && used.is_empty() && !whole {
-                insns.push(Arc::clone(one));
-                continue;
+    let mut changed: Vec<(usize, usize, Arc<Insn>)> = Vec::new();
+    postings::following(body, |postings| {
+        for (block_index, block) in body.blocks.iter().enumerate() {
+            for &at in postings.frames(block_index) {
+                let one = &block.insns[at as usize];
+                let Some(what) = &one.what else { continue };
+                let defined: BTreeSet<u32> = what.dests.iter().filter_map(|operand| slot(operand, &mut capacities)).collect();
+                let used: BTreeSet<u32> = what.sources.iter().filter_map(|operand| slot(operand, &mut capacities)).collect();
+                if defined.is_empty() && used.is_empty() && !whole {
+                    continue;
+                }
+                let made = _with(one, |made| {
+                    made.defines = one.defines.iter().copied().chain(defined).collect::<IndexSet<u32>>().into_iter().collect();
+                    made.uses = one.uses.iter().copied().chain(used).collect::<IndexSet<u32>>().into_iter().collect();
+                });
+                // A value changes whether an instruction is a mark, and with it the slots after it.
+                flipped |= made.is_meta() != one.is_meta();
+                changed.push((block_index, at as usize, made));
             }
-            let made = _with(one, |made| {
-                made.defines = one.defines.iter().copied().chain(defined).collect::<IndexSet<u32>>().into_iter().collect();
-                made.uses = one.uses.iter().copied().chain(used).collect::<IndexSet<u32>>().into_iter().collect();
-            });
-            // A value changes whether an instruction is a mark, and with it the slots after it.
-            flipped |= made.is_meta() != one.is_meta();
-            insns.push(made);
         }
-        blocks.push(block.with_insns(insns));
-    }
-    let tracked = body.with_blocks(blocks);
-    let index = ranges::indexed(&tracked);
-    let busy = crate::analysis::frequency::Frequency::of(&tracked);
-    let live = if whole || flipped {
-        ranges::intervals_over(&tracked, Some(&index), &busy)
+    });
+    let shared;
+    let owned;
+    let index: &ranges::Indexes;
+    let live;
+    if whole || flipped || std::env::var_os("LLRM_CHECK_RANGES").is_some() {
+        let mut tracked = body.clone();
+        for (block_index, at, made) in changed {
+            tracked.blocks[block_index].insns[at] = made;
+        }
+        owned = ranges::indexed(&tracked);
+        index = &owned;
+        let busy = crate::analysis::frequency::Frequency::of(&tracked);
+        live = if whole || flipped {
+            ranges::intervals_over(&tracked, Some(index), &busy)
+        } else {
+            let mut live = ranges::intervals(body, None);
+            // The homes' pseudo-values are the `first..` ids.
+            live.extend(ranges::intervals_where(&tracked, index, &busy, &|value| value >= first));
+            live
+        };
     } else {
-        let mut live = ranges::intervals(body, None);
-        let homes: BTreeSet<u32> = pseudo.values().copied().collect();
-        live.extend(ranges::intervals_among(&tracked, &index, &busy, &homes));
-        live
-    };
+        // The slots are the body's own, remembered; the homes' pseudo-values are walked in a body of the instructions
+        // that name them alone (whole parallel copies, which share a point), at the slots they have in the body.
+        shared = ranges::indexed_shared(body);
+        index = &*shared;
+        let mut sparse_blocks: Vec<LirBlock> = body.blocks.iter().map(|block| LirBlock { at: block.at, insns: Vec::new(), succ: block.succ.clone(), phis: block.phis.clone(), cold: block.cold }).collect();
+        let mut starts: Vec<Vec<i64>> = vec![Vec::new(); body.blocks.len()];
+        let mut by_block: IndexMap<usize, Vec<(usize, Arc<Insn>)>> = IndexMap::default();
+        for (block_index, at, made) in changed {
+            by_block.entry(block_index).or_default().push((at, made));
+        }
+        for (block_index, mut named) in by_block {
+            let original = &body.blocks[block_index].insns;
+            // The runs of a parallel copy a named instruction is in, as the walk takes them together.
+            let mut wanted: std::collections::BTreeMap<usize, Arc<Insn>> = std::collections::BTreeMap::new();
+            for (at, made) in named.drain(..) {
+                if let Some(group) = original[at].group {
+                    let (mut low, mut high) = (at, at);
+                    while low > 0 && original[low - 1].group == Some(group) {
+                        low -= 1;
+                    }
+                    while high + 1 < original.len() && original[high + 1].group == Some(group) {
+                        high += 1;
+                    }
+                    for position in low..=high {
+                        wanted.entry(position).or_insert_with(|| Arc::clone(&original[position]));
+                    }
+                }
+                wanted.insert(at, made);
+            }
+            // An instruction's slot: the block's first after its phis', then two for each before it that is no mark.
+            // (Counted, not looked up: the same instruction may stand in two places.)
+            let mut next = index.span[&body.blocks[block_index].at].0 + ranges::PER_INSN;
+            let mut counted = 0;
+            let mut before: Option<usize> = None;
+            for (position, one) in wanted {
+                // Two instructions of one parallel copy with others between them are not one run here either.
+                if let (Some(earlier), Some(group)) = (before, one.group) {
+                    if position > earlier + 1 && sparse_blocks[block_index].insns.last().is_some_and(|last| last.group == Some(group)) {
+                        starts[block_index].push(next);
+                        sparse_blocks[block_index].insns.push(Arc::new(Insn::new(0, None, None, Vec::new(), Vec::new())));
+                    }
+                }
+                before = Some(position);
+                while counted < position {
+                    if !original[counted].is_meta() {
+                        next += ranges::PER_INSN;
+                    }
+                    counted += 1;
+                }
+                starts[block_index].push(next);
+                sparse_blocks[block_index].insns.push(one);
+            }
+        }
+        let sparse = body.with_blocks(sparse_blocks);
+        let mut all = ranges::intervals(body, None);
+        all.extend(ranges::intervals_sparse(&sparse, index, &starts, &|value| value >= first));
+        live = all;
+    }
     let end = index.span.values().map(|(_first, last)| *last).max().unwrap_or(1);
     let mut colors = Vec::new();
     for home in homes {
@@ -3446,8 +3520,29 @@ mod tests {
         let (spilt, _made) = spilled(&body, &set(&[1, 3]), Some(&mut frame), &crate::backend::classes::RegisterClasses::m16()).expect("spills");
         assert!(!frame.slots.is_empty(), "the body has homes to find");
         let (among, whole) = (super::_existing_colors_by(&spilt, &mut frame, false), super::_existing_colors_by(&spilt, &mut frame, true));
-        assert_eq!(among.0, whole.0);
-        assert_eq!(among.1, whole.1);
+        assert!(super::_same_colors(&among.0, &whole.0), "{:?} {:?}", among.0, whole.0);
+        assert!(among.1.len() == whole.1.len() && among.1.iter().all(|(value, one)| whole.1.get(value).is_some_and(|other| other.segments == one.segments)));
+    }
+
+    /// The homes are walked in a body of the instructions that name them: two of one parallel copy with another
+    /// instruction between them were one run there, which moved the point the first is read at (weapons.c: a home
+    /// live from 415, not 411).
+    #[test]
+    fn test_two_instructions_of_one_copy_apart_are_not_one_run_among_the_homes() {
+        let body = _body(vec![
+            _move(3, 30, Some(7), 0x10),
+            _move(40, 41, None, 0x12),
+            _move(1, 10, Some(7), 0x14),
+            _add(31, 3, 0x16),
+            _move(2, 1, None, 0x18),
+            _add(21, 2, 0x1a),
+            _add(22, 1, 0x1c),
+        ]);
+        let mut frame = Frame::new(0);
+        let (spilt, _made) = spilled(&body, &set(&[1, 3]), Some(&mut frame), &crate::backend::classes::RegisterClasses::m16()).expect("spills");
+        assert!(!frame.slots.is_empty(), "the body has homes to find");
+        let (among, whole) = (super::_existing_colors_by(&spilt, &mut frame, false), super::_existing_colors_by(&spilt, &mut frame, true));
+        assert!(super::_same_colors(&among.0, &whole.0), "{:?} {:?}", among.0, whole.0);
     }
 
     #[test]
