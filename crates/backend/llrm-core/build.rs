@@ -9,12 +9,15 @@ mod generator;
 
 fn main() {
     let family_forms = "../../target/llrm-x86/src/instructions/x86.instr";
-    for path in ["src/backend/isel/generator", "../../target", family_forms] {
+    let family_patterns = "../../target/llrm-x86/src/isel/family.isel";
+    for path in ["src/backend/isel/generator", "../../target", family_forms, family_patterns] {
         println!("cargo:rerun-if-changed={path}");
     }
     let read = |path: &std::path::Path| std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     // A target's forms are the family's, then its own.
     let forms_of = |own: &std::path::Path| format!("{}\n{}", read(std::path::Path::new(family_forms)), read(own));
+    // And its patterns: its own first, so a target's pattern for a type wins over the family's general one.
+    let patterns_of = |own: &std::path::Path| format!("{}\n{}", read(own), read(std::path::Path::new(family_patterns)));
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
     let mut targets: Vec<_> = std::fs::read_dir("../../target")
@@ -37,7 +40,7 @@ fn main() {
         for path in [&patterns, &forms] {
             println!("cargo:rerun-if-changed={}", path.display());
         }
-        let generated = generator::generate(&forms_of(&forms), &read(&patterns), name).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let generated = generator::generate(&forms_of(&forms), &patterns_of(&patterns), name).unwrap_or_else(|error| panic!("{name}: {error}"));
         std::fs::write(out.join(format!("isel_{ident}.rs")), generated.code).unwrap();
         index.push_str(&format!("pub mod {ident} {{\n    use super::*;\n    include!(concat!(env!(\"OUT_DIR\"), \"/isel_{ident}.rs\"));\n}}\n\n"));
         all.push(format!("&{ident}::SELECTOR"));
