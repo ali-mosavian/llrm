@@ -737,3 +737,67 @@ fn a_nonnull_parameter_is_nonnull_by_definition() {
     assert_eq!(nonnull_by_definition(&unit, parsed.value("p")), Some(true));
     assert_eq!(nonnull_by_definition(&unit, parsed.value("q")), Some(false));
 }
+
+const TYPE_TREE: &str = "
+!0 = !{!\"root\"}
+!1 = !{!\"scalar\", !0, i64 0}
+!2 = !{!\"int\", !1, i64 0}
+!3 = !{!\"long\", !2, i64 0}
+!4 = !{!2, !2, i64 0}
+!5 = !{!3, !3, i64 0}
+";
+
+/// With no type tree in the unit, each access built the module's whole tree from all its metadata
+/// (`Tbaa::of`) to read its own tag's ancestors: `Summaries` did that for every access of every
+/// procedure in every round, 41% of deedlines' compile (#394).
+#[test]
+fn an_access_in_a_unit_with_no_type_tree_builds_none() {
+    let stores: String = (0..20).map(|at| format!("  store i16 {at}, ptr %p, !tbaa !{}\n", 4 + at % 2)).collect();
+    let parsed = Parsed::new(&format!("define void @f(ptr %p) {{\n{stores}  ret void\n}}\n{TYPE_TREE}"));
+    let before = llrm_mir::tbaa::built();
+    let references = annotated(&parsed.unit()).expect("annotates");
+    assert_eq!(references.len(), 20);
+    assert_eq!(llrm_mir::tbaa::built() - before, 0, "a type tree was built for an access");
+}
+
+/// Reading a tag's ancestors without the tree gives what the tree gives, for every tag.
+#[test]
+fn a_tags_ancestors_are_the_same_with_and_without_the_type_tree() {
+    let parsed = Parsed::new(&format!("define void @f() {{\n  ret void\n}}\n{TYPE_TREE}"));
+    let metadata = &parsed.module.metadata;
+    let tree = llrm_mir::tbaa::Tbaa::of(metadata);
+    for at in 0..metadata.len() as u32 {
+        let tag = llrm_mir::module::MetadataId(at);
+        assert_eq!(llrm_mir::tbaa::Tbaa::chain(metadata, tag), tree.of_tag(metadata, tag), "tag !{at}");
+    }
+    assert_eq!(llrm_mir::tbaa::Tbaa::chain(metadata, llrm_mir::module::MetadataId(5)), ["int", "scalar", "root"]);
+}
+
+/// What a body does on its own was made again for every body in every round of the fixed point:
+/// 7000 times in deedlines, 47 s of 101 (#394). It is made once per body, however many rounds.
+#[test]
+fn a_direct_summary_is_made_once_per_body_however_many_rounds() {
+    let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
+    let procedures = IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+    let before = super::direct_runs();
+    summaries(&procedures, None).unwrap();
+    assert_eq!(super::direct_runs() - before, 2);
+}
+
+/// Every round of the fixed point visited every body: a chain of calls with no cycle in it took
+/// as many rounds as it had links, and each visit ran `points_to` (#394). A body in no cycle is
+/// visited once, callees first; a cycle iterates, and only it.
+#[test]
+fn a_body_in_no_cycle_of_calls_is_visited_once() {
+    let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
+    let procedures = IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+    let before = super::visits();
+    summaries(&procedures, None).unwrap();
+    assert_eq!(super::visits() - before, 2);
+
+    let recursive = Parsed::new("define void @f(ptr %p) {\nb0:\n  store i8 0, ptr %p\n  call void @f(ptr %p)\n  ret void\n}\n");
+    let procedures = IndexMap::from_iter([("f".to_owned(), Procedure::of(recursive.unit()))]);
+    let before = super::visits();
+    summaries(&procedures, None).unwrap();
+    assert!(super::visits() - before >= 2, "a cycle is visited until nothing changes");
+}
