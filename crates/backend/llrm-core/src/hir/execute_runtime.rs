@@ -296,7 +296,7 @@ impl Machine<'_> {
     }
 
     /// The DOS file calls on host files: a handle or count, or DOS's error
-    /// code negated, as the OS layer's operations return them (llrm-target/os/interface.toml).
+    /// code negated, as the OS layer's operations return them (runtime/shared/interface.toml).
     fn file(&mut self, name: &str, arguments: &[Scalar]) -> Outcome<i16> {
         use std::io::{Read, Write};
         const FIRST: usize = 5;
