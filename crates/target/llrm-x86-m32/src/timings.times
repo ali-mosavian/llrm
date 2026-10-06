@@ -58,6 +58,7 @@ rep_movs_cell 3  1
 x87_load     3   1
 x87_exchange 4   1
 x87_store    8   2
+x87_release 3   1
 x87_add      8   3
 x87_mul      16  3
 x87_div      73  39
@@ -127,6 +128,7 @@ rep_movs_cell 3  1
 x87_load     3   1
 x87_exchange 4   1
 x87_store    8   2
+x87_release 3   1
 x87_add      8   3
 x87_mul      16  3
 x87_div      73  39

@@ -40,7 +40,12 @@ pub struct CpuPrices {
 /// A cost model that is only what a target describes: its registers, address forms and
 /// operation prices.
 pub fn described(prices: &CpuPrices) -> Rc<dyn llrm_mir::target::Machine> {
-    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone(), operations: prices.operations.clone(), spaces: prices.spaces })
+    described_by_size(prices, None)
+}
+
+/// `described`, with what each operation costs in code bytes where the description states them.
+pub fn described_by_size(prices: &CpuPrices, sizes: Option<OperationCosts>) -> Rc<dyn llrm_mir::target::Machine> {
+    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone(), operations: prices.operations.clone(), sizes, spaces: prices.spaces })
 }
 
 struct Described {
@@ -48,6 +53,7 @@ struct Described {
     call_registers: i64,
     address_forms: Vec<AddressForm>,
     operations: OperationCosts,
+    sizes: Option<OperationCosts>,
     spaces: llrm_mir::spaces::Spaces,
 }
 
@@ -63,6 +69,10 @@ impl llrm_mir::target::Machine for Described {
 
     fn costs(&self) -> OperationCosts {
         self.operations.clone()
+    }
+
+    fn size_costs(&self) -> OperationCosts {
+        self.sizes.clone().unwrap_or_else(|| self.costs())
     }
 
     fn registers(&self) -> i64 {
