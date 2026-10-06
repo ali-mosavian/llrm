@@ -444,8 +444,10 @@ pub struct Segments {
 
 impl Segments {
     pub fn of(machine: &Machine) -> Self {
-        // A flat machine reaches the backend with the flat target (PR 16).
-        let segments = machine.segments.as_ref().expect("a segmented machine");
+        // A flat machine has no selector to place: DS is only what string operations read.
+        let Some(segments) = machine.segments.as_ref() else {
+            return Self { selectors: Vec::new(), data: Register::DS, through: None, huge_shift: None };
+        };
         let named = |one: &Register, name: &String| name.eq_ignore_ascii_case(crate::backend::select::SEGMENTS[one]);
         let register = |name: &String| {
             *crate::backend::select::SEGMENTS
@@ -593,6 +595,15 @@ pub fn name_of(register: Register) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `Segments::of` panicked ("a segmented machine") on a flat machine, so no flat
+    /// target reached the allocator; a flat machine places no selector.
+    #[test]
+    fn test_a_flat_machine_has_no_selector_to_place() {
+        let flat = Machine::parse("addressing = \"flat\"\nsegment_end_faults = false\nfar_bss = false\ncpu = \"486\"\n", &["486"]).unwrap();
+        let segments = Segments::of(&flat);
+        assert!(segments.selectors.is_empty() && segments.through.is_none() && segments.huge_shift.is_none());
+    }
 
     /// The allocator's bases are the encodable ones less the frame register: a new frame rule changes one place.
     #[test]
