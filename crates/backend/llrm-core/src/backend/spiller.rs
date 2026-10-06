@@ -2451,7 +2451,7 @@ mod tests {
 
     use super::{_color_slots, _constants, spilled, spilled_from};
     use crate::backend::frame::{Frame, SlotKey};
-    use crate::backend::{omfwrite, select};
+    use crate::backend::{objbuild, select};
     use crate::model::ir::{Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
 
@@ -2989,9 +2989,9 @@ mod tests {
                 vec![Loc::Address(source)],
             );
             let names: IndexMap<(Space, i64), String> = IndexMap::from_iter([((space, 7), "_descriptor".to_owned())]);
-            let emitted = omfwrite::_encoded(&lea, &names, 16).expect("encodes");
+            let emitted = objbuild::_encoded(&lea, &names, 16).expect("encodes");
             assert_eq!(emitted.code, [0x8D, 0x1E, 0x0C, 0x00]);
-            assert_eq!(emitted.fixups, [omfwrite::Fixup::new(2, omfwrite::OFFSET, "_descriptor")]);
+            assert_eq!(emitted.fixups, [objbuild::Fixup::new(2, objbuild::OFFSET, "_descriptor")]);
         }
     }
 
