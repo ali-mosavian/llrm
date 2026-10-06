@@ -64,8 +64,8 @@ impl llrm_target::Target for Code32 {
     }
 
     /// Flat: no segments, one model.
-    fn listing_header(&self) -> Vec<String> {
-        vec![".386".to_owned(), ".model flat".to_owned()]
+    fn object(&self) -> llrm_target::object::ObjectFormat {
+        llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml")).expect("flat object.toml parses")
     }
 
     fn stack_pointer(&self) -> Register {
@@ -75,6 +75,10 @@ impl llrm_target::Target for Code32 {
     /// cdecl32 keeps EBX, ESI and EDI whole.
     fn callee_saved(&self) -> Vec<(Register, Register)> {
         vec![(EBX, EBX), (ESI, ESI), (EDI, EDI)]
+    }
+
+    fn forms_text(&self) -> String {
+        llrm_x86::instructions::joined(include_str!("instructions/x86.instr"))
     }
 
     fn default_cpu(&self) -> &'static str {
@@ -146,7 +150,7 @@ mod tests {
     #[test]
     fn test_code32_answers_cdecl32() {
         let frame = Code32.frame_registers();
-        assert_eq!(Code32.listing_header(), [".386", ".model flat"]);
+        assert_eq!((Code32.object().bitness, Code32.object().header), (32, vec![".386".to_owned(), ".model flat".to_owned()]));
         assert_eq!((frame.pointer, frame.stack), (EBP, ESP));
         assert_eq!(frame.saved, [(EBX, EBX), (ESI, ESI), (EDI, EDI)]);
         assert_eq!((Code32.stack_slot_bytes(), Code32.first_argument_offset(false)), (4, 8));

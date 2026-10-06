@@ -31,6 +31,10 @@ impl llrm_target::Target for Code16 {
         GENERAL.len() as i64
     }
 
+    fn forms_text(&self) -> String {
+        instructions::TEXT.clone()
+    }
+
     fn default_cpu(&self) -> &'static str {
         timings::TABLE.default_cpu().expect("timings.times states a default CPU")
     }
@@ -81,8 +85,8 @@ impl llrm_target::Target for Code16 {
         if far { 6 } else { 4 }
     }
 
-    fn listing_header(&self) -> Vec<String> {
-        vec![".model medium".to_owned(), ".386".to_owned()]
+    fn object(&self) -> llrm_target::object::ObjectFormat {
+        llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml")).expect("real mode's object.toml parses")
     }
 
     fn stack_pointer(&self) -> iced_x86::Register {
@@ -120,7 +124,7 @@ mod tests {
     fn test_code16_answers_the_literals_isel_had() {
         assert_eq!((Code16.stack_slot_bytes(), Code16.frame_register()), (2, iced_x86::Register::BP));
         assert_eq!((Code16.first_argument_offset(false), Code16.first_argument_offset(true)), (4, 6));
-        assert_eq!(Code16.listing_header(), [".model medium", ".386"]);
+        assert_eq!((Code16.object().bitness, Code16.object().header), (16, vec![".model medium".to_owned(), ".386".to_owned()]));
         assert_eq!(Code16.stack_pointer(), iced_x86::Register::SP);
         assert_eq!(Code16.callee_saved(), PRESERVED.to_vec());
         assert_eq!([1, 2, 4, 8].map(|width| Code16.results(width)), [vec![EAX], vec![EAX], vec![EAX, EDX], vec![EAX, EDX]]);

@@ -33,7 +33,7 @@ pub fn machine<'a>(
     segments: &Segments,
     spilling: bool,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
-    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, spilling.then(Rc::<ssaspill::Run>::default), &crate::backend::peep::targets::x86_code16::RULES, &llrm_target::Target::frame_registers(&llrm_x86_code16::Code16))
+    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, &crate::backend::classes::RegisterClasses::code16(), spilling.then(Rc::<ssaspill::Run>::default), &crate::backend::peep::targets::x86_code16::RULES, &llrm_target::Target::frame_registers(&llrm_x86_code16::Code16))
 }
 
 /// `machine`, its peephole made of the rules `rules` holds; the spiller, where `spilling` names a run, reports to it.
@@ -46,6 +46,7 @@ pub fn machine_with<'a>(
     basic_semantics: bool,
     cpu: impl Into<ProfileOrName<'a>>,
     segments: &Segments,
+    classes: &Rc<crate::backend::classes::RegisterClasses>,
     spilling: Option<Rc<ssaspill::Run>>,
     rules: &'static crate::backend::peep::Rules,
     registers: &llrm_target::FrameRegisters,
@@ -61,14 +62,14 @@ pub fn machine_with<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
-        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), prices: ssaspill::Prices::of(target), run: spilling.clone().unwrap_or_default() }),
+        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), classes: Rc::clone(classes), prices: ssaspill::Prices::of(target), run: spilling.clone().unwrap_or_default() }),
         Box::new(phielim::PhiElimination),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),
         Box::new(twoaddr::TwoAddress),
         Box::new(coalesce::Coalescer::new(None, segments)),
-        Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments)?),
+        Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?),
         // After allocation: which moves in a phi's copy conflict is a question about locations.
         Box::new(parcopy::ParallelCopy),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
@@ -82,6 +83,11 @@ pub fn machine_with<'a>(
     ];
     if spilling.is_none() {
         phases.retain(|phase| phase.class_name() != "SsaSpill");
+    }
+    // Its slots are words of 2 bytes and it parks BP at that width: a target whose stack slot is
+    // wider has no such slots.
+    if registers.slot != 2 {
+        phases.retain(|phase| phase.class_name() != "LoopSlots");
     }
     Ok(phases)
 }

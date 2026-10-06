@@ -960,6 +960,22 @@ pub fn fixupp_record(subrecords: &[Vec<u8>]) -> Rc<Record> {
     Rc::new(Record::new(FIXUPP, subrecords.concat()))
 }
 
+/// `ledata_record` with a 32-bit offset: LEDATA's 32-bit twin, for a USE32 segment.
+pub fn ledata_record32(seg: i64, offset: i64, payload: &[u8]) -> Result<Rc<Record>, ValueError> {
+    if payload.len() > 1024 {
+        return Err(ValueError(format!("LEDATA holds at most 1024 bytes, not {}", payload.len())));
+    }
+    let mut body = _emit_index(seg)?;
+    body.extend((offset as u32).to_le_bytes());
+    body.extend_from_slice(payload);
+    Ok(Rc::new(Record::new(LEDATA + 1, body)))
+}
+
+/// `fixupp_record`'s 32-bit twin.
+pub fn fixupp_record32(subrecords: &[Vec<u8>]) -> Rc<Record> {
+    Rc::new(Record::new(FIXUPP + 1, subrecords.concat()))
+}
+
 pub fn _emit_index(value: i64) -> Result<Vec<u8>, ValueError> {
     if value < 0x80 {
         bytes(&[value])

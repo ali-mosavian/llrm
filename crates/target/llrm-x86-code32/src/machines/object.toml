@@ -1,0 +1,15 @@
+# x86-code32: OMF with USE32 segments and 32-bit offsets, linked as an LE
+# executable under a DOS extender, and the listing's MASM header.
+writer = "omf"
+bitness = 32
+header = [".386", ".model flat"]
+
+# How a C test is linked (tools/dosbatch): an LE executable behind DOS/32A's stub, which
+# loads `dos32a.exe` from the program's directory; `{ow}` is the pinned Open Watcom tree.
+[link]
+format = ["format", "os2", "le"]
+options = ["option", "stub={ow}/bld/redist/dos32a/stub32a.exe"]
+first = ["crates/target/llrm-x86-code32/runtime/crt.asm"]
+last = ["crates/target/llrm-x86-code32/runtime/ext.asm"]
+final = []
+loader = "{ow}/bld/redist/dos32a/dos32a.exe"
