@@ -436,6 +436,7 @@ dependencies = [
 name = "llrm-x86"
 version = "0.1.0"
 dependencies = [
+ "iced-x86",
  "toml",
 ]
 
