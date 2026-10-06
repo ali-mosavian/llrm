@@ -408,7 +408,7 @@ fn built_inner(module: &masm::Module, source: &str, layout: CodeLayout) -> Resul
             .iter()
             .position(|one| &one.name == name)
             .unwrap_or_else(|| panic!("ValueError: {} is not in list", pyrepr::string(name)));
-        _data(&mut segments[index], index, items, &mut symbols);
+        _data(&mut segments[index], index, items, &mut symbols, module.object.bitness);
     }
     for (index, group) in groups.iter().enumerate() {
         _code(&mut segments[index], index, module, group, &mut symbols)?;
@@ -424,7 +424,7 @@ fn built_inner(module: &masm::Module, source: &str, layout: CodeLayout) -> Resul
     object_of(module, source, segments, &symbols, &externs)
 }
 
-pub fn _data(segment: &mut Segment, index: usize, items: &[masm::Datum], symbols: &mut IndexMap<String, (usize, usize)>) {
+pub fn _data(segment: &mut Segment, index: usize, items: &[masm::Datum], symbols: &mut IndexMap<String, (usize, usize)>, bits: u32) {
     for item in items {
         match item {
             masm::Datum::Label(masm::Label { name }) | masm::Datum::Object(masm::Label { name }) => {
@@ -432,11 +432,14 @@ pub fn _data(segment: &mut Segment, index: usize, items: &[masm::Datum], symbols
             }
             masm::Datum::Fill(masm::Fill { size, byte: None }) => segment.skip(*size as usize),
             masm::Datum::Fill(masm::Fill { size, byte: Some(byte) }) => segment.put(&vec![*byte; *size as usize], &[]),
-            masm::Datum::Pointer(masm::Pointer { name, offset, far }) => {
-                let loc = if *far { POINTER } else { OFFSET };
+            masm::Datum::Pointer(masm::Pointer { name, offset, far, bytes }) => {
+                // A far pointer is an offset and a selector; a near one is the offset alone, as wide as the target's
+                // pointer (a 32-bit object's is a dword).
+                let loc = if *far { POINTER } else if bits == 32 { OFFSET32 } else { OFFSET };
+                assert_eq!(loc.width(), *bytes as usize, "a {bytes}-byte pointer in a {bits}-bit object");
                 segment.put(&vec![0; loc.width()], &[Fixup::new(0, loc, name.clone())]);
                 let at = segment.image.len() - loc.width();
-                pack_into(&mut segment.image, at, offset & 0xFFFF);
+                pack_into(&mut segment.image, at, offset & ((1_i64 << (8 * (*bytes).min(4))) - 1));
             }
             masm::Datum::Align(masm::Align { to }) => {
                 segment.align = segment.align.max(*to as usize);
@@ -864,7 +867,7 @@ mod tests {
     }
 
     fn pointer(name: &str, offset: i64, far: bool) -> masm::Datum {
-        masm::Datum::Pointer(masm::Pointer { name: name.into(), offset, far })
+        masm::Datum::Pointer(masm::Pointer { name: name.into(), offset, far, bytes: if far { 4 } else { 2 } })
     }
 
     fn fill(size: i64, byte: Option<u8>) -> masm::Datum {
@@ -883,7 +886,7 @@ mod tests {
         let mut segment = Segment::new("_DATA", Role::Data, true);
         let mut symbols = IndexMap::default();
         let items = [pointer("_x", 0, false), masm::Datum::SegmentWord("DGROUP".into()), label("_after")];
-        _data(&mut segment, 0, &items, &mut symbols);
+        _data(&mut segment, 0, &items, &mut symbols, 16);
         assert_eq!(segment.image.len(), 4);
         assert_eq!(symbols["_after"], (0, 4));
         assert_eq!((segment.fixups[1].at, segment.fixups[1].kind, segment.fixups[1].name.as_str()), (2, BASE, "DGROUP"));

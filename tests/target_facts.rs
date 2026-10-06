@@ -137,6 +137,17 @@ fn counts(root: &Path) -> BTreeMap<String, usize> {
     found
 }
 
+/// The files the baseline text lists more than once: what a union merge of two branches that lowered the same file's
+/// count leaves (`.gitattributes` merges this file by union, so a merge never stops on it).
+fn listed_twice(text: &str) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    text.lines()
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split_once(' ').map(|(_, path)| path.to_owned()))
+        .filter(|path| !seen.insert(path.clone()))
+        .collect()
+}
+
 fn baseline() -> BTreeMap<String, usize> {
     let text = fs::read_to_string(Path::new(ROOT).join(BASELINE)).unwrap_or_default();
     text.lines()
@@ -177,6 +188,8 @@ fn shared_code_holds_no_copy_of_a_target_fact() {
         fs::write(root.join(BASELINE), text).unwrap();
         return;
     }
+    let twice = listed_twice(&fs::read_to_string(root.join(BASELINE)).unwrap_or_default());
+    assert!(twice.is_empty(), "the baseline lists {twice:?} twice, as a merge of two lowerings leaves it: LLRM_BLESS=1 cargo test --test target_facts");
     let wrong = problems(root, &baseline());
     assert!(wrong.is_empty(), "read the target's description instead of copying it:\n{}", wrong.join("\n"));
 }
@@ -246,4 +259,11 @@ fn an_untracked_copy_is_not_counted() {
     let stray = root.join("crates/ir/sample/src/stray.rs");
     fs::write(&stray, "fn g() { let _ = \"ax\"; }\n").unwrap();
     assert!(problems(&root, &BTreeMap::new()).is_empty());
+}
+
+/// A merge kept both sides' lines for one file and the guard took the later: a count nobody blessed. It is refused.
+#[test]
+fn a_file_listed_twice_is_found() {
+    assert_eq!(listed_twice("# header\n3 a.rs\n2 b.rs\n1 a.rs\n"), ["a.rs"]);
+    assert!(listed_twice("3 a.rs\n2 b.rs\n").is_empty());
 }
