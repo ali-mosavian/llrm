@@ -55,7 +55,7 @@ mod tests {
     use llrm_core::support::pyjson::{self, Json};
 
     fn options() -> llrm_core::driver::Options {
-        llrm_core::driver::Options { dump: None, ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) }
+        llrm_core::driver::Options { dump: None, ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) }
     }
 
     #[test]
@@ -63,7 +63,7 @@ mod tests {
         // nbody used to expose HIR and MIR only through separate ad-hoc commands.
         let directory = tempfile::tempdir().expect("a directory");
         let nbody = fixture("nbody.nib");
-        let output = dumped(&nbody, &directory.path().join("nbody"), &super::super::Frontend::default(), &options(), "main").expect("dumps");
+        let output = dumped(&nbody, &directory.path().join("nbody"), &crate::real_mode(), &options(), "main").expect("dumps");
         let names = |directory: &std::path::Path| -> Vec<String> {
             let mut names: Vec<String> = std::fs::read_dir(directory)
                 .expect("lists")
@@ -93,7 +93,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("a directory");
         let source = directory.path().join("lib.nib");
         std::fs::write(&source, "@export(\"cdecl16\")\nfn twice(value: i16) -> i16:\n    return value * 2\n").expect("writes");
-        let output = dumped(&source, &directory.path().join("dump"), &super::super::Frontend::default(), &options(), "main").expect("dumps");
+        let output = dumped(&source, &directory.path().join("dump"), &crate::real_mode(), &options(), "main").expect("dumps");
         let listing = std::fs::read_to_string(output.join("mir/listing.asm")).expect("a listing");
         assert!(listing.contains("_twice"), "{listing}");
     }
