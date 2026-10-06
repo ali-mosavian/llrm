@@ -49,7 +49,7 @@ fn descriptors(module: &Module, function: &Function) -> Vec<Descriptor> {
     out
 }
 
-fn class(function: &Function, context: &Context, spaces: &[u32], hary: Option<Operand>, pointer: Operand, descriptors: &[Descriptor]) -> Option<Class> {
+fn class(function: &Function, context: &Context, segment: u32, spaces: &[u32], hary: Option<Operand>, pointer: Operand, descriptors: &[Descriptor]) -> Option<Class> {
     let root = pointer_parts(function, context, pointer).root;
     if let Operand::Constant(id) = root
         && let ConstantKind::Global(global) = context.get(id).kind
@@ -61,8 +61,8 @@ fn class(function: &Function, context: &Context, spaces: &[u32], hary: Option<Op
         (Opcode::Cast(CastOp::AddrSpaceCast), operands) => {
             let from = function.operand_type(context, operands[0])?;
             match context.types.get(from) {
-                llrm_mir::Type::Pointer(0) => class(function, context, spaces, hary, operands[0], descriptors),
-                llrm_mir::Type::Pointer(crate::SEGMENT) => {
+                llrm_mir::Type::Pointer(0) => class(function, context, segment, spaces, hary, operands[0], descriptors),
+                llrm_mir::Type::Pointer(space) if *space == segment => {
                     let (Opcode::Cast(CastOp::IntToPtr), selector) = made(function, context, operands[0])? else { return None };
                     let descriptor = match made(function, context, selector[0])? {
                         // The selector a descriptor holds, two bytes in.
@@ -89,7 +89,7 @@ fn class(function: &Function, context: &Context, spaces: &[u32], hary: Option<Op
 }
 
 /// Tags every access in `module` whose provenance says what it reaches.
-pub fn tag(module: &mut Module) {
+pub fn tag(module: &mut Module, segment: u32) {
     let spaces: Vec<u32> = module.globals.iter().map(|one| one.address_space).collect();
     let hary = module.named(&crate::access::declared()).map(|one| Operand::Constant(module.reference(one)));
     let bodies: Vec<GlobalId> = module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, _)| id).collect();
@@ -112,7 +112,7 @@ pub fn tag(module: &mut Module) {
                     Opcode::Store { .. } => one.operands[1],
                     _ => return None,
                 };
-                Some((inst, class(function, &module.context, &spaces, hary, pointer, &mine)?))
+                Some((inst, class(function, &module.context, segment, &spaces, hary, pointer, &mine)?))
             })
             .collect();
         if classes.is_empty() {

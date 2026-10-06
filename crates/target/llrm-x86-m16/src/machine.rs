@@ -10,7 +10,7 @@ pub use llrm_target::machine::*;
 pub const DOS: &str = concat!(include_str!("machines/dos.toml"), include_str!("../../llrm-target/src/machines/pc-ports.toml"));
 
 /// The built-in description, which nothing can change.
-pub static BUILT_IN: LazyLock<Machine> = LazyLock::new(|| Machine::parse(DOS, crate::timings::TABLE.default_cpu().expect("timings.times states a default CPU")).expect("the built-in DOS description parses"));
+pub static BUILT_IN: LazyLock<Machine> = LazyLock::new(|| Machine::parse(DOS, crate::timings::TABLE.default_cpu().expect("timings.times states a default CPU")).expect("the built-in DOS description parses").with_layout(crate::layout()));
 
 /// The built-in description as a BASIC runtime runs it: compiled code only
 /// ever runs on the program's stack, which is in the data group.

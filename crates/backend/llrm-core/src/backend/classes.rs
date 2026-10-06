@@ -18,7 +18,8 @@ type Key = (String, &'static str, usize, usize);
 pub struct RegisterClasses {
     /// Each form's pins, by the mnemonic, the operation and the operand counts that
     /// pick it out.
-    pins: HashMap<Key, Vec<(Side, usize, Register)>>,
+    /// By mnemonic first: asked of every instruction of a body, over and over, so no key is made of it.
+    pins: crate::support::hash::HashMap<String, Vec<(&'static str, usize, usize, Vec<(Side, usize, Register)>)>>,
     /// The registers a value may be placed in, whole, in allocation order.
     pub available: Vec<Register>,
     /// The word registers an address is made of (`[bx+si]`): the bases, the indexes and the frame.
@@ -39,7 +40,7 @@ impl RegisterClasses {
     pub fn of(arch: &dyn Target) -> Self {
         let forms = instructions::parse::parse(&arch.forms_text()).expect("the target's forms parse");
         let operations: HashMap<&str, &'static str> = Operation::ALL.iter().map(|op| (op.as_str(), op.as_str())).collect();
-        let mut pins = HashMap::new();
+        let mut pins: HashMap<Key, Vec<(Side, usize, Register)>> = HashMap::new();
         for form in &forms {
             let chosen = |side: Side, index: usize, root: &str| {
                 forms.iter().any(|other| {
@@ -49,6 +50,11 @@ impl RegisterClasses {
             let required = form.fixed.iter().filter(|(side, index, root)| !chosen(*side, *index, root)).map(|(side, index, root)| (*side, *index, root_register(root))).collect();
             pins.entry((form.name.clone(), operations[form.operation.as_str()], form.dests.len(), form.sources.len())).or_insert(required);
         }
+        let mut by_name: crate::support::hash::HashMap<String, Vec<(&'static str, usize, usize, Vec<(Side, usize, Register)>)>> = crate::support::hash::HashMap::default();
+        for ((name, operation, dests, sources), required) in pins {
+            by_name.entry(name).or_default().push((operation, dests, sources, required));
+        }
+        let pins = by_name;
         let file = llrm_target::registers::parse(&arch.registers_text()).expect("the target's registers parse");
         let named = |name: &str| iced(name);
         let word = |root: &str| file.iter().find(|one| one.root == root && one.bits == 16).map(|one| iced(&one.name)).expect("a register has a word view");
@@ -79,8 +85,8 @@ impl RegisterClasses {
             return out;
         }
         let Some(name) = what.name.as_deref() else { return out };
-        let key = (name.to_owned(), what.op.as_str(), what.dests.len(), what.sources.len());
-        let Some(pins) = self.pins.get(&key) else { return out };
+        let operation = what.op.as_str();
+        let Some(pins) = self.pins.get(name).and_then(|forms| forms.iter().find(|(op, dests, sources, _)| *op == operation && *dests == what.dests.len() && *sources == what.sources.len())).map(|(_, _, _, pins)| pins) else { return out };
         for (side, index, register) in pins {
             let places = match side {
                 Side::Dest => &what.dests,
