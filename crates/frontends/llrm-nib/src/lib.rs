@@ -56,9 +56,10 @@ pub struct Frontend {
     pub debug: bool,
     /// Each function compares SP with the runtime's limit on entry: `-fsanitize=stack`.
     pub checked_stack: bool,
-    /// Warn where `far` or `huge` is written for a target where far is near (`-Wno-distance` turns
-    /// it off, for the runtime, which writes `*far` for the targets that have one).
-    pub warn_distance: bool,
+    /// Warn where the source meets the target's widths: `far` or `huge` written where far is near, a
+    /// `usize` narrowed implicitly (`-Wno-target-width` turns both off, for the runtime, which writes
+    /// `*far` for the targets that have one and counts in words).
+    pub warn_target_width: bool,
     /// What the last compile warned of, for the caller to print.
     pub warnings: std::rc::Rc<std::cell::RefCell<Vec<Diagnostic>>>,
 }
@@ -66,7 +67,7 @@ pub struct Frontend {
 impl Default for Frontend {
     /// For real mode, where the language began: a caller that knows its target sets `layout`.
     fn default() -> Self {
-        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_distance: true, warnings: Default::default() }
+        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default() }
     }
 }
 

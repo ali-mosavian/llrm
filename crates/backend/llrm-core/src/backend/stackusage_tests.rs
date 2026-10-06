@@ -95,9 +95,11 @@ fn test_a_runtime_frame_counts_the_locals_its_entry_call_takes() {
 #[test]
 fn test_the_stack_to_add_is_what_the_chain_needs_beyond_the_base() {
     let one = |entry| module(vec![Procedure { entry, ..procedure("big", 0, 0, &[]) }]);
-    assert_eq!(stack_to_add(&one(100), 0x800), Ok(0));
-    assert_eq!(stack_to_add(&one(6010), 0x800), Ok(4 + 6010 + STACK_RESERVE - 0x800));
-    assert!(stack_to_add(&one(0xF000), 0x800).unwrap_err().contains("bytes of stack"));
+    assert_eq!(stack_to_add(&one(100), 0x800, Some(0xF000)), Ok(0));
+    assert_eq!(stack_to_add(&one(6010), 0x800, Some(0xF000)), Ok(4 + 6010 + STACK_RESERVE - 0x800));
+    assert!(stack_to_add(&one(0xF000), 0x800, Some(0xF000)).unwrap_err().contains("bytes of stack"));
+    // A target without segments has no such limit: a 70 KB frame was refused on code32.
+    assert_eq!(stack_to_add(&one(70000), 0x800, None), Ok(4 + 70000 + STACK_RESERVE - 0x800));
 }
 
 fn checked(mut one: Procedure, red_zone: i64) -> Procedure {

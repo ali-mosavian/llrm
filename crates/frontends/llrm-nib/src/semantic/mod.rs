@@ -635,7 +635,7 @@ impl TypeRegistry {
                 [TypeAnnotation::Value(target)] => {
                     let target = self.resolve_element(target, span)?;
                     let distance = name[1..].split(' ').next().expect("a distance");
-                    self.warn_distance(distance, span);
+                    self.warn_target_width(distance, span);
                     Ok(ElementType::Scalar(self.raw_pointer(target, distance, name.ends_with(" mut"))))
                 }
                 _ => Err(Diagnostic::new(span, "a raw pointer takes one target type")),
@@ -712,7 +712,7 @@ impl TypeRegistry {
 
     /// The word of a length, capacity or index: usize, the target's near pointer wide.
     pub(super) fn word(&self) -> TypeName {
-        if self.sizes.near == 4 { TypeName::U32 } else { TypeName::U16 }
+        TypeName::usize(self.sizes.near)
     }
 
     /// `word`'s type id.
@@ -1414,7 +1414,7 @@ fn program(
     frontend: &super::Frontend,
 ) -> Result<hir::Program, Diagnostic> {
 let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.conventions.clone(), frontend.bits);
-    types.warnings = frontend.warn_distance.then(|| frontend.warnings.clone());
+    types.warnings = frontend.warn_target_width.then(|| frontend.warnings.clone());
     types.register_fixed_types(&module.fixed_types)?;
     types.register_aggregates(&module.structs, &module.enums)?;
     types.register_drops(&module.functions.iter().collect::<Vec<_>>())?;
@@ -1656,7 +1656,8 @@ fn print_builtins(types: &mut TypeRegistry) -> Vec<(&'static str, Vec<u32>)> {
 }
 
 fn print_name(type_name: TypeName) -> &'static str {
-    match type_name {
+    match type_name.plain() {
+        TypeName::Word { .. } => unreachable!("plain() is never a word"),
         TypeName::String => rt::PRINT_STRING,
         TypeName::Addr => unreachable!("addresses have no default formatter"),
         TypeName::Enum { .. }
@@ -2238,21 +2239,21 @@ fn fixed_storage_value(value: i128, type_name: TypeName, span: Span) -> Result<i
 
 pub(crate) fn is_integer(type_name: TypeName) -> bool {
     matches!(
-        type_name,
+        type_name.plain(),
         TypeName::I8 | TypeName::U8 | TypeName::I16 | TypeName::U16 | TypeName::I32 | TypeName::U32
     )
 }
 
 pub(crate) fn is_signed(type_name: TypeName) -> bool {
     matches!(
-        type_name,
+        type_name.plain(),
         TypeName::I8 | TypeName::I16 | TypeName::I32 | TypeName::I64 | TypeName::Fixed { .. }
     )
 }
 
 fn is_unsigned(type_name: TypeName) -> bool {
     matches!(
-        type_name,
+        type_name.plain(),
         TypeName::Char | TypeName::U8 | TypeName::U16 | TypeName::U32
     )
 }
@@ -2497,7 +2498,8 @@ fn type_name_of(id: u32) -> TypeName {
 }
 
 fn type_id(type_name: TypeName) -> u32 {
-    match type_name {
+    match type_name.plain() {
+        TypeName::Word { .. } => unreachable!("plain() is never a word"),
         TypeName::Void => VOID,
         TypeName::Bool => BOOL,
         TypeName::Char => CHAR,
@@ -2534,7 +2536,8 @@ pub(crate) fn width(sizes: crate::Sizes, type_name: TypeName) -> u32 {
 /// The width of a type that is no pointer: an integer, a float, a fixed-point, an enum, a
 /// bits struct.
 pub(crate) fn scalar_width(type_name: TypeName) -> u32 {
-    match type_name {
+    match type_name.plain() {
+        TypeName::Word { .. } => unreachable!("plain() is never a word"),
         TypeName::Void => 0,
         TypeName::Bool | TypeName::Char | TypeName::I8 | TypeName::U8 => 1,
         TypeName::I16 | TypeName::U16 => 2,
@@ -2554,6 +2557,7 @@ pub(crate) fn scalar_width(type_name: TypeName) -> u32 {
 
 fn type_name_text(type_name: TypeName) -> String {
     match type_name {
+        TypeName::Word { signed, .. } => if signed { "isize" } else { "usize" }.into(),
         TypeName::Void => "void".into(),
         TypeName::Bool => "bool".into(),
         TypeName::Char => "char".into(),

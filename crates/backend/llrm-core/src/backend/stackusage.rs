@@ -115,15 +115,19 @@ pub fn elide_checks(procedures: &mut [masm::Procedure], entered_directly: &dyn F
 /// What the runtime's routines, DOS and an interrupt use below the program's
 /// deepest chain, which the call graph cannot see.
 pub const STACK_RESERVE: i64 = 512;
-/// A stack is one segment, and DGROUP's data and heap share it.
-pub const STACK_LIMIT: i64 = 0xF000;
+/// A stack is one segment, and DGROUP's data and heap share it: what a segment of
+/// `segment_bytes` leaves it.
+pub fn stack_limit(segment_bytes: Option<usize>) -> Option<i64> {
+    segment_bytes.map(|bytes| bytes as i64 - 0x1000)
+}
 
 /// The bytes the object's stack segment adds to the `base` the runtime links,
-/// so the deepest chain of frames fits. A chain that cannot fit any segment is an error.
-pub fn stack_to_add(module: &Module, base: i64) -> Result<i64, String> {
+/// so the deepest chain of frames fits. A chain that cannot fit a segment of `limit` bytes is an
+/// error; none where the target has no segments.
+pub fn stack_to_add(module: &Module, base: i64, limit: Option<i64>) -> Result<i64, String> {
     let need = Usage::of(std::slice::from_ref(module)).deepest() + STACK_RESERVE;
-    if need > STACK_LIMIT {
-        return Err(format!("the deepest chain of calls needs {need} bytes of stack, more than the {STACK_LIMIT} a stack segment can hold"));
+    if let Some(limit) = limit.filter(|limit| need > *limit) {
+        return Err(format!("the deepest chain of calls needs {need} bytes of stack, more than the {limit} a stack segment can hold"));
     }
     Ok((need - base).max(0))
 }
