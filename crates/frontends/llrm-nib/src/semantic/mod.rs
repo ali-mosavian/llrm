@@ -1772,6 +1772,8 @@ struct FunctionCompiler<'a> {
     statement_span: Span,
     /// Whether the statement takes an address in a huge module variable.
     huge_address: bool,
+    /// The values loaded from a length or capacity word: usize, which an implicit conversion may narrow.
+    lengths: std::collections::BTreeSet<u32>,
     /// Changes to borrowed owners, refused if a holder is used after one.
     conflicts: Vec<liveness::Conflict>,
     /// The stores that give a reseated view a new descriptor, by block and
@@ -1882,6 +1884,7 @@ impl<'a> FunctionCompiler<'a> {
             lends: Vec::new(),
             statement_span: Span::new(0, 0, 0),
             huge_address: false,
+            lengths: Default::default(),
             conflicts: Vec::new(),
             reseats: BTreeSet::new(),
             reference_cells: Vec::new(),
