@@ -152,8 +152,11 @@ fn site(context: &Context, callees: &Callees, function: &Function, id: GlobalId,
             } else {
                 let Opcode::Binary(op @ (BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)) = function.instruction(made).opcode else { return None };
                 let [left, right] = function.instruction(made).operands[..] else { return None };
+                // Of two calls summed (fib), the later is the tail; the earlier's result is what it adds to.
+                let at = |inst: InstId| work.iter().position(|&one| one == inst);
                 let call = match (defined(left).filter(|&one| is_call(one)), defined(right).filter(|&one| is_call(one))) {
                     (Some(call), None) | (None, Some(call)) => call,
+                    (Some(first), Some(second)) => if at(first) > at(second) { first } else { second },
                     _ => return None,
                 };
                 (call, Some(Step { inst: made, op }))

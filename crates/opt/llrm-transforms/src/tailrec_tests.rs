@@ -263,3 +263,32 @@ b2:
     let after = eliminated(text, &[&[0, 5], &[3, 5]]);
     assert_eq!(after.matches("phi i16").count(), 1, "{after}");
 }
+
+/// bench/fib: `f(n - 1) + f(n - 2)`, both operands of the sum calls. The second is the tail and the
+/// first is what it adds to: 350256 instructions, gcc's loop 206373.
+#[test]
+fn of_two_calls_summed_the_later_is_the_loop() {
+    let text = "define i16 @f(i16 %n) {
+b0:
+  %z = icmp slt i16 %n, 2
+  br i1 %z, label %b3, label %b2
+
+b2:
+  %a = sub i16 %n, 1
+  %x = call i16 @f(i16 %a)
+  %b = sub i16 %n, 2
+  %y = call i16 @f(i16 %b)
+  %s = add i16 %x, %y
+  br label %b4
+
+b3:
+  br label %b4
+
+b4:
+  %r = phi i16 [ %s, %b2 ], [ %n, %b3 ]
+  ret i16 %r
+}
+";
+    let after = eliminated(text, &[&[0], &[1], &[2], &[7], &[12]]);
+    assert_eq!(calls(&after), 1, "{after}");
+}
