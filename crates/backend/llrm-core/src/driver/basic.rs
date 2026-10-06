@@ -487,7 +487,7 @@ pub fn finalized(body: &lir::LirBody, parameter_bytes: i64) -> Result<Finalized,
             }
             sites.insert(
                 instruction.at,
-                masm::Callee { name: format!("$inline_{name}"), far: false, code: vec![masm::InlinePart::Bytes(code)] },
+                masm::Callee { name: format!("$inline_{name}"), far: false, pops: 0, code: vec![masm::InlinePart::Bytes(code)] },
             );
             let mut replaced = (**instruction).clone();
             replaced.what = Some(Semantics { name: Some(name), ..Semantics::new(Operation::Call) });
@@ -791,7 +791,7 @@ fn procedure(
     }
     for (at, callee) in &machined.calls {
         if let Some(code) = machined.inline.get(at) {
-            callees.insert(*at, masm::Callee { name: callee.clone(), far: false, code: vec![masm::InlinePart::Bytes(code.clone())] });
+            callees.insert(*at, masm::Callee { name: callee.clone(), far: false, pops: 0, code: vec![masm::InlinePart::Bytes(code.clone())] });
             continue;
         }
         let linked = match module.named(callee) {

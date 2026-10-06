@@ -250,6 +250,8 @@ pub struct Selected {
     /// The code laid down in place of each call to an inline helper.
     pub inline: IndexMap<i64, Vec<u8>>,
     pub far: BTreeSet<i64>,
+    /// The argument bytes each direct call's callee pops as it returns, where it does.
+    pub pops: IndexMap<i64, i64>,
     /// The bytes below BP its allocas and stack temporaries take: an
     /// indexed access names no frame slot the frame could find it by.
     pub depth: i64,
@@ -515,6 +517,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         calls: IndexMap::default(),
         inline: IndexMap::default(),
         far: BTreeSet::new(),
+        pops: IndexMap::default(),
         landing: None,
         reachable: BTreeSet::new(),
         flagged: BTreeSet::new(),
@@ -530,7 +533,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     // An inlined callee's variables are not this procedure's.
     body.variables.extend(selector.variables.into_iter().filter(|(scope, _)| scope == name).map(|(_, one)| one));
-    Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, depth: selector.depth, landing: selector.landing })
+    Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, pops: selector.pops, depth: selector.depth, landing: selector.landing })
 }
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes them in.
@@ -698,6 +701,7 @@ struct Selector<'m, 'c, 'p> {
     /// The code laid down in place of each call to an inline helper.
     inline: IndexMap<i64, Vec<u8>>,
     far: BTreeSet<i64>,
+    pops: IndexMap<i64, i64>,
     /// The `at` of what starts the landing pad.
     landing: Option<i64>,
     /// The blocks execution can reach.
@@ -3176,6 +3180,10 @@ impl Selector<'_, '_, '_> {
         }
         match callee {
             Callee::Direct(name, far) => {
+                // What the callee takes back is what the caller does not.
+                if pushed > contract.caller_cleanup {
+                    self.pops.insert(at, pushed - contract.caller_cleanup);
+                }
                 self.calls.insert(at, name);
                 if far {
                     self.far.insert(at);
