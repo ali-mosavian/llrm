@@ -1,5 +1,5 @@
 ' dialect: pds71
-' flags: -O2 --cpu 486 --huge-arrays
+' flags: -O2 -march=i486 --huge-arrays
 ' 40000 INTEGERs (80000 bytes) in huge memory filled with one value no one byte repeats: past 64K.
 ' A subscript is at most 32767, so the array is two columns wide: a(k AND 1, k \ 2) is word k of the run.
 DEFINT A-Z

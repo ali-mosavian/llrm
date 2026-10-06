@@ -1,4 +1,4 @@
-# flags: -O2 --cpu 486 --target x86-code32
+# flags: -O2 -march=i486 -m32
 # A fixed array past 64 KB, indexed and iterated, with bounds checked against its dimension.
 var table: i32[40000] = [0] * 40000
 

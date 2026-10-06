@@ -1,4 +1,4 @@
-// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32 | -Os --cpu 486 --target x86-code32
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32 | -Os -march=i486 -m32
 /* A nest that fills a local's rows with one value: every row, not the first alone.
    `rep stos` counts cx down to 0, and its count was set once, outside the nest. */
 extern void report(long value);

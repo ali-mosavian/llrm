@@ -1,6 +1,6 @@
 //! Runs a Nib module's entry on the host HIR interpreter.
 //!
-//!   llrm-run SOURCE.nib [ENTRY] [INTEGER...]
+//!   llrm-run [-m16|-m32] SOURCE.nib [ENTRY] [INTEGER...]
 
 use std::process::ExitCode;
 
@@ -9,9 +9,16 @@ use llrm_core::hir::execute;
 use llrm_core::hir::model::Number;
 
 fn main() -> ExitCode {
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let mut arguments: Vec<String> = std::env::args().skip(1).collect();
+    let frontend = match llrm_nib::cli::frontend_with_mode(&mut arguments) {
+        Ok(frontend) => frontend,
+        Err(why) => {
+            eprintln!("llrm-run: {why}");
+            return ExitCode::from(2);
+        }
+    };
     let Some(input) = arguments.first() else {
-        eprintln!("usage: llrm-run SOURCE.nib [ENTRY] [INTEGER...]");
+        eprintln!("usage: llrm-run [-m16|-m32] SOURCE.nib [ENTRY] [INTEGER...]");
         return ExitCode::from(2);
     };
     let entry = arguments.get(1).map_or("main", String::as_str);
@@ -24,7 +31,7 @@ fn main() -> ExitCode {
         eprintln!("llrm-run: arguments are integers");
         return ExitCode::from(2);
     };
-    let hir = match llrm_nib::compile_file(std::path::Path::new(input), &Default::default()) {
+    let hir = match llrm_nib::compile_file(std::path::Path::new(input), &frontend) {
         Ok(hir) => hir,
         Err((path, error)) => {
             eprintln!(

@@ -1,5 +1,5 @@
 ' dialect: pds71
-' flags: -O2 --cpu 486 --huge-arrays
+' flags: -O2 -march=i486 --huge-arrays
 ' 10000 pairs of LONGs (80000 bytes) REDIM'd /AH: 8-byte elements.
 DEFINT A-Z
 TYPE Pair

@@ -22,6 +22,8 @@ pub struct Timings {
     cpus: Vec<String>,
     tables: Vec<CpuTable>,
     default: Option<String>,
+    /// What gcc's `-march` calls each CPU, in column order.
+    marches: Vec<String>,
 }
 
 impl Timings {
@@ -29,6 +31,7 @@ impl Timings {
         let mut cpus: Vec<String> = Vec::new();
         let mut tables: Vec<CpuTable> = Vec::new();
         let mut default = None;
+        let mut marches: Vec<String> = Vec::new();
         let mut section = "scalars";
         for (index, raw) in text.lines().enumerate() {
             let line = raw.split('#').next().unwrap_or("").trim();
@@ -58,6 +61,10 @@ impl Timings {
             if values.len() != cpus.len() {
                 return Err(format!("{at}: {} values for {} CPUs", values.len(), cpus.len()));
             }
+            if name == "march" {
+                marches = values.iter().map(|one| (*one).to_owned()).collect();
+                continue;
+            }
             for (table, value) in tables.iter_mut().zip(values) {
                 let number = || value.parse::<i64>().map_err(|_| format!("{at}: `{value}` is no number"));
                 if *value == "-" {
@@ -82,7 +89,10 @@ impl Timings {
         if let Some(name) = default.as_deref().filter(|name| !cpus.iter().any(|one| one == name)) {
             return Err(format!("timings.times: default_cpu {name} is no column"));
         }
-        Ok(Self { cpus, tables, default })
+        if !marches.is_empty() && marches.iter().enumerate().any(|(at, name)| marches[..at].contains(name)) {
+            return Err("timings.times: two CPUs share a march name".to_owned());
+        }
+        Ok(Self { cpus, tables, default, marches })
     }
 
     /// The CPUs' names, in column order.
@@ -95,6 +105,16 @@ impl Timings {
         self.default.as_deref()
     }
 
+    /// The names gcc's `-march` and `-mtune` take for this target's CPUs, in column order.
+    pub fn marches(&self) -> Vec<&str> {
+        self.marches.iter().map(String::as_str).collect()
+    }
+
+    /// The CPU `-march=name` names.
+    pub fn march(&self, name: &str) -> Option<&str> {
+        self.marches.iter().position(|one| one == name).map(|at| self.cpus[at].as_str())
+    }
+
     pub fn cpu(&self, name: &str) -> Option<&CpuTable> {
         self.cpus.iter().position(|one| one == name).map(|at| &self.tables[at])
     }
@@ -103,6 +123,16 @@ impl Timings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// gcc's `-march` names were a table in the flag parser, three of eight CPUs: the target
+    /// states them beside its `cpus`, one a column.
+    #[test]
+    fn a_cpu_has_the_name_gccs_march_gives_it() {
+        let timings = Timings::parse("cpus a b\nmarch x86a pent\nissue 1 2\n").unwrap();
+        assert_eq!((timings.march("pent"), timings.march("a"), timings.marches()), (Some("b"), None, vec!["x86a", "pent"]));
+        assert!(Timings::parse("cpus a b\nmarch one\n").unwrap_err().contains("1 values for 2 CPUs"));
+        assert!(Timings::parse("cpus a b\nmarch same same\n").unwrap_err().contains("share a march name"));
+    }
 
     #[test]
     fn a_column_is_a_cpu_and_a_dash_is_no_price() {

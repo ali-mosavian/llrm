@@ -1,5 +1,5 @@
 ' dialect: pds71
-' flags: -O2 --cpu 486 --huge-arrays
+' flags: -O2 -march=i486 --huge-arrays
 ' Two REDIM'd arrays of 20000 LONGs (80000 bytes each), /AH: one read into the other.
 DEFINT A-Z
 DECLARE FUNCTION BenchCopy1d& ()

@@ -1,4 +1,4 @@
-// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 /* CRC-32/ISO-HDLC of "123456789" (CBF43926), reported as signed 32-bit. */
 extern void report(long value);
 

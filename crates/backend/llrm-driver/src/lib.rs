@@ -10,7 +10,7 @@ use llrm_core::driver::Options;
 use llrm_core::abi::machine::Machine;
 use llrm_target::Target;
 
-/// The target a driver builds for when `--target` is absent.
+/// The target a driver builds for when no `-m` is given.
 pub const DEFAULT: &str = "x86-code16";
 
 /// Every target built in.
@@ -39,16 +39,21 @@ pub fn code16_options(machine: Machine) -> Options {
     Options::new(machine, target, selection)
 }
 
-/// The target `flags` name, or the default; refused if it is not built in or
-/// the frontend does not build for it: `supported` lists the ones it does, `None` any.
+/// The target `flags` name by its `-m` number (its `datalayout.toml` says which), or the default;
+/// refused if none is built in or the frontend does not build for it: `supported` lists the
+/// names of the ones it does, `None` any.
 pub fn target(flags: &Flags, supported: Option<&[&str]>) -> Result<Bound, String> {
-    let name = flags.target().unwrap_or(DEFAULT);
     let known = all();
-    let found = known.iter().find(|one| one.name() == name).ok_or_else(|| {
-        format!("unknown target {name}; choose {}", known.iter().map(|one| one.name()).collect::<Vec<_>>().join(", "))
-    })?;
+    let found = match flags.mode() {
+        Some(mode) => known.iter().find(|one| one.layout().mode == mode).ok_or_else(|| {
+            format!("no target for -m{mode}; choose {}", known.iter().map(|one| format!("-m{}", one.layout().mode)).collect::<Vec<_>>().join(", "))
+        })?,
+        None => known.iter().find(|one| one.name() == DEFAULT).expect("the default target is built in"),
+    };
+    let name = found.name();
     if let Some(supported) = supported.filter(|list| !list.contains(&name)) {
-        return Err(format!("this compiler builds for {} only, not {name}", supported.join(", ")));
+        let modes: Vec<String> = known.iter().filter(|one| supported.contains(&one.name())).map(|one| format!("-m{}", one.layout().mode)).collect();
+        return Err(format!("this compiler builds for {} only, not -m{}", modes.join(", "), found.layout().mode));
     }
     let selection = isel::selector(name).ok_or_else(|| format!("no instruction selector is built for {name}"))?;
     Ok(Bound { target: Rc::clone(found), selection })

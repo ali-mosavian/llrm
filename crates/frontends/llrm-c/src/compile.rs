@@ -220,7 +220,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     };
     let bound = llrm_driver::target(&flags, Some(&["x86-code16", "x86-code32"]))?;
     let os_layer = os_layer.map(|field| bound.target.os_layer().ok_or_else(|| "this target has no OS layer".to_owned()).and_then(|layer| layer.report(&bound.target.runtime("c").ok_or("this target has no C runtime")?, &field)));
-    let machine = flags.machine(bound.target.machine())?;
+    let machine = flags.machine(&*bound.target, bound.target.machine())?;
     Ok(Args {
         source,
         os_layer,
@@ -549,12 +549,12 @@ mod tests {
         asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).map(str::to_owned).collect()
     }
 
-    /// The loop of `function` in `fixture`'s listing as `llrm-c -O2 --cpu 486 -S`
+    /// The loop of `function` in `fixture`'s listing as `llrm-c -O2 -march=i486 -S`
     /// writes it: from the label its backward branch takes to the branch.
     fn driven_loop(fixture: &str, function: &str) -> Vec<String> {
         let directory = tempfile::tempdir().unwrap();
         let (source, out) = (Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs")), directory.path().join("out.asm"));
-        let argv = ["-O2", "--cpu", "486", "-S", source.to_str().unwrap(), "-o", out.to_str().unwrap()].map(str::to_owned);
+        let argv = ["-O2", "-march=i486", "-S", source.to_str().unwrap(), "-o", out.to_str().unwrap()].map(str::to_owned);
         assert_eq!(super::main(&argv), 0);
         let asm = std::fs::read_to_string(out).unwrap();
         let from = asm.find(&format!("{function} proc")).expect("the function");
@@ -950,10 +950,10 @@ mod tests {
         assert!(built.is_ok(), "{:?}", built.err());
     }
 
-    /// tests/fixtures/c32/`fixture`.cgs, as the 386 front end recorded it, selected for `--target x86-code32`.
+    /// tests/fixtures/c32/`fixture`.cgs, as the 386 front end recorded it, selected for `-m32`.
     fn flat_listing(fixture: &str) -> Vec<String> {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs"))).unwrap();
-        let argv: Vec<String> = ["--target", "x86-code32", "-O2", "x.c"].map(str::to_owned).to_vec();
+        let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
         let args = super::parse_args(&argv).unwrap();
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
         llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect()
@@ -997,7 +997,7 @@ mod tests {
 
     fn flat_object_with(fixture: &str, flags: &[&str]) -> Vec<(u8, Vec<u8>)> {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs"))).unwrap();
-        let argv: Vec<String> = ["--target", "x86-code32", "-O2"].iter().chain(flags).chain(&["x.c"]).map(|one| (*one).to_owned()).collect();
+        let argv: Vec<String> = ["-m32", "-O2"].iter().chain(flags).chain(&["x.c"]).map(|one| (*one).to_owned()).collect();
         let args = super::parse_args(&argv).unwrap();
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
         let bytes = llrm_core::backend::omfwrite::written(&built, "x.c").unwrap();
@@ -1053,7 +1053,7 @@ mod tests {
     #[test]
     fn test_code32_checks_its_stack_against_a_dword_limit_and_a_near_handler() {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32/add.cgs")).unwrap();
-        let argv: Vec<String> = ["--target", "x86-code32", "-O2", "x.c"].map(str::to_owned).to_vec();
+        let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
         let args = super::parse_args(&argv).unwrap();
         let built = super::selected_checking(&text, "add", None, &args.codegen, Some(super::stack_check(&llrm_x86_code32::Code32))).unwrap();
         let listing = llrm_core::backend::masm::text(&built).unwrap();

@@ -1,4 +1,4 @@
-// flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 /* fib(24) + sum of digit sums of 1..30000; recursion uses plain stack frames, no runtime frame helpers. */
 extern void report(long value);
 

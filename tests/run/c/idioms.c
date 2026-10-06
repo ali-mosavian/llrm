@@ -1,4 +1,4 @@
-// flags: -O2 --cpu 486 | -Os --cpu 486 | -O2 --cpu 486 -fsanitize=bounds | -O2 --cpu 486 --target x86-code32 | -Os --cpu 486 --target x86-code32 | -O2 --cpu 486 -fsanitize=bounds --target x86-code32
+// flags: -O2 -march=i486 | -Os -march=i486 | -O2 -march=i486 -fsanitize=bounds | -O2 -march=i486 -m32 | -Os -march=i486 -m32 | -O2 -march=i486 -fsanitize=bounds -m32
 /* Fill and copy loops as programs write them: clearing and scrolling a buffer, filling a
    palette, copying rows and records, and the loops that look alike but are not one move:
    a smear, a changed value, a second store, a stride that is not the cell, a source the body

@@ -642,3 +642,14 @@ b0:
     assert_eq!(parsed.result("q", &x), Some(Known::new(192, 32)));
     assert_eq!(parsed.result("z", &x), None, "a zero divisor is undefined");
 }
+
+/// `known` built each access's reference without the exposed-frames table, so each scanned its alloca's
+/// uses: 3.6% of compiling 100 sequential loops (#556). The table is made once for the body.
+#[test]
+fn test_known_asks_each_bodys_exposed_frames_once() {
+    let accesses: String = (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
+    let parsed = Parsed::new(&format!("define i16 @f() {{\nentry:\n  %slot = alloca i16\n{accesses}  ret i16 %v39\n}}\n"));
+    let before = crate::frameescape::scans();
+    known(&parsed.unit(), Some(&Calls::default()), None, None);
+    assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
+}

@@ -119,7 +119,7 @@ fn compiled(tool: &str, source: &Path, arguments: &[&str]) -> String {
 /// Each loop of `stem`'s kernel in BASIC, C and Nib, normalized.
 fn kernels(dir: &Path, stem: &str, basic: &str) -> [(&'static str, Vec<(Vec<String>, bool)>); 3] {
     let source = |extension: &str| dir.join(format!("{stem}.{extension}"));
-    let cpu = ["-O2", "--cpu", "486"];
+    let cpu = ["-O2", "-march=i486"];
     let bas = compiled("llrm-qb", &source("bas"), &[&cpu[..], &["--dialect", "pds71", "--runtime", "pds71", "--huge-arrays"]].concat());
     let c = compiled("llrm-c", &source("c"), &[&cpu[..], &["-fno-inline-functions"]].concat());
     let nib = compiled("llrm-nib", &source("nib"), &cpu);

@@ -1,4 +1,4 @@
-// flags: -O2 --cpu 486 | -Os --cpu 486
+// flags: -O2 -march=i486 | -Os -march=i486
 /* A byte stored from a loop's index into a frame array: the index sat in si or di, which have no byte half, and
    the body was refused ("value may be in no register"). Here with a variable-length copy loop between two such arrays. */
 extern void report(long value);

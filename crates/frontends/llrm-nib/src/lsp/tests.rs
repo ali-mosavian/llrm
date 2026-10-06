@@ -235,7 +235,7 @@ fn completion_offers_the_locals_in_scope_at_the_cursor() {
 }
 
 /// The editor checked every project as real mode's: `let n: usize = 70000` was an error on code32,
-/// where a word is 32 bits. The project's target comes with `initialize`; an unknown one is refused.
+/// where a word is 32 bits. The project's target comes with `initialize`; one no target declares is refused.
 #[test]
 fn the_projects_target_decides_what_the_editor_checks() {
     let program = Program::new();
@@ -243,9 +243,9 @@ fn the_projects_target_decides_what_the_editor_checks() {
     let messages = [program.opened("main", text)];
     let real = session(&messages);
     assert!(published(&real, &program.uri("main"))[0]["message"].as_str().expect("a message").contains("does not fit"));
-    let flat = session_with(json!({"initializationOptions": {"target": "x86-code32"}}), &messages);
+    let flat = session_with(json!({"initializationOptions": {"mode": 32}}), &messages);
     // Nothing to report where nothing was reported before.
     assert!(flat.iter().all(|one| one["params"]["uri"] != program.uri("main").as_str()), "{flat:?}");
-    let unknown = session_with(json!({"initializationOptions": {"target": "arm64"}}), &[]);
-    assert!(unknown[0]["error"]["message"].as_str().expect("an error").contains("unknown target arm64"), "{unknown:?}");
+    let unknown = session_with(json!({"initializationOptions": {"mode": 64}}), &[]);
+    assert!(unknown[0]["error"]["message"].as_str().expect("an error").contains("no target for -m64"), "{unknown:?}");
 }

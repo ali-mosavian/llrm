@@ -1,4 +1,4 @@
-# flags: -O2 --cpu 486 | -O2 --cpu 486 --target x86-code32
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32
 # A file call's count is a count, however large: 40000 bytes written and read back, each in one call.
 # The result was an i16, so 40000 came back as -25536; the error is still negative.
 import os

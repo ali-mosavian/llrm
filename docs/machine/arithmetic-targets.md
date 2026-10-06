@@ -1,8 +1,8 @@
 # CPU-dependent constant arithmetic
 
-Production CLI: `uv run python -m qbopt.rewrite input.obj -o output.obj --cpu P5`.
+Production CLI: `uv run python -m qbopt.rewrite input.obj -o output.obj -march=pentium`.
 The C frontend accepts the same profiles with
-`uv run python -m qbopt.cfront input.c --opt --cpu P5`. Both drivers resolve
+`uv run python -m qbopt.cfront input.c --opt -march=pentium`. Both drivers resolve
 the public name through one immutable profile and retain `386` as the default.
 `tools/stages.py`, `tools/e2e.py`, and `tools/bench.py` accept the same
 `--cpu` option. The rewrite manifest and completion marker record tuning;
@@ -98,7 +98,7 @@ sub ecx,eax
 sub ebx,ecx
 ```
 
-`tools/stages.py --cpu P5 --dump DIR` records the selected backend stages.
+`tools/stages.py -march=pentium --dump DIR` records the selected backend stages.
 Remaining: simplify quotient/remainder consumers in MIR, and make the
 current MIR power-of-two division expansion participate in the comparison
 rather than irreversibly expanding before lowering. Selection is still

@@ -155,27 +155,49 @@ fn header(found: &found_module::Module, records: &[Rc<omf::Record>], code_segmen
     Ok(bytes)
 }
 
-/// `llrm-omf --rich`: `OBJ... [LIB...] -o OUT [--manifest M] [--cpu CPU]`.
+/// `llrm-omf --rich`: `OBJ... [LIB...] -o OUT [--manifest M] [-march=CPU]`.
 /// The objects are one program; OUT is the object, or a directory for
 /// several. A library is the runtime, which is not recompiled.
 pub fn main(argv: &[String]) -> i32 {
     let mut inputs = Vec::new();
-    let (mut output, mut manifest, mut cpu) = (None, None, machine::BASIC.cpu.clone());
-    let mut arguments = argv.iter();
-    while let Some(one) = arguments.next() {
-        match one.as_str() {
-            "-o" | "--output" => output = arguments.next().cloned(),
-            "--manifest" => manifest = arguments.next().cloned(),
-            "--cpu" => cpu = arguments.next().cloned().unwrap_or(cpu),
-            "--rich" | "--dry-run" => {}
-            other if other.starts_with('-') => {}
-            other if other.to_ascii_lowercase().ends_with(".lib") => {}
-            other => inputs.push(std::path::PathBuf::from(other)),
+    let mut manifest = None;
+    let mut flags = llrm_core::driver::flags::Flags::default();
+    let mut at = 0;
+    while at < argv.len() {
+        match flags.take(argv, &mut at) {
+            Ok(true) => {}
+            Ok(false) => match argv[at].as_str() {
+                "--manifest" => {
+                    at += 1;
+                    manifest = argv.get(at).cloned();
+                }
+                "--rich" | "--dry-run" => {}
+                other if other.starts_with('-') => {
+                    eprintln!("llrm-omf: unrecognized argument {other}");
+                    return 2;
+                }
+                other if other.to_ascii_lowercase().ends_with(".lib") => {}
+                other => inputs.push(std::path::PathBuf::from(other)),
+            },
+            Err(why) => {
+                eprintln!("llrm-omf: {why}");
+                return 2;
+            }
         }
+        at += 1;
     }
+    let output = flags.output.as_ref().map(|one| one.to_string_lossy().into_owned());
     let Some(output) = output.filter(|_| !inputs.is_empty()) else {
-        eprintln!("llrm-omf --rich: OBJ... [LIB...] -o OUT [--manifest M] [--cpu CPU]");
+        eprintln!("llrm-omf --rich: OBJ... [LIB...] -o OUT [--manifest M] [-march=CPU]");
         return 2;
+    };
+    let machine = llrm_driver::target(&flags, Some(&["x86-code16"])).and_then(|bound| flags.machine(&*bound.target, machine::BASIC.clone()));
+    let machine = match machine {
+        Ok(machine) => machine,
+        Err(why) => {
+            eprintln!("llrm-omf: {why}");
+            return 2;
+        }
     };
     let read: Result<Vec<(String, Vec<u8>)>, String> = inputs
         .iter()
@@ -185,7 +207,6 @@ pub fn main(argv: &[String]) -> i32 {
         })
         .collect();
     let written = read.and_then(|read| {
-        let machine = on(&cpu);
         let written = program(&Program { modules: read.iter().map(|(name, data)| (name.clone(), data.as_slice())).collect(), machine: &machine })?;
         Ok(read.into_iter().map(|(name, _)| name).zip(written).collect::<Vec<_>>())
     });
