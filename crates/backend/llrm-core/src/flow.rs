@@ -32,10 +32,10 @@ pub fn machine<'a>(
     segments: &Segments,
     spilling: bool,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
-    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, spilling, &crate::backend::peep::targets::x86_code16::RULES)
+    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, spilling.then(Rc::<ssaspill::Run>::default), &crate::backend::peep::targets::x86_code16::RULES, &llrm_target::Target::frame_registers(&llrm_x86_code16::Code16))
 }
 
-/// `machine`, its peephole made of the rules `rules` holds.
+/// `machine`, its peephole made of the rules `rules` holds; the spiller, where `spilling` names a run, reports to it.
 #[allow(clippy::too_many_arguments)]
 pub fn machine_with<'a>(
     pinned: &IndexMap<u32, Register>,
@@ -45,8 +45,9 @@ pub fn machine_with<'a>(
     basic_semantics: bool,
     cpu: impl Into<ProfileOrName<'a>>,
     segments: &Segments,
-    spilling: bool,
+    spilling: Option<Rc<ssaspill::Run>>,
     rules: &'static crate::backend::peep::Rules,
+    registers: &llrm_target::FrameRegisters,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     let target = targets::profile(cpu)?;
     let mut pinned = pinned.clone();
@@ -59,7 +60,7 @@ pub fn machine_with<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
-        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), prices: ssaspill::Prices::of(target) }),
+        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), prices: ssaspill::Prices::of(target), run: spilling.clone().unwrap_or_default() }),
         Box::new(phielim::PhiElimination),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
@@ -70,7 +71,7 @@ pub fn machine_with<'a>(
         // After allocation: which moves in a phi's copy conflict is a question about locations.
         Box::new(parcopy::ParallelCopy),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
-        Box::new(peephole::Peephole::with_rules(frame.clone(), target, rules)?),
+        Box::new(peephole::Peephole::with_rules(frame.clone(), target, rules, registers.saved.iter().map(|(whole, _)| *whole).collect())?),
         // Once spill traffic is final: which slots a loop still reaches.
         Box::new(loopslots::LoopSlots::new(frame.clone(), target)?),
         // Scheduling may only move fully allocated machine occurrences.
@@ -78,7 +79,7 @@ pub fn machine_with<'a>(
         // Last: this physical order decides which explicit edge is now fall-through.
         Box::new(jumps::ControlFlow { cpu: target }),
     ];
-    if !spilling {
+    if spilling.is_none() {
         phases.retain(|phase| phase.class_name() != "SsaSpill");
     }
     Ok(phases)

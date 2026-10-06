@@ -1513,3 +1513,28 @@ fn a_block_only_resume_reaches_follows_its_dominators() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
 }
+
+/// A flat 32-bit program lowers with 32-bit pointers in the one address space:
+/// every 4-byte pointer was a far one (space 1, a 16-bit offset), and the layout
+/// was always real mode's.
+#[test]
+fn a_flat_pointer_is_a_near_one_in_a_32_bit_layout() {
+    use crate::model::{AddressKind, CallDistance, FloatReturn, ProcedureAbi, StackCleanup, TargetProfile};
+    let mut int = Type::new(1, "int", TypeKind::Integer, 4);
+    int.signed = Some(true);
+    let mut pointer = Type::new(2, "int *", TypeKind::Pointer, 4);
+    (pointer.element, pointer.address) = (Some(1), AddressKind::Near);
+    let values = vec![Value { id: 1, r#type: 2 }];
+    let block = Block::new(1, Vec::new(), Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(1)], Vec::new()));
+    let mut function = Function::new(1, "same", 2, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1];
+    function.abi = Some(ProcedureAbi { cleanup: StackCleanup::Caller, distance: CallDistance::Near, parameter_bytes: 4, float_return: FloatReturn::Register, variadic: false });
+    let types = vec![Type::new(0, "void", TypeKind::Void, 0), int, pointer];
+    let mut program = Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![Module::new(1, "m", types, vec![function])]);
+    program.target = TargetProfile::I386Flat32;
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("p:32:32") && !text.contains("p1:"), "{text}");
+    assert!(text.contains("define ptr @same(ptr %0) {"), "{text}");
+}

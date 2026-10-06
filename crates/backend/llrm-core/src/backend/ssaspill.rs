@@ -36,9 +36,6 @@ const FAR: i64 = 1 << 40;
 const EXIT: i64 = 1 << 20;
 
 thread_local! {
-    static CHANGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static TIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static ADMISSION_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MEMORY_PHIS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     static SHARED_SLOTS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
@@ -61,29 +58,41 @@ pub fn without_memory_phis<T>(run: impl FnOnce() -> T) -> T {
     done
 }
 
-/// How many bodies this phase has changed on this thread: what a caller reads to learn whether a run did anything.
-pub fn changes() -> usize {
-    CHANGES.with(std::cell::Cell::get)
+/// What one run of the spiller was asked and settled, for whoever built its phase: whether a loop's entry may load what
+/// the loop reads, and whether it changed the body and admitted a loop on a tie in the bytes it counts (the trips
+/// decided, and the encoded code may not agree).
+#[derive(Debug)]
+pub struct Run {
+    pub admission: bool,
+    changed: std::cell::Cell<bool>,
+    ties: std::cell::Cell<bool>,
 }
 
-/// How many loops this thread's runs admitted on a tie in what the level counts (bytes at -Os): which the trips decided,
-/// and the encoded code may not agree with.
-pub fn admission_ties() -> usize {
-    TIES.with(std::cell::Cell::get)
+impl Run {
+    pub fn new(admission: bool) -> Rc<Self> {
+        Rc::new(Self { admission, changed: std::cell::Cell::new(false), ties: std::cell::Cell::new(false) })
+    }
+
+    pub fn changed(&self) -> bool {
+        self.changed.get()
+    }
+
+    pub fn ties(&self) -> bool {
+        self.ties.get()
+    }
 }
 
-/// `run` with no loop's entry loading what the loop reads, on this thread.
-pub fn without_admission<T>(run: impl FnOnce() -> T) -> T {
-    let before = ADMISSION_OFF.with(|one| one.replace(true));
-    let done = run();
-    ADMISSION_OFF.with(|one| one.set(before));
-    done
+impl Default for Run {
+    fn default() -> Self {
+        Self { admission: true, changed: std::cell::Cell::new(false), ties: std::cell::Cell::new(false) }
+    }
 }
 
 pub struct SsaSpill {
     pub frame: Rc<RefCell<Frame>>,
     pub segments: Segments,
     pub prices: Prices,
+    pub run: Rc<Run>,
 }
 
 /// How much a block or an edge counts: by how often it runs, or once where the price is bytes.
@@ -141,9 +150,9 @@ impl LIRTransform for SsaSpill {
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
         // A body nothing was done to is returned as it came: a copy loses what later phases know of it.
-        let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments, self.prices)?;
+        let made = changed(&body, &mut self.frame.borrow_mut(), &self.segments, self.prices, &self.run)?;
         if made.is_some() {
-            CHANGES.with(|count| count.set(count.get() + 1));
+            self.run.changed.set(true);
         }
         Ok(made.unwrap_or(body))
     }
@@ -487,11 +496,11 @@ struct Edits {
 }
 
 pub fn spilled(body: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices) -> Result<LirBody, String> {
-    Ok(changed(body, frame, segments, prices)?.unwrap_or_else(|| body.clone()))
+    Ok(changed(body, frame, segments, prices, &Run::default())?.unwrap_or_else(|| body.clone()))
 }
 
 /// `body` spilled, or None where there was nothing to spill and nothing to simplify.
-fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices) -> Result<Option<LirBody>, String> {
+fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: Prices, run: &Run) -> Result<Option<LirBody>, String> {
     let simple = ssarepair::simplified(original);
     let body = simple.as_ref().unwrap_or(original);
     // The loops, found once: depths, headers and each loop's pressure all come from them.
@@ -521,7 +530,7 @@ fn changed(original: &LirBody, frame: &mut Frame, segments: &Segments, prices: P
             selectors.extend(kept.keys().copied().filter(|value| machine.registered(*value)));
         }
         let bridged: BTreeSet<(i64, i64)> = result.across.keys().copied().collect();
-        let one = simulated_in(body, &flow, &machine, &skip, &kept, &order, &place, &frequency, &headers, &loops, prices, &bridged);
+        let one = simulated_in(body, &flow, &machine, &skip, &kept, &order, &place, &frequency, &headers, &loops, prices, &bridged, run);
         result.merge(one);
     }
     if result.stored.is_empty() {
@@ -611,12 +620,13 @@ fn simulated_in(
     loops: &[crate::analysis::loops::Loop],
     prices: Prices,
     bridged: &BTreeSet<(i64, i64)>,
+    run: &Run,
 ) -> Simulated {
     let weights = Weights { frequency, by_frequency: prices.by_frequency };
     let attempt = |admit: &BTreeSet<i64>| simulated_with(body, flow, machine, skip, remakes, order, place, frequency, headers, loops, prices, &weights, bridged, admit);
     let nothing: BTreeSet<i64> = BTreeSet::new();
     let first = attempt(&nothing);
-    if machine.file != File::Selector || ADMISSION_OFF.with(std::cell::Cell::get) {
+    if machine.file != File::Selector || !run.admission {
         return first;
     }
     // Whether a loop's entry loads what the loop reads: none, all, or each loop by itself; priced by the level's
@@ -652,7 +662,7 @@ fn simulated_in(
         }
     }
     if tied.get() {
-        TIES.with(|count| count.set(count.get() + 1));
+        run.ties.set(true);
     }
     kept
 }

@@ -28,6 +28,18 @@ mod meaning;
 /// alignment.
 pub const DATALAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32";
 
+/// The flat 32-bit profile's: one address space, 32-bit pointers and indices,
+/// natural alignment (code32's `datalayout.toml` says the same).
+pub const DATALAYOUT_FLAT32: &str = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-n8:16:32";
+
+/// The layout of the programs `profile` describes.
+pub fn layout_of(profile: model::TargetProfile) -> &'static str {
+    match profile {
+        model::TargetProfile::I386RealMode => DATALAYOUT,
+        model::TargetProfile::I386Flat32 => DATALAYOUT_FLAT32,
+    }
+}
+
 /// A far pointer's address space.
 pub const FAR: u32 = 1;
 /// A segment's: a cast from a far pointer gives its segment, and one back
@@ -201,7 +213,8 @@ fn value_type(types: &mut Types, hir: &model::Type) -> Emit<TypeId> {
         TypeKind::Pointer if hir.address == AddressKind::Segment => types.ptr(SEGMENT),
         TypeKind::Pointer if hir.address == AddressKind::Huge => types.ptr(HUGE),
         TypeKind::Pointer if hir.address == AddressKind::Fixed => types.ptr(FIXED),
-        TypeKind::Pointer => types.ptr(if hir.width == 4 { FAR } else { 0 }),
+        // A 4-byte pointer is a far one unless it says it is near: flat 32-bit pointers do.
+        TypeKind::Pointer => types.ptr(if hir.width == 4 && hir.address != AddressKind::Near { FAR } else { 0 }),
         TypeKind::Array | TypeKind::Opaque => return Err(format!("a value of type {}", hir.name)),
     })
 }
@@ -439,7 +452,7 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
     // before it is written is zero.
     let zeroed: HashSet<i64> = hir.functions.iter().filter(|one| program.zeroed_locals && !hir.frames_itself(program.frames, one)).map(|one| one.id).collect();
     let nounwind = promises.nounwind.as_slice();
-    let mut module = Module { datalayout: Some(DATALAYOUT.to_owned()), ..Module::default() };
+    let mut module = Module { datalayout: Some(layout_of(program.target).to_owned()), ..Module::default() };
     let mut refused = Vec::new();
     let mut instruction_flags: HashMap<(i64, i64), Flags> = HashMap::new();
     for one in &hir.facts {
@@ -473,7 +486,7 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
         array_order,
         module_handler: None,
         zeroed,
-        layout: DataLayout::parse(DATALAYOUT).expect("llrm's layout"),
+        layout: DataLayout::parse(layout_of(program.target)).expect("llrm's layout"),
         types: hir.types.iter().map(|one| (one.id, one)).collect(),
         callables: hir.callables.iter().map(|one| (one.name.as_str(), one)).collect(),
         data: HashMap::new(),
