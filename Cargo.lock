@@ -272,6 +272,7 @@ dependencies = [
  "indexmap",
  "llrm-analysis",
  "llrm-bcmachine",
+ "llrm-elf32",
  "llrm-hir",
  "llrm-mir",
  "llrm-object",
@@ -304,6 +305,13 @@ dependencies = [
  "llrm-x86",
  "llrm-x86-m16",
  "llrm-x86-m32",
+]
+
+[[package]]
+name = "llrm-elf32"
+version = "0.1.0"
+dependencies = [
+ "llrm-object",
 ]
 
 [[package]]

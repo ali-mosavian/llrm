@@ -50,3 +50,13 @@ Symbol   { name, binding: Public|Local|Weak, hidden, kind: Func|Object|None, siz
 `object.toml`: `formats = ["omf", "elf"]`, `default = "omf"`. `-fobject-format=omf|elf|macho` picks one;
 without it the default applies. A format the target does not list is refused, and so is an `Object` the
 writer cannot express.
+
+## Writers
+
+| format | crate | status |
+| --- | --- | --- |
+| OMF | `llrm-omf` (`write`) | 16- and 32-bit |
+| ELF32 | `llrm-elf32` | i386: `.text`/`.data`/`.rodata`/`.bss`, REL, `R_386_32`, `R_386_PC32`, `_16`, `PC16`, `_8`, `PC8` |
+
+An ELF object is written for `-m32 -fobject-format=elf` into a file named `*.o`. It refuses what OMF alone
+has: segments with a selector of their own, far pointers, groups, the stack segment, and `-g`'s CodeView.

@@ -21,11 +21,11 @@ class LinkRecipeTests(unittest.TestCase):
         """The tools wrote `format dos` and `-omf` themselves: a target linked as an LE executable was still linked for DOS."""
         saved = linkrecipe.ROOT
         try:
-            linkrecipe.ROOT = self.tree('writer = "omf"\nbitness = 32\nheader = []\n[link]\nformat = ["format", "os2", "le"]\nlast = ["x.asm"]\n')
+            linkrecipe.ROOT = self.tree('formats = ["omf"]\ndefault = "omf"\nbitness = 32\nheader = []\n[link]\nformat = ["format", "os2", "le"]\nlast = ["x.asm"]\n')
             self.assertEqual(linkrecipe.link("x86-test", "format"), ["format", "os2", "le"])
             self.assertEqual(linkrecipe.link("x86-test", "last"), ["x.asm"])
             self.assertEqual(linkrecipe.assembler("x86-test"), "-omf")
-            linkrecipe.ROOT = self.tree('writer = "coff"\nbitness = 32\nheader = []\n[link]\nformat = []\n')
+            linkrecipe.ROOT = self.tree('formats = ["omf"]\ndefault = "coff"\nbitness = 32\nheader = []\n[link]\nformat = []\n')
             with self.assertRaises(KeyError):
                 linkrecipe.assembler("x86-test")
         finally:
@@ -34,6 +34,7 @@ class LinkRecipeTests(unittest.TestCase):
     def test_the_real_targets_link_as_they_say(self):
         self.assertEqual(linkrecipe.link("x86-m16", "format"), ["format", "dos"])
         self.assertEqual(linkrecipe.link("x86-m32", "format"), ["format", "os2", "le"])
+        self.assertEqual(linkrecipe.ld_emulation("x86-m32"), "elf_i386")
 
 
 if __name__ == "__main__":
