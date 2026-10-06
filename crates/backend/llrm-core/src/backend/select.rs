@@ -739,11 +739,22 @@ pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(
 pub static CONTROL_WORD: LazyLock<IndexMap<&'static str, &'static str>> =
     LazyLock::new(|| IndexMap::from_iter([("fldcw", "FLDCW_M2BYTE"), ("fnstcw", "FNSTCW_M2BYTE")]));
 
+/// iced's name of an instruction the tables spell in 16-bit mode as a word form (`RETNW`,
+/// `ENTERW_IMM16_IMM8`): in 32-bit mode it is the dword form (`RETND`).
+fn in_mode(name: &str, at: At) -> String {
+    if at.bits != 32 {
+        return name.to_owned();
+    }
+    match name.split_once("W_") {
+        Some((head, tail)) => format!("{head}D_{tail}"),
+        None if name.ends_with('W') => format!("{}D", &name[..name.len() - 1]),
+        None => name.to_owned(),
+    }
+}
+
 /// An instruction with no operands at all.
 pub fn bare(name: &str, at: At) -> Option<Emitted> {
-    let named = BARE.get(name).copied().unwrap_or("");
-    // The table spells each in 16-bit mode, a word form (`RETNW`); a 32-bit one is the dword (`RETND`).
-    let code = _code(&if at.bits == 32 && named.ends_with('W') { format!("{}D", &named[..named.len() - 1]) } else { named.to_owned() })?;
+    let code = _code(&in_mode(BARE.get(name).copied().unwrap_or(""), at))?;
     _assemble(&Instruction::with(code), at, true)
 }
 
@@ -763,7 +774,7 @@ pub fn ret_far(popped: i64, at: At) -> Option<Emitted> {
 
 /// `ret n`: a near procedure that pops its own arguments.
 pub fn ret_near(popped: i64, at: At) -> Option<Emitted> {
-    let code = _code(if popped != 0 { "RETNW_IMM16" } else { "RETNW" })?;
+    let code = _code(&in_mode(if popped != 0 { "RETNW_IMM16" } else { "RETNW" }, at))?;
     let made = if popped != 0 { raised(create_i32(code, popped)) } else { Instruction::with(code) };
     _assemble(&made, at, true)
 }
@@ -950,7 +961,7 @@ pub fn fill(name: &str, at: At, repeated: bool) -> Option<Emitted> {
         _ => return None,
     };
     let prefix = if repeated { RepPrefixKind::Repe } else { RepPrefixKind::None };
-    _assemble(&raised(make(BITNESS, prefix).map_err(|error| error.to_string())), at, true)
+    _assemble(&raised(make(at.bits, prefix).map_err(|error| error.to_string())), at, true)
 }
 
 /// `movs{b,w,d}`, with `rep` where it repeats: `over:si`, ds where none, to
@@ -963,7 +974,7 @@ pub fn copy(name: &str, over: Register, at: At, repeated: bool) -> Option<Emitte
         _ => return None,
     };
     let prefix = if repeated { RepPrefixKind::Repe } else { RepPrefixKind::None };
-    _assemble(&raised(make(BITNESS, over, prefix).map_err(|error| error.to_string())), at, true)
+    _assemble(&raised(make(at.bits, over, prefix).map_err(|error| error.to_string())), at, true)
 }
 
 /// The shifts and rotates.
@@ -1778,23 +1789,26 @@ pub fn emit_in(
             _ => None,
         };
     }
-    if op == Operation::Fill && matches!(sources.len(), 3 | 4) {
-        return fill(name, at, sources.len() == 4);
+    // A string operation repeats when it has a count, an extra result; it names its segments
+    // as operands only where the target has selector registers.
+    if op == Operation::Fill && matches!(dests.len(), 2 | 3) {
+        return fill(name, at, dests.len() == 3);
     }
-    if op == Operation::Copy && matches!(sources.len(), 4 | 5) {
+    if op == Operation::Copy && matches!(dests.len(), 3 | 4) {
+        let repeated = dests.len() == 4;
         // The source is read through ds unless its segment says otherwise.
-        let over = match &sources[sources.len() - 2] {
-            Loc::Reg(one) if one.register != Register::DS => one.register,
+        let over = match sources.get(sources.len().wrapping_sub(2)).filter(|_| sources.len() == if repeated { 5 } else { 4 }) {
+            Some(Loc::Reg(one)) if one.register != Register::DS => one.register,
             _ => Register::None,
         };
-        return copy(name, over, at, sources.len() == 5);
+        return copy(name, over, at, repeated);
     }
     if op == Operation::Nothing && name.is_empty() {
         return Some(Emitted::new(Vec::new()));
     }
     if op == Operation::Nothing && name == "enter" {
         let [Loc::Imm(size), Loc::Imm(level)] = sources.as_slice() else { return None };
-        let code = _code("ENTERW_IMM16_IMM8")?;
+        let code = _code(&in_mode("ENTERW_IMM16_IMM8", at))?;
         return _assemble(&Instruction::with2(code, size.value as u32, level.value as u32).ok()?, at, true);
     }
     if matches!(op, Operation::Extend | Operation::Nothing | Operation::Leave) {

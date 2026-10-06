@@ -949,8 +949,12 @@ mod tests {
 
     /// `fixture`'s flat object, as records: (type, body).
     fn flat_object(fixture: &str) -> Vec<(u8, Vec<u8>)> {
+        flat_object_with(fixture, &[])
+    }
+
+    fn flat_object_with(fixture: &str, flags: &[&str]) -> Vec<(u8, Vec<u8>)> {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c32/{fixture}.cgs"))).unwrap();
-        let argv: Vec<String> = ["--target", "x86-code32", "-O2", "x.c"].map(str::to_owned).to_vec();
+        let argv: Vec<String> = ["--target", "x86-code32", "-O2"].iter().chain(flags).chain(&["x.c"]).map(|one| (*one).to_owned()).collect();
         let args = super::parse_args(&argv).unwrap();
         let built = super::selected(&text, fixture, None, &args.codegen).unwrap();
         let bytes = llrm_core::backend::omfwrite::written(&built, "x.c").unwrap();
@@ -975,6 +979,30 @@ mod tests {
         assert!(records[2].1[0] & 1 == 1 && records[3].1[0] & 1 == 1, "both segments are USE32: {records:?}");
         let code = &records[5].1;
         assert_eq!(hex(&code[5..]), "558bec8b450803450c5dc3", "push ebp; mov ebp,esp; mov eax,[ebp+8]; add eax,[ebp+12]; pop ebp; ret");
+    }
+
+    /// A near procedure that pops its own arguments returns `ret 4` (`c2 0400`): the word form,
+    /// `66 c2 0400`, pops a 16-bit return address and sent the flat program into the vector table.
+    #[test]
+    fn test_code32_returns_popping_arguments_with_a_dword_ret() {
+        let object = flat_object("pop");
+        let code = hex(&object.iter().find(|(kind, _)| *kind == 0xA1).expect("code").1);
+        assert!(code.contains("c20400") && !code.contains("66c2"), "{code}");
+    }
+
+    /// A flat string operation takes its operands in ESI, EDI and ECX with no segment operand: it was
+    /// `movs dword ptr es:[di], dword ptr ebx:[si]` with the source and count in whatever registers
+    /// the allocator chose, and a refusal ("may be in no register") before that.
+    #[test]
+    fn test_code32_lists_a_string_copy_through_esi_edi_ecx() {
+        let lines = flat_listing("strings");
+        let at = lines.iter().position(|line| line == "rep movsd").expect("a rep movsd");
+        let before = &lines[..at];
+        assert!(before.iter().any(|line| line.starts_with("lea esi, [ebp")) && before.iter().any(|line| line.starts_with("lea edi, [ebp")), "{before:#?}");
+        assert!(before.iter().rev().take(4).any(|line| line == "shr ecx, 2" || line.starts_with("mov ecx")), "{before:#?}");
+        let object = flat_object("strings");
+        let code = hex(&object.iter().find(|(kind, _)| *kind == 0xA1).expect("code").1);
+        assert!(code.contains("f3a5") && !code.contains("66f3a5"), "rep movsd, not its word form: {code}");
     }
 
     fn hex(bytes: &[u8]) -> String {

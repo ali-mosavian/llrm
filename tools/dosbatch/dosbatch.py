@@ -128,7 +128,7 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
         for name in names:
             path = made / (Path(name).stem.upper() + ".OBJ")
             with _RUNTIME_LOCK:  # builds run in threads; one assembles the start-up, the others wait for it
-                if not path.exists():
+                if not path.exists() or path.stat().st_mtime < (ROOT / name).stat().st_mtime:
                     assemble(ROOT / name, path)
             out.append(path)
         return out
