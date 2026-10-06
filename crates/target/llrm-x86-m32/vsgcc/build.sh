@@ -4,13 +4,8 @@ set -e
 P=$1; R=$(cd "$(dirname "$0")/../../../.." && pwd); O=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}; S=$R/bench/$P/$P.c
 LLRM=${LLRM:-$R/target/release/llrm-c}
 mkdir -p $O/b $O/o
-<<<<<<< HEAD:crates/target/llrm-x86-m32/vsgcc/build.sh
-$LLRM --target x86-m32 -O2 -march=i486 -fno-inline-functions -o $O/o/$P.llrm.obj $S 2>$O/o/$P.llrm.err || echo "FAIL llrm $P"
-$LLRM --target x86-m32 -Os -march=i486 -fno-inline-functions -o $O/o/$P.llrmOs.obj $S 2>$O/o/$P.llrmOs.err || echo "FAIL llrmOs $P"
-=======
 $LLRM -m32 -O2 -march=i486 -fno-inline-functions -o $O/o/$P.llrm.obj $S 2>$O/o/$P.llrm.err || echo "FAIL llrm $P"
 $LLRM -m32 -Os -march=i486 -fno-inline-functions -o $O/o/$P.llrmOs.obj $S 2>$O/o/$P.llrmOs.err || echo "FAIL llrmOs $P"
->>>>>>> origin/main:crates/target/llrm-x86-m32/vsgcc/build.sh
 cd $O/b
 # the kernel must stay a call: gcc/clang inline it into main otherwise (llrm does not under -fno-inline-functions)
 sed -E "s/^([a-z][a-z ]*[ *])(bench_$P\()/__attribute__((noinline)) \1\2/" $S > $P.c

@@ -1,9 +1,5 @@
 ; The externals the C run tests call, in cdecl32: `report` prints a signed decimal and a
-<<<<<<< HEAD:runtime/c/x86-m32/ext.asm
-; newline on stdout (handle 1), as m16's runtime does.
-=======
 ; newline on standard output, as m16's runtime does.
->>>>>>> origin/main:runtime/c/x86-m32/ext.asm
 .386
 .model flat
 

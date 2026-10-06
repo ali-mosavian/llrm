@@ -6,11 +6,7 @@ progs = [p for p in sorted(x.name for x in (R / "bench").iterdir()) if p not in 
 F = "-m32 -march=i486 -fno-pic -fno-inline-functions -fno-stack-protector -fcf-protection=none -Dfar=".split()
 def cmds(p):
     s = R / "bench" / p / f"{p}.c"; g = O / "b" / f"{p}.c"
-<<<<<<< HEAD:crates/target/llrm-x86-m32/vsgcc/ctime.py
-    ll = [str(R / "target/release/llrm-c"), "--target", "x86-m32", "-march=i486", "-fno-inline-functions"]
-=======
     ll = [str(R / "target/release/llrm-c"), "-m32", "-march=i486", "-fno-inline-functions"]
->>>>>>> origin/main:crates/target/llrm-x86-m32/vsgcc/ctime.py
     return {"llrm O2": ll + ["-O2", "-o", "/dev/null", str(s)], "llrm Os": ll + ["-Os", "-o", "/dev/null", str(s)],
             "gcc O2": ["gcc", *F, "-O2", "-c", "-o", "/dev/null", str(g)], "gcc Os": ["gcc", *F, "-Os", "-c", "-o", "/dev/null", str(g)],
             "clang O2": ["clang", *F, "-O2", "-c", "-o", "/dev/null", str(g)], "clang Os": ["clang", *F, "-Os", "-c", "-o", "/dev/null", str(g)]}
