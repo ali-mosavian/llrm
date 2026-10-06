@@ -1812,7 +1812,7 @@ fn test_a_multiply_by_a_constant_is_shifts_and_adds() {
     assert_eq!(by(10), ["mov bx, word ptr [bp+6]", "lea ax, [ebx+ebx*4]", "add ax, ax"]);
     assert_eq!(by(7), ["mov ax, word ptr [bp+6]", "mov bx, ax", "shl bx, 3", "sub bx, ax", "mov ax, bx"]);
     let variable = "define i16 @f(i16 %x, i16 %y) addrspace(1) {\n  %q = mul i16 %x, %y\n  ret i16 %q\n}\n";
-    assert_eq!(inner(variable), ["mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "imul ax, bx"]);
+    assert_eq!(inner(variable), ["mov ax, word ptr [bp+6]", "imul ax, word ptr [bp+8]"]);
 }
 
 /// Tuned for size, a multiply by a constant is the imul unless the shifts and adds are fewer
@@ -3344,7 +3344,7 @@ fn test_far_pointers_compare_by_words() {
     };
     assert_eq!(
         compare("eq", "%q"),
-        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "mov dx, word ptr [bp+12]", "xor ax, word ptr [bp+10]", "xor bx, dx", "or ax, bx", "sete al", "movzx ax, al", "pop bp", "retf"]
+        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "xor ax, word ptr [bp+10]", "xor bx, word ptr [bp+12]", "or ax, bx", "sete al", "movzx ax, al", "pop bp", "retf"]
     );
     assert_eq!(compare("ne", "null"), ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "or ax, word ptr [bp+8]", "setne al", "movzx ax, al", "pop bp", "retf"]);
     assert!(compare("ult", "%q").iter().any(|line| line == "setb al"));
@@ -3475,20 +3475,7 @@ fn test_huge_pointers_compare_by_selector_then_offset() {
 ";
     assert_eq!(
         listing(huge, "f"),
-        [
-            "push bp",
-            "mov bp, sp",
-            "L0_0:",
-            "mov ax, word ptr [bp+6]",
-            "mov bx, word ptr [bp+8]",
-            "mov dx, word ptr [bp+12]",
-            "sub ax, word ptr [bp+10]",
-            "sbb bx, dx",
-            "setb al",
-            "movzx ax, al",
-            "pop bp",
-            "retf",
-        ]
+        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "mov cx, word ptr [bp+12]", "sub ax, word ptr [bp+10]", "sbb bx, cx", "setb al", "movzx ax, al", "pop bp", "retf"]
     );
     let far = huge.replace("addrspace(3)", "addrspace(1)");
     assert!(!listing(&far, "f").iter().any(|line| line.starts_with("sbb")));
@@ -4042,8 +4029,8 @@ fn test_a_phi_stored_on_more_edges_than_its_block_runs_stays_in_a_register() {
 #[test]
 fn test_code16_emits_386_forms() {
     let arithmetic = listing("define i32 @f(i32 %a, i32 %b) addrspace(1) {\n  %c = add i32 %a, %b\n  %d = mul i32 %c, 3\n  ret i32 %d\n}\n", "f");
-    assert!(arithmetic.contains(&"add eax, dword ptr [bp+10]".to_owned()), "{arithmetic:?}");
-    assert!(arithmetic.contains(&"lea ebx, [eax+eax*2]".to_owned()), "{arithmetic:?}");
+    assert!(arithmetic.contains(&"add ebx, dword ptr [bp+10]".to_owned()), "{arithmetic:?}");
+    assert!(arithmetic.contains(&"lea eax, [ebx+ebx*2]".to_owned()), "{arithmetic:?}");
 
     let extends = listing("define i32 @f(i8 %a, i16 %b) addrspace(1) {\n  %x = sext i8 %a to i32\n  %y = zext i16 %b to i32\n  %z = add i32 %x, %y\n  ret i32 %z\n}\n", "f");
     for want in ["movsx eax, byte ptr [bp+6]", "movzx ebx, word ptr [bp+8]", "add eax, ebx"] {

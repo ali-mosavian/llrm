@@ -904,6 +904,53 @@ fn _through_copies<T: Clone>(found: IndexMap<u32, T>, values: &BTreeSet<u32>, co
     values.iter().filter_map(|value| found.get(value).or_else(|| copies.get(value).and_then(|source| found.get(source))).map(|one| (*value, one.clone()))).collect()
 }
 
+/// Each of `values` that is loaded from a cell holding until its one reader, which runs no more often than the load
+/// (frequencies are products of floats: two blocks that run alike differ in the last digits)
+/// and takes that cell as its memory operand: read there it costs the same one memory operand and no instruction,
+/// and no register is held from the load to it, so holding it never pays.
+pub fn _folded_reads(body: &LirBody, values: &BTreeSet<u32>) -> BTreeSet<u32> {
+    let stable = _stable_loads(body, values);
+    if stable.is_empty() {
+        return BTreeSet::new();
+    }
+    let busy = crate::analysis::frequency::Frequency::of(body);
+    let mut readers: IndexMap<u32, Vec<(i64, &Arc<Insn>)>> = IndexMap::default();
+    let mut loads: IndexMap<u32, i64> = IndexMap::default();
+    for block in &body.blocks {
+        for one in &block.insns {
+            for value in one.uses.iter().filter(|value| stable.contains_key(*value)) {
+                readers.entry(*value).or_default().push((block.at, one));
+            }
+            for value in one.defines.iter().filter(|value| stable.contains_key(*value)) {
+                loads.insert(*value, block.at);
+            }
+        }
+    }
+    // A cell the body also writes is a variable: its loads and stores share frame homes and slots with other values.
+    let written: Vec<Mem> = body.insns().iter().flat_map(|one| one.what.iter().flat_map(|what| what.dests.iter())).filter_map(|place| if let Loc::Mem(cell) = place { Some(cell.clone()) } else { None }).collect();
+    stable
+        .iter()
+        .filter(|(value, cell)| {
+            if written.iter().any(|dest| dest.addr.is_none() || (dest.addr.zip(cell.addr).is_some_and(|(there, own)| there.space == own.space) && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width))) {
+                return false;
+            }
+            let ([(at, one)], Some(loaded)) = (readers.get(*value).map(Vec::as_slice).unwrap_or_default(), loads.get(*value)) else { return false };
+            let Some(what) = &one.what else { return false };
+            let held = |place: &Loc| matches!(place, Loc::Held(held) if held.value == **value);
+            let (read, written) = (what.sources.iter().filter(|place| held(place)).count(), what.dests.iter().filter(|place| held(place)).count());
+            if one.group.is_some() || read != 1 || written != 0 || one.defines.contains(value) || busy.block(*at) > busy.block(*loaded) * (1.0 + 1e-9) {
+                return false;
+            }
+            // The forms a reader takes a memory operand in: the spiller's own folds, and the push that peephole folds.
+            let only = BTreeSet::from([**value]);
+            let pushed = what.op == Operation::Push && what.name.as_deref() == Some("push") && one.defines.is_empty() && one.requires.is_empty() && one.delivers.is_empty();
+            // A copy is the coalescer's: the load it copies is the load it becomes.
+            pushed || (what.op != Operation::Move && folded_source_in(one, &only, false).is_some_and(|folded| folded.value == **value))
+        })
+        .map(|(value, _)| *value)
+        .collect()
+}
+
 /// Values loaded from a cell nothing changes before they are used again.
 pub fn _stable_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Mem> {
     _stable_loads_through(body, values, &IndexMap::default())
@@ -949,6 +996,7 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
                                 && one.clobbers.is_empty()
                                 && one.group.is_none()
                                 && one.spread.is_empty()
+                                && !one.volatile
                                 && one.symbol != Some(true)
                             {
                                 cell = Some(source.clone());
