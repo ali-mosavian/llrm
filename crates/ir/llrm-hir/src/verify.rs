@@ -232,7 +232,7 @@ pub fn verify(program: &model::Program) -> Result<(), InvalidHIR> {
     if program.schema != model::SCHEMA_VERSION {
         invalid!("unsupported HIR schema {}", program.schema);
     }
-    if program.target != model::TargetProfile::I386RealMode {
+    if !matches!(program.target, model::TargetProfile::I386RealMode | model::TargetProfile::I386Flat32) {
         invalid!("unsupported target {}", program.target.repr());
     }
     let mut module_ids = HashSet::default();
