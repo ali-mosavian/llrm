@@ -75,7 +75,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--procedure-segments" => layout = CodeLayout::PerProcedure,
             "--declare" => declare = Some(super::declarations::Language::named(&value("--declare")?).ok_or("--declare takes h, bi or inc")?),
             "--os-layer" => os_layer = Some(value("--os-layer")?),
-            "-Wno-distance" => frontend.warn_distance = false,
+            "-Wno-target-width" => frontend.warn_target_width = false,
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
             "--unchecked-bounds" => frontend.unchecked_bounds = true,
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),

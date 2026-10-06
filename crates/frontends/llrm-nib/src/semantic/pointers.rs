@@ -24,7 +24,7 @@ impl TypeRegistry {
     }
 
     /// Warns, once for each place, that a `far` or `huge` written where the target has one space is near.
-    pub(super) fn warn_distance(&mut self, distance: &str, span: Span) {
+    pub(super) fn warn_target_width(&mut self, distance: &str, span: Span) {
         if self.sizes.segmented || distance == "near" {
             return;
         }

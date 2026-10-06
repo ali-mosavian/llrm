@@ -3247,3 +3247,30 @@ fn test_flat_dword_sum_stays_where_the_upper_half_may_not_be_zero() {
     let kept = whats(&made.insns());
     assert_eq!((kept[1].name.as_deref(), kept[2].name.as_deref()), (Some("add"), Some("movzx")), "{kept:?}");
 }
+
+// ------------------------------------------------------- copies forwarded into addresses
+
+/// `mov esi, ecx` then a store through `[ebp+esi-8]`: the store reads ECX. Only the register operands were
+/// forwarded, so an address kept the copy's register and the copy stayed (`Mem` equality leaves registers
+/// out, so a rewritten cell also read as unchanged and was dropped).
+#[test]
+fn test_a_copy_is_forwarded_into_the_address_that_reads_it() {
+    let copy = Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![rl(Register::ESI, 4)], vec![rl(Register::ECX, 4)])), vec![], vec![]));
+    let cell = Mem { index_through: Register::ESI, index: Some(Held { value: 32, width: 4 }), ..mem(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, -1032) }), 1, Register::EBP, 0, 2) };
+    let store = Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![im(1, 1)])), vec![], vec![]));
+    let made = copyprop::forwarded(&flat_body(vec![copy, store]));
+    let Some(Loc::Mem(cell)) = made.insns()[1].what.as_ref().map(|what| what.dests[0].clone()) else { panic!("a store") };
+    assert_eq!(cell.index_through, Register::ECX);
+}
+
+/// Not where the older register changes between the copy and the read.
+#[test]
+fn test_a_copy_is_not_forwarded_past_a_write_of_its_source() {
+    let copy = Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![rl(Register::ESI, 4)], vec![rl(Register::ECX, 4)])), vec![], vec![]));
+    let bump = Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, "add", vec![rl(Register::ECX, 4)], vec![rl(Register::ECX, 4), im(1, 4)])), vec![], vec![]));
+    let cell = Mem { index_through: Register::ESI, index: Some(Held { value: 32, width: 4 }), ..mem(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, -1032) }), 1, Register::EBP, 0, 2) };
+    let store = Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![im(1, 1)])), vec![], vec![]));
+    let made = copyprop::forwarded(&flat_body(vec![copy, bump, store]));
+    let Some(Loc::Mem(cell)) = made.insns()[2].what.as_ref().map(|what| what.dests[0].clone()) else { panic!("a store") };
+    assert_eq!(cell.index_through, Register::ESI);
+}

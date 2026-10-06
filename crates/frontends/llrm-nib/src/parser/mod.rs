@@ -60,8 +60,8 @@ pub fn parse(tokens: Vec<Token>) -> Result<Module, Diagnostic> {
 pub fn parse_after(tokens: Vec<Token>, fixed_before: u16, imported: &BTreeMap<String, Expr>, near_bytes: u32) -> Result<Module, Diagnostic> {
     let mut parser = Parser::new(tokens, fixed_before);
     parser.seeded = 2;
-    parser.fixed_types.insert("usize".to_owned(), if near_bytes == 4 { TypeName::U32 } else { TypeName::U16 });
-    parser.fixed_types.insert("isize".to_owned(), if near_bytes == 4 { TypeName::I32 } else { TypeName::I16 });
+    parser.fixed_types.insert("usize".to_owned(), TypeName::usize(near_bytes));
+    parser.fixed_types.insert("isize".to_owned(), TypeName::Word { bytes: near_bytes as u8, signed: true });
     let mut imported = imported.clone();
     imported.insert("NEAR_BYTES".to_owned(), Expr::Integer(i64::from(near_bytes), Span::new(1, 1, 1)));
     parser.module_constants(&imported)?;

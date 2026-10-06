@@ -99,7 +99,7 @@ impl TypeRegistry {
             // Where far is near a huge object is in the one space: no segment of its own.
             let huge = declared.huge && self.sizes.segmented;
             if declared.huge {
-                self.warn_distance("huge", declared.span);
+                self.warn_target_width("huge", declared.span);
             }
             let segment = huge.then(|| format!("{}_{}_HUGE", identifier(module_name), declared.name));
             let symbol = literals.object(&format!("$var_{}", declared.name), bytes, false, segment);
