@@ -1401,9 +1401,9 @@ pub fn compile(module: &Module, module_name: &str, frontend: &super::Frontend) -
 
 /// Type-checks `module` as `compile` does: what the checker learned of the
 /// names it spells, and the first error.
-pub fn check(module: &Module) -> (Vec<Fact>, Result<(), Diagnostic>) {
+pub fn check(module: &Module, frontend: &super::Frontend) -> (Vec<Fact>, Result<(), Diagnostic>) {
     let facts = RefCell::new(Vec::new());
-    let checked = program(module, "", Some(&facts), &super::Frontend::default()).map(drop);
+    let checked = program(module, "", Some(&facts), frontend).map(drop);
     (facts.into_inner(), checked)
 }
 
@@ -1413,7 +1413,7 @@ fn program(
     facts: Option<&RefCell<Vec<Fact>>>,
     frontend: &super::Frontend,
 ) -> Result<hir::Program, Diagnostic> {
-let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.conventions.clone(), frontend.bits);
+    let mut types = TypeRegistry::new(frontend.sizes(), frontend.native(), frontend.conventions.clone(), frontend.bits);
     types.warnings = frontend.warn_target_width.then(|| frontend.warnings.clone());
     types.register_fixed_types(&module.fixed_types)?;
     types.register_aggregates(&module.structs, &module.enums)?;

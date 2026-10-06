@@ -20,5 +20,5 @@ pub fn definition(documents: &Documents, path: &Path, position: Position) -> Opt
         }
         Target::Module(module) => (module, Range::default()),
     };
-    Some(Location { uri: documents::uri(&module_file(path, &module)), range })
+    Some(Location { uri: documents::uri(&module_file(path, &module, &documents.frontend.os.module)), range })
 }
