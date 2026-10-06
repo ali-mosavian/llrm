@@ -22,6 +22,9 @@ pub struct Spaces {
     /// A frontend states it of an access; an analysis reads it as "apart from every
     /// program object".
     pub fixed: Option<u32>,
+    /// The most bytes a data segment holds: a larger object is cut into segments a huge pointer
+    /// steps through. None where the target has no segments.
+    pub segment_bytes: Option<u64>,
 }
 
 impl Default for Spaces {
@@ -33,7 +36,7 @@ impl Default for Spaces {
 impl Spaces {
     /// One space, none of the others: a target with no segments, and the one a pass is
     /// given when no target is named.
-    pub const FLAT: Self = Self { near: 0, far: 0, data: 0, stack: 0, segment: None, huge: None, fixed: None };
+    pub const FLAT: Self = Self { near: 0, far: 0, data: 0, stack: 0, segment: None, huge: None, fixed: None, segment_bytes: None };
 
     /// Whether `far` is the `near` space: the target is flat, and a far or huge pointer is a near one.
     pub fn far_is_near(&self) -> bool {

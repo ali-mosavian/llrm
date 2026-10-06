@@ -164,6 +164,8 @@ pub struct Sizes {
     pub segmented: bool,
     /// A stack slot's bytes.
     pub slot: u32,
+    /// The most bytes an object near addresses reach: the segment's, or the address space's.
+    pub max_object: u64,
 }
 
 impl Frontend {
@@ -176,7 +178,9 @@ impl Frontend {
     pub fn sizes(&self) -> Sizes {
         let layout = llrm_mir::datalayout::DataLayout::parse(&self.layout.datalayout).expect("a target's datalayout parses");
         let bytes = |space: u32| layout.pointer(space).bits / 8;
-        Sizes { near: bytes(self.layout.spaces.near), far: bytes(self.layout.spaces.far), segmented: !self.layout.spaces.far_is_near(), slot: self.slot }
+        let near = bytes(self.layout.spaces.near);
+        let max_object = self.layout.segment_bytes().map_or_else(|| (1_u64 << (8 * near)) - 1, |bytes| bytes as u64 - 1);
+        Sizes { near, far: bytes(self.layout.spaces.far), segmented: !self.layout.spaces.far_is_near(), slot: self.slot, max_object }
     }
 }
 

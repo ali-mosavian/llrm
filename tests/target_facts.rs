@@ -61,7 +61,7 @@ fn facts() -> Regex {
             parts.push(format!(r#"["'](?:{any})["']"#));
             parts.push(format!(r"\bRegister::(?:{any})\b"));
         }
-        if let Some(bytes) = target.layout().segment_bytes {
+        if let Some(bytes) = target.layout().segment_bytes() {
             parts.push(number(bytes as u64));
             parts.push(number(bytes as u64 - 1));
         }

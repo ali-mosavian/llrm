@@ -88,12 +88,14 @@ fn scaled(interval: &Interval, disp: i64, scale: i64) -> (BigInt, BigInt) {
 /// wholly in memory the machine keeps no program data in.
 fn foreign(reference: &MemRef, known: Option<&BTreeMap<ValueId, Interval>>, program: Option<&ProgramProxy>) -> Option<Slice> {
     let machine = &*program?.target;
+    // A selector or offset is a word of the segment's size: none where the target has no segments.
+    let segment = i64::try_from(machine.spaces().segment_bytes?).ok()?;
     // A selector or offset is an unsigned word; ranges may carry it signed,
     // and an offset wraps within its segment.
     let words = |low: BigInt, high: BigInt| -> Option<(i64, i64)> {
         let (low, high) = (low.to_i64()?, high.to_i64()?);
-        let word = |one: i64| one.rem_euclid(0x1_0000);
-        (high - low < 0x1_0000 && word(low) <= word(high)).then(|| (word(low), word(high)))
+        let word = |one: i64| one.rem_euclid(segment);
+        (high - low < segment && word(low) <= word(high)).then(|| (word(low), word(high)))
     };
     let selectors = match (reference.selector, reference.segment) {
         (Some(selector), _) => words(selector.into(), selector.into())?,
@@ -114,7 +116,7 @@ fn foreign(reference: &MemRef, known: Option<&BTreeMap<ValueId, Interval>>, prog
                 words(low + &disp, high + &disp)
             }),
     }
-    .unwrap_or((0, 0xFFFF));
+    .unwrap_or((0, segment - 1));
     let width = i64::from(reference.width.max(1));
     let (start, end) = machine.foreign_span(selectors, offsets, width)?;
     Some(Slice::new(linear(), start, end - width + 1, 1, width).expect("a foreign span holds one access"))
