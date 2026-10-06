@@ -6,20 +6,21 @@
 //! refuses outside a `try`, an index out of range) panics here with the
 //! same message.
 
-use crate::support::hash::HashMap;
+use llrm_support::hash::HashMap;
 use std::sync::LazyLock;
 
 use iced_x86::{
     Code, Decoder, DecoderOptions, Encoder, Instruction, MemoryOperand, Register, RepPrefixKind,
 };
-use crate::support::hash::IndexMap;
+use llrm_support::hash::IndexMap;
 
-use crate::backend::target;
-use crate::frontends::bc::declen::BITNESS;
-use crate::model::ir::{self, Loc, Operation, Semantics, Space};
+use llrm_lir::{self as ir, Loc, Operation, Semantics, Space};
+
+/// Real mode: what a size asked of an instruction no object holds yet is in.
+pub const BITNESS: u32 = 16;
 
 // The register file's own tables, not a copy of them.
-pub use crate::backend::target::{AT_WIDTH, WIDTHS};
+pub use crate::registers::{AT_WIDTH, WIDTHS};
 
 /// The bytes, and where a relocated displacement ended up inside them.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -156,7 +157,7 @@ fn raised<T>(made: Result<T, String>) -> T {
 }
 
 fn width_of(register: Register) -> Option<i64> {
-    target::WIDTHS.get(&register).copied()
+    crate::registers::WIDTHS.get(&register).copied()
 }
 
 /// Where an instruction goes, and the mode it is encoded in: 16 or 32 bits.
@@ -317,8 +318,8 @@ pub fn operand_of(what: &ir::Mem, bits: u32) -> Option<(MemoryOperand, bool)> {
     }
 }
 
-pub const _WORD_BASES: [Register; 2] = llrm_x86::addressing16::BASES;
-pub const _WORD_INDEXES: [Register; 2] = llrm_x86::addressing16::INDEXES;
+pub const _WORD_BASES: [Register; 2] = crate::addressing16::BASES;
+pub const _WORD_INDEXES: [Register; 2] = crate::addressing16::INDEXES;
 
 /// `[base+index*scale+disp]`. A relocated cell takes only the word form,
 /// `[bx|bp+si|di+disp16]`: its fixup is 16 bits.
@@ -363,11 +364,11 @@ pub fn r#move(into: Register, outof: Register, at: At) -> Option<Emitted> {
     if into == outof {
         return Some(Emitted::new(Vec::new())); // a move to itself is no instruction at all
     }
-    let code = if target::WIDE.contains(&into) && target::WIDE.contains(&outof) {
+    let code = if crate::registers::DWORDS.contains(&into) && crate::registers::DWORDS.contains(&outof) {
         Code::Mov_r32_rm32
-    } else if target::NARROW.contains(&into) && target::NARROW.contains(&outof) {
+    } else if crate::registers::WORDS.contains(&into) && crate::registers::WORDS.contains(&outof) {
         Code::Mov_r16_rm16
-    } else if target::BYTE.contains(&into) && target::BYTE.contains(&outof) {
+    } else if crate::registers::BYTES.contains(&into) && crate::registers::BYTES.contains(&outof) {
         Code::Mov_r8_rm8
     } else {
         return None;
@@ -402,7 +403,7 @@ pub fn _operand(one: &Loc, r#where: Option<&RegisterMap>, held: Option<&HeldMap>
         let Some(got) = held.and_then(|map| map.get(&value.value)).copied() else {
             return one; // emit() refuses it
         };
-        let wide = target::AT_WIDTH
+        let wide = crate::registers::AT_WIDTH
             .get(&ir::root(got))
             .and_then(|widths| widths.get(&i64::from(value.width)))
             .copied()
@@ -1462,7 +1463,7 @@ pub fn emit_in(
                 }
                 let code = _code(&format!("{upper}_R{}_RM{}", wide(into.register) * 8, wide(outof.register) * 8));
                 if let Some(code) = code {
-                    if target::WIDTHS[&into.register] > target::WIDTHS[&outof.register] {
+                    if crate::registers::WIDTHS[&into.register] > crate::registers::WIDTHS[&outof.register] {
                         return _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true);
                     }
                 }
@@ -1471,7 +1472,7 @@ pub fn emit_in(
                 let code = _code(&format!("{upper}_R{}_RM{}", wide(into.register) * 8, cell.width * 8));
                 let built = operand_of(cell, at.bits);
                 if let (Some(code), Some((r#where, relocated))) = (code, built) {
-                    if target::WIDTHS[&into.register] > i64::from(cell.width) {
+                    if crate::registers::WIDTHS[&into.register] > i64::from(cell.width) {
                         return _assemble(&raised(create_reg_mem(code, into.register, r#where)), at, relocated);
                     }
                 }
@@ -1855,10 +1856,10 @@ pub fn emit_in(
 #[cfg(test)]
 mod sweep_support {
     pub use super::*;
-    pub use crate::model::ir::{self, Addr, Loc, Space};
+    pub use llrm_lir::{self as ir, Addr, Loc, Space};
     pub use iced_x86::Register as R;
 
-    pub use crate::model::ir::Operation as Op;
+    pub use llrm_lir::Operation as Op;
 
     pub fn a(space: Space, disp: i64, index: i64, base: R, segment: R) -> Addr {
         Addr { space, disp, index, base, segment }

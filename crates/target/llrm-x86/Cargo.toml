@@ -8,3 +8,5 @@ description = "What every x86 target shares: the instruction forms"
 [dependencies]
 toml = { workspace = true }
 iced-x86 = { workspace = true }
+llrm-lir = { workspace = true }
+llrm-support = { workspace = true }
