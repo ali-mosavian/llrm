@@ -2,7 +2,7 @@
 # key absent here is the target having no such form (no far call, no segment
 # load). Values are code16's `timings.rs` 486 and P5 columns for the forms
 # both have. call_near and ret_near are NOT from there: 3/5 (486) and 1/2 (P5)
-# are recalled, to be checked against the i486 data sheet and Agner Fog's
+# and ret_pop 5/3 and leave 5/3 are recalled (a reviewer's figures), to be checked against the i486 data sheet and Agner Fog's
 # tables before any measurement uses them. `prefix` is paid by 16-bit forms
 # here, by 32-bit forms in code16.
 #
@@ -31,12 +31,12 @@ push_m       4   2
 push_i       1   1
 pop_r        4   1
 pop_m        6   1
-leave        5   2
+leave        5   3
 jmp_short    3   1
 jcc          3   1
 call_near    3   1
 ret_near     5   2
-ret_pop      5   2
+ret_pop      5   3
 rep_stos     7   9
 rep_stos_cell 4  1
 rep_movs     12  13
@@ -47,3 +47,16 @@ x87_store    8   2
 x87_add      8   3
 x87_mul      16  3
 x87_div      73  39
+x87_convert_store 35 7
+x87_add_m    8   3
+x87_mul_m    14  3
+x87_div_m    73  39
+x87_control_load 4 8
+x87_control_store 3 2
+mul_r16      13  11
+div_r16      24  25
+jcc_not_taken 1  1
+nop          1   1
+lahf         3   2
+sahf         2   1
+unknown      2   2

@@ -15,20 +15,32 @@ G_AND,G_OR,G_XOR              i64        narrow:i32
 G_MUL                         i8,i16,i32 legal
 G_MUL                         i64        lower        # one mul and two imul
 G_SDIV,G_UDIV,G_SREM,G_UREM   i8,i16,i32 legal
-G_SDIV,G_UDIV,G_SREM,G_UREM   i64        libcall:__I8D,__U8D
+# Helper names and their convention are the per-target helper table's (not
+# code16's inline 16-bit blobs); one helper per (signedness, op).
+G_SDIV,G_UDIV,G_SREM,G_UREM   i64        libcall:helper_table
 G_SHL,G_LSHR,G_ASHR           i8,i16,i32 legal          # amount i8
-G_SHL,G_LSHR,G_ASHR           i64        narrow:i32     # shld/shrd by constant
-G_ICMP                        i8,i16,i32 legal
-G_ICMP                        i64        narrow:i32
-G_SEXT,G_ZEXT,G_ANYEXT        i8..i32 -> i16..i32  legal  # movsx, movzx
+G_SHL,G_LSHR,G_ASHR           i64, amount i8 const  narrow:i32  # shld/shrd
+G_SHL,G_LSHR,G_ASHR           i64, amount not const  unsupported  # as code16
+G_ICMP                        i1 <- i8,i16,i32,p0  legal
+G_ICMP                        i1 <- i64  narrow:i32
+G_SEXT,G_ZEXT,G_ANYEXT        i1,i8,i16 -> i16,i32 (wider)  legal  # movsx, movzx
 G_SEXT,G_ZEXT                 i1..i32 -> i64 narrow:i32
-G_TRUNC                       i16..i64 -> i1..i32  legal
-G_LOAD,G_STORE                i8,i16,i32 p0 legal
+G_TRUNC                       i16,i32 -> i1,i8,i16 (narrower)  legal
+G_TRUNC                       i64 -> i1..i32  narrow:i32  # the low half
+G_LOAD,G_STORE                i8,i16,i32,p0,f32,f64,f80 via p0  legal
 G_LOAD,G_STORE                i64 p0     narrow:i32
 G_PTR_ADD                     p0,i32     legal         # address forms or lea
 G_PTRTOINT,G_INTTOPTR         p0,i32     legal         # no-ops
 G_BRCOND                      i1         legal
-G_SELECT                      i32        lower         # branch: no cmov before P6
+G_SELECT                      i8,i16,i32,p0  lower  # branch: no cmov before P6
 G_FADD,G_FSUB,G_FMUL,G_FDIV   f32,f64,f80 legal         # x87
-G_FPTOSI,G_SITOFP             f32,f64,f80 <-> i16,i32 legal
-G_FPTOSI,G_SITOFP             <-> i64    unsupported   # as code16 today
+G_SITOFP                      i16,i32 -> f32,f64,f80  legal   # fild
+G_SITOFP                      i64 -> f32,f64,f80  custom  # pair to an 8-byte temp, fild (as code16)
+G_FPTOSI                      f32,f64,f80 -> i16,i32  custom  # fistp needs fnstcw/fldcw to truncate (no fisttp before SSE3)
+G_FPTOSI                      -> i64    unsupported
+G_FCMP                        i1 <- f32,f64,f80  legal
+G_UITOFP,G_FPTOUI             i32,f64   lower
+# Structural ops with no choice to make.
+G_CONSTANT,G_FRAME_INDEX,G_GLOBAL_VALUE,G_PHI,G_BR  i8,i16,i32,p0  legal
+G_CONSTANT                    i64        narrow:i32
+G_MEMCPY,G_MEMSET             p0,i32     lower         # rep movs / stos, ES = DS

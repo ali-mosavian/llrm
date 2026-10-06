@@ -1,4 +1,5 @@
-# cdecl32: the C convention of every 32-bit x86 C compiler on DOS and Windows.
+# cdecl32: the stack convention, as `wccq` is asked for it (-ecc; Watcom's
+# default is register-based). The aggregate rule below is the front end's.
 
 [cdecl32]
 slot_bytes = 4
@@ -9,9 +10,12 @@ cleanup = "caller"
 argument_registers = []
 # Return address 4 bytes: the first argument is at [esp+4] on entry.
 return_address_bytes = 4
-first_argument_offset = 4
+# From EBP after `push ebp; mov ebp, esp`; from ESP on entry it is 4.
+first_argument_offset = 8
 preserved = ["ebx", "esi", "edi", "ebp"]
-clobbered = ["eax", "ecx", "edx"]
+clobbered = ["eax", "ecx", "edx", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "flags"]
+# Direction flag clear and the x87 stack empty on entry and on return.
+entry_state = ["df_clear", "x87_empty"]
 # Integers and pointers of at most 32 bits; i64 in edx:eax, low in eax;
 # floats in st(0). A struct is returned through a hidden first argument.
 [cdecl32.result]
@@ -20,5 +24,11 @@ i64 = ["eax", "edx"]
 pointer = ["eax"]
 float = ["st0"]
 aggregate = "hidden-pointer"
+# UNDECIDED, to settle against what wccq emits for -ecc: whether the callee
+# returns the hidden pointer in eax and whether it pops it; whether a struct of
+# 1, 2, 4 or 8 bytes is returned in eax[:edx].
 # char and short arguments are widened to a slot.
 promotion = "slot"
+# i64 and double take two slots, low half first; a variadic float is a double.
+wide_slots = 2
+variadic_float = "double"
