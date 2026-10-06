@@ -940,9 +940,15 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             let pointer = candidate.of.pointer.is_some();
             let symbolic = !fit.rest.is_zero() || matches!(fit.base, Some(Operand::Value(_)));
             // A pointer made from an integer, in a carrying space, carries into its selector.
+            // A two-address target makes a result in its first operand's register: the candidate stays
+            // live, as a counter does, so a form no address takes (a negation, a general scale) is
+            // copied first. `lea` makes `cand * k + rest + constant` in one, where its scales hold `k`.
+            // Only where any register may be a base and an index: `[bx+si]` is no `lea` of `ax`.
+            let addressable = target.forms.iter().any(|form| form.bases.is_none() && form.indices.is_none() && (fit.k == BigInt::from(1) || small(&fit.k) > 1 && form.scales.contains(&small(&fit.k))));
+            let copy = if target.room.two_address && !addressable { costs.r#move } else { 0 };
             let made = |constant| {
                 let ty = view.function.value(site.one.value).ty;
-                if pointer { costs.add } else { profit::advance(view.context, view.layout, ty, costs.add, constant, costs) }
+                copy + if pointer { costs.add } else { profit::advance(view.context, view.layout, ty, costs.add, constant, costs) }
             };
             if symbolic {
                 let whole = fit.rest.plus(&Scev::constant(fit.constant.clone(), fit.rest.width));

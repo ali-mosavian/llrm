@@ -1928,3 +1928,62 @@ b20:
     let wide = |text: &str| text.lines().filter(|line| line.contains("phi i32")).count();
     assert_eq!(wide(&after), wide(text), "{after}");
 }
+
+/// A counted loop that reads `i + k` on the side of a branch only: a value the counter makes in one add.
+fn offset_read() -> String {
+    "define i16 @f(i16 %n, i16 %k, i16 %m) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %inext, %b5 ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %b5 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b6
+
+b2:
+  %odd = and i16 %acc, 1
+  %c = icmp ne i16 %odd, 0
+  br i1 %c, label %b3, label %b4
+
+b3:
+  %v = add i16 %i, %k
+  %t = xor i16 %v, %acc
+  br label %b5
+
+b4:
+  %u = shl i16 %acc, 1
+  br label %b5
+
+b5:
+  %sum = phi i16 [ %t, %b3 ], [ %u, %b4 ]
+  %inext = add i16 %i, 1
+  br label %b1
+
+b6:
+  ret i16 %acc
+}
+"
+    .to_owned()
+}
+
+
+/// A value made from the counter in one arm, `i + k`, costs an add where an add makes it in place
+/// and `mov; add` on a two-address target whose forms have no `lea` of any register (`[bx+si]`
+/// only): the price omitted the copy (#705), so the arm's use and its half of a trip never paid for
+/// a counter of its own. A target whose forms take any register makes it in one `lea`.
+#[test]
+fn test_a_value_made_from_the_counter_is_priced_with_its_copy() {
+    let ivs = |two_address: bool, flat: bool| {
+        let mut machine = target();
+        machine.two_address = two_address;
+        if !flat {
+            machine.address_forms.truncate(1);
+        }
+        let (_, printed) = reduced_for(&offset_read(), machine);
+        printed.lines().filter(|line| line.contains("= phi") && line.contains("%lsr.iv")).count()
+    };
+    assert_eq!(ivs(false, false), 1, "a one-address target adds in place");
+    assert_eq!(ivs(true, false), 2, "`mov; add` is dearer than the step of a counter of its own");
+    assert_eq!(ivs(true, true), 1, "`lea` makes it in one");
+}
