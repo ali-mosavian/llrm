@@ -29,7 +29,7 @@
 /* What the target says (build.rs reads its description, build.sh passes it): whether its far pointer is its near one
  * (LLRM_FLAT), and the bytes of its near pointer, its far pointer and its `int`. */
 #if !defined( LLRM_FLAT ) || !defined( LLRM_NEAR_BYTES ) || !defined( LLRM_FAR_BYTES ) || !defined( LLRM_INT_BYTES )
-#error LLRM_FLAT, LLRM_NEAR_BYTES, LLRM_FAR_BYTES and LLRM_INT_BYTES come from the target's description
+#error LLRM_FLAT, LLRM_NEAR_BYTES, LLRM_FAR_BYTES and LLRM_INT_BYTES come from the target description
 #endif
 
 static FILE *Out;

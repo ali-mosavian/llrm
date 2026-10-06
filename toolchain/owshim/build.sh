@@ -30,8 +30,10 @@ case "$CPU" in
     *) echo "OWCPU is i86 or 386, not $CPU" >&2; exit 1 ;;
 esac
 # What the target's description says, which build.rs reads for each Open Watcom tree (FLAT: 1 where far is near).
-FLAT=${LLRM_FLAT:?LLRM_FLAT comes from the target's description}
-NEAR=${LLRM_NEAR_BYTES:?}; FAR=${LLRM_FAR_BYTES:?}; INT=${LLRM_INT_BYTES:?}
+FLAT=${LLRM_FLAT:?LLRM_FLAT comes from the target description}
+NEAR=${LLRM_NEAR_BYTES:?LLRM_NEAR_BYTES comes from the target description}
+FAR=${LLRM_FAR_BYTES:?LLRM_FAR_BYTES comes from the target description}
+INT=${LLRM_INT_BYTES:?LLRM_INT_BYTES comes from the target description}
 CC_OBJ="$OWROOT/bld/cc/$CPU/binbuild"
 OUT="${1:-$HERE/$BIN}"
 mkdir -p "$OUT"
