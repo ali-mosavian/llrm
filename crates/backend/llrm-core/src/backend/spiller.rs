@@ -811,6 +811,20 @@ fn _copied_with(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Vec<Res
 /// negative; `u32` cannot say that, so they are numbered in the same order
 /// at the top of the range instead. Nothing compares them with a real value.
 fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<Interval>)>, IndexMap<u32, Interval>) {
+    let found = _existing_colors_by(body, frame, false);
+    if std::env::var_os("LLRM_CHECK_COLORS").is_some() {
+        let whole = _existing_colors_by(body, frame, true);
+        assert!(found.0 == whole.0, "{}: the slot colors differ from working them out whole", body.name);
+        // The values the callers ask of are the body's: the homes' own pseudo-values are not among them.
+        assert!(found.1.iter().all(|(value, interval)| whole.1.get(value) == Some(interval)), "{}: an interval differs from working it out whole", body.name);
+        assert!(found.1.len() == whole.1.len(), "{}: a value has no interval where working it out whole gives one", body.name);
+    }
+    found
+}
+
+/// `_existing_colors`, with the intervals of the homes' pseudo-values found among themselves and the body's
+/// own remembered, or, `whole`, as the body with the homes in it is worked out at once.
+fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(i64, u32, Vec<Interval>)>, IndexMap<u32, Interval>) {
     let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
     homes.sort_unstable();
     if homes.is_empty() {
@@ -847,6 +861,8 @@ fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<In
         None
     };
 
+    // Only an instruction that names a home is made again with it among its values; the others are the body's.
+    let mut flipped = false;
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
@@ -857,16 +873,32 @@ fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<In
             };
             let defined: BTreeSet<u32> = what.dests.iter().filter_map(|operand| slot(operand, &mut capacities)).collect();
             let used: BTreeSet<u32> = what.sources.iter().filter_map(|operand| slot(operand, &mut capacities)).collect();
-            insns.push(_with(one, |made| {
+            if defined.is_empty() && used.is_empty() && !whole {
+                insns.push(Arc::clone(one));
+                continue;
+            }
+            let made = _with(one, |made| {
                 made.defines = one.defines.iter().copied().chain(defined).collect::<IndexSet<u32>>().into_iter().collect();
                 made.uses = one.uses.iter().copied().chain(used).collect::<IndexSet<u32>>().into_iter().collect();
-            }));
+            });
+            // A value changes whether an instruction is a mark, and with it the slots after it.
+            flipped |= made.is_meta() != one.is_meta();
+            insns.push(made);
         }
         blocks.push(block.with_insns(insns));
     }
     let tracked = body.with_blocks(blocks);
-    let live = ranges::intervals(&tracked, None);
-    let end = ranges::indexed(&tracked).span.values().map(|(_first, last)| *last).max().unwrap_or(1);
+    let index = ranges::indexed(&tracked);
+    let busy = crate::analysis::frequency::Frequency::of(&tracked);
+    let live = if whole || flipped {
+        ranges::intervals_over(&tracked, Some(&index), &busy)
+    } else {
+        let mut live = ranges::intervals(body, None);
+        let homes: BTreeSet<u32> = pseudo.values().copied().collect();
+        live.extend(ranges::intervals_among(&tracked, &index, &busy, &homes));
+        live
+    };
+    let end = index.span.values().map(|(_first, last)| *last).max().unwrap_or(1);
     let mut colors = Vec::new();
     for home in homes {
         let interval = live.get(&pseudo[&home]);
@@ -3111,6 +3143,26 @@ mod tests {
         let mut frame = Frame::new(0);
         super::siblings(&body, &set(&[1]), Some(&mut frame), &BTreeSet::new()).expect("sibling slots");
         assert_eq!(crate::backend::coalesce::last_asked(), Some(3), "the other web's values were asked of");
+    }
+
+    /// Every spill made a body of every instruction with the slots in it as values, and numbered it and
+    /// found every interval again to colour the slots: 16 s of compiling `d_faces` (#559). The slots
+    /// are found among themselves and the body's own intervals are remembered; the answers are the same.
+    #[test]
+    fn test_the_slots_colors_are_the_same_found_among_themselves_as_found_whole() {
+        let body = _body(vec![
+            _move(3, 30, None, 0x10),
+            _move(1, 10, None, 0x12),
+            _add(31, 3, 0x14),
+            _move(2, 1, None, 0x16),
+            _add(21, 2, 0x18),
+        ]);
+        let mut frame = Frame::new(0);
+        let (spilt, _made) = spilled(&body, &set(&[1, 3]), Some(&mut frame), &crate::backend::classes::RegisterClasses::code16()).expect("spills");
+        assert!(!frame.slots.is_empty(), "the body has homes to find");
+        let (among, whole) = (super::_existing_colors_by(&spilt, &mut frame, false), super::_existing_colors_by(&spilt, &mut frame, true));
+        assert_eq!(among.0, whole.0);
+        assert_eq!(among.1, whole.1);
     }
 
     #[test]

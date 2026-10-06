@@ -180,13 +180,19 @@ impl LiveRows {
 
 /// `live`, as rows.
 pub fn live_rows(body: &LirBody) -> LiveRows {
+    live_rows_by(body, |_| true)
+}
+
+/// `live_rows` of the values `keep` says only: each is live where it is as in the whole, the others are
+/// not numbered, so a caller that asks of a few values pays for rows of those.
+pub fn live_rows_by(body: &LirBody, keep: impl Fn(u32) -> bool) -> LiveRows {
     // Every value the body names, numbered by order. Ids can be far apart, so the number of a value
     // is found by a table over the ids where they are dense enough, else by search.
     let mut numbered: Vec<u32> = Vec::new();
     for block in &body.blocks {
-        numbered.extend(block.phis.iter().flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value))));
+        numbered.extend(block.phis.iter().flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value))).filter(|value| keep(*value)));
         for one in &block.insns {
-            numbered.extend(one.defines.iter().chain(&one.uses).copied());
+            numbered.extend(one.defines.iter().chain(&one.uses).copied().filter(|value| keep(*value)));
         }
     }
     numbered.sort_unstable();
@@ -199,17 +205,21 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
         }
         table
     });
-    let number = |value: u32| -> usize {
-        match &table {
+    let number = |value: u32| -> Option<usize> {
+        if !keep(value) {
+            return None;
+        }
+        Some(match &table {
             Some(table) => table[value as usize] as usize,
             None => numbered.binary_search(&value).expect("every value is numbered"),
-        }
+        })
     };
     let words = numbered.len() / 64 + 1;
     let count = body.blocks.len();
     let set = |row: &mut [u64], value: u32| {
-        let at = number(value);
-        row[at / 64] |= 1 << (at % 64);
+        if let Some(at) = number(value) {
+            row[at / 64] |= 1 << (at % 64);
+        }
     };
     let position: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
     // Rows of `words` each, a block's at `block * words`.
@@ -245,8 +255,9 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
             let group = &block.insns[first..=index as usize];
             for item in group {
                 for value in &item.defines {
-                    let at = number(*value);
-                    alive[at / 64] &= !(1 << (at % 64));
+                    if let Some(at) = number(*value) {
+                        alive[at / 64] &= !(1 << (at % 64));
+                    }
                 }
             }
             for item in group {
@@ -257,8 +268,9 @@ pub fn live_rows(body: &LirBody) -> LiveRows {
             index = first as i64 - 1;
         }
         for phi in &block.phis {
-            let at = number(phi.result);
-            alive[at / 64] &= !(1 << (at % 64));
+            if let Some(at) = number(phi.result) {
+                alive[at / 64] &= !(1 << (at % 64));
+            }
         }
         generated[row].copy_from_slice(&alive);
     }
