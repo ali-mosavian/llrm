@@ -158,15 +158,35 @@ fn test_c_parity_fixtures_compute_their_expected_values() {
         .filter_map(|one| Some(one.unwrap().path().to_str()?.strip_suffix(".cgs")?.rsplit('/').next()?.to_owned()))
         .collect();
     names.sort();
+    // The C start-up is the OS layer's: its start, C's hook, and its operations, which `main` below calls.
+    let target = llrm_x86_code16::Code16;
+    let (layer, c) = (llrm_target::Target::os_layer(&target).unwrap(), llrm_target::Target::runtime(&target, "c").unwrap());
+    let defines: Vec<String> = layer.defines().unwrap().into_iter().chain(c.defines().unwrap()).map(|(symbol, value)| format!("-D{symbol}={value}")).collect();
+    let assemble = |source: String, object: &str| {
+        let mut args = vec!["-q".to_owned(), "-c".into(), "-Cp".into(), "-Zg".into(), "-omf".into(), format!("-Fo{object}")];
+        args.extend(defines.iter().cloned());
+        args.push(source);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        run("jwasm", &args);
+    };
+    assemble(format!("{}/{}", layer.directory, layer.string("start").unwrap()), "layer_start.obj");
+    assemble(format!("{}/{}", layer.directory, layer.string("implementation").unwrap()), "layer_os.obj");
+    assemble(format!("{}/{}", c.directory, c.string("init_file").unwrap()), "c_init.obj");
+    std::fs::write(dir.join("os.h"), layer.c_header().unwrap()).unwrap();
+    // Each fixture's entry, run by a C `main` that writes its value to VALUE.BIN and ends by the layer's exit.
+    let entries = [("algebra", "parity_algebra_demo"), ("branch", "parity_branch_demo"), ("control", "parity_control_demo"), ("loop", "parity_loop_demo"), ("memory", "parity_memory_demo"), ("parity", "parity_kernel"), ("qbsp", "quake_bsp_demo"), ("qlight", "quake_light_demo"), ("qmove", "quake_move_demo"), ("scalar", "parity_scalar")];
+    assert_eq!(entries.len(), names.len(), "premise: every fixture has an entry: {names:?}");
     let mut autoexec = format!("[autoexec]\nmount c {}\nc:\n", dir.display());
     let mut runs = Vec::new();
     for (number, name) in names.iter().enumerate() {
-        let start = parity.join(format!("{name}-start.asm"));
-        run("jwasm", &["-q", "-c", "-Cp", "-Zg", "-omf", &format!("-Fo{name}_s.obj"), start.to_str().unwrap()]);
+        let entry = entries.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no entry for {name}")).1;
+        let main = format!("#include \"os.h\"\nextern long {entry}(void);\nint main(void)\n{{\n    long value = {entry}();\n    short handle = llrm_os_create(\"VALUE.BIN\");\n    if (handle < 0 || llrm_os_write_file(handle, (const unsigned char *)&value, 4) != 4) return 1;\n    llrm_os_close(handle);\n    return 0;\n}}\n");
+        std::fs::write(dir.join(format!("{name}_main.c")), main).unwrap();
+        run("llrm-c", &[dir.join(format!("{name}_main.c")).to_str().unwrap(), "-I", dir.to_str().unwrap(), "-o", &format!("{name}_m.obj")]);
         let program = format!("P{number}");
         let source = parity.join(format!("{name}.cgs"));
         run("llrm-c", &[source.to_str().unwrap(), "-o", &format!("{program}.obj")]);
-        run("jwlink", &["format", "dos", "name", &format!("{program}.EXE"), "file", &format!("{name}_s.obj"), "file", &format!("{program}.obj"), "op", "quiet"]);
+        run("jwlink", &["format", "dos", "name", &format!("{program}.EXE"), "file", "layer_start.obj", "file", "c_init.obj", "file", &format!("{name}_m.obj"), "file", &format!("{program}.obj"), "file", "layer_os.obj", "op", "quiet"]);
         autoexec += &format!("del VALUE.BIN\n{program}\ncopy VALUE.BIN {program}.BIN\n");
         runs.push((name.clone(), program));
     }

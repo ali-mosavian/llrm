@@ -4,6 +4,7 @@
 //! DOSBox starts with zeroed RAM, so a plain run proves nothing: every program here runs under
 //! `tools/dosbatch/dirty.asm`, which fills free memory with 0A5h first.
 
+use llrm_target::Target;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -57,15 +58,29 @@ impl Lab {
         self.run("jwasm", &args);
     }
 
-    /// `PROGRAM` at the flag, linked with the C start-up (`nozero`: one that does not zero).
+    /// What the assembler is told of the OS layer and C's runtime description; `nozero` adds NOZERO, a start-up
+    /// that does not zero.
+    fn defines(nozero: bool) -> Vec<String> {
+        let target = llrm_x86_code16::Code16;
+        let (layer, c) = (target.os_layer().unwrap(), target.runtime("c").unwrap());
+        let mut defines: Vec<String> = layer.defines().unwrap().into_iter().chain(c.defines().unwrap()).map(|(symbol, value)| format!("-D{symbol}={value}")).collect();
+        defines.extend(nozero.then(|| "-DNOZERO".to_owned()));
+        defines
+    }
+
+    /// `PROGRAM` at the flag, linked with the OS layer's start-up (`nozero`: one that does not zero).
     fn exe(&self, name: &str, flag: &str, nozero: bool) -> PathBuf {
-        let runtime = self.root.join("tools/loops/runtime");
-        self.assemble(&runtime.join("crt.asm"), &format!("{name}-crt.obj"), if nozero { &["-DNOZERO"] } else { &[] });
+        let target = llrm_x86_code16::Code16;
+        let (layer, c) = (target.os_layer().unwrap(), target.runtime("c").unwrap());
+        let defines = Self::defines(nozero);
+        let defines: Vec<&str> = defines.iter().map(String::as_str).collect();
+        self.assemble(&Path::new(layer.directory).join(layer.string("start").unwrap()), &format!("{name}-start.obj"), &defines);
+        self.assemble(&Path::new(c.directory).join(c.string("init_file").unwrap()), &format!("{name}-init.obj"), &defines);
         std::fs::write(self.path("t.c"), PROGRAM).unwrap();
         self.run("llrm-c", &["-Os", flag, "--cpu", "486", "t.c", "-o", &format!("{name}.obj")]);
         let exe = self.path(&format!("{name}.exe"));
-        let (crt, program) = (format!("{name}-crt.obj"), format!("{name}.obj"));
-        self.run("jwlink", &["option", "quiet", "format", "dos", "name", exe.to_str().unwrap(), "file", &crt, "file", &program, "file", "ext.obj", "file", "zend.obj"]);
+        let (start, init, program) = (format!("{name}-start.obj"), format!("{name}-init.obj"), format!("{name}.obj"));
+        self.run("jwlink", &["option", "quiet", "format", "dos", "name", exe.to_str().unwrap(), "file", &start, "file", &init, "file", &program, "file", "ext.obj", "file", "os.obj"]);
         exe
     }
 
@@ -82,9 +97,12 @@ impl Lab {
     }
 
     fn runtime(&self) {
-        let runtime = self.root.join("tools/loops/runtime");
-        self.assemble(&runtime.join("ext.asm"), "ext.obj", &[]);
-        self.assemble(&runtime.join("zend.asm"), "zend.obj", &[]);
+        let target = llrm_x86_code16::Code16;
+        let (layer, c) = (target.os_layer().unwrap(), target.runtime("c").unwrap());
+        let defines = Self::defines(false);
+        let defines: Vec<&str> = defines.iter().map(String::as_str).collect();
+        self.assemble(&Path::new(c.directory).join("ext.asm"), "ext.obj", &defines);
+        self.assemble(&Path::new(layer.directory).join(layer.string("implementation").unwrap()), "os.obj", &defines);
         let out = format!("-Fo{}", self.path("dirty.com").display());
         self.run("jwasm", &["-q", "-bin", &out, self.root.join("tools/dosbatch/dirty.asm").to_str().unwrap()]);
     }

@@ -93,7 +93,7 @@ pub struct Os {
     pub far_bss: bool,
     /// What the assembler is told of the description (`assembler_defines`): each symbol and the
     /// value of the field it stands for, so the files that name no constant of their own.
-    pub defines: Vec<(String, i64)>,
+    pub defines: Vec<(String, String)>,
     /// The directory the description is in, and the assembly files it names there.
     pub directory: String,
     pub start: String,
@@ -136,11 +136,7 @@ impl Os {
         let file = |key: &str| -> Result<String, String> { let name = description.string(key)?; description.file(&name).map(str::to_owned).ok_or(format!("the runtime description names {name}, which is not shipped")) };
         let stack = toml::Value::Table(file("stack")?.parse().map_err(|error: toml::de::Error| error.to_string())?);
         let mut defines = layer.defines()?;
-        for entry in table.get("assembler_defines").and_then(|one| one.as_array()).into_iter().flatten() {
-            let (field, symbol) = entry.as_str().and_then(|one| one.split_once(':')).ok_or("assembler_defines are \"field:SYMBOL\"")?;
-            let value = table.get(field).and_then(|one| one.as_integer()).ok_or_else(|| format!("{field} is not an integer"))?;
-            defines.push((symbol.to_owned(), value));
-        }
+        defines.extend(description.defines()?);
         Ok(Self {
             module: layer.nib_module()?,
             stack: llrm_core::hir::model::StackCheck::from_toml(&stack)?,

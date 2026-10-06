@@ -9,6 +9,7 @@ description = "The C frontend, through Open Watcom's front end"
 llrm-core = { workspace = true }
 llrm-driver = { workspace = true }
 llrm-mir = { workspace = true }
+llrm-target = { workspace = true }
 llrm-transforms = { workspace = true }
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }
@@ -27,5 +28,6 @@ toolchain = []
 
 [dev-dependencies]
 llrm-x86-code16 = { workspace = true }
+llrm-x86-code32 = { workspace = true }
 regex = { workspace = true }
 llrm-core = { workspace = true, features = ["testing"] }

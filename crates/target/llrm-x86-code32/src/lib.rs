@@ -54,11 +54,19 @@ impl llrm_target::Target for Code32 {
     }
 
     fn runtime(&self, language: &str) -> Option<llrm_target::runtime::Description> {
-        (language == "nib").then_some(llrm_target::runtime::Description {
-            directory: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../runtime/nib/x86-code32"),
-            text: include_str!("../../../../runtime/nib/x86-code32/nib.toml"),
-            files: &[("stack.toml", include_str!("../../../../runtime/nib/x86-code32/stack.toml"))],
-        })
+        match language {
+            "nib" => Some(llrm_target::runtime::Description {
+                directory: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../runtime/nib/x86-code32"),
+                text: include_str!("../../../../runtime/nib/x86-code32/nib.toml"),
+                files: &[("stack.toml", include_str!("../../../../runtime/nib/x86-code32/stack.toml"))],
+            }),
+            "c" => Some(llrm_target::runtime::Description {
+                directory: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../runtime/c/x86-code32"),
+                text: include_str!("../../../../runtime/c/x86-code32/c.toml"),
+                files: &[("stack.toml", include_str!("../../../../runtime/c/x86-code32/stack.toml"))],
+            }),
+            _ => None,
+        }
     }
 
     fn os_layer(&self) -> Option<llrm_target::os::Layer> {
