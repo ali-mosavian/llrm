@@ -523,7 +523,15 @@ depends on them. code32 (20) has no baseline to match, so the generic pipeline i
 descriptions, not code. Not in this task: running or linking code32, a 32-bit object
 writer, code64, arm64.
 
-PRs 2 to 19 and code16's migration belong to the target-refactor session. The
+The code32 session also makes the shared edits its listing needs, each as a
+`Target` query whose code16 answer is today's literal (so byte-identical), one PR
+per row: A, `Options` carries the target, with `stack_slot_bytes`, `frame_register`,
+`first_argument_offset` and `returns`; B, `callee_saved`; C, the datalayout and HIR
+profile into HIR to MIR; D, `bitness` and the listing header and frame in `masm`;
+E, the width in `allocate.rs` (cost-spill's file: mechanical, agreed with it first);
+and PR 5's data half, the family/code16 split of `x86.instr`, after PR 4b.
+
+PRs 2 to 19 and code16's migration otherwise belong to the target-refactor session. The
 code32 session owns PR 20 and what follows: the crate and its descriptions, the
 32-bit `wccq`, the 32-bit HIR profile, and the generic-pipeline pieces as its
 first client. Its crate stays out of the workspace until PR 3c, it edits no
