@@ -322,8 +322,10 @@ fn sp_reg() -> Loc {
 /// callee, by its low half.
 fn saved_of(procedure: &Procedure) -> Vec<Register> {
     let roots = _roots(&procedure.body);
-    // An interrupt handler has saved everything before its frame.
-    SAVED.iter().filter(|(whole, _)| procedure.interrupt.is_none() && roots.contains(whole)).map(|(_, low)| *low).collect()
+    // An interrupt handler has saved everything before its frame, and a runtime-built one has saved
+    // SI and DI (B$ENRA/B$ENRD, restored by B$EXSA).
+    let owned = procedure.interrupt.is_some() || procedure.entry != 0;
+    SAVED.iter().filter(|(whole, _)| !owned && roots.contains(whole)).map(|(_, low)| *low).collect()
 }
 
 /// Where `procedure` saves them, where that is not its entry (`shrinkwrap`).
