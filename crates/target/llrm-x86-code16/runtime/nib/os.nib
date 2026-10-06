@@ -6,9 +6,9 @@ pub fn open(name: *far char, mode: u8) -> i16
 @extern("cdecl16", name="N$OCRE")
 pub fn create(name: *far char) -> i16
 @extern("cdecl16", name="N$OREA")
-pub fn read(handle: i16, data: *far mut u8, count: u16) -> i16
+pub fn read(handle: i16, data: *far mut u8, count: usize) -> i16
 @extern("cdecl16", name="N$OWRI")
-pub fn write_file(handle: i16, data: *far u8, count: u16) -> i16
+pub fn write_file(handle: i16, data: *far u8, count: usize) -> i16
 @extern("cdecl16", name="N$OCLO")
 pub fn close(handle: i16) -> i16
 # Ends the program with `code`.
@@ -29,6 +29,6 @@ pub fn chain(handler: extern "interrupt16" fn() -> void) -> void
 const STANDARD_OUTPUT: i16 = 1
 
 # `length` bytes of `text` to standard output.
-pub fn write(text: *far u8, length: u16) -> void:
+pub fn write(text: *far u8, length: usize) -> void:
     unsafe:
         write_file(STANDARD_OUTPUT, text, length)

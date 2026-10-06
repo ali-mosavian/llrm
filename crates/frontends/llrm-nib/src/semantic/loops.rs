@@ -120,17 +120,18 @@ impl<'a> FunctionCompiler<'a> {
             },
         );
         let counter_name = format!("$comprehension_{name}");
-        let counter = self.place(&counter_name, TypeName::U16, true);
+        let counter = self.place(&counter_name, self.word(), true);
         self.emit(
             "store",
             Vec::new(),
-            vec![hir::Operand::Place(counter), hir::Operand::Constant(U16, 0)],
+            vec![hir::Operand::Place(counter), hir::Operand::Constant(self.word_id(), 0)],
             None,
         );
+        let word = self.word();
         self.scopes.last_mut().expect("scope").insert(
             counter_name.clone(),
             Binding {
-                type_: BindingType::Scalar(TypeName::U16),
+                type_: BindingType::Scalar(word),
                 mutable: true,
                 storage: Storage::Place(counter),
             },
@@ -265,13 +266,13 @@ impl<'a> FunctionCompiler<'a> {
         };
         let length = match length {
             Some(length) => hir::Operand::Constant(
-                U16,
-                i64::from(u16::try_from(length).map_err(|_| {
+                self.word_id(),
+                i64::try_from(length).ok().filter(|&length| length >> (8 * self.word_bytes()) == 0).ok_or_else(|| {
                     Diagnostic::new(
                         iterable.span(),
-                        "for array length exceeds the 16-bit target",
+                        "for array length exceeds the target's word",
                     )
-                })?),
+                })?,
             ),
             None => {
                 let pointer = if let Some(pointer) = string_pointer {
@@ -281,14 +282,14 @@ impl<'a> FunctionCompiler<'a> {
                 } else {
                     return Err(Diagnostic::new(iterable.span(), "view has no descriptor"));
                 };
-                let value = self.value(TypeName::U16);
+                let value = self.value(self.word());
                 self.emit(
                     "load",
                     vec![value],
                     vec![hir::Operand::DescriptorPlace {
                         base: pointer,
                         field: "length",
-                        type_id: U16,
+                        type_id: self.word_id(),
                     }],
                     None,
                 );
@@ -296,13 +297,13 @@ impl<'a> FunctionCompiler<'a> {
             }
         };
 
-        let index_place = self.place(&format!("$for_{array_name}"), TypeName::U16, true);
+        let index_place = self.place(&format!("$for_{array_name}"), self.word(), true);
         self.emit(
             "store",
             Vec::new(),
             vec![
                 hir::Operand::Place(index_place),
-                hir::Operand::Constant(U16, 0),
+                hir::Operand::Constant(self.word_id(), 0),
             ],
             None,
         );
@@ -313,7 +314,7 @@ impl<'a> FunctionCompiler<'a> {
         self.terminate(jump(condition_block));
 
         self.current = condition_block;
-        let index = self.value(TypeName::U16);
+        let index = self.value(self.word());
         self.emit(
             "load",
             vec![index],
@@ -399,20 +400,20 @@ impl<'a> FunctionCompiler<'a> {
         }
 
         self.current = increment_block;
-        let old_index = self.value(TypeName::U16);
+        let old_index = self.value(self.word());
         self.emit(
             "load",
             vec![old_index],
             vec![hir::Operand::Place(index_place)],
             None,
         );
-        let next_index = self.value(TypeName::U16);
+        let next_index = self.value(self.word());
         self.emit(
             "add",
             vec![next_index],
             vec![
                 hir::Operand::Value(old_index),
-                hir::Operand::Constant(U16, 1),
+                hir::Operand::Constant(self.word_id(), 1),
             ],
             None,
         );

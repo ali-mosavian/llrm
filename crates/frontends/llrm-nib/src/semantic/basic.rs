@@ -112,7 +112,7 @@ impl FunctionCompiler<'_> {
         let view = self.view_slot(element, rank);
         let mut capacity = hir::Operand::Value(dimensions[0]);
         for (axis, dimension) in dimensions.iter().enumerate() {
-            let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::dim(axis as u8), type_id: U16, inbounds: false, member: None };
+            let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::basic::dim(axis as u8), type_id: U16, inbounds: false, member: None };
             self.emit("store", Vec::new(), vec![place, hir::Operand::Value(*dimension)], None);
             if axis > 0 {
                 let product = self.value(TypeName::U16);
@@ -120,12 +120,12 @@ impl FunctionCompiler<'_> {
                 capacity = hir::Operand::Value(product);
             }
         }
-        let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::capacity(rank), type_id: U16, inbounds: false, member: None };
+        let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::basic::capacity(rank), type_id: U16, inbounds: false, member: None };
         self.emit("store", Vec::new(), vec![place, capacity], None);
         let data_type = self.types.pointer(element.id(), 0);
         let elements = self.value_type(data_type);
         self.emit("copy", vec![elements], vec![hir::Operand::Value(data)], None);
-        let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::size(rank), type_id: data_type, inbounds: false, member: None };
+        let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::basic::size(rank), type_id: data_type, inbounds: false, member: None };
         self.emit("store", Vec::new(), vec![place, hir::Operand::Value(elements)], None);
         Ok(Binding { type_: target, mutable: true, storage: Storage::Slice(view) })
     }
@@ -159,12 +159,12 @@ impl FunctionCompiler<'_> {
         let data_type = self.types.pointer(element.id(), 0);
         let raw = self.types.raw_pointer(element, "far", true);
         let data = self.value_type(data_type);
-        let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::size(1), type_id: data_type, inbounds: false, member: None };
+        let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::basic::size(1), type_id: data_type, inbounds: false, member: None };
         self.emit("load", vec![data], vec![place], None);
         let pointer = self.value(raw);
         self.emit("copy", vec![pointer], vec![hir::Operand::Value(data)], None);
         let length = self.value(TypeName::U16);
-        let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::dim(0), type_id: U16, inbounds: false, member: None };
+        let place = hir::Operand::IndirectPlace { base: view, offset: descriptor::basic::dim(0), type_id: U16, inbounds: false, member: None };
         self.emit("load", vec![length], vec![place], None);
         let mut arguments = Vec::new();
         for (value, type_name) in [(pointer, raw), (length, TypeName::U16)] {

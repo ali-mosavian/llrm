@@ -469,12 +469,12 @@ impl FunctionCompiler<'_> {
                 let data_type = self.types.pointer(element.id(), 0);
                 let data = self.value_type(data_type);
                 self.emit("copy", vec![data], vec![hir::Operand::Value(pointer)], None);
-                let words = shape.descriptor().into_iter().map(|(_, value)| hir::Operand::Constant(U16, i64::from(value))).collect();
+                let words = shape.descriptor().into_iter().map(|(_, value)| hir::Operand::Constant(self.word_id(), i64::from(value))).collect();
                 let pointer_type = self.types.slice_pointer(*element, 1);
                 let hir::Operand::Value(descriptor) = self.view_descriptor(&view.owner, pointer_type, words, data) else {
                     unreachable!("a view is a descriptor pointer")
                 };
-                Ok(Subject::Sequence { descriptor, data, length: hir::Operand::Constant(U16, i64::from(shape.len())), element: *element })
+                Ok(Subject::Sequence { descriptor, data, length: hir::Operand::Constant(self.word_id(), i64::from(shape.len())), element: *element })
             }
             _ => Err(Diagnostic::new(span, "a sequence pattern needs a vec, one-dimensional array or view")),
         }

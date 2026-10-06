@@ -184,7 +184,7 @@ impl FunctionCompiler<'_> {
         };
         let key = single_key(indices, span)?;
         let (_, _, entry) = self.types.dictionary_parts(type_name).expect("a dict");
-        let size = hir::Operand::Constant(U16, i64::from(self.types.width(entry)));
+        let size = hir::Operand::Constant(self.word_id(), i64::from(self.types.width(entry)));
         let place = self.sequence_place(&Expr::Name(dictionary.into(), span), span)?;
         let table = self.value(type_name);
         self.emit("load", vec![table], vec![place.clone()], None);
@@ -200,11 +200,11 @@ impl FunctionCompiler<'_> {
         let (count, done) = (self.block(), self.block());
         self.terminate(hir::Terminator { kind: "branch", operands: vec![found], targets: vec![done, count] });
         self.current = count;
-        let entries = hir::Operand::DescriptorPlace { base: grown, field: "capacity", type_id: U16 };
-        let before = self.value(TypeName::U16);
+        let entries = hir::Operand::DescriptorPlace { base: grown, field: "capacity", type_id: self.word_id() };
+        let before = self.value(self.word());
         self.emit("load", vec![before], vec![entries.clone()], None);
-        let after = self.value(TypeName::U16);
-        self.emit("add", vec![after], vec![hir::Operand::Value(before), hir::Operand::Constant(U16, 1)], None);
+        let after = self.value(self.word());
+        self.emit("add", vec![after], vec![hir::Operand::Value(before), hir::Operand::Constant(self.word_id(), 1)], None);
         self.emit("store", Vec::new(), vec![entries, hir::Operand::Value(after)], None);
         self.terminate(jump(done));
         self.current = done;
@@ -224,9 +224,9 @@ impl FunctionCompiler<'_> {
         let table = self.dictionary_table(receiver, type_name, span)?;
         match (name, arguments) {
             ("len", []) => {
-                let count = self.value(TypeName::U16);
-                self.emit("load", vec![count], vec![hir::Operand::DescriptorPlace { base: table, field: "capacity", type_id: U16 }], None);
-                self.implicit(TypedOperand { operand: Some(hir::Operand::Value(count)), type_name: TypeName::U16 }, expected.unwrap_or(TypeName::U16), span)
+                let count = self.value(self.word());
+                self.emit("load", vec![count], vec![hir::Operand::DescriptorPlace { base: table, field: "capacity", type_id: self.word_id() }], None);
+                self.implicit(TypedOperand { operand: Some(hir::Operand::Value(count)), type_name: self.word() }, expected.unwrap_or(self.word()), span)
             }
             ("contains", [key]) => {
                 let probe = self.probe(table, type_name, key, true, span)?;

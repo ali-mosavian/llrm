@@ -42,7 +42,7 @@ impl<'a> FunctionCompiler<'a> {
             .collect::<Result<Vec<_>, _>>()?;
         if let Some(shape) = shape {
             for (index, dim) in indices.iter().zip(shape.dims()) {
-                self.check_bounds(index, hir::Operand::Constant(U16, i64::from(*dim)), span)?;
+                self.check_bounds(index, hir::Operand::Constant(self.word_id(), i64::from(*dim)), span)?;
             }
         }
         let element_width = self.types.width(element.id());
@@ -58,7 +58,7 @@ impl<'a> FunctionCompiler<'a> {
                 let strides = shape
                     .strides()
                     .into_iter()
-                    .map(|one| hir::Operand::Constant(U16, i64::from(one)))
+                    .map(|one| hir::Operand::Constant(self.word_id(), i64::from(one)))
                     .collect();
                 let flat = self.linear(indices, strides, span)?;
                 ElementAt::Pointer(self.indexed_pointer(pointer, flat, element_width, span)?)
@@ -87,29 +87,29 @@ impl<'a> FunctionCompiler<'a> {
         indices: Vec<hir::Operand>,
         span: Span,
     ) -> Result<u32, Diagnostic> {
-        let mut strides = vec![hir::Operand::Constant(U16, 1)];
+        let mut strides = vec![hir::Operand::Constant(self.word_id(), 1)];
         for axis in (1..rank).rev() {
-            let dim = self.value(TypeName::U16);
+            let dim = self.value(self.word());
             self.emit(
                 "load",
                 vec![dim],
                 vec![hir::Operand::IndirectPlace {
                     base: descriptor,
-                    offset: descriptor::dim(axis),
-                    type_id: U16,
+                    offset: descriptor::dim(axis, self.word_bytes()),
+                    type_id: self.word_id(),
                     inbounds: false, member: None,
                 }],
                 None,
             );
             let inner = TypedOperand {
                 operand: Some(strides[0].clone()),
-                type_name: TypeName::U16,
+                type_name: self.word(),
             };
             let dim = TypedOperand {
                 operand: Some(hir::Operand::Value(dim)),
-                type_name: TypeName::U16,
+                type_name: self.word(),
             };
-            strides.insert(0, self.folded("mul", dim, inner, TypeName::U16));
+            strides.insert(0, self.folded("mul", dim, inner, self.word()));
         }
         let flat = self.linear(indices, strides, span)?;
         let data = self.slice_data_pointer(descriptor, element, rank);
@@ -135,9 +135,9 @@ impl<'a> FunctionCompiler<'a> {
                 .find(|one| one.id == *value)
                 .map(|one| one.type_id)
                 .expect("an index value has a type"),
-            _ => U16,
+            _ => this.word_id(),
         };
-        let index_name = TypeName::U16;
+        let index_name = self.word();
         let mut total: Option<hir::Operand> = None;
         for (index, stride) in indices.into_iter().zip(strides) {
             let index = TypedOperand {
@@ -272,7 +272,7 @@ impl<'a> FunctionCompiler<'a> {
             vec![pointer],
             vec![hir::Operand::IndirectPlace {
                 base: descriptor,
-                offset: descriptor::size(rank),
+                offset: descriptor::size(rank, self.word_bytes()),
                 type_id: pointer_type,
                 inbounds: false, member: None,
             }],
@@ -290,7 +290,7 @@ impl<'a> FunctionCompiler<'a> {
     ) -> Result<u32, Diagnostic> {
         let byte_offset = match index {
             hir::Operand::Constant(_, value) => {
-                hir::Operand::Constant(U16, value * i64::from(element_width))
+                hir::Operand::Constant(self.word_id(), value * i64::from(element_width))
             }
             hir::Operand::Value(value) if element_width == 1 => hir::Operand::Value(value),
             hir::Operand::Value(value) => {
