@@ -656,20 +656,26 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
     // What a body captures grows from nothing: a call captures what its
     // callee's summary says, so a least fixed point, as a recursive one
     // that captures nothing proves.
-    let direct = procedures
-        .iter()
-        .map(|(name, one)| Ok((name.clone(), Summary { captures: BTreeSet::new(), .._direct_summary(&one.unit)? })))
-        .collect::<Result<Vec<_>, String>>()?;
+    let direct = llrm_support::debug::timed("summaries direct", || {
+        procedures
+            .iter()
+            .map(|(name, one)| Ok((name.clone(), Summary { captures: BTreeSet::new(), .._direct_summary(&one.unit)? })))
+            .collect::<Result<Vec<_>, String>>()
+    })?;
     let mut result = known.cloned().unwrap_or_default();
     result.extend(direct);
     let recursive = _recursive_edges(procedures);
     loop {
+        // Rounds are the misses, procedures worked on in them the hits.
+        llrm_support::debug::counted("summaries rounds", false);
+        let _round = llrm_support::debug::span("summaries round");
         let mut changed = false;
         for (name, procedure) in procedures {
-            let callbacks = _callbacks(&procedure.unit, &result);
+            llrm_support::debug::counted("summaries rounds", true);
+            let callbacks = llrm_support::debug::timed("summaries callbacks", || _callbacks(&procedure.unit, &result));
             let captured_at = procedure.calls.iter().map(|(at, target)| (*at, _summary(&procedure.unit, &result, target).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
-            let facts = points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at))?;
-            let direct = _direct_summary(&procedure.unit)?;
+            let facts = llrm_support::debug::timed("summaries points-to", || points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at)))?;
+            let direct = llrm_support::debug::timed("summaries direct", || _direct_summary(&procedure.unit))?;
             let (mut reads, mut writes) = (direct.reads, direct.writes);
             let captures = facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter && matches!(one.identity, Some(Identity::Int(_)))).map(|one| one.identity.clone()).collect();
             let (mut unknown_read, mut unknown_write) = (direct.unknown_read, direct.unknown_write);

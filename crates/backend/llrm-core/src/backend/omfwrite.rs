@@ -367,6 +367,10 @@ pub fn _resolved_fixup(one: &omf::Fixup, offset: i64, disp: i64) -> Result<Vec<u
 /// kept unit names one of its labels. Items before a segment's first Object
 /// always stay.
 pub fn live(module: &masm::Module) -> Result<masm::Module, Error> {
+    llrm_support::debug::timed("omf live", || live_inner(module))
+}
+
+fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
     if !module.data.iter().any(|(_, items)| items.iter().any(|item| matches!(item, masm::Datum::Object(_)))) {
         return Ok(module.clone());
     }
@@ -453,6 +457,10 @@ pub fn written(module: &masm::Module, source: &str) -> Result<Vec<u8>, Error> {
 }
 
 pub fn written_as(module: &masm::Module, source: &str, layout: CodeLayout) -> Result<Vec<u8>, Error> {
+    llrm_support::debug::timed("omf write", || written_inner(module, source, layout))
+}
+
+fn written_inner(module: &masm::Module, source: &str, layout: CodeLayout) -> Result<Vec<u8>, Error> {
     let module = &live(module)?;
     let groups: Vec<Vec<usize>> = match layout {
         CodeLayout::OneSegment => vec![(0..module.procedures.len()).collect()],

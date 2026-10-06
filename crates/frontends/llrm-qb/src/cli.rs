@@ -113,14 +113,14 @@ pub fn main(argv: &[String]) -> i32 {
         if let Some(dump) = &args.dump {
             qbstages::dumped(&args.source, dump, &args.frontend, &args.codegen)?;
         }
-        let program = parsed(&args.source, &args.frontend, args.dump_hir.as_deref()).map_err(|error| error.0)?;
+        let program = llrm_core::support::debug::timed("frontend", || parsed(&args.source, &args.frontend, args.dump_hir.as_deref())).map_err(|error| error.0)?;
         if args.flags.assembly {
             let module = compile::assembled(&program, None, &args.codegen).map_err(|error| error.to_string())?;
             let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
             std::fs::write(output, llrm_core::driver::basic::text(&module)?).map_err(|error| error.to_string())?;
         } else if let Some(output) = &args.flags.output {
             let bytes = compile::object_bytes(&program, &args.source, None, &args.codegen).map_err(|error| error.to_string())?;
-            std::fs::write(output, bytes).map_err(|error| error.to_string())?;
+            llrm_core::support::debug::timed("write output", || std::fs::write(output, bytes)).map_err(|error| error.to_string())?;
         } else if args.dump.is_none() {
             print!("{}", codec::encode(&program, None).map_err(|error| error.0)?);
         }

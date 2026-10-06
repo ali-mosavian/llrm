@@ -111,7 +111,7 @@ pub fn main(argv: &[String]) -> i32 {
             (None, None) => args.source.with_extension(if args.flags.assembly { "asm" } else { "obj" }),
             (None, Some(_)) => return Ok(()),
         };
-        let mut program = driver::parsed(&args.source, &args.frontend, None).map_err(|error| error.0)?;
+        let mut program = llrm_core::support::debug::timed("frontend", || driver::parsed(&args.source, &args.frontend, None)).map_err(|error| error.0)?;
         if !args.used_by.is_empty() {
             nib::keep_exports(&mut program, &used(&args.used_by)?);
         }
@@ -121,7 +121,7 @@ pub fn main(argv: &[String]) -> i32 {
         } else {
             nib::object(&module, &args.source, args.layout)?
         };
-        std::fs::write(&output, &bytes).map_err(|error| error.to_string())?;
+        llrm_core::support::debug::timed("write output", || std::fs::write(&output, &bytes)).map_err(|error| error.to_string())?;
         println!("{} ({} bytes)", output.display(), bytes.len());
         Ok(())
     })();

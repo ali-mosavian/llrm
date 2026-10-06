@@ -23,6 +23,7 @@ use crate::hir::model;
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir;
 use data::Placed;
+use llrm_support::debug::timed;
 
 /// What a compile is for: the machine, whose CPU prices the choices, the
 /// passes that run, and where the pipeline writes each stage.
@@ -65,14 +66,14 @@ impl Options {
 /// listing and executed costs go beside the stages.
 pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm::Module>, String> {
     let (mut mir, data) = emitted(program, options)?;
-    let placed: Vec<Placed> = mir.modules.iter().zip(&program.modules).zip(&data).map(|((module, hir), data)| Placed::of(module, hir, data)).collect();
+    let placed: Vec<Placed> = timed("data placement", || mir.modules.iter().zip(&program.modules).zip(&data).map(|((module, hir), data)| Placed::of(module, hir, data)).collect());
     optimized(&mut mir, options)?;
     let abi = HirAbi::of(program)?;
     let segments = Segments::of(&options.machine);
     let mut out = Vec::new();
     for ((module, hir), placed) in mir.modules.iter().zip(&program.modules).zip(&placed) {
-        let mut assembled = assemble::assembled_by(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments, options.selection, &*options.arch)?;
-        placed.lay_out(&mut assembled, module, mir.segments.data_space, program.constant_segment.as_deref(), options.machine.far_bss)?;
+        let mut assembled = timed("assemble", || assemble::assembled_by(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments, options.selection, &*options.arch))?;
+        timed("data layout", || placed.lay_out(&mut assembled, module, mir.segments.data_space, program.constant_segment.as_deref(), options.machine.far_bss))?;
         if let Some(directory) = &options.dump {
             let suffix = if program.modules.len() > 1 { format!("-{}", hir.name) } else { String::new() };
             let written = |name: &str, text: String| std::fs::write(directory.join(format!("{name}{suffix}")), text).map_err(|error| error.to_string());
@@ -125,14 +126,14 @@ fn spill_model(program: &Program) {
 pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
     // Whichever frontend made it, a program is checked before it is lowered.
     crate::support::debug::timed("hir verify", || llrm_hir::verify::verify(program)).map_err(|why| why.0)?;
-    let emitted = llrm_hir::mir::emit(program, &options.arch.layout());
+    let emitted = timed("hir to mir", || llrm_hir::mir::emit(program, &options.arch.layout()));
     if let Some((name, why)) = emitted.iter().find_map(|one| one.refused.first()) {
         return Err(format!("@{name}: {why}"));
     }
-    let runtime = crate::hir::mir::runtime(&emitted.iter().zip(&program.modules).collect::<Vec<_>>(), &program.promises)?;
+    let runtime = timed("mir runtime", || crate::hir::mir::runtime(&emitted.iter().zip(&program.modules).collect::<Vec<_>>(), &program.promises))?;
     let (modules, data) = emitted.into_iter().map(|one| (one.module, one.data)).unzip();
     let target = std::rc::Rc::new(crate::abi::qb::LoweredTarget::of(options.cpu()?, crate::abi::qb::HirAbi::of(program)?));
-    let mut linked = linked(modules, runtime, target)?;
+    let mut linked = timed("mir link", || linked(modules, runtime, target))?;
     linked.exports.entries = program.entries.iter().cloned().collect();
     Ok((linked, data))
 }
@@ -141,7 +142,7 @@ pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, 
 /// module of declarations alone; each verified.
 pub fn linked(modules: Vec<Module>, runtime: Module, target: std::rc::Rc<dyn llrm_mir::target::Machine>) -> Result<Program, String> {
     let program = Program::new(modules, target)?.with_runtime(runtime)?;
-    verified(&program, "the frontend")?;
+    timed("mir verify frontend", || verified(&program, "the frontend"))?;
     Ok(program)
 }
 
@@ -150,14 +151,14 @@ pub fn linked(modules: Vec<Module>, runtime: Module, target: std::rc::Rc<dyn llr
 /// module verified after.
 pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String> {
     let applied = llrm_transforms::pipeline::Applied { options: options.pipeline.clone(), dump: options.dump.clone(), ..Default::default() };
-    llrm_transforms::pipeline::applied(program, &applied)?;
-    program.modules.iter_mut().for_each(llrm_transforms::dead::assumptions_dropped);
-    program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared)?;
-    program.modules.iter_mut().try_for_each(crate::backend::selects::lowered)?;
+    timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
+    timed("mir assumptions", || program.modules.iter_mut().for_each(llrm_transforms::dead::assumptions_dropped));
+    timed("mir ehprepare", || program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared))?;
+    timed("mir selects", || program.modules.iter_mut().try_for_each(crate::backend::selects::lowered))?;
     if llrm_support::debug::enabled("spillmodel") {
-        spill_model(program);
+        timed("mir spill model", || spill_model(program));
     }
-    verified(program, "the pipeline")
+    timed("mir verify pipeline", || verified(program, "the pipeline"))
 }
 
 /// Refuses `program` where a module does not verify, `stage` having made it.

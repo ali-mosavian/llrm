@@ -376,7 +376,7 @@ fn _graphics_dependencies(module: &model::Module) -> BTreeSet<String> {
 /// driver into the BASIC module object laid out here, each data object as
 /// this names it and lays it down.
 fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result<masm::Module, CompileError> {
-    let program = &_positional_data(program)?;
+    let program = &llrm_core::support::debug::timed("hir positional data", || _positional_data(program))?;
     let module = &program.modules[0];
     let functions = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name)));
     let symbols: BTreeMap<String, String> = functions.chain(module.callables.iter().map(|one| (one.name.clone(), _link_name(one)))).collect();
@@ -454,12 +454,12 @@ pub fn assembled(
     observer: Option<&mut HirObserver<'_>>,
     codegen: &driver::Options,
 ) -> Result<masm::Module, CompileError> {
-    hir::verify::verify(program).map_err(|error| CompileError::Value(error.0))?;
+    llrm_core::support::debug::timed("hir verify", || hir::verify::verify(program)).map_err(|error| CompileError::Value(error.0))?;
     if let Some(observe) = observer {
         observe(program)?;
     }
-    let laid_out = super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function));
-    let program = &_near_procedures(&laid_out);
+    let laid_out = llrm_core::support::debug::timed("hir zero fill", || super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function)));
+    let program = &llrm_core::support::debug::timed("hir near procedures", || _near_procedures(&laid_out));
     if program.modules.len() != 1 {
         return emission("one OMF object represents exactly one QB module");
     }

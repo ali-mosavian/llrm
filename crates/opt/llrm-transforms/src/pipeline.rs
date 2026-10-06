@@ -202,6 +202,19 @@ pub fn passes() -> Vec<&'static str> {
     pipeline(&Applied::default()).iter().map(|one| one.name()).collect()
 }
 
+/// Plugs the pass manager's steps into `LLRM_DEBUG=time`, if it is on.
+pub fn timed() {
+    use llrm_support::debug;
+    if !debug::enabled("time") {
+        return;
+    }
+    llrm_mir::passes::observe(llrm_mir::passes::Observer {
+        span: |kind, name, run| debug::timed_by(|| format!("{kind} {name}"), run),
+        function: |name, run| debug::in_function(name, run),
+        count: |what, hit| debug::counted(what, hit),
+    });
+}
+
 /// `program` through the pipeline.
 pub fn applied(program: &mut Program, applied: &Applied) -> Result<(), String> {
     recorded(program, applied).map(|_| ())
@@ -209,6 +222,7 @@ pub fn applied(program: &mut Program, applied: &Applied) -> Result<(), String> {
 
 /// `applied`, with what the pipeline did to each function.
 pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, String> {
+    timed();
     let mut manager = PassManager::default();
     manager.verify_each = true;
     manager.dump = applied.dump.clone();
@@ -457,11 +471,11 @@ impl Run {
         if !self.promotes && matches!(pass.name(), "sroa" | "promote") {
             return false;
         }
-        let preserved = pass.run(unit, analyses);
+        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses));
         if preserved.are_all_preserved() {
             return false;
         }
-        analyses.invalidate(&preserved);
+        llrm_mir::passes::spanned("invalidate", || analyses.invalidate(&preserved));
         self.changed(stage, unit, analyses);
         true
     }

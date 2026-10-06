@@ -3,6 +3,7 @@
 //! BASIC's segments and classes, and the final spelling of the x87 pseudos
 //! isel leaves.
 
+use llrm_support::debug::timed;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -356,6 +357,10 @@ pub fn text(module: &masm::Module) -> Result<String, String> {
 /// A BASIC module's object: `module`'s code after the 30h MODULE_CODE
 /// `header`, its data in BASIC's segments, and the statement table last.
 pub fn written_basic(module: &masm::Module, header: Vec<u8>, name: &str) -> Result<Vec<u8>, String> {
+    timed("omf write", || written_basic_inner(module, header, name))
+}
+
+fn written_basic_inner(module: &masm::Module, header: Vec<u8>, name: &str) -> Result<Vec<u8>, String> {
     // Build the same semantic segments as backend.omfwrite.written, then add
     // the BASIC-owned MODULE_CODE envelope before asking its canonical record
     // serializer to write OMF.
@@ -578,7 +583,7 @@ pub fn compiled(program: &model::Program, object: &Object, options: &Options) ->
         resolved.segments.push(Segment { name: segment.name.clone(), items: items.collect(), size: segment.size });
     }
     super::optimized(&mut mir, options)?;
-    assembled(&mir.modules[0], &resolved, program.runtime, options)
+    llrm_support::debug::timed("assemble", || assembled(&mir.modules[0], &resolved, program.runtime, options))
 }
 
 /// A lifter's `module` compiled into the BASIC module object `object` lays
@@ -648,7 +653,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         let frame = object.frames.get(module.global(id).name.as_deref().unwrap_or_default()).copied().unwrap_or(Frame::Runtime { strings: 0 });
         // B$ENRA zero-fills a runtime frame's locals.
         let target = Target { cpu, segments: &segments, selection: options.selection, arch: &*options.arch, classes: &classes, runtime: runtime.value(), basic: true, zeroed: matches!(frame, Frame::Runtime { .. }) };
-        let (procedure, landing, statics) = procedure(module, id, id == main, frame, &names, &abi, &pool, &target, runtime)?;
+        let (procedure, landing, statics) = llrm_support::debug::in_function(module.global(id).name.as_deref().unwrap_or_default(), || timed("procedure", || procedure(module, id, id == main, frame, &names, &abi, &pool, &target, runtime)))?;
         main_frame += statics;
         for callee in procedure.callees.values() {
             referenced.insert(callee.name.clone(), callee.far);
@@ -676,7 +681,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
     procedures.push(super::statement_table(&rows, options.arch.frame_registers()));
     let mut data = Vec::new();
     for segment in &object.segments {
-        data.push((segment.name.clone(), laid_out(module, segment, &names)?));
+        data.push((segment.name.clone(), timed("data layout", || laid_out(module, segment, &names))?));
     }
     let mut pooled = Vec::new();
     if main_frame > 0 {
@@ -698,7 +703,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
             None => data.push((object.constants.clone(), pooled)),
         }
     }
-    crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names));
+    timed("stack checks", || crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names)));
     let defined: BTreeSet<&str> = procedures.iter().map(|one| one.name.as_str()).collect();
     let mut externs: Vec<(String, String)> = referenced
         .iter()
@@ -715,7 +720,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
     externs.sort();
     externs.dedup();
     let flavor = llrm_omf::cvwrite::Flavor { qb45: runtime == model::RuntimeProfile::Qb45 };
-    let debug = codeview::described(module, &names, flavor)?;
+    let debug = timed("codeview", || codeview::described(module, &names, flavor))?;
     Ok(masm::Module {
         code: object.code.clone(),
         names,
@@ -752,7 +757,7 @@ fn procedure(
 ) -> Result<(masm::Procedure, Option<i64>, i64), String> {
     let global = module.global(id);
     let machined = assemble::machined(module, global.name.as_deref().unwrap_or_default(), abi, pool, target)?;
-    let finalized = finalized(&machined.body, machined.popped)?;
+    let finalized = timed("masm finalize", || finalized(&machined.body, machined.popped))?;
     let mut callees = finalized.callees;
     let mut reserve = 0;
     let mut entry = 0;
