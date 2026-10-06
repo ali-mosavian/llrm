@@ -1,0 +1,41 @@
+# flags: -O2 --cpu 486 --target x86-code32
+# Inline assembly on the 32-bit registers: whole e-registers in and out, a byte of one, a 16-bit view,
+# a near pointer in a register, and a loop in the block.
+fn sum3(a: u32, b: u32) -> u32:
+    unsafe:
+        asm(eax=a, ebx=b, out=(eax=let total), clobbers=[flags]):
+            add eax, ebx
+            add eax, 3
+        return total
+
+fn scaled(base: *u32, index: u32) -> u32:
+    unsafe:
+        asm(ebx=base, ecx=index, out=(eax=let at), clobbers=[flags]):
+            mov eax, [ebx+ecx*4]
+        return at
+
+fn bytes(low: u8, high: u8) -> u32:
+    unsafe:
+        asm(al=low, ah=high, out=(eax=let word), clobbers=[flags]):
+            and eax, 0FFFFh
+        return word
+
+fn countdown(n: u32) -> u32:
+    unsafe:
+        asm(ecx=n, out=(edx=let steps), clobbers=[eax, flags]):
+            xor edx, edx
+            again:
+            inc edx
+            dec ecx
+            jnz again
+        return steps
+
+var table: u32[4] = [10, 20, 30, 40]
+
+fn main() -> i16:
+    print(sum3(100000, 3000000))
+    unsafe:
+        print(scaled(&table, 2))
+    print(bytes(0x34, 0x12))
+    print(countdown(7))
+    return 0

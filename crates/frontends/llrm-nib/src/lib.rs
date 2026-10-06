@@ -46,6 +46,8 @@ pub struct Frontend {
     pub slot: u32,
     /// The bits of the target's code (its `object.toml`): what inline assembly is assembled for.
     pub bits: u32,
+    /// The target's register file (`registers.regs`): which registers an inline block may name.
+    pub registers: Vec<llrm_target::registers::Register>,
     /// The machine's physical addresses the target names (`PHYSICAL_TEXT_SCREEN`...), which every module
     /// may use as constants.
     pub physical: Vec<(String, u64)>,
@@ -73,7 +75,7 @@ pub struct Frontend {
 impl Default for Frontend {
     /// For real mode, where the language began: a caller that knows its target sets `layout`.
     fn default() -> Self {
-        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, physical: llrm_target::Target::physical_addresses(&llrm_x86_code16::Code16), conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default(), reported: Default::default() }
+        Self { layout: llrm_x86_code16::layout(), slot: 2, bits: 16, registers: llrm_target::registers::parse(&llrm_target::Target::registers_text(&llrm_x86_code16::Code16)).expect("registers.regs parses"), physical: llrm_target::Target::physical_addresses(&llrm_x86_code16::Code16), conventions: llrm_target::Target::conventions(&llrm_x86_code16::Code16).iter().map(|one| (*one).to_owned()).collect(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_code16::Code16, "nib").expect("real mode has a Nib runtime")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default(), reported: Default::default() }
     }
 }
 
@@ -109,6 +111,7 @@ impl Frontend {
             layout: target.layout(),
             slot: u32::try_from(target.stack_slot_bytes()).expect("a slot is positive"),
             bits: target.object().bitness,
+            registers: llrm_target::registers::parse(&target.registers_text())?,
             physical: target.physical_addresses(),
             conventions: target.conventions().iter().map(|one| (*one).to_owned()).collect(),
             os: Os::for_target(target)?,
