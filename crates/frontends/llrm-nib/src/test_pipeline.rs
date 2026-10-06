@@ -193,3 +193,22 @@ fn test_usize_and_near_bytes_follow_the_targets_near_width() {
     assert_eq!(run(&Default::default()), "16\n2\n65535\n32768\n");
     assert_eq!(run(&flat), "32\n4\n4294967295\n32768\n");
 }
+
+/// A length is the target's word: on code32 `let n: u16 = v.len` cut it to 16 bits without a word,
+/// and a vector past 64 KB then looked short. It warns, naming the explicit form; `u16(v.len)` and a
+/// word-wide target do not, and code16 (where a word is 16 bits) warns only for a byte.
+#[test]
+fn test_a_length_narrowed_implicitly_warns() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let path = directory.path().join("w.nib");
+    std::fs::write(&path, "fn main() -> i16:\n    let v: vec[i32] = [1, 2, 3]\n    let n: u16 = v.len\n    let m: u8 = v.len\n    let k: u16 = u16(v.len)\n    let w: u32 = v.len\n    print(n + u16(m) + k)\n    print(w)\n    return 0\n").expect("written");
+    let flat_text = include_str!("../../../target/llrm-x86-code32/src/machines/datalayout.toml");
+    let warned = |frontend: crate::Frontend| {
+        crate::driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{}", error.0));
+        let found: Vec<String> = frontend.warnings.borrow().iter().map(|one| format!("{}:{}", one.span.line, one.message)).collect();
+        found
+    };
+    let flat = warned(crate::Frontend { layout: llrm_target::layout::Layout::parse(flat_text).expect("parses"), slot: 4, ..Default::default() });
+    assert_eq!(flat, ["3:warning: a length is 4 bytes and u16 holds fewer: write u16(...) to cut it", "4:warning: a length is 4 bytes and u8 holds fewer: write u8(...) to cut it"]);
+    assert_eq!(warned(Default::default()), ["4:warning: a length is 2 bytes and u8 holds fewer: write u8(...) to cut it"]);
+}
