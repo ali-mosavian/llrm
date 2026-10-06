@@ -32,3 +32,13 @@ const STANDARD_OUTPUT: i16 = 1
 pub fn write(text: *far u8, length: usize) -> void:
     unsafe:
         write_file(STANDARD_OUTPUT, text, length)
+
+# The colour text screen: 80x25 cells of a character and an attribute, at the machine's physical
+# address (the target's description names it; this layer turns it into the far pointer real mode
+# reaches memory outside its data segment by: segment = address >> 4, offset = address & 15).
+const SCREEN_FAR = ((PHYSICAL_TEXT_SCREEN >> 4) << 16) | (PHYSICAL_TEXT_SCREEN & 15)
+
+pub fn text_screen() -> *far mut u8:
+    unsafe:
+        let screen: *far mut u8 = SCREEN_FAR
+        return screen

@@ -148,16 +148,23 @@ fn test_a_convention_the_target_does_not_define_is_refused() {
 }
 
 /// Inline assembly on a flat target was assembled as 16-bit code and emitted without a word: its
-/// `mov ax, 0` became bytes a 32-bit decoder reads as `mov eax, imm32`, and a program hung.
+/// `mov ax, 0` became bytes a 32-bit decoder reads as `mov eax, imm32`, and a program hung. The block is
+/// assembled in the target's mode now (its bits, segments and address width are the description's): the
+/// same `mov ax, 0` takes the 66h prefix, and a segment register is refused where the target has none.
 #[test]
-fn test_inline_assembly_is_refused_where_registers_are_wider() {
+fn test_inline_assembly_is_assembled_in_the_targets_mode() {
     let directory = tempfile::tempdir().expect("a directory");
     let path = directory.path().join("a.nib");
-    std::fs::write(&path, "fn main() -> i16:\n    unsafe:\n        asm(clobbers=[ax, flags]):\n            mov ax, 0\n    return 0\n").expect("written");
-    let flat = crate::Frontend { bits: 32, ..Default::default() };
-    let error = crate::driver::parsed(&path, &flat, None).expect_err("refused").0;
-    assert!(error.contains("inline assembly is 16-bit only"), "{error}");
-    crate::driver::parsed(&path, &Default::default(), None).expect("real mode takes it");
+    let program = |line: &str| format!("fn main() -> i16:\n    unsafe:\n        asm(clobbers=[ax, es, flags]):\n            {line}\n    return 0\n");
+    let flat_text = include_str!("../../../target/llrm-x86-code32/src/machines/datalayout.toml");
+    let flat = crate::Frontend { layout: llrm_target::layout::Layout::parse(flat_text).expect("parses"), slot: 4, bits: 32, ..Default::default() };
+    let compiled = |source: &str, frontend: &crate::Frontend| {
+        std::fs::write(&path, source).expect("written");
+        crate::driver::parsed(&path, frontend, None).map(|_| ()).map_err(|error| error.0)
+    };
+    assert!(compiled(&program("mov ax, 0"), &flat).is_ok());
+    assert!(compiled(&program("mov es, ax"), &flat).expect_err("refused").contains("this target has no segments: es is not available"));
+    assert!(compiled(&program("mov es, ax"), &Default::default()).is_ok(), "real mode has segments");
 }
 
 /// `.near()` of a far pointer was `unsafe` on every target, though where far is near the offset is
@@ -211,4 +218,18 @@ fn test_a_length_narrowed_implicitly_warns() {
     let flat = warned(crate::Frontend { layout: llrm_target::layout::Layout::parse(flat_text).expect("parses"), slot: 4, ..Default::default() });
     assert_eq!(flat, ["3:warning: usize is 4 bytes and u16 holds fewer: write u16(...) to cut it", "4:warning: usize is 4 bytes and u8 holds fewer: write u8(...) to cut it", "7:warning: usize is 4 bytes and u16 holds fewer: write u16(...) to cut it"]);
     assert_eq!(warned(Default::default()), ["4:warning: usize is 2 bytes and u8 holds fewer: write u8(...) to cut it"]);
+}
+
+/// The machine's physical addresses are one fact in the platform description; a module names one as
+/// `PHYSICAL_<NAME>` (the text screen's video memory was typed as 0xB8000000 in each program).
+#[test]
+fn test_a_module_names_the_targets_physical_addresses() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let path = directory.path().join("p.nib");
+    std::fs::write(&path, "const SCREEN = PHYSICAL_TEXT_SCREEN\n\nfn main() -> i16:\n    print(i32(SCREEN))\n    return 0\n").expect("written");
+    let frontend = crate::Frontend::default();
+    let hir = crate::compile_file(&path, &frontend).unwrap_or_else(|(_, error)| panic!("{}", error.message));
+    let executed = llrm_core::hir::execute::run(&llrm_core::hir::codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
+    assert_eq!(executed.output, "753664\n");
+    assert!(crate::Frontend { physical: Vec::new(), ..Default::default() }.physical_constants().is_empty());
 }
