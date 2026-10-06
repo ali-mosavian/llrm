@@ -1,6 +1,35 @@
 //! What every x86 target shares. Each target's `x86.instr` holds only the forms
 //! it adds to `instructions::FAMILY`.
 
+/// The x86 general register file's views, in the order iced and the manuals list them: the architecture's, the
+/// same in every x86 target.
+pub mod registers {
+    use iced_x86::Register;
+
+    /// The dword registers.
+    pub const DWORDS: [Register; 8] = [Register::EAX, Register::ECX, Register::EDX, Register::EBX, Register::ESI, Register::EDI, Register::EBP, Register::ESP];
+    /// Their low words.
+    pub const WORDS: [Register; 8] = [Register::AX, Register::CX, Register::DX, Register::BX, Register::SI, Register::DI, Register::BP, Register::SP];
+    /// The byte halves of the first four.
+    pub const BYTES: [Register; 8] = [Register::AL, Register::CL, Register::DL, Register::BL, Register::AH, Register::CH, Register::DH, Register::BH];
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// Each word is the low half of the dword at its place, and each byte a half of one of the first four.
+        #[test]
+        fn the_views_are_the_register_file_iced_knows() {
+            for (word, dword) in WORDS.iter().zip(&DWORDS) {
+                assert_eq!(word.full_register32(), *dword);
+            }
+            for (at, byte) in BYTES.iter().enumerate() {
+                assert_eq!(byte.full_register32(), DWORDS[at % 4], "{byte:?}");
+            }
+        }
+    }
+}
+
 /// What 16-bit x86 addressing (the ModRM byte without an address-size prefix) is made of: `[base+index+disp]`
 /// with a base from BX or BP and an index from SI or DI. The architecture's, the same in every 16-bit target.
 pub mod addressing16 {
