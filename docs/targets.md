@@ -500,7 +500,7 @@ code16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | 5 | `llrm-x86` family crate: schema, parser, condition codes, encoder; byte sizes from the encoder | `parse.rs`, `isel/matcher.rs:366` |
 | 6 | the form table is the only list of fixed registers, flags, ties and implicit defs/uses; string-op rows | `target.rs:67-162` (~100 lines) |
 | 7 | shadow oracle: old and new selector compared per function (isel LIR dump with every field, pool snapshot) | test tool only |
-| 8 | legality table in the description, with the derived-table test | `width_of`, `is_wide`, `is_far` read it |
+| 7' | one `TypeClass` that the patterns' type names, `width_of` and `size_of` read; the legality table moves to PR 15 (generic opcodes), where it has a reader | `isel.rs`, `isel/matcher.rs` |
 | 9 | the legalizer's state out of `Selector`; three shared sets stay | `isel.rs`, `wide.rs` |
 | 10 | register description; `RegId` as an alias of iced's `Register`, `RegisterInfo` queries, generated constants, the parity test | no behaviour change |
 | 11 | `RegId` migration in slices by area, one PR each; `regclass`, `allocate`, `ssaspill`, `constrain` get only the mechanical rename after cost-spill; then the alias becomes a newtype | ~830 sites |
