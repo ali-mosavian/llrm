@@ -381,6 +381,8 @@ fn test_the_zed_extension_names_a_library_that_exists_and_passes_the_projects_ta
     let library = manifest.lines().find_map(|line| line.trim().strip_prefix("path = \"")).and_then(|rest| rest.strip_suffix('"')).expect("a library path");
     let source = std::fs::read_to_string(zed.join(library)).unwrap_or_else(|_| panic!("{library} is not in editors/zed"));
     assert!(source.contains("fn language_server_initialization_options") && source.contains("settings.initialization_options"));
+}
+
 /// The identity gate is an instrument: a build compared with itself must say SAME of every
 /// program, and a build whose output differs must be reported DIFF with a failing exit, or a
 /// change that moved a target's code would pass the gate silently.
