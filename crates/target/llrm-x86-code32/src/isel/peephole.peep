@@ -22,3 +22,30 @@ rule narrowed_immediate_arithmetic
             dead(@1, CF), dead(@1, ZF), dead(@1, SF), dead(@1, OF), dead(@1, PF), dead(@1, AF), encodable($0)
     rewrite @0: =@0 low_word(d), low_word(d), low_word(s) {defines: @1.defines, uses: joined_uses(@0, @1), widths: joined_widths(@0, @1)} ;
             anchor @1 {defines: [], uses: []}
+
+
+// A word copy of a register whose upper half is zero, into one whose upper half nothing reads, is the
+// dword copy: no prefix, and the upper half is zero for what follows.
+group widened_moves
+    walk each
+
+rule widened_move
+    match   mov d:reg16, s:reg16
+    when    free(@0, widening), upper_zero(@0, s), dead(@0, root_upper(d)), encodable($0)
+    rewrite @0: =@0 widen(d), widen(s)
+
+
+// The extension of a word whose register is zero above it is that register: another one's copy of it,
+// or nothing where it is the same.
+group zero_extensions
+    walk window skip meta
+
+rule zero_extended_copy
+    match   movzx d:reg32, w:reg16
+    when    free(@0, widening), upper_zero(@0, w), !same_root(d, w), encodable($0)
+    rewrite @0: mov d, widen(w)
+
+rule zero_extended_in_place
+    match   movzx d:reg32, w:reg16
+    when    free(@0, widening), upper_zero(@0, w), same_root(d, w)
+    rewrite anchor @0

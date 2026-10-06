@@ -17,6 +17,16 @@ pub fn upper(one: Reg) -> Lanes {
     _lanes(one.register).into_iter().filter(|lane| lane.1 >= 2).collect()
 }
 
+/// The lanes of a register's root above its low word.
+pub fn root_upper(one: Reg) -> Lanes {
+    _lanes(crate::model::ir::root(one.register)).into_iter().filter(|lane| lane.1 >= 2).collect()
+}
+
+/// The whole register a view belongs to, as a dword operand.
+pub fn widen(one: Reg) -> Loc {
+    Loc::Reg(Reg { register: crate::model::ir::root(one.register), width: 4 })
+}
+
 /// Two word immediates, high then low, as the dword they push.
 pub fn dword(high: &Imm, low: &Imm) -> Loc {
     Loc::Imm(Imm { value: ((high.value & 0xFFFF) << 16) | (low.value & 0xFFFF), width: 4, address: None })
