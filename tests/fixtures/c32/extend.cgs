@@ -1,0 +1,52 @@
+INIT sw=0x808000 target=0x458 size=50 rev=0x23 flat=1
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=4
+SEG 3 attr=0xc name="CONST2" align=4
+SEG 4 attr=0x6 name="_DATA" align=4
+START
+TYPE T25 size=28 align=1
+f1 DBSrcFile "/home/alim/scratch/code32/tests/fixtures/c32/extend.c" main=1
+- DBSrcCue f1 1 1
+SYM y1 name="extend" base="extend" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x602 parms=[] ret=0:0
+- CGProcDecl y1 TY_INT_4
+SYM y2 name="p" base="p" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_POINTER
+l2 CGLastParm
+t3 CGTemp TY_INT_4
+n4 CGFEName y2 TY_POINTER
+n5 CGUnary O_POINTS n4 TY_POINTER
+n6 CGUnary O_POINTS n5 TY_INT_2
+n7 CGUnary O_CONVERT n6 TY_INT_4
+n8 CGTempName t3 TY_INT_4
+n9 CGAssign n8 n7 TY_INT_4
+- CGDone n9
+n10 CGTempName t3 TY_INT_4
+n11 CGUnary O_POINTS n10 TY_INT_4
+- CGReturn n11 TY_INT_4
+- DBSrcCue f1 2 1
+SYM y3 name="extend2" base="extend2" pattern="_*" attr=0x7 seg=1
+CALLCONV y3 class=0x80 target=0x602 parms=[] ret=0:0
+- CGProcDecl y3 TY_INT_4
+SYM y4 name="p" base="p" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y4 TY_POINTER
+SYM y5 name="q" base="q" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y5 TY_POINTER
+l12 CGLastParm
+t13 CGTemp TY_INT_4
+n14 CGFEName y5 TY_POINTER
+n15 CGUnary O_POINTS n14 TY_POINTER
+n16 CGUnary O_POINTS n15 TY_INT_2
+n17 CGFEName y4 TY_POINTER
+n18 CGUnary O_POINTS n17 TY_POINTER
+n19 CGUnary O_POINTS n18 TY_INT_2
+n20 CGBinary O_PLUS n16 n19 TY_INTEGER
+n21 CGUnary O_CONVERT n20 TY_INT_4
+n22 CGTempName t13 TY_INT_4
+n23 CGAssign n22 n21 TY_INT_4
+- CGDone n23
+n24 CGTempName t13 TY_INT_4
+n25 CGUnary O_POINTS n24 TY_INT_4
+- CGReturn n25 TY_INT_4
+STOP
+FINI
