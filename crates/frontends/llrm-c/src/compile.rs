@@ -89,7 +89,15 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
 pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options, stack_check: Option<llrm_core::hir::model::StackCheck>) -> Result<masm::Module, CompileError> {
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
         let unit = hir::unit(&stream::parse(text))?;
-        Ok(llrm_core::hir::model::Program { stack_check, ..translate::program(&unit, module)? })
+        // The front end was picked by the shim's flat flag; the target says what flat is.
+        if unit.flat != codegen.arch.layout().spaces.far_is_near() {
+            return Err(hir::Unsupported(format!("the front end is {} but target {} is {}", if unit.flat { "flat" } else { "segmented" }, codegen.arch.name(), if unit.flat { "segmented" } else { "flat" })).into());
+        }
+        let program = translate::program(&unit, module)?;
+        for warning in unit.warnings.borrow().iter() {
+            eprintln!("{module}: {warning}");
+        }
+        Ok(llrm_core::hir::model::Program { stack_check, ..program })
     })?;
     let mut options = codegen.clone();
     if let Some(dump) = dump {
@@ -197,8 +205,6 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             // Watcom's: relaxed alias checking; relaxed floating point.
             "-oa" => watcom.push("-oa"),
             "-on" => watcom.push("-on"),
-            // Watcom's large model, after medium's: what a program asks for where default data pointers were far.
-            "-ml" => watcom.push("-ml"),
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unrecognized arguments: {flag}"));
             }

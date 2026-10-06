@@ -30,7 +30,7 @@ impl<'u> Described<'u> {
             "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" => DebugReach::Near,
             "TY_LONG_POINTER" | "TY_LONG_CODE_PTR" => DebugReach::Far,
             "TY_HUGE_POINTER" => DebugReach::Huge,
-            "TY_POINTER" if self.unit.target & hir::BIG_DATA == 0 => DebugReach::Near,
+            "TY_POINTER" => DebugReach::Near,
             "TY_CODE_PTR" if self.unit.target & hir::BIG_CODE == 0 => DebugReach::Near,
             "TY_POINTER" | "TY_CODE_PTR" => DebugReach::Far,
             _ => return None,
