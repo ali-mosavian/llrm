@@ -18,3 +18,4 @@
 [debugging.md](debugging.md) says how to find a miscompile in a DOS program with dosrun.
 [fragility.md](fragility.md) records what broke, or hid a break, and what guards it now.
 [codegen-improvements.md](codegen-improvements.md) ranks backend ideas from LLVM, gcc-ia16 and Open Watcom.
+[vs-gcc.md](vs-gcc.md) measures llrm code32 against gcc and clang on the C benchmarks, with eight findings.
