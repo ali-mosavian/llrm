@@ -12,7 +12,7 @@ A header comment holds a program's settings:
     ' data: values.dat         a file the program reads, copied beside it; @dickens: a cached corpus, verified (skipped if unavailable)
     ' mask: \d+(?= spins)       text of the output that varies: each match reads as N
     ' known: #123              fails today, tracked by issue 123
-    # targets: x86-code16     a Nib program runs on code16 and, unless it says so, on x86-code32 too (same .out, a --target configuration)
+    # targets: x86-code16     a Nib or C program runs on code16 and, unless it says so, on x86-code32 too (same .out, a --target configuration)
 
 A known program that passes fails the run: remove its mark.
 """
@@ -119,7 +119,7 @@ def discover(selected: list[str]) -> list[Program]:
         if source.suffix in COMPILERS:
             settings = header(source)
             configured = configurations(settings)
-            if source.suffix == ".nib" and "targets" not in settings and "link" not in settings and not any("--target" in flags for _, flags, _ in configured):
+            if source.suffix in (".nib", ".c") and "targets" not in settings and "link" not in settings and not any("--target" in flags for _, flags, _ in configured):
                 # Where a Nib program runs on code32 too, with the same output.
                 configured += [(f"{label}{' ' if label else ''}[{FLAT}]", [*flags, "--target", FLAT], dialect) for label, flags, dialect in configured]
             for label, flags, dialect in configured:
