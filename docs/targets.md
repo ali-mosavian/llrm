@@ -509,13 +509,19 @@ code16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | 17 | schema edits (four) and language features (i) to (v), one per PR, each deleting its hooks | `isel.rs`, `patterns.isel` |
 | 18 | `ObjectWriter` and listing syntax read from the object-format description | `compile.rs`, `basic.rs`, `masm.rs` header |
 | 19 | class routing in `regclass`, `allocate`, `ssaspill`, `constrain` | **after cost-spill lands, agreed with it first** |
-| 20 | `llrm-x86-code32` skeleton, the first client of the generic pipeline (generic opcodes, legalizer table, complex patterns, RegBankSelect): descriptions, 32-bit `wccq`, HIR profile, `--target x86-code32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
+| 20 | owned by the code32 session: `llrm-x86-code32` skeleton, the first client of the generic pipeline (generic opcodes, legalizer table, complex patterns, RegBankSelect): descriptions, 32-bit `wccq`, HIR profile, `--target x86-code32`, listing test for `int add(int,int)` and a loop over `int*` | new crate; no shared line changed |
 
 PRs 2 to 4 are the structural ones and go first: every later "where does this go"
 depends on them. code32 (20) has no baseline to match, so the generic pipeline is designed there;
 7 to 15 move code16 onto the same machinery under the oracle, and the skeleton adds
 descriptions, not code. Not in this task: running or linking code32, a 32-bit object
 writer, code64, arm64.
+
+PRs 2 to 19 and code16's migration are this session's. The code32 session owns PR
+20 and what follows: the crate and its descriptions, the 32-bit `wccq`, the 32-bit
+HIR profile, and the generic-pipeline pieces as its first client. Until PR 3
+lands its crate stays out of the workspace, it edits no shared file, and hook
+requests go to the owner of PRs 2 to 19.
 
 ## Metric
 
