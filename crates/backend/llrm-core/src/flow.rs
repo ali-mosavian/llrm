@@ -33,7 +33,7 @@ pub fn machine<'a>(
     segments: &Segments,
     spilling: bool,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
-    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, &crate::backend::classes::RegisterClasses::code16(), spilling.then(Rc::<ssaspill::Run>::default), &crate::backend::peep::targets::x86_code16::RULES, &llrm_target::Target::frame_registers(&llrm_x86_code16::Code16))
+    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, &crate::backend::classes::RegisterClasses::m16(), spilling.then(Rc::<ssaspill::Run>::default), &crate::backend::peep::targets::x86_m16::RULES, &llrm_target::Target::frame_registers(&llrm_x86_m16::M16))
 }
 
 /// `machine`, its peephole made of the rules `rules` holds; the spiller, where `spilling` names a run, reports to it.
@@ -210,7 +210,7 @@ mod tests {
         let returned = ir::Semantics { name: Some("ret".into()), ..ir::Semantics::new(Operation::Return) };
         let block = LirBlock::new(1, vec![Arc::new(Insn::new(1, Some((1, 4)), Some(jump), vec![], vec![])), Arc::new(Insn::new(4, Some((4, 5)), Some(returned), vec![], vec![]))]);
         let body = LirBody::new("bytes", 1, vec![block], IndexMap::default(), IndexMap::default());
-        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut DropsBytes, false, &crate::backend::classes::RegisterClasses::code16()) else {
+        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut DropsBytes, false, &crate::backend::classes::RegisterClasses::m16()) else {
             panic!("the gate let three source bytes go");
         };
         assert_eq!(said, "DropsBytes: lost source bytes [0x1 0x2 0x3], gained []");
@@ -228,7 +228,7 @@ mod tests {
         let mut body =
             LirBody::new("phase", 1, vec![LirBlock::new(1, vec![Arc::new(source)])], IndexMap::default(), IndexMap::default());
         body.inputs = BTreeSet::from([1]);
-        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut LosesDefinition, false, &crate::backend::classes::RegisterClasses::code16()) else {
+        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut LosesDefinition, false, &crate::backend::classes::RegisterClasses::m16()) else {
             panic!("the gate let a lost definition through");
         };
         assert!(said.starts_with("loses-definition: value#99 is read"), "{said}");

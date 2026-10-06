@@ -2639,7 +2639,7 @@ mod tests {
         let body = _one_block(insns);
         let frame = Rc::new(RefCell::new(frames::of(&body, None, "", None).expect("a frame")));
         let mut phase =
-            RegAlloc::new(None, Some(Rc::clone(&frame)), ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("a cpu");
+            RegAlloc::new(None, Some(Rc::clone(&frame)), ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("a cpu");
         RegAlloc::transform(&mut phase, body).expect("allocates");
         assert!(!frame.borrow().slots.is_empty());
     }
@@ -2647,7 +2647,7 @@ mod tests {
     fn _through_regalloc(body: LirBody, pinned: &[(u32, Register)]) -> LirBody {
         let pinned = pins(pinned);
         let frame = frames::of(&body, None, "", None).expect("a frame");
-        let mut phase = RegAlloc::new(Some(&pinned), Some(Rc::new(RefCell::new(frame))), ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("a cpu");
+        let mut phase = RegAlloc::new(Some(&pinned), Some(Rc::new(RefCell::new(frame))), ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("a cpu");
         RegAlloc::transform(&mut phase, body).expect("allocates")
     }
 
@@ -2660,7 +2660,7 @@ mod tests {
     }
 
     fn allocated(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>) -> Result<Assignment, Error> {
-        allocate(body, pinned, None, None, None, ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16())
+        allocate(body, pinned, None, None, None, ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16())
     }
 
     fn registers(places: &[Loc]) -> Vec<Register> {
@@ -2742,7 +2742,7 @@ mod tests {
     #[test]
     fn test_a_soft_preference_changes_free_register_order_without_becoming_a_pin() {
         let preferred = pins(&[(1, Register::EDX)]);
-        let one = allocate(&_one_block(vec![_mov(1, 1, 0x100)]), None, None, None, Some(&preferred), "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16())
+        let one = allocate(&_one_block(vec![_mov(1, 1, 0x100)]), None, None, None, Some(&preferred), "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16())
             .expect("allocates");
         assert_eq!(one.r#where[&1], Register::EDX);
         let overlap = Insn::new(
@@ -2760,7 +2760,7 @@ mod tests {
             Some(&preferred),
             "386".into(),
             &target::BUILT_IN,
-        &crate::backend::classes::RegisterClasses::code16(),
+        &crate::backend::classes::RegisterClasses::m16(),
         )
         .expect("allocates");
         assert_ne!(kept.r#where[&1], Register::EDX);
@@ -2791,7 +2791,7 @@ mod tests {
             Some(&pins(&[(1, Register::EDX)])),
             "386".into(),
             &target::BUILT_IN,
-        &crate::backend::classes::RegisterClasses::code16(),
+        &crate::backend::classes::RegisterClasses::m16(),
         )
         .expect("allocates");
         assert_eq!(got.r#where[&1], Register::EDX, "{:?}", got.r#where);
@@ -2828,8 +2828,8 @@ mod tests {
             vec![2],
             vec![2, 3],
         ));
-        let blind = allocate(&_one_block(insns.clone()), None, None, None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("allocates");
-        let got = allocate(&_one_block(insns), Some(&pins(&[(3, blind.r#where[&1])])), None, None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16())
+        let blind = allocate(&_one_block(insns.clone()), None, None, None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("allocates");
+        let got = allocate(&_one_block(insns), Some(&pins(&[(3, blind.r#where[&1])])), None, None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16())
             .expect("allocates");
         assert_eq!(_whole(got.r#where[&1]), _whole(got.r#where[&2]), "{:?}", got.r#where);
     }
@@ -2850,8 +2850,8 @@ mod tests {
         insns.push(last);
         let body = _one_block(insns);
 
-        let on_386 = allocate(&body, None, None, None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("allocates");
-        let on_core = allocate(&body, None, None, None, None, "Core".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("allocates");
+        let on_386 = allocate(&body, None, None, None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("allocates");
+        let on_core = allocate(&body, None, None, None, None, "Core".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("allocates");
 
         assert!(!on_386.spilled.contains(&7), "{on_386:?}");
         assert_eq!(on_core.spilled, values(&[7]), "{on_core:?}");
@@ -2903,7 +2903,7 @@ mod tests {
     fn test_a_placed_cell_reaches_memory_by_the_register_its_value_got() {
         for register in [Register::EBX, Register::ESI] {
             let was = cell_of(&_based_cell());
-            let got = _settled(&Loc::Mem(was.clone()), &pins(&[(21, register)]), &crate::backend::classes::RegisterClasses::code16()).expect("placed");
+            let got = _settled(&Loc::Mem(was.clone()), &pins(&[(21, register)]), &crate::backend::classes::RegisterClasses::m16()).expect("placed");
             let Loc::Mem(got) = got else { panic!("not a cell: {got:?}") };
             assert_eq!(got.through, target::named(register, 2), "{register:?}: {:?}", got.through);
             assert_eq!(got.base, Some(Held { value: 21, width: 2 }), "the cell stopped naming its value");
@@ -2929,7 +2929,7 @@ mod tests {
             one.at == 0x100 && matches!(one.what.as_ref().map(|what| &what.sources[0]), Some(Loc::Mem(_)))
         });
         let through = cell_of(&load.expect("the load")).through;
-        assert!(crate::backend::classes::RegisterClasses::code16().addressing.contains(&through), "{through:?}");
+        assert!(crate::backend::classes::RegisterClasses::m16().addressing.contains(&through), "{through:?}");
     }
 
     #[test]
@@ -2944,7 +2944,7 @@ mod tests {
             vec![],
             vec![17],
         );
-        let got = applied(&_one_block(vec![load]), &assignment(pins(&[(17, Register::BX)])), &crate::backend::classes::RegisterClasses::code16()).expect("applies");
+        let got = applied(&_one_block(vec![load]), &assignment(pins(&[(17, Register::BX)])), &crate::backend::classes::RegisterClasses::m16()).expect("applies");
         let read = cell_of(&got.blocks[0].insns[0]);
         assert_eq!(read.through, Register::BX, "the cell is still reached through {:?}", read.through);
         assert_eq!(read.base, Some(Held { value: 17, width: 2 }), "the cell stopped saying which value reached it");
@@ -3068,7 +3068,7 @@ mod tests {
         let cell = Mem { base: Some(Held { value: 1, width: 2 }), ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
         let body = _one_block(vec![_mov(1, 5, 0), _load(4, 2, cell, vec![1])]);
         let profile = targets::profile(ProfileOrName::from("386")).expect("a profile");
-        let facts = Facts::of(&body, profile, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16(), &BTreeSet::new(), &BTreeSet::new(), &Frequency::of(&body));
+        let facts = Facts::of(&body, profile, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16(), &BTreeSet::new(), &BTreeSet::new(), &Frequency::of(&body));
         let union = IndexMap::from_iter([(_whole(Register::AX), vec![1])]);
         let placed = IndexMap::from_iter([(1, Register::AX)]);
         assert_eq!(_overlapping(&union, &placed, &facts), BTreeSet::from([1]));
@@ -3136,8 +3136,8 @@ mod tests {
             vec![],
             (1..8).collect(),
         ));
-        let pinned: IndexMap<u32, Register> = (1..7).zip(crate::backend::classes::RegisterClasses::code16().available.clone()).collect();
-        let got = allocate(&_one_block(insns), Some(&pinned), Some(&values(&[7])), None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+        let pinned: IndexMap<u32, Register> = (1..7).zip(crate::backend::classes::RegisterClasses::m16().available.clone()).collect();
+        let got = allocate(&_one_block(insns), Some(&pinned), Some(&values(&[7])), None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
         let message = unplaced(got);
         assert!(message.contains("7 values that cannot be spilled are live at one point"), "{message}");
     }
@@ -3169,7 +3169,7 @@ mod tests {
     fn test_call_input_is_computed_in_its_available_required_register() {
         let body = call_copy();
         let assignment = allocated(&body, Some(&body.pins)).expect("allocates");
-        let result = applied(&body, &assignment, &crate::backend::classes::RegisterClasses::code16()).expect("applies");
+        let result = applied(&body, &assignment, &crate::backend::classes::RegisterClasses::m16()).expect("applies");
         assert!(assignment.spilled.is_empty());
         let mut emitted: Vec<u8> = Vec::new();
         for one in result.insns() {
@@ -3275,7 +3275,7 @@ mod tests {
             Insn::new(6, Some((6, 7)), Some(semantics(Operation::Push, "push", vec![], vec![one])), vec![], vec![1]);
         let body = body_of("call", 0, vec![before.clone(), call.clone(), after.clone()]);
         let si = pins(&[(1, Register::SI)]);
-        let assigned = allocate(&body, Some(&si), Some(&values(&[1])), None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).expect("allocates");
+        let assigned = allocate(&body, Some(&si), Some(&values(&[1])), None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("allocates");
         assert!(assigned.spilled.is_empty() && assigned.r#where[&1] == Register::SI);
 
         let surviving = body_of("call", 0, vec![before, Insn { defines: vec![], ..call }, after]);
@@ -3325,7 +3325,7 @@ mod tests {
 
         let assignment = allocated(&body, None).expect("allocates");
         assert!(assignment.spilled.is_empty(), "{assignment:?}");
-        let placed = applied(&body, &assignment, &crate::backend::classes::RegisterClasses::code16()).expect("applies");
+        let placed = applied(&body, &assignment, &crate::backend::classes::RegisterClasses::m16()).expect("applies");
         let accesses: Vec<Semantics> =
             placed.insns().iter().filter(|one| [4, 5].contains(&one.at)).filter_map(|one| one.what.clone()).collect();
         assert!(accesses.iter().all(|what| select::emit(what, 0, None, false, false, None).is_some()), "{accesses:?}");
@@ -3353,10 +3353,10 @@ mod tests {
         let read = _load(4, 3, cell, vec![1, 2]);
         let body = body_of("call-crossing-base", 0, vec![_frame_load(1, 1, 4), call, index, read]);
 
-        let found = classes(&body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+        let found = classes(&body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
 
-        assert_eq!(found[&1], crate::backend::classes::RegisterClasses::code16().word_indexes);
-        assert_eq!(found[&2], crate::backend::classes::RegisterClasses::code16().word_bases);
+        assert_eq!(found[&1], crate::backend::classes::RegisterClasses::m16().word_indexes);
+        assert_eq!(found[&2], crate::backend::classes::RegisterClasses::m16().word_bases);
     }
 
     #[test]
@@ -3384,10 +3384,10 @@ mod tests {
         let read = _load(3, 3, cell, vec![1, 2]);
         let body = body_of("retained-address-role", 0, vec![_frame_load(1, 1, 6), _frame_load(2, 2, 8), read]);
 
-        let confined = classes(&body, &values(&[1]), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+        let confined = classes(&body, &values(&[1]), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
 
-        assert_eq!(confined[&1], crate::backend::classes::RegisterClasses::code16().word_indexes);
-        assert_eq!(confined[&2], crate::backend::classes::RegisterClasses::code16().word_bases);
+        assert_eq!(confined[&1], crate::backend::classes::RegisterClasses::m16().word_indexes);
+        assert_eq!(confined[&2], crate::backend::classes::RegisterClasses::m16().word_bases);
     }
 
     /// The allocator ranked its candidate bodies counting every instruction, anchors that print nothing among them: a
@@ -3404,7 +3404,7 @@ mod tests {
         let cell = Mem { base: Some(Held { value: 1, width: 4 }), ..Mem::new(Some(Addr::new(Space::Far, 0)), 2) };
         let body = body_of("secondary-base-class", 0, vec![_load(2, 2, cell, vec![1])]);
 
-        assert!(!classes(&body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).contains_key(&1));
+        assert!(!classes(&body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).contains_key(&1));
     }
 
     // ------------------------------------------------------ tests/test_lir.py
@@ -3421,14 +3421,14 @@ mod tests {
     #[test]
     fn test_an_address_value_takes_the_class_a_base_register_must_be_in() {
         for through in [Register::BX, Register::SI] {
-            let got = classes(&_celled(Some(Held { value: 21, width: 2 }), through), &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
-            assert_eq!(got.get(&21), Some(&crate::backend::classes::RegisterClasses::code16().addressing), "through={through:?}: {:?}", got.get(&21));
+            let got = classes(&_celled(Some(Held { value: 21, width: 2 }), through), &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
+            assert_eq!(got.get(&21), Some(&crate::backend::classes::RegisterClasses::m16().addressing), "through={through:?}: {:?}", got.get(&21));
         }
     }
 
     #[test]
     fn test_an_unbased_cell_confines_no_value() {
-        assert!(!classes(&_celled(None, Register::BX), &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16()).contains_key(&21));
+        assert!(!classes(&_celled(None, Register::BX), &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).contains_key(&21));
     }
 
     // ------------------------------------- tests/test_dead_call_deliveries.py
@@ -3439,7 +3439,7 @@ mod tests {
             Insn::new(0, Some((0, 3)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![1], vec![]);
         call.delivers = vec![(Held { value: 1, width: 2 }, Register::AX)];
         let (narrow, pinned) = narrowed(&body_of("dead result", 0, vec![call]), &pins(&[(1, Register::EAX)]));
-        let (lowered, _fixed) = constrain::constrained(&narrow, Some(&pinned), &crate::backend::classes::RegisterClasses::code16());
+        let (lowered, _fixed) = constrain::constrained(&narrow, Some(&pinned), &crate::backend::classes::RegisterClasses::m16());
         let insns = lowered.insns();
         assert_eq!(insns.len(), 1);
         assert!(insns[0].defines.is_empty());
@@ -3465,7 +3465,7 @@ mod tests {
             returning.requires = vec![(Held { value: 2, width: 2 }, Register::AX)];
             let body = LirBody { inputs: values(&[1]), ..body_of("fixed-identity", 1, vec![identity, returning]) };
 
-            let placed = applied(&body, &assignment(pins(&[(1, Register::AX), (2, Register::AX)])), &crate::backend::classes::RegisterClasses::code16()).expect("applies");
+            let placed = applied(&body, &assignment(pins(&[(1, Register::AX), (2, Register::AX)])), &crate::backend::classes::RegisterClasses::m16()).expect("applies");
 
             let wrong = verify::verify(&placed, false);
             assert!(wrong.is_empty(), "{covers:?}: {wrong:?}");
@@ -3493,7 +3493,7 @@ mod tests {
         let body = LirBody { inputs: values(&[1]), ..body_of("parallel-identity", 1, vec![identity, consumed]) };
         let assignment = assignment(pins(&[(1, Register::AX), (2, Register::AX)]));
 
-        let placed = applied(&body, &assignment, &crate::backend::classes::RegisterClasses::code16()).expect("applies");
+        let placed = applied(&body, &assignment, &crate::backend::classes::RegisterClasses::m16()).expect("applies");
         let scheduled = parcopy::scheduled(&placed).expect("schedules");
 
         assert!(verify::verify(&placed, false).is_empty(), "{:?}", verify::verify(&placed, false));
@@ -3543,7 +3543,7 @@ mod tests {
         let what = semantics(Operation::Move, "mov", vec![held(1, 1)], vec![imm(12, 1)]);
         let body = body_of("byte", 0, vec![Insn::new(0, Some((0, 0)), Some(what), vec![1], vec![])]);
         assert_eq!(
-            classes(&body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16())[&1],
+            classes(&body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16())[&1],
             BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX])
         );
     }

@@ -8,7 +8,7 @@ use crate::testing::{parsed, printed};
 fn run(text: &str) -> String {
     let mut module = parsed(&format!("{}{text}", llrm_analysis::testing::DOS));
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("parses");
-    promoted(&mut module, &layout, &llrm_x86_code16::Dos::default().costs(), false);
+    promoted(&mut module, &layout, &llrm_x86_m16::Dos::default().costs(), false);
     printed(&module)
 }
 

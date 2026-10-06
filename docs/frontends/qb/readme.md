@@ -207,7 +207,7 @@ owns the QB-family ABI and runtime choices. MIR and everything below it remain
 unchanged.
 
 Fresh object emission reuses `qbopt.backend.masm.Module` and
-`qbopt.backend.omfwrite`, the single fresh-OMF path already used by the WCC
+`qbopt.backend.objbuild`, the single fresh-OMF path already used by the WCC
 frontend. The QB adapter supplies native far procedure entry/exit, callee
 cleanup, argument order, ordinary data, runtime imports, the BASIC module
 envelope, and its startup/descriptor fixups. Runtime-owned local cleanup and

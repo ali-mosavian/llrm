@@ -620,7 +620,7 @@ fn allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), String> {
     let (body, notes) = body(seed, shape);
     let generated = body.clone();
     let segments = &*target::BUILT_IN;
-    let mut phases: Vec<Box<dyn LIRTransform>> = vec![Box::new(RegAlloc::new(None, None, ProfileOrName::Name(cpu), segments, &crate::backend::classes::RegisterClasses::code16())?)];
+    let mut phases: Vec<Box<dyn LIRTransform>> = vec![Box::new(RegAlloc::new(None, None, ProfileOrName::Name(cpu), segments, &crate::backend::classes::RegisterClasses::m16())?)];
     if std::env::var_os("FUZZ_NO_PARCOPY").is_none() {
         phases.push(Box::new(ParallelCopy));
     }
@@ -652,11 +652,11 @@ fn spilled_and_allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), Stri
     let segments = &*target::BUILT_IN;
     let frame = std::rc::Rc::new(std::cell::RefCell::new(crate::backend::frame::Frame::new(0)));
     let mut phases: Vec<Box<dyn LIRTransform>> = vec![
-        Box::new(SsaSpill { frame: frame.clone(), segments: segments.clone(), classes: crate::backend::classes::RegisterClasses::code16(), prices: crate::backend::ssaspill::Prices::clocks(), run: Default::default() }),
+        Box::new(SsaSpill { frame: frame.clone(), segments: segments.clone(), classes: crate::backend::classes::RegisterClasses::m16(), prices: crate::backend::ssaspill::Prices::clocks(), run: Default::default() }),
         Box::new(PhiElimination),
         Box::new(TwoAddress),
-        Box::new(Coalescer::new(None, segments, &crate::backend::classes::RegisterClasses::code16())),
-        Box::new(RegAlloc::new(None, Some(frame), ProfileOrName::Name(cpu), segments, &crate::backend::classes::RegisterClasses::code16())?),
+        Box::new(Coalescer::new(None, segments, &crate::backend::classes::RegisterClasses::m16())),
+        Box::new(RegAlloc::new(None, Some(frame), ProfileOrName::Name(cpu), segments, &crate::backend::classes::RegisterClasses::m16())?),
         Box::new(ParallelCopy),
     ];
     if std::env::var_os("FUZZ_NO_PARCOPY").is_some() {
@@ -830,7 +830,7 @@ fn test_interference_among_some_values_is_the_whole_graphs_among_them() {
 fn test_a_body_with_no_word_address_pairs_is_not_numbered_to_find_classes() {
     let (generated, _) = body(5, &Shape { pool: 8, ops: 6 });
     let before = crate::analysis::intervals::worked();
-    crate::backend::regclass::classes(&generated, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &crate::backend::classes::RegisterClasses::code16());
+    crate::backend::regclass::classes(&generated, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
     assert_eq!(crate::analysis::intervals::worked() - before, 0, "intervals were worked out for a body with no word pairs");
 }
 
@@ -1010,7 +1010,7 @@ fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
     use crate::backend::allocate::_masks;
     use crate::backend::classes::RegisterClasses;
     use crate::backend::regclass::{Found, classes, classes_given};
-    let registers = RegisterClasses::code16();
+    let registers = RegisterClasses::m16();
     for seed in 0..150 {
         let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
         let (plain, _) = body(seed, &shape);

@@ -6,7 +6,7 @@ fn main() {
     let path = std::env::args().nth(1).expect("an object");
     let found = llrm_omf::module::load(std::path::PathBuf::from(&path)).unwrap().unwrap();
     println!("calls {:?}", found.calls);
-    for body in decode::decode_module(&found, &llrm_x86_code16::machine::BUILT_IN).unwrap() {
+    for body in decode::decode_module(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap() {
         println!("== {:?} {:?} seed {:#x} {:?}", body.body.kind, body.body.name, body.body.seed, body.body.ranges);
         for node in &body.nodes {
             let (lo, hi) = span(node);

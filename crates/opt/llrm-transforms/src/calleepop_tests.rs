@@ -11,7 +11,7 @@ fn run(text: &str) -> String {
 /// `text` after the pass, priced in bytes (`size`) or in clocks, on the real-mode target.
 fn run_for(text: &str, size: bool) -> String {
     let mut module = parsed(&format!("{}{text}", llrm_analysis::testing::DOS));
-    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_x86_code16::Dos::default()));
+    let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_x86_m16::Dos::default()));
     CalleePop { size }.run(&mut module, &mut analyses);
     printed(&module)
 }

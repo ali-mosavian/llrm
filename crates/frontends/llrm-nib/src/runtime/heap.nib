@@ -2,7 +2,7 @@
 # Free blocks wait in one list per power-of-two size class and merge with
 # free neighbours when freed, so the heap does not fragment into slivers.
 #
-# A word is the target's near pointer wide (usize): 2 bytes on code16, 4 on code32.
+# A word is the target's near pointer wide (usize): 2 bytes on m16, 4 on m32.
 # A block is a header word, then its payload. The header is the block's
 # size, a multiple of 4 counting the header, with two flags in its low
 # bits: USED, and BEFORE_USED when the block in front is in use. A free

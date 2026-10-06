@@ -18,7 +18,7 @@ fn main() -> ExitCode {
     };
     let text = match std::env::args().nth(2) {
         Some(path) => std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}")),
-        None => include_str!("../../../../target/llrm-x86-code16/src/machines/datalayout.toml").to_owned(),
+        None => include_str!("../../../../target/llrm-x86-m16/src/machines/datalayout.toml").to_owned(),
     };
     let layout = match llrm_target::layout::Layout::parse(&text) {
         Ok(layout) => layout,

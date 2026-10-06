@@ -31,7 +31,7 @@ class RuntimeObjectTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as work, mock.patch.object(dosbatch, "assemble", assembled), mock.patch.object(dosbatch, "_ASSEMBLED", set()):
             path = Path(work) / "START.OBJ"
-            asked = [threading.Thread(target=dosbatch.runtime_object, args=("runtime/shared/dos/x86-code32/start.asm", path, ("STACK_BYTES=16384",))) for _ in range(16)]
+            asked = [threading.Thread(target=dosbatch.runtime_object, args=("runtime/shared/dos/m32/start.asm", path, ("STACK_BYTES=16384",))) for _ in range(16)]
             for one in asked:
                 one.start()
             for one in asked:
@@ -46,10 +46,10 @@ class LinkTests(unittest.TestCase):
         """`link: @c-runtime` reached the compiler as a file name in bench (llrm-c: wccq failed on .../@c-runtime):
         only run_tests resolved it. Every reader resolves it here."""
         source = Path("bench/parity/parity/parity.nib")
-        self.assertEqual(dosbatch.link_files(source, ["@c-runtime"], "x86-code16"), [dosbatch.ROOT / "runtime/c/x86-code16/ext.asm"])
-        self.assertEqual(dosbatch.link_files(source, ["@c-runtime"], "x86-code32"), [dosbatch.ROOT / "runtime/c/x86-code32/ext.asm"])
-        self.assertEqual(dosbatch.link_files(source, ["geometry.c"], "x86-code32"), [Path("bench/parity/parity/geometry.c")])
-        for target in ("x86-code16", "x86-code32"):
+        self.assertEqual(dosbatch.link_files(source, ["@c-runtime"], "x86-m16"), [dosbatch.ROOT / "runtime/c/x86-m16/ext.asm"])
+        self.assertEqual(dosbatch.link_files(source, ["@c-runtime"], "x86-m32"), [dosbatch.ROOT / "runtime/c/x86-m32/ext.asm"])
+        self.assertEqual(dosbatch.link_files(source, ["geometry.c"], "x86-m32"), [Path("bench/parity/parity/geometry.c")])
+        for target in ("x86-m16", "x86-m32"):
             self.assertTrue(all(one.exists() for one in dosbatch.link_files(source, ["@c-runtime"], target)))
 
 

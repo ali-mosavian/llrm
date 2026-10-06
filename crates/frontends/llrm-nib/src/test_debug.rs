@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::rc::Rc;
 
-use llrm_core::backend::omfwrite::CodeLayout;
+use llrm_core::backend::objbuild::CodeLayout;
 use llrm_core::objectfile::{cvinfo, omf};
 
 const SOURCE: &str = "var counter: i16 = 5
@@ -42,7 +42,7 @@ fn compiled(inlined: bool) -> Vec<Rc<omf::Record>> {
     // Unless asked, not inlined: `scale` is a symbol and its lines are statements to read.
     let threshold = if inlined { llrm_transforms::inline::Threshold::default() } else { llrm_transforms::inline::Threshold::new(0) };
     let pipeline = llrm_transforms::pipeline::Options { inline: threshold, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::code16_options(crate::compile::machine(&llrm_x86_code16::Code16, &crate::Frontend::default().os)) };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::Frontend::default().os)) };
     let module = crate::compile::assembled(&program, "main", &options, &crate::Frontend::default().os).expect("compiles");
     omf::parse(&crate::compile::object(&module, Path::new("probe.nib"), CodeLayout::OneSegment).expect("writes")).expect("parses")
 }

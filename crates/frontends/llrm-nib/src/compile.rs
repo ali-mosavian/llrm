@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use llrm_core::backend::{masm, omfwrite};
+use llrm_core::backend::{masm, objbuild};
 use llrm_core::hir::model;
 use llrm_core::support::pyrepr;
 
@@ -62,8 +62,8 @@ pub fn machine(target: &dyn llrm_target::Target, os: &crate::Os) -> llrm_core::a
 }
 
 /// `module` as an OMF object, its code laid out as `layout` says.
-pub fn object(module: &masm::Module, source: &Path, layout: omfwrite::CodeLayout) -> Result<Vec<u8>, String> {
+pub fn object(module: &masm::Module, source: &Path, layout: objbuild::CodeLayout) -> Result<Vec<u8>, String> {
     let name = source.file_name().map(|one| one.to_string_lossy().into_owned()).unwrap_or_default();
-    omfwrite::written_as(module, &name, layout).map_err(|error| error.to_string())
+    objbuild::written_as(module, &name, layout).map_err(|error| error.to_string())
 }
 
