@@ -72,7 +72,19 @@ pub fn run_limited(
     arguments: &[Number],
     step_limit: u64,
 ) -> Outcome<Executed> {
+    run_with_input(program, entry, arguments, step_limit, &[])
+}
+
+/// `run_limited` with `input` as what standard input holds.
+pub fn run_with_input(
+    program: &model::Program,
+    entry: &str,
+    arguments: &[Number],
+    step_limit: u64,
+    input: &[u8],
+) -> Outcome<Executed> {
     let mut machine = Machine::new(program, step_limit)?;
+    machine.input = input.iter().copied().collect();
     let arguments = arguments
         .iter()
         .map(|one| match *one {
@@ -319,6 +331,8 @@ struct Machine<'p> {
     layouts: HashMap<&'p str, Rc<Layout<'p>>>,
     data: HashMap<i64, Memory>,
     output: String,
+    /// What standard input still holds.
+    input: std::collections::VecDeque<u8>,
     remaining: u64,
     /// Every heap buffer the runtime allocated.
     heap: Vec<Memory>,
@@ -387,6 +401,7 @@ impl<'p> Machine<'p> {
             layouts: HashMap::default(),
             data,
             output: String::new(),
+            input: std::collections::VecDeque::new(),
             panicked: None,
             remaining: limit,
             heap: Vec::new(),

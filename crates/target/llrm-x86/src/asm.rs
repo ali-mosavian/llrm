@@ -442,7 +442,7 @@ fn built(code: Code, operands: &[Operand], bits: u32) -> Option<Instruction> {
     let kinds = info.op_kinds();
     let mut instruction = Instruction::default();
     instruction.set_code(code);
-    instruction.set_code_size(if bits == 32 { CodeSize::Code32 } else { CodeSize::Code16 });
+    instruction.set_code_size(if bits == 32 { CodeSize::M32 } else { CodeSize::M16 });
     if kinds.iter().any(|kind| implicit(*kind, bits).is_some()) {
         if !operands.is_empty() {
             return None;

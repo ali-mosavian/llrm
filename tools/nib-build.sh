@@ -21,20 +21,20 @@ trap 'rm -rf "$work"' EXIT
 
 "$bin/llrm-nib" "$source" -o "$work/program.obj" "$level" --procedure-segments ${NIB_FLAGS:-} >/dev/null
 "$bin/nibfront" --declare h "$source" >"$work/$(basename "$source" .nib).h"
+defines=""
+for one in $("$bin/llrm-nib" --os-layer defines); do defines="$defines -D$one"; done
 objects=""
 used="--used-by $work/program.obj"
 for part in "$@"; do
     name=$(basename "$part")
     case $part in
-    *.asm) "$toolchain/jwasm" -q -c -Cp -Zg -omf "-Fo$work/$name.obj" "$part" ;;
+    *.asm) "$toolchain/jwasm" -q -c -Cp -Zg -omf $defines "-Fo$work/$name.obj" "$part" ;;
     *) "$bin/llrm-c" "$part" -I "$work" -o "$work/$name.obj" "$level" >/dev/null ;;
     esac
     objects="$objects file $work/$name.obj"
     used="$used --used-by $work/$name.obj"
 done
 layer=$("$bin/llrm-nib" --os-layer directory)
-defines=""
-for one in $("$bin/llrm-nib" --os-layer defines); do defines="$defines -D$one"; done
 for field in start implementation; do
     part=$("$bin/llrm-nib" --os-layer $field)
     # shellcheck disable=SC2086

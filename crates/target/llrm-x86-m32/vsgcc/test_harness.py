@@ -30,3 +30,12 @@ def test_every_result_reproduces_the_benchmark_output():
     for line in (harness.OUT / "results.jsonl").read_text().splitlines():
         r = json.loads(line)
         assert r["ok"], (r["prog"], r["variant"], r["got"])
+
+
+def test_build_script_flags_are_accepted_by_llrm_c():
+    """build.sh/ctime.py passed the removed --target: every llrm build failed with exit 2 and run.sh printed no tables."""
+    import subprocess
+    out = subprocess.run([str(harness.REPO / "target/release/llrm-c"), "-m32", "-O2", "-march=i486", "-fno-inline-functions", "-o", "/dev/null", str(BENCH / "sieve/sieve.c")], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    here = Path(__file__).parent
+    assert "--target" not in (here / "build.sh").read_text() + (here / "ctime.py").read_text()

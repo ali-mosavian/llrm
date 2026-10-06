@@ -1,5 +1,9 @@
 ; The externals the C run tests call, in cdecl32: `report` prints a signed decimal and a
+<<<<<<< HEAD:runtime/c/x86-m32/ext.asm
 ; newline on stdout (handle 1), as m16's runtime does.
+=======
+; newline on standard output, as m16's runtime does.
+>>>>>>> origin/main:runtime/c/x86-m32/ext.asm
 .386
 .model flat
 
@@ -22,7 +26,7 @@ public __STKOVERFLOW
 __STKOVERFLOW proc
     push 17
     push offset stkmsg
-    push 1
+    push DOS_STDOUT
     call _llrm_os_write_file
     push 1
     call _llrm_os_exit
@@ -64,7 +68,7 @@ unsigned:
     sub ecx, edi
     push ecx
     push edi
-    push 1
+    push DOS_STDOUT
     call _llrm_os_write_file
     add esp, 12
     pop edi
