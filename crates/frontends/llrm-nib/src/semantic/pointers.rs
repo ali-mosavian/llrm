@@ -245,6 +245,7 @@ impl FunctionCompiler<'_> {
                     return None;
                 };
                 let target = self.types.raw_target(type_name)?;
+                let name = if self.types.sizes.segmented { name } else { "near" };
                 let name = format!("*{name} {}{}", if mutable { "mut " } else { "" }, self.types.types[(target.id() - 1) as usize].name);
                 let id = *self.types.raw_pointers.get(&name)?;
                 Some(TypeName::Pointer { type_id: id, far: name.starts_with("*far"), width: self.types.pointer_width(name.starts_with("*far")), mutable })
@@ -351,6 +352,13 @@ impl FunctionCompiler<'_> {
             // alone, which the program vouches is in DGROUP.
             // The offset alone, which the program vouches is in DGROUP: the
             // low word of the far pointer's bytes.
+            // Where far is near the offset is the pointer: a copy, and nothing is lost.
+            ("near", [], []) if !self.types.sizes.segmented => {
+                let near = self.types.raw_pointer(target, "near", mutable);
+                let moved = self.value(near);
+                self.emit("copy", vec![moved], vec![pointer], None);
+                TypedOperand { operand: Some(hir::Operand::Value(moved)), type_name: near }
+            }
             ("near", [], []) => {
                 self.require_unsafe("a far pointer's offset", span)?;
                 let near = self.types.raw_pointer(target, "near", mutable);
@@ -360,6 +368,12 @@ impl FunctionCompiler<'_> {
                 let low = hir::Operand::ProjectedPlace { place: whole, indices: Vec::new(), offset: 0, type_id: type_id(near), member: None };
                 self.emit("load", vec![offset], vec![low], None);
                 TypedOperand { operand: Some(hir::Operand::Value(offset)), type_name: near }
+            }
+            ("far", [], []) if !self.types.sizes.segmented => {
+                let far = self.types.raw_pointer(target, name, mutable);
+                let moved = self.value(far);
+                self.emit("copy", vec![moved], vec![pointer], None);
+                TypedOperand { operand: Some(hir::Operand::Value(moved)), type_name: far }
             }
             ("far", [], []) => {
                 let far = self.types.raw_pointer(target, name, mutable);

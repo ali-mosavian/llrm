@@ -159,3 +159,19 @@ fn test_inline_assembly_is_refused_where_registers_are_wider() {
     assert!(error.contains("inline assembly is 16-bit only"), "{error}");
     crate::driver::parsed(&path, &Default::default(), None).expect("real mode takes it");
 }
+
+/// `.near()` of a far pointer was `unsafe` on every target, though where far is near the offset is
+/// the whole pointer: a flat program needed an `unsafe:` block for a copy.
+#[test]
+fn test_near_of_a_far_pointer_is_a_plain_copy_where_far_is_near() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let path = directory.path().join("n.nib");
+    std::fs::write(&path, "var cell: i16 = 7\n\nfn main() -> i16:\n    unsafe:\n        let wide: *far i16 = &cell\n        let narrow: *near i16 = wide.near()\n        return *narrow\n").expect("written");
+    let flat_text = include_str!("../../../target/llrm-x86-code32/src/machines/datalayout.toml");
+    let flat = crate::Frontend { layout: llrm_target::layout::Layout::parse(flat_text).expect("parses"), slot: 4, ..Default::default() };
+    crate::driver::parsed(&path, &flat, None).unwrap_or_else(|error| panic!("{}", error.0));
+    std::fs::write(&path, "fn narrow(wide: *far i16) -> *near i16:\n    return wide.near()\n\nfn main() -> i16:\n    return 0\n").expect("written");
+    let on_flat = crate::driver::parsed(&path, &flat, None);
+    assert!(on_flat.is_ok(), "{:?}", on_flat.err());
+    assert!(crate::driver::parsed(&path, &Default::default(), None).expect_err("real mode needs unsafe").0.contains("unsafe"));
+}
