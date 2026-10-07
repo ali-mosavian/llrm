@@ -49,6 +49,11 @@ impl Interval {
         self.segments.iter().map(|one| one.end - one.start).sum()
     }
 
+    /// What spilling this value is divided by: how many slots it is live for, and the grace every value has.
+    pub fn spill_size(&self) -> i64 {
+        self.size() + GRACE
+    }
+
     pub fn overlaps(&self, other: &Interval) -> bool {
         let (mut mine, mut theirs) = (self.segments.iter(), other.segments.iter());
         let (mut one, mut two) = (mine.next(), theirs.next());
@@ -79,7 +84,18 @@ pub struct Indexes {
     pub order: Vec<i64>,          // block addresses, in the order they are numbered
 }
 
+/// Where an instruction writes, given where it reads: the second of the two slots it holds.
+pub fn def_point(slot: i64) -> i64 {
+    slot + DEF
+}
+
 impl Indexes {
+    /// Where the instruction at `position` in `block` ends: the point its two slots end at, which is where the next
+    /// instruction (or the block's end) begins. A segment that ends here touches one that starts at the next.
+    pub fn window_end(&self, block: &LirBlock, position: usize) -> i64 {
+        self.slot(block, position) + PER_INSN
+    }
+
     /// The slot of the instruction at `position` in `block`, or the block's end past its last.
     pub fn slot(&self, block: &LirBlock, position: usize) -> i64 {
         block.insns.get(position).map_or(self.span[&block.at].1, |one| self.at[&key(one)])
@@ -555,4 +571,37 @@ fn _weights(body: &LirBody, busy: &Frequency, ranges: &IndexMap<u32, Interval>, 
             (value, found / size as f64)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    /// The numbering of slots is this file's alone: everything else asks for a point (`def_point`, `window_end`, `slot`,
+    /// `spill_size`) and never does arithmetic on the constants, so the numbering can change while what is asked stays
+    /// true. Test code is free to name them.
+    #[test]
+    fn test_nothing_outside_the_numbering_does_arithmetic_on_slots() {
+        let mut found = Vec::new();
+        let mut dirs = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(dir).expect("a source directory") {
+                let path = entry.expect("an entry").path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                let name = path.to_string_lossy().into_owned();
+                if !name.ends_with(".rs") || name.ends_with("analysis/intervals.rs") || name.ends_with("_tests.rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("a source file");
+                let code = text.split("#[cfg(test)]").next().unwrap_or_default();
+                for token in ["PER_INSN", "intervals::DEF", "ranges::DEF", "GRACE"] {
+                    if code.contains(token) {
+                        found.push(format!("{name}: {token}"));
+                    }
+                }
+            }
+        }
+        assert!(found.is_empty(), "slot arithmetic outside the numbering: {found:?}");
+    }
 }
