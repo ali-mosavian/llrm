@@ -62,3 +62,7 @@ reason = "`16777217L != (float)16777217e0`: the long is converted to float in th
 [[differs]]
 program = "20031003-1"
 reason = "`(int)2147483648.0f`: a conversion out of range is undefined (C11 6.3.1.4p1); GCC folds the constant saturated, the x87 `fistp` gives 0x80000000, the integer indefinite."
+
+[[differs]]
+program = "20030714-1"
+reason = "`EPosition _position : 2` holding 3 (FIXED): the compatible type of an enum is implementation-defined (C11 6.7.2.2p4); GCC's is unsigned for an enum with no negative enumerator, Open Watcom's is int, so the 2-bit field reads -1 (checked: enum, unsigned and int bit-fields of 2 bits hold 3 as 3, 3 and -1 under GCC's rule, -1 for the enum here)."
