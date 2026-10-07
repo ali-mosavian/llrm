@@ -205,6 +205,8 @@ def cost(ins, taken, first_rep, mem, multiplier=None):
         return 3
     if m == Mnemonic.RET:
         return 5
+    if m == Mnemonic.ENTER:
+        return 14
     if m == Mnemonic.LEAVE:
         return 5
     if m == Mnemonic.JMP:

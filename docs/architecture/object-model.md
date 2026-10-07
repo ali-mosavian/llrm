@@ -58,6 +58,8 @@ facts are the model's: a register's number is the target's `registers.regs` `dwa
 Enums, typedefs, qualifiers, block scopes, register and listed locations, columns and checksums are in
 the model; a frontend fills them as it learns to, and a writer that cannot say one refuses it by name.
 
+A `Location::Frame` is relative to the frame register after the prologue, which the backend keeps for any function that has debug variables (`masm::stack_addressed` refuses one with variables), so the model carries one frame register, not one per function.
+
 With `-g`, a variable the program declares is read from its frame cell at any line, so each store to it
 is lowered volatile (`hir/mir.rs`, `declared_place`) and no pass drops, merges or moves one. At
 -O>0 that costs code a gcc or clang `-g` build does not (they note each value's place with `dbg.value`

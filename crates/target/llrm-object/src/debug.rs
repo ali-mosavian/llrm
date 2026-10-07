@@ -216,6 +216,20 @@ pub struct Line {
     pub column: u32,
 }
 
+impl Type {
+    /// The types this one names, which a writer that cannot write one cannot write this one for.
+    pub fn references(&self) -> Vec<TypeId> {
+        match self {
+            Type::Scalar(_) | Type::FixedString(_) => Vec::new(),
+            Type::Array { element, .. } => vec![*element],
+            Type::Struct { fields, .. } => fields.iter().map(|field| field.r#type).collect(),
+            Type::Enum { underlying, .. } => vec![*underlying],
+            Type::Pointer { target, .. } | Type::Reference(target) | Type::Typedef { target, .. } | Type::Qualified { target, .. } => vec![*target],
+            Type::Procedure { result, parameters, .. } => result.iter().chain(parameters).copied().collect(),
+        }
+    }
+}
+
 impl Info {
     /// The bytes a value of `ty` occupies, where the type says: None for a type that has no size
     /// of its own (void, a procedure, BASIC's array whose bounds are a descriptor's).

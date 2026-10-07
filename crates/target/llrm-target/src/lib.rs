@@ -212,11 +212,16 @@ pub trait Target {
 
     /// What a frame is built of.
     fn frame_registers(&self) -> FrameRegisters {
-        FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved(), slot: self.stack_slot_bytes(), optional: self.frame_optional() }
+        FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved(), slot: self.stack_slot_bytes(), optional: self.frame_optional(), enter: self.frame_enter() }
     }
 
     /// Whether a function that needs no frame register may leave it out (`calling.toml`'s `frame_optional`).
     fn frame_optional(&self) -> bool {
+        false
+    }
+
+    /// Whether a frame tuned for size opens with `enter` (`calling.toml`'s `frame_enter`).
+    fn frame_enter(&self) -> bool {
         false
     }
 }
@@ -234,6 +239,8 @@ pub struct FrameRegisters {
     pub slot: i64,
     /// A function that needs no frame register may leave it out.
     pub optional: bool,
+    /// A frame tuned for size opens with `enter`.
+    pub enter: bool,
 }
 
 impl FrameRegisters {

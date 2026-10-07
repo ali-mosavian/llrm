@@ -19,6 +19,8 @@ convention = "cdecl32"
 # The routine the start-up calls, and the convention it calls it in: with no arguments, on the stack.
 entry = "main"
 entry_convention = "cdecl32"
+# What the front end records of a function it passes in its default registers (its own list, which differs by tree).
+default_registers = "[f0000ff:0]"
 # The header it includes first, from the repository root.
 header = "crates/frontends/llrm-c/src/flat.h"
 
