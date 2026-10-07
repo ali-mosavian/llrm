@@ -62,7 +62,8 @@ pub fn program(unit: &hir::Unit, name: &str, calling: &llrm_target::calling::Cal
     let valueless: HashSet<i64> = unit
         .procs
         .iter()
-        .filter(|proc| proc.body.iter().filter(|one| one.call == "CGReturn").all(|one| one.args[0] == "n0") && !answered_by_inline_code(unit, proc))
+        // `main` is the exception: reaching its closing brace returns 0 (C99 5.1.2.2.3), a value the host reads.
+        .filter(|proc| proc.body.iter().filter(|one| one.call == "CGReturn").all(|one| one.args[0] == "n0") && !answered_by_inline_code(unit, proc) && unit.symbols[&proc.symbol].base != "main")
         .map(|proc| proc.symbol)
         .collect();
     let module = Shared { calling, unit, data: &data, keys: &keys, valueless: &valueless };
@@ -1094,6 +1095,12 @@ impl<'a, 't> Body<'a, 't> {
         }
         if let (Some(answer), "n0") = (self.inlined, node) {
             let value = self.converted(answer, "TY_UINT_4", &self.proc.type_.clone())?;
+            self.terminate(TerminatorKind::Return, vec![value_ref(value)], Vec::new());
+            return Ok(());
+        }
+        if node == "n0" && self.unit.symbols[&self.proc.symbol].base == "main" {
+            let zero = self.int(1, 0);
+            let value = self.converted(zero, "TY_INT_1", &self.proc.type_.clone())?;
             self.terminate(TerminatorKind::Return, vec![value_ref(value)], Vec::new());
             return Ok(());
         }
