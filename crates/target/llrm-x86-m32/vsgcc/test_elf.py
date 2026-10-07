@@ -74,3 +74,12 @@ def test_an_llrm_object_and_a_gcc_object_link_into_one_program(work):
     sh("gcc", "-m32", "-march=i486", "-fno-pic", "-fno-stack-protector", "-fcf-protection=none", "-fno-asynchronous-unwind-tables", "-O2", "-c", "-o", second, gcc_c)
     link(work, "mix.gccO2", first, second)
     assert harness.run("mix", "gccO2")["reports"] == [30]
+
+
+def test_build_sh_links_every_compiler_for_a_program(work, monkeypatch):
+    """build.sh read `$EMU`, which nothing set: every gcc/clang link failed, and table.py died on `KeyError: 'gccO2'`."""
+    monkeypatch.setenv("VSGCC_WORK", str(work))
+    out = sh(Path(__file__).parent / "build.sh", "fib")
+    assert "FAIL" not in out
+    for name in ("llrmElf", "gcc", "clang"):
+        assert (work / "b" / f"fib.{name}O2.elf").exists(), name
