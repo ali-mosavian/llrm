@@ -5,6 +5,7 @@ pub mod classes;
 pub mod affine;
 pub mod addressvalues;
 pub mod lirtext;
+pub mod calleefacts;
 pub mod callregs;
 pub mod assemble;
 pub mod allocate;

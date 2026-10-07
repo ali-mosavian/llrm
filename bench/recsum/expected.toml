@@ -1,4 +1,4 @@
-reason = "baselines of the held-out recursion kernels (#777) predate main's later changes, not #785's (the same rows come out with main's own binary): called-once inlining (#769) puts each kernel's static function into the kernel, so recfloat's 100.0 is a 4-byte pooled constant loaded in place of a pushed 64-bit argument (code 136 -> 108 B, data 8 -> 12 B, net -24 B, instructions -10), recsum and recmany lose the call and its argument handling (one memory operand and 13 B fewer)"
+reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
 blessed = "2026-10-07"
 
 [c.O2]

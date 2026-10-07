@@ -10,6 +10,7 @@ use llrm_mir::facts::Fact;
 use llrm_mir::{GlobalId, GlobalKind, Linkage, Module};
 
 use crate::abi::runtime::Contract;
+use crate::backend::calleefacts;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{Profile, ProfileOrName};
 use crate::backend::target::Segments;
@@ -67,7 +68,19 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
     let mut data = Vec::new();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
-    let target = Target { cpu, segments, selection, arch, classes: &classes, runtime: "", basic: false, zeroed: false };
+    let (facts, order) = calleefacts::CalleeFacts::of(module);
+    let target = Target { facts: &facts, cpu, segments, selection, arch, classes: &classes, runtime: "", basic: false, zeroed: false };
+    // Callees first, so what a function that takes part writes is known when its callers are selected.
+    let mut done: IndexMap<GlobalId, Machined> = IndexMap::default();
+    for id in order {
+        let global = module.global(id);
+        if global.function().is_some_and(|one| !one.is_declaration()) {
+            let name = global.name.as_deref().unwrap_or_default();
+            let made = llrm_support::debug::in_function(name, || machined(module, name, abi, &pool, &target))?;
+            facts.record(name, &made.body, &made.registers.saved);
+            done.insert(id, made);
+        }
+    }
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         let name = global.name.as_deref().unwrap_or_default();
@@ -75,7 +88,7 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
             GlobalKind::Variable(variable) if variable.initializer.is_some() => data.extend(globals::datums(module, id, &names)?),
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
-                let Machined { body, reserve, calls, inline, far, pops, popped, registers, .. } = llrm_support::debug::in_function(name, || machined(module, name, abi, &pool, &target))?;
+                let Machined { body, reserve, calls, inline, far, pops, popped, registers, .. } = done.shift_remove(&id).expect("every function with a body was machined");
                 let body = timed("masm cleaned returns", || masm::cleaned_returns(&addressvalues::converted(&body), popped))?;
                 let mut callees = IndexMap::default();
                 for (at, callee) in &calls {
@@ -152,7 +165,10 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
 /// What the machine a frontend compiles for is: its processor, its segment
 /// registers, the runtime family whose frame it calls into, and whether
 /// floats keep BASIC's semantics.
+#[derive(Clone, Copy)]
 pub struct Target<'t> {
+    /// What the functions that take part in interprocedural register use leave different, made as each is machined.
+    pub facts: &'t calleefacts::CalleeFacts,
     /// What the target requires of registers: the pins of its forms.
     pub classes: &'t Rc<RegisterClasses>,
     pub cpu: &'t Profile,
@@ -195,7 +211,20 @@ pub struct Machined {
 /// the function is selected again with the allocas below a hole the spill
 /// slots fill, and whichever has fewer two-byte displacements is kept.
 pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
-    let kept = machined_once(module, name, abi, pool, target)?;
+    let mut kept = machined_once(module, name, abi, pool, target)?;
+    // A function that calls one whose registers are known is made without that too, and the cheaper kept: what the allocator
+    // costs is an estimate, and a freer choice of registers is not always the better code.
+    if calls_known(module, name, target.facts) {
+        let none = calleefacts::CalleeFacts::none();
+        let plain = machined_once(module, name, abi, pool, &Target { facts: &none, ..*target })?;
+        // Its own cost leaves the pushes and pops of the registers it saves out: they are the frame's, made after.
+        let priced = |made: &Machined| cost(made, target).map(|one| one + saves(made) as f64 * 2.0);
+        if let Some((with, without)) = priced(&kept).zip(priced(&plain)) {
+            if without < with {
+                kept = plain;
+            }
+        }
+    }
     // What the function's cost in `timefunc` is measured against.
     llrm_support::debug!("size", "{name} {}", kept.body.insns().len());
     // Reported once the choice is made: a rejected candidate is no function's cost.
@@ -208,6 +237,24 @@ pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Po
         }
     }
     Ok(kept)
+}
+
+/// How many registers `made` pushes and pops for its caller: the ones its convention keeps that its body writes or a call in it
+/// disturbs.
+fn saves(made: &Machined) -> usize {
+    let mut used = masm::_roots(&made.body);
+    for one in made.body.insns() {
+        used.extend(one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(crate::model::ir::root)));
+    }
+    made.registers.saved.iter().filter(|(whole, _)| used.contains(whole)).count()
+}
+
+/// Whether `name` makes a direct call of a function whose written registers are known.
+fn calls_known(module: &Module, name: &str, facts: &calleefacts::CalleeFacts) -> bool {
+    let Some(function) = module.named(name).and_then(|id| module.global(id).function()) else { return false };
+    function.walk().any(|(_, inst)| {
+        llrm_mir::memory::callee(&module.context, function, inst).and_then(|id| module.global(id).name.as_deref()).is_some_and(|callee| facts.written(callee).is_some())
+    })
 }
 
 fn machined_once(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
@@ -309,7 +356,7 @@ fn far_frame(body: &LirBody) -> usize {
 fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64, spilling: bool, admission: bool) -> Result<((Machined, frame::Frame), Rc<ssaspill::Run>), String> {
     let run = ssaspill::Run::new(admission);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
-    let selected = timed("isel", || isel::selected(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole));
+    let selected = timed("isel", || isel::selected_with(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole, target.facts));
     let Selected { body, convention, calls, inline, far, pops, depth, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     let mut body = timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)?;

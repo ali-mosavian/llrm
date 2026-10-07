@@ -1,5 +1,5 @@
-reason = "tile: (y+dy)&63 and (x+dx)&63 are no-ops under the loops' ranges; algebraic drops the mask (7156 -> 4156 instructions on c, 9156 -> 4181 on bas and nib)"
-blessed = "2026-10-06"
+reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
+blessed = "2026-10-07"
 
 [bas.O2]
 instructions = 4181

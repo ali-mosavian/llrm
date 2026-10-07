@@ -1,4 +1,4 @@
-reason = "lsr counts a loop with another way out to zero at its own exit at -O2 (queens, quicksort); left as it is at -Os, where the setup is code and the trips an estimate. queens bas -O2 instructions +4.7%, queens c/bas -O2 code +3/+9 bytes: ~9 setup instructions a call against one saved a trip, where the model assumes 10 trips and Safe's early exits give about 3 (issue 799). queens c -Os instructions +1.7% for -2 bytes."
+reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 195078
-memory_operands = 40297
-code_bytes = 235
+instructions = 190709
+memory_operands = 30648
+code_bytes = 239
 data_bytes = 0
 bss_bytes = 0
 

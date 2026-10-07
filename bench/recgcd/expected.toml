@@ -1,16 +1,16 @@
-reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 (Intel 240440-002); -Os pays 2 bytes and 2 instructions a frame"
+reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
 blessed = "2026-10-07"
 
 [c.O2]
-instructions = 26135
-memory_operands = 3008
-code_bytes = 171
+instructions = 26134
+memory_operands = 2407
+code_bytes = 163
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 28230
-memory_operands = 3606
-code_bytes = 159
+instructions = 26732
+memory_operands = 2407
+code_bytes = 152
 data_bytes = 0
 bss_bytes = 0
