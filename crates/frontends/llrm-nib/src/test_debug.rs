@@ -96,7 +96,7 @@ fn model_of(source: &str) -> llrm_object::debug::Info {
     std::fs::write(&path, source).expect("writes");
     let frontend = crate::Frontend { debug: true, ..crate::real_mode() };
     let program = crate::driver::parsed(&path, &frontend, None).expect("parses");
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("compiles");
     llrm_core::backend::objbuild::built(&module, "probe.nib", CodeLayout::OneSegment).expect("builds").debug.expect("-g's information")
