@@ -1,5 +1,5 @@
-reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
-blessed = "2026-10-06"
+reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 for push/mov/sub (Intel 240440-002); -Os counts and bytes rise by what enter saved (2 bytes, 2 instructions per frame), rec* rows are #777's and untouched here"
+blessed = "2026-10-07"
 
 [bas.O2]
 instructions = 1064
@@ -26,12 +26,11 @@ bss_bytes = 0
 kernel_ms = 0.0049
 
 [c.Os]
-instructions = 335
+instructions = 337
 memory_operands = 87
-code_bytes = 354
+code_bytes = 356
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0049
 
 [nib.O2]
 instructions = 320
@@ -42,12 +41,11 @@ bss_bytes = 0
 kernel_ms = 0.0051
 
 [nib.Os]
-instructions = 316
+instructions = 324
 memory_operands = 123
-code_bytes = 406
+code_bytes = 410
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0051
 
 [ow.O2]
 instructions = 387

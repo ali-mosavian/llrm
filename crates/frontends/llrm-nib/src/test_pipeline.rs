@@ -127,8 +127,8 @@ fn test_a_loop_admitted_on_a_tie_in_counted_bytes_does_not_grow_the_object() {
     let options = nib::level("Os");
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
     let object = crate::compile::object(&module, &source, llrm_core::backend::objbuild::CodeLayout::OneSegment, llrm_target::object::Format::Omf).expect("an object").len();
-    // 2517 bytes before the loop was admitted on the tie; 2532 with it.
-    assert!(object <= 2517, "{object} bytes");
+    // 2523 bytes before the loop was admitted on the tie (2517 while -Os opened frames with `enter`); 2538 with it.
+    assert!(object <= 2523, "{object} bytes");
 }
 
 /// A flat target's program naming `cdecl16` compiled as if it were real mode's: the frame it
