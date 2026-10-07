@@ -162,9 +162,19 @@ pub struct Shape {
     pub loops: Vec<Loop>,
 }
 
+thread_local! {
+    static DERIVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many shapes this thread has derived, for a test that a pass asks for its body's once.
+pub fn shapes_derived() -> usize {
+    DERIVED.with(std::cell::Cell::get)
+}
+
 impl Shape {
     /// Of a body no manager holds.
     pub fn of(function: &Function) -> Self {
+        DERIVED.with(|count| count.set(count.get() + 1));
         let dominance = Dominance::of(function);
         let loops = natural(function, &LoopInfo::new(function, dominance.tree()));
         Self { dominance, loops }
@@ -176,6 +186,7 @@ impl Analysis for Shape {
     const NAME: &'static str = "shape";
 
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Shape {
+        DERIVED.with(|count| count.set(count.get() + 1));
         let dominance = Dominance::new(analyses.get::<Dominators>(context, layout, function));
         let loops = natural(function, &analyses.get::<Loops>(context, layout, function));
         Shape { dominance, loops }

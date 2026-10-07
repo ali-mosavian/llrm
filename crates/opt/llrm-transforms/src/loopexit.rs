@@ -95,10 +95,11 @@ pub fn evaluated_with(context: &mut Context, layout: &DataLayout, function: &mut
 
 /// The first loop whose exit values change something: the old `evaluated`.
 fn _evaluation(context: &Context, layout: &DataLayout, function: &Function, outer: &Outer, standing: &mut Standing) -> Result<Option<Evaluation>, String> {
-    let unit = Unit::within(context, layout, function, outer);
+    let shape = cfg::Shape::of(function);
+    let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
     let facts = standing.of(&unit);
     let unit = unit.with_registers(facts);
-    for loop_ in cfg::Shape::of(function).loops {
+    for loop_ in shape.loops.iter() {
         let Some(&latch) = loop_.latches.first() else { continue };
         if loop_.body.len() != 2 || loop_.latches.len() != 1 || !edges::phis(function, cfg::block(latch)).is_empty() {
             continue;

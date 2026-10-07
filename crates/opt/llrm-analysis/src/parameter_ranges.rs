@@ -143,7 +143,8 @@ pub fn stamp(program: &mut Program, eligible: &BTreeSet<Defined>) -> BTreeSet<De
                 if calls.is_empty() {
                     continue;
                 }
-                let unit = Unit::of(module, &program.layout, function);
+                let shape = cfg::Shape::of(function);
+                let unit = Unit::of(module, &program.layout, function).with_shape(&shape);
                 // Found once, for the body as it is: its ranges and the arguments' proofs ask the same.
                 let registers = crate::consts::known(&unit, None, None, None);
                 let unit = unit.with_registers(&registers);
