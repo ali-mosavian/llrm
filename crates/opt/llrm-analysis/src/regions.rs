@@ -165,7 +165,8 @@ fn provably_overlap(one: &MemRef, other: &MemRef) -> bool {
         return false;
     };
     let exact = |slice: &Slice| slice.stride == 1 && slice.high == slice.low + 1 && slice.low != FLOOR;
-    first.object == second.object && exact(first) && exact(second) && first.low < second.low + second.width && second.low < first.low + first.width
+    let (one_width, other_width) = (i64::from(one.width.max(1)), i64::from(other.width.max(1)));
+    first.object == second.object && exact(first) && exact(second) && first.low < second.low + other_width && second.low < first.low + one_width
 }
 
 /// Python `typed_apart`: accesses of different `!tbaa` types cannot alias
@@ -616,6 +617,28 @@ b0:
         // Two roots one object starts: the union view by provenance.
         let object = global(1, Some(8));
         assert!(!typed_apart(&with(short, one(&object, 0, 1)), &with(elsewhere, one(&object, 0, 1))));
+    }
+
+    /// Types tell apart what the address analysis cannot place; two accesses it places in one object at overlapping bytes are not
+    /// told apart by their types (`long long` stored, `int` read at 4 of it, #677), and ones whose bytes do not meet still are.
+    #[test]
+    fn a_known_overlap_outranks_the_types() {
+        let module = module(&format!(
+            "define void @f(ptr %p, ptr %q) {{
+b0:
+  store i16 1, ptr %p, !tbaa !3
+  store i32 4, ptr %q, !tbaa !4
+  ret void
+}}
+
+{TAGS}"
+        ));
+        let dl = layout(&module);
+        let [short, wide] = &accesses(&module, &dl)[..] else { panic!() };
+        let object = global(1, Some(8));
+        // The short is bytes 0-1; the wide, at 1, is bytes 1-4 and at 2, bytes 2-5.
+        assert!(!typed_apart(&with(short, one(&object, 0, 1)), &with(wide, one(&object, 1, 2))));
+        assert!(typed_apart(&with(short, one(&object, 0, 1)), &with(wide, one(&object, 2, 3))));
     }
 
     const C_TAGS: &str = "!0 = !{!\"Simple C/C++ TBAA\"}
