@@ -6,6 +6,7 @@ use llrm_mir::{debuginfo as di, MetadataId};
 use llrm_object::debug::{self as model, Info, Kind, Location, Variable};
 
 use crate::backend::objbuild::Segment;
+use crate::model::lir::DebugPlace;
 use crate::backend::{globals, masm};
 use crate::model::ir::Space;
 use crate::support::hash::IndexMap;
@@ -166,20 +167,36 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
             .filter(|one| one.scope.as_ref() == Some(&procedure.name) && defined(&one.symbol))
             .map(|one| variable(&one.name, one.r#type, Kind::Local, &one.symbol, one.displacement))
             .collect();
-        for one in &procedure.body.variables {
-            let r#type = type_of(one.r#type)?;
-            let kind = if one.parameter { Kind::Parameter } else { Kind::Local };
-            match one.addr.space {
-                Space::Frame => variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::Frame { disp: one.addr.disp } }),
-                space => {
-                    let Some(symbol) = module.names.get(&(space, one.addr.index)).filter(|one| defined(one)) else { continue };
-                    variables.push(variable(&one.name, r#type, kind, symbol, one.addr.disp));
-                }
-            }
-        }
         // A body starts before its end, and ends after its start.
         let bound = |mark: masm::Mark, within: std::ops::Range<usize>| code.bodies.iter().find(|&&(one, at)| one == mark && within.contains(&at)).map(|&(_, at)| at - start);
         let body = (bound(masm::Mark::BodyStart, start..end).unwrap_or(0), bound(masm::Mark::BodyEnd, start + 1..end + 1).unwrap_or(end - start));
+        for one in &procedure.body.variables {
+            let r#type = type_of(one.r#type)?;
+            let kind = if one.parameter { Kind::Parameter } else { Kind::Local };
+            let addr = match &one.place {
+                DebugPlace::At(addr) => addr,
+                // A parameter that arrives in a register is there until the body starts, and no longer said:
+                // the register is the allocator's from then on. The range takes in the body's first instruction.
+                DebugPlace::Register(register) => {
+                    let entry = model::Range { section: 0, offset: start, length: body.0 + 1 };
+                    let location = Location::List(vec![(entry, Location::Register(format!("{register:?}").to_lowercase()))]);
+                    variables.push(Variable { name: one.name.clone(), r#type, kind, location });
+                    continue;
+                }
+                // The optimiser removed it: no location anywhere is "optimized out".
+                DebugPlace::Gone => {
+                    variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::List(Vec::new()) });
+                    continue;
+                }
+            };
+            match addr.space {
+                Space::Frame => variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::Frame { disp: addr.disp } }),
+                space => {
+                    let Some(symbol) = module.names.get(&(space, addr.index)).filter(|one| defined(one)) else { continue };
+                    variables.push(variable(&one.name, r#type, kind, symbol, addr.disp));
+                }
+            }
+        }
         info.functions.push(model::Function {
             name: described.name.clone(),
             symbol: ids[&procedure.name],
