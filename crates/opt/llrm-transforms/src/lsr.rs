@@ -452,7 +452,7 @@ fn _exit(view: &memory::Unit, loop_: &Loop, users: &Users) -> Option<Exit> {
     let function = view.function;
     // The count holds whenever the loop goes on: where another exit stops
     // the program, nothing after it reads what the counters were.
-    let proofs = induction::counted_unless_stopped(view, loop_, None, true);
+    let proofs = induction::counted_leaving(view, loop_, None, true);
     let [proof] = &proofs[..] else { return None };
     let result = function.instruction(proof.compare).result?;
     if function.users(result).iter().any(|one| one.user != proof.branch) || users.web.contains(&proof.compare) {

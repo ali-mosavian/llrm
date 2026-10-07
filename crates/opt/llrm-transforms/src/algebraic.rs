@@ -100,6 +100,7 @@ fn _rewritten(context: &mut Context, layout: &DataLayout, function: &mut Functio
         || _phi_of_casts(context, function, inst)
         || _duplicate_phi(function, inst)
         || _negated_difference(context, function, inst)
+        || _difference_from_sum(context, function, inst)
         || _shift_chain(context, function, inst)
         || _scaled_chain(context, function, inst)
         || _offset_chain(context, function, inst)
@@ -712,6 +713,25 @@ fn _negated_difference(context: &mut Context, function: &mut Function, inst: Ins
     let Some(made) = _definition(function, difference) else { return false };
     let Some((BinaryOp::Sub, left, right, _)) = _binary(context, function, made) else { return false };
     _replace(function, inst, Opcode::Binary(BinaryOp::Sub), vec![right, left]);
+    true
+}
+
+/// `x - (x + y)` and `(x - y) - x` are `-y`, modulo the width: InstCombine's `visitSub`. A counter rebased by what a use
+/// subtracts it from (`row - (c + row)` where `c = r - row`) leaves the sum behind it.
+fn _difference_from_sum(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let Some((BinaryOp::Sub, left, right, _)) = _binary(context, function, inst) else { return false };
+    if _integer(context, left) == Some(0) {
+        return false;
+    }
+    let other = match (_definition(function, right).and_then(|made| _binary(context, function, made)), _definition(function, left).and_then(|made| _binary(context, function, made))) {
+        (Some((BinaryOp::Add, first, second, _)), _) if first == left => Some(second),
+        (Some((BinaryOp::Add, first, second, _)), _) if second == left => Some(first),
+        (_, Some((BinaryOp::Sub, minuend, subtrahend, _))) if minuend == right => Some(subtrahend),
+        _ => None,
+    };
+    let Some(other) = other else { return false };
+    let zero = _constant(context, function, inst, 0);
+    _replace(function, inst, Opcode::Binary(BinaryOp::Sub), vec![zero, other]);
     true
 }
 

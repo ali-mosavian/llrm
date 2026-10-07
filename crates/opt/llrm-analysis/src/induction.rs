@@ -292,7 +292,7 @@ struct _Control {
 }
 
 /// The block whose conditional branch is the loop's only exit that goes on: its header, or its latch.
-fn _control(function: &Function, loop_: &Loop) -> Option<_Control> {
+fn _control(function: &Function, loop_: &Loop, leaving: bool) -> Option<_Control> {
     let graph = cfg::graph(function);
     let blocks = graph.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
     if loop_.latches.len() != 1 || !blocks.contains_key(&loop_.header) {
@@ -339,7 +339,8 @@ fn _control(function: &Function, loop_: &Loop) -> Option<_Control> {
         .filter(|at| **at != control.at)
         .flat_map(|at| blocks[at].succ.iter().copied().filter(|to| !inside.contains(to)))
         .collect::<BTreeSet<_>>();
-    if !elsewhere.is_empty() && !elsewhere.is_subset(&noreturn::stranded(function, header.at)) {
+    // Or, where `leaving`, go on: the count then holds as long as the loop does.
+    if !leaving && !elsewhere.is_empty() && !elsewhere.is_subset(&noreturn::stranded(function, header.at)) {
         return None;
     }
     let outside =
@@ -411,7 +412,7 @@ pub fn counted_renewed(unit: &Unit, previous: &Counted, dirty: impl Fn(&Loop) ->
         .iter()
         .map(|loop_| match previous.get(&loop_.header) {
             Some(proofs) if !dirty(loop_) => (loop_.header, proofs.clone()),
-            _ => (loop_.header, _counted_unless_stopped(unit, loop_, &registers, false)),
+            _ => (loop_.header, _counted_unless_stopped(unit, loop_, &registers, false, false)),
         })
         .collect()
 }
@@ -423,7 +424,7 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
         if facts.is_none_or(|facts| std::ptr::eq(facts, registers)) {
             if let Some(found) = held.get(&loop_.header) {
                 if std::env::var_os("LLRM_CHECK_COUNTED").is_some() {
-                    assert!(*found == _counted_unless_stopped(unit, loop_, registers, false), "the counted proofs a unit carries are not those of the body it stands over: stale");
+                    assert!(*found == _counted_unless_stopped(unit, loop_, registers, false, false), "the counted proofs a unit carries are not those of the body it stands over: stale");
                 }
                 return found.clone();
             }
@@ -437,13 +438,28 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
             &*computed
         }
     };
-    _counted_unless_stopped(unit, loop_, facts, inbounds)
+    _counted_unless_stopped(unit, loop_, facts, inbounds, false)
 }
 
-fn _counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: &IndexMap<ValueId, Known>, inbounds: bool) -> Vec<CountedLoop> {
+/// `counted_unless_stopped`, also for a loop that has other ways out that go on, not only into a block that never returns:
+/// each proof has `stops` set where there is one, and its count is the trips as long as the loop is not left early. What
+/// rewrites the loop's own exit test and the counters it reads (lsr) may use it, where a final value or a deleted loop may not.
+pub fn counted_leaving(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap<ValueId, Known>>, inbounds: bool) -> Vec<CountedLoop> {
+    let computed;
+    let facts = match facts {
+        Some(facts) => facts,
+        None => {
+            computed = unit.registers();
+            &*computed
+        }
+    };
+    _counted_unless_stopped(unit, loop_, facts, inbounds, true)
+}
+
+fn _counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: &IndexMap<ValueId, Known>, inbounds: bool, leaving: bool) -> Vec<CountedLoop> {
     PROVED.with(|count| count.set(count.get() + 1));
     let function = unit.function;
-    let Some(shape) = _control(function, loop_) else { return Vec::new() };
+    let Some(shape) = _control(function, loop_, leaving) else { return Vec::new() };
     let branch = function.terminator(cfg::block(shape.block)).expect("_control proved a branch");
     let [condition, Operand::Block(taken), Operand::Block(_)] = function.instruction(branch).operands[..] else { return Vec::new() };
     let Some((compare, icmp)) = unit.defining(condition) else { return Vec::new() };

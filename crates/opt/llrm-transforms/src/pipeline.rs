@@ -271,6 +271,8 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // Each loop's counters chosen once, on the loop the passes above leave.
     if applied.options.wanted("lsr") {
         manager.add(lsr::Lsr);
+        // What the counters it chose leave behind (a bound subtracted from a counter rebased by it), as LLVM's LSR cleans with SimplifyInstructions.
+        manager.add(algebraic::Algebraic);
     }
     // On the pointers LSR chose: a huge one a loop keeps in one window is far there.
     if applied.options.wanted("window") {
