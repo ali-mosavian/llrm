@@ -415,6 +415,7 @@ mod tests {
             module: false,
             variables,
             blocks: Vec::new(),
+            frame: Vec::new(),
         };
         let mut made = Info {
             format: Format::TurboDebugger,

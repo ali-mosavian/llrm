@@ -59,6 +59,9 @@ pub struct Info {
     pub producer: Producer,
     /// The register a [`Location::Frame`] is relative to.
     pub frame_register: String,
+    /// The register that stands for the return address in call frame information (the target's `pc`
+    /// class); empty where the target numbers none.
+    pub return_register: String,
     /// The target's register file, so a writer needs no target.
     pub registers: Vec<Register>,
     pub files: Vec<File>,
@@ -203,6 +206,20 @@ pub struct Function {
     /// Parameters first, in order, then the locals.
     pub variables: Vec<Variable>,
     pub blocks: Vec<Block>,
+    /// How to find the caller's frame from each place in the code; empty where the code could not be
+    /// followed (a writer then says nothing, rather than something wrong).
+    pub frame: Vec<FrameRow>,
+}
+
+/// From `offset` bytes into a function's first range, until the next row: the canonical frame address is
+/// `cfa_offset` past register `cfa_register`, and each register in `saved` is in memory at that address
+/// plus its offset (negative: below it).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FrameRow {
+    pub offset: usize,
+    pub cfa_register: String,
+    pub cfa_offset: i64,
+    pub saved: Vec<(String, i64)>,
 }
 
 /// The first instruction at `offset` of section `section` is source line `line` of `file`.

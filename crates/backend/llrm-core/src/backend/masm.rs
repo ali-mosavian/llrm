@@ -252,6 +252,9 @@ pub enum Mark {
     /// The procedure's own code ends, its epilogue next: after the last
     /// code of a source line but a return.
     BodyEnd,
+    /// The call before it popped this many bytes of its arguments as it returned: the stack is that much higher
+    /// from here.
+    Pops(i64),
 }
 
 fn reg(register: Register) -> Loc {
@@ -557,6 +560,10 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
                             return Err(Unprintable(format!("{} at {}: a call with no callee", procedure.name, one.at)));
                         };
                         out.push(Item::Callee(callee.clone()));
+                        // Said for call frame information, which `-g` writes: no code of its own.
+                        if callee.pops != 0 && callee.code.is_empty() && first.is_some() {
+                            out.push(Item::Mark(Mark::Pops(callee.pops)));
+                        }
                     }
                 }
                 Operation::Return => {
