@@ -2,12 +2,15 @@
 //! machine adds is its COFF machine number and its relocation types: see [`Machine`].
 //! `llrm-coff32` and `llrm-coff64` are the machines.
 
+pub mod codeview;
+
 use llrm_object::{Arch, Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
 
 const SCN_CNT_CODE: u32 = 0x20;
 const SCN_CNT_INITIALIZED_DATA: u32 = 0x40;
 const SCN_CNT_UNINITIALIZED_DATA: u32 = 0x80;
 const SCN_LNK_NRELOC_OVFL: u32 = 0x0100_0000;
+const SCN_MEM_DISCARDABLE: u32 = 0x0200_0000;
 const SCN_MEM_EXECUTE: u32 = 0x2000_0000;
 const SCN_MEM_READ: u32 = 0x4000_0000;
 const SCN_MEM_WRITE: u32 = 0x8000_0000;
@@ -118,13 +121,14 @@ fn spelling(section: &Section, taken: bool) -> Result<(String, u32), Unsupported
         Role::Data => (".data", SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ | SCN_MEM_WRITE),
         Role::Bss => (".bss", SCN_CNT_UNINITIALIZED_DATA | SCN_MEM_READ | SCN_MEM_WRITE),
         Role::Stack => return Err(unsupported(format!("{}: an OMF stack segment has no COFF section", section.name))),
-        Role::Debug => return Err(unsupported(format!("{}: a debug section is its format's writer's", section.name))),
+        Role::Debug => (section.name.as_str(), SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ | SCN_MEM_DISCARDABLE),
     };
     if !section.align.is_power_of_two() || section.align > 8192 {
         return Err(unsupported(format!("{}: COFF aligns a section to a power of two up to 8192, not {}", section.name, section.align)));
     }
     let align = (section.align.trailing_zeros() + 1) << 20;
-    Ok((if taken { format!("{base}${}", section.name) } else { base.to_owned() }, flags | align))
+    let name = if taken && section.role != Role::Debug { format!("{base}${}", section.name) } else { base.to_owned() };
+    Ok((name, flags | align))
 }
 
 fn pad(bytes: &mut Vec<u8>, to: usize) {
@@ -135,11 +139,33 @@ fn pad(bytes: &mut Vec<u8>, to: usize) {
 
 /// `object` as a COFF object file of machine `M`.
 pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
-    if object.arch != M::ARCH {
-        return Err(unsupported(format!("{:?} is not the {:?} this COFF writer is for", object.arch, M::ARCH)));
-    }
     if object.debug.is_some() {
         return Err(unsupported("-g: this writer does not write debug information yet"));
+    }
+    write_with::<M>(object, None)
+}
+
+/// `object` as a COFF object file of machine `M`, its debug information, if any, as C13 with
+/// `registers` to name where a variable is.
+pub fn write_with<M: Machine>(object: &Object, registers: Option<&codeview::Registers>) -> Result<Vec<u8>, Unsupported> {
+    let expanded;
+    let object = match (&object.debug, registers) {
+        (Some(info), Some(registers)) => {
+            let encoded = codeview::encode(object, info, registers)?;
+            let section = |name: &str, one: codeview::Section| Section { name: name.to_owned(), role: Role::Debug, near: true, align: 1, spans: vec![[0, one.image.len()]], image: one.image, relocs: one.relocs };
+            let mut sections = object.sections.clone();
+            sections.push(section(".debug$S", encoded.symbols));
+            sections.push(section(".debug$T", encoded.types));
+            expanded = Object { sections, debug: None, ..object.clone() };
+            &expanded
+        }
+        _ => object,
+    };
+    if object.debug.is_some() {
+        return Err(unsupported("-g: debug information needs the target's register numbers"));
+    }
+    if object.arch != M::ARCH {
+        return Err(unsupported(format!("{:?} is not the {:?} this COFF writer is for", object.arch, M::ARCH)));
     }
     if !object.omf_groups.is_empty() {
         return Err(unsupported("a group of segments is OMF's"));

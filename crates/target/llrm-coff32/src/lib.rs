@@ -36,6 +36,12 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     llrm_coff::write::<I386>(object)
 }
 
+/// `object` as a COFF object file with its debug information as C13, `registers` naming where a
+/// variable is.
+pub fn write_with(object: &Object, registers: &llrm_coff::codeview::Registers) -> Result<Vec<u8>, Unsupported> {
+    llrm_coff::write_with::<I386>(object, Some(registers))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;

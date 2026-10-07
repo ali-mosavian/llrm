@@ -39,6 +39,12 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     llrm_coff::write::<X8664>(object)
 }
 
+/// `object` as a COFF object file with its debug information as C13, `registers` naming where a
+/// variable is.
+pub fn write_with(object: &Object, registers: &llrm_coff::codeview::Registers) -> Result<Vec<u8>, Unsupported> {
+    llrm_coff::write_with::<X8664>(object, Some(registers))
+}
+
 #[cfg(test)]
 mod tests {
     use std::process::Command;
@@ -96,6 +102,41 @@ mod tests {
         assert!(linked.status.success(), "{}{}", String::from_utf8_lossy(&linked.stdout), String::from_utf8_lossy(&linked.stderr));
         let said = Command::new(dump).args(["-d", "--no-show-raw-insn"]).arg(&exe).output().unwrap();
         assert!(String::from_utf8_lossy(&said.stdout).contains("0x140001008"), "{}", String::from_utf8_lossy(&said.stdout));
+    }
+
+    /// An x86-64 object's C13 names the AMD64 machine and an 8-byte pointer, and RBP (334) is its
+    /// frame: llvm-readobj reads them back.
+    #[test]
+    fn debug_information_names_the_amd64_machine_and_eight_byte_pointers() {
+        use llrm_object::debug::{Function, Info, Kind as K, Location, Range, Reach, Scalar, Type, Variable};
+        let Ok(dump) = which("llvm-readobj") else { return eprintln!("skipped: no llvm-readobj") };
+        let info = Info {
+            code: vec![Range { section: 0, offset: 0, length: 4 }],
+            types: vec![Type::Scalar(Scalar::Int { bytes: 4, signed: true }), Type::Pointer { target: 0, bytes: 8, reach: Reach::Near }, Type::Procedure { result: None, parameters: vec![1], convention: None }],
+            functions: vec![Function {
+                name: "f".into(),
+                symbol: 0,
+                r#type: 2,
+                ranges: vec![Range { section: 0, offset: 0, length: 4 }],
+                body: None,
+                far: false,
+                module: false,
+                variables: vec![Variable { name: "p".into(), r#type: 1, kind: K::Parameter, location: Location::Frame { disp: 16 } }],
+                blocks: Vec::new(),
+            }],
+            ..Info::default()
+        };
+        let mut made = object(vec![text(vec![0x90; 4], vec![])], vec![defined("f", 0)]);
+        made.debug = Some(info);
+        let registers = llrm_coff::codeview::Registers { frame: 334, numbers: Default::default() };
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("f.obj");
+        std::fs::write(&path, write_with(&made, &registers).unwrap()).unwrap();
+        let said = Command::new(dump).arg("--codeview").arg(&path).output().unwrap();
+        let text = String::from_utf8_lossy(&said.stdout);
+        for wanted in ["Machine: X64 (0xD0)", "PtrType: Near64 (0xC)", "SizeOf: 8", "BaseRegister: RBP (0x14E)", "BasePointerOffset: 16", "ReturnType: void (0x3)"] {
+            assert!(said.status.success() && text.contains(wanted), "no {wanted}:\n{text}{}", String::from_utf8_lossy(&said.stderr));
+        }
     }
 
     fn which(tool: &str) -> Result<std::path::PathBuf, ()> {
