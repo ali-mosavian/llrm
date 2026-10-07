@@ -22,7 +22,7 @@ use crate::backend::cpu::Profile;
 use crate::backend::peep;
 use crate::backend::target::Segments;
 use crate::backend::{addressforms, division};
-use crate::backend::callregs::{call_clobbered_high, call_clobbers};
+use crate::backend::callregs::{call_clobbered_high_keeping, call_clobbers};
 use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{BlockOdds, DebugVariable, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::AddressForm;
@@ -3195,11 +3195,12 @@ impl Selector<'_, '_, '_> {
                 (Semantics { indirect: true, ..semantics(Operation::Call, "call", vec![], vec![target.clone()]) }, through)
             }
         };
+        let whole: BTreeSet<Register> = self.arch.callee_saved().into_iter().filter(|(full, pushed)| full == pushed).map(|(full, _)| crate::model::ir::root(full)).collect();
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {
             call: Some(self.listed(effects)),
             clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments)),
-            clobbers_high: if changed.is_some() { BTreeSet::new() } else { call_clobbered_high(&contract, self.segments) },
+            clobbers_high: if changed.is_some() { BTreeSet::new() } else { call_clobbered_high_keeping(&contract, self.segments, &whole) },
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
             uses: requires.iter().map(|(held, _)| held.value).chain(through).collect(),
