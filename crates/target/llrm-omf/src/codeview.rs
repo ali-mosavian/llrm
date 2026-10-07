@@ -45,7 +45,7 @@ fn scalar(one: model::Scalar) -> Option<Scalar> {
 fn typed(one: &model::Type) -> Result<Option<Type>, Error> {
     use model::Type as M;
     Ok(Some(match one {
-        M::Scalar(one) => match scalar(*one) {
+        M::Scalar(one) | M::Basic { scalar: one, .. } => match scalar(*one) {
             Some(one) => Type::Scalar(one),
             None => return Ok(None),
         },
