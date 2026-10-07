@@ -238,12 +238,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-coff"
+version = "0.1.0"
+dependencies = [
+ "llrm-object",
+]
+
+[[package]]
+name = "llrm-coff32"
+version = "0.1.0"
+dependencies = [
+ "llrm-coff",
+ "llrm-object",
+ "tempfile",
+]
+
+[[package]]
+name = "llrm-coff64"
+version = "0.1.0"
+dependencies = [
+ "llrm-coff",
+ "llrm-object",
+ "tempfile",
+]
+
+[[package]]
 name = "llrm-core"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-analysis",
+ "llrm-coff32",
+ "llrm-coff64",
  "llrm-elf32",
  "llrm-elf64",
  "llrm-hir",

@@ -261,4 +261,17 @@ mod tests {
         assert_eq!([4, 8].map(|width| M32.results(width)), [vec![EAX], vec![EAX, EDX]]);
         assert_eq!(llrm_x86::calling::callee_saved(CALLING.named("cdecl32").unwrap()), [(EBX, EBX), (ESI, ESI), (EDI, EDI)]);
     }
+
+    /// Every convention that decorates a symbol for OMF says how for COFF: Open Watcom's own
+    /// COFF objects (wcc386 -eoc) name `_c` for cdecl and `w_` for its register convention, as
+    /// its OMF ones do. A convention with no `coff` entry leaves its COFF symbols undecorated.
+    #[test]
+    fn a_convention_that_decorates_for_omf_decorates_the_same_for_coff() {
+        let names = CALLING.names();
+        assert!(names.len() >= 2);
+        for name in names {
+            let symbol = &CALLING.named(name).unwrap().symbol;
+            assert_eq!(symbol.get("coff"), symbol.get("omf"), "{name}");
+        }
+    }
 }
