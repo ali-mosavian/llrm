@@ -86,13 +86,13 @@ fn a_callee_saves_the_registers_it_uses_that_its_arguments_do_not() {
     assert!(!lines.iter().any(|one| one == "push eax" || one == "pop eax"), "EAX is the callee's own: {lines:?}");
 }
 
-/// The listing of C `source` for -m32 under `-mabi=sysv`.
-fn sysv_listing(source: &str) -> String {
+/// The listing of C `source` under `flags`.
+fn c_listing(flags: &[&str], source: &str) -> String {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("t.c");
     std::fs::write(&path, source).unwrap();
     let out = directory.path().join("t.asm");
-    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c")).args(["-m32", "-mabi=sysv", "-O2", "-fno-inline-functions", "-S"]).arg(&path).arg("-o").arg(&out).output().unwrap();
+    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c")).args(flags).args(["-O2", "-fno-inline-functions", "-S"]).arg(&path).arg("-o").arg(&out).output().unwrap();
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     std::fs::read_to_string(out).unwrap()
 }
@@ -102,11 +102,22 @@ fn sysv_listing(source: &str) -> String {
 /// the description's `private` convention; the exported function keeps sysv's.
 #[test]
 fn a_private_function_takes_registers_under_sysv_and_an_exported_one_keeps_the_stack() {
-    let text = sysv_listing("static int add3(int a, int b, int c) { return a * 3 + b * 5 + c; }\nint twice(int a, int b, int c) { return a * 2 + b + c; }\nint use(int x) { return add3(x, 2, 3) + add3(3, x, 1); }\n");
+    let text = c_listing(&["-m32", "-mabi=sysv"], "static int add3(int a, int b, int c) { return a * 3 + b * 5 + c; }\nint twice(int a, int b, int c) { return a * 2 + b + c; }\nint use(int x) { return add3(x, 2, 3) + add3(3, x, 1); }\n");
     let private = procedure(&text, "_add3");
     assert!(!private.iter().any(|line| line.contains("[esp+")), "{private:?}");
     let exported = procedure(&text, "_twice");
     assert!(exported.iter().any(|line| line.contains("[esp+4]")), "{exported:?}");
     let caller = procedure(&text, "_use");
     assert!(!caller.iter().any(|line| line.starts_with("push") && line.contains("2")) && !pops_after(&caller), "{caller:?}");
+}
+
+/// A callee keeps ECX under Watcom's convention unless its arguments arrive there; `g_` (two arguments, in EAX and EDX) called a
+/// cdecl routine, which clobbers ECX, and did not save it: a caller holding a value in ECX across `call g_` lost it (found as
+/// a crash at the end of tests/run/nib/flat_containers.nib under `-mabi=sysv`, whose private functions took the register convention).
+#[test]
+fn a_callee_saves_the_register_a_call_it_makes_clobbers() {
+    let text = c_listing(&["-m32"], "extern int __cdecl ext(int a, int b);\nint g(int a, int b) { return ext(a, b) + 1; }\n");
+    let lines = procedure(&text, "g_");
+    assert!(lines.first().is_some_and(|one| one == "push ecx"), "ECX is the callee's to keep: {lines:?}");
+    assert!(lines.iter().any(|one| one == "pop ecx"), "{lines:?}");
 }

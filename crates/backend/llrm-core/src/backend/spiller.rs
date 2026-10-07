@@ -2888,6 +2888,7 @@ mod tests {
                 Arc::new(crate::model::lir::CallMemory {
                     effects: llrm_mir::memory::Effects::ANY,
                     private: if spared { vec![crate::model::lir::WHOLE_FRAME] } else { vec![] },
+                    disturbs: BTreeSet::new(),
                 })
             });
             middle.clobbers = BTreeSet::from([Register::EAX]);
