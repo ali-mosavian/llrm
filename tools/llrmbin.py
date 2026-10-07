@@ -21,3 +21,12 @@ def target_dir(env: dict | None = None, repo: Path = REPO) -> Path:
     """Cargo's target directory, which the tools' scratch work goes under: CARGO_TARGET_DIR, else <repo>/target."""
     env = os.environ if env is None else env
     return Path(env["CARGO_TARGET_DIR"]) if env.get("CARGO_TARGET_DIR") else repo / "target"
+
+
+if __name__ == "__main__":
+    import sys
+
+    kinds = {"bin": bin_dir, "target": target_dir}
+    if len(sys.argv) != 2 or sys.argv[1] not in kinds:
+        sys.exit("usage: llrmbin.py bin|target")
+    print(kinds[sys.argv[1]]())

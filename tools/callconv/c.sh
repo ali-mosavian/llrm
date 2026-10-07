@@ -8,7 +8,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 W="$1"; mkdir -p "$W"
-BIN="${LLRM_BIN:-$ROOT/target/release}"
+BIN="$(python3 "$ROOT/tools/llrmbin.py" bin)"
 DOSRUN="${DOSRUN:-$HOME/scratch/pr-dosbox/src/dosbox-x}"
 [[ -x "$DOSRUN" ]] || DOSRUN="$BIN/dosbox-x"
 BCLIB="${BCLIB:-$HOME/work/other/d32x/toolchains/bcpp31/lib}"

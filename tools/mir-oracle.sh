@@ -16,6 +16,7 @@ if [ -z "$bin" ] || ! "$bin/opt" --version | grep -q 'version 20\.'; then
   exit 2
 fi
 root=$(cd "$(dirname "$0")/.." && pwd)
+llrm_bin=$(python3 "$root/tools/llrmbin.py" bin)
 cargo build -q --release --bin llrm-mir --manifest-path "$root/Cargo.toml" || exit 2
 ours=$(mktemp -d)
 trap 'rm -rf "$ours"' EXIT
@@ -26,7 +27,7 @@ for file in "$@"; do
   reason=$(sed -n 's/^; invalid: //p' "$file" | head -1)
   if [ -n "$reason" ]; then
     "$bin/opt" -passes=verify -disable-output "$file" 2>/dev/null && why="opt accepts it"
-    if [ -z "$why" ] && ! "$root/target/release/llrm-mir" "$file" 2>&1 >/dev/null | grep -qF "$reason"; then
+    if [ -z "$why" ] && ! "$llrm_bin/llrm-mir" "$file" 2>&1 >/dev/null | grep -qF "$reason"; then
       why="llrm-mir does not refuse it for: $reason"
     fi
     if [ -n "$why" ]; then echo "FAIL $file: $why"; failed=1; else echo "ok   $file (refused)"; fi
@@ -37,7 +38,7 @@ for file in "$@"; do
   want=$(sed -n 's/^; expect: //p' "$file" | head -1)
   if [ -z "$why" ]; then
     written="$ours/$(basename "$file")"
-    if ! "$root/target/release/llrm-mir" "$file" > "$written" 2> "$written.err"; then
+    if ! "$llrm_bin/llrm-mir" "$file" > "$written" 2> "$written.err"; then
       why="llrm-mir refuses it: $(cat "$written.err")"
     elif ! diff <(canonical "$file") <(canonical "$written") > "$written.diff" 2>&1; then
       why="llrm-mir's round trip differs: $(head -5 "$written.diff" | tr '\n' ' ')"
@@ -48,7 +49,7 @@ for file in "$@"; do
     got=$?
     [ "$got" = "$want" ] || why="lli exits $got, expected $want"
     if [ -z "$why" ]; then
-      ran=$("$root/target/release/llrm-mir" --run "$file" 2>&1)
+      ran=$("$llrm_bin/llrm-mir" --run "$file" 2>&1)
       [ "$ran" = "${ran//[^0-9]/}" ] && [ -n "$ran" ] && [ $((ran % 256)) = "$want" ] || why="llrm-mir runs it to $ran, expected $want"
     fi
   fi
