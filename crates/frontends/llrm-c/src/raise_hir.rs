@@ -155,7 +155,10 @@ mod tests {
     /// clobbers SI and keeps the rest says so, whichever target it is.
     #[test]
     fn a_contract_clobbers_what_the_targets_convention_says() {
-        let text = r#"[c]
+        let text = r#"default = "c"
+[abi.c]
+convention = "c"
+[c]
 slot_bytes = 2
 order = "right-to-left"
 cleanup = "caller"

@@ -19,8 +19,17 @@ convention = "cdecl32"
 # The routine the start-up calls, and the convention it calls it in: with no arguments, on the stack.
 entry = "main"
 entry_convention = "cdecl32"
-# The same switches but the model, packing and Borland's headers. Its C ABI is Open Watcom's 386
-# flat one (`calling.toml`): structs laid out at -zp4, an unmarked function in registers.
-flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-s", "-zl", "-zq"]
 # The header it includes first, from the repository root.
 header = "crates/frontends/llrm-c/src/flat.h"
+
+# Per ABI (calling.toml's `[abi.*]`): the switches Open Watcom's front end is asked with, the convention a function it records as
+# cdecl has, and one it records in its default registers. `-ecc` makes every function cdecl, as gcc's i386 default is.
+[frontend.abi.watcom]
+flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-s", "-zl", "-zq"]
+cdecl = "cdecl32"
+registers = "watcall32"
+
+[frontend.abi.sysv]
+flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-ecc", "-s", "-zl", "-zq"]
+cdecl = "sysv32"
+registers = "watcall32"

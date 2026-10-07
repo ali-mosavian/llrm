@@ -56,6 +56,8 @@ pub struct Frontend {
     /// How each convention spells a symbol in the object format asked for (`*` is the name), where the target's
     /// description says: `symbols_for`. A convention it does not name spells it as `Abi::symbol` does.
     pub symbols: std::collections::BTreeMap<String, String>,
+    /// The convention the language's own functions have, by its name in `calling.toml`: the `-mabi=` family's, else the default's.
+    pub native_name: String,
     /// The target's OS layer under Nib's runtime.
     pub os: Os,
     /// Index and slice bounds go unchecked, as in `unsafe`: `--unchecked-bounds`.
@@ -127,6 +129,7 @@ impl Frontend {
             physical: target.physical_addresses(),
             conventions: target.conventions().iter().map(|one| (*one).to_owned()).collect(),
             symbols: Default::default(),
+            native_name: target.calling().native().name.clone(),
             os: Os::for_target(target)?,
             unchecked_bounds: false,
             debug: false,
@@ -188,9 +191,9 @@ impl Frontend {
         target.calling().conventions.iter().filter_map(|one| Some((one.name.clone(), one.symbol.get(format)?.clone()))).collect()
     }
 
-    /// The convention the language's own functions have: the target's first.
+    /// The convention the language's own functions have: the `-mabi=` family's, else the target's default.
     pub fn native(&self) -> syntax::Abi {
-        self.conventions.first().and_then(|name| syntax::Abi::named(name)).expect("a target defines a calling convention the language names")
+        syntax::Abi::named(&self.native_name).expect("a target defines a calling convention the language names")
     }
 
     /// The pointers' sizes: what the datalayout says of the near and the far space.
