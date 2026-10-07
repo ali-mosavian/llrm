@@ -94,3 +94,80 @@ pub(crate) fn _four_clobbers() -> BTreeSet<Reg> {
     out.insert(Reg::Flags);
     out
 }
+
+/// A helper above as code for a flat unit. Its bytes are real-mode 386 code, each instruction on dwords made so by a 66
+/// prefix and each near branch a word long; flat code reads the prefix as a word operation and the branches as dwords.
+/// The instructions are decoded as 16-bit code and encoded again for 32, the branches made dword ones and retargeted.
+pub(crate) fn flat(code: &[u8]) -> Vec<u8> {
+    use iced_x86::{BlockEncoder, BlockEncoderOptions, Code, Decoder, DecoderOptions, Instruction, InstructionBlock, Mnemonic};
+    let mut decoder = Decoder::new(16, code, DecoderOptions::NONE);
+    let mut instructions = Vec::new();
+    while decoder.can_decode() {
+        let one = decoder.decode();
+        let branch = |code: Code| {
+            let mut made = Instruction::with_branch(code, one.near_branch_target()).expect("a near branch");
+            made.set_ip(one.ip());
+            made
+        };
+        instructions.push(match one.mnemonic() {
+            Mnemonic::Call => branch(Code::Call_rel32_32),
+            Mnemonic::Jmp => branch(Code::Jmp_rel32_32),
+            Mnemonic::Je => branch(Code::Je_rel32_32),
+            Mnemonic::Jne => branch(Code::Jne_rel32_32),
+            Mnemonic::Ja => branch(Code::Ja_rel32_32),
+            Mnemonic::Jae => branch(Code::Jae_rel32_32),
+            Mnemonic::Jb => branch(Code::Jb_rel32_32),
+            Mnemonic::Jbe => branch(Code::Jbe_rel32_32),
+            Mnemonic::Jg => branch(Code::Jg_rel32_32),
+            Mnemonic::Jge => branch(Code::Jge_rel32_32),
+            Mnemonic::Jl => branch(Code::Jl_rel32_32),
+            Mnemonic::Jle => branch(Code::Jle_rel32_32),
+            Mnemonic::Js => branch(Code::Js_rel32_32),
+            Mnemonic::Jns => branch(Code::Jns_rel32_32),
+            Mnemonic::Ret => {
+                let mut made = Instruction::with(Code::Retnd);
+                made.set_ip(one.ip());
+                made
+            }
+            _ => one,
+        });
+    }
+    // A branch to the end of the helper is to the instruction after it: a nop stands there, to be taken off again.
+    let mut end = Instruction::with(Code::Nopd);
+    end.set_ip(code.len() as u64);
+    instructions.push(end);
+    let block = InstructionBlock::new(&instructions, 0);
+    let mut flat = BlockEncoder::encode(32, block, BlockEncoderOptions::NONE).expect("a helper encodes as flat code").code_buffer;
+    flat.pop();
+    flat
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced_x86::{Decoder, DecoderOptions, FlowControl};
+
+    /// The 64-bit division helpers made flat code: no instruction is a word one by a prefix, and every near branch lands on an
+    /// instruction or at the end. As the real-mode bytes they ran a flat unit's division as words and branched into the middle
+    /// of instructions (exception 06h at -O0, 00h at -O2 in gcc.c-torture's 920604-1 and a divisions program).
+    #[test]
+    fn test_a_helper_made_flat_branches_between_its_instructions_and_has_no_word_prefix() {
+        for code in [&*_UDIV, &*_SDIV, &*_UDIV_CONST32, &*_SDIV_CONST32] {
+            let flat = flat(code);
+            let mut starts = BTreeSet::new();
+            let mut targets = Vec::new();
+            let mut decoder = Decoder::new(32, &flat, DecoderOptions::NONE);
+            while decoder.can_decode() {
+                let one = decoder.decode();
+                assert!(!one.is_invalid(), "{flat:02x?}");
+                starts.insert(one.ip());
+                if matches!(one.flow_control(), FlowControl::ConditionalBranch | FlowControl::UnconditionalBranch | FlowControl::Call) {
+                    targets.push(one.near_branch_target());
+                }
+            }
+            starts.insert(flat.len() as u64);
+            assert!(targets.iter().all(|target| starts.contains(target)), "{targets:x?} against {starts:x?}");
+            assert!(flat.len() < code.len(), "the prefixes are gone");
+        }
+    }
+}

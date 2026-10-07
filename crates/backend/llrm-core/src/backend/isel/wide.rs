@@ -403,7 +403,8 @@ impl Selector<'_, '_, '_> {
             ..Insn::new(at, Some((at, at)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![], vec![])
         }));
         self.calls.insert(at, name.to_owned());
-        self.inline.insert(at, code.to_vec());
+        // The helpers are real-mode bytes: a flat unit has them as flat code.
+        self.inline.insert(at, if self.cpu.operand_bytes == 4 { crate::backend::lower_int64::flat(code) } else { code.to_vec() });
         Ok((quotient, remainder))
     }
 
