@@ -67,9 +67,9 @@ fn cost(text: &str, line: usize) -> Result<Cost, String> {
     Ok(Cost::Sum(terms))
 }
 
-const OPERATIONS: [&str; 30] = [
+const OPERATIONS: [&str; 31] = [
     "add", "multiply", "divide", "shift", "address", "carry", "carry_step", "load", "store", "memory_update", "branch", "prefix", "move", "call", "return", "argument", "pop", "adjust",
-    "return_pops", "float_add", "float_multiply", "float_divide", "float_load", "float_store", "extend", "fill", "fill_cell", "copy", "copy_cell", "direction",
+    "return_pops", "float_add", "float_multiply", "float_divide", "float_load", "float_store", "float_release", "extend", "fill", "fill_cell", "copy", "copy_cell", "direction",
 ];
 
 impl Description {
@@ -162,6 +162,7 @@ impl Description {
                 "float_divide" => out.float_divide = value,
                 "float_load" => out.float_load = value,
                 "float_store" => out.float_store = value,
+                "float_release" => out.float_release = value,
                 "extend" => out.extend = value,
                 "fill" => out.fill = value,
                 "fill_cell" => out.fill_cell = value,
@@ -179,7 +180,7 @@ impl Description {
 mod tests {
     use super::*;
 
-    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_store = fs\nextend = z\nfill = f + 2*p + 3\nfill_cell = fc\ncopy = cp\ncopy_cell = cc\ndirection = 2*a\n";
+    const ALL: &str = "add = a\nmultiply = m\ndivide = d\nshift = s\naddress = l\ncarry = carry(z, a, s, r)\ncarry_step = step(a)\nload = ld\nstore = st\nmemory_update = u\nbranch = j\nprefix = prefix\nmove = r\ncall = c\nreturn = t\nargument = st + ld\npop = p\nadjust = i\nreturn_pops = rp - t\nfloat_add = fa\nfloat_multiply = fm\nfloat_divide = fd\nfloat_load = fl\nfloat_store = fs\nfloat_release = fr\nextend = z\nfill = f + 2*p + 3\nfill_cell = fc\ncopy = cp\ncopy_cell = cc\ndirection = 2*a\n";
 
     #[test]
     fn a_sum_is_terms_with_counts_and_signs() {
@@ -191,7 +192,7 @@ mod tests {
 
     #[test]
     fn size_costs_replace_what_size_says_and_price_by_bytes() {
-        let text = format!("{ALL}[bytes]\n{}\n[size]\nprefix = 1\nargument = 2\n", ["a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd", "fl", "fs", "f", "fc", "cp", "cc"].iter().map(|one| format!("{one} = 4")).collect::<Vec<_>>().join("\n"));
+        let text = format!("{ALL}[bytes]\n{}\n[size]\nprefix = 1\nargument = 2\n", ["a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd", "fl", "fs", "fr", "f", "fc", "cp", "cc"].iter().map(|one| format!("{one} = 4")).collect::<Vec<_>>().join("\n"));
         let costs = Description::parse(&text).unwrap().size_costs();
         assert_eq!((costs.prefix, costs.argument, costs.add, costs.fill), (1, 2, 4, 4 + 8 + 3));
     }

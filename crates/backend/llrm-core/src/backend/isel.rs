@@ -250,6 +250,8 @@ pub struct Selected {
     /// The code laid down in place of each call to an inline helper.
     pub inline: IndexMap<i64, Vec<u8>>,
     pub far: BTreeSet<i64>,
+    /// The argument bytes each direct call's callee pops as it returns, where it does.
+    pub pops: IndexMap<i64, i64>,
     /// The bytes below BP its allocas and stack temporaries take: an
     /// indexed access names no frame slot the frame could find it by.
     pub depth: i64,
@@ -515,6 +517,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         calls: IndexMap::default(),
         inline: IndexMap::default(),
         far: BTreeSet::new(),
+        pops: IndexMap::default(),
         landing: None,
         reachable: BTreeSet::new(),
         flagged: BTreeSet::new(),
@@ -526,11 +529,12 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     let body = selector.body(name, &convention)?;
     let mut body = lined(module, function, &selector.ats, body);
     body.spares = Arc::new(spared(module, function, &selector.ats));
+    body.homes = Arc::new(homed(module, function, &selector.ats, &selector.values, &body));
     body.variables = parameters(module, name, &convention);
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     // An inlined callee's variables are not this procedure's.
     body.variables.extend(selector.variables.into_iter().filter(|(scope, _)| scope == name).map(|(_, one)| one));
-    Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, depth: selector.depth, landing: selector.landing })
+    Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, pops: selector.pops, depth: selector.depth, landing: selector.landing })
 }
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes them in.
@@ -562,6 +566,30 @@ fn spared(module: &Module, function: &Function, ats: &IndexMap<InstId, i64>) -> 
         }
     }
     pairs
+}
+
+/// Each phi's value that the program also holds in a fixed cell (`!llrm.home`): the cell the store it names wrote.
+fn homed(module: &Module, function: &Function, ats: &IndexMap<InstId, i64>, values: &IndexMap<ValueId, u32>, body: &LirBody) -> std::collections::BTreeMap<u32, Mem> {
+    let mut found = std::collections::BTreeMap::new();
+    for (inst, _) in ats {
+        let instruction = function.instruction(*inst);
+        let (Opcode::Phi, Some(result)) = (&instruction.opcode, instruction.result) else { continue };
+        let Some(&value) = values.get(&result) else { continue };
+        for (_, node) in instruction.metadata.iter().filter(|(kind, _)| kind == llrm_transforms::homes::KIND) {
+            let Some(llrm_mir::MetadataOperand::Constant(store)) = module.metadata[node.0 as usize].operands.first() else { continue };
+            let ConstantKind::Int(store) = module.context.get(*store).kind else { continue };
+            let Some(&at) = u32::try_from(store).ok().and_then(|store| ats.get(&InstId(store))) else { continue };
+            // The cell its store wrote, where selection left one fixed address.
+            let cell = body.blocks.iter().flat_map(|block| &block.insns).filter(|one| one.at == at).filter_map(|one| one.what.as_ref()).find_map(|what| match what.dests.as_slice() {
+                [Loc::Mem(cell)] if cell.base.is_none() && cell.index.is_none() && cell.addr.is_some() => Some(cell.clone()),
+                _ => None,
+            });
+            if let Some(cell) = cell {
+                found.insert(value, cell);
+            }
+        }
+    }
+    found
 }
 
 /// `body` with each instruction's source line: that of the MIR instruction
@@ -698,6 +726,7 @@ struct Selector<'m, 'c, 'p> {
     /// The code laid down in place of each call to an inline helper.
     inline: IndexMap<i64, Vec<u8>>,
     far: BTreeSet<i64>,
+    pops: IndexMap<i64, i64>,
     /// The `at` of what starts the landing pad.
     landing: Option<i64>,
     /// The blocks execution can reach.
@@ -3176,6 +3205,10 @@ impl Selector<'_, '_, '_> {
         }
         match callee {
             Callee::Direct(name, far) => {
+                // What the callee takes back is what the caller does not.
+                if pushed > contract.caller_cleanup {
+                    self.pops.insert(at, pushed - contract.caller_cleanup);
+                }
                 self.calls.insert(at, name);
                 if far {
                     self.far.insert(at);

@@ -22,6 +22,7 @@ pub mod floatfold;
 pub mod floatloop;
 pub mod argpromotion;
 pub mod calleepop;
+pub mod homes;
 pub mod spares;
 pub mod deadargs;
 pub mod inferspace;

@@ -176,7 +176,7 @@ Out of scope and pinned to m16: the BASIC runtime, BC raise, Nib (~25k lines).
 
 | Assumption | Anchor | Class | Becomes |
 |---|---|---|---|
-| LIR's operand model (`Reg`, `Mem`, `Loc`, `Operation`, `Semantics`, `Effects`) is defined in the BC lifter and typed with `iced_x86::Register` (722 non-test `Register::` in `llrm-core`, 110 in `llrm-bcmachine`) | `llrm-bcmachine/src/model/ir`, `llrm-core/src/model/mod.rs:3` | S | its own crate, `llrm-lir` |
+| LIR's operand model (`Reg`, `Mem`, `Loc`, `Operation`, `Semantics`, `Effects`) is defined in the BC lifter and typed with `iced_x86::Register` (722 non-test `Register::` in `llrm-core`, 110 in `llrm-x86-bcmachine`) | `llrm-x86-bcmachine/src/model/ir`, `llrm-core/src/model/mod.rs:3` | S | its own crate, `llrm-lir` |
 | `llrm-core` depends on `llrm-x86-m16`; the generators pull `parse.rs` in by `#[path]` | `llrm-core/Cargo.toml`, `build.rs`, `generator/mod.rs:17` | T | target crates depend on `llrm-core`, not the reverse |
 | `iced_x86` in `llrm-support` (`pyrepr.rs`, `pyset.rs`) and `llrm-omf` | | S | out of support |
 | `Profile::target()` builds `Dos`; CPU and target are one axis | `cpu.rs:51` | T | target x CPU (LLVM's subtarget) |
@@ -279,7 +279,7 @@ and not a flag. A target without it has no rows, so its passes find nothing.
 | `int`/pointer sizes, `medium_model()` clobbers | `raise_hir.rs:14-122` | target's type widths and ABI |
 | `far`, `huge`, `__based`, call distance in `llrm-c` | `hir.rs`, `translate.rs` (~90) | collapse; refuse `__based/__segment/__huge` |
 | Flags pick the machine: `-march`, `--machine` | `driver/flags.rs:163-230` | `-m16`/`-m32` select the `Target` by the number its `datalayout.toml` declares |
-| QB, BC | `llrm-qb`, `llrm-bc*` | pinned to m16 |
+| QB, BC | `llrm-qb`, `llrm-x86-bc*` | pinned to m16 |
 | Nib | `llrm-nib` | m16 and m32: layout, conventions and OS layer come from the target (`runtime/shared/`, `runtime/nib/`) |
 
 ## Interface
@@ -291,7 +291,7 @@ the PR that touches each.
 ```
 llrm-mir        MIR, DataLayout, CostModel, address-space kinds    generic
 llrm-lir        LIR operand model: Reg, Mem, Loc, Operation,       x86 family for now
-                Semantics, Effects (out of llrm-bcmachine)
+                Semantics, Effects (out of llrm-x86-bcmachine)
 llrm-core       backend over LIR: allocator, spiller, frame, peephole runtime,
                 SelectCx, trait Target, generic call/ret and address-form lowering
 llrm-iselgen    shared generators (isel, peephole): run by each target's build.rs
@@ -527,10 +527,10 @@ m16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | guard | #502 `test_m16_emits_386_forms` | none |
 | 0 | this document and the reviews | none |
 | 1 | withdrawn: the MIR crates already take m16 as a dev-dependency (manifests checked) | none |
-| 2 | `llrm-lir`: the operand model out of `llrm-bcmachine`, moved unchanged, with `Addr` (via `llrm-omf` for now), `Flag`, `root()` and the `Repr` impls | no m16 or iced in the BC lifter's model crate |
+| 2 | `llrm-lir`: the operand model out of `llrm-x86-bcmachine`, moved unchanged, with `Addr` (via `llrm-omf` for now), `Flag`, `root()` and the `Repr` impls | no m16 or iced in the BC lifter's model crate |
 | 3a | `llrm-target`: the platform description (`Machine`, its parser) out of m16, which keeps `dos.toml`, `BUILT_IN`, `BASIC`, `CPUS`; the BC crates stop depending on m16 | production uses 20 to 17 |
 | 3b | the platform is flat-capable (`addressing = "flat"`, optional `[segments]`), `dos.toml` parses to an identical value; the PC ports in one shared file | `llrm-target` |
-| 3c | `llrm-driver`, `trait Target` (in `llrm-target`: `llrm-core` cannot be below m16 while `llrm-bcmachine` was above it), `-m16`/`-m32` (default m16), the target in `Options`; `llrm-core` stays on m16 for the statics that `allocate`, `regclass`, `constrain` and `ssaspill` read (until PR 19) and for the profile tables (until PR 5); metric baseline | about 12 uses in `llrm-core` left |
+| 3c | `llrm-driver`, `trait Target` (in `llrm-target`: `llrm-core` cannot be below m16 while `llrm-x86-bcmachine` was above it), `-m16`/`-m32` (default m16), the target in `Options`; `llrm-core` stays on m16 for the statics that `allocate`, `regclass`, `constrain` and `ssaspill` read (until PR 19) and for the profile tables (until PR 5); metric baseline | about 12 uses in `llrm-core` left |
 | 4 | one selector per target definition directory: `build.rs` generates a `Compiled` for each `crates/target/<name>/src/isel/` (`patterns.isel`, forms in `src/instructions/x86.instr`), found by the directory's name; `llrm-driver` binds a target to its selector and hands it in through `Options`; m16's `patterns.isel` moved there. The generated code and its hooks stay in `llrm-core` until the inversion (after 19) | `build.rs`, `matcher.rs`, `isel.rs`, `assemble.rs` |
 | 4b | the same for the peephole rules (`peephole.peep`) | `build.rs`, `peep/` |
 | 4c | no default names a target in shared code: `Options`, `assemble`, `flow`, `Peephole`, `Profile` take the selector, rules and model from the driver; tests use a helper | `llrm-core`, `llrm-driver` |

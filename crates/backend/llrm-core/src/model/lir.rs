@@ -302,6 +302,8 @@ pub struct LirBody {
     pub returns_twice: bool,
     /// (load, write) by `at`: the optimizer proved the write leaves the load's cell as it was (`!llrm.spares`).
     pub spares: Arc<BTreeSet<(i64, i64)>>,
+    /// A phi's value, by number, and the fixed cell the program also holds it in wherever it is live (`!llrm.home`).
+    pub homes: Arc<std::collections::BTreeMap<u32, crate::model::ir::Mem>>,
     /// 16 or 32: the mode the target's code runs in, which decides how an instruction encodes and what it touches.
     pub bits: u32,
 }
@@ -402,6 +404,7 @@ impl LirBody {
             odds: BlockOdds::default(),
             returns_twice: false,
             spares: Arc::default(),
+            homes: Arc::default(),
             bits: crate::frontends::bc::declen::BITNESS,
         }
     }
@@ -425,6 +428,7 @@ impl LirBody {
             odds: self.odds.clone(),
             returns_twice: self.returns_twice,
             spares: Arc::clone(&self.spares),
+            homes: Arc::clone(&self.homes),
             bits: self.bits,
         }
     }

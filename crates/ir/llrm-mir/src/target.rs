@@ -143,6 +143,9 @@ pub struct OperationCosts {
     pub float_divide: i64,
     pub float_load: i64,
     pub float_store: i64,
+    /// What dropping a floating value from the register stack costs once its last reader is past (x87 `fstp st(0)`):
+    /// one held across a loop is released after it.
+    pub float_release: i64,
     pub extend: i64,
     pub fill: i64,
     pub fill_cell: i64,
@@ -206,6 +209,7 @@ impl Default for OperationCosts {
             float_divide: 1,
             float_load: 1,
             float_store: 1,
+            float_release: 0,
             extend: 1,
             fill: 1,
             fill_cell: 1,

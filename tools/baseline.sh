@@ -7,7 +7,7 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:?usage: tools/baseline.sh OUT}
-bin=$root/target/release
+bin=$(python3 "$root/tools/llrmbin.py" bin)
 build=(cargo build --release --quiet --manifest-path "$root/Cargo.toml" --bin llrm-omf --bin llrm-nib)
 "${build[@]}" 2>/dev/null || "${build[@]}"
 

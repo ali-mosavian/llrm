@@ -340,7 +340,7 @@ def _configs_from(args) -> list[build.Config]:
             out.append(build.Config(cpu, "-" + opt))
         return out
     if args.quick:
-        return [build.Config("486", "-O2")]
+        return [build.Config(build.DEFAULT_CPU, "-O2")]
     return [build.Config(cpu, opt) for cpu in build.CPUS for opt in build.OPTS]
 
 

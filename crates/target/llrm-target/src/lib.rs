@@ -40,7 +40,12 @@ pub struct CpuPrices {
 /// A cost model that is only what a target describes: its registers, address forms and
 /// operation prices.
 pub fn described(prices: &CpuPrices) -> Rc<dyn llrm_mir::target::Machine> {
-    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone(), operations: prices.operations.clone(), spaces: prices.spaces })
+    described_by_size(prices, None)
+}
+
+/// `described`, with what each operation costs in code bytes where the description states them.
+pub fn described_by_size(prices: &CpuPrices, sizes: Option<OperationCosts>) -> Rc<dyn llrm_mir::target::Machine> {
+    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone(), operations: prices.operations.clone(), sizes, spaces: prices.spaces })
 }
 
 struct Described {
@@ -48,6 +53,7 @@ struct Described {
     call_registers: i64,
     address_forms: Vec<AddressForm>,
     operations: OperationCosts,
+    sizes: Option<OperationCosts>,
     spaces: llrm_mir::spaces::Spaces,
 }
 
@@ -63,6 +69,10 @@ impl llrm_mir::target::Machine for Described {
 
     fn costs(&self) -> OperationCosts {
         self.operations.clone()
+    }
+
+    fn size_costs(&self) -> OperationCosts {
+        self.sizes.clone().unwrap_or_else(|| self.costs())
     }
 
     fn registers(&self) -> i64 {
@@ -190,7 +200,12 @@ pub trait Target {
 
     /// What a frame is built of.
     fn frame_registers(&self) -> FrameRegisters {
-        FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved(), slot: self.stack_slot_bytes() }
+        FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved(), slot: self.stack_slot_bytes(), optional: self.frame_optional() }
+    }
+
+    /// Whether a function that needs no frame register may leave it out (`calling.toml`'s `frame_optional`).
+    fn frame_optional(&self) -> bool {
+        false
     }
 }
 
@@ -205,6 +220,8 @@ pub struct FrameRegisters {
     pub saved: Vec<(iced_x86::Register, iced_x86::Register)>,
     /// The bytes the stack is kept a multiple of.
     pub slot: i64,
+    /// A function that needs no frame register may leave it out.
+    pub optional: bool,
 }
 
 impl FrameRegisters {

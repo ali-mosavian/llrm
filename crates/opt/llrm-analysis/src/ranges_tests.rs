@@ -245,6 +245,15 @@ fn test_signed_widening_keeps_the_numeric_range() {
     }
 }
 
+/// nbody's `x[i]` index was `zext i16 %i to i32` with `%i` in 0..3: no interval came out, `covering` refused the
+/// access, and the hoist left x[i] and y[i] loaded on every trip of the inner loop.
+#[test]
+fn test_zero_extending_a_non_negative_interval_keeps_the_numeric_range() {
+    for (low, high) in [(0, 3), (1, 20), (0, 32767)] {
+        assert_eq!(computed(&unary("zext i16 %x to i32", 32), "y", &[("x", interval(low, high, 16))]), Some(interval(low, high, 32)));
+    }
+}
+
 #[test]
 fn a_zero_extension_is_not_taken_for_a_sign_extension() {
     assert_eq!(computed(&unary("zext i16 %x to i32", 32), "y", &[("x", interval(-1, 1, 16))]), None);
