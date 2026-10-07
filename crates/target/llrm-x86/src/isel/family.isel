@@ -190,6 +190,12 @@ pattern negate
   emit neg result <- x
 end
 
+# A byte product has no two-operand form: the low byte of the product of the words is the product's.
+pattern multiply_byte
+  match mul.i8(a, b)
+  call byte_multiply(a, b)
+end
+
 # A multiply by a constant: imul, or shifts and adds where they are cheaper.
 pattern multiply_immediate
   match mul(a, n:int)
