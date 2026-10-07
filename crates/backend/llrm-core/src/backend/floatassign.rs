@@ -1019,38 +1019,13 @@ fn _aliased(body: &LirBody) -> LirBody {
     out
 }
 
-/// The phis' values the optimizer proved are a cell's (`!llrm.home`) where nothing writes the cell while they are
-/// live, as the body now stands: each is read back from the cell, and a store of its own is never made. The proof
-/// is the optimizer's, the check here that no instruction moved since into a live range of the cell's.
+/// The phis' values the optimizer proved are a cell's (`!llrm.home`) where the body still holds it
+/// (`storedhomes`): each is read back from the cell, and a store of its own is never made.
 fn _stored_homes(body: &LirBody, floating: &HashSet<u32>) -> IndexMap<u32, Arc<Insn>> {
-    let mut found: IndexMap<u32, Arc<Insn>> = body.homes.iter().filter(|(value, cell)| floating.contains(*value) && cell.width == 8 || cell.width == 4 && floating.contains(*value)).map(|(value, cell)| (*value, _spill_home(*value, cell.clone()))).collect();
-    if found.is_empty() {
-        return found;
-    }
-    let (_, live_out) = live(body);
-    for block in &body.blocks {
-        let mut alive: BTreeSet<u32> = live_out[&block.at].iter().copied().filter(|value| found.contains_key(value)).collect();
-        for one in block.insns.iter().rev() {
-            let writes: Vec<u32> = alive.iter().copied().filter(|value| {
-                let cell = cell_of(&found[value]);
-                crate::backend::spiller::_may_write(one, cell, body.sealed_arguments) && !_stores_itself(one, *value, cell)
-            }).collect();
-            for value in writes {
-                found.shift_remove(&value);
-                alive.remove(&value);
-            }
-            for value in &one.defines {
-                alive.remove(value);
-            }
-            alive.extend(one.uses.iter().copied().filter(|value| found.contains_key(value)));
-        }
-    }
-    found
-}
-
-/// Whether `one` stores `value` to `cell`: it leaves in the cell what it holds.
-fn _stores_itself(one: &Insn, value: u32, cell: &Mem) -> bool {
-    one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && matches!(what.dests.as_slice(), [Loc::Mem(dest)] if dest == cell) && _held_floats(&what.sources) == [value])
+    crate::backend::storedhomes::held(body, &|value, cell| floating.contains(&value) && (cell.width == 8 || cell.width == 4))
+        .into_iter()
+        .map(|(value, cell)| (value, _spill_home(value, cell)))
+        .collect()
 }
 
 /// Values a block reads from a cell nothing writes before their last

@@ -91,6 +91,12 @@ fn planned_with(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame, posti
     let extensions = llrm_support::debug::timed("spill extensions", || _extensions_by(body, values, postings));
     let mut frame_loads = llrm_support::debug::timed("spill stable loads", || _stable_loads(body, values));
     frame_loads.extend(llrm_support::debug::timed("spill frame loads", || _frame_loads(body, values)));
+    // A phi's value the program also stores to a cell the body has not written since is read from there.
+    if !body.homes.is_empty() {
+        let widths: IndexMap<u32, u32> = body.blocks.iter().flat_map(|block| &block.insns).filter_map(|one| one.what.as_ref()).flat_map(|what| what.dests.iter().chain(&what.sources)).filter_map(|place| if let Loc::Held(held) = place { Some((held.value, held.width)) } else { None }).collect();
+        let homed = crate::backend::storedhomes::held(body, &|value, cell| values.contains(&value) && !frame_loads.contains_key(&value) && widths.get(&value) == Some(&cell.width));
+        frame_loads.extend(homed);
+    }
     // A copy of a load is made again as that load.
     if !copies.is_empty() {
         let apart: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
