@@ -107,3 +107,13 @@ fn a_callee_saves_the_register_a_call_it_makes_clobbers() {
     assert!(lines.first().is_some_and(|one| one == "push ecx"), "ECX is the callee's to keep: {lines:?}");
     assert!(lines.iter().any(|one| one == "pop ecx"), "{lines:?}");
 }
+
+/// `va_start` made the list's pointer with a 16-bit `lea ax,[esp+20]` and stored a word, whatever the target: on -m32 every
+/// function with `...` that read an argument read through half a pointer (found by gcc.c-torture/20030914-2).
+#[test]
+fn a_variadic_function_on_a_flat_target_makes_a_full_width_list_pointer() {
+    let text = c_listing(&["-m32"], "int f(int a, int b, ...) { return b; }\n");
+    let lines = procedure(&text, "f_");
+    assert!(lines.iter().any(|one| one.starts_with("lea eax, [esp+")), "{lines:?}");
+    assert!(!lines.iter().any(|one| one.starts_with("lea ax,") || one.starts_with("mov word ptr")), "{lines:?}");
+}
