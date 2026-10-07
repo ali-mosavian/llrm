@@ -2727,10 +2727,8 @@ impl Selector<'_, '_, '_> {
                 }
                 (CastOp::IntToPtr, Type::Int(32)) => {
                     let dword = self.held(operand, from, at, out)?;
-                    let top = self.fresh_held(4);
-                    let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
-                    out.push(insn(at, semantics(Operation::Binary, "shr", vec![Loc::Held(top)], vec![Loc::Held(dword), sixteen])));
-                    (Some(Held { width: 2, ..dword }), Held { width: 2, ..top })
+                    let (offset, selector) = self.far_of(dword, at, out);
+                    (Some(offset), selector)
                 }
                 _ => return refuse(format!("{op:?} to a far pointer")),
             };
@@ -3111,6 +3109,16 @@ impl Selector<'_, '_, '_> {
         let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
         out.push(insn(at, semantics(Operation::Binary, "shr", vec![Loc::Held(top)], vec![Loc::Held(held), sixteen])));
         (Held { width: 2, ..held }, Held { width: 2, ..top })
+    }
+
+    /// The offset and the selector of the far pointer a dword is: its low word and its high word, which a segment register takes
+    /// from a word of its own. The selector as a view of the shifted dword was a second width of one value, which the allocator did
+    /// not hoist out of a loop.
+    fn far_of(&mut self, dword: Held, at: i64, out: &mut Vec<Arc<Insn>>) -> (Held, Held) {
+        let (offset, top) = self.words(dword, at, out);
+        let selector = self.fresh_held(2);
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(selector)], vec![Loc::Held(top)])));
+        (offset, selector)
     }
 
     /// `held` widened to `width` bytes, as its `signext` says, where it is narrower.

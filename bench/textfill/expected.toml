@@ -1,4 +1,4 @@
-reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
+reason = "a far pointer made from a long loads its segment once, before the loop: -10000 instructions, -4 bytes"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -18,16 +18,16 @@ bss_bytes = 0
 kernel_ms = 0.4138
 
 [c.O2]
-instructions = 40009
+instructions = 30010
 memory_operands = 8000
-code_bytes = 89
+code_bytes = 85
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 40009
+instructions = 30010
 memory_operands = 8000
-code_bytes = 88
+code_bytes = 84
 data_bytes = 0
 bss_bytes = 0
 
