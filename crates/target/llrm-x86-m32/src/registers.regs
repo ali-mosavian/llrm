@@ -6,6 +6,9 @@
 #   root     the full register it is a view of (itself for a root)
 #   lane     bit offset inside the root
 #   classes  comma separated, as below
+#   dwarf    the i386 psABI's DWARF register number; a view at lane 0 has its root's (a location
+#            reads the low bytes), one at another lane has none. `-` for none.
+#   codeview CV_HREG_e (llvm's CodeViewRegisters.def); `-` for none.
 #
 # Classes: reserved (never allocated: esp, ebp, es), gpr (allocatable value), byte (has an 8-bit view), base (an address
 # base: any GPR), index (an address index: any GPR but ESP), frame, stack.
@@ -15,37 +18,37 @@
 # allocatable; it equals DS (`string_segment` in datalayout.toml). FS and GS
 # are never described.
 #
-# name  bits root lane classes
-eax     32   eax  0    gpr,byte,base,index
-ecx     32   ecx  0    gpr,byte,base,index
-edx     32   edx  0    gpr,byte,base,index
-ebx     32   ebx  0    gpr,byte,base,index
-esi     32   esi  0    gpr,base,index
-edi     32   edi  0    gpr,base,index
-ebp     32   ebp  0    reserved,frame,base,index
-esp     32   esp  0    reserved,stack,base
-ax      16   eax  0    -
-cx      16   ecx  0    -
-dx      16   edx  0    -
-bx      16   ebx  0    -
-si      16   esi  0    -
-di      16   edi  0    -
-bp      16   ebp  0    -
-sp      16   esp  0    -
-al      8    eax  0    -
-cl      8    ecx  0    -
-dl      8    edx  0    -
-bl      8    ebx  0    -
-ah      8    eax  8    -
-ch      8    ecx  8    -
-dh      8    edx  8    -
-bh      8    ebx  8    -
-es      16   es   0    reserved,string_segment
-st0     80   st0 0    x87
-st1     80   st1 0    x87
-st2     80   st2 0    x87
-st3     80   st3 0    x87
-st4     80   st4 0    x87
-st5     80   st5 0    x87
-st6     80   st6 0    x87
-st7     80   st7 0    x87
+# name  bits root lane classes dwarf codeview
+eax     32   eax  0    gpr,byte,base,index  0  17
+ecx     32   ecx  0    gpr,byte,base,index  1  18
+edx     32   edx  0    gpr,byte,base,index  2  19
+ebx     32   ebx  0    gpr,byte,base,index  3  20
+esi     32   esi  0    gpr,base,index  6  23
+edi     32   edi  0    gpr,base,index  7  24
+ebp     32   ebp  0    reserved,frame,base,index  5  22
+esp     32   esp  0    reserved,stack,base  4  21
+ax      16   eax  0    -  0  9
+cx      16   ecx  0    -  1  10
+dx      16   edx  0    -  2  11
+bx      16   ebx  0    -  3  12
+si      16   esi  0    -  6  15
+di      16   edi  0    -  7  16
+bp      16   ebp  0    -  5  14
+sp      16   esp  0    -  4  13
+al      8    eax  0    -  0  1
+cl      8    ecx  0    -  1  2
+dl      8    edx  0    -  2  3
+bl      8    ebx  0    -  3  4
+ah      8    eax  8    -  -  5
+ch      8    ecx  8    -  -  6
+dh      8    edx  8    -  -  7
+bh      8    ebx  8    -  -  8
+es      16   es   0    reserved,string_segment  40  25
+st0     80   st0 0    x87  11  128
+st1     80   st1 0    x87  12  129
+st2     80   st2 0    x87  13  130
+st3     80   st3 0    x87  14  131
+st4     80   st4 0    x87  15  132
+st5     80   st5 0    x87  16  133
+st6     80   st6 0    x87  17  134
+st7     80   st7 0    x87  18  135

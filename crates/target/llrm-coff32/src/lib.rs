@@ -80,7 +80,7 @@ mod tests {
 
     fn text(image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
         let spans = vec![[0, image.len()]];
-        Section { name: "A_TEXT".into(), role: Role::Text, near: true, align: 16, image, spans, relocs, lines: Vec::new() }
+        Section { name: "A_TEXT".into(), role: Role::Text, near: true, align: 16, image, spans, relocs }
     }
 
     fn data(image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
@@ -243,4 +243,5 @@ mod tests {
         let said = Command::new(&objdump).args(["-s", "-j", ".data"]).arg(&exe).output().unwrap();
         assert!(String::from_utf8_lossy(&said.stdout).contains("08104000"), "{}", String::from_utf8_lossy(&said.stdout));
     }
+
 }

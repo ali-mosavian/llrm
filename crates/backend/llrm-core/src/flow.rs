@@ -66,6 +66,8 @@ pub fn machine_with<'a>(
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
         Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), classes: Rc::clone(classes), prices: ssaspill::Prices::of(target), run: spilling.clone().unwrap_or_default() }),
         Box::new(phielim::PhiElimination),
+        // Before any value is placed: a load made where its reader is.
+        Box::new(crate::backend::pressuresink::PressureSink { segments: segments.clone(), classes: Rc::clone(classes) }),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),

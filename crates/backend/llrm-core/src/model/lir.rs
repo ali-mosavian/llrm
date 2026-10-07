@@ -276,6 +276,8 @@ pub struct DebugVariable {
     pub name: String,
     pub r#type: llrm_mir::MetadataId,
     pub addr: Addr,
+    /// Passed in, not declared in the body.
+    pub parameter: bool,
 }
 
 /// One lowered procedure.  Blocks remain in emitted order.

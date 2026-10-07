@@ -22,7 +22,7 @@ use crate::backend::cpu::Profile;
 use crate::backend::peep;
 use crate::backend::target::Segments;
 use crate::backend::{addressforms, division};
-use crate::backend::callregs::{call_clobbered_high, call_clobbers};
+use crate::backend::callregs::{call_clobbered_high_keeping, call_clobbers};
 use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{BlockOdds, DebugVariable, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::AddressForm;
@@ -465,6 +465,8 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     let convention = convention(module, &layout, global, arch)?;
     let unit = Unit::of(module, &layout, function).with_spaces(arch.layout().spaces.roles);
     // The body is not changed while it is selected: what is known of it without memory is found once.
+    let shape = llrm_analysis::cfg::Shape::of(function);
+    let unit = unit.with_shape(&shape);
     let registers = llrm_analysis::consts::known(&unit, None, None, None);
     let unit = unit.with_registers(&registers);
     let exact = ranges::exact_offsets(&unit).map_err(Unselected)?;
@@ -509,6 +511,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         segments,
         exact,
         registers,
+        shape: shape.clone(),
         exact_sums: BTreeSet::new(),
         secondary,
         wide,
@@ -563,7 +566,7 @@ fn parameters(module: &Module, name: &str, convention: &Convention) -> Vec<Debug
     function
         .parameters
         .into_iter()
-        .filter_map(|(index, name, r#type)| Some(DebugVariable { name, r#type, addr: Addr::new(Space::Frame, cell(index)?) }))
+        .filter_map(|(index, name, r#type)| Some(DebugVariable { name, r#type, addr: Addr::new(Space::Frame, cell(index)?), parameter: true }))
         .collect()
 }
 
@@ -694,6 +697,8 @@ struct Selector<'m, 'c, 'p> {
     exact: BTreeSet<ValueId>,
     /// What is known of the function without memory: found once, for the body as selected.
     registers: IndexMap<ValueId, llrm_analysis::consts::Known>,
+    /// The body's dominance and loops, found once: the body is not changed while it is selected.
+    shape: llrm_analysis::cfg::Shape,
     /// The registers indexing cells `exact` proves: each such cell is
     /// `Mem::exact`, for `exactaddress`.
     exact_sums: BTreeSet<u32>,
@@ -1033,8 +1038,7 @@ impl Selector<'_, '_, '_> {
     /// became: a branch takes its MIR edges', shared out among the
     /// successors it has.
     fn odds(&self, made: &IndexMap<BlockId, Vec<LirBlock>>, block_at: &IndexMap<BlockId, i64>) -> BlockOdds {
-        let unit = Unit::of(self.module, &self.layout, self.function).with_spaces(self.spaces);
-        let estimated = llrm_analysis::branchprob::estimated(&self.module.context, &self.module.metadata, &self.module.globals, self.function, &unit.shape(), &std::collections::BTreeMap::new());
+        let estimated = llrm_analysis::branchprob::estimated(&self.module.context, &self.module.metadata, &self.module.globals, self.function, &self.shape, &std::collections::BTreeMap::new());
         let mut odds = BlockOdds::default();
         for (block, chain) in made {
             let taken: IndexMap<i64, f64> = self
@@ -1065,10 +1069,10 @@ impl Selector<'_, '_, '_> {
 
     /// Each loop's header and constant trips, as `induction` proves them.
     fn trip_counts(&self, block_at: &IndexMap<BlockId, i64>) -> Vec<(i64, i64)> {
-        let unit = Unit::of(self.module, &self.layout, self.function).with_spaces(self.spaces).with_registers(&self.registers);
+        let unit = Unit::of(self.module, &self.layout, self.function).with_spaces(self.spaces).with_registers(&self.registers).with_shape(&self.shape);
         let facts = unit.registers();
-        let mut counts: Vec<(i64, i64)> = unit
-            .shape()
+        let mut counts: Vec<(i64, i64)> = self
+            .shape
             .loops
             .iter()
             .filter_map(|one| {
@@ -1685,7 +1689,7 @@ impl Selector<'_, '_, '_> {
         let Some(variable) = attached.and_then(|node| llrm_mir::debuginfo::read_variable(self.module, node)) else { return Ok(()) };
         if let Ok(Pointer::Frame { disp, index: None, .. }) = self.pointer(arguments[0]) {
             let addr = Addr::new(Space::Frame, disp + variable.offset);
-            self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, addr }));
+            self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, addr, parameter: variable.parameter }));
         }
         Ok(())
     }
@@ -3225,11 +3229,12 @@ impl Selector<'_, '_, '_> {
                 (Semantics { indirect: true, ..semantics(Operation::Call, "call", vec![], vec![target.clone()]) }, through)
             }
         };
+        let whole: BTreeSet<Register> = self.arch.callee_saved().into_iter().filter(|(full, pushed)| full == pushed).map(|(full, _)| crate::model::ir::root(full)).collect();
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {
             call: Some(self.listed(effects)),
             clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments)),
-            clobbers_high: if changed.is_some() { BTreeSet::new() } else { call_clobbered_high(&contract, self.segments) },
+            clobbers_high: if changed.is_some() { BTreeSet::new() } else { call_clobbered_high_keeping(&contract, self.segments, &whole) },
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
             uses: requires.iter().map(|(held, _)| held.value).chain(through).collect(),
