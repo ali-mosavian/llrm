@@ -127,6 +127,9 @@ def main() -> int:
     if args.gate:
         names_wanted = [line.strip() for line in (HERE / "sample.txt").read_text().splitlines() if line.strip() and not line.startswith("#")]
     chosen = programs(names_wanted)[: args.sample or None]
+    if not chosen:
+        print(f"no programs in {CORPUS} (TORTURE_CORPUS names the gcc.c-torture/execute directory)")
+        return 2
     support_obj = work / "libc.obj"
     done = subprocess.run([str(BIN / "llrm-c"), str(HERE / "libc.c"), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), "-O2", "-o", str(support_obj)], capture_output=True, text=True)
     if done.returncode != 0:
