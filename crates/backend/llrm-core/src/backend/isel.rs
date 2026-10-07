@@ -1575,12 +1575,21 @@ impl Selector<'_, '_, '_> {
             blocks.push(LirBlock { succ: vec![block_at[&default]], phis, ..LirBlock::new(from, insns) });
             return Ok(());
         }
-        let value = Loc::Held(self.held(operand, ty, at, &mut insns)?);
+        // A selector wider than a register (an i64 on a 32-bit target) is compared by its halves.
+        let wide = self.is_wide(ty);
+        let value = if wide { None } else { Some(Loc::Held(self.held(operand, ty, at, &mut insns)?)) };
         let chain: Vec<i64> = std::iter::once(from).chain(self.chains.get(&inst).cloned().unwrap_or_default()).collect();
         for (index, (case, target)) in cases.into_iter().enumerate() {
             let next = chain.get(index + 1).copied().unwrap_or(block_at[&default]);
-            let case = self.source(case, ty, at, &mut insns)?;
-            insns.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![value.clone(), case])));
+            match &value {
+                Some(value) => {
+                    let case = self.source(case, ty, at, &mut insns)?;
+                    insns.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![value.clone(), case])));
+                }
+                None => {
+                    self.wide_compare(IntPredicate::Eq, operand, case, at, &mut insns)?;
+                }
+            }
             let branch = Semantics { target: Some(block_at[&target]), ..semantics(Operation::Branch, "je", vec![], vec![]) };
             insns.push(insn(at, branch));
             let succ = vec![block_at[&target], next];
