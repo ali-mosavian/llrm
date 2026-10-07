@@ -7,10 +7,26 @@
 use std::collections::BTreeSet;
 
 use crate::backend::allocate::live;
+use crate::backend::overlap;
 use crate::backend::spiller::_may_write;
 use crate::model::ir::{Loc, Mem, Operation};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::IndexMap;
+
+/// Whether `cell` and `other` are certainly different bytes: both fixed addresses (no register in either) that
+/// `overlap` tells apart. The machine cannot tell two pointers or two elements of one array apart, nor a pointer from a
+/// global (`overlap`'s rule: that is MIR's to say), so anything else may overlap.
+fn apart(cell: &Mem, other: &Mem) -> bool {
+    let fixed = |one: &Mem| one.base.is_none() && one.index.is_none() && one.selector.is_none() && one.addr.is_some();
+    fixed(cell) && fixed(other) && !overlap::may_overlap(cell.addr, cell.width, other.addr, other.width)
+}
+
+/// Whether `one` may write a byte of `cell`: the spiller's answer for the frame, and for any other memory a store
+/// that is not certainly elsewhere. (The spiller's alone said no to a store to the very global a load read: nothing
+/// in it but frame cells was asked.)
+pub fn may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
+    _may_write(one, cell, sealed) || one.what.as_ref().is_some_and(|what| what.dests.iter().any(|place| matches!(place, Loc::Mem(other) if !apart(cell, other))))
+}
 
 /// Whether `one` only copies one value to another.
 fn copies(one: &Insn) -> bool {
@@ -50,7 +66,7 @@ pub fn held(body: &LirBody, wanted: &dyn Fn(u32, &Mem) -> bool) -> IndexMap<u32,
     for block in &body.blocks {
         let mut alive: BTreeSet<u32> = live_out[&block.at].iter().copied().filter(|value| found.contains_key(value)).collect();
         for one in block.insns.iter().rev() {
-            let disturbed: Vec<u32> = alive.iter().copied().filter(|value| _may_write(one, &found[value], body.sealed_arguments) && !stores(one, *value, &found[value])).collect();
+            let disturbed: Vec<u32> = alive.iter().copied().filter(|value| may_write(one, &found[value], body.sealed_arguments) && !stores(one, *value, &found[value])).collect();
             for value in disturbed {
                 found.shift_remove(&value);
                 alive.remove(&value);

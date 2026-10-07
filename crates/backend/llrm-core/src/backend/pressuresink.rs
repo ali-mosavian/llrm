@@ -16,7 +16,7 @@ use iced_x86::Register;
 use crate::backend::allocate::live;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::regclass;
-use crate::backend::spiller::_may_write;
+use crate::backend::storedhomes::may_write;
 use crate::backend::target::Segments;
 use crate::model::ir::{Loc, Mem, Operation};
 use crate::model::lir::{Insn, LirBlock, LirBody};
@@ -153,7 +153,7 @@ fn _reader(
         let Some(what) = &between.what else { return None };
         if crate::backend::floatregions::boundary(between)
             || between.volatile()
-            || _may_write(between, cell, body.sealed_arguments)
+            || may_write(between, cell, body.sealed_arguments)
             || between.defines.iter().any(|defined| addresses.contains(defined) || *defined == value)
             || what.op == Operation::Barrier
         {

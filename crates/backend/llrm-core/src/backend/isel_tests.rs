@@ -276,7 +276,7 @@ fn test_variable_indices_are_scaled_and_added() {
     let got = listing(text, "f");
     assert_eq!(
         got,
-        ["push bp", "mov bp, sp", "sub sp, 8", "push si", "push di", "L0_0:", "mov si, word ptr [bp+8]", "lea di, [esi+esi]", "mov word ptr [bp+di-8], 5", "add si, si", "mov bx, word ptr [bp+6]", "mov ax, word ptr [bx+si+2]", "pop di", "pop si", "leave", "retf"]
+        ["push bp", "mov bp, sp", "sub sp, 8", "push si", "push di", "L0_0:", "mov bx, word ptr [bp+6]", "mov si, word ptr [bp+8]", "lea di, [esi+esi]", "mov word ptr [bp+di-8], 5", "add si, si", "mov ax, word ptr [bx+si+2]", "pop di", "pop si", "leave", "retf"]
     );
 }
 
@@ -4042,4 +4042,20 @@ fn test_a_dword_pointer_scales_its_index_in_the_access() {
     assert!(!insns.iter().any(|what| what.name.as_deref() == Some("shl")), "{insns:?}");
     let scaled = insns.iter().any(|what| what.sources.iter().any(|one| matches!(one, crate::model::ir::Loc::Mem(cell) if cell.scale == 4 && cell.base.is_some() && cell.index.is_some())));
     assert!(scaled, "{insns:?}");
+}
+
+/// A load made just before its reader moved past a store to the very global it read, which `_may_write` (the frame's
+/// question) did not see: `N$PEND`, `x = g; g = 0; return x`, returned the zero and every Nib program's output looped.
+#[test]
+fn test_a_load_does_not_move_past_a_store_to_the_global_it_read() {
+    let text = "@g = internal global i16 5
+define i16 @f() addrspace(1) {
+  %v = load i16, ptr @g
+  store i16 0, ptr @g
+  ret i16 %v
+}
+";
+    let got = listing(text, "f");
+    let (load, store) = (got.iter().position(|one| one.starts_with("mov ax, word ptr g")), got.iter().position(|one| one.starts_with("mov word ptr g, 0")));
+    assert!(load.is_some() && store.is_some() && load < store, "{got:?}");
 }
