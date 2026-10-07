@@ -293,6 +293,8 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     if applied.options.wanted("addresssink") {
         manager.add(addresssink::AddressSink);
     }
+    // Before the passes that name instructions: a load made where its reader is.
+    manager.add(crate::loadsink::LoadSink);
     // Last: what it names are the instructions selection sees.
     manager.add_module(crate::spares::Spares);
     manager.add_module(crate::homes::Homes);
