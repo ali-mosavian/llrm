@@ -1298,9 +1298,87 @@ fn _recolored_hints(
                 union.entry(_whole(register)).or_default().push(value);
                 r#where.insert(value, register);
                 moved = true;
+                continue;
+            }
+            // Nothing free joins more. Copies that form a cycle (`a<-b<-c<-a`, an `xchg` each) are no single move's
+            // gain: seat `value` with a partner and send each value in the way to a register of one of its own partners.
+            let mut targets: Vec<Register> = settled.hints.get(&value).into_iter().flatten().filter_map(|(other, _)| r#where.get(other).map(|one| _whole(*one))).filter(|one| *one != now).collect();
+            targets.dedup();
+            for theirs in targets {
+                let mut plan = IndexMap::default();
+                if !_ejected(value, theirs, &mut plan, 0, r#where, union, settled, &pinned) {
+                    continue;
+                }
+                let moved_values: Vec<u32> = plan.keys().copied().collect();
+                let sum = |places: &IndexMap<u32, Register>| moved_values.iter().map(|each| joined(*each, _whole(places[each]), places)).sum::<f64>();
+                let before = sum(r#where);
+                let mut after = r#where.clone();
+                after.extend(plan.iter().map(|(each, register)| (*each, *register)));
+                if sum(&after) <= before {
+                    continue;
+                }
+                for (each, register) in &plan {
+                    let was = _whole(r#where[each]);
+                    union.get_mut(&was).expect("assigned").retain(|one| one != each);
+                    union.entry(_whole(*register)).or_default().push(*each);
+                }
+                *r#where = after;
+                moved = true;
+                break;
             }
         }
     }
+}
+
+/// How far a chain of values sent out of each other's way may run: LLVM's `lcr-max-depth`.
+const EJECTION_DEPTH: usize = 6;
+
+/// Whether `value` may sit in `register` if each value in its way goes to a register of one of its own copy
+/// partners, and those in theirs likewise, `plan` holding the moves made so far.
+#[allow(clippy::too_many_arguments)]
+fn _ejected(
+    value: u32,
+    register: Register,
+    plan: &mut IndexMap<u32, Register>,
+    depth: usize,
+    r#where: &IndexMap<u32, Register>,
+    union: &IndexMap<Register, Vec<u32>>,
+    settled: &Settled<'_>,
+    pinned: &dyn Fn(u32) -> bool,
+) -> bool {
+    let (Some(mine), true) = (settled.live.get(&value), !pinned(value) && !plan.contains_key(&value)) else { return false };
+    if depth >= EJECTION_DEPTH || (!settled.data_free && register == settled.segments.data) {
+        return false;
+    }
+    let width = settled.widths.get(&value).copied().unwrap_or(4);
+    let order: Vec<Register> = target::order(settled.confined.get(&value), settled.segments, settled.classes).into_iter().filter(|one| _whole(*one) == register).collect();
+    let Some(exact) = _free(mine, &order, &IndexMap::default(), settled.live, settled.masks, width) else { return false };
+    // Who is in `register` once the plan is carried out, and overlaps `value`.
+    let in_way: Vec<u32> = union
+        .get(&register)
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|other| *other != value && !plan.contains_key(other))
+        .chain(plan.iter().filter(|(other, at)| _whole(**at) == register && **other != value).map(|(other, _)| *other))
+        .filter(|other| settled.live.get(other).is_some_and(|theirs| theirs.overlaps(mine)))
+        .collect();
+    plan.insert(value, exact);
+    for other in in_way {
+        let partners: Vec<Register> = settled.hints.get(&other).into_iter().flatten().filter_map(|(partner, _)| plan.get(partner).or_else(|| r#where.get(partner)).map(|one| _whole(*one))).filter(|one| *one != register).collect();
+        let before = plan.clone();
+        if !partners.into_iter().any(|theirs| {
+            let tried = _ejected(other, theirs, plan, depth + 1, r#where, union, settled, pinned);
+            if !tried {
+                *plan = before.clone();
+                plan.insert(value, exact);
+            }
+            tried
+        }) {
+            return false;
+        }
+    }
+    true
 }
 
 /// Every value that wants a register, dead definitions included.
