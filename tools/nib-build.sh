@@ -25,7 +25,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/nib-build.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
 "$bin/llrm-nib" "$source" -o "$work/program.obj" "$level" --procedure-segments ${NIB_FLAGS:-} >/dev/null
-"$bin/nibfront" --declare h "$source" >"$work/$(basename "$source" .nib).h"
+"$bin/nibfront" --declare h $abi "$source" >"$work/$(basename "$source" .nib).h"
 defines=""
 recipe() { python3 "$root/tools/linkrecipe.py" x86-m16 "$1"; }
 omf=$(recipe assembler)
