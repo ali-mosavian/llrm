@@ -5,6 +5,7 @@
     linkrecipe.py TARGET format      the linker's format words (`format dos`)
     linkrecipe.py TARGET FIELD       one `[link]` field (`first`, `last`, `final`, `options`, `loader`), words
     linkrecipe.py TARGET ld-emulation  GNU ld's -m for the target's ELF objects
+    linkrecipe.py TARGET coff-machine  lld-link's /machine: for the target's COFF objects
 """
 
 import sys
@@ -52,6 +53,11 @@ def ld_emulation(target: str) -> str:
     return recipe(target)["link"]["elf"]["emulation"]
 
 
+def coff_machine(target: str) -> str:
+    """lld-link's `/machine:` for the target's COFF objects: `[link.coff]`'s `machine`."""
+    return recipe(target)["link"]["coff"]["machine"]
+
+
 if __name__ == "__main__":
     target, field = sys.argv[1], sys.argv[2]
-    print({"assembler": lambda: assembler(target), "ld-emulation": lambda: ld_emulation(target)}.get(field, lambda: " ".join(link(target, field)))())
+    print({"assembler": lambda: assembler(target), "ld-emulation": lambda: ld_emulation(target), "coff-machine": lambda: coff_machine(target)}.get(field, lambda: " ".join(link(target, field)))())
