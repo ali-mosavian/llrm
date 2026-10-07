@@ -62,4 +62,4 @@ pub trait LIRTransform {
 pub use llrm_mir::target::{AddressForm, OperationCosts};
 
 pub const DEFAULT_MAX_UNROLL_ITERATIONS: i64 = 16;
-pub const DEFAULT_MAX_UNROLLED_OPERATIONS: i64 = 200;
+pub const DEFAULT_MAX_UNROLLED_OPERATIONS: i64 = 150;

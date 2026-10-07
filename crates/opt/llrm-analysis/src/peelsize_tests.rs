@@ -237,3 +237,14 @@ fn a_loop_of_more_than_ten_trips_is_not_copied() {
     assert!(summing(10, "%x", "").admitted(&Limits::default()));
     assert!(!summing(16, "%x", "").admitted(&Limits::default()));
 }
+
+/// The budget is LLVM's 150 under LLVM's 400% boost; GCC's 200 sat under that boost, a limit above both
+/// references': three calls of six arguments in a body of eight trips are over the first and under the second
+/// (matmul unrolled to 2633 B, 4.3 times gcc's 402 and over clang's 1789).
+#[test]
+fn test_the_default_budget_is_llvms_threshold_not_gccs_beneath_llvms_boost() {
+    let work: String = (0..3).map(|k| format!("  %w{k} = mul i16 %x, {}\n  call void @h(i16 %w{k}, i16 %i, i16 %i, i16 %i, i16 %i, i16 %i)\n", k + 2)).collect();
+    let one = summing(8, "%x", &work);
+    assert!(one.admitted(&Limits { max_unrolled_operations: 200, ..Limits::default() }));
+    assert!(!one.admitted(&Limits::default()));
+}

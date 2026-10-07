@@ -67,7 +67,9 @@ const MAX_PERCENT_THRESHOLD_BOOST: i64 = 400;
 pub struct Limits {
     /// LLVM's `-unroll-max-iteration-count-to-analyze` (10), where GCC's `max-completely-peel-times` is 16; 0 is unbounded.
     pub max_unroll_iterations: i64,
-    /// `--param max-completely-peeled-insns`; 0 is unbounded.
+    /// LLVM's `-unroll-threshold-default` (150; -O3 doubles it to 300), the base its 400% boost applies to; GCC's
+    /// `max-completely-peeled-insns` is 200 with no boost, and the pair was one reference's boost on the other's base.
+    /// 0 is unbounded.
     pub max_unrolled_operations: i64,
     pub grows: bool,
     /// Clocks an inline that grows the code must save for each byte it adds: `--clocks-per-byte`.
@@ -76,7 +78,7 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_unroll_iterations: 10, max_unrolled_operations: 200, grows: true, milliclocks_per_byte: 16_000 }
+        Self { max_unroll_iterations: 10, max_unrolled_operations: 150, grows: true, milliclocks_per_byte: 16_000 }
     }
 }
 
@@ -86,7 +88,7 @@ impl Default for Limits {
 /// copy would settle: building it is the cost. A copy no larger than the loop always
 /// pays. Otherwise GCC refuses growth under -Os, past `max-peel-branches` undecided
 /// branches, and past
-/// `max-completely-peeled-insns` instructions -- a budget raised, as LLVM's
+/// the budget (`Limits`) -- raised, as LLVM's
 /// `shouldFullUnroll` raises it, by the share of the rolled work the copy no longer
 /// does (`getFullUnrollBoostingFactor`). A loop holding another is copied only when
 /// that shrinks it, as GCC does for outer loops.

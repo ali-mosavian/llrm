@@ -41,7 +41,7 @@ pub struct Profile {
     pub address_forms: Vec<AddressForm>,
     // GCC's target-independent complete-peel default.
     pub max_unroll_iterations: i64,
-    // GCC's `max-completely-peeled-insns` default, in semantic operations.
+    // LLVM's `-unroll-threshold-default`, in semantic operations.
     pub max_unrolled_operations: i64,
     // A 67h override's predecoder stall, charged apart from the prefix
     // issue cost so profitability makes the scorer's comparison.
@@ -294,7 +294,7 @@ mod tests {
                 target.cost("x87_store").unwrap()
             );
             assert_eq!(target.max_unroll_iterations, 16);
-            assert_eq!(target.max_unrolled_operations, 200);
+            assert_eq!(target.max_unrolled_operations, 150);
         }
         assert!(profile("P5").unwrap().pentium_pairing);
         assert!(
