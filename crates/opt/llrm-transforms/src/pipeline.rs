@@ -34,7 +34,7 @@ use llrm_mir::passes::{Analyses, Declared, FunctionPass, ModuleAnalyses, PassMan
 use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
-use crate::{
+use crate::{jumpthread, 
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
     promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
 };
@@ -283,6 +283,10 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
     manager.add(rotate::Rotate);
+    // After the loop passes: the cycles it makes between the cases are no natural loop. LLVM's DFAJumpThreading, gcc's FSM threader.
+    if applied.options.wanted("jumpthread") {
+        manager.add(jumpthread::JumpThread { size: applied.options.prefers_size() });
+    }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if applied.options.wanted("hoist") {
