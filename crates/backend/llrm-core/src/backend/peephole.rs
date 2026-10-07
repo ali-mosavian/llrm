@@ -1910,7 +1910,8 @@ fn _flag_source(bits: u32, blocks: &[Vec<Arc<Insn>>], line: &[(usize, usize)], r
                 what.sources.iter().all(|source| matches!(source, Loc::Reg(_) | Loc::Imm(_)))
             });
             let (reads, writes) = (registers(&effect.reads), registers(&effect.writes));
-            return (operands_in_registers
+            // Moved past nothing, a setter reads its memory operand where it did.
+            return ((operands_in_registers || crossed.is_empty())
                 && crossed.iter().all(|other: &liveness::Effect| {
                     other.writes.is_disjoint(&reads) && other.reads.is_disjoint(&writes) && other.writes.is_disjoint(&writes)
                 }))
