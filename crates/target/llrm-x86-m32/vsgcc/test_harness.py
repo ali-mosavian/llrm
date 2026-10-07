@@ -79,3 +79,28 @@ def test_a_multiply_costs_what_its_multiplier_is():
     assert harness.multiply_clocks(25173, True) == 10 + 15
     assert harness.multiply_clocks(0xCCCCCCCD, False) == 42
     assert harness.multiply_clocks(0xFFFFFFFF, True) == 15      # -1: n = 5 for a negative multiplier
+
+
+def test_llrm_is_built_in_the_convention_gcc_uses_and_its_report_is_read_from_the_stack(built):
+    """The table put llrm's watcom register arguments beside gcc's stack ones: part of every ratio was the ABI. build.sh passes
+    -mabi=sysv and records it; the harness reads `report`'s value where that convention puts it."""
+    assert harness.built_abi() == "sysv"
+    result = harness.run("fib", "llrm")
+    assert result["reports"] == expected("fib"), result["reports"]
+    listing = subprocess_text([str(harness.LLRM), "-m32", "-mabi=sysv", "-O2", "-march=i486", "-S", "-o", "/dev/stdout", str(BENCH / "fib/fib.c")])
+    assert "_fib proc" in listing and "fib_ proc" not in listing, "sysv names are undecorated"
+
+
+def subprocess_text(argv):
+    import subprocess
+    done = subprocess.run(argv, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def test_enter_costs_what_the_486_charges_for_it():
+    """`enter` fell to the default one clock: a frame opened with it read 3 clocks cheaper than push/mov/sub's 3 when it is
+    14 (Intel 240440-002), and the -Os rows that used it looked as fast as they were small."""
+    from iced_x86 import Decoder
+    enter = next(iter(Decoder(32, bytes([0xC8, 0x08, 0x00, 0x00]))))
+    assert harness.cost(enter, True, True, None) == 14

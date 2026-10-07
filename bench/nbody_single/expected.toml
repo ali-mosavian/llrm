@@ -1,4 +1,4 @@
-reason = "x87: a value that stays is copied with fld st(i) for a memory operand, not exchanged up first (nbody_single -10%, fpbench -10%)"
+reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 for push/mov/sub (Intel 240440-002); -Os counts and bytes rise by what enter saved (2 bytes, 2 instructions per frame), rec* rows are #777's and untouched here"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -26,12 +26,11 @@ bss_bytes = 96
 kernel_ms = 12.0218
 
 [c.Os]
-instructions = 1037188
+instructions = 1037190
 memory_operands = 138111
-code_bytes = 344
+code_bytes = 346
 data_bytes = 24
 bss_bytes = 96
-kernel_ms = 13.8369
 
 [nib.O2]
 instructions = 948123
@@ -42,12 +41,11 @@ bss_bytes = 0
 kernel_ms = 12.648
 
 [nib.Os]
-instructions = 1350434
+instructions = 1350436
 memory_operands = 230138
-code_bytes = 562
+code_bytes = 564
 data_bytes = 32
 bss_bytes = 0
-kernel_ms = 18.0145
 
 [ow.O2]
 instructions = 1088249

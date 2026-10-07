@@ -108,6 +108,10 @@ impl llrm_target::Target for M32 {
         CALLING.native().frame_optional
     }
 
+    fn frame_enter(&self) -> bool {
+        CALLING.native().frame_enter
+    }
+
     /// Past EBP and the return address; there is no far call.
     fn first_argument_offset(&self, far: bool) -> i64 {
         llrm_x86::calling::first_argument_offset(CALLING.native(), far)

@@ -1,4 +1,4 @@
-reason = "integer spiller reads a phi's value from the cell the program stores it to: frames bas -0.6%, nbody_fixed -7% bytes, queens bas -2.7%"
+reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 for push/mov/sub (Intel 240440-002); -Os counts and bytes rise by what enter saved (2 bytes, 2 instructions per frame), rec* rows are #777's and untouched here"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -26,12 +26,11 @@ bss_bytes = 96
 kernel_ms = 17.8109
 
 [c.Os]
-instructions = 1488160
+instructions = 1488162
 memory_operands = 326049
-code_bytes = 483
+code_bytes = 485
 data_bytes = 0
 bss_bytes = 96
-kernel_ms = 19.8519
 
 [nib.O2]
 instructions = 3008335
@@ -42,12 +41,11 @@ bss_bytes = 0
 kernel_ms = 40.1282
 
 [nib.Os]
-instructions = 3431517
+instructions = 3431519
 memory_operands = 789069
-code_bytes = 842
+code_bytes = 844
 data_bytes = 96
 bss_bytes = 0
-kernel_ms = 45.774
 
 [ow.O2]
 instructions = 8130433

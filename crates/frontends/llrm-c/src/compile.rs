@@ -92,6 +92,7 @@ pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen:
         unit.cdecl_cc = Some(cc_of(&profile.cdecl)?).filter(|cc| cc != "cdecl");
         unit.registers_cc = Some(cc_of(&profile.registers)?).filter(|cc| cc != "cdecl");
         unit.entry = profile.entry.clone();
+        unit.default_registers = profile.default_registers.clone();
         unit.entry_cc = calling.named(&profile.entry_convention).and_then(|one| one.cc.clone()).ok_or_else(|| hir::Unsupported(format!("calling.toml has no {} with a cc", profile.entry_convention)))?;
         unit.decorate(calling, codegen.object_format);
         // The front end was picked by the shim's flat flag; the target says what flat is.
@@ -152,6 +153,8 @@ pub struct Profile {
     /// The routine the runtime's start calls, and the convention it calls it in by its name in `calling.toml`.
     pub entry: String,
     pub entry_convention: String,
+    /// What it records of a function it passes in its default registers: its own list (`[ff:0]`), which differs by tree.
+    pub default_registers: String,
     /// The ABI the front end is asked for: what it is run with, and what its records mean in `calling.toml`'s conventions: one it
     /// records as cdecl, and one it records in its default registers.
     pub flags: Vec<String>,
@@ -187,7 +190,7 @@ impl Profile {
             None => Vec::new(),
             Some(list) => list.as_array().ok_or("frontend.interrupt_parameters is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("an interrupt parameter is not a string")).collect::<Result<_, _>>()?,
         };
-        Ok(Self { cpu: text(frontend, "watcom_cpu")?, convention: text(frontend, "convention")?, entry: text(frontend, "entry")?, entry_convention: text(frontend, "entry_convention")?, flags, cdecl: text(abi, "cdecl")?, registers: text(abi, "registers")?, header: text(frontend, "header")?, interrupt_parameters })
+        Ok(Self { cpu: text(frontend, "watcom_cpu")?, convention: text(frontend, "convention")?, entry: text(frontend, "entry")?, entry_convention: text(frontend, "entry_convention")?, default_registers: text(frontend, "default_registers")?, flags, cdecl: text(abi, "cdecl")?, registers: text(abi, "registers")?, header: text(frontend, "header")?, interrupt_parameters })
     }
 }
 
@@ -612,6 +615,51 @@ mod tests {
         asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).map(str::to_owned).collect()
     }
 
+    /// `function` of tests/fixtures/c/watcall16.cgs under `-mabi=watcom`: Open Watcom's 16-bit register convention.
+    fn watcall16(function: &str) -> Vec<String> {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/watcall16.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let options = llrm_core::driver::Options { abi: Some("watcom".to_owned()), ..llrm_driver::m16_options(machine) };
+        let built = super::selected(&text, "watcall16", None, &options).unwrap();
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find(&format!("{function} proc")).expect("the function");
+        asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
+    }
+
+    /// `wcc -ecw` took the first four words in AX, DX, BX and CX and the rest from the stack, lowest first, popped with
+    /// `retf 4`; the stack convention read all six from [bp+6]...
+    #[test]
+    fn test_m16_watcom_words_arrive_in_ax_dx_bx_cx_and_the_callee_pops_the_rest() {
+        let body = watcall16("six_");
+        assert_eq!(body, ["push bp", "mov bp, sp", "L0_0:", "sub ax, dx", "imul bx, cx", "add ax, bx", "sub ax, word ptr [bp+6]", "add ax, word ptr [bp+8]", "pop bp", "retf 4"]);
+    }
+
+    /// A long or a far pointer takes a pair: `mixed(int a, long b, int c)` has a in AX, b in BX:CX and c in DX, as `wcc` has it
+    /// (DX was passed over by the pair and stayed free); a far pointer is its offset in AX and its segment in DX.
+    #[test]
+    fn test_m16_watcom_a_long_and_a_far_pointer_take_a_pair_and_a_passed_over_register_stays_free() {
+        let body = watcall16("mixed_");
+        assert!(body.contains(&"movzx esi, bx".to_owned()) && body.contains(&"movzx ebx, cx".to_owned()) && body.contains(&"movsx ebx, dx".to_owned()), "{body:?}");
+        let body = watcall16("far_pointer_");
+        assert!(body.contains(&"mov si, ax".to_owned()) && body.contains(&"mov es, dx".to_owned()) && body.contains(&"add ax, bx".to_owned()) && body.contains(&"add ax, cx".to_owned()), "{body:?}");
+    }
+
+    /// A struct larger than a dword is written through the near address in SI, which comes back in AX.
+    #[test]
+    fn test_m16_watcom_a_struct_result_is_written_through_si_and_returned_in_ax() {
+        let body = watcall16("result_");
+        assert!(body.contains(&"mov dword ptr [si], ebx".to_owned()) && body.contains(&"mov ax, si".to_owned()), "{body:?}");
+        assert_eq!(body.last().map(String::as_str), Some("retf"));
+    }
+
+    /// The call passes a long in DX:AX and an int in BX and leaves the callee's own `retf` to pop nothing.
+    #[test]
+    fn test_m16_watcom_a_call_passes_a_long_in_dx_ax_and_takes_the_result_in_dx_ax() {
+        let body = watcall16("calls_");
+        assert!(body.contains(&"mov bx, 5".to_owned()) && body.contains(&"call far ptr away_".to_owned()), "{body:?}");
+        assert!(!body.iter().any(|line| line.starts_with("add sp")), "{body:?}");
+    }
+
     /// The loop of `function` in `fixture`'s listing as `llrm-c -O2 -march=i486 -S`
     /// writes it: from the label its backward branch takes to the branch.
     fn driven_loop(fixture: &str, function: &str) -> Vec<String> {
@@ -953,7 +1001,7 @@ mod tests {
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_summed proc").expect("_summed");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-        assert!(body.contains(&"fadd dword ptr [bp+6]") && body.contains(&"enter 8, 0"), "{body:#?}");
+        assert!(body.contains(&"fadd dword ptr [bp+6]") && body.contains(&"sub sp, 8"), "{body:#?}");
     }
 
     /// The listing of each function in `fixture`, `-Os` on a 486.

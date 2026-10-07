@@ -145,7 +145,7 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
             }
             let convention = match abi {
                 Abi::C | Abi::Cdecl16 | Abi::Cdecl32 | Abi::Sysv32 => "__cdecl",
-                Abi::Watcall32 => "__watcall",
+                Abi::Watcall32 | Abi::Watcall16 => "__watcall",
                 Abi::Interrupt16 => "__interrupt",
                 Abi::Pascal16 | Abi::Basic(_) => "__pascal",
             };
@@ -164,7 +164,7 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
                 .iter()
                 .map(|(name, spec)| basic_parameter(name, spec).ok_or_else(|| unsupported(name, "BASIC", span)))
                 .collect::<Result<Vec<_>, _>>()?;
-            if abi == Abi::Watcall32 {
+            if matches!(abi, Abi::Watcall32 | Abi::Watcall16) {
                 return Err(unsupported(name, "BASIC", span));
             }
             let convention = if matches!(abi, Abi::C | Abi::Cdecl16 | Abi::Cdecl32) { " CDECL" } else { "" };
@@ -194,7 +194,7 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
             let cleanup = match abi {
                 Abi::C | Abi::Cdecl16 | Abi::Cdecl32 | Abi::Sysv32 => "caller removes the arguments".to_owned(),
                 Abi::Interrupt16 => "iret".to_owned(),
-                Abi::Watcall32 => "the callee removes the stack arguments".to_owned(),
+                Abi::Watcall32 | Abi::Watcall16 => "the callee removes the stack arguments".to_owned(),
                 _ => format!("retf {words}"),
             };
             Ok(format!(

@@ -4,6 +4,9 @@ default = "cdecl"
 [abi.cdecl]
 convention = "cdecl16"
 
+[abi.watcom]
+convention = "watcall16"
+
 # cdecl16, m16's C ABI: Borland's medium model as `wccq` is asked for it (-mm -ecc; `_name`
 # symbols). A far call (a procedure that is exported) leaves a 4-byte return address.
 
@@ -37,8 +40,13 @@ variadic_float = "double"
 aggregate = "hidden-pointer"
 aggregate_in_register_bytes = [1, 2, 4]
 aggregate_pointer = "after-arguments"
+aggregate_pointer_far = true
 aggregate_pointer_returned = "eax"
 aggregate_pointer_popped_by = "caller"
+
+# Borland's C decoration, which Open Watcom's -ecc writes too.
+[cdecl16.symbol]
+omf = "_*"
 
 # By the bytes a result takes: a byte or word in AX, a dword in DX:AX, an i64 in EDX:EAX; the
 # registers are named by their dword, as the selector holds them. Floats in st(0).
@@ -55,6 +63,9 @@ float = ["st0"]
 like = "cdecl16"
 order = "left-to-right"
 cleanup = "callee"
+
+[pascal16.symbol]
+omf = "^*"
 
 # BASIC's own: the same, in the compilers of each dialect.
 [qb45]
@@ -80,3 +91,30 @@ clobbered = []
 # or `iret` restores. The one statement of the layout: the backend pushes in this order and frontends name
 # registers through it.
 interrupt_frame = [["gs", 2], ["fs", 2], ["es", 2], ["ds", 2], ["edi", 4], ["esi", 4], ["ebp", 4], ["esp", 4], ["ebx", 4], ["edx", 4], ["ecx", 4], ["eax", 4], ["ip", 2], ["cs", 2], ["flags", 2]]
+
+# watcall16: Open Watcom's 16-bit register convention (`wcc -ecw`, `__watcall`), medium model, read from `bwcc`'s own output.
+# Arguments take AX, DX, BX, CX in order; a long or a far pointer (4 bytes) takes DX:AX or CX:BX (the low word, or a far
+# pointer's offset, first: AX, BX), the first pair with both free, and a register passed over stays free for a later word. The
+# first argument that fits no register (a float, an 8-byte value, a struct of more than 4 bytes) and every one after it goes on the
+# stack, which the callee pops (`retf n`); a struct of 1, 2 or 4 bytes is passed as an integer is. A callee changes the registers its
+# own arguments arrive in, AX, ES and, for a long result, DX, and keeps every other, as in 32 bits. A struct result larger than a
+# dword is written through the near address in SI, which the callee returns in AX. Symbols are `name_`; a variadic call is cdecl16's.
+[watcall16]
+like = "cdecl16"
+cc = "watcall"
+cleanup = "callee"
+argument_registers = ["ax", "dx", "bx", "cx"]
+wide_pairs = [["ax", "dx"], ["bx", "cx"]]
+backfill = true
+arguments_clobbered = true
+results_clobbered = true
+variadic = "cdecl16"
+preserved = ["bp", ["ebx", "bx"], ["ecx", "cx"], ["edx", "dx"], ["esi", "si"], ["edi", "di"]]
+clobbered = ["ax", "es", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "flags"]
+aggregate_pointer = "register"
+aggregate_pointer_register = "si"
+aggregate_pointer_far = false
+aggregate_pointer_popped_by = "callee"
+
+[watcall16.symbol]
+omf = "*_"

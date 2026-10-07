@@ -1,0 +1,19 @@
+# flags: -O2 -march=i486 -mabi=watcom
+# link: @c-runtime
+# -mabi=watcom makes Open Watcom's register convention Nib's own on real mode, and "c" means it: a call into the C test glue
+# (`report`, a long in DX:AX) and the compiler's own calls into the runtime (`print`) cross it.
+@extern("c")
+fn report(value: i32) -> void
+
+fn add3(a: i16, b: i16, c: i16, d: i16, e: i16) -> i16:
+    return a * 3 + b * 5 + c + d * 7 + e * 11
+
+fn wide(a: i16, b: i32, c: i16) -> i32:
+    return b + b + i32(a) + i32(c)
+
+fn main() -> i32:
+    print("watcom16")
+    unsafe:
+        report(i32(add3(1, 2, 3, 4, 5)))
+        report(wide(1, 100000, 2))
+    return 0

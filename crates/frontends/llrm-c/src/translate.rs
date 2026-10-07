@@ -523,7 +523,7 @@ fn cleanup(symbol: &hir::Symbol, unit: &hir::Unit) -> R<(StackCleanup, Option<St
         (false, hir::CALLER_POPS) => Ok((StackCleanup::Caller, unit.cdecl_cc.clone())),
         (false, hir::REVERSE_PARMS) => Ok((StackCleanup::Callee, None)),
         // Open Watcom's own register list, where the target's calling.toml states that convention.
-        (true, 0) if symbol.default_registers => Ok((StackCleanup::Callee, unit.registers_cc.clone())),
+        (true, 0) if symbol.register_list == unit.default_registers => Ok((StackCleanup::Callee, unit.registers_cc.clone())),
         _ => refuse(format!("{} has a register calling convention", symbol.object_name())),
     }
 }
@@ -583,6 +583,13 @@ fn distance(symbol: &hir::Symbol) -> CallDistance {
 /// How Borland C returns a struct of `size` bytes: an integer that wide in
 /// AL, AX or DX:AX, or, where none, through a far pointer to the caller's
 /// memory that it pushes after every argument and gets back in DX:AX.
+/// The address space of the pointer a struct result is written through under `convention`: far where it states a far one
+/// (Borland's), else near.
+fn result_space(calling: &llrm_target::calling::Calling, convention: &Option<String>) -> u32 {
+    let far = calling.by_cc(convention.as_deref().unwrap_or("cdecl")).and_then(|one| one.aggregate.as_ref()).is_some_and(|one| one.pointer_far);
+    if far { FAR } else { 0 }
+}
+
 fn returned_as_integer(calling: &llrm_target::calling::Calling, convention: &Option<String>, size: i64) -> Option<i64> {
     let sizes = calling.by_cc(convention.as_deref().unwrap_or("cdecl")).and_then(|one| one.aggregate.as_ref()).map_or(&[][..], |one| &one.in_register_bytes);
     sizes.contains(&size).then_some(size)
@@ -658,7 +665,7 @@ impl<'a, 't> Body<'a, 't> {
             _ if shared.valueless.contains(&symbol.id) => body.types.of(Shape::Void, None),
             Some(size) => match returned_as_integer(shared.calling, &body.convention, size) {
                 Some(width) => body.types.raw(width),
-                None => body.types.pointer(FAR),
+                None => body.types.pointer(result_space(shared.calling, &body.convention)),
             },
             None => body.ty(&proc.type_)?,
         };
@@ -989,8 +996,8 @@ impl<'a, 't> Body<'a, 't> {
         }
         // A struct result goes where a far pointer pushed after every argument says.
         if self.types.aggregate(&self.proc.type_).is_some_and(|size| returned_as_integer(self.shared.calling, &self.convention, size).is_none()) {
-            let far = self.types.pointer(FAR);
-            let destination = self.value(far);
+            let pointer = self.types.pointer(result_space(self.shared.calling, &self.convention));
+            let destination = self.value(pointer);
             with_destination(&mut parameters, destination, in_order);
             self.destination = Some(destination);
         }
@@ -2053,8 +2060,13 @@ impl<'a, 't> Body<'a, 't> {
         let mut result_at = None;
         if let Some((temporary, _)) = returned.filter(|&(_, size)| returned_as_integer(self.shared.calling, &convention, size).is_none()) {
             let near = self.address_of(temporary);
-            let far = self.types.pointer(FAR);
-            let destination = self.op(Op::Convert, far, vec![value_ref(near)]);
+            let space = result_space(self.shared.calling, &convention);
+            let destination = if space == FAR {
+                let far = self.types.pointer(FAR);
+                self.op(Op::Convert, far, vec![value_ref(near)])
+            } else {
+                near
+            };
             with_destination(&mut arguments, destination, symbol.in_order());
             // Where it goes in the list: first where arguments are listed first first.
             result_at = Some(if symbol.in_order() { arguments.len() as i64 - 1 } else { 0 });
@@ -2065,7 +2077,7 @@ impl<'a, 't> Body<'a, 't> {
             (_, Some((_, size))) => {
                 let ty = match returned_as_integer(self.shared.calling, &convention, size) {
                     Some(width) => self.types.raw(width),
-                    None => self.types.pointer(FAR),
+                    None => self.types.pointer(result_space(self.shared.calling, &convention)),
                 };
                 Some(self.value(ty))
             }

@@ -205,6 +205,8 @@ def cost(ins, taken, first_rep, mem, multiplier=None):
         return 3
     if m == Mnemonic.RET:
         return 5
+    if m == Mnemonic.ENTER:
+        return 14
     if m == Mnemonic.LEAVE:
         return 5
     if m == Mnemonic.JMP:
@@ -250,6 +252,12 @@ def cost(ins, taken, first_rep, mem, multiplier=None):
     return 1
 
 
+def built_abi():
+    """The convention build.sh compiled llrm's side in, as it recorded it: a work directory of an earlier build says so too."""
+    record = OUT / "abi"
+    return record.read_text().strip() if record.exists() else "watcom"
+
+
 def stub_digest():
     """What stub.s says now: a stub is current when the one it was built from said the same."""
     import hashlib
@@ -292,8 +300,8 @@ def run(prog, variant, hot=False, limit=300_000_000):
     code_end = max(va + len(b) for va, b, _ in segs)
     # OMF's default-convention name is `report_`, ELF's is `report`: both are the stub's, and the caller says where the value is.
     report_at = {stub["report"], stub.get("report_", stub["report"])}
-    # llrm's default convention takes the value in EAX; gcc and clang push it.
-    in_eax = variant.startswith("llrm")
+    # llrm's watcom convention takes the value in EAX; gcc and clang, and llrm under -mabi=sysv, push it.
+    in_eax = variant.startswith("llrm") and built_abi() == "watcom"
     st = dict(active=False, sp=0, prev=None, prev_ins=None, cnt=0)
     total = Counter()   # instructions, mem, clocks
     hits = Counter()

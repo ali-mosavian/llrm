@@ -172,8 +172,9 @@ def data_files(program: Program) -> tuple[Path, ...]:
 
 def unavailable(program: Program) -> str | None:
     """Why a program's corpus or Open Watcom's compiler cannot be had, or None."""
-    if any(one.endswith(".wc") for one in program.link) and not dosbatch.watcom_cc().exists():
-        return f"{dosbatch.watcom_cc()} is not built (toolchain/owshim/build.sh builds the tree)"
+    target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
+    if any(one.endswith(".wc") for one in program.link) and not dosbatch.watcom_cc(target).exists():
+        return f"{dosbatch.watcom_cc(target)} is not built (toolchain/owshim/build.sh builds the tree)"
     for one in program.data:
         if one.startswith("@"):
             try:
@@ -251,7 +252,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
             for at, source in enumerate(one for one in linked(program, target) if one.name != Path(dosbatch.target_link(target)["last"][0]).name):
                 extra = work / f"{stem}F{at}.obj"
                 if source.suffix == ".wc":
-                    dosbatch.watcom_compile(source, extra)
+                    dosbatch.watcom_compile(source, extra, target)
                 elif source.suffix == ".asm":
                     dosbatch.assemble(source, extra, *dosbatch.os_defines(target, "c"))
                 else:
@@ -277,10 +278,18 @@ def main() -> int:
     parser.add_argument("select", nargs="*")
     parser.add_argument("--work", type=Path, help="where to build and run; one private to this run by default")
     parser.add_argument("--retarget", help="build each Nib program for this target instead, against its own .out")
+    parser.add_argument("--abi", help="build each C and Nib program with -mabi=ABI, against its own .out: the same programs, another convention")
     args = parser.parse_args()
     programs = discover(args.select)
     if args.retarget:
         programs = [dataclasses.replace(p, flags=[*p.flags, dosbatch.m_flag(args.retarget)]) for p in programs if p.source.suffix == ".nib" and dosbatch.target_of(p.flags, "") == ""]
+    if args.abi:
+        # Only the programs whose target has that ABI: the compilers refuse the others.
+        has = {}
+        for target in dosbatch.target_modes():
+            done = subprocess.run([str(BIN / "llrm-c"), dosbatch.m_flag(target), f"-mabi={args.abi}", "--os-layer", "directory"], capture_output=True, text=True)
+            has[target] = done.returncode == 0
+        programs = [dataclasses.replace(p, flags=[*p.flags, f"-mabi={args.abi}"]) for p in programs if p.source.suffix in (".c", ".nib") and not any(one.startswith("-mabi=") for one in p.flags) and has[dosbatch.target_of(p.flags, dosbatch.REAL_MODE)] and not any(one.endswith(".wc") for one in p.link)]
     for program in [one for one in programs if unavailable(one)]:
         print(f"SKIP  {program.name}: {unavailable(program)}")
         programs.remove(program)

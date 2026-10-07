@@ -1,4 +1,4 @@
-reason = "lsr prices the copy a two-address target makes before a negation or a shift of a live counter (#705): matmul nib -O2 2463 -> 2439 instructions, shellsort nib 11434 -> 11370 (-Os 11856 -> 11792)"
+reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 for push/mov/sub (Intel 240440-002); -Os counts and bytes rise by what enter saved (2 bytes, 2 instructions per frame), rec* rows are #777's and untouched here"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -25,9 +25,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 9364
+instructions = 9366
 memory_operands = 1630
-code_bytes = 162
+code_bytes = 165
 data_bytes = 0
 bss_bytes = 0
 
@@ -39,9 +39,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 11792
+instructions = 11794
 memory_operands = 1757
-code_bytes = 205
+code_bytes = 208
 data_bytes = 0
 bss_bytes = 0
 

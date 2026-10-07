@@ -1,16 +1,16 @@
-reason = "seven recursive kernels the tail-recursion rule was not fitted on (held-out validation for #651's hanoi work): first baselines"
+reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 (Intel 240440-002); -Os pays 2 bytes and 2 instructions a frame"
 blessed = "2026-10-07"
 
 [c.O2]
-instructions = 9033
-memory_operands = 1013
-code_bytes = 136
-data_bytes = 8
+instructions = 9023
+memory_operands = 1011
+code_bytes = 108
+data_bytes = 12
 bss_bytes = 0
 
 [c.Os]
-instructions = 9033
-memory_operands = 1013
-code_bytes = 126
-data_bytes = 8
+instructions = 9024
+memory_operands = 1011
+code_bytes = 101
+data_bytes = 12
 bss_bytes = 0
