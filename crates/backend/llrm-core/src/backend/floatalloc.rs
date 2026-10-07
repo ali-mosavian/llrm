@@ -582,6 +582,14 @@ impl _Stack {
         }
         let (mut dies_left, dies_right) = (!self.survives(left), !self.survives(right));
         if left == right {
+            // A value that stays is copied from where it is, and the product replaces the copy: no exchange.
+            let depth = index_of(&self.values, left);
+            if !dies_left && depth > 0 {
+                self.duplicate(left)?;
+                self.emit(semantics(Operation::FloatArith, name, vec![st(0)], vec![st(0), st(depth + 1)]));
+                self.values[0] = result;
+                return Ok(());
+            }
             self.exchange(index_of(&self.values, left));
             let mut slot = 0;
             if !dies_left {
