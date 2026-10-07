@@ -18,6 +18,7 @@
 //! another operation set has no counterpart.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph::loops;
@@ -121,6 +122,8 @@ fn edge_delta(
     known: &IndexMap<ValueId, Interval>,
     facts: Option<&IndexMap<ValueId, Known>>,
 ) -> Result<Option<IndexMap<ValueId, Interval>>, String> {
+    #[cfg(test)]
+    EDGE_DELTAS.with(|count| count.set(count.get() + 1));
     let successors = unit.function.successors(block);
     if !successors.contains(&successor) {
         return Err("not a successor".to_owned());
@@ -646,6 +649,7 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
                 }
             }
         };
+        let above_loop: RefCell<Option<(Vec<(usize, usize, i64)>, IndexMap<ValueId, Interval>)>> = RefCell::new(None);
         // Everything the branch edges above `at` and the assumes narrow `known` to there.
         let scope_at = |at: i64, known: &IndexMap<ValueId, Interval>| -> Result<IndexMap<ValueId, Interval>, String> {
             let mut scoped = known.clone();
@@ -666,10 +670,39 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
                 above = shape.dominance.immediate(one);
             }
             chain.sort_unstable();
-            for (from, _, successor) in chain {
-                if let Some(delta) = edge_delta(unit, cfg::block(graph[from].at), cfg::block(successor), &scoped, Some(&facts))? {
-                    scoped.extend(delta);
+            // The edges from outside the loop read only values made outside it, which `known` holds as it did the
+            // last time: what they narrow is kept, and only the edges inside the loop are worked out again.
+            let outer = chain.iter().take_while(|(from, _, _)| !loop_.body.contains(&graph[*from].at)).count();
+            let separable = chain[outer..].iter().all(|(from, _, _)| loop_.body.contains(&graph[*from].at));
+            let narrow_by = |edges: &[(usize, usize, i64)], scoped: &mut IndexMap<ValueId, Interval>| -> Result<(), String> {
+                for &(from, _, successor) in edges {
+                    if let Some(delta) = edge_delta(unit, cfg::block(graph[from].at), cfg::block(successor), scoped, Some(&facts))? {
+                        scoped.extend(delta);
+                    }
                 }
+                Ok(())
+            };
+            if separable {
+                let held = above_loop.borrow().as_ref().filter(|(edges, _)| *edges == chain[..outer]).map(|(_, delta)| delta.clone());
+                let delta = match held {
+                    Some(delta) => delta,
+                    None => {
+                        let mut narrowed = scoped.clone();
+                        narrow_by(&chain[..outer], &mut narrowed)?;
+                        let delta: IndexMap<ValueId, Interval> = narrowed.into_iter().filter(|(value, interval)| scoped.get(value) != Some(interval)).collect();
+                        *above_loop.borrow_mut() = Some((chain[..outer].to_vec(), delta.clone()));
+                        delta
+                    }
+                };
+                scoped.extend(delta);
+                narrow_by(&chain[outer..], &mut scoped)?;
+            } else {
+                narrow_by(&chain, &mut scoped)?;
+            }
+            if check_scopes() {
+                let mut every = known.clone();
+                narrow_by(&chain, &mut every)?;
+                assert!(every.iter().eq(scoped.iter()), "the edges above a loop narrow `known` as they did before");
             }
             // What the blocks above it assume.
             for condition in assumed.above(&shape, at) {
@@ -718,6 +751,22 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
         result.entry(at).or_insert(known);
     }
     Ok(result)
+}
+
+#[cfg(test)]
+thread_local! {
+    static EDGE_DELTAS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many edges this thread has narrowed `known` by, for a test that a loop does not work out again the edges above it.
+#[cfg(test)]
+pub(crate) fn edge_deltas() -> usize {
+    EDGE_DELTAS.with(std::cell::Cell::get)
+}
+
+fn check_scopes() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_SCOPES").is_some())
 }
 
 /// Header phis, made by no counted proof, that every entry and every trip round the
