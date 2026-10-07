@@ -66,14 +66,19 @@ pub struct Threshold {
     /// Where code size outranks speed: a call also removes its arguments' pushes and cleanup.
     pub single: bool,
     /// The last call of a function nothing else reaches inlines at any size: its body moves, nothing is
-    /// copied: LLVM's last-call-to-static bonus and GCC's `-finline-functions-called-once`. Where nothing
-    /// inlines (`-fno-inline-functions`), nothing does.
+    /// copied: LLVM's last-call-to-static bonus and GCC's `-finline-functions-called-once`, which
+    /// `-fno-inline-functions` leaves on as GCC's does; `-fno-inline-functions-called-once` turns it off.
     pub last: bool,
 }
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
         Self { limit, hint: (325, 225), hot: (525, 225), single: false, last: true }
+    }
+
+    /// Nothing inlines, the last call of a function included.
+    pub fn none() -> Self {
+        Self { last: false, ..Self::new(0) }
     }
 
     /// The same where code size outranks speed: a hint or a loop buys nothing.
@@ -259,7 +264,7 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         };
         // Only once nothing else is: a body that a call in it is about to be inlined into would
         // be copied with that call still in it, and the call's callee counted once too many.
-        let last = threshold.last && budget.is_some() && copies == 0 && !always && !admitted();
+        let last = threshold.last && copies == 0 && !always && !admitted();
         // A body held only to inline from (`available_externally`) is priced by the trial of what
         // it leaves, not by its size: any size is a candidate there, never in the plain round.
         let verdict = always || admitted() || module.global(name).linkage == Linkage::AvailableExternally;

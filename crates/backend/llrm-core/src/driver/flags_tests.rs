@@ -39,6 +39,16 @@ fn each_level_selects_its_pipeline() {
     assert!(parsed(&["-O4"]).is_err());
 }
 
+/// `-fno-inline-functions` was no inlining at all, the last call of a function included; gcc's leaves
+/// `-finline-functions-called-once` on and so does this, which is the spelling for none.
+#[test]
+fn test_no_inline_functions_leaves_called_once_on_as_gcc_does() {
+    assert!(pipeline(&["-O2", "-fno-inline-functions"]).inline.last);
+    assert!(!pipeline(&["-O2", "-fno-inline-functions-called-once"]).inline.last);
+    assert!(!pipeline(&["-O2", "-fno-inline-functions-called-once", "-fno-inline-functions"]).inline.last);
+    assert_eq!(pipeline(&["-O2", "-fno-inline-functions-called-once", "-fno-inline-functions"]).inline, llrm_transforms::inline::Threshold::none());
+}
+
 #[test]
 fn a_pass_option_overrides_the_level_wherever_it_stands() {
     let options = pipeline(&["-fno-unroll-loops", "-O3", "-funswitch-loops", "-fno-inline-functions", "-fno-gcse"]);
