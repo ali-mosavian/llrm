@@ -389,6 +389,7 @@ dependencies = [
  "llrm-driver",
  "llrm-hir",
  "llrm-mir",
+ "llrm-object",
  "llrm-target",
  "llrm-transforms",
  "llrm-x86-m16",

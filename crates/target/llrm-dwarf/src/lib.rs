@@ -53,11 +53,16 @@ pub fn expanded(object: &Object, info: &Info) -> Result<Object, Unsupported> {
         names.push(".debug_line_str");
     }
     names.extend([".debug_line", ".debug_info", ".debug_aranges"]);
+    // The section of location lists, where any variable has one.
+    let lists = info.globals.iter().chain(info.functions.iter().flat_map(|one| one.variables.iter().chain(one.blocks.iter().flat_map(blocks)))).any(|one| matches!(&one.location, llrm_object::debug::Location::List(entries) if !entries.is_empty()));
+    if lists {
+        names.push(if version >= 5 { ".debug_loclists" } else { ".debug_loc" });
+    }
     let at = |name: &str| base + names.iter().position(|one| *one == name).expect("a section of this version");
-    let places = die::Places { abbrev: at(".debug_abbrev"), strings: at(".debug_str"), line: at(".debug_line"), info: at(".debug_info"), line_strings: (version >= 5).then(|| at(".debug_line_str")) };
+    let places = die::Places { abbrev: at(".debug_abbrev"), strings: at(".debug_str"), line: at(".debug_line"), info: at(".debug_info"), line_strings: (version >= 5).then(|| at(".debug_line_str")), locations: lists.then(|| at(if version >= 5 { ".debug_loclists" } else { ".debug_loc" })) };
     let mut out = die::Out::new(version, address as u8, places);
     let line = line::program(object, info, &mut out)?;
-    let (info_part, abbrev) = die::unit(object, info, &mut out)?;
+    let (info_part, abbrev, locations) = die::unit(object, info, &mut out)?;
     let aranges = die::aranges(object, info, &out)?;
     let mut sections = Vec::new();
     for name in &names {
@@ -67,6 +72,7 @@ pub fn expanded(object: &Object, info: &Info) -> Result<Object, Unsupported> {
             ".debug_line_str" => out.line_strings.part(),
             ".debug_line" => line.clone(),
             ".debug_info" => info_part.clone(),
+            ".debug_loclists" | ".debug_loc" => locations.clone(),
             _ => aranges.clone(),
         };
         sections.push(section(name, part));
@@ -74,6 +80,11 @@ pub fn expanded(object: &Object, info: &Info) -> Result<Object, Unsupported> {
     let mut made = Object { debug: None, ..object.clone() };
     made.sections.extend(sections);
     Ok(made)
+}
+
+/// A block's variables and those of the blocks in it.
+fn blocks(block: &llrm_object::debug::Block) -> Box<dyn Iterator<Item = &llrm_object::debug::Variable> + '_> {
+    Box::new(block.variables.iter().chain(block.blocks.iter().flat_map(blocks)))
 }
 
 fn section(name: &str, part: buffer::Done) -> Section {
