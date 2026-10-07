@@ -22,7 +22,7 @@ use crate::backend::cpu::Profile;
 use crate::backend::peep;
 use crate::backend::target::Segments;
 use crate::backend::{addressforms, division};
-use crate::backend::callregs::{call_clobbered_high, call_clobbers};
+use crate::backend::callregs::{call_clobbered_high_keeping, call_clobbers};
 use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{BlockOdds, DebugVariable, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::AddressForm;
@@ -566,7 +566,7 @@ fn parameters(module: &Module, name: &str, convention: &Convention) -> Vec<Debug
     function
         .parameters
         .into_iter()
-        .filter_map(|(index, name, r#type)| Some(DebugVariable { name, r#type, addr: Addr::new(Space::Frame, cell(index)?) }))
+        .filter_map(|(index, name, r#type)| Some(DebugVariable { name, r#type, addr: Addr::new(Space::Frame, cell(index)?), parameter: true }))
         .collect()
 }
 
@@ -1689,7 +1689,7 @@ impl Selector<'_, '_, '_> {
         let Some(variable) = attached.and_then(|node| llrm_mir::debuginfo::read_variable(self.module, node)) else { return Ok(()) };
         if let Ok(Pointer::Frame { disp, index: None, .. }) = self.pointer(arguments[0]) {
             let addr = Addr::new(Space::Frame, disp + variable.offset);
-            self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, addr }));
+            self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, addr, parameter: variable.parameter }));
         }
         Ok(())
     }
@@ -3229,11 +3229,12 @@ impl Selector<'_, '_, '_> {
                 (Semantics { indirect: true, ..semantics(Operation::Call, "call", vec![], vec![target.clone()]) }, through)
             }
         };
+        let whole: BTreeSet<Register> = self.arch.callee_saved().into_iter().filter(|(full, pushed)| full == pushed).map(|(full, _)| crate::model::ir::root(full)).collect();
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {
             call: Some(self.listed(effects)),
             clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments)),
-            clobbers_high: if changed.is_some() { BTreeSet::new() } else { call_clobbered_high(&contract, self.segments) },
+            clobbers_high: if changed.is_some() { BTreeSet::new() } else { call_clobbered_high_keeping(&contract, self.segments, &whole) },
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
             uses: requires.iter().map(|(held, _)| held.value).chain(through).collect(),

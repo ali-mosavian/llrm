@@ -125,9 +125,9 @@ impl<'u> Described<'u> {
     }
 
     /// A parameter's or local's `name`, held in `place`.
-    pub fn variable(&mut self, place: i64, name: &str, handle: i64) {
+    pub fn variable(&mut self, place: i64, name: &str, handle: i64, parameter: bool) {
         if let Some(r#type) = self.r#type(handle) {
-            self.builder.variable(place, name, r#type);
+            self.builder.variable(place, name, r#type, parameter);
         }
     }
 
