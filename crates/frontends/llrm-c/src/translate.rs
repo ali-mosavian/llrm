@@ -1457,7 +1457,15 @@ impl<'a, 't> Body<'a, 't> {
             }
             ("CGCall", [call]) => {
                 let call = &self.unit.calls[&hir::handle(call)];
-                self.call(call)?
+                match self.call(call)? {
+                    // A function whose body returns no value is a MIR void function; `int f(int i) { }` called as `return f(i)`
+                    // has the value the C standard leaves undefined, and the front end types its call as an int either way.
+                    Got::Returned(None) if self.types.aggregate(&call.type_).is_none() && self.ty(&call.type_).is_ok() => {
+                        let ty = self.ty(&call.type_)?;
+                        Got::Returned(Some(self.constant(ty, Number::Int(0))))
+                    }
+                    got => got,
+                }
             }
             ("CGChoose", [test, yes, no, type_]) => {
                 // A local both arms store, which promotion makes a phi.
