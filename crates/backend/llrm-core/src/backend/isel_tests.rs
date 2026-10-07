@@ -1924,9 +1924,11 @@ fn test_an_and_only_compared_with_zero_is_test() {
         ))
     };
     assert_eq!(tested("%m", "0")[..4], ["mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "test ax, bx", "je L0_3"]);
-    // Read again, the AND is computed; a constant mask is the old route's AND too.
+    // Read again, the AND is computed; a constant mask is the instruction's immediate (`test ax, 12`), not a copy `and`ed:
+    // collatz's `n & 1` was `mov edi, esi; and edi, 1; jne`.
     assert!(tested("%m", "%a").iter().any(|one| one.starts_with("and ")), "{:?}", tested("%m", "%a"));
-    assert!(tested("12", "0").iter().any(|one| one.starts_with("and ")), "{:?}", tested("12", "0"));
+    let masked = tested("12", "0");
+    assert!(masked.iter().any(|one| one == "test ax, 12") && !masked.iter().any(|one| one.starts_with("and ")), "{masked:?}");
 }
 
 /// A block every path from which ends in `unreachable` is cold, laid out
