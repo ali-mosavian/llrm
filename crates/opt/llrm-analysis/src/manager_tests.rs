@@ -307,3 +307,67 @@ fn test_globals_aa_asks_each_bodys_exposed_frames_once() {
     analyses.get::<super::GlobalsAA>(&module);
     assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
 }
+
+/// Two loops, the second counting to `%lim`, which a block outside both makes.
+const LIMITED: &str = "define i16 @f() {
+b0:
+  %five = add i16 2, 3
+  %seven = add i16 3, 4
+  br label %h0
+
+h0:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %l0 ]
+  %c = icmp slt i16 %i, 9
+  br i1 %c, label %l0, label %p1
+
+l0:
+  %i.next = add i16 %i, 1
+  br label %h0
+
+p1:
+  %lim = add i16 %five, 0
+  br label %h1
+
+h1:
+  %j = phi i16 [ 0, %p1 ], [ %j.next, %l1 ]
+  %d = icmp slt i16 %j, %lim
+  br i1 %d, label %l1, label %end
+
+l1:
+  %j.next = add i16 %j, 1
+  br label %h1
+
+end:
+  ret i16 %j
+}
+";
+
+/// A change made to what a loop's bound comes from, outside the loop, is not seen in the loop's blocks: its trips were
+/// kept stale. Only the loop it reaches is proved again.
+#[test]
+fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
+    let mut module = parsed(&format!("{DOS}{LIMITED}"));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let trips = |counted: &crate::induction::Counted, header: &str, function: &llrm_mir::module::Function| {
+        let header = crate::cfg::id(crate::testing::block(function, header));
+        counted[&header].iter().filter_map(|proof| proof.count.clone()).next()
+    };
+    {
+        let (context, function) = module.function_mut("f").unwrap();
+        let before = analyses.get::<super::Counted>(context, &layout, function);
+        assert_eq!(trips(&before, "h1", function), Some(num_bigint::BigInt::from(5)));
+        let lim = value(function, "lim");
+        let lim = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(lim)).unwrap();
+        let seven = Operand::Value(value(function, "seven"));
+        function.set_operand(lim, 0, seven);
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    let (context, function) = module.function_mut("f").unwrap();
+    let proved = crate::induction::proved();
+    let after = analyses.get::<super::Counted>(context, &layout, function);
+    assert_eq!(crate::induction::proved() - proved, 1, "only the loop the change reaches is proved again");
+    assert_eq!(trips(&after, "h1", function), Some(num_bigint::BigInt::from(7)), "the loop that reads the changed bound");
+    assert_eq!(*after, *Analyses::new(outer).get::<super::Counted>(context, &layout, function), "what was brought up to date is what deriving it afresh gives");
+}

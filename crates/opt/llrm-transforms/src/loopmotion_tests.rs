@@ -280,3 +280,28 @@ fn test_the_entry_value_is_asked_once_per_block_not_per_path() {
     std::thread::spawn(move || done.send(sunk(&text, TRIPS)).unwrap());
     assert!(finished.recv_timeout(std::time::Duration::from_secs(20)).is_ok(), "loopmotion ran past 20 s");
 }
+
+/// Each loop sunk made the next ask of Annotated prove every loop's trips again: 20 loops proved 420 times. A change
+/// reaches the loops that read what it touched, so the others keep their proofs.
+#[test]
+fn test_sinking_a_loops_store_proves_only_that_loop_again() {
+    let loops = 20;
+    let mut text = String::from("define i16 @f(i16 %k) {\nb0:\n  br label %h0\n\n");
+    for at in 0..loops {
+        let from = if at == 0 { "b0".to_owned() } else { format!("p{at}") };
+        let exit = if at + 1 == loops { "end".to_owned() } else { format!("p{}", at + 1) };
+        text += &format!("@n{at} = global i16 0\n");
+        text += &format!("h{at}:\n  %i{at} = phi i16 [ 0, %{from} ], [ %x{at}, %l{at} ]\n  store i16 %i{at}, ptr @n{at}\n  %c{at} = icmp slt i16 %i{at}, 9\n  br i1 %c{at}, label %l{at}, label %{exit}\n\nl{at}:\n  %x{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n");
+        if at + 1 < loops {
+            text += &format!("p{}:\n  br label %h{}\n\n", at + 1, at + 1);
+        }
+    }
+    text += "end:\n  ret i16 %k\n}\n";
+    let globals: String = (0..loops).map(|at| format!("@n{at} = global i16 0\n")).collect();
+    let text = text.lines().filter(|line| !line.starts_with('@')).collect::<Vec<_>>().join("\n");
+    let before = llrm_analysis::induction::proved();
+    let (after, changed) = sunk(&format!("{globals}{text}\n"), TRIPS);
+    assert!(changed, "{after}");
+    let proved = llrm_analysis::induction::proved() - before;
+    assert!(proved <= 4 * loops, "{proved} loops proved for {loops} loops sunk one after another");
+}

@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{Function, InstId, Linkage, Module, ValueId};
+use llrm_mir::module::{BlockId, Change, Function, InstId, Linkage, Module, ValueId};
 use llrm_mir::passes::{Analyses, Analysis, ModuleAnalyses, ModuleAnalysis, Outer};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy};
 use llrm_support::hash::IndexMap;
@@ -286,12 +286,63 @@ pub struct Counted;
 impl Analysis for Counted {
     type Result = induction::Counted;
     const NAME: &'static str = "counted";
+    const INCREMENTAL: bool = true;
+
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let shape = analyses.get::<Shape>(context, layout, function);
         let registers = analyses.get::<Registers>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         induction::counted_all(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_exposed(&exposed))
     }
+
+    /// A loop's proofs read its own blocks, and the values its operands come from, which `Registers` also derives from
+    /// their operands alone. So they hold until a change to an instruction reaches the loop through the uses of
+    /// the values it makes: a loop none reaches keeps its proofs. A change to the CFG, or to the loops themselves,
+    /// derives them afresh.
+    fn update(previous: &Self::Result, changes: &[Change], context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Option<Self::Result> {
+        let reached = reached_by(function, changes)?;
+        let shape = analyses.get::<Shape>(context, layout, function);
+        if !shape.loops.iter().map(|one| one.header).eq(previous.keys().copied()) {
+            return None;
+        }
+        let registers = analyses.get::<Registers>(context, layout, function);
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_exposed(&exposed);
+        Some(induction::counted_renewed(&unit, previous, |one| one.body.iter().any(|at| reached.contains(&crate::cfg::block(*at)))))
+    }
+}
+
+/// The blocks holding an instruction `changes` touched, or one that reads a value a touched instruction makes, or
+/// one that reads the value such a reader makes, and so on; none where a change was to the CFG.
+pub fn reached_by(function: &Function, changes: &[Change]) -> Option<BTreeSet<BlockId>> {
+    let mut blocks = BTreeSet::new();
+    let mut work: Vec<InstId> = Vec::new();
+    for change in changes {
+        let (inst, placed) = match *change {
+            Change::BlockCreated(_) | Change::BlockErased(_) => return None,
+            Change::Inserted { inst, block, .. } | Change::Erased { inst, block, .. } => (inst, vec![block]),
+            Change::Moved { inst, block, from, .. } => (inst, vec![block, from]),
+            Change::Rewritten(inst) => (inst, Vec::new()),
+            Change::Cloned { to, .. } => (to, Vec::new()),
+        };
+        if function.instruction(inst).opcode.is_terminator() {
+            return None;
+        }
+        blocks.extend(placed);
+        work.push(inst);
+    }
+    let mut seen: BTreeSet<InstId> = work.iter().copied().collect();
+    while let Some(inst) = work.pop() {
+        blocks.extend(function.parent(inst));
+        if let Some(result) = function.instruction(inst).result {
+            for user in function.users(result) {
+                if seen.insert(user.user) {
+                    work.push(user.user);
+                }
+            }
+        }
+    }
+    Some(blocks)
 }
 
 /// What each call writes, as `CallEffects` says: the `Calls` consts and

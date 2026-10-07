@@ -399,8 +399,21 @@ pub fn proved() -> usize {
 
 /// `counted_unless_stopped` of every loop of `unit`'s shape, under the registers it carries.
 pub fn counted_all(unit: &Unit) -> Counted {
+    counted_renewed(unit, &Counted::default(), |_| true)
+}
+
+/// `counted_all`, taking `previous`'s proofs of each loop `dirty` does not name.
+pub fn counted_renewed(unit: &Unit, previous: &Counted, dirty: impl Fn(&Loop) -> bool) -> Counted {
     let registers = unit.registers();
-    unit.shape().loops.iter().map(|loop_| (loop_.header, _counted_unless_stopped(unit, loop_, &registers, false))).collect()
+    let shape = unit.shape();
+    shape
+        .loops
+        .iter()
+        .map(|loop_| match previous.get(&loop_.header) {
+            Some(proofs) if !dirty(loop_) => (loop_.header, proofs.clone()),
+            _ => (loop_.header, _counted_unless_stopped(unit, loop_, &registers, false)),
+        })
+        .collect()
 }
 
 /// `counted`, also for a loop that may leave into a block that never returns.

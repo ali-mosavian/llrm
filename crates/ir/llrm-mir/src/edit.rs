@@ -162,7 +162,7 @@ impl Function {
             return Err(format!("instruction {} is already placed or erased", inst.0));
         }
         let (block, next) = self.attach(inst, position)?;
-        self.changes.push(Change::Inserted { inst, block, next });
+        self.log(Change::Inserted { inst, block, next });
         Ok(())
     }
 
@@ -171,9 +171,9 @@ impl Function {
         if position == Position::Before(inst) {
             return Ok(());
         }
-        self.detach(inst).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
+        let (from, _) = self.detach(inst).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
         let (block, next) = self.attach(inst, position)?;
-        self.changes.push(Change::Moved { inst, block, next });
+        self.log(Change::Moved { inst, block, next, from });
         Ok(())
     }
 
@@ -182,7 +182,7 @@ impl Function {
         let old = std::mem::replace(&mut self.instructions[inst.0 as usize].operands[index], operand);
         self.remove_use(old, at);
         self.add_use(operand, at);
-        self.changes.push(Change::Rewritten(inst));
+        self.log(Change::Rewritten(inst));
     }
 
     /// Replaces all of an instruction's operands, as LLVM's
@@ -196,13 +196,13 @@ impl Function {
             self.add_use(operand, Use { user: inst, index: index as u32 });
         }
         self.instructions[inst.0 as usize].operands = operands;
-        self.changes.push(Change::Rewritten(inst));
+        self.log(Change::Rewritten(inst));
     }
 
     /// Replaces an instruction's flags.
     pub fn set_flags(&mut self, inst: InstId, flags: Flags) {
         self.instructions[inst.0 as usize].flags = flags;
-        self.changes.push(Change::Rewritten(inst));
+        self.log(Change::Rewritten(inst));
     }
 
     fn replace_uses(&mut self, uses: Vec<Use>, with: Operand) {
@@ -241,7 +241,7 @@ impl Function {
             self.remove_use(operand, Use { user: inst, index: index as u32 });
         }
         if let Some((block, next)) = self.detach(inst) {
-            self.changes.push(Change::Erased { inst, block, next });
+            self.log(Change::Erased { inst, block, next });
         }
         self.erased[inst.0 as usize] = true;
         Ok(())
@@ -252,21 +252,21 @@ impl Function {
     pub fn add_argument_attr(&mut self, inst: InstId, index: usize, attr: crate::opcode::Attribute) {
         let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
         info.argument_attrs[index].push(attr);
-        self.changes.push(Change::Rewritten(inst));
+        self.log(Change::Rewritten(inst));
     }
 
     /// Adds `attr` to the call `inst` itself, as LLVM's `CallBase::addFnAttr`.
     pub fn add_call_attr(&mut self, inst: InstId, attr: crate::opcode::Attribute) {
         let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
         info.attrs.push(attr);
-        self.changes.push(Change::Rewritten(inst));
+        self.log(Change::Rewritten(inst));
     }
 
     /// Gives the call `inst` calling convention `convention`.
     pub fn set_call_convention(&mut self, inst: InstId, convention: u32) {
         let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
         info.calling_convention = convention;
-        self.changes.push(Change::Rewritten(inst));
+        self.log(Change::Rewritten(inst));
     }
 
     /// New parameters of `types` stand before parameter `at`, bare of attributes; the function's
@@ -312,7 +312,7 @@ impl Function {
     pub fn set_call_type(&mut self, inst: InstId, function_type: TypeId) {
         let Opcode::Call(info) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
         info.function_type = function_type;
-        self.changes.push(Change::Rewritten(inst));
+        self.log(Change::Rewritten(inst));
     }
 
     /// The call `inst`'s argument `at` becomes `with`, as the callee's parameter did, under `function_type`.
@@ -332,7 +332,7 @@ impl Function {
     pub fn set_access_align(&mut self, inst: InstId, bytes: u64) {
         let (Opcode::Load { align, .. } | Opcode::Store { align, .. }) = &mut self.instructions[inst.0 as usize].opcode else { return };
         *align = Some(bytes);
-        self.changes.push(Change::Rewritten(inst));
+        self.log(Change::Rewritten(inst));
     }
 
     /// Attaches `node` to `inst` as metadata of `kind`.
@@ -345,7 +345,7 @@ impl Function {
         let original = self.instruction(inst).clone();
         let copy = self.create_instruction(original.opcode, original.ty, original.operands, original.flags, None);
         self.instructions[copy.0 as usize].metadata = original.metadata;
-        self.changes.push(Change::Cloned { from: inst, to: copy });
+        self.log(Change::Cloned { from: inst, to: copy });
         copy
     }
 
@@ -355,7 +355,7 @@ impl Function {
         let name = name.map(|one| self.unique_name(one));
         self.blocks.push(Block { name, instructions: Vec::new(), erased: false });
         self.block_uses.push(Vec::new());
-        self.changes.push(Change::BlockCreated(id));
+        self.log(Change::BlockCreated(id));
         id
     }
 
@@ -378,10 +378,10 @@ impl Function {
         for block in self.layout.clone() {
             for inst in self.block(block).instructions.clone() {
                 let (block, next) = self.detach(inst).expect("a placed instruction");
-                self.changes.push(Change::Erased { inst, block, next });
+                self.log(Change::Erased { inst, block, next });
             }
             self.blocks[block.0 as usize].erased = true;
-            self.changes.push(Change::BlockErased(block));
+            self.log(Change::BlockErased(block));
         }
         self.layout.clear();
         self.erased.fill(true);
@@ -399,7 +399,7 @@ impl Function {
         }
         self.layout.retain(|one| *one != block);
         self.blocks[block.0 as usize].erased = true;
-        self.changes.push(Change::BlockErased(block));
+        self.log(Change::BlockErased(block));
         Ok(())
     }
 }
