@@ -21,5 +21,12 @@ class CauseTests(unittest.TestCase):
         self.assertIsNone(torture.refusal("_main: .X is neither defined nor imported", rules))
 
 
+
+class DifferencesTests(unittest.TestCase):
+    def test_a_program_that_differs_by_design_names_its_reason(self):
+        self.assertIn("ISO C11", torture.differences()["pr32244-1"])
+        self.assertIn("pr34971", torture.differences())
+
+
 if __name__ == "__main__":
     unittest.main()

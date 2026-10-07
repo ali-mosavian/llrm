@@ -58,6 +58,12 @@ def expected() -> list[dict]:
         return tomllib.load(handle).get("refused", [])
 
 
+def differences() -> dict[str, str]:
+    """The programs that run and exit non-zero by design, each with its reason: `[[differs]]` in expected.toml."""
+    with open(HERE / "expected.toml", "rb") as handle:
+        return {one["program"]: one["reason"] for one in tomllib.load(handle).get("differs", [])}
+
+
 def refusal(text: str, rules: list[dict]) -> str | None:
     for rule in rules:
         if re.search(rule["match"], text):
@@ -155,6 +161,10 @@ def main() -> int:
                 else:
                     result[case] = ("pass", "")
             print(f"ran {min(start + BATCH, len(order))}/{len(order)}", file=sys.stderr)
+    by_design = differences()
+    for case, (kind, why) in list(result.items()):
+        if kind == "wrong" and case[0].stem in by_design:
+            result[case] = ("differs", f"{why}: {by_design[case[0].stem]}")
     summary(result, args)
     if args.out:
         args.out.write_text(json.dumps({f"{case[0].stem}@{case[1]}": list(value) for case, value in result.items()}, indent=1))
@@ -164,7 +174,7 @@ def main() -> int:
 def summary(result, args) -> None:
     total = Counter(kind for kind, _ in result.values())
     print(f"{len(result)} builds: " + ", ".join(f"{count} {kind}" for kind, count in sorted(total.items())))
-    for kind in ("refused", "compile", "link", "wrong"):
+    for kind in ("refused", "differs", "compile", "link", "wrong"):
         causes: dict[str, list[str]] = defaultdict(list)
         for (source, level), (found, why) in result.items():
             if found == kind:
