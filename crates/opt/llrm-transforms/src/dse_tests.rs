@@ -26,6 +26,20 @@ fn promoted(text: &str) -> String {
     after[after.find("@f(").unwrap()..].to_owned()
 }
 
+/// `text` through Dse alone: @f printed; what @f returns stays.
+fn dropped(text: &str) -> String {
+    let before = parsed(text);
+    let mut module = before.clone();
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(Dse);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let after = printed(&module);
+    assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{after}");
+    after[after.find("@f(").unwrap()..].to_owned()
+}
+
 /// Promote leaves the stores to a cell whose loads it replaced; nothing
 /// reads the cell after, so they go.
 #[test]
@@ -428,4 +442,55 @@ b0:
 ",
     );
     assert!(!after.contains("store "), "{after}");
+}
+
+/// A store whose value is also read back whole is still read where a narrower load at an offset reaches it: `store i32` into a cell,
+/// the high word read through `getelementptr` and the whole word read as well. Dropped as dead, the narrower load read bytes nothing
+/// had written (`((int *)&b)[1]` of an i64 parameter, #677).
+#[test]
+fn test_dse_keeps_a_store_a_narrower_load_at_an_offset_reads() {
+    let after = promoted(
+        "define i32 @f(i32 %x) {
+b0:
+  %s = alloca i32
+  store i32 %x, ptr %s
+  %p = getelementptr inbounds i8, ptr %s, i32 2
+  %h = load i16, ptr %p
+  %w = load i32, ptr %s
+  %e = zext i16 %h to i32
+  %r = add i32 %w, %e
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("store i32"), "{after}");
+}
+
+/// The same with an i64 and the types C gives them: a `long long` stored and an `int` read at offset 4 of it. Type-based alias
+/// analysis may rule two accesses out where the address analysis cannot tell, not where it has them in one object at overlapping bytes
+/// (LLVM asks it only of MayAlias): the store went as dead and the read took the cell's bytes unwritten (`((int *)&b)[1]`, #677).
+#[test]
+fn test_dse_keeps_an_i64_store_its_high_dword_load_reads() {
+    let after = dropped(
+        "define i32 @f(i32 %x) {
+b0:
+  %s = alloca i64
+  %v = zext i32 %x to i64
+  store i64 %v, ptr %s, !tbaa !13
+  %p = getelementptr inbounds i8, ptr %s, i32 4
+  %h = load i32, ptr %p, !tbaa !11
+  %t = trunc i64 %v to i32
+  %r = add i32 %t, %h
+  ret i32 %r
+}
+
+!5 = !{!\"Simple C/C++ TBAA\"}
+!6 = !{!\"omnipotent char\", !5, i64 0}
+!10 = !{!\"int4\", !6, i64 0}
+!11 = !{!10, !10, i64 0}
+!12 = !{!\"int8\", !6, i64 0}
+!13 = !{!12, !12, i64 0}
+",
+    );
+    assert!(after.contains("store i64"), "{after}");
 }

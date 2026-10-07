@@ -154,6 +154,20 @@ fn same_typed_start(one: &MemRef, other: &MemRef) -> bool {
     first.object == second.object && first.low == second.low && first.low != FLOOR
 }
 
+/// Whether the address analysis has the two accesses in one object at bytes that overlap: each names one start in a single object,
+/// and their widths reach one another. Type-based alias analysis only tells accesses apart that the address analysis cannot (as LLVM
+/// asks it of MayAlias alone); it does not unsay an overlap that is known.
+fn provably_overlap(one: &MemRef, other: &MemRef) -> bool {
+    let (Some(one_provenance), Some(other_provenance)) = (&one.provenance, &other.provenance) else {
+        return false;
+    };
+    let (Some(first), Some(second)) = (one_provenance.slices.iter().next().filter(|_| one_provenance.slices.len() == 1), other_provenance.slices.iter().next().filter(|_| other_provenance.slices.len() == 1)) else {
+        return false;
+    };
+    let exact = |slice: &Slice| slice.stride == 1 && slice.high == slice.low + 1 && slice.low != FLOOR;
+    first.object == second.object && exact(first) && exact(second) && first.low < second.low + second.width && second.low < first.low + first.width
+}
+
 /// Python `typed_apart`: accesses of different `!tbaa` types cannot alias
 /// unless one's type is an ancestor of the other's, or for two views
 /// explicitly computed from the same union start.
@@ -161,6 +175,9 @@ pub fn typed_apart(one: &MemRef, other: &MemRef) -> bool {
     let (Some(one_type), Some(other_type)) = (&one.typed, &other.typed) else {
         return false;
     };
+    if provably_overlap(one, other) {
+        return false;
+    }
     // As LLVM's TypeBasedAA: types of one root, neither covering the other.
     // A type with no root, or of another root, says nothing: may alias.
     let (Some(one_root), Some(other_root)) = (one.lineage.last(), other.lineage.last()) else {
