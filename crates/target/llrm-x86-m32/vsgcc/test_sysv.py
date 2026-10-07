@@ -32,6 +32,10 @@ double llrm_dd(double a, int b, float c) { return a + b + c; }
 int llrm_by_value(struct S12 s, struct S1 t, int a) { return s.a + s.c + t.x + a; }
 int llrm_six(int a, int b, int c, int d, int e, int f) { return a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6; }
 
+/* A private function takes the target's register convention whatever the ABI; the exported one that calls it keeps sysv, which gcc's side calls. */
+static int priv(int a, int b, int c, int d, int e) { return a + b * 2 + c * 3 + d * 4 + e * 5; }
+int llrm_private(int a) { return priv(a, 2, 3, 4, 5) + priv(1, a, 3, 4, 5); }
+
 /* llrm calling gcc's: each result is folded into an int the other side prints. */
 int llrm_calls_gcc(int a)
 {
@@ -66,6 +70,7 @@ extern double llrm_dd(double a, int b, float c);
 extern int llrm_by_value(struct S12 s, struct S1 t, int a);
 extern int llrm_six(int a, int b, int c, int d, int e, int f);
 extern int llrm_calls_gcc(int a);
+extern int llrm_private(int a);
 extern void report(int);
 
 N struct S1 gcc_s1(int a) { struct S1 s; s.x = a; return s; }
@@ -99,6 +104,7 @@ N int bench_sysv(void)
     report((int)llrm_dd(2.5, 3, 4.0f));
     report(llrm_by_value(w, one, 9));
     report(llrm_six(1, 2, 3, 4, 5, 6));
+    report(llrm_private(7));
     report(llrm_calls_gcc(7));
     return 0;
 }
@@ -112,7 +118,7 @@ def expected():
     value = 7 + 8 * 10 + 8 * 100 + 15 * 1000
     value = 7 + (7 + 1) * 10 + 3 * 100 + (7 + 2) * 1000 + (l >> 32) * 10000 + (l & 0xFFFFFFFF) * 100000 + (1 + 3 + 5 + 6) * 1000000 + int(2.5 + 3 + 4.0) + int(3.0)
     wrapped = value & 0xFFFFFFFF
-    return [7, 8, 7 * 100 + 8, 7 * 10000 + 8 * 100 + 15, 3, l >> 32, l & 0xFFFFFFFF, 9, 1 + 3 + 5 + 9, 91, wrapped - (1 << 32) if wrapped >= 1 << 31 else wrapped]
+    return [7, 8, 7 * 100 + 8, 7 * 10000 + 8 * 100 + 15, 3, l >> 32, l & 0xFFFFFFFF, 9, 1 + 3 + 5 + 9, 91, (7 + 4 + 9 + 16 + 25) + (1 + 14 + 9 + 16 + 25), wrapped - (1 << 32) if wrapped >= 1 << 31 else wrapped]
 
 
 def test_llrm_sysv_and_gcc_call_each_other_in_every_shape(work):  # noqa: F811

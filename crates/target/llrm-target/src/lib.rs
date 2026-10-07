@@ -35,6 +35,8 @@ pub struct CpuPrices {
     pub operations: OperationCosts,
     /// The target's address spaces by role.
     pub spaces: llrm_mir::spaces::Spaces,
+    /// What its description gives a function nothing outside the program reaches.
+    pub private: Option<llrm_mir::target::PrivateConvention>,
 }
 
 /// A cost model that is only what a target describes: its registers, address forms and
@@ -45,7 +47,7 @@ pub fn described(prices: &CpuPrices) -> Rc<dyn llrm_mir::target::Machine> {
 
 /// `described`, with what each operation costs in code bytes where the description states them.
 pub fn described_by_size(prices: &CpuPrices, sizes: Option<OperationCosts>) -> Rc<dyn llrm_mir::target::Machine> {
-    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone(), operations: prices.operations.clone(), sizes, spaces: prices.spaces })
+    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone(), operations: prices.operations.clone(), sizes, spaces: prices.spaces, private: prices.private.clone() })
 }
 
 struct Described {
@@ -55,9 +57,14 @@ struct Described {
     operations: OperationCosts,
     sizes: Option<OperationCosts>,
     spaces: llrm_mir::spaces::Spaces,
+    private: Option<llrm_mir::target::PrivateConvention>,
 }
 
 impl llrm_mir::target::Machine for Described {
+    fn private_convention(&self) -> Option<llrm_mir::target::PrivateConvention> {
+        self.private.clone()
+    }
+
     fn spaces(&self) -> llrm_mir::spaces::Spaces {
         self.spaces
     }

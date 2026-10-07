@@ -85,3 +85,28 @@ fn a_callee_saves_the_registers_it_uses_that_its_arguments_do_not() {
     assert!(lines.first().is_some_and(|one| one.starts_with("push")), "{lines:?}");
     assert!(!lines.iter().any(|one| one == "push eax" || one == "pop eax"), "EAX is the callee's own: {lines:?}");
 }
+
+/// The listing of C `source` for -m32 under `-mabi=sysv`.
+fn sysv_listing(source: &str) -> String {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("t.c");
+    std::fs::write(&path, source).unwrap();
+    let out = directory.path().join("t.asm");
+    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c")).args(["-m32", "-mabi=sysv", "-O2", "-fno-inline-functions", "-S"]).arg(&path).arg("-o").arg(&out).output().unwrap();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    std::fs::read_to_string(out).unwrap()
+}
+
+/// Under `-mabi=sysv` a `static` function took the stack too, though no one outside sees it (gcc passes it in registers,
+/// `regparm` for a `local` one): its arguments were read from [esp+4..], each call pushed them and popped them after. It takes
+/// the description's `private` convention; the exported function keeps sysv's.
+#[test]
+fn a_private_function_takes_registers_under_sysv_and_an_exported_one_keeps_the_stack() {
+    let text = sysv_listing("static int add3(int a, int b, int c) { return a * 3 + b * 5 + c; }\nint twice(int a, int b, int c) { return a * 2 + b + c; }\nint use(int x) { return add3(x, 2, 3) + add3(3, x, 1); }\n");
+    let private = procedure(&text, "_add3");
+    assert!(!private.iter().any(|line| line.contains("[esp+")), "{private:?}");
+    let exported = procedure(&text, "_twice");
+    assert!(exported.iter().any(|line| line.contains("[esp+4]")), "{exported:?}");
+    let caller = procedure(&text, "_use");
+    assert!(!caller.iter().any(|line| line.starts_with("push") && line.contains("2")) && !pops_after(&caller), "{caller:?}");
+}
