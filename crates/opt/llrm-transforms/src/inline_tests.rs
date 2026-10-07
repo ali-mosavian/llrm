@@ -728,11 +728,14 @@ fn test_the_last_calls_into_a_large_caller_stop_where_it_has_doubled() {
     assert!(after <= original * 2 + 100, "{after} operations after, from {original}");
 }
 
-/// LLVM prices the last call of a static function by cost (bonus 15000 over 5 a instruction): a body of 3200 operations
-/// is not moved into its one call, whatever its caller.
+/// The knee: a once-called body of 300 operations is not moved into its caller, one of 200 is. part_frame went from 435
+/// to 1647 instructions by absorbing such callees and took 42 times the backend time.
 #[test]
-fn test_the_only_call_of_a_body_over_three_thousand_operations_stays_a_call() {
-    let body: String = (0..3200).map(|at| format!("  %t{at} = add i16 {}, {at}\n", if at == 0 { "%x".to_owned() } else { format!("%t{}", at - 1) })).collect();
-    let mut module = parsed(&format!("define internal i16 @big(i16 %x) {{\nb0:\n{body}  ret i16 %t3199\n}}\n\ndefine i16 @main(i16 %x) {{\nb0:\n  %r = call i16 @big(i16 %x)\n  ret i16 %r\n}}\n"));
-    assert!(!inline_with(&mut module, "main", 8, Threshold::default()), "{}", printed(&module).len());
+fn test_the_only_call_of_a_body_past_the_allocation_knee_stays_a_call() {
+    let chain = |count: usize| -> String { (0..count).map(|at| format!("  %t{at} = add i16 {}, {at}\n", if at == 0 { "%x".to_owned() } else { format!("%t{}", at - 1) })).collect() };
+    let text = |size: usize| format!("define internal i16 @big(i16 %x) {{\nb0:\n{}  ret i16 %t{}\n}}\n\ndefine i16 @main(i16 %x) {{\nb0:\n  %r = call i16 @big(i16 %x)\n  ret i16 %r\n}}\n", chain(size), size - 1);
+    let mut past = parsed(&text(300));
+    assert!(!inline_with(&mut past, "main", 8, Threshold::default()));
+    let mut within = parsed(&text(200));
+    assert!(inline_with(&mut within, "main", 8, Threshold::default()));
 }

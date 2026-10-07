@@ -113,16 +113,27 @@ fn stated(body: &Function) -> Option<Inlining> {
 /// function they add up per level.  LLVM bounds the same way.
 const FRAME_LIMIT: u64 = 256;
 
-/// gcc's `large-function-insns` and `large-function-growth` (ipa-inline.cc `caller_growth_limits`): an inline that
-/// leaves its caller over `LARGE_FUNCTION` operations and over the larger of the caller's and the callee's own size
-/// grown by `LARGE_GROWTH` percent is refused, the last call of a function included. LLVM bounds the same case
-/// by price: the last-call bonus is 15000 against a threshold of 225, the cost five a instruction, so about 3000.
-const LARGE_FUNCTION: i64 = 2700;
+/// Where the register allocator's cost leaves linear. gcc bounds a caller's growth at `large-function-insns` (2700)
+/// and `large-function-growth` (100%, ipa-inline.cc `caller_growth_limits`) and LLVM moves a once-called body up to the
+/// last-call bonus (15000 over 5 a instruction, about 3000): both for allocators near linear in function size. Ours
+/// rebuilds its intervals and facts over the whole body at each spill and split, so a body merged past the knee costs
+/// several times what its parts did. Measured (compile-time's curve, QCport -O2, 732 functions, instrument commit
+/// 646b62f0 on perf/walk, data in ~/scratch/ctime-out/curve): backend milliseconds per LIR instruction 0.20 up to about 200
+/// instructions, 0.45 at 200-400, 0.96 at 400-800, 1.8 above 1600; the log-log slope of time against size 1.25 below 300
+/// instructions and 2.2 above. A MIR operation is about an LIR instruction in a large body (0.7 to 1.0 in bench's matmul,
+/// particle and lru; 2 to 3.6 in a body of twenty, which carries its prologue). Called-once inlining (#769) merged
+/// part_frame from 435 to 1647 instructions: backend 271 ms -> 11,385 ms.
+const ALLOCATION_KNEE: i64 = 250;
+
+/// gcc's rule of `caller_growth_limits` with the knee for `large-function-insns`: an inline that leaves its caller over
+/// `ALLOCATION_KNEE` operations and over the larger of the caller's own size (before any inlining) and the callee's grown
+/// by `LARGE_GROWTH` percent is refused, the last call of a function included.
+const LARGE_FUNCTION: i64 = ALLOCATION_KNEE;
 const LARGE_GROWTH: i64 = 100;
 
-/// LLVM's last-call-to-static bonus (15000) over the cost of an instruction (5): the largest body it moves into its
-/// one caller, where gcc's limits above let a large callee into a small caller whole.
-const LAST_CALL_OPERATIONS: i64 = 3000;
+/// A body that is moved into its one caller is at most the knee: gcc's limits above let a large callee into a small
+/// caller whole, which is the merge that costs.
+const LAST_CALL_OPERATIONS: i64 = ALLOCATION_KNEE;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Candidate {
