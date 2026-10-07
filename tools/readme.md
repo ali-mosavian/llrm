@@ -18,6 +18,7 @@ Run the Python ones with `uv run --project tools python tools/<dir>/<tool>.py`.
 | `e2e/mkfixtures.py` | rebuilds `tests/inputs/omf` with the BC toolchains |
 | `e2e/dosbox.py`, `e2e/cache.py`, `e2e/configs.py` | the DOSBox runner, its launch cache, the BC switch sets |
 | `identity.sh KIND BASE NEW [-m16|-m32]` | the identity gate: two builds of `llrm-nib` (`nib`) or `llrm-c` (`c`, `qcport`) make byte-identical objects for a whole corpus; fails on any DIFF or STATUS. Run it against a build of the base for any change that must not move a target's output; see below |
+| `qcport-run.py [llrm-c]` | QCport built by llrm-c runs beside the all-Borland build and draws the same (frames, polys, BENCH.BMP md5); QCPORT, QCPORT_INC, QCPORT_BORLAND name its sources and the Borland build; fails loudly on any difference |
 | `qcport-compile.sh [llrm-c]` | QCport's 65 C modules compiled at -O2 and -Os; each refusal listed (QCPORT, QCPORT_INC name its sources) |
 | `sizes.py BASE [NEW] [-O2 -Os ...]` | object bytes and the backend's expected instructions and memory operands of every test, bench, example and demo program, two builds side by side |
 | `innerloops.py` | each innermost loop's instructions and memory operands, from an object's bytes (OMF or ELF, x86 or msp430) |
