@@ -60,7 +60,8 @@ struct Narrow {
 /// The products whose operands, less the shifts they carry, multiply within their width.
 fn narrowable(unit: &passes::Unit, analyses: &mut Analyses) -> Vec<Narrow> {
     let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
-    let memory = Unit::within(unit.context, unit.layout, unit.function, analyses.outer()).with_registers(&held);
+    let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+    let memory = Unit::within(unit.context, unit.layout, unit.function, analyses.outer()).with_registers(&held).with_shape(&shape);
     let calls: Vec<_> = unit.function.walk().filter(|&(_, inst)| matches!(memory.intrinsic(inst), Some(Intrinsic::Fixed { divide: false }))).collect();
     if calls.is_empty() {
         return Vec::new();

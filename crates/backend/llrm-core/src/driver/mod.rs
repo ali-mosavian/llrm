@@ -109,7 +109,9 @@ fn spill_model(program: &Program) {
         for global in &module.globals {
             let Some(function) = global.function().filter(|one| !one.is_declaration()) else { continue };
             let unit = llrm_analysis::memory::Unit::of(module, &layout, function).with_spaces(program.target.spaces());
-            let trips = profit::proven_trips(&unit, &unit.registers());
+            let shape = llrm_analysis::cfg::Shape::of(function);
+            let registers = llrm_analysis::consts::known(&unit, None, None, None);
+            let trips = profit::proven_trips(&unit.with_shape(&shape).with_registers(&registers), &registers);
             let Some(frequency) = profit::_frequencies(&module.context, &module.metadata, &module.globals, function, Some(&trips)) else { continue };
             let found = llrm_analysis::liveness::live(function);
             let across = |inst| spill::kept_across(&outer, &module.context, function, inst);

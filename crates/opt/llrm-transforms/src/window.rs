@@ -92,10 +92,12 @@ pub fn windowed(unit: &mut Unit, analyses: &Analyses, outer: &Outer, size: bool)
     let mut done = std::collections::BTreeSet::new();
     let mut changed = false;
     loop {
-        let facts = analyses.fresh().get::<Registers>(unit.context, unit.layout, unit.function);
+        let mut fresh = analyses.fresh();
+        let facts = fresh.get::<Registers>(unit.context, unit.layout, unit.function);
+        let shape = fresh.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let found = {
-            let view = memory::Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(&facts);
-            let loops = view.shape().loops.clone();
+            let view = memory::Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(&facts).with_shape(&shape);
+            let loops = shape.loops.clone();
             let mut found = None;
             for one in &loops {
                 if done.insert(one.header) {

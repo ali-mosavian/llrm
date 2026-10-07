@@ -97,7 +97,8 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, costs: &OperationCosts, reoptim
         let within = memory::Unit::within(unit.context, unit.layout, state, outer);
         // A body of its own, which no manager has seen.
         let registers = llrm_analysis::consts::known(&within, None, None, None);
-        let within = within.with_registers(&registers);
+        let shape = cfg::Shape::of(state);
+        let within = within.with_registers(&registers).with_shape(&shape);
         let trips = profit::proven_trips(&within, &registers);
         let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, state, Some(&trips))?;
         profit::weighted(unit.context, unit.layout, state, outer.callees(), costs, &frequency)

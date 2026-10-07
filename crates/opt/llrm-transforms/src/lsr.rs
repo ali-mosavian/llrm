@@ -83,10 +83,12 @@ pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer) -> bool {
     let mut done = BTreeSet::<i64>::new();
     let mut changed = false;
     loop {
-        let facts = analyses.fresh().get::<Registers>(unit.context, unit.layout, unit.function);
+        let mut fresh = analyses.fresh();
+        let facts = fresh.get::<Registers>(unit.context, unit.layout, unit.function);
+        let shape = fresh.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let plan = {
-            let view = memory::Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(&facts);
-            let mut loops = view.shape().loops.clone();
+            let view = memory::Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(&facts).with_shape(&shape);
+            let mut loops = shape.loops.clone();
             loops.sort_by_key(|one| (one.body.len(), one.header));
             let Some(loop_) = loops.into_iter().find(|one| !done.contains(&one.header)) else { break };
             done.insert(loop_.header);
