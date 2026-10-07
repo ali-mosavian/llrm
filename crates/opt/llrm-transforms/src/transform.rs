@@ -340,12 +340,12 @@ pub fn _undisturbed(one: InstId, between: &[InstId], accesses: &Accesses, progra
 ///
 /// `avoid_store_crossing` keeps a value from serving a load when a store
 /// lies on a path from its definition to the load.
-pub fn forwarded(context: &Context, layout: &DataLayout, function: &mut Function, outer: &Outer, accesses: &Accesses, registers: &IndexMap<ValueId, llrm_analysis::consts::Known>, avoid_store_crossing: bool) -> Result<bool, String> {
+pub fn forwarded(context: &Context, layout: &DataLayout, function: &mut Function, outer: &Outer, accesses: &Accesses, registers: &IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &llrm_analysis::cfg::Shape, avoid_store_crossing: bool) -> Result<bool, String> {
     let want = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Load { .. })).collect::<BTreeSet<_>>();
     if want.is_empty() {
         return Ok(false);
     }
-    let served = avail::forwardable(&memory::Unit::within(context, layout, function, outer).with_registers(registers), accesses, &want)
+    let served = avail::forwardable(&memory::Unit::within(context, layout, function, outer).with_registers(registers).with_shape(shape), accesses, &want)
         .into_iter()
         .filter(|one| !avoid_store_crossing || !_crosses_store(function, one.value, one.at))
         .collect::<Vec<_>>();
@@ -506,7 +506,8 @@ b0:
         };
         let (context, function) = module.function_mut("f").expect("@f");
         let registers = llrm_analysis::consts::known(&llrm_analysis::testing::with_registers(Unit::within(context, &layout, function, &outer)), None, None, None);
-        let changed = forwarded(context, &layout, function, &outer, &accesses, &registers, avoid_store_crossing).unwrap();
+        let shape = llrm_analysis::cfg::Shape::of(function);
+        let changed = forwarded(context, &layout, function, &outer, &accesses, &registers, &shape, avoid_store_crossing).unwrap();
         let text = printed(&module);
         assert_eq!(changed, text != printed(&before), "{text}");
         assert_eq!(results(&module, XY), results(&before, XY), "{text}");

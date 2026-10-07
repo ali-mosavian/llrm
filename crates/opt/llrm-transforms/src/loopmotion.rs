@@ -71,8 +71,7 @@ pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees
     let successors = graph.iter().map(|block| (block.at, block.succ.clone())).collect::<BTreeMap<_, _>>();
     let shape = cfg::Shape::of(function);
     let dominators = shape.dominance.dominators(function);
-    // After a change, what alias said of the old placement no longer holds.
-    let mut fresh: Option<Analyses> = None;
+    let mut changed = false;
     for loop_ in shape.loops {
         let mut exits = Vec::new();
         for &at in &loop_.body {
@@ -95,10 +94,10 @@ pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees
         if inside.iter().any(|&inst| refused(inst)) {
             continue;
         }
-        let current = fresh.as_mut().unwrap_or(&mut *analyses);
-        let accesses = Accesses::managed(context, layout, function, current)?;
-        let registers = current.get::<llrm_analysis::manager::Registers>(context, layout, function);
-        let unit = Unit::within(context, layout, function, current.outer()).with_registers(&registers);
+        let accesses = Accesses::managed(context, layout, function, analyses)?;
+        let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
+        let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_registers(&registers).with_shape(&shape);
         let moved = _moved(&unit, &accesses, &loop_, &inside, &predecessors, &successors, &dominators, source)?;
         if moved.is_empty() {
             continue;
@@ -117,9 +116,11 @@ pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees
             function.set_operand(store, 0, value);
             function.move_to(store, Position::Before(anchor))?;
         }
-        fresh = Some(analyses.fresh());
+        // What alias said of the old placement no longer holds.
+        analyses.invalidate(&PreservedAnalyses::none());
+        changed = true;
     }
-    Ok(fresh.is_some())
+    Ok(changed)
 }
 
 /// What a moved store writes in place of its own value.

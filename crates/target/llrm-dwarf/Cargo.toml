@@ -1,0 +1,15 @@
+[package]
+name = "llrm-dwarf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "llrm's DWARF writer: debug::Info as .debug_info, .debug_abbrev, .debug_line, .debug_str, .debug_aranges"
+
+[dependencies]
+llrm-object = { workspace = true }
+
+[dev-dependencies]
+llrm-elf32 = { workspace = true }
+llrm-elf64 = { workspace = true }
+llrm-macho = { workspace = true }
+tempfile = { workspace = true }

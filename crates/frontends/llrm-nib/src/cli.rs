@@ -178,7 +178,8 @@ pub fn main(argv: &[String]) -> i32 {
         if !args.used_by.is_empty() {
             nib::keep_exports(&mut program, &used(&args.used_by)?);
         }
-        let module = nib::assembled(&program, &args.entry, &args.codegen, &args.frontend.os)?;
+        // A library cut to what some objects name has no entry to want, even when the cut leaves it no export.
+        let module = if args.used_by.is_empty() { nib::assembled(&program, &args.entry, &args.codegen, &args.frontend.os)? } else { nib::assembled_library(&program, &args.codegen, &args.frontend.os)? };
         let bytes = if args.flags.assembly {
             masm::text(&module).map_err(|error| error.to_string())?.into_bytes()
         } else {

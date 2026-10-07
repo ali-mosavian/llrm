@@ -87,6 +87,16 @@ spelled!(
     }
 );
 
+spelled!(
+    /// The language a program is written in, which a debugger reads its values by.
+    Language {
+        C = "c",
+        Basic = "basic",
+        Nib = "nib",
+    }
+);
+
+pub const LANGUAGE: &str = "llrm.dbg.language";
 pub const TYPES: &str = "llrm.dbg.types";
 pub const FUNCTIONS: &str = "llrm.dbg.functions";
 pub const GLOBALS: &str = "llrm.dbg.globals";
@@ -144,6 +154,8 @@ pub struct Variable {
     pub name: String,
     pub r#type: MetadataId,
     pub offset: i64,
+    /// Where a parameter's value is kept, not a variable the body declares.
+    pub parameter: bool,
 }
 
 fn node(module: &mut Module, operands: Vec<MetadataOperand>) -> MetadataId {
@@ -264,6 +276,17 @@ pub fn add_function(module: &mut Module, one: &Function) {
     named(module, FUNCTIONS, id);
 }
 
+/// The module's source language.
+pub fn set_language(module: &mut Module, language: Language) {
+    let id = node(module, vec![text(language.value())]);
+    named(module, LANGUAGE, id);
+}
+
+pub fn language(module: &Module) -> Option<Language> {
+    let id = listed(module, LANGUAGE).next()?;
+    Language::from_value(&Reader::of(module, id)?.text(0)?)
+}
+
 pub fn functions(module: &Module) -> Vec<Function> {
     let read = |id: MetadataId| {
         let one = Reader::of(module, id)?;
@@ -296,12 +319,17 @@ pub fn globals(module: &Module) -> Vec<Global> {
 /// The node an `llvm.dbg.declare` attaches as [`VARIABLE`].
 pub fn add_variable(module: &mut Module, one: &Variable) -> MetadataId {
     let offset = int(module, one.offset);
-    node(module, vec![text(&one.scope), text(&one.name), MetadataOperand::Node(one.r#type), offset])
+    let mut operands = vec![text(&one.scope), text(&one.name), MetadataOperand::Node(one.r#type), offset];
+    // After the offset, only where true: a node without it is no parameter's.
+    if one.parameter {
+        operands.push(int(module, 1));
+    }
+    node(module, operands)
 }
 
 pub fn read_variable(module: &Module, id: MetadataId) -> Option<Variable> {
     let one = Reader::of(module, id)?;
-    Some(Variable { scope: one.text(0)?, name: one.text(1)?, r#type: one.node(2)?, offset: one.int(3)? })
+    Some(Variable { scope: one.text(0)?, name: one.text(1)?, r#type: one.node(2)?, offset: one.int(3)?, parameter: one.int(4).is_some_and(|flag| flag != 0) })
 }
 
 fn listed<'m>(module: &'m Module, name: &str) -> impl Iterator<Item = MetadataId> + 'm {
@@ -346,8 +374,23 @@ mod tests {
         let global = Global { global: "g".into(), offset: 4, name: "G".into(), r#type: int16, scope: Some("f".into()) };
         add_global(&mut module, &global);
         assert_eq!(globals(&module), [global]);
-        let variable = Variable { scope: "f".into(), name: "v".into(), r#type: pt, offset: -2 };
+        let variable = Variable { scope: "f".into(), name: "v".into(), r#type: pt, offset: -2, parameter: false };
         let id = add_variable(&mut module, &variable);
         assert_eq!(read_variable(&module, id), Some(variable));
+    }
+
+    /// A parameter's home read back as an ordinary local: the C frontend keeps a parameter in a
+    /// frame slot, and nothing past the frontend could say it was passed in.
+    #[test]
+    fn a_parameters_home_reads_back_as_one_and_a_plain_node_as_none() {
+        let mut module = Module::default();
+        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new() };
+        let int16 = add_type(&mut module, &scalar);
+        let home = Variable { scope: "f".into(), name: "a".into(), r#type: int16, offset: 0, parameter: true };
+        let local = Variable { parameter: false, name: "l".into(), ..home.clone() };
+        let (home_id, local_id) = (add_variable(&mut module, &home), add_variable(&mut module, &local));
+        assert_eq!(module.metadata[local_id.0 as usize].operands.len(), 4, "a local's node is what it was");
+        let reparsed = crate::parse::module(&crate::print::module(&module)).expect("parses");
+        assert_eq!((read_variable(&reparsed, home_id), read_variable(&reparsed, local_id)), (Some(home), Some(local)));
     }
 }

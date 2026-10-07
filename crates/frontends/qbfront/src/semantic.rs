@@ -1420,7 +1420,7 @@ impl Compiler {
             current_source_line: 0,
             source: None,
             numbered_lines: BTreeMap::new(),
-            debug: llrm_hir::debug::Builder::default(),
+            debug: llrm_hir::debug::Builder::for_language(llrm_hir::model::DebugLanguage::Basic),
             debug_structures: BTreeMap::new(),
             load_lines: BTreeMap::new(),
             warnings: Vec::new(),

@@ -65,12 +65,14 @@ impl FunctionPass for Gvn {
         let pointers = Result::as_ref(&*pointers).map_err(String::clone);
         // Numbering leaves the CFG alone: every candidate has these trips.
         let registers = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
+        let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let trips = if !profit::registers(analyses.outer()).priced() {
             IndexMap::default()
         } else {
-            profit::proven_trips(&memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer()).with_registers(&registers), &registers)
+            let counted = analyses.get::<llrm_analysis::manager::Counted>(unit.context, unit.layout, unit.function);
+            profit::proven_trips(&memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer()).with_registers(&registers).with_shape(&shape).with_counted(&counted), &registers)
         };
-        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers)) {
+        match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape)) {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
@@ -87,7 +89,7 @@ impl FunctionPass for Gvn {
 ///
 /// Every edit replaces a value with an equal one and adds no memory
 /// access before `loadjoins`, so `accesses` stays true throughout.
-pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, pointers: &PointsTo, trips: &IndexMap<i64, i64>, registers: &IndexMap<ValueId, llrm_analysis::consts::Known>) -> Result<bool, String> {
+pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, pointers: &PointsTo, trips: &IndexMap<i64, i64>, registers: &IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &cfg::Shape) -> Result<bool, String> {
     let equal = propagated(unit);
     // What is known of the body the manager saw, unless propagating a branch's condition changed it.
     let fresh;
@@ -97,11 +99,19 @@ pub fn optimized(unit: &mut Unit, outer: &Outer, accesses: &Accesses, pointers: 
     } else {
         registers
     };
-    let (numbered, subexpressed) = _numbered(unit, outer, accesses, &profit::costs(outer), profit::registers(outer), trips, registers)?;
+    let (numbered, subexpressed) = _numbered(unit, outer, accesses, &profit::costs(outer), profit::registers(outer), trips, registers, shape)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, !subexpressed)?;
-    let loaded = loadjoins::reused(unit.context, unit.layout, unit.function, outer, outer.callees(), accesses, pointers, !combined)?;
+    // Joining may split an edge, which the manager's shape has not seen.
+    let joined_shape;
+    let shape = if combined {
+        joined_shape = cfg::Shape::of(unit.function);
+        &joined_shape
+    } else {
+        shape
+    };
+    let loaded = loadjoins::reused(unit.context, unit.layout, unit.function, outer, outer.callees(), accesses, pointers, !combined, shape)?;
     Ok(equal || numbered || combined || loaded)
 }
 
@@ -153,10 +163,10 @@ fn propagated(unit: &mut Unit) -> bool {
 /// Local numbering, crossing stores only where the whole function prices
 /// lower for it: a provider held across a store saves loads but may spill.
 /// Whether it changed anything, and whether `subexpressions` did.
-fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &OperationCosts, room: crate::spill::Room, trips: &IndexMap<i64, i64>, registers: &IndexMap<ValueId, llrm_analysis::consts::Known>) -> Result<(bool, bool), String> {
+fn _numbered(unit: &mut Unit, outer: &Outer, accesses: &Accesses, costs: &OperationCosts, room: crate::spill::Room, trips: &IndexMap<i64, i64>, registers: &IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &cfg::Shape) -> Result<(bool, bool), String> {
     let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
         let mut function = function.clone();
-        let forwarded = transform::forwarded(unit.context, unit.layout, &mut function, outer, accesses, registers, avoid_store_crossing)?;
+        let forwarded = transform::forwarded(unit.context, unit.layout, &mut function, outer, accesses, registers, shape, avoid_store_crossing)?;
         let subexpressed = transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()))?;
         Ok((function, (forwarded || subexpressed, subexpressed)))
     };

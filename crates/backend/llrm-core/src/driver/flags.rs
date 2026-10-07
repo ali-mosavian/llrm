@@ -125,8 +125,10 @@ pub struct Flags {
     /// `-S`: assembly rather than an object.
     pub assembly: bool,
     pub sanitize: Sanitize,
-    /// `-g`: CodeView debug information.
+    /// `-g`: debug information, in the object format's own format unless `-gcodeview`, `-gdwarf[-N]`
+    /// or `-gtd` says which.
     pub debug: bool,
+    pub debug_format: llrm_object::debug::Format,
     /// `-fobject-format=`: the object format to write, where the target has more than its default.
     pub object_format: Option<Format>,
     /// `-mabi=`: the ABI an unmarked function has, by the family name the target's `calling.toml` gives; its default without.
@@ -139,7 +141,7 @@ pub struct Flags {
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { level: Level::O2, passes: Vec::new(), march: None, mtune: None, machine: None, mode: None, stack_is_data: None, far_bss: None, milliclocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, object_format: None, abi: None, stack_usage: false, stack_limit: None }
+        Self { level: Level::O2, passes: Vec::new(), march: None, mtune: None, machine: None, mode: None, stack_is_data: None, far_bss: None, milliclocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, abi: None, debug_format: Default::default(), object_format: None, stack_usage: false, stack_limit: None }
     }
 }
 
@@ -163,8 +165,12 @@ impl Flags {
         match flag {
             "-o" | "--output" => self.output = Some(PathBuf::from(value("-o/--output")?)),
             "-S" => self.assembly = true,
-            "-g" => self.debug = true,
+            "-g" => (self.debug, self.debug_format) = (true, Default::default()),
             "-g0" => self.debug = false,
+            "-gcodeview" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::CodeView),
+            "-gdwarf" | "-gdwarf-5" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 5 }),
+            "-gdwarf-4" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 4 }),
+            "-gtd" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::TurboDebugger),
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "-mfar-bss" => self.far_bss = Some(true),
@@ -273,7 +279,7 @@ impl Flags {
 
     /// The driver's options for `machine`.
     pub fn driver(&self, machine: Machine, arch: std::rc::Rc<dyn llrm_target::Target>, selection: &'static crate::backend::isel::Compiled) -> super::Options {
-        super::Options { pipeline: self.pipeline(), stack_usage: self.stack_usage, stack_limit: self.stack_limit, abi: self.abi.clone(), ..super::Options::new(machine, arch, selection) }
+        super::Options { debug_format: self.debug_format, pipeline: self.pipeline(), stack_usage: self.stack_usage, stack_limit: self.stack_limit, abi: self.abi.clone(), ..super::Options::new(machine, arch, selection) }
     }
 }
 

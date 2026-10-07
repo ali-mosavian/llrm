@@ -1294,7 +1294,8 @@ fn test_any_integer_operand_converts_to_a_float() {
     let mixed = between(&text, "MIXED proc far", "MIXED endp");
     // Each unsigned is read signed at twice its width: u8 a word, u16 a
     // dword, u32 a qword whose high dword is zero.
-    assert!(mixed.contains("movzx ax, dl") && mixed.contains("movzx eax, cx"), "{mixed}");
+    let widened = |pattern: &str| Regex::new(pattern).unwrap().is_match(mixed);
+    assert!(widened(r"movzx [a-d]x, (?:[a-d]l|byte ptr \[bp\+\d+\])") && widened(r"movzx e[a-d]x, (?:[a-d]x|word ptr \[bp\+\d+\])"), "{mixed}");
     let qword = Regex::new(r"mov dword ptr \[bp-(\d+)\], ebx\n\s*mov dword ptr \[bp-(\d+)\], 0\n\s*fild qword ptr \[bp-(\d+)\]").unwrap();
     let cells = qword.captures(mixed).unwrap_or_else(|| panic!("{mixed}"));
     let at = |group: usize| cells[group].parse::<i64>().unwrap();
@@ -2514,4 +2515,18 @@ fn test_a_near_call_reaches_a_procedure_in_another_code_segment_of_the_object() 
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "near.nib", RECURSIVE);
     object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::PerProcedure).expect("writes");
+}
+
+/// A library cut to what an object names (`--used-by`) is still a library when the cut leaves it no export: the runtime of a
+/// program that calls none of its routines. It was an error, "entry function 'main' does not exist", and tools/dosbatch could
+/// not link the program (#747).
+#[test]
+fn test_a_library_cut_to_nothing_assembles_without_an_entry() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "lib.nib", "@export(\"cdecl16\")\nfn twice(x: i16) -> i16:\n    return x + x\n");
+    let mut program = parsed(&source);
+    nib_compile::keep_exports(&mut program, &std::collections::BTreeSet::new());
+    let module = nib_compile::assembled_library(&program, &level("O2"), &crate::real_mode().os).unwrap_or_else(|error| panic!("{error}"));
+    assert!(module.publics.is_empty(), "{:?}", module.publics);
+    assert!(nib_compile::assembled(&program, "main", &level("O2"), &crate::real_mode().os).is_err(), "a program with no entry is still refused");
 }

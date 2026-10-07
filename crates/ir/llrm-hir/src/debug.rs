@@ -1,7 +1,7 @@
 //! `-g`: builds a module's [`Debug`] as a frontend declares its source
 //! types, procedures, parameters and variables. Each type is made once.
 
-use crate::model::{Debug, DebugFunction, DebugGlobal, DebugKind, DebugMember, DebugParameter, DebugReach, DebugScalar, DebugType, DebugVariable};
+use crate::model::{Debug, DebugFunction, DebugGlobal, DebugKind, DebugLanguage, DebugMember, DebugParameter, DebugReach, DebugScalar, DebugType, DebugVariable};
 
 #[derive(Default)]
 pub struct Builder {
@@ -13,6 +13,11 @@ pub struct Builder {
 }
 
 impl Builder {
+    /// A builder for a program written in `language`.
+    pub fn for_language(language: DebugLanguage) -> Self {
+        Self { debug: Debug { language: Some(language), ..Debug::default() }, ..Self::default() }
+    }
+
     /// The type `kind` and the rest describe, made once.
     fn intern(&mut self, kind: DebugKind, name: &str, target: Option<i64>, size: i64, reach: DebugReach, members: Vec<DebugMember>) -> i64 {
         let types = &mut self.debug.types;
@@ -71,8 +76,8 @@ impl Builder {
     }
 
     /// A variable of the function, held in `place`.
-    pub fn variable(&mut self, place: i64, name: &str, r#type: i64) {
-        self.variables.push(DebugVariable { place, name: name.to_owned(), r#type });
+    pub fn variable(&mut self, place: i64, name: &str, r#type: i64, parameter: bool) {
+        self.variables.push(DebugVariable { place, name: name.to_owned(), r#type, parameter });
     }
 
     /// A variable of the module, `offset` bytes into data object `object`.

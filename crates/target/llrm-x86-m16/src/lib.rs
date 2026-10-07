@@ -200,4 +200,14 @@ mod tests {
         assert_eq!(M16.callee_saved(), PRESERVED.to_vec());
         assert_eq!([1, 2, 4, 8].map(|width| M16.results(width)), [vec![EAX], vec![EAX], vec![EAX, EDX], vec![EAX, EDX]]);
     }
+
+    /// Real mode has no psABI DWARF register map: none is numbered, so a DWARF location in m16
+    /// code is refused instead of written with i386's. CodeView's ids are there for BP and AX.
+    #[test]
+    fn real_mode_numbers_codeview_but_not_dwarf() {
+        let file = llrm_target::registers::parse(&M16.registers_text()).unwrap();
+        assert!(file.iter().all(|one| one.dwarf.is_none()));
+        let cv = |name: &str| file.iter().find(|one| one.name == name).unwrap().codeview;
+        assert_eq!((cv("bp"), cv("ax"), cv("st0")), (Some(14), Some(9), Some(128)));
+    }
 }

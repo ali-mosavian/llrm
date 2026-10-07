@@ -57,7 +57,7 @@ mod tests {
 
     fn section(name: &str, role: Role, image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
         let spans = vec![[0, image.len()]];
-        Section { name: name.into(), role, near: true, align: 8, image, spans, relocs, lines: Vec::new() }
+        Section { name: name.into(), role, near: true, align: 8, image, spans, relocs }
     }
 
     fn symbol(name: &str, binding: Binding, section: usize, offset: usize) -> Symbol {
@@ -151,5 +151,17 @@ mod tests {
         let mut made = hello();
         made.sections[0].relocs[0].kind = Kind::SegmentBase;
         assert!(write(&made).is_err());
+    }
+
+    /// An object that asks for CodeView or Turbo Debugger information is refused by name: the
+    /// information of another format is never written in its place.
+    #[test]
+    fn a_debug_format_this_object_cannot_carry_is_refused() {
+        for (format, name) in [(llrm_object::debug::Format::CodeView, "CodeView"), (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger")] {
+            let mut made = hello();
+            made.debug = Some(llrm_object::debug::Info { format, ..Default::default() });
+            let why = write(&made).unwrap_err().0;
+            assert!(why.contains("cannot carry") && why.contains(name), "{why}");
+        }
     }
 }

@@ -56,6 +56,9 @@ pub(super) fn emitted<'h>(
 ) -> Emit<HashMap<(i64, i64), MetadataId>> {
     let mut variables = HashMap::new();
     let Some(debug) = &hir.debug else { return Ok(variables) };
+    if let Some(language) = debug.language {
+        di::set_language(module, language);
+    }
     let mut types = Types { of: debug.types.iter().map(|one| (one.id, one)).collect(), made: HashMap::new() };
     for global in &debug.globals {
         let Some(&object) = data.get(&global.object) else { continue };
@@ -85,7 +88,7 @@ pub(super) fn emitted<'h>(
             match place.storage {
                 Storage::Local => {
                     let group = groups.iter().find(|group| group.places.iter().any(|one| one.id == place.id)).ok_or("a local outside the frame")?;
-                    let node = di::Variable { scope: scope.clone(), name: variable.name.clone(), r#type, offset: place.offset - group.start };
+                    let node = di::Variable { scope: scope.clone(), name: variable.name.clone(), r#type, offset: place.offset - group.start, parameter: variable.parameter };
                     variables.insert((function.id, place.id), di::add_variable(module, &node));
                 }
                 // Where it was passed: its argument's cell.

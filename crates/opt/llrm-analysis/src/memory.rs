@@ -423,6 +423,8 @@ pub struct Unit<'a> {
     pub annotated: Option<&'a Result<IndexMap<InstId, MemRef>, String>>,
     /// What each block assumes; without it each ask finds it.
     pub assumptions: Option<&'a Assumptions>,
+    /// Each loop's counted proofs under `registers`, the manager's `Counted`; without them each ask proves them.
+    pub counted: Option<&'a crate::induction::Counted>,
     /// The allocas whose address is exposed, the manager's `ExposedFrames`; without it each ask scans
     /// the alloca's uses.
     pub exposed: Option<&'a BTreeSet<ValueId>>,
@@ -442,7 +444,7 @@ impl<'a> Unit<'a> {
     }
 
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { program: None, spaces: llrm_mir::spaces::Spaces::FLAT, context: &module.context, layout, metadata: &module.metadata, tbaa: None, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, exposed: None }
+        Self { program: None, spaces: llrm_mir::spaces::Spaces::FLAT, context: &module.context, layout, metadata: &module.metadata, tbaa: None, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, counted: None, exposed: None }
     }
 
     pub fn with_spaces(self, spaces: llrm_mir::spaces::Spaces) -> Self {
@@ -463,6 +465,10 @@ impl<'a> Unit<'a> {
 
     pub fn with_shape(self, shape: &'a Shape) -> Self {
         Self { shape: Some(shape), ..self }
+    }
+
+    pub fn with_counted(self, counted: &'a crate::induction::Counted) -> Self {
+        Self { counted: Some(counted), ..self }
     }
 
     pub fn with_registers(self, registers: &'a IndexMap<ValueId, Known>) -> Self {
@@ -525,8 +531,13 @@ impl<'a> Unit<'a> {
 
     pub fn shape(&self) -> Cow<'a, Shape> {
         match self.shape {
-            Some(shape) => Cow::Borrowed(shape),
-            None => Cow::Owned(Shape::of(self.function)),
+            Some(shape) => {
+                if std::env::var_os("LLRM_CHECK_SHAPE").is_some() {
+                    assert!(*shape == Shape::of(self.function), "the shape a unit carries is not that of the body it stands over: stale");
+                }
+                Cow::Borrowed(shape)
+            }
+            None => panic!("a unit with no shape was asked for it: take it from the analysis manager"),
         }
     }
 

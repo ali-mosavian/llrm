@@ -49,7 +49,7 @@ mod tests {
 
     fn text(image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
         let spans = vec![[0, image.len()]];
-        Section { name: "A_TEXT".into(), role: Role::Text, near: true, align: 16, image, spans, relocs, lines: Vec::new() }
+        Section { name: "A_TEXT".into(), role: Role::Text, near: true, align: 16, image, spans, relocs }
     }
 
     fn object(sections: Vec<Section>, symbols: Vec<Symbol>) -> Object {
@@ -98,9 +98,46 @@ mod tests {
         assert!(String::from_utf8_lossy(&said.stdout).contains("0x140001008"), "{}", String::from_utf8_lossy(&said.stdout));
     }
 
+    /// An x86-64 object's C13 names the AMD64 machine and an 8-byte pointer, and RBP (334) is its
+    /// frame: llvm-readobj reads them back.
+    #[test]
+    fn debug_information_names_the_amd64_machine_and_eight_byte_pointers() {
+        use llrm_object::debug::{Function, Info, Kind as K, Location, Range, Reach, Scalar, Type, Variable};
+        let Ok(dump) = which("llvm-readobj") else { return eprintln!("skipped: no llvm-readobj") };
+        let info = Info {
+            frame_register: "rbp".into(),
+            registers: vec![llrm_object::debug::Register { name: "rbp".into(), bits: 64, dwarf: Some(6), codeview: Some(334) }],
+            code: vec![Range { section: 0, offset: 0, length: 4 }],
+            types: vec![Type::Scalar(Scalar::Int { bytes: 4, signed: true }), Type::Pointer { target: 0, bytes: 8, reach: Reach::Near }, Type::Procedure { result: None, parameters: vec![1], convention: None }],
+            functions: vec![Function {
+                name: "f".into(),
+                symbol: 0,
+                r#type: 2,
+                ranges: vec![Range { section: 0, offset: 0, length: 4 }],
+                body: None,
+                far: false,
+                module: false,
+                variables: vec![Variable { name: "p".into(), r#type: 1, kind: K::Parameter, location: Location::Frame { disp: 16 } }],
+                blocks: Vec::new(),
+            }],
+            ..Info::default()
+        };
+        let mut made = object(vec![text(vec![0x90; 4], vec![])], vec![defined("f", 0)]);
+        made.debug = Some(info);
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("f.obj");
+        std::fs::write(&path, write(&made).unwrap()).unwrap();
+        let said = Command::new(dump).arg("--codeview").arg(&path).output().unwrap();
+        let text = String::from_utf8_lossy(&said.stdout);
+        for wanted in ["Machine: X64 (0xD0)", "PtrType: Near64 (0xC)", "SizeOf: 8", "BaseRegister: RBP (0x14E)", "BasePointerOffset: 16", "ReturnType: void (0x3)"] {
+            assert!(said.status.success() && text.contains(wanted), "no {wanted}:\n{text}{}", String::from_utf8_lossy(&said.stderr));
+        }
+    }
+
     fn which(tool: &str) -> Result<std::path::PathBuf, ()> {
         let mut dirs = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect::<Vec<_>>()).unwrap_or_default();
         dirs.push("/usr/lib/llvm-20/bin".into());
         dirs.iter().map(|dir| dir.join(tool)).find(|path| path.exists()).ok_or(())
     }
+
 }

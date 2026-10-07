@@ -528,6 +528,29 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// An i64 read as its two dwords, the low at the address: x86 is little-endian.
+    fn hook_wide_load(&mut self, m: &Match, out: &mut Vec<Arc<Insn>>, pointer: Operand) -> Result<(), Unselected> {
+        let pointer = self.pointer(pointer)?;
+        let (low, high) = (self.fresh_held(4), self.fresh_held(4));
+        for (held, by) in [(low, 0), (high, 4)] {
+            let what = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(Self::memory(pointer.moved(by), 4))]);
+            out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
+        }
+        self.wides.insert(self.function.instruction(m.inst).result.expect("a load's value"), (low, high));
+        Ok(())
+    }
+
+    /// An i64 written as its two dwords.
+    fn hook_wide_store(&mut self, m: &Match, out: &mut Vec<Arc<Insn>>, value: Operand, pointer: Operand) -> Result<(), Unselected> {
+        let (low, high) = self.wide(value, m.at, out)?;
+        let pointer = self.pointer(pointer)?;
+        for (held, by) in [(low, 0), (high, 4)] {
+            let what = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(by), 4))], vec![Loc::Held(held)]);
+            out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
+        }
+        Ok(())
+    }
+
     fn hook_far_load(&mut self, m: &Match, out: &mut Vec<Arc<Insn>>, pointer: Operand) -> Result<(), Unselected> {
         let pointer = self.pointer(pointer)?;
         let (offset, selector) = self.far_loaded(pointer, m.volatile, m.at, out);
