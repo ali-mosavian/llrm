@@ -111,7 +111,8 @@ fn llvm_reads_the_codeview_of_every_bench_coff_object() {
 
 /// `-g` through the whole path: lld-link links the C program's object with /debug, and the PDB holds
 /// its function with both parameters, its struct, its global and its lines. The same program
-/// as OMF CodeView names the same function, parameters and struct.
+/// as OMF CodeView names the same function, parameters and struct. `__cdecl` is the `_name` the
+/// entry asks for; the default convention spells it `name_`.
 #[test]
 fn lld_link_makes_a_pdb_of_a_c_program() {
     let (Some(link), Some(pdbutil)) = (llvm("lld-link"), llvm("llvm-pdbutil")) else {
@@ -120,7 +121,7 @@ fn lld_link_makes_a_pdb_of_a_c_program() {
     };
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
-    std::fs::write(dir.join("p.c"), "struct S { int a; char b; };\nint g = 3;\nint twice(int a, struct S *p)\n{\n    int y = a + p->a;\n    return y + y + g;\n}\n").unwrap();
+    std::fs::write(dir.join("p.c"), "struct S { int a; char b; };\nint g = 3;\nint __cdecl twice(int a, struct S *p)\n{\n    int y = a + p->a;\n    return y + y + g;\n}\n").unwrap();
     let made = compile(&dir.join("p.c"), &["-m32", "-O0", "-g", "-fobject-format=coff"], &dir.join("p.obj"));
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let linked = Command::new(link).args(["/machine:x86", "/subsystem:console", "/entry:twice", "/nodefaultlib", "/debug", "/pdb:p.pdb", "/out:p.exe", "p.obj"]).current_dir(dir).output().unwrap();
@@ -230,7 +231,7 @@ fn a_pdb_holds_the_functions_of_an_llrm_object_and_a_clang_cl_object() {
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
     std::fs::write(dir.join("m.c"), "int clang_add(int a, int b) { int s = a + b; return s; }\nint start(void);\nint entry(void) { return start(); }\n").unwrap();
-    std::fs::write(dir.join("l.c"), "int clang_add(int a, int b);\nint start(void) { int r = clang_add(1, 2); return r + 4; }\n").unwrap();
+    std::fs::write(dir.join("l.c"), "int __cdecl clang_add(int a, int b);\nint __cdecl start(void) { int r = clang_add(1, 2); return r + 4; }\n").unwrap();
     let made = Command::new(clang).args(["--target=i386-pc-windows-msvc", "/c", "/GS-", "/Zi", "/Fo:m.obj", "m.c"]).current_dir(dir).output().unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let made = compile(&dir.join("l.c"), &["-m32", "-O0", "-g", "-fobject-format=coff"], &dir.join("l.obj"));
