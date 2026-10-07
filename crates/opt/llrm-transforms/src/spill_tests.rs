@@ -458,3 +458,27 @@ done:
     // A scale the address does not take is no fold.
     assert!(!folded_in(&module.context, function, q, 0b0011));
 }
+
+/// nbody_single's `&pos_x[k]`, made once and read in a loop: a symbol plus a constant is a displacement at each
+/// read, as a frame object plus a constant is, but only the latter was: the model held 21 such addresses as
+/// registers across the nest, forecast 5389056 clocks of spills and the allocator spilled nothing.
+#[test]
+fn test_a_symbol_plus_a_constant_is_no_register_wherever_it_is_read() {
+    let module = module("@table = global [8 x i32] zeroinitializer
+define i32 @f(i32 %n) {
+entry:
+  %p = getelementptr inbounds i8, ptr @table, i32 8
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %v = load i32, ptr %p
+  %next = add i32 %i, %v
+  %more = icmp slt i32 %next, %n
+  br i1 %more, label %loop, label %done
+done:
+  ret i32 %next
+}
+");
+    let function = self::function(&module);
+    assert!(!integer(&module.context, function, named(function, "p")));
+}
