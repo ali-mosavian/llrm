@@ -764,3 +764,38 @@ fn a_mask_that_only_clears_a_scaled_low_bit_is_removed() {
     let text = checked(&masked_loop(40, 63).replace("%a = add nsw i32 %i, 7", "%t = add nsw i32 %i, 7\n  %a = mul i32 %t, 2").replace("and i32 %a, 63", "and i32 %a, 126"), &[vec![0]]);
     assert!(!text.contains("and i32"), "{text}");
 }
+
+/// A counter rebased by the bound a use subtracts it from left `row - (c + row)` behind it (queens: `lea; mov; sub; cmp`
+/// where gcc's loop has `add; je` on the counter itself).
+#[test]
+fn test_a_value_less_a_sum_it_is_in_is_the_other_addend_negated() {
+    let text = "define i16 @f(i16 %x) {
+b0:
+  %y = add i16 %x, 5
+  %s = add i16 %y, %x
+  %r = sub i16 %x, %s
+  ret i16 %r
+}
+";
+    let after = checked(text, &singles(&edges(16)));
+    assert!(!after.contains("%s = add") && after.contains("sub i16 0, %y"), "{after}");
+    let swapped = "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %s = add i16 %x, %y
+  %r = sub i16 %x, %s
+  ret i16 %r
+}
+";
+    let inputs: Vec<Vec<i128>> = edges(16).into_iter().flat_map(|x| edges(16).into_iter().map(move |y| vec![x, y])).collect();
+    let after = checked(swapped, &inputs);
+    assert!(after.contains("sub i16 0, %y"), "{after}");
+    let nested = "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %d = sub i16 %x, %y
+  %r = sub i16 %d, %x
+  ret i16 %r
+}
+";
+    let after = checked(nested, &inputs);
+    assert!(after.contains("sub i16 0, %y"), "{after}");
+}

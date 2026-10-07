@@ -670,6 +670,8 @@ pub struct DebugType {
     pub size: i64,
     pub reach: DebugReach,
     pub members: Vec<DebugMember>,
+    /// A scalar's name in the source, where it has one.
+    pub spelling: Option<String>,
 }
 
 /// A structure's field, or a procedure's parameter by its type alone.

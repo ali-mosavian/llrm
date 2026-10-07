@@ -88,7 +88,9 @@ fn _test_only(function: &Function, header: BlockId, inst: InstId) -> bool {
         Opcode::Binary(kind) => !matches!(kind, BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem),
         _ => false,
     };
-    computes && op.result.is_none_or(|value| function.users(value).iter().all(|one| function.parent(one.user) == Some(header)))
+    // A header phi reading it takes it round the back edge: it is the step of a counter, which must run before the
+    // trip it starts, not skip the first.
+    computes && op.result.is_none_or(|value| function.users(value).iter().all(|one| function.parent(one.user) == Some(header) && function.instruction(one.user).opcode != Opcode::Phi))
 }
 
 pub(crate) fn _shape(function: &Function, loop_: &Loop) -> Option<Shape> {

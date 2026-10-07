@@ -196,6 +196,8 @@ pub struct Machined {
 /// slots fill, and whichever has fewer two-byte displacements is kept.
 pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
     let kept = machined_once(module, name, abi, pool, target)?;
+    // What the function's cost in `timefunc` is measured against.
+    llrm_support::debug!("size", "{name} {}", kept.body.insns().len());
     // Reported once the choice is made: a rejected candidate is no function's cost.
     if crate::support::debug::enabled("cost") {
         llrm_support::debug!("cost", "{}", executed::summary(&kept.body, target.cpu));
