@@ -143,12 +143,14 @@ struct _Stack {
     one: Option<Arc<Insn>>,
     absorbed: HashSet<i64>, // later copies of a group already taken
     fresh: u32,             // the next value no instruction names
+    depth: usize,           // how many values the stack holds
 }
 
 impl _Stack {
-    fn new(floating: HashSet<u32>) -> Self {
+    fn new(floating: HashSet<u32>, depth: usize) -> Self {
         Self {
             floating,
+            depth,
             values: Vec::new(),
             sequence: Vec::new(),
             reads: IndexMap::default(),
@@ -334,7 +336,7 @@ impl _Stack {
     }
 
     fn room(&mut self, count: usize) -> Result<(), Raised> {
-        if self.values.len() + count > 8 {
+        if self.values.len() + count > self.depth {
             return Err(unlowered("floating instruction requires too many stack operands"));
         }
         Ok(())
@@ -694,7 +696,7 @@ fn _converted(body: &LirBody) -> Result<LirBody, Raised> {
     }
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut settled: IndexMap<usize, Vec<u32>> = IndexMap::default();
-    let mut stack = _Stack::new(floating.clone());
+    let mut stack = _Stack::new(floating.clone(), body.float_stack);
     stack.fresh = body
         .blocks
         .iter()

@@ -225,6 +225,7 @@ mod tests {
         fn default_cpu(&self) -> &'static str { self.0.default_cpu() }
         fn operation_costs(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> llrm_mir::target::OperationCosts { self.0.operation_costs(price, prefix) }
         fn register_capacity(&self) -> i64 { self.0.register_capacity() }
+        fn float_stack(&self) -> usize { self.0.float_stack() }
         fn address_forms(&self, costs: &llrm_mir::target::OperationCosts, address_stall: i64) -> Vec<llrm_mir::target::AddressForm> { self.0.address_forms(costs, address_stall) }
         fn cost_model(&self) -> llrm_target::CostModel { self.0.cost_model() }
         fn calling(&self) -> &'static llrm_target::calling::Calling { self.0.calling() }

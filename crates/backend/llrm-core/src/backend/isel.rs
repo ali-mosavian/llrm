@@ -1008,6 +1008,7 @@ impl Selector<'_, '_, '_> {
         let (blocks, root) = self.rooted(blocks, block_at[&entry], pads.first().map(|pad| block_at[pad]), at);
         let mut body = LirBody::new(name, root, blocks, IndexMap::default(), self.pins.clone());
         body.bits = self.arch.object().bitness;
+        body.float_stack = self.arch.float_stack();
         body.sealed_arguments = !self.unsealed;
         body.inputs = self.inputs.clone();
         body.ordered = true;

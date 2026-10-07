@@ -31,9 +31,6 @@ use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap, IndexSet};
 
-/// The flat registers: x87's stack depth.
-const REGISTERS: usize = 8;
-
 /// x87 reads integers from memory, for named values and physical stack slots.
 fn _integer_loads(body: &LirBody, mut frame: Option<&mut Frame>, mut pool: Option<&mut Pool>) -> Result<LirBody, Raised> {
     let mut blocks = Vec::new();
@@ -1302,6 +1299,7 @@ impl Plan<'_> {
 /// The first instruction before which more floating values hold registers
 /// than there are, counting what each bundle's borders hold.
 fn _crowded(body: &LirBody, floating: &HashSet<u32>) -> Option<(i64, usize)> {
+    let registers = body.float_stack;
     let (live_in, live_out) = live(body);
     let bundles = spillplacement::bundles(body);
     let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> { set.iter().copied().filter(|value| floating.contains(value)).collect() };
@@ -1314,10 +1312,10 @@ fn _crowded(body: &LirBody, floating: &HashSet<u32>) -> Option<(i64, usize)> {
     for block in &body.blocks {
         let (entry, exit) = bundles.of[&block.at];
         let cut = _terminators(block);
-        if held[&exit].len() > REGISTERS {
+        if held[&exit].len() > registers {
             return Some((block.at, cut));
         }
-        if held[&entry].len() > REGISTERS {
+        if held[&entry].len() > registers {
             return Some((block.at, 0));
         }
         let steps = _steps(block, cut);
@@ -1342,7 +1340,7 @@ fn _crowded(body: &LirBody, floating: &HashSet<u32>) -> Option<(i64, usize)> {
             // duplicating one operand still holds the other, which it pops.
             let read = group.iter().filter_map(|one| one.what.as_ref()).flat_map(|what| _held_floats(&what.sources));
             let before: BTreeSet<u32> = after[index].difference(&made).copied().chain(read).collect();
-            if after[index].union(&made).count().max(before.len() + duplicated) > REGISTERS {
+            if after[index].union(&made).count().max(before.len() + duplicated) > registers {
                 return Some((block.at, first));
             }
         }
