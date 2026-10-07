@@ -18,12 +18,15 @@ int f(int x)
 /// `sub esi, [esp+32]; or esi, esi; je`; gcc's `add; je`, LLVM's `optimizeCompareInstr`).
 #[test]
 fn test_a_zero_test_right_after_the_instruction_that_computed_it_is_not_made() {
-    let scratch = tempfile::tempdir().unwrap();
-    let directory = scratch.path();
-    std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).args(["-m32", "-mabi=sysv", "-O2", "-S", "-o", "a.s", "a.c"]).output().unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    let text = std::fs::read_to_string(directory.join("a.s")).unwrap();
-    let tested = text.lines().map(str::trim).any(|line| line.strip_prefix("or ").is_some_and(|rest| rest.split_once(", ").is_some_and(|(left, right)| left == right)));
-    assert!(!tested, "{text}");
+    // Both families: sysv passes `x` on the stack, watcom in a register; the setter's memory operand is `g` in each.
+    for family in ["sysv", "watcom"] {
+        let scratch = tempfile::tempdir().unwrap();
+        let directory = scratch.path();
+        std::fs::write(directory.join("a.c"), KERNEL).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).args(["-m32", &format!("-mabi={family}"), "-O2", "-S", "-o", "a.s", "a.c"]).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let text = std::fs::read_to_string(directory.join("a.s")).unwrap();
+        let tested = text.lines().map(str::trim).any(|line| line.strip_prefix("or ").is_some_and(|rest| rest.split_once(", ").is_some_and(|(left, right)| left == right)));
+        assert!(!tested, "{family}: {text}");
+    }
 }
