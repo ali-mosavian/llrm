@@ -2047,12 +2047,26 @@ impl<'a, 't> Body<'a, 't> {
                 let left = size - at;
                 let value = if left >= unit {
                     self.op(Op::Load, word, vec![Operand::IndirectPlace(indirect(from, at, word, false))])
-                } else if matches!(left, 1 | 2) {
-                    let part = self.types.raw(left);
-                    let value = self.op(Op::Load, part, vec![Operand::IndirectPlace(indirect(from, at, part, false))]);
-                    self.op(Op::ZeroExtend, word, vec![value_ref(value)])
                 } else {
-                    return self.refuse(&format!("a struct of {size} bytes passed by value"));
+                    // The last partial word: its bytes in pieces of 2 and 1, the first at the lowest address and the least significant.
+                    let mut whole: Option<i64> = None;
+                    let mut taken = 0;
+                    while taken < left {
+                        let piece = if left - taken >= 2 { 2 } else { 1 };
+                        let part = self.types.raw(piece);
+                        let loaded = self.op(Op::Load, part, vec![Operand::IndirectPlace(indirect(from, at + taken, part, false))]);
+                        let mut value = self.op(Op::ZeroExtend, word, vec![value_ref(loaded)]);
+                        if taken > 0 {
+                            let up = self.constant(word, Number::Int((8 * taken).into()));
+                            value = self.op(Op::Shl, word, vec![value_ref(value), value_ref(up)]);
+                        }
+                        whole = Some(match whole {
+                            Some(low) => self.op(Op::Or, word, vec![value_ref(low), value_ref(value)]),
+                            None => value,
+                        });
+                        taken += piece;
+                    }
+                    whole.expect("a partial word has a byte")
                 };
                 arguments.push(value);
                 in_memory.push(!scalar && convention.is_some());
