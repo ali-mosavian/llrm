@@ -21,6 +21,8 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "tools"))
+import llrmbin  # noqa: E402
 DEMOS = Path(environ.get("QBDEMOS", Path.home() / "work/qbdemos/orig"))
 COST = re.compile(r"executes (\d+) instructions, (\d+) memory operands")
 
@@ -185,7 +187,7 @@ def main() -> None:
     args = [one for one in sys.argv[1:] if not one.startswith("-")]
     levels = [one for one in sys.argv[1:] if one.startswith("-O")] or ["-O2"]
     base = Path(args[0])
-    new = Path(args[1]) if len(args) > 1 else ROOT / "target" / "release"
+    new = Path(args[1]) if len(args) > 1 else llrmbin.bin_dir()
     status = False
     for level in levels:
         before, after = table(base, level), table(new, level)

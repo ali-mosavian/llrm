@@ -1,5 +1,5 @@
 [package]
-name = "llrm-bcmachine"
+name = "llrm-x86-bcmachine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -61,14 +61,13 @@ pub fn spilled(
 
 /// How each value of a set is spilled: the decision, made before any
 /// instruction is written. A value is made again where it is read (a constant,
-/// an address, an extension, a stable load of a frame cell, a frame home it
-/// already has), or stored to a slot of the frame.
+/// an address, an extension, a stable load of a frame cell), or stored to a
+/// slot of the frame.
 pub struct Plan {
     constants: IndexMap<u32, Imm>,
     addresses: IndexMap<u32, Address>,
     extensions: IndexMap<u32, Arc<Insn>>,
     frame_loads: IndexMap<u32, Mem>,
-    frame_homes: IndexMap<u32, (Mem, usize)>,
     /// The cell of each value made again from the frame.
     rebuilt: IndexMap<u32, Mem>,
     stored: BTreeSet<u32>,
@@ -92,19 +91,15 @@ fn planned_with(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame, posti
     let extensions = llrm_support::debug::timed("spill extensions", || _extensions_by(body, values, postings));
     let mut frame_loads = llrm_support::debug::timed("spill stable loads", || _stable_loads(body, values));
     frame_loads.extend(llrm_support::debug::timed("spill frame loads", || _frame_loads(body, values)));
-    // A copy of a load is made again as that load, unless the value has a frame home of its own (an argument's slot).
+    // A copy of a load is made again as that load.
     if !copies.is_empty() {
         let apart: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
-        let homed = llrm_support::debug::timed("spill frame homes", || _frame_homes(body, &apart));
-        let copied = _through_copies(llrm_support::debug::timed("spill stable loads", || _stable_loads_through(body, &wide, &copies)), &apart.iter().copied().filter(|value| !homed.contains_key(value)).collect(), &copies);
+        let copied = _through_copies(llrm_support::debug::timed("spill stable loads", || _stable_loads_through(body, &wide, &copies)), &apart, &copies);
         for (value, cell) in copied {
             frame_loads.entry(value).or_insert(cell);
         }
     }
-    let unloaded: BTreeSet<u32> = values.iter().copied().filter(|value| !frame_loads.contains_key(value)).collect();
-    let frame_homes = llrm_support::debug::timed("spill frame homes", || _frame_homes(body, &unloaded));
-    let mut rebuilt = frame_loads.clone();
-    rebuilt.extend(frame_homes.iter().map(|(value, (home, _at))| (*value, home.clone())));
+    let rebuilt = frame_loads.clone();
     let stored: BTreeSet<u32> = values
         .iter()
         .copied()
@@ -113,13 +108,12 @@ fn planned_with(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame, posti
                 && !addresses.contains_key(value)
                 && !extensions.contains_key(value)
                 && !frame_loads.contains_key(value)
-                && !frame_homes.contains_key(value)
         })
         .collect();
     // Before any cell names a slot.
     llrm_support::debug::timed("spill color slots", || _color_slots(body, &stored, &_widest_by(body, &stored, postings), frame))?;
     let narrow = llrm_support::debug::timed("spill literals", || _literals_by(body, &stored, true, postings));
-    Ok(Plan { constants, addresses, extensions, frame_loads, frame_homes, rebuilt, stored, narrow })
+    Ok(Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow })
 }
 
 /// `spilled`, numbering the values it makes from `floor` at least: an
@@ -152,7 +146,7 @@ pub fn spilled_from(
 pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, classes: &RegisterClasses) -> Result<(LirBody, BTreeSet<u32>), Error> {
     let mut fresh = _next_value(body).max(floor);
     let mut made: BTreeSet<u32> = BTreeSet::new();
-    let Plan { constants, addresses, extensions, frame_loads, frame_homes, rebuilt, stored, narrow } = plan;
+    let Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow } = plan;
     let (body, next) = llrm_support::debug::timed("spill short updates", || _short_update_runs(body, &stored, frame, fresh))?;
     fresh = next;
     let (body, next) = llrm_support::debug::timed("spill local updates", || _local_updates(&body, &stored, frame, fresh))?;
@@ -176,7 +170,6 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
         .chain(addresses.keys())
         .chain(extensions.keys())
         .chain(frame_loads.keys())
-        .chain(frame_homes.keys())
         .copied()
         .collect();
     let named: BTreeSet<usize> = postings::following(&body, |postings| {
@@ -241,10 +234,8 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
                 if (constant.is_none()
                     && !addresses.contains_key(&value)
                     && !extensions.contains_key(&value)
-                    && !frame_loads.contains_key(&value)
-                    && !frame_homes.contains_key(&value))
+                    && !frame_loads.contains_key(&value))
                     || remade.contains_key(&value)
-                    || frame_homes.get(&value).is_some_and(|home| key(&one) == home.1)
                 {
                     continue;
                 }
@@ -279,10 +270,8 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
                         vec![fresh],
                         vec![source.value],
                     )
-                } else if let Some(cell) = frame_loads.get(&value) {
-                    _reload(&one, fresh, cell)
                 } else {
-                    _reload(&one, fresh, &frame_homes[&value].0)
+                    _reload(&one, fresh, &frame_loads[&value])
                 };
                 let product = _with(&inserted, |made| made.rematerialized = true);
                 match &mut copy {
@@ -1467,135 +1456,6 @@ fn _frame_loads(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Mem> {
         }
     }
     result
-}
-
-/// Existing stable frame stores which can hold a spilled SSA value.
-fn _frame_homes(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, (Mem, usize)> {
-    if values.is_empty() {
-        return IndexMap::default();
-    }
-    let mut definitions: IndexMap<u32, Vec<(usize, usize)>> = values.iter().map(|value| (*value, Vec::new())).collect();
-    let mut uses: IndexMap<u32, Vec<(usize, usize, Arc<Insn>)>> =
-        values.iter().map(|value| (*value, Vec::new())).collect();
-    let mut candidates: IndexMap<u32, Vec<(usize, usize, Arc<Insn>, Mem)>> =
-        values.iter().map(|value| (*value, Vec::new())).collect();
-
-    for (block_index, block) in body.blocks.iter().enumerate() {
-        for (insn_index, one) in block.insns.iter().enumerate() {
-            for value in values.intersection(&_set(&one.defines)) {
-                definitions[value].push((block_index, insn_index));
-            }
-            for value in values.intersection(&_set(&one.uses)) {
-                uses[value].push((block_index, insn_index, Arc::clone(one)));
-            }
-            let Some(what) = &one.what else {
-                continue;
-            };
-            if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
-                if let ([Loc::Mem(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice()) {
-                    let original = one.covers.is_some_and(|covers| covers.0 != covers.1);
-                    if values.contains(&source.value)
-                        && dest.width == source.width
-                        && dest.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp < 0)
-                        && dest.base.is_none()
-                        && dest.through == Register::BP
-                        && !dest.stack_argument
-                        && original
-                        && one.group.is_none()
-                    {
-                        candidates[&source.value].push((block_index, insn_index, Arc::clone(one), dest.clone()));
-                    }
-                }
-            }
-        }
-    }
-
-    let mut result = IndexMap::default();
-    for value in values {
-        let homes = &candidates[value];
-        // The store reads the definition kept in a register.
-        if homes.is_empty() || definitions[value].len() != 1 {
-            continue;
-        }
-        let mut eligible: Vec<(Mem, usize)> = Vec::new();
-        for (_block, _index, store, home) in homes {
-            let later: Vec<&(usize, usize, Arc<Insn>)> =
-                uses[value].iter().filter(|site| !Arc::ptr_eq(&site.2, store)).collect();
-            if later.is_empty() || later.iter().any(|(_b, _i, one)| one.group.is_some()) {
-                continue;
-            }
-            if _home_holds(body, *value, home, store) {
-                eligible.push((home.clone(), key(store)));
-            }
-        }
-        if eligible.len() == 1 {
-            result.insert(*value, eligible.remove(0));
-        }
-    }
-    result
-}
-
-/// Whether `home` still holds `value` after `one`.
-///
-/// Python's `cell is not home` asks whether a written cell is the store's
-/// own operand object; only `store` holds it, and `store` returned above.
-fn _holding(one: &Arc<Insn>, value: u32, home: &Mem, store: &Arc<Insn>, holds: bool) -> bool {
-    if Arc::ptr_eq(one, store) {
-        return true;
-    }
-    if one.defines.contains(&value) {
-        return false;
-    }
-    let written = _written(one, home);
-    holds
-        && !_may_write(one, home, false)
-        && !written
-            .iter()
-            .any(|cell| cell.addr.is_none() || crate::backend::overlap::may_overlap(home.addr, home.width, cell.addr, cell.width))
-}
-
-/// Whether `home` holds `value` at every use of it but the store itself.
-fn _home_holds(body: &LirBody, value: u32, home: &Mem, store: &Arc<Insn>) -> bool {
-    let predecessors = _predecessors(body);
-    let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    // A must-analysis: unreached is "holds".
-    let mut into: IndexMap<i64, bool> = blocks.keys().map(|at| (*at, *at != body.entry)).collect();
-    let mut outof: IndexMap<i64, bool> = IndexMap::default();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for (at, block) in &blocks {
-            let mut holds = into[at];
-            for one in &block.insns {
-                holds = _holding(one, value, home, store, holds);
-            }
-            if outof.get(at) != Some(&holds) {
-                outof.insert(*at, holds);
-                changing = true;
-            }
-        }
-        for at in blocks.keys() {
-            if *at == body.entry || predecessors[at].is_empty() {
-                continue;
-            }
-            let met = predecessors[at].iter().all(|parent| outof.get(parent).copied().unwrap_or(true));
-            if met != into[at] {
-                into.insert(*at, met);
-                changing = true;
-            }
-        }
-    }
-
-    for block in &body.blocks {
-        let mut holds = into[&block.at];
-        for one in &block.insns {
-            if one.uses.contains(&value) && !Arc::ptr_eq(one, store) && !holds {
-                return false;
-            }
-            holds = _holding(one, value, home, store, holds);
-        }
-    }
-    true
 }
 
 /// `_remove_abandoned` of a body in which only the blocks in `marked` hold an abandoned instruction: the

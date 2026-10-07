@@ -6,6 +6,9 @@
 # tables before any measurement uses them. `prefix` is paid by 16-bit forms
 # here, by 32-bit forms in m16.
 #
+# x87_release (`fstp st(i)`): 486 Intel's i486 data sheet 240440-002, Table 10.3, 3 clocks; P5 Intel 241430-004,
+# instruction set, FST/FSTP (PDF page 755; Appendix F, PDF page 1023), 1 clock.
+#
 #
 # The scalars: issue width, in-order (the 486 and P5 are), clocks decoding each
 # operand-size prefix (paid by 16-bit forms here), the partial-register and
@@ -58,6 +61,7 @@ rep_movs_cell 3  1
 x87_load     3   1
 x87_exchange 4   1
 x87_store    8   2
+x87_release 3   1
 x87_add      8   3
 x87_mul      16  3
 x87_div      73  39
@@ -127,6 +131,7 @@ rep_movs_cell 3  1
 x87_load     3   1
 x87_exchange 4   1
 x87_store    8   2
+x87_release 3   1
 x87_add      8   3
 x87_mul      16  3
 x87_div      73  39

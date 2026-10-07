@@ -76,7 +76,11 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses, size: bool) -> 
     let room = profit::registers(&outer);
     let costs = if size { outer.target().size_costs() } else { profit::costs(&outer) };
     // Moving instructions leaves every block and loop as they are.
-    let frequency = (room.priced() && !_slots_remain(unit)).then(|| _frequency(unit, analyses, &outer, size)).flatten();
+    // The registers are priced where the function is in SSA; before that, with scalar slots still in memory, only
+    // what a held value costs to release is.
+    let pressure = room.priced() && !_slots_remain(unit);
+    let frequency = (pressure || room.priced() && costs.float_release > 0).then(|| _frequency(unit, analyses, &outer, size)).flatten();
+    let room = if pressure { room } else { crate::spill::Room { registers: 0, ..room } };
     let mut changed = false;
     for one in found {
         let Some(into) = _preheader(&graph, one) else { continue };
@@ -86,7 +90,7 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses, size: bool) -> 
         }
         let before = unit.function.terminator(cfg::block(into)).expect("a terminator");
         let run = match &frequency {
-            Some(frequency) => _affordable(unit, &outer, run, before, &costs, room, frequency),
+            Some(frequency) => _affordable(unit, &outer, run, before, into, &costs, room, frequency),
             None => run,
         };
         if run.is_empty() {
@@ -105,7 +109,7 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses, size: bool) -> 
 /// spill model spills, and the instructions reading them, stay in the loop.
 /// What the model charges for spilling a value that needs no register, a
 /// displacement the accesses fold or a value made again at each read, is not counted.
-fn _affordable(unit: &passes::Unit, outer: &Outer, mut run: Vec<InstId>, before: InstId, costs: &OperationCosts, room: crate::spill::Room, frequency: &std::collections::BTreeMap<i64, i64>) -> Vec<InstId> {
+fn _affordable(unit: &passes::Unit, outer: &Outer, mut run: Vec<InstId>, before: InstId, into: i64, costs: &OperationCosts, room: crate::spill::Room, frequency: &std::collections::BTreeMap<i64, i64>) -> Vec<InstId> {
     let price = |function: &Function| profit::motion_price(unit.context, unit.layout, outer, function, costs, room, frequency);
     let Some(kept) = price(unit.function) else { return run };
     while !run.is_empty() {
@@ -114,6 +118,9 @@ fn _affordable(unit: &passes::Unit, outer: &Outer, mut run: Vec<InstId>, before:
             hoisted.move_to(inst, Position::Before(before)).expect("a placed instruction");
         }
         let Some(moved) = price(&hoisted) else { return run };
+        // A floating value held across the loop is released after it, once for each time the loop is entered.
+        let floats: BTreeSet<ValueId> = _crossed_values(&hoisted, &run).into_iter().filter(|&value| matches!(unit.context.types.get(hoisted.value(value).ty), Type::Float(_))).collect();
+        let moved = moved + floats.len() as i64 * costs.float_release * frequency.get(&into).copied().unwrap_or(1);
         let found = llrm_analysis::liveness::live(&hoisted);
         let Some(forecast) = profit::spill_forecast(unit.context, unit.layout, &hoisted, costs, room, &|inst| crate::spill::kept_across(outer, unit.context, &hoisted, inst), frequency, &found) else { return run };
         let cells = crate::spill::cells(&hoisted);
@@ -125,6 +132,10 @@ fn _affordable(unit: &passes::Unit, outer: &Outer, mut run: Vec<InstId>, before:
             return run;
         }
         let mut stay: BTreeSet<ValueId> = crossing.into_iter().filter(|&value| !free(value)).collect();
+        // What costs its release more than it saves stays, with what reads it.
+        if costs.float_release > 0 {
+            stay.extend(floats);
+        }
         if stay.is_empty() {
             return Vec::new();
         }

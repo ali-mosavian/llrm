@@ -169,7 +169,7 @@ fn split(items: Vec<masm::Datum>, segment: &str, limit: Option<usize>) -> Result
             }
             other => {
                 let size = match &other {
-                    Datum::Pointer(masm::Pointer { far, .. }) => if *far { 4 } else { 2 },
+                    Datum::Pointer(masm::Pointer { bytes, .. }) => *bytes as usize,
                     Datum::SegmentWord(_) => 2,
                     _ => 0,
                 };
@@ -232,7 +232,7 @@ mod tests {
             .map(|one| match one {
                 Datum::Bytes(bytes) => bytes.len(),
                 Datum::Fill(Fill { size, .. }) => *size as usize,
-                Datum::Pointer(Pointer { far, .. }) => if *far { 4 } else { 2 },
+                Datum::Pointer(Pointer { bytes, .. }) => *bytes as usize,
                 _ => 0,
             })
             .sum()
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_an_address_after_a_full_segment_starts_the_next() {
-        let pointer = Datum::Pointer(Pointer { name: "_x".into(), offset: 0, far: true });
+        let pointer = Datum::Pointer(Pointer { name: "_x".into(), offset: 0, far: true, bytes: 4 });
         let parts = split(vec![label(), Datum::Bytes(vec![0; 65536]), pointer], "S", Some(0x1_0000)).unwrap();
         assert_eq!(parts.iter().map(|part| size(part)).collect::<Vec<_>>(), [65536, 4]);
     }

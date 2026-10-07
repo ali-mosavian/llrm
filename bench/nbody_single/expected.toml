@@ -1,13 +1,13 @@
-reason = "x87: a squared value below the top is copied with fld st(i), not exchanged up (nbody -4%, fpbench c -9%)"
+reason = "x87: a squared value below the top is copied with fld st(i), not exchanged up (nbody -4%, fpbench -9%)"
 blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 948124
-memory_operands = 217092
-code_bytes = 1205
-data_bytes = 189
+instructions = 939099
+memory_operands = 204072
+code_bytes = 1126
+data_bytes = 165
 bss_bytes = 0
-kernel_ms = 12.6587
+kernel_ms = 12.5383
 
 [bas.Os]
 instructions = 1157194
@@ -18,12 +18,12 @@ bss_bytes = 0
 kernel_ms = 15.4475
 
 [c.O2]
-instructions = 1016131
-memory_operands = 164102
-code_bytes = 1211
+instructions = 1001107
+memory_operands = 146077
+code_bytes = 1109
 data_bytes = 68
 bss_bytes = 96
-kernel_ms = 13.556
+kernel_ms = 13.3556
 
 [c.Os]
 instructions = 1157194
@@ -34,12 +34,12 @@ bss_bytes = 96
 kernel_ms = 15.4377
 
 [nib.O2]
-instructions = 957148
-memory_operands = 199100
-code_bytes = 1197
+instructions = 948123
+memory_operands = 186080
+code_bytes = 1048
 data_bytes = 76
 bss_bytes = 0
-kernel_ms = 12.7684
+kernel_ms = 12.648
 
 [nib.Os]
 instructions = 1350434

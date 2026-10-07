@@ -115,9 +115,15 @@ pub struct Tuned {
     pub window: Option<(u32, i64)>,
     /// The address spaces, where not real mode's.
     pub spaces: Option<llrm_mir::spaces::Spaces>,
+    /// `Machine::two_address`.
+    pub two_address: bool,
 }
 
 impl llrm_mir::target::Machine for Tuned {
+    fn two_address(&self) -> bool {
+        self.two_address
+    }
+
     fn spaces(&self) -> llrm_mir::spaces::Spaces {
         self.spaces.unwrap_or_else(llrm_x86_m16::spaces)
     }

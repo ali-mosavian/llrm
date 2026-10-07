@@ -11,7 +11,7 @@ import linkrecipe  # noqa: E402
 
 class LinkRecipeTests(unittest.TestCase):
     def tree(self, text: str) -> Path:
-        root = Path(tempfile.mkdtemp(dir=Path(__file__).resolve().parents[1] / "target"))
+        root = Path(tempfile.mkdtemp())
         machines = root / "crates" / "target" / "llrm-x86-test" / "src" / "machines"
         machines.mkdir(parents=True)
         (machines / "object.toml").write_text(text)

@@ -434,3 +434,52 @@ b2:
     let hoisted = block(&printed, "b0").iter().filter(|line| line.contains("getelementptr")).count();
     assert_eq!(hoisted, 6, "{printed}");
 }
+
+/// A loop's invariant `double` load, hoisted: a value on a stack machine is held across the loop and released
+/// after it. x86-m32's -Os grew 4 B per float hoisted (nbody: two `fld` and two `fstp st(0)` out of an inner loop
+/// of 1.5 trips) because the price counted a move and no release.
+fn float_hoist(size: bool, release: i64) -> usize {
+    let text = "@g = global double 1.0
+
+define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %s = phi double [ 0.0, %b0 ], [ %s1, %b1 ]
+  %v = load double, ptr @g
+  %s1 = fadd double %s, %v
+  %i1 = add i16 %i, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  %r = fptosi double %s1 to i16
+  ret i16 %r
+}
+";
+    let before = parsed(text);
+    let mut after = before.clone();
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.require::<Summaries>();
+    passes.add(super::Hoist { size });
+    let prices = crate::profit::OperationCosts { float_release: release, ..Default::default() };
+    let machine = crate::testing::Tuned { registers: 6, costs: prices.clone(), sizes: prices, ..Default::default() };
+    passes.run_module(&mut after, std::rc::Rc::new(machine)).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    block(&printed(&after), "b0").iter().filter(|line| line.contains("load")).count()
+}
+
+#[test]
+fn test_a_float_load_is_not_hoisted_where_its_release_costs_the_code_more() {
+    // Moved out of the loop its price is the same: only the release after the loop differs.
+    assert_eq!(float_hoist(true, 0), 1, "unpriced, it is hoisted");
+    assert_eq!(float_hoist(true, 2), 0, "released after the loop at 2 bytes, it stays");
+}
+
+/// At speed the loop's trips pay for the release: 10 loads saved against one release of 2.
+#[test]
+fn test_a_float_load_is_hoisted_where_the_loop_pays_for_its_release() {
+    assert_eq!(float_hoist(false, 2), 1);
+}
