@@ -44,5 +44,9 @@ Table of `tests/turbo.rs`'s programs, the oracle.
 Register variables (a register's number is the target's, not a column of `registers.regs` yet), bit fields
 beside padding (the encoding of `int a:3; char c;` is not known), enums, coverage offsets, 32-bit objects
 (Borland's are another format), BASIC and Nib programs, a type past 64K (`huge`'s 80,400-byte array).
-Turbo Debugger itself is not driven: it has keystroke macros, not a batch mode; the table it reads is the
-one `tests/turbo.rs` compares.
+Turbo Debugger 3.00 itself is driven by `tests/turbo.rs` under the fork's DOSBox-X debug socket
+(`DOSBOX_DEBUG_PORT`: key injection, the text screen, a PNG screenshot): it stops at every INT 3, which
+Turbo Debugger uses for its breakpoints, so a reader thread answers each with `continue`. F8 and F7 step
+to a line (the window's title says which), Ctrl-F7 (scan code 0x64, not 0x6A) adds a watch. For the
+program built by Turbo C++ and the one llrm built with `-gtd`, stopped at `lst.c` line 9, the Watches window
+reads alike: `s int 0`, `n struct node * ds:00AE [_head]`, `*n struct node {ds:00AA,3}`, `n->v int 3`.
