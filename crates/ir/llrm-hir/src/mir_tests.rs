@@ -43,13 +43,13 @@ fn a_function_becomes_its_llvm_ir() {
 fn a_call_repeats_its_callees_convention() {
     use crate::model::{CallAbi, CallDistance, FloatReturn, ProcedureAbi, StackCleanup};
     let mut function = difference();
-    function.abi = Some(ProcedureAbi { convention: None, cleanup: StackCleanup::Callee, distance: CallDistance::Far, parameter_bytes: 4, float_return: FloatReturn::Pointer, variadic: false });
+    function.abi = Some(ProcedureAbi { convention: None, memory: Vec::new(), result_pointer: None, cleanup: StackCleanup::Callee, distance: CallDistance::Far, parameter_bytes: 4, float_return: FloatReturn::Pointer, variadic: false });
     let mut call = Instruction::new(2, Op::Call, vec![4], vec![Operand::value_ref(3), Operand::value_ref(1)]);
     call.callee = Some("B$NEAR".to_owned());
     function.values.push(Value { id: 4, r#type: 1 });
     function.blocks[0].instructions.push(call);
     function.blocks[0].terminator.operands = vec![Operand::value_ref(4)];
-    let site = |order| CallAbi { convention: None, instruction: 2, order, cleanup: StackCleanup::Caller, distance: CallDistance::Near, callee: None, float_return: FloatReturn::Register };
+    let site = |order| CallAbi { convention: None, memory: Vec::new(), result_pointer: None, instruction: 2, order, cleanup: StackCleanup::Caller, distance: CallDistance::Near, callee: None, float_return: FloatReturn::Register };
     function.calls = vec![site(vec![1, 0])];
     let emitted = emit(&program(function.clone())).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
@@ -582,7 +582,7 @@ fn a_string_comparison_compares_its_callees_sign() {
     let mut compare = Instruction::new(1, Op::StringGt, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2)]);
     compare.callee = Some("B$SCMP".to_owned());
     function.blocks[0].instructions = vec![compare];
-    function.calls = vec![CallAbi { convention: None, instruction: 1, order: vec![0, 1], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    function.calls = vec![CallAbi { convention: None, memory: Vec::new(), result_pointer: None, instruction: 1, order: vec![0, 1], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
     let emitted = emit(&program(function)).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
@@ -599,7 +599,7 @@ fn a_string_comparisons_callee_is_a_three_way_compare() {
     let mut compare = Instruction::new(1, Op::StringGt, vec![3], vec![Operand::value_ref(1), Operand::value_ref(2)]);
     compare.callee = Some("B$SCMP".to_owned());
     function.blocks[0].instructions = vec![compare];
-    function.calls = vec![CallAbi { convention: None, instruction: 1, order: vec![0, 1], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    function.calls = vec![CallAbi { convention: None, memory: Vec::new(), result_pointer: None, instruction: 1, order: vec![0, 1], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
     let emitted = emit(&program(function)).remove(0);
     let module = &emitted.module;
     let callee = module.global(module.named("llrm.qb.B$SCMP").expect("declared")).function().expect("a function");
@@ -779,7 +779,7 @@ fn a_call_through_a_functions_address() {
     function.blocks[0].instructions.extend([address, call]);
     function.blocks[0].terminator.operands = vec![Operand::value_ref(5)];
     function.values.extend([Value { id: 4, r#type: 2 }, Value { id: 5, r#type: 1 }]);
-    function.calls = vec![CallAbi { convention: None, instruction: 3, order: vec![1, 0], cleanup: StackCleanup::Caller, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    function.calls = vec![CallAbi { convention: None, memory: Vec::new(), result_pointer: None, instruction: 3, order: vec![1, 0], cleanup: StackCleanup::Caller, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
     let mut program = program(function);
     program.modules[0].types.push(Type::new(2, "far", TypeKind::Pointer, 4));
 
@@ -1043,7 +1043,7 @@ fn facts_of_a_call_argument_are_its_call_site_attributes() {
     let block = Block::new(1, vec![call], Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
     let mut function = Function::new(1, "f", 0, values, Vec::new(), vec![block], 1);
     function.parameters = vec![1];
-    function.calls = vec![CallAbi { convention: None, instruction: 1, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    function.calls = vec![CallAbi { convention: None, memory: Vec::new(), result_pointer: None, instruction: 1, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
     let mut program = program(function);
     let mut facts = Builder::new("test");
     let argument = Subject::Operand { function: 1, instruction: 1, operand: 0 };
@@ -1100,7 +1100,7 @@ fn calling(stated: Vec<(crate::facts::Subject, llrm_mir::facts::Fact)>) -> Strin
     function.values.push(Value { id: 4, r#type: 1 });
     function.blocks[0].instructions.push(call);
     function.blocks[0].terminator.operands = vec![Operand::value_ref(4)];
-    function.calls = vec![CallAbi { convention: None, instruction: 2, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    function.calls = vec![CallAbi { convention: None, memory: Vec::new(), result_pointer: None, instruction: 2, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
     let mut program = program(function);
     program.modules[0].callables.push(Callable {
         id: 1,
@@ -1370,7 +1370,7 @@ fn a_callable_that_returns_twice_is_declared_so() {
     function.values.push(Value { id: 4, r#type: 1 });
     function.blocks[0].instructions.push(call);
     function.blocks[0].terminator.operands = vec![Operand::value_ref(4)];
-    function.calls = vec![CallAbi { convention: None, instruction: 2, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
+    function.calls = vec![CallAbi { convention: None, memory: Vec::new(), result_pointer: None, instruction: 2, order: vec![0], cleanup: StackCleanup::Callee, distance: CallDistance::Far, callee: None, float_return: FloatReturn::Register }];
     let mut program = program(function);
     let callable = |returns_twice| Callable { id: 1, name: "B$TWICE".to_owned(), result_type: Some(1), parameter_types: vec![1], by_value: vec![true], segmented: vec![false], arrays: vec![false], defined: false, returns_twice, symbol: None };
     program.modules[0].callables.push(callable(true));
@@ -1536,7 +1536,7 @@ fn a_flat_target_has_one_space_and_a_32_bit_layout() {
     let block = Block::new(1, Vec::new(), Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(1)], Vec::new()));
     let mut function = Function::new(1, "same", 2, values, Vec::new(), vec![block], 1);
     function.parameters = vec![1];
-    function.abi = Some(ProcedureAbi { convention: None, cleanup: StackCleanup::Caller, distance: CallDistance::Near, parameter_bytes: 4, float_return: FloatReturn::Register, variadic: false });
+    function.abi = Some(ProcedureAbi { convention: None, memory: Vec::new(), result_pointer: None, cleanup: StackCleanup::Caller, distance: CallDistance::Near, parameter_bytes: 4, float_return: FloatReturn::Register, variadic: false });
     let types = vec![Type::new(0, "void", TypeKind::Void, 0), int, pointer];
     let program = Program::new(Dialect::Qb45, RuntimeProfile::Qb45, vec![Module::new(1, "m", types, vec![function])]);
     let flat = Layout::parse(FLAT).unwrap();

@@ -2075,7 +2075,7 @@ fn a_pointer_field_in_an_assembler_struct_is_the_targets_pointer_width() {
     use super::declarations::{Language, declarations_on};
     let source = "@repr(\"c\")\nstruct Node:\n    next: *near mut i16\n    id: i16\n\nfn main() -> i16:\n    return 0\n";
     let module = super::parse(super::lex(source).expect("lexes")).expect("parses");
-    let on = |target: &dyn llrm_target::Target| declarations_on(&module, "t", Language::Assembler, crate::Frontend::for_target(target).unwrap().sizes()).expect("declares");
+    let on = |target: &dyn llrm_target::Target| declarations_on(&module, "t", Language::Assembler, crate::Frontend::for_target(target).unwrap().sizes(), crate::Frontend::for_target(target).unwrap().native()).expect("declares");
     assert!(on(&llrm_x86_m16::M16).contains("    next dw ?\n"));
     assert!(on(&llrm_x86_m32::M32).contains("    next dd ?\n"));
 }

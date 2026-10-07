@@ -98,7 +98,7 @@ pub struct Calling {
     pub conventions: Vec<Convention>,
 }
 
-const KEYS: [&str; 32] = [
+const KEYS: &[&str] = &[
     "cc",
     "wide_pairs",
     "backfill",
@@ -176,6 +176,12 @@ impl Calling {
 
     pub fn named(&self, name: &str) -> Option<&Convention> {
         self.conventions.iter().find(|one| one.name == name)
+    }
+
+    /// `pattern`, a symbol's OMF decoration (`*_`) as the front end records it, in `format`: the one the convention
+    /// whose OMF decoration it is gives. None where no convention states `format`, or none has that pattern.
+    pub fn redecorated(&self, pattern: &str, format: &str) -> Option<String> {
+        self.conventions.iter().find(|one| one.symbol.get("omf").is_some_and(|omf| omf == pattern)).and_then(|one| one.symbol.get(format)).cloned()
     }
 
     /// The convention MIR's `cc` names: the file's first answers `ccc`, whose `cc` is 0.
@@ -401,6 +407,11 @@ impl Convention {
         out
     }
 
+    /// `name` as an object in `format` (`omf`, `elf`, `macho`) spells it under this convention, where the description gives it.
+    pub fn decorated(&self, format: &str, name: &str) -> Option<String> {
+        self.symbol.get(format).map(|pattern| pattern.replace('*', name))
+    }
+
     /// The registers kept for the caller that a value may be held in: all but the frame register.
     pub fn callee_saved(&self) -> Vec<&Kept> {
         self.preserved.iter().filter(|one| one.full != self.frame && one.pushed != self.frame).collect()
@@ -500,6 +511,18 @@ mod tests {
         assert_eq!(w.clobbers(&used, Some(4)), ["eax", "flags"]);
         let used = w.place(&[Kind::Wide, Kind::Word]).used;
         assert_eq!(w.clobbers(&used, Some(8)), ["eax", "ebx", "edx", "flags"]);
+    }
+
+    /// An ELF object has no leading underscore and an OMF one a trailing one: the description says so for each
+    /// convention, and a pattern the front end recorded (OMF's) is turned into the format's.
+    #[test]
+    fn a_symbol_is_decorated_as_its_object_format_spells_it() {
+        let text = format!("{WATCALL}[w.symbol]\nomf = \"*_\"\nelf = \"*\"\nmacho = \"_*\"\n[c]\nlike = \"w\"\ncc = \"cdecl\"\n[c.symbol]\nomf = \"_*\"\nelf = \"*\"\nmacho = \"_*\"\n");
+        let calling = Calling::parse(&text).unwrap();
+        assert_eq!(calling.named("w").unwrap().decorated("omf", "f").as_deref(), Some("f_"));
+        assert_eq!(calling.named("c").unwrap().decorated("macho", "f").as_deref(), Some("_f"));
+        assert_eq!((calling.redecorated("*_", "elf").as_deref(), calling.redecorated("_*", "elf").as_deref(), calling.redecorated("_*", "macho").as_deref()), (Some("*"), Some("*"), Some("_*")));
+        assert_eq!((calling.redecorated("^", "elf"), calling.redecorated("*_", "coff")), (None, None));
     }
 
     #[test]
