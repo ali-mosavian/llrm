@@ -108,13 +108,19 @@ fn spill_model(program: &Program) {
         let costs = program.target.costs();
         for global in &module.globals {
             let Some(function) = global.function().filter(|one| !one.is_declaration()) else { continue };
-            let unit = llrm_analysis::memory::Unit::of(module, &layout, function).with_spaces(program.target.spaces());
-            let trips = profit::proven_trips(&unit, &unit.registers());
+            let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer.clone()));
+            let registers = analyses.get::<llrm_analysis::manager::Registers>(&module.context, &layout, function);
+            let unit = llrm_analysis::memory::Unit::of(module, &layout, function).with_spaces(program.target.spaces()).with_registers(&registers);
+            let trips = profit::proven_trips(&unit, &registers);
             let Some(frequency) = profit::_frequencies(&module.context, &module.metadata, &module.globals, function, Some(&trips)) else { continue };
             let found = llrm_analysis::liveness::live(function);
             let across = |inst| spill::kept_across(&outer, &module.context, function, inst);
             if let Some(forecast) = profit::spill_forecast(&module.context, &layout, function, &costs, room, &across, &frequency, &found) {
                 llrm_support::debug!("spillmodel", "{} peak {} spilled {} price {}", global.name.as_deref().unwrap_or("?"), forecast.peak, forecast.spilled.len(), forecast.cost);
+                if let Some(name) = global.name.as_deref() {
+                    let per_entry = forecast.cost as f64 / profit::UNIT as f64;
+                    crate::backend::executed::predict(name, crate::backend::executed::Predicted { peak: forecast.peak, spilled: forecast.spilled.len(), price: per_entry, load: costs.load, store: costs.store });
+                }
             }
         }
     }
@@ -155,7 +161,7 @@ pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String>
     timed("mir assumptions", || program.modules.iter_mut().for_each(llrm_transforms::dead::assumptions_dropped));
     timed("mir ehprepare", || program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared))?;
     timed("mir selects", || program.modules.iter_mut().try_for_each(crate::backend::selects::lowered))?;
-    if llrm_support::debug::enabled("spillmodel") {
+    if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {
         timed("mir spill model", || spill_model(program));
     }
     timed("mir verify pipeline", || verified(program, "the pipeline"))
