@@ -135,6 +135,10 @@ pub fn sections(object: &Object, info: &Info) -> Result<[Section; 2], Error> {
         model::Format::Dwarf { .. } => return refused("OMF cannot carry DWARF: use -gcodeview, or -fobject-format=elf"),
         model::Format::TurboDebugger => return refused("this writer does not write Turbo Debugger's information yet"),
     }
+    // C is CodeView 4 as C7 writes it; BASIC's compilers write the older dialect `cvwrite` is.
+    if info.language == model::Language::C {
+        return crate::cv4::sections(object, info);
+    }
     let flavor = Flavor { qb45: info.producer == model::Producer::Qb45 };
     let encoded = cvwrite::written(&module(object, info)?, flavor).map_err(Error::Unencodable)?;
     let mut relocs = Vec::new();

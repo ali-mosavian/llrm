@@ -4,7 +4,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use llrm_core::backend::objbuild;
-use llrm_core::objectfile::{cvinfo, omf};
+use llrm_core::objectfile::{cv4info, omf};
 
 /// tests/fixtures/c/debug.cgs, recorded from debug.c (and its debug.h)
 /// with -d2, compiled as the CLI compiles it.
@@ -27,26 +27,28 @@ fn object_of(name: &str) -> Vec<Rc<omf::Record>> {
 /// is no parameter, and its only one was `void`.
 #[test]
 fn c_symbols_read_with_their_types() {
-    let shape = cvinfo::parse(&object()).shape();
+    let shape = cv4info::shape(&object());
     assert_eq!(
         shape,
         [
-            "DATA ga: 20 BYTES OF INTEGER",
-            "DATA gfp: BYREF CHAR",
-            "DATA ghp: BYREF INTEGER",
-            "DATA gp: TYPE pt {x +0 INTEGER, y +2 LONG}",
-            "DATA gu: TYPE mix {b +0 UNSIGNED CHAR, w +0 UNSIGNED SHORT}",
+            "DATA ga: 20 BYTES OF SHORT",
+            "DATA gfp: FAR RCHAR *",
+            "DATA ghp: HUGE SHORT *",
+            "DATA gp: struct pt {x +0 SHORT, y +2 LONG}",
+            "DATA gu: union mix {b +0 UNSIGNED CHAR, w +0 UNSIGNED SHORT}",
             "DATA gul: UNSIGNED LONG",
-            "DATA st: INTEGER",
-            "LOCAL f.a: INTEGER",
-            "LOCAL f.b: BYREF TYPE pt",
-            "LOCAL f.c: CHAR",
-            "LOCAL f.l: INTEGER",
-            "LOCAL twice.x: INTEGER",
-            "PROC f flags 4 (INTEGER, BYREF TYPE pt, CHAR) -> LONG",
+            "DATA st: SHORT",
+            "LOCAL f.a: SHORT",
+            "LOCAL f.b: NEAR * struct pt {x +0 SHORT, y +2 LONG}",
+            "LOCAL f.c: RCHAR",
+            "LOCAL f.l: SHORT",
+            "LOCAL twice.x: SHORT",
+            "PROC f far (SHORT, NEAR * struct pt {x +0 SHORT, y +2 LONG}, RCHAR) -> LONG",
             // Static: near.
-            "PROC twice flags 0 (INTEGER) -> INTEGER",
-            "PROC v flags 4 () -> STRING",
+            "PROC twice near (SHORT) -> SHORT",
+            "PROC v far () -> VOID",
+            "UDT mix: union mix {b +0 UNSIGNED CHAR, w +0 UNSIGNED SHORT}",
+            "UDT pt: struct pt {x +0 SHORT, y +2 LONG}",
         ]
     );
 }
@@ -76,12 +78,12 @@ fn bit_field_members_round_trip_through_the_codec_and_others_are_unchanged() {
 
 /// A bit field read as its whole base type: `DBBitField`'s first bit and
 /// width were dropped, and a debugger showed `b` as the int at offset 0.
-/// Each is now QuickC's bitfield record of its width, sign and first bit.
+/// Each is now a bitfield record of its width, base type and first bit.
 #[test]
 fn c_bit_fields_read_with_their_width_and_first_bit() {
-    let shape = cvinfo::parse(&object_of("debugbf")).shape();
+    let shape = cv4info::shape(&object_of("debugbf"));
     assert!(
-        shape.contains(&"DATA gf: TYPE flags {a +0 BITFIELD 3 UNSIGNED @0, b +0 BITFIELD 5 SIGNED @3, c +1 BITFIELD 9 UNSIGNED @0}".to_owned()),
+        shape.contains(&"DATA gf: struct flags {a +0 BITFIELD 3 UNSIGNED CHAR @0, b +0 BITFIELD 5 CHAR @3, c +1 BITFIELD 9 UNSIGNED SHORT @0}".to_owned()),
         "{shape:#?}"
     );
 }

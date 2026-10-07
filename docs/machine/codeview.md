@@ -289,3 +289,26 @@ CodeView 4 on `llrm-c -g` and `llrm-nib -g`, stopped in each program:
 
 ![C in CodeView 4](codeview/c-cv4.png)
 ![Nib in CodeView 4](codeview/nib-cv4.png)
+
+## C: CodeView 4 as C7 writes it
+
+`llrm-c -g` for OMF writes `cv4.rs`'s dialect; BASIC's compilers' raw dialect above is `cvwrite.rs`'s. Records are Open
+Watcom's `cv4f.h`; each shape was also read from objects ML 6.11 wrote under `/Zi`
+(`tests/inputs/cv4/p*.obj`, with sources, read by `cv4info`). Measured on ML's objects:
+
+- $$TYPES and $$SYMBOLS both start with the signature `01 00 00 00`. Type records are `len, leaf, data`, each
+  ending on four bytes with `F3 F2 F1` fill; symbol records are `len, code, data`, not padded.
+- ML names a record before the field list it holds (`LF_STRUCTURE` at 0x1000, its `LF_FIELDLIST` at 0x1001): a record
+  may name a later index, so a struct that points to itself is numbered first (`cv4::Types::structure`).
+- `LF_POINTER` is attribute, type and four zero bytes; a pointer to a primitive is the primitive's code with the mode in
+  the high byte (near16 1, far 2, huge 3, near32 4) and no record.
+- `S_GPROC16`: three zero links, length, debug start, debug end (two bytes each), offset, segment, type, flags, name;
+  `S_GPROC32` has four-byte lengths and offset. Offset and segment are one 16:16 fixup, or an offset32 and a base.
+- ML's debug segments are SEGDEF32, four-byte length; `omf::segments` took it for two and found nothing.
+- `LINK /CO` runs CVPACK, which rewrites the table (`NB08` trailer, CVPACK 4.02); CodeView then breaks at a function
+  by name and its locals window shows `short a = 1`.
+
+What ML cannot tell, from the OW headers alone and unverified against a producer: `LF_UNION` (ML writes a union as
+`LF_STRUCTURE`), `LF_ENUM`, `LF_BITFIELD`, `LF_MODIFIER`, `LF_ARRAY`'s index type, `S_REGISTER`, `S_BLOCK`, and the
+32-bit records (no 32-bit CodeView or CVPACK on tinytim; only ML's own 32-bit object's shapes). A register that holds a
+value for part of a scope, and one the optimiser removed, are left out: CodeView 4 names one place per scope.

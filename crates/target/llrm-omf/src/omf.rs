@@ -201,12 +201,14 @@ pub fn segments(recs: &[Rc<Record>]) -> Vec<Option<(String, i64)>> {
             // absolute: frame and offset follow
             i += 3;
         }
-        let mut ln = unpack_from(&r.body, i);
+        // SEGDEF32 (the odd record type) has a four-byte length: ML's debug segments are written so.
+        let width = if r.r#type & 1 == 1 { 4 } else { 2 };
+        let mut ln = if width == 4 { i64::from(u32::from_le_bytes(r.body[i..i + 4].try_into().expect("a SEGDEF32 length"))) } else { unpack_from(&r.body, i) };
         if (acbp & 0x02) != 0 && ln == 0 {
             // the big bit: a full 64K
             ln = 0x10000;
         }
-        i += 2;
+        i += width;
         let (ni, _) = _index(&r.body, i);
         let name = if (ni as usize) < nm.len() {
             nm[ni as usize].clone()
