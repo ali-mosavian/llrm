@@ -1348,18 +1348,14 @@ pub fn _widest(body: &LirBody) -> IndexMap<u32, u32> {
     let mut out: IndexMap<u32, u32> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
-            let mut held: Vec<Held> = match &one.what {
-                Some(what) => what.dests.iter().chain(&what.sources).flat_map(ir::values).collect(),
-                None => Vec::new(),
-            };
-            held.extend(one.requires.iter().chain(&one.delivers).map(|(place, _register)| *place));
-            for place in held {
-                let had = out.get(&place.value).copied().unwrap_or(0);
-                out.insert(place.value, had.max(place.width));
+            let named = one.what.iter().flat_map(|what| what.dests.iter().chain(&what.sources)).flat_map(ir::values).chain(one.requires.iter().chain(&one.delivers).map(|(place, _register)| *place));
+            for place in named {
+                let widest = out.entry(place.value).or_insert(0);
+                *widest = (*widest).max(place.width);
             }
             for (value, width) in &one.widths {
-                let had = out.get(value).copied().unwrap_or(0);
-                out.insert(*value, had.max(*width));
+                let widest = out.entry(*value).or_insert(0);
+                *widest = (*widest).max(*width);
             }
         }
     }
