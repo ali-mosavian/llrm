@@ -512,9 +512,9 @@ fn value_ref(value: i64) -> Operand {
 
 /// The stack convention of a procedure: cdecl's, or pascal's, which
 /// pushes in order and pops its own.
-fn cleanup(symbol: &hir::Symbol) -> R<(StackCleanup, Option<String>)> {
-    // `main` is called by the runtime's start, in C's convention.
-    if symbol.entry() && !symbol.in_order() {
+fn cleanup(symbol: &hir::Symbol, unit: &hir::Unit) -> R<(StackCleanup, Option<String>)> {
+    // The entry is called by the runtime's start in the stack convention its description names.
+    if symbol.is_entry(&unit.entry) && !symbol.in_order() {
         return Ok((StackCleanup::Caller, None));
     }
     let stack = symbol.call_class & (hir::CALLER_POPS | hir::REVERSE_PARMS);
@@ -623,7 +623,7 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<h::Function> {
         let unit = shared.unit;
         let symbol = &unit.symbols[&proc.symbol];
-        let (cleanup, convention) = cleanup(symbol)?;
+        let (cleanup, convention) = cleanup(symbol, unit)?;
         let mut body = Body {
             convention: convention.clone(),
             memory: Vec::new(),
@@ -2004,7 +2004,7 @@ impl<'a, 't> Body<'a, 't> {
             let value = self.value_as(node, type_)?;
             return Ok(Got::Returned(Some(self.unary("O_FABS", value, type_)?)));
         }
-        let (cleanup, convention) = cleanup(symbol).map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))?;
+        let (cleanup, convention) = cleanup(symbol, self.unit).map_err(|error| Unsupported(format!("{}: {}", self.name(), error.0)))?;
         let distance = distance(symbol);
         let callee = match target {
             Got::Function(_) => None,

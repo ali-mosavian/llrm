@@ -185,10 +185,9 @@ impl Symbol {
         self.call_class & REVERSE_PARMS != 0
     }
 
-    /// The program's entry, which the runtime's start calls with no arguments in the target's C convention,
-    /// whatever its language's default is: `main`.
-    pub fn entry(&self) -> bool {
-        self.base == "main" && self.exported()
+    /// The program's entry, `entry` (the routine the runtime's start calls, its C runtime description's).
+    pub fn is_entry(&self, entry: &str) -> bool {
+        self.base == entry && self.exported()
     }
 
     pub fn object_name(&self) -> String {
@@ -310,6 +309,9 @@ pub struct Unit {
     pub procs: Vec<Proc>,
     /// Compiled with -d2.
     pub debug: Option<Debug>,
+    /// The routine the runtime's start calls, and the `cc` of the convention it calls it in (the C runtime description's).
+    pub entry: String,
+    pub entry_cc: String,
     /// INIT's code-generator switches (`CGSW_GEN_*`).
     pub switches: i64,
     /// Recorded by the 386 front end: flat, `int` and every pointer 4 bytes.
@@ -320,13 +322,13 @@ pub struct Unit {
 
 impl Unit {
     /// Each symbol's decoration as `calling` states it for `format`: what the front end recorded is OMF's, and a
-    /// symbol whose pattern a convention states takes that convention's for `format`. The entry `main` is called
-    /// by the runtime's start in C's convention, whatever the front end made of it.
+    /// symbol whose pattern a convention states takes that convention's for `format`. The entry is called by
+    /// the runtime's start in the convention the description names, whatever the front end made of it.
     pub fn decorate(&mut self, calling: &llrm_target::calling::Calling, format: &str) {
-        let cdecl = calling.by_cc("cdecl").and_then(|one| one.symbol.get(format)).cloned();
+        let entry = calling.by_cc(&self.entry_cc).and_then(|one| one.symbol.get(format)).cloned();
         for symbol in self.symbols.values_mut() {
-            if symbol.entry() {
-                if let Some(pattern) = &cdecl {
+            if symbol.is_entry(&self.entry) {
+                if let Some(pattern) = &entry {
                     symbol.pattern = pattern.clone();
                 }
             } else if let Some(pattern) = calling.redecorated(&symbol.pattern, format) {

@@ -271,7 +271,8 @@ def run(prog, variant, hot=False, limit=300_000_000):
     uc.mem_write(esp, struct.pack("<III", SENT, 0, 0))
     uc.reg_write(UC_X86_REG_ESP, esp)
     code_end = max(va + len(b) for va, b, _ in segs)
-    report_at = stub["report"]
+    # OMF's default-convention name is `report_`, ELF's is `report`: both are the stub's, and the caller says where the value is.
+    report_at = {stub["report"], stub.get("report_", stub["report"])}
     # llrm's default convention takes the value in EAX; gcc and clang push it.
     in_eax = variant.startswith("llrm")
     st = dict(active=False, sp=0, prev=None, prev_ins=None, cnt=0)
@@ -286,7 +287,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
     def hook(uc, address, size, _):
         if address == SENT:
             uc.emu_stop(); return
-        if address == report_at:
+        if address in report_at:
             if in_eax:
                 reports.append(struct.unpack("<i", struct.pack("<I", uc.reg_read(UC_X86_REG_EAX)))[0])
             else:

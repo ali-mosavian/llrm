@@ -86,7 +86,11 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
 pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options, stack_check: Option<llrm_core::hir::model::StackCheck>) -> Result<masm::Module, CompileError> {
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
         let mut unit = hir::unit(&stream::parse(text))?;
-        unit.decorate(codegen.arch.calling(), codegen.object_format);
+        let profile = Profile::of(&*codegen.arch).map_err(hir::Unsupported)?;
+        let calling = codegen.arch.calling();
+        unit.entry = profile.entry;
+        unit.entry_cc = calling.named(&profile.entry_convention).and_then(|one| one.cc.clone()).ok_or_else(|| hir::Unsupported(format!("calling.toml has no {} with a cc", profile.entry_convention)))?;
+        unit.decorate(calling, codegen.object_format);
         // The front end was picked by the shim's flat flag; the target says what flat is.
         if unit.flat != codegen.arch.layout().spaces.far_is_near() {
             return Err(hir::Unsupported(format!("the front end is {} but target {} is {}", if unit.flat { "flat" } else { "segmented" }, codegen.arch.name(), if unit.flat { "segmented" } else { "flat" })).into());
@@ -142,6 +146,9 @@ pub struct Profile {
     pub cpu: String,
     /// The calling convention it compiles C under, by its name in `calling.toml`.
     pub convention: String,
+    /// The routine the runtime's start calls, and the convention it calls it in by its name in `calling.toml`.
+    pub entry: String,
+    pub entry_convention: String,
     pub flags: Vec<String>,
     /// The header it includes first, from the repository root.
     pub header: String,
@@ -164,7 +171,7 @@ impl Profile {
             None => Vec::new(),
             Some(list) => list.as_array().ok_or("frontend.interrupt_parameters is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("an interrupt parameter is not a string")).collect::<Result<_, _>>()?,
         };
-        Ok(Self { cpu: text("watcom_cpu")?, convention: text("convention")?, flags, header: text("header")?, interrupt_parameters })
+        Ok(Self { cpu: text("watcom_cpu")?, convention: text("convention")?, entry: text("entry")?, entry_convention: text("entry_convention")?, flags, header: text("header")?, interrupt_parameters })
     }
 }
 
