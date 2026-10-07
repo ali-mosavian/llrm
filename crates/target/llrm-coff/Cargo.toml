@@ -1,0 +1,9 @@
+[package]
+name = "llrm-coff"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "llrm's COFF object container: sections, symbols and relocations for i386 and x86-64"
+
+[dependencies]
+llrm-object = { workspace = true }
