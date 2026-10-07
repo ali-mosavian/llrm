@@ -1888,9 +1888,27 @@ impl Selector<'_, '_, '_> {
             [(position, scale)] => Some((instruction.operands[1 + position], scale as i64)),
             _ => None,
         };
-        if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor)) {
+        if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor, false)) {
             self.pointers.insert(address, scaled);
             // A product the scale took is computed only if something else reads it.
+            if let Some((Operand::Value(product), _)) = one
+                && matches!(function.value(product).def, ValueDef::Instruction(_))
+            {
+                let product = self.value(product);
+                self.folded.insert(product);
+            }
+            return Ok(());
+        }
+        // A pointer something else than an access reads is one `lea` of the same form where the target has it:
+        // base + index * scale, not the index shifted and then added.
+        if !self.only_addressed(address)
+            && self.width(instruction.ty).ok() == Some(4)
+            && let Some(valued) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor, true))
+            && let Pointer::Based { index: Some(_), segment: None, .. } = valued
+        {
+            let cell = Self::memory(valued, 4);
+            let held = Held { value: self.value(address), width: 4 };
+            out.push(insn(at, semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Mem(cell)])));
             if let Some((Operand::Value(product), _)) = one
                 && matches!(function.value(product).def, ValueDef::Instruction(_))
             {
@@ -1923,7 +1941,7 @@ impl Selector<'_, '_, '_> {
             _ => None,
         };
         if !taken.is_empty() {
-            if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor)) {
+            if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor, false)) {
                 self.pointers.insert(address, scaled);
                 for &add in &taken {
                     let add = self.value(add);
@@ -2251,7 +2269,7 @@ impl Selector<'_, '_, '_> {
     /// defines them (`addressforms::promote`), so no register is added. The
     /// wider sum names the same byte where the index is a non-negative word
     /// at every access, and the access is typed or its offset exact.
-    fn widened(&mut self, inst: InstId, index: Operand, pointer: Pointer, scale: i64, factor: i64) -> Option<Pointer> {
+    fn widened(&mut self, inst: InstId, index: Operand, pointer: Pointer, scale: i64, factor: i64, valued: bool) -> Option<Pointer> {
         let Operand::Value(index) = index else { return None };
         let function = self.function;
         // A dword index is already the wide register; a word one is widened
@@ -2260,7 +2278,7 @@ impl Selector<'_, '_, '_> {
         let form = if dword { self.wide? } else { self.secondary? };
         let address = function.instruction(inst).result?;
         let scaled = scale > 1 || (dword && matches!(pointer, Pointer::Frame { .. }));
-        if !scaled || !form.scales.contains(&scale) || !self.only_addressed(address) || !(dword || self.promotable(index)) {
+        if !scaled || !form.scales.contains(&scale) || !(valued || self.only_addressed(address)) || !(dword || self.promotable(index)) {
             return None;
         }
         // A word index is zero-extended, so it must be non-negative; a dword
@@ -2899,8 +2917,8 @@ impl Selector<'_, '_, '_> {
 
     /// What a call may read and write: `effects`, and never the frame bytes
     /// no exposed alloca occupies.
-    fn listed(&self, effects: llrm_mir::memory::Effects) -> Arc<crate::model::lir::CallMemory> {
-        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone() })
+    fn listed(&self, effects: llrm_mir::memory::Effects, disturbs: BTreeSet<Register>) -> Arc<crate::model::lir::CallMemory> {
+        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs })
     }
 
     /// A direct call: its arguments pushed as its convention orders them,
@@ -3233,6 +3251,11 @@ impl Selector<'_, '_, '_> {
             Ok::<_, Unselected>(names.iter().filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st")).map(|name| llrm_x86::calling::register(name)).map(|register| if register.is_gpr() { register.full_register32() } else { register }).collect::<BTreeSet<Register>>())
         });
         let changed = changed.transpose()?;
+        // What its convention says it disturbs, which a caller that keeps those for its own caller saves before it.
+        let disturbs: BTreeSet<Register> = changed.clone().unwrap_or_else(|| {
+            let named = self::entry(self.arch, convention, variadic).map(|entry| entry.clobbers(&[], None)).unwrap_or_default();
+            named.iter().filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st")).map(|name| llrm_x86::calling::register(name)).map(|register| if register.is_gpr() { register.full_register32() } else { register }).collect()
+        });
         let mut delivers = Vec::new();
         let mut result = None;
         let mut float = None;
@@ -3300,7 +3323,7 @@ impl Selector<'_, '_, '_> {
         let whole: BTreeSet<Register> = self.arch.callee_saved().into_iter().filter(|(full, pushed)| full == pushed).map(|(full, _)| crate::model::ir::root(full)).collect();
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {
-            call: Some(self.listed(effects)),
+            call: Some(self.listed(effects, disturbs)),
             clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments)),
             clobbers_high: match &placed {
                 // What the convention keeps only the pushed part of (a 16-bit push of a 32-bit register) loses its upper half.
@@ -3590,7 +3613,9 @@ impl Selector<'_, '_, '_> {
         match (byte, constant) {
             // Tuned for size, one `rep stosb`: no dword count, tail or
             // operand-size prefix.
-            (Some(byte), _) if self.cpu.size => {
+            // Where the dwords fill is as short: zeros through a 32-bit segment, `xor eax, eax` for `mov al, 0` and
+            // no operand-size prefix on `stosd`, the count an immediate of the same width, no tail.
+            (Some(byte), _) if self.cpu.size && !(byte == 0 && self.arch.object().bitness == 32 && constant.is_some_and(|(_, length)| length % 4 == 0)) => {
                 let count = match constant {
                     Some((_, length)) => imm(length, self.address_bytes()),
                     None => Loc::Held(self.held(length, self.function.operand_type(&self.module.context, length).expect("a typed length"), at, out)?),
@@ -3755,8 +3780,13 @@ impl Selector<'_, '_, '_> {
             && let ValueDef::Instruction(and) = self.function.value(value).def
             && self.covered.contains_key(&and)
         {
-            let operands = self.function.instruction(and).operands.clone();
-            let (x, y) = (Loc::Held(self.held(operands[0], ty, at, out)?), Loc::Held(self.held(operands[1], ty, at, out)?));
+            let mut operands = self.function.instruction(and).operands.clone();
+            // The mask is the instruction's immediate: `test r, 1`, not a register made to hold it.
+            if matches!(operands[0], Operand::Constant(_)) {
+                operands.swap(0, 1);
+            }
+            let x = Loc::Held(self.held(operands[0], ty, at, out)?);
+            let y = if matches!(operands[1], Operand::Constant(_)) { self.source(operands[1], ty, at, out)? } else { Loc::Held(self.held(operands[1], ty, at, out)?) };
             out.push(insn(at, semantics(Operation::Compare, "test", vec![], vec![x, y])));
             return Ok(Test::One(condition_code(predicate)));
         }
