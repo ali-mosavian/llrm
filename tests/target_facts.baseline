@@ -58,8 +58,7 @@
 4 crates/opt/llrm-transforms/src/ports.rs
 1 crates/support/llrm-support/src/pyjson.rs
 1 crates/support/llrm-support/src/pyrepr.rs
-1 tools/bench/bench.py
-5 tools/bench/icount.py
+2 tools/bench/bench.py
 2 tools/bench/maps.py
 1 tools/callconv/bas.sh
 2 tools/callconv/c.sh

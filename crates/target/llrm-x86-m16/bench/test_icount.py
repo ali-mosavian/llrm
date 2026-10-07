@@ -1,4 +1,4 @@
-"""`uv run --project tools python -m unittest discover -s tools/bench`"""
+"""`uv run --project tools python -m unittest discover -s crates/target/llrm-x86-m16/bench -p "test_icount.py"`"""
 
 import os
 import sys
@@ -8,7 +8,9 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dosbatch"))
+REPO = Path(__file__).resolve().parents[4]
+sys.path.insert(0, str(REPO / "tools" / "dosbatch"))
+sys.path.insert(0, str(REPO / "tools" / "bench"))
 
 import maps  # noqa: E402
 import icount  # noqa: E402
