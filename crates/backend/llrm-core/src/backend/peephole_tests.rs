@@ -2934,7 +2934,7 @@ fn _high_extract_body(tail: Vec<Arc<Insn>>) -> LirBody {
     let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-4), 4) });
     // A reload carries the call memory of what it stands beside: here a call
     // that touches none.
-    let beside = crate::model::lir::CallMemory { effects: llrm_mir::memory::Effects::NONE, private: vec![] };
+    let beside = crate::model::lir::CallMemory { effects: llrm_mir::memory::Effects::NONE, private: vec![], disturbs: Default::default() };
     let load = Insn {
         symbol: Some(false),
         call: Some(Arc::new(beside)),

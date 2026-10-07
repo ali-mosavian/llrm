@@ -2899,8 +2899,8 @@ impl Selector<'_, '_, '_> {
 
     /// What a call may read and write: `effects`, and never the frame bytes
     /// no exposed alloca occupies.
-    fn listed(&self, effects: llrm_mir::memory::Effects) -> Arc<crate::model::lir::CallMemory> {
-        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone() })
+    fn listed(&self, effects: llrm_mir::memory::Effects, disturbs: BTreeSet<Register>) -> Arc<crate::model::lir::CallMemory> {
+        Arc::new(crate::model::lir::CallMemory { effects, private: self.private.clone(), disturbs })
     }
 
     /// A direct call: its arguments pushed as its convention orders them,
@@ -3233,6 +3233,11 @@ impl Selector<'_, '_, '_> {
             Ok::<_, Unselected>(names.iter().filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st")).map(|name| llrm_x86::calling::register(name)).map(|register| if register.is_gpr() { register.full_register32() } else { register }).collect::<BTreeSet<Register>>())
         });
         let changed = changed.transpose()?;
+        // What its convention says it disturbs, which a caller that keeps those for its own caller saves before it.
+        let disturbs: BTreeSet<Register> = changed.clone().unwrap_or_else(|| {
+            let named = self::entry(self.arch, convention, variadic).map(|entry| entry.clobbers(&[], None)).unwrap_or_default();
+            named.iter().filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st")).map(|name| llrm_x86::calling::register(name)).map(|register| if register.is_gpr() { register.full_register32() } else { register }).collect()
+        });
         let mut delivers = Vec::new();
         let mut result = None;
         let mut float = None;
@@ -3300,7 +3305,7 @@ impl Selector<'_, '_, '_> {
         let whole: BTreeSet<Register> = self.arch.callee_saved().into_iter().filter(|(full, pushed)| full == pushed).map(|(full, _)| crate::model::ir::root(full)).collect();
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {
-            call: Some(self.listed(effects)),
+            call: Some(self.listed(effects, disturbs)),
             clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments)),
             clobbers_high: match &placed {
                 // What the convention keeps only the pushed part of (a 16-bit push of a 32-bit register) loses its upper half.

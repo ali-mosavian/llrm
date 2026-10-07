@@ -326,10 +326,14 @@ fn sp_reg() -> Loc {
     reg(STACK)
 }
 
-/// The registers `procedure` keeps for its caller: each one it names that the convention leaves to the
-/// callee, by its low half.
+/// The registers `procedure` keeps for its caller: each one it names, or a call it makes disturbs by its
+/// convention, that this convention leaves to the callee, by its low half. A call to a routine whose
+/// convention disturbs more than this one's (cdecl's ECX and EDX under Watcom's) takes the caller's value.
 fn saved_of(procedure: &Procedure) -> Vec<Register> {
-    let roots = _roots(&procedure.body);
+    let mut roots = _roots(&procedure.body);
+    for one in procedure.body.insns() {
+        roots.extend(one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(ir::root)));
+    }
     // An interrupt handler has saved everything before its frame, and a runtime-built one has saved
     // SI and DI (B$ENRA/B$ENRD, restored by B$EXSA).
     let owned = procedure.interrupt.is_some() || procedure.entry != 0;
