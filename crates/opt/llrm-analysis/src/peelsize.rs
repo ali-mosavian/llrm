@@ -67,16 +67,27 @@ const MAX_PERCENT_THRESHOLD_BOOST: i64 = 400;
 pub struct Limits {
     /// LLVM's `-unroll-max-iteration-count-to-analyze` (10), where GCC's `max-completely-peel-times` is 16; 0 is unbounded.
     pub max_unroll_iterations: i64,
-    /// `--param max-completely-peeled-insns`; 0 is unbounded.
+    /// `--param max-completely-peeled-insns`; 0 is unbounded. Where `target_percent` is set, the target's own
+    /// (`OperationCosts::unroll_budget`) in that percent replaces it.
     pub max_unrolled_operations: i64,
+    /// What share of the target's `unroll_budget` the budget is, in percent: 100, and -O3's 200 (LLVM's 300 over 150).
+    /// 0: `max_unrolled_operations` as it stands.
+    pub target_percent: i64,
     pub grows: bool,
     /// Clocks an inline that grows the code must save for each byte it adds: `--clocks-per-byte`.
     pub milliclocks_per_byte: i64,
 }
 
+impl Limits {
+    /// These limits on a target whose description states `unroll_budget`.
+    pub fn on(&self, unroll_budget: i64) -> Self {
+        if self.target_percent > 0 && unroll_budget > 0 { Self { max_unrolled_operations: unroll_budget * self.target_percent / 100, ..self.clone() } } else { self.clone() }
+    }
+}
+
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_unroll_iterations: 10, max_unrolled_operations: 200, grows: true, milliclocks_per_byte: 16_000 }
+        Self { max_unroll_iterations: 10, max_unrolled_operations: 200, target_percent: 0, grows: true, milliclocks_per_byte: 16_000 }
     }
 }
 

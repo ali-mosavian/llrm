@@ -7,3 +7,4 @@ description = "llrm's ELF relocatable container: sections, symbols and relocatio
 
 [dependencies]
 llrm-object = { workspace = true }
+llrm-dwarf = { workspace = true }

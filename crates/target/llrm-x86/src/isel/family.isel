@@ -106,6 +106,16 @@ pattern wide_binary
   call wide_binary
 end
 
+pattern wide_load
+  match load.i64(p)
+  call wide_load(p)
+end
+
+pattern wide_store
+  match store(v.i64, p)
+  call wide_store(v, p)
+end
+
 pattern float_load
   match load.float(p)
   let c = cell(p)

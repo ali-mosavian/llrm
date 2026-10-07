@@ -81,7 +81,7 @@ pub fn _static_frame(body: &lir::LirBody, size: i64) -> lir::LirBody {
     let variables = body
         .variables
         .iter()
-        .map(|one| lir::DebugVariable { addr: if one.addr.space == Space::Frame { moved(&one.addr) } else { one.addr }, ..one.clone() })
+        .map(|one| lir::DebugVariable { place: match &one.place { lir::DebugPlace::At(addr) if addr.space == Space::Frame => lir::DebugPlace::At(moved(addr)), other => other.clone() }, ..one.clone() })
         .collect();
     // Through BP no longer: the data object's own address.
     let through = |register: Register| if matches!(register, Register::BP | Register::EBP) { Register::None } else { register };
@@ -175,7 +175,7 @@ pub fn _runtime_frame(
         let disp = if addr.disp > 0 { addr.disp } else { addr.disp - header };
         Addr { disp, ..*addr }
     };
-    let variables = body.variables.iter().map(|one| lir::DebugVariable { addr: moved(&one.addr), ..one.clone() }).collect();
+    let variables = body.variables.iter().map(|one| lir::DebugVariable { place: match &one.place { lir::DebugPlace::At(addr) => lir::DebugPlace::At(moved(addr)), other => other.clone() }, ..one.clone() }).collect();
     let operand = |r#where: &Loc| -> Loc {
         match r#where {
             Loc::Mem(mem) if mem.in_frame() => {
@@ -715,7 +715,10 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
     externs.sort();
     externs.dedup();
     let producer = if runtime == model::RuntimeProfile::Qb45 { llrm_object::debug::Producer::Qb45 } else { llrm_object::debug::Producer::Native };
-    let debug = timed("debug info", || debuginfo::described(module, &names, producer, &*options.arch))?;
+    let mut debug = timed("debug info", || debuginfo::described(module, &names, producer, &*options.arch))?;
+    if let Some(debug) = debug.as_mut() {
+        debug.format = options.debug_format;
+    }
     Ok(masm::Module {
         code: object.code.clone(),
         names,

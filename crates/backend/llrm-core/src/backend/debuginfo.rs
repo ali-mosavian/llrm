@@ -6,6 +6,7 @@ use llrm_mir::{debuginfo as di, MetadataId};
 use llrm_object::debug::{self as model, Info, Kind, Location, Variable};
 
 use crate::backend::objbuild::Segment;
+use crate::model::lir::DebugPlace;
 use crate::backend::{globals, masm};
 use crate::model::ir::Space;
 use crate::support::hash::IndexMap;
@@ -31,6 +32,8 @@ pub struct Global {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Debug {
+    pub format: model::Format,
+    pub language: model::Language,
     pub producer: model::Producer,
     pub frame_register: String,
     pub registers: Vec<model::Register>,
@@ -68,7 +71,7 @@ fn scalar(scalar: di::Scalar) -> model::Scalar {
 
 /// `one`, its targets and members already read into `nodes`; `near` the width of an offset.
 fn typed(one: &di::Type, nodes: &IndexMap<MetadataId, model::TypeId>, near: u8) -> Result<model::Type, String> {
-    let node = |id: MetadataId| nodes.get(&id).copied().ok_or_else(|| format!("debug type !{} listed after its use", id.0));
+    let node = |id: MetadataId| nodes.get(&id).copied().ok_or_else(|| format!("debug type !{} is not listed", id.0));
     let target = || one.target.map(node).ok_or_else(|| format!("a {} of nothing", one.kind.value()))?;
     Ok(match one.kind {
         di::Kind::Scalar => model::Type::Scalar(scalar(di::Scalar::from_value(&one.name).ok_or_else(|| format!("no debug scalar {}", one.name))?)),
@@ -84,7 +87,7 @@ fn typed(one: &di::Type, nodes: &IndexMap<MetadataId, model::TypeId>, near: u8) 
             model::Type::Pointer { target: target()?, bytes, reach }
         }
         di::Kind::Reference => model::Type::Reference(target()?),
-        di::Kind::Struct => {
+        di::Kind::Struct | di::Kind::Union => {
             let fields = one
                 .members
                 .iter()
@@ -93,7 +96,7 @@ fn typed(one: &di::Type, nodes: &IndexMap<MetadataId, model::TypeId>, near: u8) 
                     Ok(model::Field { name: member.name.clone(), r#type: node(member.r#type)?, offset: narrow(member.offset, "a field's offset")?, bits })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            model::Type::Struct { name: one.name.clone(), bytes: narrow(one.size, "a structure's size")?, fields }
+            model::Type::Struct { name: one.name.clone(), bytes: narrow(one.size, "a structure's size")?, fields, union: one.kind == di::Kind::Union }
         }
         di::Kind::Procedure => model::Type::Procedure {
             result: one.target.map(node).transpose()?,
@@ -113,11 +116,13 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
         return Ok(None);
     }
     let symbol = |name: &str| module.named(name).and_then(|id| names.get(&(globals::space(module, id), i64::from(id.0)))).cloned();
-    let (mut types, mut nodes) = (Vec::new(), IndexMap::default());
-    for id in di::types(module) {
+    // Every type has its place before any is read: a member may name one made after it.
+    let listed = di::types(module);
+    let nodes: IndexMap<MetadataId, model::TypeId> = listed.iter().enumerate().map(|(at, &id)| (id, at)).collect();
+    let mut types = Vec::new();
+    for &id in &listed {
         let one = di::read_type(module, id).ok_or_else(|| format!("debug type !{} does not read", id.0))?;
         types.push(typed(&one, &nodes, (near / 8) as u8)?);
-        nodes.insert(id, types.len() - 1);
     }
     let node = |id: MetadataId| nodes.get(&id).copied().ok_or_else(|| format!("debug type !{} unlisted", id.0));
     let mut procedures = IndexMap::default();
@@ -133,7 +138,13 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
     let file = llrm_target::registers::parse(&arch.registers_text())?;
     let frame_register = llrm_target::registers::of_class(&file, "frame").first().map(|one| (*one).to_owned()).ok_or("the target's register file has no frame register")?;
     let registers = file.into_iter().map(|one| model::Register { name: one.name, bits: one.bits, dwarf: one.dwarf, codeview: one.codeview }).collect();
-    Ok(Some(Debug { producer, frame_register, registers, types, nodes, procedures, globals: out }))
+    let language = match di::language(module) {
+        Some(di::Language::C) => model::Language::C,
+        Some(di::Language::Basic) => model::Language::Basic,
+        Some(di::Language::Nib) => model::Language::Nib,
+        None => model::Language::Unknown,
+    };
+    Ok(Some(Debug { format: model::Format::Default, language, producer, frame_register, registers, types, nodes, procedures, globals: out }))
 }
 
 /// `module`'s debug information for the object `source`, its code laid out in `segments` (the
@@ -146,7 +157,7 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
     let variable = |name: &str, r#type: model::TypeId, kind: Kind, symbol: &str, disp: i64| Variable { name: name.to_owned(), r#type, kind, location: Location::Static { symbol: ids[symbol], disp } };
     let mut starts: Vec<usize> = module.procedures.iter().filter_map(|one| symbols.get(&one.name).map(|&(_, at)| at)).collect();
     starts.sort_unstable();
-    let mut info = Info { producer: debug.producer, frame_register: debug.frame_register.clone(), registers: debug.registers.clone(), files: vec![model::File { name: source.to_owned(), checksum: None }], types: debug.types.clone(), ..Info::default() };
+    let mut info = Info { format: debug.format, language: debug.language, producer: debug.producer, frame_register: debug.frame_register.clone(), registers: debug.registers.clone(), files: vec![model::File { name: source.to_owned(), checksum: None }], types: debug.types.clone(), ..Info::default() };
     info.globals = debug.globals.iter().filter(|one| one.scope.is_none() && defined(&one.symbol)).map(|one| variable(&one.name, one.r#type, Kind::Local, &one.symbol, one.displacement)).collect();
     for procedure in &module.procedures {
         let (Some(described), Some(&(_, start))) = (debug.procedures.get(&procedure.name), symbols.get(&procedure.name)) else { continue };
@@ -158,20 +169,36 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
             .filter(|one| one.scope.as_ref() == Some(&procedure.name) && defined(&one.symbol))
             .map(|one| variable(&one.name, one.r#type, Kind::Local, &one.symbol, one.displacement))
             .collect();
-        for one in &procedure.body.variables {
-            let r#type = type_of(one.r#type)?;
-            let kind = if one.parameter { Kind::Parameter } else { Kind::Local };
-            match one.addr.space {
-                Space::Frame => variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::Frame { disp: one.addr.disp } }),
-                space => {
-                    let Some(symbol) = module.names.get(&(space, one.addr.index)).filter(|one| defined(one)) else { continue };
-                    variables.push(variable(&one.name, r#type, kind, symbol, one.addr.disp));
-                }
-            }
-        }
         // A body starts before its end, and ends after its start.
         let bound = |mark: masm::Mark, within: std::ops::Range<usize>| code.bodies.iter().find(|&&(one, at)| one == mark && within.contains(&at)).map(|&(_, at)| at - start);
         let body = (bound(masm::Mark::BodyStart, start..end).unwrap_or(0), bound(masm::Mark::BodyEnd, start + 1..end + 1).unwrap_or(end - start));
+        for one in &procedure.body.variables {
+            let r#type = type_of(one.r#type)?;
+            let kind = if one.parameter { Kind::Parameter } else { Kind::Local };
+            let addr = match &one.place {
+                DebugPlace::At(addr) => addr,
+                // A parameter that arrives in a register is there until the body starts, and no longer said:
+                // the register is the allocator's from then on. The range takes in the body's first instruction.
+                DebugPlace::Register(register) => {
+                    let entry = model::Range { section: 0, offset: start, length: body.0 + 1 };
+                    let location = Location::List(vec![(entry, Location::Register(format!("{register:?}").to_lowercase()))]);
+                    variables.push(Variable { name: one.name.clone(), r#type, kind, location });
+                    continue;
+                }
+                // The optimiser removed it: no location anywhere is "optimized out".
+                DebugPlace::Gone => {
+                    variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::List(Vec::new()) });
+                    continue;
+                }
+            };
+            match addr.space {
+                Space::Frame => variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::Frame { disp: addr.disp } }),
+                space => {
+                    let Some(symbol) = module.names.get(&(space, addr.index)).filter(|one| defined(one)) else { continue };
+                    variables.push(variable(&one.name, r#type, kind, symbol, addr.disp));
+                }
+            }
+        }
         info.functions.push(model::Function {
             name: described.name.clone(),
             symbol: ids[&procedure.name],

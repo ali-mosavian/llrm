@@ -96,6 +96,10 @@ pub struct Convention {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Calling {
     pub conventions: Vec<Convention>,
+    /// The ABI families a program may ask for with `-mabi=`: each names the convention an unmarked function has under it.
+    pub abis: BTreeMap<String, String>,
+    /// The family a program gets without the switch.
+    pub default: String,
 }
 
 const KEYS: &[&str] = &[
@@ -139,7 +143,13 @@ impl Calling {
         let table: toml::Table = text.parse().map_err(|error: toml::de::Error| error.to_string())?;
         let mut conventions = Vec::new();
         let mut stated: Vec<(&String, toml::Table)> = Vec::new();
-        for (name, value) in &table {
+        let default = table.get("default").and_then(toml::Value::as_str).ok_or("calling.toml: `default` names the ABI a program has without -mabi=")?.to_owned();
+        let mut abis = BTreeMap::new();
+        for (family, one) in table.get("abi").and_then(toml::Value::as_table).ok_or("calling.toml: no [abi.<family>]")? {
+            let convention = one.as_table().and_then(|one| one.get("convention")).and_then(toml::Value::as_str).ok_or_else(|| format!("calling.toml: abi.{family}.convention is not a name"))?;
+            abis.insert(family.clone(), convention.to_owned());
+        }
+        for (name, value) in table.iter().filter(|(name, _)| !matches!(name.as_str(), "default" | "abi")) {
             let mut one = value.as_table().ok_or_else(|| format!("calling.toml: {name} is not a table"))?.clone();
             // `like = "other"`: everything `other` states that this does not.
             if let Some(like) = one.remove("like") {
@@ -156,12 +166,25 @@ impl Calling {
         if conventions.is_empty() {
             return Err("calling.toml: no convention".to_owned());
         }
-        Ok(Self { conventions })
+        let calling = Self { conventions, abis, default };
+        for (family, convention) in &calling.abis {
+            calling.named(convention).ok_or_else(|| format!("calling.toml: abi.{family} is the convention {convention}, which is not given"))?;
+        }
+        calling.chosen(None)?;
+        Ok(calling)
     }
 
-    /// The convention a language's own functions use: the file's first.
+    /// The convention an unmarked function has: the default ABI's.
     pub fn native(&self) -> &Convention {
-        &self.conventions[0]
+        self.chosen(None).expect("parse checked the default")
+    }
+
+    /// The convention an unmarked function has under `-mabi=family`, or the default's without one; a family this target
+    /// has not is refused, saying which it has.
+    pub fn chosen(&self, family: Option<&str>) -> Result<&Convention, String> {
+        let family = family.unwrap_or(&self.default);
+        let found = self.abis.get(family).and_then(|name| self.named(name));
+        found.ok_or_else(|| format!("no ABI \"{family}\": this target has {}", self.abis.keys().map(String::as_str).collect::<Vec<_>>().join(", ")))
     }
 
     /// The names, in file order.
@@ -431,7 +454,7 @@ fn names_as_integers(value: Option<&toml::Value>, at: &str) -> Result<Vec<i64>, 
 mod tests {
     use super::*;
 
-    const ONE: &str = "[c]\nslot_bytes = 2\norder = \"left-to-right\"\ncleanup = \"callee\"\nargument_registers = []\nreturn_address_bytes = 2\nfirst_argument_offset = 4\nfirst_argument_offset_far = 6\nframe = \"bp\"\nstack = \"sp\"\npreserved = [\"bp\", [\"esi\", \"si\"]]\nclobbered = [\"ax\"]\nentry_state = []\npromotion = \"slot\"\nwide_slots = 2\nvariadic_float = \"double\"\n[c.result]\n1 = [\"eax\"]\n4 = [\"eax\", \"edx\"]\n";
+    const ONE: &str = "default = \"c\"\n[abi.c]\nconvention = \"c\"\n[c]\nslot_bytes = 2\norder = \"left-to-right\"\ncleanup = \"callee\"\nargument_registers = []\nreturn_address_bytes = 2\nfirst_argument_offset = 4\nfirst_argument_offset_far = 6\nframe = \"bp\"\nstack = \"sp\"\npreserved = [\"bp\", [\"esi\", \"si\"]]\nclobbered = [\"ax\"]\nentry_state = []\npromotion = \"slot\"\nwide_slots = 2\nvariadic_float = \"double\"\n[c.result]\n1 = [\"eax\"]\n4 = [\"eax\", \"edx\"]\n";
 
     #[test]
     fn a_convention_names_its_frame_its_kept_registers_and_its_results() {
@@ -465,7 +488,7 @@ mod tests {
     }
 
     /// Open Watcom's flat register convention, as `wcc386 -3r` emits it (read from its disassembly).
-    const WATCALL: &str = "[w]\nslot_bytes = 4\norder = \"right-to-left\"\ncleanup = \"callee\"\nargument_registers = [\"eax\", \"edx\", \"ebx\", \"ecx\"]\nwide_pairs = [[\"eax\", \"edx\"], [\"ebx\", \"ecx\"]]\nbackfill = true\narguments_clobbered = true\nresults_clobbered = true\nreturn_address_bytes = 4\nfirst_argument_offset = 8\nframe = \"ebp\"\nstack = \"esp\"\npreserved = [\"ebx\", \"ecx\", \"edx\", \"esi\", \"edi\", \"ebp\"]\nclobbered = [\"eax\", \"flags\"]\nentry_state = []\npromotion = \"slot\"\nwide_slots = 2\nvariadic_float = \"double\"\n[w.result]\n4 = [\"eax\"]\n8 = [\"eax\", \"edx\"]\n";
+    const WATCALL: &str = "default = \"w\"\n[abi.w]\nconvention = \"w\"\n[w]\nslot_bytes = 4\norder = \"right-to-left\"\ncleanup = \"callee\"\nargument_registers = [\"eax\", \"edx\", \"ebx\", \"ecx\"]\nwide_pairs = [[\"eax\", \"edx\"], [\"ebx\", \"ecx\"]]\nbackfill = true\narguments_clobbered = true\nresults_clobbered = true\nreturn_address_bytes = 4\nfirst_argument_offset = 8\nframe = \"ebp\"\nstack = \"esp\"\npreserved = [\"ebx\", \"ecx\", \"edx\", \"esi\", \"edi\", \"ebp\"]\nclobbered = [\"eax\", \"flags\"]\nentry_state = []\npromotion = \"slot\"\nwide_slots = 2\nvariadic_float = \"double\"\n[w.result]\n4 = [\"eax\"]\n8 = [\"eax\", \"edx\"]\n";
 
     fn registers(names: &[&str]) -> Place {
         Place::Registers(names.iter().map(|one| (*one).to_owned()).collect())
@@ -523,6 +546,17 @@ mod tests {
         assert_eq!(calling.named("c").unwrap().decorated("macho", "f").as_deref(), Some("_f"));
         assert_eq!((calling.redecorated("*_", "elf").as_deref(), calling.redecorated("_*", "elf").as_deref(), calling.redecorated("_*", "macho").as_deref()), (Some("*"), Some("*"), Some("_*")));
         assert_eq!((calling.redecorated("^", "elf"), calling.redecorated("*_", "coff")), (None, None));
+    }
+
+    /// The default ABI is the file's `default`, not its first entry: a second family is chosen by name, and one the target has not is
+    /// refused with the ones it has.
+    #[test]
+    fn an_abi_family_names_the_convention_an_unmarked_function_has() {
+        let text = format!("{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\n").replace("default = \"w\"\n[abi.w]\nconvention = \"w\"\n", "default = \"stack\"\n[abi.reg]\nconvention = \"w\"\n[abi.stack]\nconvention = \"c\"\n");
+        let calling = Calling::parse(&text).unwrap();
+        assert_eq!((calling.native().name.as_str(), calling.chosen(Some("reg")).unwrap().name.as_str()), ("c", "w"));
+        assert_eq!(calling.chosen(Some("gcc")).unwrap_err(), "no ABI \"gcc\": this target has reg, stack");
+        assert!(Calling::parse(&text.replace("default = \"stack\"", "default = \"nowhere\"")).unwrap_err().contains("no ABI \"nowhere\""));
     }
 
     #[test]
