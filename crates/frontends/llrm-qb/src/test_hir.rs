@@ -61,6 +61,13 @@ pub(super) fn listing(program: &Program) -> String {
     masm::text(&assembled(program).expect("assembles")).expect("prints")
 }
 
+/// `listing` where no function is inlined into its one caller: a test that reads the callee (a handler).
+pub(super) fn listing_calls_kept(program: &Program) -> String {
+    let mut options = codegen();
+    options.pipeline.inline = llrm_transforms::inline::Threshold::none();
+    masm::text(&qb_compile::assembled(program, None, &options).expect("assembles")).expect("prints")
+}
+
 /// The module's MIR as the front end emits it, as text.
 pub(super) fn emitted_mir(program: &Program) -> String {
     let options = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());

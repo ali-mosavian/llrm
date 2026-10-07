@@ -820,7 +820,7 @@ fn test_resume_next_retains_runtime_statement_entries() {
     let main = &source.modules[0].functions[0];
     assert!(!main.external_entries.is_empty());
 
-    let listing = listing(&source);
+    let listing = listing_calls_kept(&source);
     let body = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
     // RESUME NEXT returns to the statement after ERROR 11.
     let lines: Vec<&str> = body.lines().collect();

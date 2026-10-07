@@ -1,13 +1,13 @@
-reason = "x87: a constant nothing reads is not loaded and popped (nbody c -48 B, fpbench c -66 B)"
+reason = "x87: a value that stays is copied with fld st(i) for a memory operand, not exchanged up first (nbody_single -10%, fpbench -10%)"
 blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 19653
+instructions = 19253
 memory_operands = 5241
-code_bytes = 2503
+code_bytes = 2495
 data_bytes = 67
 bss_bytes = 0
-kernel_ms = 0.2731
+kernel_ms = 0.2678
 
 [bas.Os]
 instructions = 21763
@@ -18,12 +18,12 @@ bss_bytes = 0
 kernel_ms = 0.3015
 
 [c.O2]
-instructions = 18927
+instructions = 16927
 memory_operands = 3021
-code_bytes = 1152
+code_bytes = 1112
 data_bytes = 52
 bss_bytes = 0
-kernel_ms = 0.2532
+kernel_ms = 0.2265
 
 [c.Os]
 instructions = 20007
@@ -34,12 +34,12 @@ bss_bytes = 0
 kernel_ms = 0.2676
 
 [nib.O2]
-instructions = 17721
+instructions = 17321
 memory_operands = 4205
-code_bytes = 905
+code_bytes = 897
 data_bytes = 60
 bss_bytes = 0
-kernel_ms = 0.2375
+kernel_ms = 0.2321
 
 [nib.Os]
 instructions = 20174

@@ -114,7 +114,8 @@ plain_enums!(
     Op,
     TerminatorKind,
     DebugKind,
-    DebugReach
+    DebugReach,
+    DebugLanguage
 );
 
 macro_rules! plain_record {
@@ -155,11 +156,35 @@ impl _Plain for model::DebugMember {
     }
 }
 plain_record!(DebugParameter, None, argument => "argument", name => "name", r#type => "type");
-plain_record!(DebugVariable, None, place => "place", name => "name", r#type => "type");
+// `parameter` only where true: every other variable writes as before.
+impl _Plain for model::DebugVariable {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("place".to_owned(), self.place._plain());
+        out.insert("name".to_owned(), self.name._plain());
+        out.insert("type".to_owned(), self.r#type._plain());
+        if self.parameter {
+            out.insert("parameter".to_owned(), self.parameter._plain());
+        }
+        Json::Dict(out)
+    }
+}
 plain_record!(DebugFunction, None, function => "function", module => "module", name => "name", r#type => "type", parameters => "parameters",
     variables => "variables");
 plain_record!(DebugGlobal, None, function => "function", object => "object", offset => "offset", name => "name", r#type => "type");
-plain_record!(Debug, None, types => "types", functions => "functions", globals => "globals");
+// `language` only where the frontend says, so a module without one writes as before.
+impl _Plain for model::Debug {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        if self.language.is_some() {
+            out.insert("language".to_owned(), self.language._plain());
+        }
+        out.insert("types".to_owned(), self.types._plain());
+        out.insert("functions".to_owned(), self.functions._plain());
+        out.insert("globals".to_owned(), self.globals._plain());
+        Json::Dict(out)
+    }
+}
 plain_record!(ValueRef, Some("value"), value => "value");
 plain_record!(Constant, Some("constant"), r#type => "type", value => "value");
 plain_record!(PlaceRef, Some("place"), place => "place");
@@ -780,7 +805,8 @@ made_enums!(
     Op,
     TerminatorKind,
     DebugKind,
-    DebugReach
+    DebugReach,
+    DebugLanguage
 );
 
 macro_rules! made_records {
@@ -1387,8 +1413,10 @@ static DEBUG_PARAMETER: _Record = _Record {
 
 static DEBUG_VARIABLE: _Record = _Record {
     name: "DebugVariable",
-    fields: &[("place", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true)],
-    build: |args| _object(model::DebugVariable { place: _required(args, "place")?, name: _required(args, "name")?, r#type: _required(args, "type")? }),
+    fields: &[("place", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true), ("parameter", _Hint::Bool, false)],
+    build: |args| {
+        _object(model::DebugVariable { place: _required(args, "place")?, name: _required(args, "name")?, r#type: _required(args, "type")?, parameter: _default(args, "parameter", false)? })
+    },
 };
 
 static DEBUG_FUNCTION: _Record = _Record {
@@ -1430,11 +1458,14 @@ static DEBUG_GLOBAL: _Record = _Record {
 static DEBUG: _Record = _Record {
     name: "Debug",
     fields: &[
+        ("language", _Hint::Union(&[enum_hint!(DebugLanguage), _Hint::NoneType]), false),
         ("types", _Hint::Tuple(&_Hint::Record(&DEBUG_TYPE)), true),
         ("functions", _Hint::Tuple(&_Hint::Record(&DEBUG_FUNCTION)), true),
         ("globals", _Hint::Tuple(&_Hint::Record(&DEBUG_GLOBAL)), true),
     ],
-    build: |args| _object(model::Debug { types: _required(args, "types")?, functions: _required(args, "functions")?, globals: _required(args, "globals")? }),
+    build: |args| {
+        _object(model::Debug { language: _default(args, "language", None)?, types: _required(args, "types")?, functions: _required(args, "functions")?, globals: _required(args, "globals")? })
+    },
 };
 
 static STATED_FACT: _Record = _Record {

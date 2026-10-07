@@ -37,7 +37,7 @@ A target crate ships, and generic code reads:
 
 | File | Format | Says |
 |---|---|---|
-| registers | line table | registers, subregisters, classes, kind letters (`r` is gpr, `s` is x87), allocation order, reserved |
+| registers | line table | registers, subregisters, classes, kind letters (`r` is gpr, `s` is x87), allocation order, reserved, DWARF and CodeView register numbers |
 | forms | line table (`x86.instr`) | operands, widths, ties, fixed registers, flags read and written, cost key, opaque `encoding` |
 | patterns, peephole | `patterns.isel`, `peephole.peep` | MIR shape to forms; form windows to forms |
 | timings | `timings.times`: a column per CPU, scalars and `[clocks]`/`[latency]` tables | clocks, latencies, issue and prefix costs; read by `llrm-target` |
@@ -141,6 +141,10 @@ callee pops. A callee keeps every register but EAX, those its arguments arrive i
 for a struct result and EDX for an i64 one. A struct larger than a dword is written
 through the address in ESI, which comes back in EAX; one of 1, 2 or 4 bytes is a
 register argument and result. Symbols are `name_`. Variadic functions take the stack.
+`-mabi=sysv` makes the i386 System V ABI the default instead, as gcc -m32 has it on Linux: arguments on the stack, the
+caller removes them, every struct result, of any size, through a pointer that is the first argument, which the callee pops
+(`ret 4`) and returns in EAX; `__cdecl` is the same convention then. `-mabi=` takes the families `calling.toml`'s `[abi.*]` names;
+a target's own default applies without it, and a function that names a convention keeps it.
 `cdecl32` is the stack convention (`__cdecl`, `@extern("cdecl32")`): arguments pushed
 right to left in dword slots, the caller removes them, symbols `_name`, EBX, ESI, EDI and
 EBP preserved. The OS layer (`_llrm_os_*`) and `main` are cdecl32: the layer's assembly

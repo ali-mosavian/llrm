@@ -415,12 +415,8 @@ fn built_inner(module: &masm::Module, source: &str, layout: CodeLayout) -> Resul
     for (index, group) in groups.iter().enumerate() {
         _code(&mut segments[index], index, module, group, &mut symbols)?;
     }
-    if let Some(debug) = &module.debug {
-        if groups.len() != 1 {
-            return Err(Unencodable("-g with a code segment per procedure".into()).into());
-        }
-        let described = super::codeview::segments(debug, module, source, &segments[0], &symbols).map_err(Unencodable)?;
-        segments.extend(described);
+    if module.debug.is_some() && groups.len() != 1 {
+        return Err(Unencodable("-g with a code segment per procedure".into()).into());
     }
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     object_of(module, source, segments, &symbols, &externs)
@@ -782,9 +778,10 @@ pub fn object_of(
     table.extend(order.iter().map(|name| Symbol { name: (*name).clone(), binding: Binding::Public, definition: Definition::Undefined, group: (externs[*name] == "byte").then_some(0) }));
     let index: IndexMap<String, usize> = table.iter().enumerate().map(|(at, symbol)| (symbol.name.clone(), at)).collect();
 
+    let debug = module.debug.as_ref().map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, &index)).transpose().map_err(Unencodable)?;
     let mut sections = Vec::new();
     for segment in segments {
-        let Segment { name, role, near, mut image, spans, fixups, lines, align, .. } = segment;
+        let Segment { name, role, near, mut image, spans, fixups, align, .. } = segment;
         let mut relocs = Vec::new();
         for one in &fixups {
             let target = _target(&one.name);
@@ -797,8 +794,7 @@ pub fn object_of(
                 pack_field(&mut image, one.at, one.kind, 0);
             }
         }
-        let lines = if module.debug.is_some() { lines } else { Vec::new() };
-        sections.push(Section { name, role, near, align, image, spans, relocs, lines });
+        sections.push(Section { name, role, near, align, image, spans, relocs });
     }
     Ok(Object {
         name: source.to_owned(),
@@ -806,7 +802,7 @@ pub fn object_of(
         sections,
         symbols: table,
         omf_groups,
-        debug: module.debug.as_ref().map(|_| llrm_object::DebugFormat::CodeView),
+        debug,
     })
 }
 

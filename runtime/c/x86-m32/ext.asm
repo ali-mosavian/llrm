@@ -125,4 +125,30 @@ keep32_ proc
     ret
 keep32_ endp
 
+; The same routines for a program in the stack convention (-mabi=sysv): arguments on the stack, which the caller removes.
+public _report
+_report proc
+    mov eax, dword ptr [esp+4]
+    jmp report_
+_report endp
+
+public _input_read
+_input_read proc
+    mov eax, dword ptr [esp+4]
+    mov edx, dword ptr [esp+8]
+    jmp input_read_
+_input_read endp
+
+public _keep
+_keep proc
+    mov eax, dword ptr [esp+4]
+    ret
+_keep endp
+
+public _keep32
+_keep32 proc
+    mov eax, dword ptr [esp+4]
+    ret
+_keep32 endp
+
 end

@@ -656,3 +656,29 @@ fn a_pass_derives_the_shape_of_its_body_once_however_many_loops_it_has() {
     let derived = llrm_analysis::cfg::shapes_derived() - before;
     assert!(derived <= 8, "{derived} shapes derived for one pass over a body of {loops} loops");
 }
+
+/// Gvn priced the loops from trip counts it proved for itself, which `Annotated` had proved already for the same body: 20
+/// sequential loops were proved 60 times, 20 now. The counts are the manager's, proved once.
+#[test]
+fn a_pass_takes_the_trip_counts_the_manager_proved() {
+    // The check proves them again to compare, and is counted.
+    if std::env::var_os("LLRM_CHECK_COUNTED").is_some() {
+        return;
+    }
+    let loops = 20;
+    let mut text = String::from("@y = global i16 0\n\ndefine i16 @f(i16 %n) {\nb0:\n  br label %h0\n\n");
+    for at in 0..loops {
+        let next = if at + 1 == loops { "end".to_owned() } else { format!("h{}", at + 1) };
+        let from = if at == 0 { "b0".to_owned() } else { format!("h{}", at - 1) };
+        text += &format!("h{at}:\n  %i{at} = phi i16 [ 0, %{from} ], [ %n{at}, %l{at} ]\n  %c{at} = icmp slt i16 %i{at}, 9\n  br i1 %c{at}, label %l{at}, label %{next}\n\nl{at}:\n  %v{at} = load i16, ptr @y\n  store i16 %i{at}, ptr @y\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n");
+    }
+    text += "end:\n  ret i16 %n\n}\n";
+    let mut module = parsed(&text);
+    let before = llrm_analysis::induction::proved();
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(Gvn::default());
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 4, ..Default::default() })).unwrap();
+    let proved = llrm_analysis::induction::proved() - before;
+    assert!(proved <= loops, "{proved} loops proved for one pass over a body of {loops} loops");
+}

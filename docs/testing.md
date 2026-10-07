@@ -44,6 +44,12 @@ output), 70 s when it compiles them; each run has 30 s (`QCPORT_RUN_SECONDS`).
     QCPORT=~/scratch/qcport/src QCPORT_INC=~/scratch/qctc/inc QCPORT_BORLAND=~/scratch/qcbcc \
         JWLINK=~/scratch/pr-jwlink/GccUnixR/jwlink tools/qcport-run.py
 
+## Debug information
+
+`tests/dwarf.rs` and `crates/target/llrm-dwarf` run llvm-dwarfdump, gdb, ld and as over the DWARF llrm
+writes. A test whose tool is missing prints `SKIPPED: why` and passes; with `LLRM_REQUIRE_DWARF=1` it
+fails instead. A gate that has the tools sets it: `. tools/debug-gate.env`.
+
 ## The loop corpus
 
 `tools/loops` judges loop code: every case is one loop program in a neutral

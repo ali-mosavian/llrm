@@ -173,7 +173,7 @@ pub(crate) fn level(name: &str) -> Options {
 /// one call reaches it (tuned for size the last call of a private function is inlined).
 fn os_calls_kept() -> Options {
     let mut options = level("Os");
-    options.pipeline.inline = llrm_transforms::inline::Threshold::new(0);
+    options.pipeline.inline = llrm_transforms::inline::Threshold::none();
     options
 }
 
@@ -195,6 +195,15 @@ fn optimized_mir(program: &model::Program, options: &Options) -> String {
 #[allow(non_snake_case)]
 pub(crate) fn O2() -> Options {
     level("O2")
+}
+
+/// -O2 where the function under test stays a function: the last call of a private function is inlined, and
+/// these tests read the callee.
+#[allow(non_snake_case)]
+pub(crate) fn O2_calls_kept() -> Options {
+    let mut options = level("O2");
+    options.pipeline.inline = llrm_transforms::inline::Threshold::none();
+    options
 }
 
 /// `program` compiled to an object.
@@ -471,7 +480,7 @@ fn test_nbody_position_loop_uses_one_end_relative_byte_offset() {
 
 #[test]
 fn test_nbody_velocity_fields_are_stored_once_per_update() {
-    let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &O2());
+    let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &O2_calls_kept());
     let function = between(&assembly, "_nbody proc near", "_nbody endp");
     // The only stores through a body's index are its velocity's two fields.
     let stored: Vec<String> = Regex::new(r"mov dword ptr (\[bp\+[sd]i[-+]\d+\]), e(?:ax|bx|cx|dx|si|di)\n")
@@ -626,7 +635,7 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     assert_eq!(pointer_type.width, 4);
     assert_eq!(pointer_type.address, model::AddressKind::Far);
 
-    let assembly = listing_on(&program, "main", &O2(), "486");
+    let assembly = listing_on(&program, "main", &O2_calls_kept(), "486");
     let bump = between(&assembly, "_bump proc near", "_bump endp");
     let main = between(&assembly, "_main proc far", "_main endp");
     // The payload's address is the view's pointer, the view's address the argument.
@@ -637,7 +646,7 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     // `bump` is internal and called directly: it pops its own view, a stack pointer of one word, `ret 2`.
     assert!(!main.contains("add sp, 2") && bump.contains("ret 2"), "{main}{bump}");
     assert!(bump.contains("es:["));
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(!object_of(&program, "main", &source, &O2_calls_kept(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
 }
 
 #[test]
@@ -657,7 +666,7 @@ fn test_borrow_rules_reject_shared_mutation_and_aliasing_mutable_arguments() {
 #[test]
 fn test_readonly_array_borrow_keeps_payload_initialization_visible_to_callee() {
     // sum returned stack garbage after DSE erased every payload store before its read-only call.
-    let assembly = listing_on(&parsed(&fixture("sum.nib")), "main", &O2(), "486");
+    let assembly = listing_on(&parsed(&fixture("sum.nib")), "main", &O2_calls_kept(), "486");
     let main = between(&assembly, "_main proc far", "_main endp");
 
     assert!(main.contains("call _sum"), "premise: the call stays\n{main}");
@@ -698,7 +707,7 @@ fn test_array_parameter_is_one_unsized_view_pointer() {
 #[test]
 fn test_runtime_bounded_array_loop_advances_its_payload_address() {
     // sum rebuilt `payload + index * 2` on every trip despite its invariant runtime bound.
-    let assembly = listing_on(&parsed(&fixture("sum.nib")), "main", &O2(), "486");
+    let assembly = listing_on(&parsed(&fixture("sum.nib")), "main", &O2_calls_kept(), "486");
     let function = between(&assembly, "_sum proc near", "_sum endp");
     let hot = closed_on_jne(function).unwrap_or_else(|| panic!("no loop closes on jne:\n{function}"));
 
@@ -713,7 +722,7 @@ fn test_three_array_initializer_keeps_the_fixed_frame_address_component() {
     // sum_three wrote locals through EAX+SI after a secondary-base rewrite lost BP.
     // The call kept: inlined, the sums fold to 1110 and no element is stored.
     let mut kept = O2();
-    kept.pipeline.inline = llrm_transforms::inline::Threshold::new(0);
+    kept.pipeline.inline = llrm_transforms::inline::Threshold::none();
     let assembly = listing(&parsed(&fixture("sum_three.nib")), "main", &kept);
     let main = between(&assembly, "_main proc far", "call _sum_three");
     let stored: BTreeSet<i64> = Regex::new(r"mov word ptr \[bp-\d+\], (\d+)\n")
@@ -1049,7 +1058,7 @@ fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
 
 /// `_sum_three proc near` .. `endp` for the 486.
 fn sum_three_on_486() -> String {
-    let assembly = listing_on(&parsed(&fixture("sum_three.nib")), "main", &O2(), "486");
+    let assembly = listing_on(&parsed(&fixture("sum_three.nib")), "main", &O2_calls_kept(), "486");
     between(&assembly, "_sum_three proc near", "_sum_three endp").to_owned()
 }
 
@@ -1094,7 +1103,7 @@ fn main() -> i16:
 fn column_loop() -> String {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "column.nib", COLUMN);
-    let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
+    let assembly = listing_on(&parsed(&source), "main", &O2_calls_kept(), "486");
     let function = between(&assembly, "_column proc near", "_column endp");
     closed_on_jne(function).unwrap_or_else(|| panic!("no loop closes on jne:\n{function}"))
 }
@@ -2056,7 +2065,7 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
         between(&body[..end], &format!("{head}:\n"), "\0").matches("ptr").count()
     };
     // Unrolled, the 4-trip loop is gone and there is nothing to count.
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), unroll: false, peel: false, ..Default::default() };
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), unroll: false, peel: false, ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
     let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
     assert_eq!(looped(&masm::text(&module).expect("prints")), 1);
@@ -2090,7 +2099,7 @@ fn test_mir_infers_what_a_nib_function_touches() {
             function.linkage = llrm_core::hir::model::FunctionLinkage::External;
         }
     }
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
@@ -2112,7 +2121,7 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
     let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    return 0\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "trip.nib", source));
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
     let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
@@ -2226,7 +2235,7 @@ fn main() -> i16:
     let mut program = parsed(&written(&directory, "views.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
     program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
@@ -2515,4 +2524,18 @@ fn test_a_near_call_reaches_a_procedure_in_another_code_segment_of_the_object() 
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "near.nib", RECURSIVE);
     object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::PerProcedure).expect("writes");
+}
+
+/// A library cut to what an object names (`--used-by`) is still a library when the cut leaves it no export: the runtime of a
+/// program that calls none of its routines. It was an error, "entry function 'main' does not exist", and tools/dosbatch could
+/// not link the program (#747).
+#[test]
+fn test_a_library_cut_to_nothing_assembles_without_an_entry() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "lib.nib", "@export(\"cdecl16\")\nfn twice(x: i16) -> i16:\n    return x + x\n");
+    let mut program = parsed(&source);
+    nib_compile::keep_exports(&mut program, &std::collections::BTreeSet::new());
+    let module = nib_compile::assembled_library(&program, &level("O2"), &crate::real_mode().os).unwrap_or_else(|error| panic!("{error}"));
+    assert!(module.publics.is_empty(), "{:?}", module.publics);
+    assert!(nib_compile::assembled(&program, "main", &level("O2"), &crate::real_mode().os).is_err(), "a program with no entry is still refused");
 }

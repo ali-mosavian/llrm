@@ -1,3 +1,9 @@
+# The ABI a program has without -mabi=, and, for each ABI, the convention an unmarked function has under it.
+default = "cdecl"
+
+[abi.cdecl]
+convention = "cdecl16"
+
 # cdecl16, m16's C ABI: Borland's medium model as `wccq` is asked for it (-mm -ecc; `_name`
 # symbols). A far call (a procedure that is exported) leaves a 4-byte return address.
 
@@ -26,6 +32,13 @@ entry_state = ["df_clear", "x87_empty"]
 promotion = "slot"
 wide_slots = 2
 variadic_float = "double"
+# Borland's struct return: a struct of 1, 2 or 4 bytes in AL, AX or DX:AX; any other is written to caller memory through a far
+# pointer pushed after every argument, which comes back in DX:AX.
+aggregate = "hidden-pointer"
+aggregate_in_register_bytes = [1, 2, 4]
+aggregate_pointer = "after-arguments"
+aggregate_pointer_returned = "eax"
+aggregate_pointer_popped_by = "caller"
 
 # By the bytes a result takes: a byte or word in AX, a dword in DX:AX, an i64 in EDX:EAX; the
 # registers are named by their dword, as the selector holds them. Floats in st(0).

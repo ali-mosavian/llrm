@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use llrm_core::hir::debug::Builder;
-use llrm_core::hir::model::{Debug, DebugReach, DebugScalar};
+use llrm_core::hir::model::{Debug, DebugKind, DebugReach, DebugScalar};
 
 use super::hir::{self, DebugType};
 use super::raise_hir::{signed, widths};
@@ -21,7 +21,7 @@ pub struct Described<'u> {
 impl<'u> Described<'u> {
     /// None unless the unit was compiled with -d2.
     pub fn of(unit: &'u hir::Unit) -> Option<Self> {
-        Some(Self { unit, debug: unit.debug.as_ref()?, builder: Builder::default(), made: HashMap::new() })
+        Some(Self { unit, debug: unit.debug.as_ref()?, builder: Builder::for_language(llrm_core::hir::model::DebugLanguage::C), made: HashMap::new() })
     }
 
     /// A pointer's reach, as the memory model makes a default one.
@@ -80,8 +80,6 @@ impl<'u> Described<'u> {
         if let Some(&made) = self.made.get(&handle) {
             return made;
         }
-        // A struct naming itself through a pointer stops here.
-        self.made.insert(handle, None);
         let made = match self.debug.types.get(&handle)?.clone() {
             DebugType::Scalar { name, cg } => Self::scalar(&name, &cg).map(|one| self.builder.scalar(one)),
             DebugType::Enum { cg } => Self::scalar("", &cg).map(|one| self.builder.scalar(one)),
@@ -94,7 +92,11 @@ impl<'u> Described<'u> {
                 let (element, bytes) = (self.r#type(base), self.size(handle));
                 element.zip(bytes).map(|(element, bytes)| self.builder.sized(element, bytes))
             }
-            DebugType::Struct { name, size, fields, .. } => {
+            // An aggregate is declared before its members, which may point back to it: the only
+            // place a type reaches itself, so the only one that needs this.
+            DebugType::Struct { name, union, size, fields } => {
+                let id = self.builder.declare_aggregate(if union { DebugKind::Union } else { DebugKind::Struct }, &name, size);
+                self.made.insert(handle, Some(id));
                 let mut members = Vec::new();
                 for (offset, field, handle, bits) in &fields {
                     if let Some(r#type) = self.r#type(*handle) {
@@ -102,7 +104,8 @@ impl<'u> Described<'u> {
                     }
                 }
                 let members: Vec<(&str, i64, i64, Option<(i64, i64)>)> = members.iter().map(|(name, r#type, offset, bits)| (name.as_str(), *r#type, *offset, *bits)).collect();
-                Some(self.builder.structure(&name, size, &members))
+                self.builder.define_aggregate(id, &members);
+                Some(id)
             }
             DebugType::Proc { result, parameters } => {
                 let void = self.builder.scalar(DebugScalar::Void);
@@ -125,9 +128,9 @@ impl<'u> Described<'u> {
     }
 
     /// A parameter's or local's `name`, held in `place`.
-    pub fn variable(&mut self, place: i64, name: &str, handle: i64) {
+    pub fn variable(&mut self, place: i64, name: &str, handle: i64, parameter: bool) {
         if let Some(r#type) = self.r#type(handle) {
-            self.builder.variable(place, name, r#type);
+            self.builder.variable(place, name, r#type, parameter);
         }
     }
 

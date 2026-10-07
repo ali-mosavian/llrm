@@ -4,7 +4,9 @@
 use std::fmt;
 use std::rc::Rc;
 
-use llrm_object::{DebugFormat, DebugKind, Definition, Kind, Object, Role, Section, Target};
+use std::borrow::Cow;
+
+use llrm_object::{Definition, Kind, Object, Role, Section, Target};
 
 use crate::omf;
 
@@ -76,8 +78,8 @@ fn class(section: &Section) -> &'static str {
         (Role::Bss, true) => "BSS",
         (Role::Bss, false) => "FAR_BSS",
         (Role::Stack, _) => "STACK",
-        (Role::Debug(DebugKind::CodeViewSymbols), _) => "DEBSYM",
-        (Role::Debug(DebugKind::CodeViewTypes), _) => "DEBTYP",
+        (Role::Debug, _) if section.name == crate::codeview::SYMBOLS => "DEBSYM",
+        (Role::Debug, _) => "DEBTYP",
     }
 }
 
@@ -125,6 +127,7 @@ fn resolved(object: &Object, extern_index: &[usize], section: &Section, at: usiz
     let in_group = |section: usize| object.omf_groups.iter().position(|group| group.members.contains(&section));
     let (method, datum, group) = match reloc.target {
         Target::OmfGroup(group) => (GROUP_TARGET, group as i64 + 1, Some(group)),
+        Target::Section(section) => (SEGMENT_TARGET, section as i64 + 1, in_group(section)),
         Target::Symbol(symbol) => match (&object.symbols[symbol], object.symbols[symbol].definition) {
             (_, Definition::Defined { section, .. }) => (SEGMENT_TARGET, section as i64 + 1, in_group(section)),
             (named, Definition::Undefined) => (EXTERNAL_TARGET, extern_index[symbol] as i64 + 1, named.group),
@@ -135,7 +138,7 @@ fn resolved(object: &Object, extern_index: &[usize], section: &Section, at: usiz
             Definition::Defined { offset, .. } => Some(offset as i64),
             Definition::Undefined => None,
         },
-        Target::OmfGroup(_) => None,
+        Target::OmfGroup(_) | Target::Section(_) => None,
     };
     let own = if matches!(loc, OFFSET | POINTER | OFFSET32) && !relative { local.unwrap_or(0) } else { 0 };
     let subrecord = match group {
@@ -230,6 +233,27 @@ fn ledata(object: &Object, extern_index: &[usize], index: usize) -> Result<Vec<R
 
 /// `object` as an OMF object file.
 pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
+    let turbo = matches!(&object.debug, Some(info) if info.format == llrm_object::debug::Format::TurboDebugger);
+    let debug = object.debug.is_some() && !turbo;
+    // Turbo Debugger's records go among the object's own; CodeView's two segments are this writer's,
+    // made from the object's debug information.
+    let td = match &object.debug {
+        Some(info) if turbo => Some(crate::td::records(object, info)?),
+        _ => None,
+    };
+    let (object, lines): (Cow<Object>, Vec<Vec<(u32, usize)>>) = match &object.debug {
+        None => (Cow::Borrowed(object), Vec::new()),
+        Some(info) if turbo => (Cow::Owned(Object { debug: None, ..object.clone() }), crate::codeview::lines(object, info)?),
+        Some(info) => {
+            let mut lines = crate::codeview::lines(object, info)?;
+            let described = crate::codeview::sections(object, info)?;
+            let mut expanded = Object { debug: None, ..object.clone() };
+            expanded.sections.extend(described);
+            lines.resize(expanded.sections.len(), Vec::new());
+            (Cow::Owned(expanded), lines)
+        }
+    };
+    let object = &*object;
     let bits = object.arch.bits();
     if !matches!(bits, 16 | 32) {
         return Err(unencodable(format!("OMF has no {bits}-bit records")));
@@ -286,8 +310,10 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         data.extend(ledata(object, &extern_index, index)?);
     }
 
-    let mut records = vec![Rc::new(omf::Record::new(omf::THEADR, string(&object.name))), Rc::new(omf::Record::new(omf::LNAMES, lnames.iter().flat_map(|one| string(one)).collect()))];
-    if object.debug == Some(DebugFormat::CodeView) {
+    let mut records = vec![Rc::new(omf::Record::new(omf::THEADR, string(&object.name)))];
+    records.extend(td.iter().flat_map(|one| one.before.iter().cloned()));
+    records.push(Rc::new(omf::Record::new(omf::LNAMES, lnames.iter().flat_map(|one| string(one)).collect())));
+    if debug {
         // CodeView 4's marker: LINK /CO reads the debug information after it.
         records.push(Rc::new(omf::Record::new(omf::COMENT, vec![0x00, 0xA1, 0x01, b'C', b'V'])));
     }
@@ -299,11 +325,12 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         records.push(Rc::new(omf::Record::new(omf::EXTDEF, body)));
     }
     for index in 0..object.sections.len() {
-        let defined: Vec<(&str, usize)> = object
+        let defined: Vec<(usize, &str, usize)> = object
             .symbols
             .iter()
-            .filter_map(|symbol| match symbol.definition {
-                Definition::Defined { section, offset } if section == index && symbol.binding == llrm_object::Binding::Public => Some((symbol.name.as_str(), offset)),
+            .enumerate()
+            .filter_map(|(at, symbol)| match symbol.definition {
+                Definition::Defined { section, offset } if section == index && symbol.binding == llrm_object::Binding::Public => Some((at, symbol.name.as_str(), offset)),
                 _ => None,
             })
             .collect();
@@ -313,23 +340,38 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         let group = object.omf_groups.iter().position(|group| group.members.contains(&index));
         let mut head = omf::as_index(group.map_or(0, |one| one as i64 + 1))?;
         head.extend(omf::as_index(index as i64 + 1)?);
-        for (name, at) in defined {
-            head.extend(string(name));
+        // One PUBDEF a symbol where Turbo Debugger's type record follows it.
+        let mut pubdefs = vec![head.clone()];
+        for &(symbol, name, at) in &defined {
+            if td.as_ref().is_some_and(|one| one.publics.contains_key(&symbol)) && pubdefs.last().is_some_and(|last| last.len() > head.len()) {
+                pubdefs.push(head.clone());
+            }
+            let last = pubdefs.last_mut().expect("a record");
+            last.extend(string(name));
             if bits == 32 {
-                head.extend((at as u32).to_le_bytes());
+                last.extend((at as u32).to_le_bytes());
             } else {
                 let at = u16::try_from(at).unwrap_or_else(|_| panic!("struct.error: 'H' format requires 0 <= number <= 65535"));
-                head.extend(at.to_le_bytes());
+                last.extend(at.to_le_bytes());
             }
-            head.push(0);
+            last.push(0);
+            if let Some(typed) = td.as_ref().and_then(|one| one.publics.get(&symbol)) {
+                records.push(Rc::new(omf::Record::new(if bits == 32 { omf::PUBDEF + 1 } else { omf::PUBDEF }, pubdefs.pop().expect("a record"))));
+                records.extend(typed.iter().cloned());
+                pubdefs.push(head.clone());
+            }
         }
-        records.push(Rc::new(omf::Record::new(if bits == 32 { omf::PUBDEF + 1 } else { omf::PUBDEF }, head)));
+        for body in pubdefs.into_iter().filter(|one| one.len() > head.len()) {
+            records.push(Rc::new(omf::Record::new(if bits == 32 { omf::PUBDEF + 1 } else { omf::PUBDEF }, body)));
+        }
+    }
+    if let Some(one) = &td {
+        records.extend(one.module.iter().cloned());
     }
     records.extend(data);
-    if object.debug.is_some() {
-        for (index, section) in object.sections.iter().enumerate() {
-            records.extend(linnum(index + 1, &section.lines)?);
-        }
+    records.extend(td.iter().map(|one| Rc::clone(&one.source)));
+    for (index, lines) in lines.iter().enumerate() {
+        records.extend(linnum(index + 1, lines)?);
     }
     records.push(Rc::new(omf::Record::new(omf::MODEND, vec![0])));
     Ok(records.iter().flat_map(|record| record.emit()).collect())
@@ -347,7 +389,7 @@ mod tests {
 
     fn section(name: &str, image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
         let spans = vec![[0, image.len()]];
-        Section { name: name.into(), role: Role::Text, near: true, align: 1, image, spans, relocs, lines: Vec::new() }
+        Section { name: name.into(), role: Role::Text, near: true, align: 1, image, spans, relocs, }
     }
 
     fn object(arch: Arch, sections: Vec<Section>, symbols: Vec<Symbol>) -> Object {

@@ -76,7 +76,7 @@ mod tests {
 
     fn text(image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
         let spans = vec![[0, image.len()]];
-        Section { name: "A_TEXT".into(), role: Role::Text, near: true, align: 1, image, spans, relocs, lines: Vec::new() }
+        Section { name: "A_TEXT".into(), role: Role::Text, near: true, align: 1, image, spans, relocs }
     }
 
     fn symbol(name: &str, binding: Binding, definition: Definition) -> Symbol {
@@ -105,7 +105,7 @@ mod tests {
     /// A local symbol has no ELF symbol: a reference to it is its section's symbol and its offset.
     #[test]
     fn a_local_symbol_is_its_section_and_its_offset() {
-        let data = Section { name: "_DATA".into(), role: Role::Data, near: true, align: 4, image: vec![0; 8], spans: vec![[0, 8]], relocs: vec![Reloc { at: 4, kind: Kind::Abs { width: 4 }, target: Target::Symbol(0), addend: 2 }], lines: Vec::new() };
+        let data = Section { name: "_DATA".into(), role: Role::Data, near: true, align: 4, image: vec![0; 8], spans: vec![[0, 8]], relocs: vec![Reloc { at: 4, kind: Kind::Abs { width: 4 }, target: Target::Symbol(0), addend: 2 }] };
         let made = object(vec![data], vec![symbol("loc", Binding::Local, Definition::Defined { section: 0, offset: 4 })]);
         let bytes = write(&made).unwrap();
         let found = sections(&bytes);
@@ -119,7 +119,7 @@ mod tests {
     /// Bss stores nothing and a section with no relocations has no REL section.
     #[test]
     fn bss_is_nobits_and_an_unrelocated_section_has_no_rel() {
-        let bss = Section { name: "_BSS".into(), role: Role::Bss, near: true, align: 4, image: vec![0; 64], spans: vec![], relocs: vec![], lines: Vec::new() };
+        let bss = Section { name: "_BSS".into(), role: Role::Bss, near: true, align: 4, image: vec![0; 64], spans: vec![], relocs: vec![] };
         let bytes = write(&object(vec![bss], vec![])).unwrap();
         let found = sections(&bytes);
         assert_eq!((named(&found, ".bss").1, named(&found, ".bss").3), (8, 64));
@@ -142,5 +142,17 @@ mod tests {
         let mut real = object(vec![text(vec![0], vec![])], vec![]);
         real.arch = Arch::I8086;
         assert!(write(&real).is_err());
+    }
+
+    /// An object that asks for CodeView or Turbo Debugger information is refused by name: the
+    /// information of another format is never written in its place.
+    #[test]
+    fn a_debug_format_this_object_cannot_carry_is_refused() {
+        for (format, name) in [(llrm_object::debug::Format::CodeView, "CodeView"), (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger")] {
+            let mut made = object(vec![text(vec![0], vec![])], vec![]);
+            made.debug = Some(llrm_object::debug::Info { format, ..Default::default() });
+            let why = write(&made).unwrap_err().0;
+            assert!(why.contains("cannot carry") && why.contains(name), "{why}");
+        }
     }
 }

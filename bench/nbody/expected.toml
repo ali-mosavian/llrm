@@ -1,4 +1,4 @@
-reason = "pressuresink: a load is made just before its reader where no register class gains; fewer memory operands overall, matmul +1 and parity/loop +2 from the order sensitivity of lea fusion and coalescing (#729)"
+reason = "x87: a value that stays is copied with fld st(i) for a memory operand, not exchanged up first (nbody_single -10%, fpbench -10%)"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -10,12 +10,12 @@ bss_bytes = 0
 kernel_ms = 0.7716
 
 [bas.Os]
-instructions = 62081
+instructions = 56081
 memory_operands = 26085
-code_bytes = 851
+code_bytes = 841
 data_bytes = 31
 bss_bytes = 0
-kernel_ms = 0.8445
+kernel_ms = 0.7645
 
 [c.O2]
 instructions = 47061

@@ -658,7 +658,7 @@ pub struct Function {
 }
 
 /// The debug vocabulary, as MIR's metadata spells it.
-pub use llrm_mir::debuginfo::{Kind as DebugKind, Reach as DebugReach, Scalar as DebugScalar};
+pub use llrm_mir::debuginfo::{Kind as DebugKind, Language as DebugLanguage, Reach as DebugReach, Scalar as DebugScalar};
 
 /// A source type, as a debugger shows it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -697,6 +697,8 @@ pub struct DebugVariable {
     pub place: i64,
     pub name: String,
     pub r#type: i64,
+    /// The place is where a parameter's value is kept, not a variable the body declares.
+    pub parameter: bool,
 }
 
 /// A function as a debugger names it: its procedure type, its source
@@ -725,6 +727,8 @@ pub struct DebugGlobal {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Debug {
+    /// The source language, where the frontend says.
+    pub language: Option<DebugLanguage>,
     pub types: Vec<DebugType>,
     pub functions: Vec<DebugFunction>,
     pub globals: Vec<DebugGlobal>,

@@ -3238,8 +3238,7 @@ fn test_dbg_lines_become_linnum() {
     };
     // Lines alone are a BASIC statement table's, not -g.
     assert!(!records(&assembled).iter().any(|one| one.r#type == llrm_omf::omf::LINNUM));
-    let flavor = llrm_omf::cvwrite::Flavor { qb45: false };
-    assembled.debug = Some(crate::backend::codeview::Debug { flavor, types: Vec::new(), nodes: Default::default(), procedures: Default::default(), globals: Vec::new() });
+    assembled.debug = Some(crate::backend::debuginfo::Debug { format: Default::default(), language: Default::default(), producer: llrm_object::debug::Producer::Native, frame_register: "ebp".into(), registers: Vec::new(), types: Vec::new(), nodes: Default::default(), procedures: Default::default(), globals: Vec::new() });
     let records = records(&assembled);
     let lines: Vec<(u16, u16)> = records.iter().filter(|one| one.r#type == llrm_omf::omf::LINNUM).flat_map(|one| llrm_omf::omf::lines(one).1).collect();
     // push bp; mov bp, sp (3 bytes) is line 7's; mov ax, [bp+6]; sub ax, [bp+8] (6 bytes) too.
@@ -4058,4 +4057,24 @@ define i16 @f() addrspace(1) {
     let got = listing(text, "f");
     let (load, store) = (got.iter().position(|one| one.starts_with("mov ax, word ptr g")), got.iter().position(|one| one.starts_with("mov word ptr g, 0")));
     assert!(load.is_some() && store.is_some() && load < store, "{got:?}");
+}
+
+/// `-g`'s parameters of a function, by where its convention passes each: in a cell, in one register, in two
+/// (left out: no one register holds it), and one the function no longer has, which the optimiser took out.
+/// A register parameter was dropped with the rest of what had no cell, and a debugger had none to show.
+#[test]
+fn a_parameter_is_a_cell_a_register_or_gone() {
+    use crate::backend::isel::{Convention, Parameter};
+    use crate::model::lir::DebugPlace;
+    use iced_x86::Register;
+    use llrm_mir::debuginfo as di;
+    let mut module = llrm_mir::Module::default();
+    let int = di::add_type(&mut module, &di::Type { kind: di::Kind::Scalar, name: "int16".into(), size: 0, reach: di::Reach::Near, target: None, members: Vec::new() });
+    let named = ["a", "b", "c", "d"];
+    let parameters = named.iter().enumerate().map(|(at, name)| (at as i64, (*name).to_owned(), int)).collect();
+    di::add_function(&mut module, &di::Function { function: "f".into(), module: false, name: "f".into(), r#type: int, parameters });
+    // a in a cell, b in AX, c in DX:AX; d is past the three the function has.
+    let convention = Convention { parameters: vec![Parameter::Cell(6), Parameter::Registers(vec![Register::AX]), Parameter::Registers(vec![Register::DX, Register::AX])], returns: Vec::new(), popped: 0, saved: Vec::new() };
+    let found: Vec<(String, DebugPlace)> = isel::parameters(&module, "f", &convention).into_iter().map(|one| (one.name, one.place)).collect();
+    assert_eq!(found, [("a".to_owned(), DebugPlace::At(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 6))), ("b".to_owned(), DebugPlace::Register(Register::AX)), ("d".to_owned(), DebugPlace::Gone)]);
 }

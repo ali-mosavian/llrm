@@ -18,6 +18,7 @@ const LC_SEGMENT_64: u32 = 0x19;
 const S_ZEROFILL: u32 = 1;
 const S_ATTR_PURE_INSTRUCTIONS: u32 = 0x8000_0000;
 const S_ATTR_SOME_INSTRUCTIONS: u32 = 0x0000_0400;
+const S_ATTR_DEBUG: u32 = 0x0200_0000;
 const N_EXT: u8 = 1;
 const N_SECT: u8 = 0xE;
 const X86_64_RELOC_UNSIGNED: u32 = 0;
@@ -46,6 +47,21 @@ fn name16(out: &mut Vec<u8>, name: &str) {
     out.extend(field);
 }
 
+/// The Mach-O name of a DWARF section.
+fn debug_name(name: &str) -> Result<&'static str, Unsupported> {
+    Ok(match name {
+        ".debug_abbrev" => "__debug_abbrev",
+        ".debug_aranges" => "__debug_aranges",
+        ".debug_info" => "__debug_info",
+        ".debug_line" => "__debug_line",
+        ".debug_line_str" => "__debug_line_str",
+        ".debug_loc" => "__debug_loc",
+        ".debug_loclists" => "__debug_loclists",
+        ".debug_str" => "__debug_str",
+        other => return Err(unsupported(format!("{other}: no Mach-O name for this debug section"))),
+    })
+}
+
 /// The segment, section and type-and-attributes words of `section`.
 fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsupported> {
     if !section.near {
@@ -59,7 +75,8 @@ fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsu
         Role::Data => ("__DATA", "__data", 0),
         Role::Bss => ("__DATA", "__bss", S_ZEROFILL),
         Role::Stack => return Err(unsupported(format!("{}: an OMF stack segment has no Mach-O section", section.name))),
-        Role::Debug(_) => return Err(unsupported(format!("{}: CodeView debug information is OMF's", section.name))),
+        // `.debug_info` is `__debug_info` of the segment `__DWARF`.
+        Role::Debug => ("__DWARF", debug_name(&section.name)?, S_ATTR_DEBUG),
     })
 }
 
@@ -89,9 +106,15 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     if object.arch != Arch::X8664 {
         return Err(unsupported(format!("{:?} has no Mach-O writer: only x86-64 is written", object.arch)));
     }
-    if object.debug.is_some() {
-        return Err(unsupported("CodeView debug information is OMF's"));
-    }
+    // DWARF's sections are this writer's, made from the object's debug information.
+    let expanded;
+    let object = match &object.debug {
+        Some(info) => {
+            expanded = llrm_dwarf::expanded(object, info)?;
+            &expanded
+        }
+        None => object,
+    };
     if !object.omf_groups.is_empty() {
         return Err(unsupported("a group of segments is OMF's"));
     }
@@ -156,16 +179,33 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let mut made: Vec<(usize, [u32; 2])> = Vec::new();
         for one in &section.relocs {
             let (kind, length, pcrel, beyond) = relocation(one.kind)?;
-            let Target::Symbol(target) = one.target else {
-                return Err(unsupported("a reference to a group is OMF's"));
-            };
             let width = one.kind.width();
-            let (symbolnum, external, field) = match index_of[target] {
+            // A section's start is a local symbol at offset 0 of it.
+            let (target, home) = match one.target {
+                Target::Symbol(target) => (Some(target), None),
+                Target::Section(section) => (None, Some(section)),
+                Target::OmfGroup(_) => return Err(unsupported("a reference to a group is OMF's")),
+            };
+            // One debug section's offset into another is not relocated: dsymutil reads the object's
+            // own sections, where it is the offset itself.
+            if section.role == Role::Debug && home.is_some_and(|home| object.sections[home].role == Role::Debug) {
+                let offset = u32::try_from(one.addend).map_err(|_| unsupported(format!("{}: an offset of {} does not fit", section.name, one.addend)))?;
+                image[one.at..one.at + width].copy_from_slice(&u64::from(offset).to_le_bytes()[..width]);
+                continue;
+            }
+            let (symbolnum, external, field) = match target.and_then(|target| index_of[target]) {
                 Some(symbol) => (symbol, true, one.addend - beyond),
                 None => {
                     // A local symbol: its section, and the address in the object's own space, which the
                     // linker moves with the section.
-                    let Definition::Defined { section: home, offset } = object.symbols[target].definition else { unreachable!("an undefined symbol is listed") };
+                    let (home, offset) = match (target, home) {
+                        (Some(target), _) => match object.symbols[target].definition {
+                            Definition::Defined { section: home, offset } => (home, offset),
+                            Definition::Undefined => unreachable!("an undefined symbol is listed"),
+                        },
+                        (None, Some(home)) => (home, 0),
+                        (None, None) => unreachable!("a target is a symbol or a section"),
+                    };
                     let place = if pcrel { (address[index] + one.at + 4) as i64 } else { 0 };
                     (ordinal(home), false, (address[home] + offset) as i64 + one.addend - beyond - place)
                 }
@@ -284,7 +324,7 @@ mod tests {
 
     fn section(name: &str, role: Role, image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
         let spans = vec![[0, image.len()]];
-        Section { name: name.into(), role, near: true, align: 1, image, spans, relocs, lines: Vec::new() }
+        Section { name: name.into(), role, near: true, align: 1, image, spans, relocs }
     }
 
     fn defined(name: &str, section: usize, offset: usize) -> Symbol {
@@ -444,5 +484,17 @@ _flag:  .byte 0
         let mut other = program();
         other.arch = Arch::I386;
         assert!(write(&other).unwrap_err().0.contains("only x86-64"));
+    }
+
+    /// An object that asks for CodeView or Turbo Debugger information is refused by name: the
+    /// information of another format is never written in its place.
+    #[test]
+    fn a_debug_format_this_object_cannot_carry_is_refused() {
+        for (format, name) in [(llrm_object::debug::Format::CodeView, "CodeView"), (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger")] {
+            let mut made = program();
+            made.debug = Some(llrm_object::debug::Info { format, ..Default::default() });
+            let why = write(&made).unwrap_err().0;
+            assert!(why.contains("cannot carry") && why.contains(name), "{why}");
+        }
     }
 }

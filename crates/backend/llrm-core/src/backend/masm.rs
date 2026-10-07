@@ -161,7 +161,7 @@ pub struct Module {
     /// Externs nothing references, declared so LINK pulls in their module.
     pub requests: BTreeSet<String>,
     /// `-g`'s debug information.
-    pub debug: Option<super::codeview::Debug>,
+    pub debug: Option<super::debuginfo::Debug>,
     /// Bytes of the linker's stack this module adds to the others' (OMF stack
     /// segments concatenate): where its call graph is the whole program's.
     pub stack: i64,

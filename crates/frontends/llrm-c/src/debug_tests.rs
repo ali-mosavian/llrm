@@ -17,7 +17,7 @@ fn object_of(name: &str) -> Vec<Rc<omf::Record>> {
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).expect("reads");
     let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
     // Not inlined: `twice` is a symbol to read.
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
     let built = super::compile::selected(&text, name, None, &options).expect("compiles");
     omf::parse(&objbuild::written(&built, &format!("{name}.c")).expect("writes")).expect("parses")
@@ -97,4 +97,47 @@ fn a_debug_member_with_half_a_bit_field_is_refused() {
     member.bit_width = None;
     let why = llrm_core::hir::verify::verify(&program).unwrap_err();
     assert!(why.0.contains("start or width alone"), "{why:?}");
+}
+
+/// What the backend hands every writer: `f`'s three parameters come before its local and are told
+/// apart from it, its code is placed, and the lines are the main file's. CodeView alone could not
+/// say a parameter from a local (its reader tells them by the offset's sign), so DWARF would have
+/// had no `formal_parameter`.
+#[test]
+fn the_model_tells_parameters_from_locals_and_places_the_code() {
+    use llrm_object::debug::Kind;
+    let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debug.cgs")).expect("reads");
+    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
+    let built = super::compile::selected(&text, "debug", None, &options).expect("compiles");
+    let object = objbuild::built(&built, "debug.c", objbuild::CodeLayout::OneSegment).expect("builds");
+    let info = object.debug.expect("-g's information rides on the object");
+    let f = info.functions.iter().find(|one| one.name == "f").expect("f");
+    let kinds: Vec<(&str, Kind)> = f.variables.iter().map(|one| (one.name.as_str(), one.kind)).collect();
+    assert_eq!(kinds, [("st", Kind::Local), ("a", Kind::Parameter), ("b", Kind::Parameter), ("c", Kind::Parameter), ("l", Kind::Local)]);
+    assert_eq!(object.symbols[f.symbol].name, "_f");
+    let range = f.ranges[0];
+    assert!(range.length > 0 && range.offset + range.length <= object.sections[range.section].image.len());
+    assert_eq!(info.lines.iter().map(|one| one.line).collect::<Vec<_>>(), [13, 15, 16, 17]);
+    assert!(info.lines.iter().all(|one| one.file == 0));
+    // The target's register file, once, for writers that know no target.
+    assert_eq!(info.frame_register, "ebp");
+    let number = |name: &str| info.registers.iter().find(|one| one.name == name).map(|one| (one.dwarf, one.codeview));
+    assert_eq!(number("bp"), Some((None, Some(14))));
+}
+
+/// HIR's codec writes a variable's `parameter` key only where it is true, so a program with none
+/// encodes as before, and one with parameters round-trips.
+#[test]
+fn a_parameters_home_round_trips_through_the_codec_and_others_are_unchanged() {
+    let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debug.cgs")).expect("reads");
+    let mut program = super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), "debug", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap();
+    let encoded = llrm_core::hir::codec::encode(&program, None).unwrap();
+    assert!(encoded.contains("\"parameter\""), "premise: debug.c has parameters");
+    assert_eq!(llrm_core::hir::codec::decode(&encoded).unwrap(), program);
+    for one in program.modules[0].debug.as_mut().unwrap().functions.iter_mut().flat_map(|one| &mut one.variables) {
+        one.parameter = false;
+    }
+    assert!(!llrm_core::hir::codec::encode(&program, None).unwrap().contains("\"parameter\""));
 }

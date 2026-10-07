@@ -312,6 +312,10 @@ pub struct Unit {
     /// The routine the runtime's start calls, and the `cc` of the convention it calls it in (the C runtime description's).
     pub entry: String,
     pub entry_cc: String,
+    /// The `cc` of the convention a function the front end records as cdecl has, and one it records in its default registers;
+    /// none where that is the C one (`ccc`).
+    pub cdecl_cc: Option<String>,
+    pub registers_cc: Option<String>,
     /// INIT's code-generator switches (`CGSW_GEN_*`).
     pub switches: i64,
     /// Recorded by the 386 front end: flat, `int` and every pointer 4 bytes.

@@ -65,7 +65,7 @@ pub fn program(unit: &hir::Unit, name: &str, calling: &llrm_target::calling::Cal
         .filter(|proc| proc.body.iter().filter(|one| one.call == "CGReturn").all(|one| one.args[0] == "n0") && !answered_by_inline_code(unit, proc))
         .map(|proc| proc.symbol)
         .collect();
-    let module = Shared { unit, data: &data, keys: &keys, valueless: &valueless };
+    let module = Shared { calling, unit, data: &data, keys: &keys, valueless: &valueless };
     let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
     for (at, proc) in unit.procs.iter().enumerate() {
@@ -417,6 +417,7 @@ impl<'u> Types<'u> {
 
 /// What the functions share.
 struct Shared<'a> {
+    calling: &'a llrm_target::calling::Calling,
     unit: &'a hir::Unit,
     data: &'a [h::DataObject],
     keys: &'a HashMap<Key, i64>,
@@ -519,10 +520,10 @@ fn cleanup(symbol: &hir::Symbol, unit: &hir::Unit) -> R<(StackCleanup, Option<St
     }
     let stack = symbol.call_class & (hir::CALLER_POPS | hir::REVERSE_PARMS);
     match (symbol.register_parms, stack) {
-        (false, hir::CALLER_POPS) => Ok((StackCleanup::Caller, None)),
+        (false, hir::CALLER_POPS) => Ok((StackCleanup::Caller, unit.cdecl_cc.clone())),
         (false, hir::REVERSE_PARMS) => Ok((StackCleanup::Callee, None)),
         // Open Watcom's own register list, where the target's calling.toml states that convention.
-        (true, 0) if symbol.default_registers => Ok((StackCleanup::Callee, Some("watcall".to_owned()))),
+        (true, 0) if symbol.default_registers => Ok((StackCleanup::Callee, unit.registers_cc.clone())),
         _ => refuse(format!("{} has a register calling convention", symbol.object_name())),
     }
 }
@@ -582,14 +583,15 @@ fn distance(symbol: &hir::Symbol) -> CallDistance {
 /// How Borland C returns a struct of `size` bytes: an integer that wide in
 /// AL, AX or DX:AX, or, where none, through a far pointer to the caller's
 /// memory that it pushes after every argument and gets back in DX:AX.
-fn returned_as_integer(size: i64) -> Option<i64> {
-    matches!(size, 1 | 2 | 4).then_some(size)
+fn returned_as_integer(calling: &llrm_target::calling::Calling, convention: &Option<String>, size: i64) -> Option<i64> {
+    let sizes = calling.by_cc(convention.as_deref().unwrap_or("cdecl")).and_then(|one| one.aggregate.as_ref()).map_or(&[][..], |one| &one.in_register_bytes);
+    sizes.contains(&size).then_some(size)
 }
 
 /// Whether a struct of `size` bytes passed under `convention` is one scalar of that size: Open Watcom's register
 /// convention takes 1, 2 and 4 byte structs as it takes an integer, and sends every other to memory.
-fn passed_as_scalar(convention: &Option<String>, size: i64) -> bool {
-    convention.is_some() && returned_as_integer(size).is_some()
+fn passed_as_scalar(calling: &llrm_target::calling::Calling, convention: &Option<String>, size: i64) -> bool {
+    convention.as_deref().and_then(|cc| calling.by_cc(cc)).is_some_and(|one| !one.argument_registers.is_empty()) && returned_as_integer(calling, convention, size).is_some()
 }
 
 /// A struct argument's words, by byte offset, in parameter order: they lie
@@ -654,7 +656,7 @@ impl<'a, 't> Body<'a, 't> {
         body.current = entry;
         let result_type = match body.types.aggregate(&proc.type_) {
             _ if shared.valueless.contains(&symbol.id) => body.types.of(Shape::Void, None),
-            Some(size) => match returned_as_integer(size) {
+            Some(size) => match returned_as_integer(shared.calling, &body.convention, size) {
                 Some(width) => body.types.raw(width),
                 None => body.types.pointer(FAR),
             },
@@ -706,7 +708,7 @@ impl<'a, 't> Body<'a, 't> {
             for &(symbol, handle) in &proc.debug {
                 let name = &unit.symbols[&symbol].name;
                 match (body.slots.get(&format!("y{symbol}")), shared.keys.get(&Key::Symbol(symbol))) {
-                    (Some(&place), _) => described.variable(place, name, handle),
+                    (Some(&place), _) => described.variable(place, name, handle, proc.parms.iter().any(|&(one, _)| one == symbol)),
                     (None, Some(&object)) => described.local_static(object, name, handle),
                     (None, None) => {}
                 }
@@ -954,7 +956,7 @@ impl<'a, 't> Body<'a, 't> {
         for (symbol, type_) in self.proc.parameters(&self.unit.symbols[&self.proc.symbol]) {
             match self.types.aggregate(type_) {
                 Some(size) => {
-                    let scalar = passed_as_scalar(&self.convention, size);
+                    let scalar = passed_as_scalar(self.shared.calling, &self.convention, size);
                     let bytes = if scalar { size } else { self.types.word() };
                     let words = (size + bytes - 1) / bytes;
                     let ty = self.types.of(Shape::Bytes(words * bytes), None);
@@ -986,7 +988,7 @@ impl<'a, 't> Body<'a, 't> {
             }
         }
         // A struct result goes where a far pointer pushed after every argument says.
-        if self.types.aggregate(&self.proc.type_).is_some_and(|size| returned_as_integer(size).is_none()) {
+        if self.types.aggregate(&self.proc.type_).is_some_and(|size| returned_as_integer(self.shared.calling, &self.convention, size).is_none()) {
             let far = self.types.pointer(FAR);
             let destination = self.value(far);
             with_destination(&mut parameters, destination, in_order);
@@ -1095,7 +1097,7 @@ impl<'a, 't> Body<'a, 't> {
         }
         if let Some(size) = self.types.aggregate(type_) {
             let Got::Aggregate(from, _) = self.eval(node)? else { return self.refuse("a scalar returned as a struct") };
-            let value = match (returned_as_integer(size), self.destination) {
+            let value = match (returned_as_integer(self.shared.calling, &self.convention, size), self.destination) {
                 (Some(width), _) => {
                     let ty = self.types.raw(width);
                     self.op(Op::Load, ty, vec![Operand::IndirectPlace(indirect(from, 0, ty, false))])
@@ -2021,7 +2023,7 @@ impl<'a, 't> Body<'a, 't> {
                 continue;
             };
             let Got::Aggregate(from, _) = self.eval(node)? else { return self.refuse("a scalar passed as an aggregate") };
-            let scalar = passed_as_scalar(&convention, size);
+            let scalar = passed_as_scalar(self.shared.calling, &convention, size);
             let unit = if scalar { size } else { self.types.word() };
             // Listed last first, as the arguments are; a last partial word widened.
             let word = self.types.raw(unit);
@@ -2049,7 +2051,7 @@ impl<'a, 't> Body<'a, 't> {
             (self.local(&format!("r{}", self.places.len() + 1), ty, size), size)
         });
         let mut result_at = None;
-        if let Some((temporary, _)) = returned.filter(|&(_, size)| returned_as_integer(size).is_none()) {
+        if let Some((temporary, _)) = returned.filter(|&(_, size)| returned_as_integer(self.shared.calling, &convention, size).is_none()) {
             let near = self.address_of(temporary);
             let far = self.types.pointer(FAR);
             let destination = self.op(Op::Convert, far, vec![value_ref(near)]);
@@ -2061,7 +2063,7 @@ impl<'a, 't> Body<'a, 't> {
         let result = match (target, returned) {
             (Got::Function(symbol), _) if self.shared.valueless.contains(&symbol) => None,
             (_, Some((_, size))) => {
-                let ty = match returned_as_integer(size) {
+                let ty = match returned_as_integer(self.shared.calling, &convention, size) {
                     Some(width) => self.types.raw(width),
                     None => self.types.pointer(FAR),
                 };
@@ -2087,10 +2089,10 @@ impl<'a, 't> Body<'a, 't> {
         };
         let memory = in_memory.iter().enumerate().filter(|(_, memory)| **memory).map(|(at, _)| at as i64).collect();
         let result_pointer = result_at.filter(|_| convention.is_some());
-        self.call_site(name.as_deref(), result, operands, order, cleanup, distance, convention, memory, result_pointer);
+        self.call_site(name.as_deref(), result, operands, order, cleanup, distance, convention.clone(), memory, result_pointer);
         let Some((temporary, size)) = returned else { return Ok(Got::Returned(result)) };
         let address = self.address_of(temporary);
-        if let (Some(width), Some(value)) = (returned_as_integer(size), result) {
+        if let (Some(width), Some(value)) = (returned_as_integer(self.shared.calling, &convention, size), result) {
             let ty = self.types.raw(width);
             let value = self.fitted(value, ty);
             self.instruction(Op::Store, Vec::new(), vec![Operand::IndirectPlace(indirect(address, 0, ty, false)), value_ref(value)]);

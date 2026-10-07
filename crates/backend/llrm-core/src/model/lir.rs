@@ -275,7 +275,20 @@ impl LirBlock {
 pub struct DebugVariable {
     pub name: String,
     pub r#type: llrm_mir::MetadataId,
-    pub addr: Addr,
+    pub place: DebugPlace,
+    /// Passed in, not declared in the body.
+    pub parameter: bool,
+}
+
+/// Where a `-g` variable is.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DebugPlace {
+    /// A frame cell, or a place in data.
+    At(Addr),
+    /// The register a parameter arrives in, which holds it until the body starts.
+    Register(iced_x86::Register),
+    /// A parameter the optimiser removed: there is none to show.
+    Gone,
 }
 
 /// One lowered procedure.  Blocks remain in emitted order.
