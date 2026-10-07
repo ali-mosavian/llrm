@@ -1,4 +1,4 @@
-reason = "a mask compared with zero is test with the mask as its immediate, not a copy and-ed for its flags (isel pattern and_tested takes a constant mask): parity/control, qbsp, recpow and others fewer instructions"
+reason = "interprocedural register use on top of #854: qbsp's callers keep values in the registers its private callees leave: instructions 320 -> 316, memory operands 118 -> 96, code bytes 462 -> 442 at -O2 (324 -> 320, 123 -> 93, 410 -> 392 at -Os)"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -30,17 +30,16 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 320
-memory_operands = 118
-code_bytes = 462
+instructions = 316
+memory_operands = 96
+code_bytes = 442
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0051
 
 [nib.Os]
-instructions = 324
-memory_operands = 123
-code_bytes = 410
+instructions = 320
+memory_operands = 93
+code_bytes = 392
 data_bytes = 0
 bss_bytes = 0
 
