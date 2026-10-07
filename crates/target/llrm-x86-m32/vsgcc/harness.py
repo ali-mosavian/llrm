@@ -250,10 +250,22 @@ def cost(ins, taken, first_rep, mem, multiplier=None):
     return 1
 
 
+def stub_digest():
+    """What stub.s says now: a stub is current when the one it was built from said the same."""
+    import hashlib
+    return hashlib.sha256(Path(__file__).with_name("stub.s").read_bytes()).hexdigest()
+
+
+def record_stub(work):
+    """Say in `work` which stub.s its stub.elf was built from; run.sh and the tests that build one do."""
+    (Path(work) / "stub.elf.src").write_text(stub_digest())
+
+
 def fresh_stub():
-    """The stub the harness links is built from stub.s: one built from an older stub.s lacks its symbols (`report_` after #743)."""
-    built, source = OUT / "stub.elf", Path(__file__).with_name("stub.s")
-    assert built.stat().st_mtime >= source.stat().st_mtime, f"{built} is older than {source}: run.sh builds it"
+    """The stub the harness links is built from stub.s: one built from an older stub.s lacks its symbols (`report_` after #743).
+    A file's age says nothing of it (a checkout makes stub.s newer than any build): the digest it was built from does."""
+    built, record = OUT / "stub.elf", OUT / "stub.elf.src"
+    assert record.exists() and record.read_text() == stub_digest(), f"{built} was not built from this stub.s: run.sh builds it"
     return built
 
 

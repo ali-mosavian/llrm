@@ -1,6 +1,4 @@
 """The vsgcc report's summary: the geomean hid hanoi's 2.6x behind twenty programs near 1.0."""
-from pathlib import Path
-
 import pytest
 
 import table
@@ -28,13 +26,16 @@ def test_a_program_without_a_variant_is_refused_not_averaged():
         table.complete(P)
 
 
-def test_a_stub_older_than_its_source_is_refused(tmp_path, monkeypatch):
-    """A work directory kept from before stub.s grew `report_` linked nothing: unresolved report_, and a stale table."""
-    import os
+def test_a_stub_built_from_another_stub_s_is_refused(tmp_path, monkeypatch):
+    """A work directory kept from before stub.s grew `report_` linked nothing: unresolved report_, and a stale table.
+    Its age is no test (a checkout dates stub.s after any build): the source it was built from is."""
     import harness
     (tmp_path / "stub.elf").write_bytes(b"")
-    old = Path(harness.__file__).with_name("stub.s").stat().st_mtime - 100
-    os.utime(tmp_path / "stub.elf", (old, old))
     monkeypatch.setattr(harness, "OUT", tmp_path)
-    with pytest.raises(AssertionError, match="older than"):
+    with pytest.raises(AssertionError, match="not built from this stub.s"):
         harness.fresh_stub()
+    (tmp_path / "stub.elf.src").write_text("an older stub.s")
+    with pytest.raises(AssertionError, match="not built from this stub.s"):
+        harness.fresh_stub()
+    harness.record_stub(tmp_path)
+    assert harness.fresh_stub() == tmp_path / "stub.elf"
