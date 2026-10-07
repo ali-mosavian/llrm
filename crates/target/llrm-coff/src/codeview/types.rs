@@ -4,6 +4,8 @@
 use llrm_object::debug::{Info, Reach, Scalar, Type, TypeId};
 use llrm_object::{Object, Unsupported};
 
+use llrm_support::leaf::{numeric, pad};
+
 use super::{name, put16, put32, record, refused};
 
 const FIRST: u32 = 0x1000;
@@ -28,45 +30,6 @@ pub struct Types {
     pub records: Vec<u8>,
     /// By the model's `TypeId`.
     pub index: Vec<u32>,
-}
-
-fn pad(left: usize) -> u8 {
-    0xF0 | left as u8
-}
-
-/// A number the way a leaf holds one: itself under 0x8000, else a tagged integer.
-fn numeric(out: &mut Vec<u8>, value: i64) {
-    if (0..0x8000).contains(&value) {
-        put16(out, value as u16);
-    } else if value < 0 {
-        match (i8::try_from(value), i16::try_from(value), i32::try_from(value)) {
-            (Ok(one), ..) => {
-                put16(out, 0x8000);
-                out.push(one as u8);
-            }
-            (_, Ok(one), _) => {
-                put16(out, 0x8001);
-                out.extend(one.to_le_bytes());
-            }
-            (.., Ok(one)) => {
-                put16(out, 0x8003);
-                out.extend(one.to_le_bytes());
-            }
-            _ => {
-                put16(out, 0x8009);
-                out.extend(value.to_le_bytes());
-            }
-        }
-    } else if value <= 0xFFFF {
-        put16(out, 0x8002);
-        put16(out, value as u16);
-    } else if value <= i64::from(u32::MAX) {
-        put16(out, 0x8004);
-        put32(out, value as u32);
-    } else {
-        put16(out, 0x800A);
-        out.extend(value.to_le_bytes());
-    }
 }
 
 fn primitive(scalar: Scalar) -> Result<u32, Unsupported> {

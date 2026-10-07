@@ -44,6 +44,10 @@ CASE(long, c_long_1000, 1000, 1)
 CASE(long, c_long_65537, 65537, 1)
 CASE(long, c_long_6700417, 6700417, 1)
 CASE(long, c_long_2147483647, 2147483647, 1)
+CASE(long, c_long_m3, -3, 1)
+CASE(long, c_long_m10, -10, 1)
+CASE(long, c_long_m641, -641, 1)
+CASE(long, c_long_m2147483647, -2147483647, 1)
 
 int main(void)
 {
@@ -59,6 +63,10 @@ int main(void)
     bad += c_long_65537();
     bad += c_long_6700417();
     bad += c_long_2147483647();
+    bad += c_long_m3();
+    bad += c_long_m10();
+    bad += c_long_m641();
+    bad += c_long_m2147483647();
     report(bad);
     report((long)sum);
     return 0;

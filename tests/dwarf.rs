@@ -239,7 +239,7 @@ fn a_struct_that_names_itself_keeps_the_member_that_does_in_both_formats() {
     let made = compile(&fixtures.join("list.c"), &["-m16", "-g"], &object);
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let records = llrm_core::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
-    let shape = llrm_core::objectfile::cvinfo::parse(&records).shape();
+    let shape = llrm_core::objectfile::cv4info::shape(&records);
     let head = shape.iter().find(|one| one.starts_with("DATA head")).unwrap_or_else(|| panic!("{shape:#?}"));
     assert!(head.contains("next +0") && head.contains("v +2"), "{head}");
     // DWARF, in an ELF object, and read by gdb.
