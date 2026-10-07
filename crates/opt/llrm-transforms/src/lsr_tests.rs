@@ -33,7 +33,7 @@ fn reduced_for(text: &str, machine: Tuned) -> (Module, String) {
     let mut after = before.clone();
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut after, Rc::new(machine)).unwrap();
     let text = printed(&after);
     (before, text)
@@ -1316,7 +1316,7 @@ fn test_frame_arrays_keep_their_own_pointers() {
     let mut after = before.clone();
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut after, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     let printed = printed(&after);
     let inputs: &[&[i128]] = &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]];
@@ -1500,7 +1500,7 @@ fn on_core(text: &str) -> String {
     let mut module = parsed(&format!("{DOS}{text}"));
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut module, Rc::new(machine)).unwrap();
     printed(&module)
 }
@@ -1611,7 +1611,7 @@ fn on_p5(text: &str) -> String {
     let mut module = parsed(&format!("{DOS}{text}"));
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut module, Rc::new(machine)).unwrap();
     printed(&module)
 }
@@ -1781,7 +1781,7 @@ fn test_a_huge_pointer_walk_is_not_swapped_for_an_offset_that_carries_too() {
     let mut after = parsed(HUGE_WALK);
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut after, Rc::new(machine)).unwrap();
     let printed = printed(&after);
     assert!(!printed.contains("lsr.iv"), "{printed}");
@@ -1855,7 +1855,7 @@ fn test_a_pointer_steps_at_the_price_of_an_add_whatever_an_address_costs() {
         let machine = Tuned { costs: OperationCosts { address, ..target().costs }, ..target() };
         let mut after = parsed(&format!("{DOS}{POINTER_WALK}"));
         let mut manager = PassManager::default();
-        manager.add(Lsr);
+        manager.add(Lsr::default());
         manager.run_module(&mut after, Rc::new(machine)).unwrap();
         printed(&after)
     };
@@ -2004,4 +2004,57 @@ fn test_a_difference_is_one_sub_from_a_copy_of_the_minuend() {
     assert_eq!(super::_scaled(&target, &BigInt::from(-1), false), (costs.add + costs.r#move, false), "`-r`: a negation of a copy");
     assert_eq!(super::_scaled(&target, &BigInt::from(2), true), (costs.shift + costs.r#move, false), "`2r + rest`: a shift of a copy");
     assert_eq!(super::_scaled(&target, &BigInt::from(1), true), (0, false));
+}
+
+/// A loop with an early way out that returns: `n` trips, or fewer where the sum meets `k`.
+fn leaving(count: &str, start: i64) -> String {
+    format!(
+        "define i16 @f(i16 %n, i16 %k) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %inext, %b3 ]
+  %c = phi i16 [ {start}, %b0 ], [ %cnext, %b3 ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %b3 ]
+  %go = icmp ult i16 %i, {count}
+  br i1 %go, label %b2, label %b4
+
+b2:
+  %off = add i16 %c, 100
+  %twice = shl i16 %acc, 1
+  %sum = xor i16 %twice, %off
+  %hit = icmp eq i16 %sum, %k
+  br i1 %hit, label %b5, label %b3
+
+b3:
+  %inext = add i16 %i, 1
+  %cnext = add i16 %c, 1
+  br label %b1
+
+b4:
+  ret i16 %acc
+
+b5:
+  ret i16 %i
+}}
+"
+    )
+}
+
+/// Queens' inner loop went the whole way round with `inc; add; cmp; jle` where gcc's stops at `inc; je`: a loop with
+/// another way out had no counted exit, so its test was never rewritten. A symbolic count with a way out counts to zero.
+#[test]
+fn test_a_loop_with_another_way_out_counts_to_zero_at_its_own_exit() {
+    let printed = same(&leaving("%n", 5), &[&[0, 9], &[1, 9], &[7, 9], &[7, 0], &[300, 1]]);
+    assert!(printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")), "{printed}");
+}
+
+/// The same with a count of 32 that the other way out leaves early: the head test is not fused with the step by
+/// rotation, so a zero test saves nothing and the counter read at the way out costs an add there. mandel's
+/// `cmp bx, 32` became `or bx, bx` and two fix-ups, 960 more instructions.
+#[test]
+fn test_a_constant_count_with_another_way_out_keeps_its_counter() {
+    let printed = same(&leaving("32", 5), &[&[0, 9], &[0, 0], &[0, 3000]]);
+    assert!(!printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")), "{printed}");
 }
