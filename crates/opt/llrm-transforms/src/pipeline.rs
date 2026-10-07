@@ -69,7 +69,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             optimize: true,
-            limits: Limits::default(),
+            limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default(),
             lcssa: true,
             floatloop: true,
@@ -102,10 +102,9 @@ impl Options {
         Self { unroll: false, peel: false, unswitch: false, ..Self::default() }
     }
 
-    /// -O3: LLVM's -O3 budgets, twice the unrolled size and a 250 inline threshold.
+    /// -O3: LLVM's -O3 budgets, twice the target's unroll budget and a 250 inline threshold.
     pub fn aggressive() -> Self {
-        let limits = Limits::default();
-        Self { limits: Limits { max_unrolled_operations: 2 * limits.max_unrolled_operations, ..limits }, inline: inline::Threshold::new(250), ..Self::default() }
+        Self { limits: Limits { target_percent: 200, ..Limits::default() }, inline: inline::Threshold::new(250), ..Self::default() }
     }
 
     /// -Os: no copy grows the code. Inlining keeps -O2's threshold: the
@@ -114,7 +113,7 @@ impl Options {
     /// shrinks the code here. A lower one would also refuse a constant-site
     /// clone that folds away.
     pub fn size() -> Self {
-        Self { limits: Limits { grows: false, ..Limits::default() }, inline: inline::Threshold::default().for_size(), ..Self::default() }
+        Self { limits: Limits { grows: false, target_percent: 100, ..Limits::default() }, inline: inline::Threshold::default().for_size(), ..Self::default() }
     }
 
     /// Whether code size outranks speed where they conflict: -Os and -Oz.

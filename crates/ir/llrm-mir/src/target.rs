@@ -154,6 +154,9 @@ pub struct OperationCosts {
     pub copy: i64,
     pub copy_cell: i64,
     pub direction: i64,
+    /// How many operations a completely unrolled loop may total before the work it saves is boosted
+    /// (`peelsize::Limits`); 0: the target states none and the pass's own is used.
+    pub unroll_budget: i64,
 }
 
 impl OperationCosts {
@@ -216,6 +219,7 @@ impl Default for OperationCosts {
             copy: 1,
             copy_cell: 1,
             direction: 1,
+            unroll_budget: 0,
         }
     }
 }

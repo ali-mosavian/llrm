@@ -30,7 +30,7 @@ fn each_level_selects_its_pipeline() {
     assert_eq!(pipeline(&["-O"]), o1);
     assert_eq!(pipeline(&["-Og"]), o1);
     let o3 = pipeline(&["-O3"]);
-    assert_eq!(o3.limits, Limits { max_unrolled_operations: 400, ..Limits::default() });
+    assert_eq!(o3.limits, Limits { target_percent: 200, ..Limits::default() });
     assert_eq!((o3.inline, o3.unroll, o3.peel), (Threshold::new(250), true, true));
     let os = pipeline(&["-Os"]);
     assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default().for_size(), true));

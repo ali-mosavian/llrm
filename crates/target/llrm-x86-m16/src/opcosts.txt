@@ -37,6 +37,11 @@ fill_cell = rep_stos_cell
 copy = rep_movs + 2*push_r + 2*pop_seg + 3*mov_ri
 copy_cell = rep_movs_cell
 direction = 2*alu_rr
+# The operations a completely unrolled loop may total, before the work its copy no longer does boosts it up to
+# fourfold (peelsize). From GCC's `max-completely-peeled-insns` (200). Calibrated on tools/bench: at LLVM's 150
+# matmul (C) runs 15.5% more instructions, nbody_fixed (BASIC) 6.5% more and 19.9% more memory operands, for 71% and
+# 38% less code: this target's gate lets executed work only fall, so the larger budget stays.
+unroll_budget = 200
 
 # What each operation comes to in code bytes: the instruction's bytes, twice
 # where an operation becomes more than the instruction (the extensions, copies,
