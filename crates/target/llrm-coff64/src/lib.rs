@@ -49,7 +49,7 @@ mod tests {
 
     fn text(image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
         let spans = vec![[0, image.len()]];
-        Section { name: "A_TEXT".into(), role: Role::Text, near: true, align: 16, image, spans, relocs, lines: Vec::new() }
+        Section { name: "A_TEXT".into(), role: Role::Text, near: true, align: 16, image, spans, relocs }
     }
 
     fn object(sections: Vec<Section>, symbols: Vec<Symbol>) -> Object {
@@ -102,5 +102,14 @@ mod tests {
         let mut dirs = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect::<Vec<_>>()).unwrap_or_default();
         dirs.push("/usr/lib/llvm-20/bin".into());
         dirs.iter().map(|dir| dir.join(tool)).find(|path| path.exists()).ok_or(())
+    }
+
+    /// `-g` reached a writer with no debug format: refused, not left out of an object a debugger
+    /// then found empty.
+    #[test]
+    fn debug_information_is_refused_not_dropped() {
+        let mut made = object(vec![text(vec![0], vec![])], vec![]);
+        made.debug = Some(llrm_object::debug::Info::default());
+        assert!(write(&made).unwrap_err().0.contains("debug information"));
     }
 }
