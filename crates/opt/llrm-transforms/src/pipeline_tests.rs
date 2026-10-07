@@ -448,7 +448,7 @@ b3:
 }
 ",
     );
-    let applied = Applied { options: pipeline::Options { inline: crate::inline::Threshold::new(0), ..pipeline::Options::default() }, ..Applied::default() };
+    let applied = Applied { options: pipeline::Options { inline: crate::inline::Threshold::none(), ..pipeline::Options::default() }, ..Applied::default() };
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
         program.exports.entries.insert("f".to_owned());
         pipeline::applied(program, &applied)

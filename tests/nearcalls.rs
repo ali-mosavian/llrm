@@ -62,7 +62,7 @@ fn test_c_passes_the_field_a_static_function_reads_through_its_struct_pointer() 
 #[test]
 fn test_nib_passes_the_slice_fields_an_unexported_function_reads() {
     let source = "fn total(a: &[i16], i: i16) -> i16:\n    if i == 0:\n        return a[0]\n    return total(a, i - 1) + a[i]\n\nfn main() -> i16:\n    let mut a: i16[8] = [1] * 8\n    a[3] = 5\n    print(total(a, 3))\n    return 0\n";
-    let asm = compiled("llrm-nib", "promote.nib", source, &["-fno-inline-functions"]);
+    let asm = compiled("llrm-nib", "promote.nib", source, &["-fno-inline-functions", "-fno-inline-functions-called-once"]);
     let body = procedure(&asm, "_total");
     // The descriptor's words were read through the pointer: its length at +0, its data pointer at +4.
     assert!(!body.contains("es:[bx+4]") && !body.contains("[bx+4]"), "{asm}");
@@ -73,7 +73,7 @@ fn test_nib_passes_the_slice_fields_an_unexported_function_reads() {
 /// callers pass and the check folds against `row`'s range; the constant is then no argument at all.
 #[test]
 fn test_nib_queens_loses_its_bounds_checks_and_the_arguments_that_carried_them() {
-    let asm = compiled("llrm-nib", "queens.nib", include_str!("../bench/queens/queens.nib"), &["-fno-inline-functions"]);
+    let asm = compiled("llrm-nib", "queens.nib", include_str!("../bench/queens/queens.nib"), &["-fno-inline-functions", "-fno-inline-functions-called-once"]);
     assert!(!asm.contains("N$EBND") && !asm.contains("pushw 12"), "{asm}");
 }
 
@@ -82,7 +82,7 @@ fn test_nib_queens_loses_its_bounds_checks_and_the_arguments_that_carried_them()
 #[test]
 fn test_nib_passes_a_global_array_slice_as_its_offset() {
     let source = "var table: i16[16] = [0] * 16\n\nfn total(a: &[i16], i: i16) -> i16:\n    if i == 0:\n        return a[0]\n    return total(a, i - 1) + a[i]\n\nfn main() -> i16:\n    table[3] = 5\n    print(total(table, 3))\n    return 0\n";
-    let asm = compiled("llrm-nib", "table.nib", source, &["-fno-inline-functions"]);
+    let asm = compiled("llrm-nib", "table.nib", source, &["-fno-inline-functions", "-fno-inline-functions-called-once"]);
     let body = procedure(&asm, "_total");
     assert!(!body.contains("les ") && !body.contains("es:[") && body.contains("ret 4"), "{asm}");
 }
@@ -91,7 +91,7 @@ fn test_nib_passes_a_global_array_slice_as_its_offset() {
 /// through `ss:`, one word on the stack, where `les` loaded a segment for it at every call.
 #[test]
 fn test_nib_reads_a_local_array_slice_through_ss() {
-    let asm = compiled("llrm-nib", "queens.nib", include_str!("../bench/queens/queens.nib"), &["-fno-inline-functions"]);
+    let asm = compiled("llrm-nib", "queens.nib", include_str!("../bench/queens/queens.nib"), &["-fno-inline-functions", "-fno-inline-functions-called-once"]);
     let body = procedure(&asm, "_safe");
     assert!(body.contains("ss:[") && !body.contains("les "), "{asm}");
 }

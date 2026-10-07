@@ -609,24 +609,25 @@ b3:
     assert!(constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, priced.call, Threshold::default().for_size()).is_empty());
 }
 
-/// Tuned for size, the last call of a private function inlines at any size: no copy is made, and
-/// the call, its arguments and the return go (QCport -Os, -548 bytes). Tuned for speed a body
-/// over the budget stays a call; so does one called twice, at any level.
+/// The last call of a private function inlines at any size, tuned for size or for speed: no copy is made, and
+/// the call, its arguments and the return go (QCport -Os, -548 bytes; queens -O2, -30% clocks). One called
+/// twice stays a call at any level, and where nothing inlines (`Threshold::none()`) so does the last call.
 #[test]
-fn test_the_only_call_of_a_large_private_function_inlines_tuned_for_size() {
+fn test_the_only_call_of_a_large_private_function_inlines_at_every_level() {
     let body: String = (0..40).map(|at| format!("  %t{at} = add i16 {}, {at}\n", if at == 0 { "%x".to_owned() } else { format!("%t{}", at - 1) })).collect();
     let text = |calls: usize| {
         let calls: String = (0..calls).map(|at| format!("  %r{at} = call i16 @big(i16 %x)\n")).collect();
         format!("define internal i16 @big(i16 %x) {{\nb0:\n{body}  ret i16 %t39\n}}\n\ndefine i16 @main(i16 %x) {{\nb0:\n{calls}  ret i16 %r0\n}}\n")
     };
-    let sized = Threshold::default().for_size();
-    let mut one = parsed(&text(1));
-    assert!(inline_with(&mut one, "main", 8, sized), "{}", printed(&one));
-    assert!(!printed(&one).contains("call "));
-    let mut fast = parsed(&text(1));
-    assert!(!inline_with(&mut fast, "main", 8, Threshold::default()));
-    let mut two = parsed(&text(2));
-    assert!(!inline_with(&mut two, "main", 8, sized));
+    for threshold in [Threshold::default().for_size(), Threshold::default()] {
+        let mut one = parsed(&text(1));
+        assert!(inline_with(&mut one, "main", 8, threshold), "{}", printed(&one));
+        assert!(!printed(&one).contains("call "));
+        let mut two = parsed(&text(2));
+        assert!(!inline_with(&mut two, "main", 8, threshold));
+    }
+    let mut none = parsed(&text(1));
+    assert!(!inline_with(&mut none, "main", 8, Threshold::none()));
 }
 
 /// Tuned for size a pure body every actual of which is known folds whole, though `folded` follows
