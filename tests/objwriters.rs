@@ -244,3 +244,63 @@ fn a_pdb_holds_the_functions_of_an_llrm_object_and_a_clang_cl_object() {
         assert!(text.contains(wanted), "no {wanted}:\n{text}");
     }
 }
+
+/// Whether some instruction between a backward branch's target and the branch writes the frame
+/// cell at `offset` from ebp, in `listing` (llvm-objdump's): a loop that keeps its variable in a
+/// register and stores it after the loop leaves the debugger's cell stale in every iteration.
+fn stores_in_a_loop(listing: &str, offset: i64) -> bool {
+    let lines: Vec<(u64, &str)> = listing
+        .lines()
+        .filter_map(|line| {
+            let (address, instruction) = line.trim().split_once(':')?;
+            Some((u64::from_str_radix(address, 16).ok()?, instruction.trim()))
+        })
+        .collect();
+    let cell = if offset < 0 { format!("-0x{:x}(%ebp)", -offset) } else { format!("0x{offset:x}(%ebp)") };
+    lines.iter().any(|&(at, instruction)| {
+        let Some(target) = instruction.strip_prefix('j').and_then(|jump| u64::from_str_radix(jump.split("0x").nth(1)?.split_whitespace().next()?, 16).ok()) else { return false };
+        target < at && lines.iter().any(|&(inside, one)| (target..=at).contains(&inside) && one.ends_with(&cell))
+    })
+}
+
+/// -O2 with `-g`: a loop's variables are read where the PDB says they are. `s` and `i` are live
+/// across the loop, so each iteration writes the frame cell the PDB's `S_DEFRANGE_REGISTER_REL`
+/// names; before #757 the loop kept both in registers and stored them after it, and a debugger
+/// read the initial values at every line of the loop. The same loop without `-g` stores nothing
+/// there, which shows the check can see a stale cell.
+#[test]
+fn a_loops_variables_are_current_in_the_frame_cell_the_pdb_names() {
+    let (Some(link), Some(pdbutil), Some(objdump)) = (llvm("lld-link"), llvm("llvm-pdbutil"), llvm("llvm-objdump")) else {
+        eprintln!("skipped: needs lld-link, llvm-pdbutil and llvm-objdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    std::fs::write(dir.join("l.c"), "int __cdecl sum(int n)\n{\n    int s = 0;\n    int i;\n    for (i = 0; i < n; i++)\n        s += i * 3;\n    return s;\n}\n").unwrap();
+    let disassembly = |flags: &[&str], exe: &str| {
+        let made = compile(&dir.join("l.c"), &[&["-m32", "-O2", "-fobject-format=coff"], flags].concat(), &dir.join("l.obj"));
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        let linked = Command::new(&link).args(["/machine:x86", "/subsystem:console", "/entry:sum", "/nodefaultlib", "/debug", "/pdb:l.pdb", &format!("/out:{exe}"), "l.obj"]).current_dir(dir).output().unwrap();
+        assert!(linked.status.success(), "{}{}", String::from_utf8_lossy(&linked.stdout), String::from_utf8_lossy(&linked.stderr));
+        String::from_utf8_lossy(&Command::new(&objdump).args(["-d", "--no-show-raw-insn", exe]).current_dir(dir).output().unwrap().stdout).into_owned()
+    };
+    let listing = disassembly(&["-g"], "g.exe");
+    let symbols = String::from_utf8_lossy(&Command::new(&pdbutil).args(["dump", "--symbols"]).arg(dir.join("l.pdb")).output().unwrap().stdout).into_owned();
+    // Each local's frame offset: its S_LOCAL, then the S_DEFRANGE_REGISTER_REL that follows.
+    let mut offsets = std::collections::BTreeMap::new();
+    let mut current = String::new();
+    for line in symbols.lines().map(str::trim) {
+        if line.split_once("| ").is_some_and(|(_, record)| record.starts_with("S_LOCAL")) {
+            current = line.split('`').nth(1).unwrap_or_default().to_owned();
+        } else if let Some(rest) = line.strip_prefix("register = EBP, offset = ") {
+            offsets.insert(current.clone(), rest.split(',').next().unwrap().parse::<i64>().unwrap());
+        }
+    }
+    for variable in ["s", "i"] {
+        let offset = *offsets.get(variable).unwrap_or_else(|| panic!("no frame location for {variable}:\n{symbols}"));
+        assert!(stores_in_a_loop(&listing, offset), "{variable} at ebp{offset:+} is not written in the loop:\n{listing}");
+    }
+    // The negative control: the same loop without -g has no homes, and the check says so.
+    let bare = disassembly(&[], "b.exe");
+    assert!(offsets.values().all(|&offset| !stores_in_a_loop(&bare, offset)), "the check sees stores that are not there:\n{bare}");
+}
