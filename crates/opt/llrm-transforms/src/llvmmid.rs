@@ -164,7 +164,7 @@ pub fn imported(text: &str) -> Result<Module, String> {
         if line.starts_with("declare ") && EXPANDED.iter().any(|name| line.contains(&format!("@llvm.{name}."))) {
             continue;
         }
-        match expanded(line) {
+        match expanded(&line.replace("= tail call ", "= call ")) {
             Some(lines) => lines.iter().for_each(|one| {
                 kept.push_str(one);
                 kept.push('\n');
@@ -292,7 +292,7 @@ mod tests {
     /// stopped at "@main: @llvm.umax.i16" after the import.
     #[test]
     fn a_min_or_max_is_read_as_the_compare_and_select_it_means() {
-        let text = format!("{HEAD}declare i16 @llvm.umax.i16(i16, i16)\n\ndefine i16 @f(i16 %a, i16 %b) {{\nb0:\n  %r = call i16 @llvm.umax.i16(i16 %a, i16 %b)\n  ret i16 %r\n}}\n");
+        let text = format!("{HEAD}declare i16 @llvm.umax.i16(i16, i16)\n\ndefine i16 @f(i16 %a, i16 %b) {{\nb0:\n  %r = tail call i16 @llvm.umax.i16(i16 %a, i16 %b)\n  ret i16 %r\n}}\n");
         let printed = llrm_mir::print::module(&imported(&text).unwrap_or_else(|error| panic!("{error}")));
         assert!(printed.contains("icmp ugt") && printed.contains("select") && !printed.contains("llvm.umax"), "{printed}");
     }
