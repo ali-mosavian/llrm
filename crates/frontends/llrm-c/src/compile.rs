@@ -206,9 +206,13 @@ pub fn recorded_for(source: &Path, includes: &[String], debug: bool, watcom: &[&
     let unbuilt = || hir::Unsupported("llrm was built without the toolchain feature".into());
     let wccq = Path::new(option_env!("LLRM_WCCQ_DIR").ok_or_else(unbuilt)?).join(&profile.cpu).join("wccq");
     let header = format!("-fi={}", root.join(&profile.header).display());
-    let flags: Vec<&str> = profile.flags.iter().map(String::as_str).chain([header.as_str()]).collect();
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
+    // What GCC predefines and programs test (`__INT_MAX__`, `__SIZE_TYPE__`, `__BYTE_ORDER__`), as the target's sizes make them.
+    let defined = scratch.path().join("predefined.h");
+    fs::write(&defined, crate::predefined::header(profile.cpu == "386")).map_err(|error| failed(error.to_string()))?;
+    let predefined = format!("-fi={}", defined.display());
+    let flags: Vec<&str> = profile.flags.iter().map(String::as_str).chain([header.as_str(), predefined.as_str()]).collect();
     let out = scratch.path().join("unit.cgs");
     let absolute = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let searched = includes.iter().map(|one| format!("-I{}", absolute(Path::new(one)).display()));
