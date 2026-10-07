@@ -54,6 +54,7 @@ pub mod peep;
 pub mod postings;
 pub mod peephole;
 pub mod phielim;
+pub mod pressuresink;
 pub mod pointers;
 pub mod prologue;
 pub mod regthrash;
