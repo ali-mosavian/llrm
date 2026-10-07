@@ -87,9 +87,7 @@ pub struct Procedure {
     /// An interrupt handler's data group, whose selector it loads into DS
     /// and ES; `None` for a procedure entered by a call.
     pub interrupt: Option<Addr>,
-    /// Tuned for size (-Os): fewer bytes at the price of clocks, as the frame's `push bp; mov
-    /// bp,sp; sub sp,N` as `enter N,0` (4 bytes for 6, 14 clocks for 3 on the 486), and the
-    /// jumps `objbuild` lays out.
+    /// Tuned for size (-Os): the jumps `objbuild` lays out.
     pub size: bool,
     /// Bytes the runtime's entry call (B$ENSA) takes below BP, which no instruction of the
     /// procedure shows: its header and the locals `cx` names.
@@ -374,17 +372,16 @@ fn parts(procedure: &Procedure, omit: bool) -> (Vec<Semantics>, Vec<Semantics>) 
     } else if framed {
         leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
     }
+    // No `enter`: 14 clocks on the 486 (Intel 240440-002) against 3 for the three instructions it replaces,
+    // and neither GCC nor LLVM emits it.
     let mut enter: Vec<Semantics> = Vec::new();
-    if framed && reserve != 0 && procedure.size && procedure.stack_check.is_none() {
-        let count = |value, width| Loc::Imm(ir::Imm { value, width, address: None });
-        enter.push(semantics(Operation::Nothing, "enter", vec![], vec![count(reserve, 2), count(0, 1)]));
-    } else if framed {
+    if framed {
         enter.extend([
             semantics(Operation::Push, "push", vec![], vec![bp.clone()]),
             semantics(Operation::Move, "mov", vec![bp], vec![sp.clone()]),
         ]);
     }
-    if reserve != 0 && !(framed && procedure.size && procedure.stack_check.is_none()) {
+    if reserve != 0 {
         enter.push(semantics(
             Operation::Binary,
             "sub",
@@ -1299,15 +1296,14 @@ mod tests {
         assert!(!has(&lines, "mov sp, bp") && !has(&lines, "pop bp"));
     }
 
-    /// Tuned for size, a frame with locals opens with `enter N,0` (4 bytes) where `push bp; mov
-    /// bp,sp; sub sp,N` is 6: 407 QCport functions. One with no locals keeps `push bp; mov bp,sp`.
+    /// Tuned for size, a frame with locals opened with `enter N,0` (4 bytes against 6, but 14 clocks against 3
+    /// on the 486, 407 QCport functions): no level opens one.
     #[test]
-    fn test_a_frame_with_locals_opens_with_enter_where_asked() {
-        let entered = _printed_entering(vec![through_bp()], 4, true);
-        assert_eq!(entered[1], "enter 4, 0");
-        assert!(!has(&entered, "push bp") && !has(&entered, "sub sp, 4"), "{entered:?}");
-        let plain = _printed_entering(vec![through_bp()], 4, false);
-        assert_eq!(plain[1..4], ["push bp", "mov bp, sp", "sub sp, 4"]);
+    fn test_no_level_opens_a_frame_with_enter() {
+        for size in [true, false] {
+            let entered = _printed_entering(vec![through_bp()], 4, size);
+            assert_eq!(entered[1..4], ["push bp", "mov bp, sp", "sub sp, 4"], "size {size}: {entered:?}");
+        }
         let bare = _printed_entering(vec![through_bp()], 0, true);
         assert_eq!(bare[1..3], ["push bp", "mov bp, sp"]);
     }
@@ -1334,7 +1330,7 @@ mod tests {
         assert_eq!(externs, [("FOO".to_owned(), "byte".to_owned()), ("BAR".to_owned(), "far".to_owned())]);
         let (plain, none) = _checked(None, 4);
         assert!(plain.iter().all(|one| !one.contains("cmp sp") && !one.contains("BAR")) && none.is_empty(), "{plain:?}");
-        assert_eq!(plain[1], "enter 4, 0", "the check turns -Os's `enter` into push/mov/sub, whose carry it tests");
+        assert_eq!(plain[1..4], ["push bp", "mov bp, sp", "sub sp, 4"]);
     }
 
     /// Return-tail layout must count the pop/leave absent from allocated LIR.

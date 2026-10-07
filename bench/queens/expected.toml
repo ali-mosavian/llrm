@@ -1,4 +1,4 @@
-reason = "the last call of a function nothing else reaches inlines at any size (LLVM's last-call-to-static bonus, gcc's -finline-functions-called-once): C kernels' static helpers go with their one call; every row better"
+reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 for push/mov/sub (Intel 240440-002); -Os counts and bytes rise by what enter saved (2 bytes, 2 instructions per frame), rec* rows are #777's and untouched here"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -25,9 +25,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 183170
+instructions = 184276
 memory_operands = 30723
-code_bytes = 190
+code_bytes = 194
 data_bytes = 0
 bss_bytes = 0
 
@@ -40,12 +40,11 @@ bss_bytes = 0
 kernel_ms = 3.0854
 
 [nib.Os]
-instructions = 272455
+instructions = 280729
 memory_operands = 75888
-code_bytes = 302
+code_bytes = 308
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.6345
 
 [ow.O2]
 instructions = 217955
