@@ -658,8 +658,9 @@ impl Bounds {
 
 /// The headers of the loops whose bounds a change can alter: the loops holding a block it reached, the loops under a
 /// branch (or an assume, or any call) whose condition it reached, the loops that start from a block whose edges' facts
-/// changed (those `bounds` was worked under against `held`, now), and then every loop in the same nest, and every loop
-/// that starts from what one of those leaves: the block its header's dominator is in, or a block that enters it.
+/// changed (those `bounds` was worked under against `held`, now), and then every loop that starts from what one of
+/// those leaves: the block its header's dominator is in, or a block that enters it. (A loop around a dirty one is
+/// dirty by the first two: they name its blocks, and its header dominates theirs.)
 pub fn loops_reached(
     function: &llrm_mir::module::Function,
     shape: &cfg::Shape,
@@ -699,9 +700,8 @@ pub fn loops_reached(
     loop {
         let before = dirty.len();
         for one in loops {
-            let nested = loops.iter().any(|other| dirty.contains(&other.header) && (other.body.is_superset(&one.body) || one.body.is_superset(&other.body)));
             let hosted = hosts.iter().any(|(header, held)| *header == one.header && held.iter().any(|at| dirty.contains(at)));
-            if nested || hosted {
+            if hosted {
                 dirty.insert(one.header);
             }
         }
