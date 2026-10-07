@@ -49,7 +49,7 @@ def cause(text: str) -> str:
     line = re.sub(r"^llrm-c:\s*", "", line)
     line = re.sub(r"^\S+\.c:\d+(:\d+)?:\s*", "", line)
     line = re.sub(r"'[^']*'", "'_'", line)
-    line = re.sub(r"\b\d+\b", "N", line)
+    line = re.sub(r"\b(n)?\d+\b", lambda found: "nN" if found.group(1) else "N", line)
     return line[:160]
 
 
