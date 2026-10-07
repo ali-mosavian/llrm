@@ -527,6 +527,16 @@ impl Selector<'_, '_, '_> {
         let (pointer, size) = (self.pointer(pointer)?, self.size(self.type_of(constant))?);
         let Operand::Constant(id) = constant else { unreachable!("a constant") };
         let ConstantKind::Float(bits) = self.module.context.get(id).kind else { return refuse("a float constant of no bits") };
+        // An extended float is its 10 bytes: a dword, a dword and a word, as a global's initializer lays them down.
+        if size == 10 {
+            let image = llrm_mir::types::x87_extended(bits);
+            for (by, width) in [(0_usize, 4_u32), (4, 4), (8, 2)] {
+                let value = image[by..by + width as usize].iter().rev().fold(0_i64, |acc, byte| acc << 8 | i64::from(*byte));
+                let what = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(by as i64), width))], vec![Loc::Imm(Imm { value, width, address: None })]);
+                out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
+            }
+            return Ok(());
+        }
         let bits = if size == 4 { u128::from(bits as u32) } else { u128::from(bits) };
         let low = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer, 4))], vec![Loc::Imm(Imm { value: bits as u32 as i64, width: 4, address: None })]);
         let what = if size == 8 {
