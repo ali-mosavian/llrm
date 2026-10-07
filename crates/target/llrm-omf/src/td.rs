@@ -35,6 +35,9 @@ const STATIC: u8 = 0x00;
 const TYPEDEF: u8 = 0x06;
 const TAG: u8 = 0x07;
 const FUNCTION: u8 = 0x18;
+/// A local or a parameter in a register, and the register's number after the flag.
+const REGISTER_LOCAL: u8 = 0x04;
+const REGISTER_PARAMETER: u8 = 0x0C;
 
 /// Where a type's own indices begin: the ones below are the scalars'.
 const FIRST_INDEX: u16 = 0x18;
@@ -59,6 +62,17 @@ fn index(number: u16) -> Result<Vec<u8>, Error> {
         0..=0x7F => Ok(vec![number as u8]),
         0x80..=0x7FFF => Ok(vec![0x80 | (number >> 8) as u8, (number & 0xFF) as u8]),
         _ => refused(format!("type index {number} does not fit")),
+    }
+}
+
+/// Borland's number of a 16-bit or 8-bit x86 register (its encoding: AX 0, CX 1, DX 2, BX 3, SP 4, BP 5,
+/// SI 6, DI 7; AL 0 .. BH 7); the records are x86's alone, so the names are too.
+fn register_number(variable: &str, register: &str) -> Result<u8, Error> {
+    const WORDS: [&str; 8] = ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"];
+    const BYTES: [&str; 8] = ["al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"];
+    match WORDS.iter().chain(&BYTES).position(|one| *one == register) {
+        Some(at) => Ok((at % 8) as u8),
+        None => refused(format!("{variable} is in register {register}, which has no Borland number")),
     }
 }
 
@@ -202,6 +216,15 @@ impl Builder<'_> {
                 data.extend(frame_offset(&variable.name, *disp)?);
             }
             Location::Static { symbol, disp } => return self.placed(&variable.name, to, false, *symbol, *disp),
+            // A register a parameter arrives in and is there until the body starts: an entry of the body's scope,
+            // a register parameter's flag 0xC and the register's number.
+            Location::List(entries) if matches!(&entries[..], [(_, Location::Register(_))]) => {
+                let Location::Register(register) = &entries[0].1 else { unreachable!("matched") };
+                data.push(if variable.kind == Kind::Parameter { REGISTER_PARAMETER } else { REGISTER_LOCAL });
+                data.push(register_number(&variable.name, register)?);
+            }
+            // The optimiser removed it: Turbo Debugger's records have no "optimized out", so it is left out.
+            Location::List(entries) if entries.is_empty() => return Ok(Vec::new()),
             Location::Register(register) => return refused(format!("{} is in register {register}, which is not written yet", variable.name)),
             Location::List(_) => return refused(format!("{} has a location list, which is not written yet", variable.name)),
         }
@@ -244,7 +267,8 @@ impl Builder<'_> {
         let [range] = function.ranges[..] else { return refused(format!("{} has {} ranges: one is written", function.name, function.ranges.len())) };
         out.push(self.scope(range.section, range.offset)?);
         let parameters: Vec<&model::Variable> = function.variables.iter().filter(|one| one.kind == Kind::Parameter).collect();
-        let reversed: Vec<&model::Variable> = parameters.iter().rev().copied().collect();
+        // The ones a frame cell holds are the function's own; one a register holds is the body's.
+        let reversed: Vec<&model::Variable> = parameters.iter().rev().copied().filter(|one| !matches!(one.location, Location::List(_))).collect();
         out.extend(self.locals(&reversed)?);
         let (start, _) = function.body.unwrap_or((0, range.length));
         out.push(self.scope(range.section, range.offset + start)?);
@@ -517,5 +541,22 @@ mod tests {
         });
         let scopes: Vec<(u8, Vec<u8>)> = comments(&made).into_iter().filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE)).collect();
         assert_eq!(scopes[2..5], [(BEGIN_SCOPE, vec![1, 0x08, 0x00]), (LOCALS, vec![1, b'y', 0x04, 0x02, 0xFC, 0xFF]), (END_SCOPE, vec![0x10, 0x00])]);
+    }
+
+    /// A parameter that arrives in a register is an entry of the body's scope alone (Turbo C++ writes a register
+    /// parameter so, flag 0xC and the register's number: SI is 6, BL is 3), and one the optimiser removed has no
+    /// entry, which these records have no "optimized out" to say.
+    #[test]
+    fn a_register_parameter_is_the_bodys_entry_and_a_removed_one_is_left_out() {
+        let entry = Range { section: 0, offset: 0, length: 7 };
+        let in_register = |name: &str, register: &str| variable(name, 0, Kind::Parameter, Location::List(vec![(entry, Location::Register(register.into()))]));
+        let made = object(vec![int()], vec![in_register("p", "si"), in_register("c", "bl"), variable("g", 0, Kind::Parameter, Location::List(Vec::new())), variable("a", 0, Kind::Parameter, Location::Frame { disp: 6 })], |_| {});
+        let scopes: Vec<(u8, Vec<u8>)> = comments(&made).into_iter().filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE)).collect();
+        // The function's scope holds the parameter a cell holds; the body's, the registers' and that one again.
+        assert_eq!(scopes[1], (LOCALS, vec![1, b'a', 0x04, 0x0A, 0x06, 0x00]));
+        assert_eq!(scopes[3], (LOCALS, vec![1, b'p', 0x04, 0x0C, 0x06, 1, b'c', 0x04, 0x0C, 0x03, 1, b'a', 0x04, 0x0A, 0x06, 0x00]));
+        // A register Turbo Debugger has no number for is refused by name.
+        let wide = object(vec![int()], vec![in_register("w", "eax")], |_| {});
+        assert!(write::write(&wide).unwrap_err().to_string().contains("w is in register eax"));
     }
 }
