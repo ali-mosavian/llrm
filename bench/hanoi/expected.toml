@@ -1,4 +1,4 @@
-reason = "dead-argument elimination to a fixed point (LLVM DAE's MaybeLive): hanoi's three pegs only trade places in its calls and are never read, as gcc's hanoi.isra.0(n); memory operands -75% on C, -54% on Nib, every row better"
+reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 for push/mov/sub (Intel 240440-002); -Os counts and bytes rise by what enter saved (2 bytes, 2 instructions per frame), rec* rows are #777's and untouched here"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -39,9 +39,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 180214
+instructions = 212980
 memory_operands = 49147
-code_bytes = 75
+code_bytes = 77
 data_bytes = 0
 bss_bytes = 0
 

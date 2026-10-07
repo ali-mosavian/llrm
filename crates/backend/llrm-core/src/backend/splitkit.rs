@@ -889,7 +889,7 @@ pub fn local(body: &LirBody, value: u32, index: &Indexes, live: &dyn allocate::L
         let mut start = 0;
         while start < named.len() {
             let mut end = start;
-            while end + 1 < named.len() && occupied.interference(*register, width, (slot(named[start]), slot(named[end + 1]) + ranges::PER_INSN)).is_none() {
+            while end + 1 < named.len() && occupied.interference(*register, width, (slot(named[start]), index.window_end(block, named[end + 1]))).is_none() {
                 end += 1;
             }
             let count = end - start + 1;
@@ -1270,6 +1270,43 @@ mod tests {
         let third = index.at[&intervals::key(&body.blocks[0].insns[2])];
         assert_eq!(piece.segments(&body, &index), vec![intervals::Segment { start: third, end: third + intervals::PER_INSN }]);
         assert_eq!(index.position(&body.blocks[0], third + 1), 2);
+    }
+
+    /// What the allocator reads of the numbering besides the order of slots: where an instruction's window ends is where the
+    /// next one's begins, a block's end is where the next block's begins, a region's end is where the next region's start
+    /// is, and a join treats segments that touch as one. A segment ending where the next instruction begins touches
+    /// one that starts there; a numbering that left a gap between windows would split them.
+    #[test]
+    fn test_what_ends_where_the_next_begins_touches_it() {
+        let marker = Arc::new(Insn::new(2, Some((2, 3)), Some(crate::model::lir::inert()), Vec::new(), Vec::new()));
+        let first = vec![move_imm(0, 3, 0x40), marker, move_imm(4, 4, 1), push(6, 3), push(8, 4)];
+        let second = vec![push(10, 3), push(12, 4)];
+        let body = body("touching", vec![block(0, first, &[1]), block(1, second, &[])]);
+        let index = intervals::indexed(&body);
+        // A window ends at the slot of the instruction after it, and the last one's at the block's end.
+        for one in &body.blocks {
+            for position in 0..one.insns.len() {
+                if !one.insns[position].is_meta() {
+                    assert_eq!(index.window_end(one, position), index.slot(one, position + 1), "block {} position {position}", one.at);
+                }
+            }
+        }
+        // A block ends where the next one starts.
+        assert_eq!(index.span[&0].1, index.span[&1].0);
+        // Two regions that follow one another end and begin at one slot.
+        let (mut before, mut after) = (Region::default(), Region::default());
+        before.add(0, 0, 3);
+        after.add(0, 3, 5);
+        let (ends, begins) = (before.segments(&body, &index), after.segments(&body, &index));
+        assert_eq!(ends.last().map(|one| one.end), begins.first().map(|one| one.start));
+        // And a value live across the block boundary has two runs that touch, which a join makes one.
+        let live = intervals::intervals(&body, None);
+        let runs = &live[&3].segments;
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        assert_eq!(runs[0].end, runs[1].start);
+        let (left, right) = (intervals::Interval::new(3, vec![runs[0]]), intervals::Interval::new(5, vec![runs[1]]));
+        let joined = crate::backend::coalesce::_merged(&left, &right);
+        assert_eq!(joined.segments, vec![intervals::Segment { start: runs[0].start, end: runs[1].end }]);
     }
 
     /// A value whose register is taken before and after a loop, but free in

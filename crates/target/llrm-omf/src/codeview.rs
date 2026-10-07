@@ -19,9 +19,10 @@ fn narrow<T: TryFrom<i64>>(value: i64, what: &str) -> Result<T, Error> {
     T::try_from(value).or_else(|_| refused(format!("{what} {value} does not fit its field")))
 }
 
-fn scalar(one: model::Scalar) -> Result<Scalar, Error> {
+/// The scalar CodeView 4 as measured has a code for, None where it has none (a 64-bit integer, a bool).
+fn scalar(one: model::Scalar) -> Option<Scalar> {
     use model::Scalar as M;
-    Ok(match one {
+    Some(match one {
         M::Void => Scalar::Void,
         M::Char => Scalar::Char,
         M::Int { bytes: 1, signed: true } => Scalar::Int8,
@@ -35,14 +36,19 @@ fn scalar(one: model::Scalar) -> Result<Scalar, Error> {
         M::Float { bytes: 10 } => Scalar::Float80,
         M::Currency => Scalar::Currency,
         M::BasicString { far } => Scalar::String { far },
-        other => return refused(format!("no type for {other:?}")),
+        _ => return None,
     })
 }
 
-fn typed(one: &model::Type) -> Result<Type, Error> {
+/// `one` as a CodeView type; None where the format as measured has no record for it, and then none for what
+/// names it either (see `usable`).
+fn typed(one: &model::Type) -> Result<Option<Type>, Error> {
     use model::Type as M;
-    Ok(match one {
-        M::Scalar(one) => Type::Scalar(scalar(*one)?),
+    Ok(Some(match one {
+        M::Scalar(one) => match scalar(*one) {
+            Some(one) => Type::Scalar(one),
+            None => return Ok(None),
+        },
         M::FixedString(length) => Type::FixedString(narrow(i64::from(*length), "a STRING's length")?),
         M::Array { element, bytes: None } => Type::Array(*element),
         M::Array { element, bytes: Some(bytes) } => Type::Sized { element: *element, bytes: *bytes },
@@ -67,7 +73,26 @@ fn typed(one: &model::Type) -> Result<Type, Error> {
         M::Enum { name, .. } => return refused(format!("enum {name} is not written yet")),
         M::Typedef { name, .. } => return refused(format!("typedef {name} is not written yet")),
         M::Qualified { .. } => return refused("const and volatile are not written yet"),
-    })
+    }))
+}
+
+/// Which types CodeView can write: those it has a record for, and those that name only such. A variable of
+/// another is left out, and a procedure naming one is written as `void ()`: what the C frontend did for every
+/// format before a 64-bit integer was a type of the model, now said once where the format's limit is.
+fn usable(info: &Info, written: &[Option<Type>]) -> Vec<bool> {
+    let mut usable: Vec<bool> = written.iter().map(Option::is_some).collect();
+    loop {
+        let mut changed = false;
+        for (at, one) in info.types.iter().enumerate() {
+            if usable[at] && one.references().into_iter().any(|target| !usable.get(target).copied().unwrap_or(false)) {
+                usable[at] = false;
+                changed = true;
+            }
+        }
+        if !changed {
+            return usable;
+        }
+    }
 }
 
 fn data(object: &Object, variable: &model::Variable) -> Result<Option<cvwrite::Data>, Error> {
@@ -78,9 +103,14 @@ fn data(object: &Object, variable: &model::Variable) -> Result<Option<cvwrite::D
 fn module(object: &Object, info: &Info) -> Result<cvwrite::Module, Error> {
     // QB 4.5's module record is nameless.
     let name = (info.producer != model::Producer::Qb45).then(|| object.name.clone());
-    let types = info.types.iter().map(typed).collect::<Result<Vec<_>, Error>>()?;
+    let made = info.types.iter().map(typed).collect::<Result<Vec<_>, Error>>()?;
+    let usable = usable(info, &made);
+    let mut types: Vec<Type> = made.into_iter().zip(&usable).map(|(one, &usable)| one.filter(|_| usable).unwrap_or(Type::Scalar(Scalar::Void))).collect();
+    // A procedure CodeView cannot write is `void ()`, a type of its own at the end of the table.
+    let empty = types.len();
+    types.push(Type::Procedure { result: None, parameters: Vec::new() });
     let mut written = cvwrite::Module { name, types, ..cvwrite::Module::default() };
-    for global in &info.globals {
+    for global in info.globals.iter().filter(|one| usable[one.r#type]) {
         written.data.extend(data(object, global)?);
     }
     if let Some(first) = info.code.first() {
@@ -92,7 +122,7 @@ fn module(object: &Object, info: &Info) -> Result<cvwrite::Module, Error> {
     for function in &info.functions {
         let mut statics = Vec::new();
         let mut locals = Vec::new();
-        for variable in &function.variables {
+        for variable in function.variables.iter().filter(|one| usable[one.r#type]) {
             match &variable.location {
                 Location::Frame { disp } => locals.push(cvwrite::Local { name: variable.name.clone(), r#type: variable.r#type, bp: narrow(*disp, "a frame offset")? }),
                 Location::Static { .. } => statics.extend(data(object, variable)?),
@@ -116,7 +146,7 @@ fn module(object: &Object, info: &Info) -> Result<cvwrite::Module, Error> {
         written.procedures.push(cvwrite::Procedure {
             name: function.name.clone(),
             symbol: object.symbols[function.symbol].name.clone(),
-            r#type: function.r#type,
+            r#type: if usable[function.r#type] { function.r#type } else { empty },
             length: narrow(range.length as i64, "a procedure's length")?,
             debug_start: narrow(start as i64, "a body's start")?,
             debug_end: narrow(end as i64, "a body's end")?,
@@ -237,12 +267,19 @@ mod tests {
         assert!(why.contains("x is in register ax"), "{why}");
     }
 
-    /// A 64-bit integer is refused with its type, not truncated to a long.
+    /// A 64-bit integer has no record in CodeView 4 as measured: a variable of one is left out, a procedure that
+    /// names one is `void ()`, and what is beside them is written. Neither is a long, which was a wrong value.
     #[test]
-    fn a_64_bit_integer_is_refused_not_narrowed() {
+    fn a_64_bit_integer_is_left_out_with_what_names_it_not_narrowed_and_not_refused() {
         let wide = T::Scalar(S::Int { bytes: 8, signed: true });
-        let why = write::write(&object(Vec::new(), vec![wide, procedure()])).unwrap_err().to_string();
-        assert!(why.contains("no type for"), "{why}");
+        let procedure = T::Procedure { result: Some(1), parameters: vec![0], convention: None };
+        let made = object(vec![local("x", model::Kind::Parameter, 4), local("w", model::Kind::Local, -8)], vec![int(), wide, procedure]);
+        let mut made = made;
+        made.debug.as_mut().unwrap().functions[0].variables[1].r#type = 1;
+        made.debug.as_mut().unwrap().functions[0].r#type = 2;
+        let shape = cvinfo::parse(&omf::parse(&write::write(&made).unwrap()).unwrap()).shape();
+        // `void` reads as STRING in CodeView's raw return code, as it does for any void function.
+        assert_eq!(shape, ["PARAM f.x: INTEGER", "PROC f flags 0 () -> STRING"], "{shape:#?}");
     }
 
     /// A parameter that arrives in a register (there until the body starts) and one the optimiser removed have

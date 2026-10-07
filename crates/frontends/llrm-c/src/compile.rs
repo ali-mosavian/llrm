@@ -1001,7 +1001,7 @@ mod tests {
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find("_summed proc").expect("_summed");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
-        assert!(body.contains(&"fadd dword ptr [bp+6]") && body.contains(&"enter 8, 0"), "{body:#?}");
+        assert!(body.contains(&"fadd dword ptr [bp+6]") && body.contains(&"sub sp, 8"), "{body:#?}");
     }
 
     /// The listing of each function in `fixture`, `-Os` on a 486.

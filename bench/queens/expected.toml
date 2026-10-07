@@ -1,45 +1,48 @@
-reason = "lsr counts a loop with another way out to zero at its own exit at -O2 (queens, quicksort); left as it is at -Os, where the setup is code and the trips an estimate. queens c -O2 and nib -O2 code +2..3 bytes and queens bas -O2 instructions +4.7%: ~9 setup instructions a call against one saved a trip, where the model assumes 10 trips and Safe's early exits give about 3 (issue 799)."
+reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 for push/mov/sub (Intel 240440-002); -Os counts and bytes rise by what enter saved (2 bytes, 2 instructions per frame), rec* rows are #777's and untouched here"
 blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 338429
-memory_operands = 103461
-code_bytes = 443
+instructions = 323224
+memory_operands = 104026
+code_bytes = 434
 data_bytes = 15
 bss_bytes = 0
+kernel_ms = 4.3181
 
 [bas.Os]
-instructions = 319614
-memory_operands = 91158
-code_bytes = 401
+instructions = 327333
+memory_operands = 104039
+code_bytes = 408
 data_bytes = 15
 bss_bytes = 0
+kernel_ms = 4.373
 
 [c.O2]
-instructions = 149297
-memory_operands = 30158
-code_bytes = 213
+instructions = 177154
+memory_operands = 30723
+code_bytes = 210
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 186242
-memory_operands = 26509
-code_bytes = 188
+instructions = 184276
+memory_operands = 30723
+code_bytes = 194
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 195078
-memory_operands = 40297
-code_bytes = 235
+instructions = 231273
+memory_operands = 46010
+code_bytes = 239
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 3.0854
 
 [nib.Os]
-instructions = 268320
-memory_operands = 63007
-code_bytes = 294
+instructions = 280729
+memory_operands = 75888
+code_bytes = 308
 data_bytes = 0
 bss_bytes = 0
 

@@ -96,3 +96,11 @@ def subprocess_text(argv):
     done = subprocess.run(argv, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
     return done.stdout
+
+
+def test_enter_costs_what_the_486_charges_for_it():
+    """`enter` fell to the default one clock: a frame opened with it read 3 clocks cheaper than push/mov/sub's 3 when it is
+    14 (Intel 240440-002), and the -Os rows that used it looked as fast as they were small."""
+    from iced_x86 import Decoder
+    enter = next(iter(Decoder(32, bytes([0xC8, 0x08, 0x00, 0x00]))))
+    assert harness.cost(enter, True, True, None) == 14
