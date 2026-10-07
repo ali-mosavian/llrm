@@ -38,6 +38,36 @@ impl Executed {
     }
 }
 
+/// What the MIR spill model forecast for a function (`driver::spill_model`), per entry, priced by the
+/// target's opcosts: the other side of the `pressure` channel's comparison with `executed`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Predicted {
+    pub peak: i64,
+    pub spilled: usize,
+    pub price: f64,
+    /// What the target charges a reload and a spill store, the units of `price`.
+    pub load: i64,
+    pub store: i64,
+}
+
+static PREDICTED: std::sync::Mutex<Vec<(String, Predicted)>> = std::sync::Mutex::new(Vec::new());
+
+/// Remember `forecast` for the function `name`; the model runs before selection.
+pub fn predict(name: &str, forecast: Predicted) {
+    PREDICTED.lock().expect("the forecasts").push((name.to_owned(), forecast));
+}
+
+/// The `pressure` channel's row: the forecast for `body` beside the spill code the allocator left in it.
+pub fn pressure(body: &LirBody) -> Option<String> {
+    let forecast = PREDICTED.lock().expect("the forecasts").iter().rev().find(|(name, _)| *name == body.name).map(|(_, one)| *one)?;
+    let done = executed(body)?;
+    let actual = done.reloads * forecast.load as f64 + done.stores * forecast.store as f64;
+    Some(format!(
+        "{} forecast peak {} spilled {} price {:.0}; allocator {:.0} reloads, {:.0} stores, {:.0} remats, price {:.0}",
+        body.name, forecast.peak, forecast.spilled, forecast.price, done.reloads, done.stores, done.remats, actual
+    ))
+}
+
 /// `executed` as one line, for the `cost` channel and dump, its jumps priced on `cpu`.
 pub fn summary(body: &LirBody, cpu: &Profile) -> String {
     match executed(body) {

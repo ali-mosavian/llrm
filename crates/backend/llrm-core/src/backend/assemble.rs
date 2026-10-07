@@ -200,6 +200,11 @@ pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Po
     if crate::support::debug::enabled("cost") {
         llrm_support::debug!("cost", "{}", executed::summary(&kept.body, target.cpu));
     }
+    if crate::support::debug::enabled("pressure") {
+        if let Some(row) = executed::pressure(&kept.body) {
+            llrm_support::debug!("pressure", "{row}");
+        }
+    }
     Ok(kept)
 }
 
