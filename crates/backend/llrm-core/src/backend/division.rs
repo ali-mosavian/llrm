@@ -395,6 +395,24 @@ mod tests {
         }
     }
 
+    /// #789 gave the multiply chains a `lea` step; the remainder's quotient-times-divisor took it for a binary operation
+    /// and named it `lea r, r2`, which no instruction is: a flat target's `x % 10` failed to assemble ("Semantics(op=BINARY,
+    /// name='lea' ...)") at -O2 on a Pentium.
+    #[test]
+    fn test_a_remainders_product_makes_its_lea_step_as_an_address() {
+        let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "P5", false).unwrap();
+        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        let mut count = 4..;
+        let mut fresh = || count.next().unwrap();
+        for signed in [true, false] {
+            let parts = if signed { reciprocal(ir::Held { value: 1, width: 4 }, 10, &results, &mut fresh, m32, true, None) } else { unsigned_reciprocal(ir::Held { value: 1, width: 4 }, 10, &results, &mut fresh, m32, true, None) }
+                .unwrap()
+                .expect("a reciprocal");
+            assert!(!parts.iter().any(|one| one.name.as_deref() == Some("lea") && one.op == ir::Operation::Binary), "signed {signed}: {parts:?}");
+            assert!(parts.iter().any(|one| one.name.as_deref() == Some("lea") && one.op == ir::Operation::Address), "signed {signed}: {parts:?}");
+        }
+    }
+
     /// LNGMXX's q+r needs both answers, including negative truncation and INT_MIN.
     #[test]
     fn test_reciprocal_preserves_signed_quotient_and_remainder() {
