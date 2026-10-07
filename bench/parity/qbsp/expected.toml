@@ -1,34 +1,31 @@
-reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 for push/mov/sub (Intel 240440-002); -Os counts and bytes rise by what enter saved (2 bytes, 2 instructions per frame), rec* rows are #777's and untouched here"
+reason = "a mask compared with zero is test with the mask as its immediate, not a copy and-ed for its flags (isel pattern and_tested takes a constant mask): parity/control, qbsp, recpow and others fewer instructions"
 blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 1064
+instructions = 1056
 memory_operands = 463
-code_bytes = 738
+code_bytes = 734
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0231
 
 [bas.Os]
-instructions = 1157
+instructions = 1149
 memory_operands = 535
-code_bytes = 663
+code_bytes = 662
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0247
 
 [c.O2]
-instructions = 337
+instructions = 329
 memory_operands = 87
-code_bytes = 413
+code_bytes = 407
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0049
 
 [c.Os]
-instructions = 337
+instructions = 326
 memory_operands = 87
-code_bytes = 356
+code_bytes = 355
 data_bytes = 0
 bss_bytes = 0
 

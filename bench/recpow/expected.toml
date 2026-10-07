@@ -1,16 +1,16 @@
-reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 (Intel 240440-002); -Os pays 2 bytes and 2 instructions a frame"
+reason = "a mask compared with zero is test with the mask as its immediate, not a copy and-ed for its flags (isel pattern and_tested takes a constant mask): parity/control, qbsp, recpow and others fewer instructions"
 blessed = "2026-10-07"
 
 [c.O2]
-instructions = 120648
+instructions = 116002
 memory_operands = 14743
-code_bytes = 243
+code_bytes = 242
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 120648
+instructions = 116002
 memory_operands = 14743
-code_bytes = 240
+code_bytes = 239
 data_bytes = 0
 bss_bytes = 0

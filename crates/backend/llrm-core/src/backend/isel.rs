@@ -3760,8 +3760,13 @@ impl Selector<'_, '_, '_> {
             && let ValueDef::Instruction(and) = self.function.value(value).def
             && self.covered.contains_key(&and)
         {
-            let operands = self.function.instruction(and).operands.clone();
-            let (x, y) = (Loc::Held(self.held(operands[0], ty, at, out)?), Loc::Held(self.held(operands[1], ty, at, out)?));
+            let mut operands = self.function.instruction(and).operands.clone();
+            // The mask is the instruction's immediate: `test r, 1`, not a register made to hold it.
+            if matches!(operands[0], Operand::Constant(_)) {
+                operands.swap(0, 1);
+            }
+            let x = Loc::Held(self.held(operands[0], ty, at, out)?);
+            let y = if matches!(operands[1], Operand::Constant(_)) { self.source(operands[1], ty, at, out)? } else { Loc::Held(self.held(operands[1], ty, at, out)?) };
             out.push(insn(at, semantics(Operation::Compare, "test", vec![], vec![x, y])));
             return Ok(Test::One(condition_code(predicate)));
         }

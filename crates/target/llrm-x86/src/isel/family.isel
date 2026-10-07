@@ -314,14 +314,14 @@ end
 
 # An AND only a comparison with zero reads is `test`.
 pattern and_tested
-  match icmp(t=and.i16|i32(_:value, _:value), #0)
+  match icmp(t=and.i16|i32(_:value, _:value|int), #0)
   when only_reader(t)
   cover t
   call setcc
 end
 
 pattern and_tested_second
-  match icmp(#0, t=and.i16|i32(_:value, _:value))
+  match icmp(#0, t=and.i16|i32(_:value, _:value|int))
   when only_reader(t)
   cover t
   call setcc
