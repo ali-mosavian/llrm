@@ -3094,6 +3094,14 @@ impl Selector<'_, '_, '_> {
             }
             requires.push((held, register));
         }
+        // A call of a function with more arguments than it declares parameters (an old-style `()` definition): the callee pops what
+        // it declares, and the rest, which were pushed first, are the caller's to remove.
+        let declared = llrm_mir::memory::callee(&self.module.context, function, inst).and_then(|id| self.module.global(id).function()).map(|one| one.parameters().len());
+        let extra = match declared {
+            Some(declared) if pops && !variadic && registers.arguments.is_empty() => (arguments.len() + in_registers.len()).saturating_sub(declared).min(arguments.len()),
+            _ => 0,
+        };
+        let described = arguments.len() - extra;
         // The convention's own: each argument by where the description puts it.
         let mut placed = None;
         let mut stack_only: Vec<usize> = (0..arguments.len()).collect();
@@ -3104,7 +3112,7 @@ impl Selector<'_, '_, '_> {
             };
             let class = |index: usize| llrm_mir::opcode::argument_class(attrs.get(index).map_or(&[], Vec::as_slice));
             let mut kinds = Vec::new();
-            for (index, &argument) in arguments.iter().enumerate() {
+            for (index, &argument) in arguments.iter().enumerate().take(described) {
                 if class(index) == Some(llrm_mir::opcode::RESULT_POINTER) {
                     continue;
                 }
@@ -3115,7 +3123,9 @@ impl Selector<'_, '_, '_> {
             let mut next = placement.places.clone().into_iter();
             let mut places = Vec::new();
             for index in 0..arguments.len() {
-                if class(index) == Some(llrm_mir::opcode::RESULT_POINTER) {
+                if index >= described {
+                    places.push(llrm_target::calling::Place::Stack(0));
+                } else if class(index) == Some(llrm_mir::opcode::RESULT_POINTER) {
                     let Some(register) = entry.aggregate.as_ref().and_then(|one| one.pointer_register.clone()) else { return refuse(format!("@{name}'s struct result has no register for its address")) };
                     placement.used.push(register.clone());
                     places.push(llrm_target::calling::Place::Registers(vec![register]));
@@ -3155,7 +3165,9 @@ impl Selector<'_, '_, '_> {
             order.reverse();
         }
         let mut pushed = 0;
+        let mut spans: Vec<(usize, i64)> = Vec::new();
         for index in order {
+            spans.push((index, pushed));
             let argument = arguments[index];
             let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
             if self.is_float(ty) {
@@ -3227,6 +3239,7 @@ impl Selector<'_, '_, '_> {
             pushed += slot(self.arch, held.width);
             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
         }
+        let excess: i64 = spans.iter().enumerate().filter(|(_, (index, _))| *index >= described).map(|(at, (_, from))| spans.get(at + 1).map_or(pushed, |(_, next)| *next) - from).sum();
         // A struct result's address the callee pops is not the caller's to remove.
         let hidden_popped = match (&instruction.opcode, self::entry(self.arch, convention, variadic)) {
             (Opcode::Call(info) | Opcode::Invoke(info), Some(one)) if hidden_slot_popped_by_callee(one, info.argument_attrs.iter().map(|attrs| llrm_mir::opcode::argument_class(attrs))) => self.arch.stack_slot_bytes(),
@@ -3235,6 +3248,7 @@ impl Selector<'_, '_, '_> {
         let contract = match callee {
             Callee::Inline(..) if Intrinsic::named(&name) == Some(Intrinsic::Asm) => self.abi.contract(&name, pops, pushed - hidden_popped).map_err(Unselected)?,
             Callee::Inline(..) => crate::abi::runtime::inline_code(&name),
+            _ if extra > 0 => self.abi.contract(&name, false, excess).map_err(Unselected)?,
             _ => self.abi.contract(&name, pops, pushed - hidden_popped).map_err(Unselected)?,
         };
         // A convention that passes in registers states what a call destroys, by the registers it used.
