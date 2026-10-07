@@ -149,31 +149,29 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
                 .collect();
             let k = allowed.len();
             let constrained = neighbours.iter().chain([&here, &there]).any(|value| held.contains_key(value));
-            let significant = neighbours
+            let constraining: Vec<u32> = neighbours
                 .iter()
+                .copied()
                 .filter(|o| {
-                    let palette = may.get(*o).unwrap_or(&everything);
+                    let palette = may.get(o).unwrap_or(&everything);
                     palette.intersection(&allowed).next().is_some()
-                        && near.get(*o).map_or(0, BTreeSet::len) >= if constrained { k } else { palette.len() }
+                        && near.get(o).map_or(0, BTreeSet::len) >= if constrained { k } else { palette.len() }
                 })
-                .count();
-            // Briggs and George keep a join from making a class that cannot be coloured; where the copies between the
-            // two run more than what the cheapest of those that would then be spilled costs, the join is worth it
-            // (IRA coalesces by the frequency of the copies; LLVM joins and lets the allocator evict by weight).
-            let worth = |here: u32, there: u32, parent: &mut IndexMap<u32, u32>| -> bool {
-                let gain: f64 = copies.iter().filter(|(_, pair)| {
-                    let (a, b) = (_find(parent, pair.0), _find(parent, pair.1));
-                    (a == here && b == there) || (a == there && b == here)
-                }).map(|(weight, _)| weight).sum();
-                let cheapest = neighbours.iter().chain([&here, &there]).filter_map(|value| live.get(value)).map(|one| one.spill_cost()).fold(f64::INFINITY, f64::min);
-                gain > cheapest
+                .collect();
+            let significant = constraining.len();
+            // Briggs and George are sufficient for a join to leave the graph as colourable as it was, not necessary: past
+            // them, simplify the graph as Chaitin-Briggs does with and without the join (a node of fewer neighbours than
+            // registers goes, and what is left may spill), and take it where no more is left. Asked of copies a block
+            // runs more than once only.
+            let worth = |here: u32, there: u32, near: &Graph, may: &IndexMap<u32, BTreeSet<Register>>| -> bool {
+                _stuck(near, may, &everything, Some((here, there))) <= _stuck(near, may, &everything, None)
             };
             if significant >= k
                 && (held.contains_key(&here)
                     || held.contains_key(&there)
                     || !(_george(here, there, &allowed, &near, &may, &held, &everything)
                         || _george(there, here, &allowed, &near, &may, &held, &everything)))
-                && (held.contains_key(&here) || held.contains_key(&there) || !worth(here, there, &mut parent))
+                && (held.contains_key(&here) || held.contains_key(&there) || !worth(here, there, &near, &may))
             {
                 continue; // Briggs and George: the merged class would not be colourable
             }
@@ -233,6 +231,40 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
                     })
                     .collect(), ..block.with_insns(_kept(block, &swap)) })
             .collect()) }
+}
+
+/// How many nodes of `near` are left when the simplification of Chaitin and Briggs has taken every one with fewer
+/// neighbours than registers it may have, with `join` (`here` into `there`) made if it is named.
+fn _stuck(near: &Graph, may: &IndexMap<u32, BTreeSet<Register>>, everything: &BTreeSet<Register>, join: Option<(u32, u32)>) -> usize {
+    let mut graph: IndexMap<u32, BTreeSet<u32>> = near.iter().map(|(node, others)| (*node, others.clone())).collect();
+    if let Some((here, there)) = join {
+        let gone = graph.shift_remove(&here).unwrap_or_default();
+        for other in &gone {
+            if let Some(found) = graph.get_mut(other) {
+                found.remove(&here);
+                if *other != there {
+                    found.insert(there);
+                }
+            }
+        }
+        let kept = graph.entry(there).or_default();
+        kept.extend(gone.into_iter().filter(|other| *other != there && *other != here));
+    }
+    let limit = |node: &u32| may.get(node).unwrap_or(everything).len();
+    let mut degree: IndexMap<u32, usize> = graph.iter().map(|(node, others)| (*node, others.len())).collect();
+    let mut work: Vec<u32> = degree.iter().filter(|(node, found)| **found < limit(node)).map(|(node, _)| *node).collect();
+    while let Some(node) = work.pop() {
+        let Some(_) = degree.shift_remove(&node) else { continue };
+        for other in graph.get(&node).into_iter().flatten() {
+            if let Some(found) = degree.get_mut(other) {
+                *found -= 1;
+                if *found + 1 == limit(other) {
+                    work.push(*other);
+                }
+            }
+        }
+    }
+    degree.len()
 }
 
 /// Whether `gone` can join `kept` without making `kept` harder to colour.
