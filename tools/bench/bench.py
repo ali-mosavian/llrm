@@ -148,7 +148,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
         tool = "llrm-qb" if variant.language in BASIC_LANGUAGES else "llrm-c"
         arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
         extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
-        done = subprocess.run([str(BIN / tool), str(variant.source), *arguments, *extra, *flags, "-o", str(obj)], capture_output=True, text=True, timeout=300)
+        done = subprocess.run([str(BIN / tool), str(variant.source), *arguments, *extra, *flags, "-o", str(obj)], capture_output=True, text=True, timeout=int(os.environ.get("LLRM_BENCH_COMPILE_TIMEOUT", "300")))
         if done.returncode != 0 or not obj.exists():
             return "compile: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == "c":
@@ -207,7 +207,7 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     from the corpus's ext.asm."""
     obj, exe, listing = work / f"{stem}.obj", work / f"{stem}.exe", work / f"{stem}.map"
     flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-c compiles it
-    done = subprocess.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], capture_output=True, text=True, timeout=300)
+    done = subprocess.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], capture_output=True, text=True, timeout=int(os.environ.get("LLRM_BENCH_COMPILE_TIMEOUT", "300")))
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
     try:

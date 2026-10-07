@@ -230,7 +230,7 @@ fn called_once(text: &str, define_line: &str) -> bool {
 
 /// The intrinsics `expanded` writes as plain instructions: MIR has no saturating arithmetic, and isel of m16 has no
 /// `umax` (`opt` makes them of any compare and select).
-const EXPANDED: [&str; 6] = ["usub.sat", "uadd.sat", "smin", "smax", "umin", "umax"];
+const EXPANDED: [&str; 7] = ["usub.sat", "uadd.sat", "smin", "smax", "umin", "umax", "abs"];
 
 /// `%r = call iN @llvm.usub.sat.iN(iN a, iN b)` (or `uadd.sat`, `smin`, `smax`, `umin`, `umax`) as the compare and
 /// select it means.
@@ -244,7 +244,8 @@ fn expanded(line: &str) -> Option<Vec<String>> {
     let arguments = arguments.strip_suffix(')')?;
     let value = |one: &str| one.trim().split_once(' ').map(|(_, value)| value.to_owned());
     let (a, b) = arguments.split_once(',')?;
-    let (a, b) = (value(a)?, value(b)?);
+    // `abs`'s second argument says whether INT_MIN is poison, which a select does not care about.
+    let (a, b) = (value(a)?, if *kind == "abs" { String::new() } else { value(b)? });
     let name = result.trim_start_matches('%');
     let pick = |predicate: &str| {
         vec![
@@ -253,6 +254,11 @@ fn expanded(line: &str) -> Option<Vec<String>> {
         ]
     };
     Some(match *kind {
+        "abs" => vec![
+            format!("  %{name}.neg = sub {ty} 0, {a}"),
+            format!("  %{name}.pick = icmp slt {ty} {a}, 0"),
+            format!("  {result} = select i1 %{name}.pick, {ty} %{name}.neg, {ty} {a}"),
+        ],
         "smin" => pick("slt"),
         "smax" => pick("sgt"),
         "umin" => pick("ult"),
@@ -297,6 +303,15 @@ mod tests {
         let text = format!("{HEAD}declare i16 @llvm.umax.i16(i16, i16)\n\ndefine i16 @f(i16 %a, i16 %b) {{\nb0:\n  %r = tail call range(i16 8, -3) i16 @llvm.umax.i16(i16 %a, i16 %b)\n  ret i16 %r\n}}\n");
         let printed = llrm_mir::print::module(&imported(&text).unwrap_or_else(|error| panic!("{error}")));
         assert!(printed.contains("icmp ugt") && printed.contains("select") && !printed.contains("llvm.umax"), "{printed}");
+    }
+
+    /// `opt` writes Nib's `if x < 0 then -x` as `llvm.abs`: 22 Nib programs stopped at "@llvm.abs.i32: an intrinsic MIR
+    /// does not have" when the runtime was compiled with them.
+    #[test]
+    fn an_abs_is_read_as_the_negate_and_select_it_means() {
+        let text = format!("{HEAD}declare i16 @llvm.abs.i16(i16, i1 immarg)\n\ndefine i16 @f(i16 %a) {{\nb0:\n  %r = tail call i16 @llvm.abs.i16(i16 %a, i1 false)\n  ret i16 %r\n}}\n");
+        let printed = llrm_mir::print::module(&imported(&text).unwrap_or_else(|error| panic!("{error}")));
+        assert!(printed.contains("sub i16 0, %a") && printed.contains("select") && !printed.contains("llvm.abs"), "{printed}");
     }
 
     /// The inliner leaves `llvm.experimental.noalias.scope.decl(metadata !N)`, a metadata operand the parser refuses
