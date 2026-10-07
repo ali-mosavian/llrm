@@ -754,6 +754,8 @@ pub fn holds(predicate: IntPredicate, left: &Known, right: &Known) -> bool {
 pub fn known(unit: &Unit, calls: Option<&Calls>, edges: Option<&IndexMap<(i64, i64), Cells>>, initial: Option<&Cells>) -> IndexMap<ValueId, Known> {
     if calls.is_none() {
         REGISTER_DERIVATIONS.with(|count| count.set(count.get() + 1));
+    } else {
+        MEMORY_DERIVATIONS.with(|count| count.set(count.get() + 1));
     }
     // Each access asks whether its frame object is exposed: found once for the body, if no caller has.
     let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
@@ -780,6 +782,13 @@ pub fn known(unit: &Unit, calls: Option<&Calls>, edges: Option<&IndexMap<(i64, i
 
 thread_local! {
     static REGISTER_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MEMORY_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has derived what is known of a body through memory, for a test that two passes that ask
+/// of one body share the answer.
+pub fn memory_derivations() -> usize {
+    MEMORY_DERIVATIONS.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has derived what is known of a body without memory, for a test that a pass asks of the
