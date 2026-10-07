@@ -397,16 +397,55 @@ pub static RESTORE_IDIOM: LazyLock<Semantics> = LazyLock::new(|| Semantics {
 /// Python `TABLE_DATA`.
 pub static TABLE_DATA: LazyLock<Semantics> = LazyLock::new(|| Semantics::new(Operation::Data));
 
-/// Python `values`: every SSA value named by one selected operand.
-pub fn values(where_: &Loc) -> Vec<Held> {
-    match where_ {
-        Loc::Held(held) => vec![*held],
-        Loc::Mem(memory) => [memory.base, memory.index, memory.selector]
-            .into_iter()
-            .flatten()
-            .collect(),
-        Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_) | Loc::St(_) => Vec::new(),
+/// The values one operand names: at most three (a cell's base, index and selector), kept in the value itself, so that
+/// asking for them of every operand of every instruction allocates nothing.
+#[derive(Clone, Copy, Debug)]
+pub struct Values {
+    held: [Held; 3],
+    len: usize,
+}
+
+impl std::ops::Deref for Values {
+    type Target = [Held];
+
+    fn deref(&self) -> &[Held] {
+        &self.held[..self.len]
     }
+}
+
+impl PartialEq<Vec<Held>> for Values {
+    fn eq(&self, other: &Vec<Held>) -> bool {
+        **self == **other
+    }
+}
+
+impl IntoIterator for Values {
+    type Item = Held;
+    type IntoIter = std::iter::Take<std::array::IntoIter<Held, 3>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.held.into_iter().take(self.len)
+    }
+}
+
+/// Python `values`: every SSA value named by one selected operand.
+pub fn values(where_: &Loc) -> Values {
+    let nothing = Held { value: 0, width: 0 };
+    let mut found = Values { held: [nothing; 3], len: 0 };
+    let mut named = |held: &Held| {
+        found.held[found.len] = *held;
+        found.len += 1;
+    };
+    match where_ {
+        Loc::Held(held) => named(held),
+        Loc::Mem(memory) => {
+            for held in [memory.base, memory.index, memory.selector].iter().flatten() {
+                named(held);
+            }
+        }
+        Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_) | Loc::St(_) => {}
+    }
+    found
 }
 
 /// Python `mapped`: replace every SSA value nested in one selected operand.
