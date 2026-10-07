@@ -129,7 +129,7 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
         .iter()
         .enumerate()
         .filter(|(_, global)| matches!(&global.kind, GlobalKind::Function(function) if function.is_declaration()))
-        .map(|(at, global)| names[&(globals::space(module, GlobalId(at as u32)), at as i64)].as_str())
+        .filter_map(|(at, _)| names.get(&(globals::space(module, GlobalId(at as u32)), at as i64)).map(String::as_str))
         .collect();
     for datum in &data {
         if let masm::Datum::Pointer(pointer) = datum
