@@ -1,4 +1,4 @@
-reason = "x87: a squared value below the top is copied with fld st(i), not exchanged up (nbody -4%, fpbench -9%)"
+reason = "x87: a constant nothing reads is not loaded and popped (nbody c -48 B, fpbench c -66 B)"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -18,12 +18,12 @@ bss_bytes = 0
 kernel_ms = 0.3015
 
 [c.O2]
-instructions = 18949
-memory_operands = 3032
-code_bytes = 1218
+instructions = 18927
+memory_operands = 3021
+code_bytes = 1152
 data_bytes = 52
 bss_bytes = 0
-kernel_ms = 0.2535
+kernel_ms = 0.2532
 
 [c.Os]
 instructions = 20007

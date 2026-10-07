@@ -9,7 +9,7 @@ use llrm_mir::module::{InstId, Module, ValueId};
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
-use super::{_computed, _recurrence_span, Interval, bounded, covering, dominated_edges, exact_offsets, on_edge, singletons};
+use super::{_computed, _recurrence_span, Interval, bounded, covering, edge_deltas, dominated_edges, exact_offsets, on_edge, singletons};
 use crate::cfg;
 use crate::memory::{MemRef, Unit};
 use crate::testing::{DOS, block, function, layout, parsed, value};
@@ -1110,4 +1110,33 @@ fn test_an_edge_sets_the_intervals_it_narrows_and_copies_none_of_the_rest() {
     let whole = on_edge(&unit, parsed.block("b0"), parsed.block("yes"), &known, None).unwrap().unwrap();
     assert_eq!(whole.len(), known.len());
     assert_eq!(whole[&x], delta[&x]);
+}
+
+/// 60 loops one after another narrowed by every edge above each of them again at each growth of its boxes: 14,760 edges
+/// worked out, cubic in the loops. The edges above a loop are narrowed once.
+#[test]
+fn test_the_edges_above_a_loop_are_narrowed_once_not_per_block_scoped() {
+    // The check works the edges out again to compare, and is counted.
+    if std::env::var_os("LLRM_CHECK_SCOPES").is_some() {
+        return;
+    }
+    let loops = 60;
+    // Each loop is entered through a block of its own: only a block with one way in carries its edge's test.
+    let mut text = String::from("define i32 @f(i32 %x) {\nb0:\n  br label %h0\n\n");
+    for at in 0..loops {
+        let from = if at == 0 { "b0".to_owned() } else { format!("p{at}") };
+        let exit = if at + 1 == loops { "end".to_owned() } else { format!("p{}", at + 1) };
+        text += &format!(
+            "h{at}:\n  %i{at} = phi i32 [ 0, %{from} ], [ %n{at}, %l{at} ]\n  %c{at} = icmp slt i32 %i{at}, %x\n  br i1 %c{at}, label %l{at}, label %{exit}\n\nl{at}:\n  %n{at} = add nsw i32 %i{at}, 1\n  br label %h{at}\n\n"
+        );
+        if at + 1 < loops {
+            text += &format!("p{}:\n  br label %h{}\n\n", at + 1, at + 1);
+        }
+    }
+    text += "end:\n  ret i32 %x\n}\n";
+    let parsed = Parsed::new(&text);
+    let before = edge_deltas();
+    bounded(&parsed.unit()).unwrap();
+    let narrowed = edge_deltas() - before;
+    assert!(narrowed <= 5_000, "{narrowed} edges narrowed for {loops} sequential loops");
 }
