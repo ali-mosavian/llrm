@@ -955,7 +955,7 @@ b:
     let runs = std::cell::Cell::new(0);
     let mut refused = BTreeSet::new();
     let mut again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused: &mut BTreeSet<_>| {
-        tried_sites::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), f, &sites, refused, &bytes, (&OperationCosts::default(), 0), "trial.", &mut |_, _, _, _| {
+        tried_sites::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), &Default::default(), f, &sites, refused, &bytes, (&OperationCosts::default(), 0), "trial.", &mut |_, _, _, _| {
             runs.set(runs.get() + 1);
             Ok(())
         })

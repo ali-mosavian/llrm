@@ -1772,8 +1772,9 @@ fn test_a_dword_divided_by_a_constant_is_multiplied_where_cheaper() {
 }
 
 /// A word divided by a constant stays a division: the reciprocal is for dwords. An unsigned dword is a multiply
-/// where the CPU prices it cheaper (a Pentium's `mul` is 10 clocks against `div`'s 41) and a division where not
-/// (the 386's and 486's multiply by a magic number is 13 to 42).
+/// where the CPU prices it cheaper: a Pentium's `mul` is 10 clocks against `div`'s 41, and the 386's and 486's, which
+/// ends early on the dividend in its r/m operand, is 13 to 42 against 40 and priced at the middle where the dividend's
+/// length is not known. The dividend is that operand, the magic number in the accumulator.
 #[test]
 fn test_a_word_divides_and_an_unsigned_dword_is_multiplied_where_cheaper() {
     let word = "define i16 @f(i16 %x) addrspace(1) {\n  %q = sdiv i16 %x, 10\n  ret i16 %q\n}\n";
@@ -1781,7 +1782,9 @@ fn test_a_word_divides_and_an_unsigned_dword_is_multiplied_where_cheaper() {
     assert!(inner_on("P5", word).contains(&"idiv bx".to_owned()), "{:?}", inner_on("P5", word));
     assert!(inner_on("P5", unsigned).iter().any(|one| one.starts_with("mul ")) && !inner_on("P5", unsigned).iter().any(|one| one.starts_with("div ")), "{:?}", inner_on("P5", unsigned));
     for cpu in ["386", "486"] {
-        assert!(inner_on(cpu, unsigned).contains(&"div ebx".to_owned()), "{cpu}: {:?}", inner_on(cpu, unsigned));
+        let listing = inner_on(cpu, unsigned);
+        let at = listing.iter().position(|one| one.starts_with("mul ")).unwrap_or_else(|| panic!("{cpu}: {listing:?}"));
+        assert!(listing[at - 1].starts_with("mov eax, ") && !listing.iter().any(|one| one.starts_with("div ")), "{cpu}: {listing:?}");
     }
 }
 
