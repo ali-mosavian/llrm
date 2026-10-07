@@ -169,8 +169,13 @@ fn number(text: &str) -> R<i64> {
 /// Each data segment's labelled objects, as the stream lays them down.
 fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
     let mut out: Vec<Object> = Vec::new();
-    for segment in unit.segments.values().filter(|one| one.attr & 0x1 == 0) {
+    // A flat unit's initializer of a local aggregate is laid down under `_TEXT` (the segment current when the front end
+    // names it): data in a code segment is still data, so a segment with items is read whatever its attributes.
+    for segment in unit.segments.values().filter(|one| one.attr & 0x1 == 0 || !one.items.is_empty()) {
         let first = out.len();
+        // Data the front end laid under a code segment goes to the first data segment of the unit: a name of code
+        // holds nothing the linker may put with the program's code.
+        let placed = if segment.attr & 0x1 == 0 { segment.name.clone() } else { unit.segments.values().find(|one| one.attr & 0x1 == 0).map_or_else(|| segment.name.clone(), |one| one.name.clone()) };
         let continues = out.last().is_some_and(|one| one.bytes.len() % HUGE_SEGMENT == 0 && !one.bytes.is_empty());
         let mut align = None;
         for (call, args) in &segment.items {
@@ -181,7 +186,7 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
                     Key::Symbol(symbol) => unit.symbols[&symbol].object_name(),
                     Key::Literal(back) => format!("L_b{back}"),
                 };
-                out.push(Object { key, name, segment: segment.name.clone(), bytes: Vec::new(), relocations: Vec::new(), align: align.take() });
+                out.push(Object { key, name, segment: placed.clone(), bytes: Vec::new(), relocations: Vec::new(), align: align.take() });
                 continue;
             }
             if let ("DGAlign", [to]) = (call.as_str(), &args[..]) {
