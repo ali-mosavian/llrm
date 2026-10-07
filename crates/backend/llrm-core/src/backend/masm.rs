@@ -372,16 +372,19 @@ fn parts(procedure: &Procedure, omit: bool) -> (Vec<Semantics>, Vec<Semantics>) 
     } else if framed {
         leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
     }
-    // No `enter`: 14 clocks on the 486 (Intel 240440-002) against 3 for the three instructions it replaces,
-    // and neither GCC nor LLVM emits it.
+    // `enter` only where the target's description takes it for size (`frame_enter`).
+    let opened = framed && reserve != 0 && procedure.size && procedure.registers.enter && procedure.stack_check.is_none();
     let mut enter: Vec<Semantics> = Vec::new();
-    if framed {
+    if opened {
+        let count = |value, width| Loc::Imm(ir::Imm { value, width, address: None });
+        enter.push(semantics(Operation::Nothing, "enter", vec![], vec![count(reserve, 2), count(0, 1)]));
+    } else if framed {
         enter.extend([
             semantics(Operation::Push, "push", vec![], vec![bp.clone()]),
             semantics(Operation::Move, "mov", vec![bp], vec![sp.clone()]),
         ]);
     }
-    if reserve != 0 {
+    if reserve != 0 && !opened {
         enter.push(semantics(
             Operation::Binary,
             "sub",
@@ -1386,7 +1389,7 @@ mod tests {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
         let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
         let body = lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, vec![r#move, leave])], IndexMap::default(), IndexMap::default());
-        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4, optional: false };
+        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4, optional: false, enter: false };
         let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 4, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers };
         let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
         assert!(has(&lines, "push ebp") && has(&lines, "mov ebp, esp") && has(&lines, "sub esp, 4"), "{lines:?}");
@@ -1394,10 +1397,25 @@ mod tests {
         assert!(!lines.iter().any(|one| one.contains("[bp") || one.contains(" bp") || one.contains(" sp")), "{lines:?}");
     }
 
+    /// `enter` is the target's to take for size (`frame_enter`): a target that states it gets the 4-byte frame at -Os
+    /// only, where the 486's own description (false) gets push/mov/sub at both levels.
+    #[test]
+    fn test_a_target_that_states_frame_enter_opens_a_size_frame_with_it() {
+        let body = lir::LirBody { bits: 32, ..lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, vec![ret()])], IndexMap::default(), IndexMap::default()) };
+        let listing = |enter: bool, size: bool| {
+            let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4, optional: false, enter };
+            let procedure = Procedure { name: "_get".into(), public: true, far: false, body: body.clone(), reserve: 4, callees: IndexMap::default(), interrupt: None, size, entry: 0, stack_check: None, registers };
+            _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect::<Vec<_>>()
+        };
+        assert_eq!(listing(true, true)[1], "enter 4, 0");
+        assert_eq!(listing(true, false)[1..4], ["push ebp", "mov ebp, esp", "sub esp, 4"]);
+        assert_eq!(listing(false, true)[1..4], ["push ebp", "mov ebp, esp", "sub esp, 4"]);
+    }
+
     /// A flat procedure whose frame register the target may leave out, `body` its instructions.
     fn flat(optional: bool, reserve: i64, body: Vec<Arc<lir::Insn>>, callees: IndexMap<i64, Callee>) -> Vec<String> {
         let body = lir::LirBody { bits: 32, ..lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, body)], IndexMap::default(), IndexMap::default()) };
-        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4, optional };
+        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4, optional, enter: false };
         let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve, callees, interrupt: None, size: false, entry: 0, stack_check: None, registers };
         _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
     }
@@ -1461,7 +1479,7 @@ mod tests {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
         let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
         let body = lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, vec![r#move, leave])], IndexMap::default(), IndexMap::default());
-        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4, optional: false };
+        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4, optional: false, enter: false };
         let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 70, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers };
         let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
         assert!(has(&lines, "sub esp, 72"), "{lines:?}");
