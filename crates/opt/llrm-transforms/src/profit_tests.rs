@@ -8,7 +8,7 @@ use llrm_analysis::cfg;
 
 use llrm_support::hash::IndexMap;
 
-use super::{OperationCosts, UNKNOWN_TRIPS, _frequencies, _loop_products, operation, proven_trips, r#static, spill_risk, weighted};
+use super::{OperationCosts, UNKNOWN_TRIPS, _frequencies, _loop_products, operation, proven_trips, r#static, spill_forecast, weighted};
 
 fn risk(text: &str, capacity: i64) -> Option<i64> {
     let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -16,7 +16,7 @@ fn risk(text: &str, capacity: i64) -> Option<i64> {
     let costs = OperationCosts { load: 10, store: 10, ..OperationCosts::default() };
     let room = crate::spill::Room { registers: capacity, across_call: capacity, ..Default::default() };
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
-    spill_risk(&module.context, &layout, function, &costs, room, &|_| capacity, &_frequencies(&module.context, &module.metadata, &module.globals, function, None).expect("frequencies"), &llrm_analysis::liveness::live(function)).map(|price| price / super::UNIT)
+    spill_forecast(&module.context, &layout, function, &costs, room, &|_| capacity, &_frequencies(&module.context, &module.metadata, &module.globals, function, None).expect("frequencies")).map(|forecast| forecast.cost / super::UNIT)
 }
 
 #[test]

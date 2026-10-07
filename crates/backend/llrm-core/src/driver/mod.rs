@@ -113,9 +113,8 @@ fn spill_model(program: &Program) {
             let unit = llrm_analysis::memory::Unit::of(module, &layout, function).with_spaces(program.target.spaces()).with_registers(&registers);
             let trips = profit::proven_trips(&unit, &registers);
             let Some(frequency) = profit::_frequencies(&module.context, &module.metadata, &module.globals, function, Some(&trips)) else { continue };
-            let found = llrm_analysis::liveness::live(function);
             let across = |inst| spill::kept_across(&outer, &module.context, function, inst);
-            if let Some(forecast) = profit::spill_forecast(&module.context, &layout, function, &costs, room, &across, &frequency, &found) {
+            if let Some(forecast) = profit::spill_forecast(&module.context, &layout, function, &costs, room, &across, &frequency) {
                 llrm_support::debug!("spillmodel", "{} peak {} spilled {} price {}", global.name.as_deref().unwrap_or("?"), forecast.peak, forecast.spilled.len(), forecast.cost);
                 if let Some(name) = global.name.as_deref() {
                     let per_entry = forecast.cost as f64 / profit::UNIT as f64;
