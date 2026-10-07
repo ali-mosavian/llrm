@@ -6,28 +6,55 @@ import pytest
 
 import harness
 
-pytestmark = pytest.mark.skipif(not (harness.OUT / "results.jsonl").exists(), reason="run crates/target/llrm-x86-m32/vsgcc/run.sh first")
-
 BENCH = harness.BENCH
+HERE = Path(__file__).parent
+RESULTS = harness.OUT / "results.jsonl"   # a run of run.sh, if there was one: read before any test points OUT elsewhere
+
+
+@pytest.fixture(scope="module")
+def built(tmp_path_factory):
+    """A work directory of its own with what these tests run: the stub and the gcc and clang objects of scroll and fib."""
+    import os
+    import subprocess
+    import sys
+    sys.path.insert(0, str(harness.REPO / "tools"))
+    import linkrecipe
+    work = tmp_path_factory.mktemp("vsgcc")
+    env = {**os.environ, "VSGCC_WORK": str(work)}
+    (work / "o").mkdir()
+    (work / "b").mkdir()
+    done = subprocess.run(["gcc", "-m32", "-c", str(HERE / "stub.s"), "-o", str(work / "stub.o")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    done = subprocess.run(["ld", "-m", linkrecipe.ld_emulation("x86-m32"), "-static", "-e", "0", "-Ttext=0x8000", "-o", str(work / "stub.elf"), str(work / "stub.o")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    previous = harness.OUT
+    harness.OUT = work
+    harness.record_stub(work)
+    for prog in ("scroll", "fib"):
+        done = subprocess.run([str(HERE / "build.sh"), prog], capture_output=True, text=True, env=env)
+        assert done.returncode == 0 and "FAIL" not in done.stdout, (prog, done.stdout, done.stderr)
+    yield work
+    harness.OUT = previous
 
 
 def expected(prog):
     return [int(x) for x in (BENCH / prog / f"{prog}.out").read_text().split()]
 
 
-def test_memmove_stand_in_copies_overlap_backwards():
+def test_memmove_stand_in_copies_overlap_backwards(built):
     """The stub's memmove copied forwards: gcc/clang scroll (loops turned into memmove) reported 32636400, not 32634864."""
     for v in ("gccO2", "clangO2"):
         assert harness.run("scroll", v)["reports"] == expected("scroll")
 
 
-def test_kernel_inlined_into_main_is_not_counted_as_zero():
+def test_kernel_inlined_into_main_is_not_counted_as_zero(built):
     """gcc inlined bench_fib into main: the region was never entered and fib read 0 instructions for gcc."""
     assert harness.run("fib", "gccO2")["ins"] > 0
 
 
+@pytest.mark.skipif(not RESULTS.exists(), reason="reads the results of a run: run crates/target/llrm-x86-m32/vsgcc/run.sh first, or it checks nothing")
 def test_every_result_reproduces_the_benchmark_output():
-    for line in (harness.OUT / "results.jsonl").read_text().splitlines():
+    for line in RESULTS.read_text().splitlines():
         r = json.loads(line)
         assert r["ok"], (r["prog"], r["variant"], r["got"])
 
