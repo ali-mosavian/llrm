@@ -1888,9 +1888,27 @@ impl Selector<'_, '_, '_> {
             [(position, scale)] => Some((instruction.operands[1 + position], scale as i64)),
             _ => None,
         };
-        if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor)) {
+        if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor, false)) {
             self.pointers.insert(address, scaled);
             // A product the scale took is computed only if something else reads it.
+            if let Some((Operand::Value(product), _)) = one
+                && matches!(function.value(product).def, ValueDef::Instruction(_))
+            {
+                let product = self.value(product);
+                self.folded.insert(product);
+            }
+            return Ok(());
+        }
+        // A pointer something else than an access reads is one `lea` of the same form where the target has it:
+        // base + index * scale, not the index shifted and then added.
+        if !self.only_addressed(address)
+            && self.width(instruction.ty).ok() == Some(4)
+            && let Some(valued) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor, true))
+            && let Pointer::Based { index: Some(_), segment: None, .. } = valued
+        {
+            let cell = Self::memory(valued, 4);
+            let held = Held { value: self.value(address), width: 4 };
+            out.push(insn(at, semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Mem(cell)])));
             if let Some((Operand::Value(product), _)) = one
                 && matches!(function.value(product).def, ValueDef::Instruction(_))
             {
@@ -1923,7 +1941,7 @@ impl Selector<'_, '_, '_> {
             _ => None,
         };
         if !taken.is_empty() {
-            if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor)) {
+            if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor, false)) {
                 self.pointers.insert(address, scaled);
                 for &add in &taken {
                     let add = self.value(add);
@@ -2251,7 +2269,7 @@ impl Selector<'_, '_, '_> {
     /// defines them (`addressforms::promote`), so no register is added. The
     /// wider sum names the same byte where the index is a non-negative word
     /// at every access, and the access is typed or its offset exact.
-    fn widened(&mut self, inst: InstId, index: Operand, pointer: Pointer, scale: i64, factor: i64) -> Option<Pointer> {
+    fn widened(&mut self, inst: InstId, index: Operand, pointer: Pointer, scale: i64, factor: i64, valued: bool) -> Option<Pointer> {
         let Operand::Value(index) = index else { return None };
         let function = self.function;
         // A dword index is already the wide register; a word one is widened
@@ -2260,7 +2278,7 @@ impl Selector<'_, '_, '_> {
         let form = if dword { self.wide? } else { self.secondary? };
         let address = function.instruction(inst).result?;
         let scaled = scale > 1 || (dword && matches!(pointer, Pointer::Frame { .. }));
-        if !scaled || !form.scales.contains(&scale) || !self.only_addressed(address) || !(dword || self.promotable(index)) {
+        if !scaled || !form.scales.contains(&scale) || !(valued || self.only_addressed(address)) || !(dword || self.promotable(index)) {
             return None;
         }
         // A word index is zero-extended, so it must be non-negative; a dword
