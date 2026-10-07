@@ -74,6 +74,11 @@ def refusal(text: str, rules: list[dict]) -> str | None:
 def build(source: Path, level: str, target: str, work: Path, support: Path, stem: str, rules: list[dict]) -> tuple[str, str, Path | None]:
     """(class, why, exe): class is built, refused, compile or link."""
     obj = work / f"{stem}.obj"
+    # A program that says (dg-require-effective-target) it needs a 32-bit int or pointer is not run where they are 16 bits.
+    if dosbatch.target_bits(target) == 16:
+        needs = re.search(r"dg-require-effective-target\s+(int32plus|size32plus|ptr32plus)", source.read_text(errors="replace"))
+        if needs:
+            return "refused", f"the program requires {needs.group(1)} (dg-require-effective-target): the real-mode target's int is 16 bits", None
     try:
         done = subprocess.run([str(BIN / "llrm-c"), str(source), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), LEVELS[level], "-o", str(obj)],
                               capture_output=True, text=True, timeout=COMPILE_SECONDS)
