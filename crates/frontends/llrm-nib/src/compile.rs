@@ -22,6 +22,16 @@ fn object_name(function: &model::Function) -> String {
 /// Compile one Nib module: the HIR emitted as MIR, optimized, then selected
 /// and assembled whole.
 pub fn assembled(program: &model::Program, entry: &str, options: &llrm_core::driver::Options, os: &crate::Os) -> Result<masm::Module, String> {
+    assembled_for(program, Some(entry), options, os)
+}
+
+/// `assembled` for a library cut to what some objects name (`keep_exports`): nothing may be left of it that calls an entry,
+/// and a cut to nothing is still a library, one with no export.
+pub fn assembled_library(program: &model::Program, options: &llrm_core::driver::Options, os: &crate::Os) -> Result<masm::Module, String> {
+    assembled_for(program, None, options, os)
+}
+
+fn assembled_for(program: &model::Program, entry: Option<&str>, options: &llrm_core::driver::Options, os: &crate::Os) -> Result<masm::Module, String> {
     if program.modules.len() != 1 {
         return Err("native Nib compilation currently accepts one module".to_owned());
     }
@@ -34,10 +44,11 @@ pub fn assembled(program: &model::Program, entry: &str, options: &llrm_core::dri
     for function in &mut module.functions {
         function.symbol = Some(object_name(function));
     }
-    match module.functions.iter_mut().find(|one| one.name == entry) {
-        Some(function) => function.linkage = model::FunctionLinkage::External,
-        None if library => {}
-        None => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
+    match entry.map(|entry| (entry, module.functions.iter_mut().find(|one| one.name == entry))) {
+        Some((_, Some(function))) => function.linkage = model::FunctionLinkage::External,
+        Some((_, None)) if library => {}
+        Some((entry, None)) => return Err(format!("entry function {} does not exist", pyrepr::string(entry))),
+        None => {}
     }
     let mut compiled = llrm_core::driver::compiled(&public, options)?.swap_remove(0);
     compiled.stack = llrm_core::backend::stackusage::stack_to_add(&compiled, os.stack_base, os.stack_reserve, llrm_core::backend::stackusage::stack_limit(options.arch.layout().segment_bytes()), &*options.arch)?;

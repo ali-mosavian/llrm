@@ -2525,3 +2525,17 @@ fn test_a_near_call_reaches_a_procedure_in_another_code_segment_of_the_object() 
     let source = written(&directory, "near.nib", RECURSIVE);
     object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::PerProcedure).expect("writes");
 }
+
+/// A library cut to what an object names (`--used-by`) is still a library when the cut leaves it no export: the runtime of a
+/// program that calls none of its routines. It was an error, "entry function 'main' does not exist", and tools/dosbatch could
+/// not link the program (#747).
+#[test]
+fn test_a_library_cut_to_nothing_assembles_without_an_entry() {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = written(&directory, "lib.nib", "@export(\"cdecl16\")\nfn twice(x: i16) -> i16:\n    return x + x\n");
+    let mut program = parsed(&source);
+    nib_compile::keep_exports(&mut program, &std::collections::BTreeSet::new());
+    let module = nib_compile::assembled_library(&program, &level("O2"), &crate::real_mode().os).unwrap_or_else(|error| panic!("{error}"));
+    assert!(module.publics.is_empty(), "{:?}", module.publics);
+    assert!(nib_compile::assembled(&program, "main", &level("O2"), &crate::real_mode().os).is_err(), "a program with no entry is still refused");
+}
