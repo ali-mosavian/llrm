@@ -53,6 +53,9 @@ pub struct Frontend {
     pub physical: Vec<(String, u64)>,
     /// The calling conventions the target defines, the first its programs' own.
     pub conventions: Vec<String>,
+    /// How each convention spells a symbol in the object format asked for (`*` is the name), where the target's
+    /// description says: `symbols_for`. A convention it does not name spells it as `Abi::symbol` does.
+    pub symbols: std::collections::BTreeMap<String, String>,
     /// The target's OS layer under Nib's runtime.
     pub os: Os,
     /// Index and slice bounds go unchecked, as in `unsafe`: `--unchecked-bounds`.
@@ -123,6 +126,7 @@ impl Frontend {
             registers: llrm_target::registers::parse(&target.registers_text())?,
             physical: target.physical_addresses(),
             conventions: target.conventions().iter().map(|one| (*one).to_owned()).collect(),
+            symbols: Default::default(),
             os: Os::for_target(target)?,
             unchecked_bounds: false,
             debug: false,
@@ -179,6 +183,11 @@ pub struct Sizes {
 }
 
 impl Frontend {
+    /// `target`'s symbol decorations in object format `format` (`omf`, `elf`, `macho`): each convention's pattern.
+    pub fn symbols_for(target: &dyn llrm_target::Target, format: &str) -> std::collections::BTreeMap<String, String> {
+        target.calling().conventions.iter().filter_map(|one| Some((one.name.clone(), one.symbol.get(format)?.clone()))).collect()
+    }
+
     /// The convention the language's own functions have: the target's first.
     pub fn native(&self) -> syntax::Abi {
         self.conventions.first().and_then(|name| syntax::Abi::named(name)).expect("a target defines a calling convention the language names")
@@ -227,7 +236,7 @@ pub fn declare_file(
     frontend: &Frontend,
 ) -> Result<String, (std::path::PathBuf, Diagnostic)> {
     let module = load_file(path, &frontend.os, frontend.sizes().near, &frontend.physical_constants())?;
-    declarations::declarations_on(&module, module_name(path), language, frontend.sizes()).map_err(|error| located(path, &module.sources, error))
+    declarations::declarations_on(&module, module_name(path), language, frontend.sizes(), frontend.native()).map_err(|error| located(path, &module.sources, error))
 }
 
 fn module_name(path: &std::path::Path) -> &str {

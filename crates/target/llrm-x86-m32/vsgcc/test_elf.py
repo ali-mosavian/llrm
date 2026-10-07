@@ -57,9 +57,9 @@ def defined_name(path, base):
 
 
 def test_an_llrm_object_and_a_gcc_object_link_into_one_program(work):
-    """llrm's `bench_mix` calls gcc's `gcc_scale`, and gcc's `main` calls `bench_mix`: one ld link, the stub's report."""
+    """llrm's `bench_mix` calls gcc's `gcc_scale`, and gcc's `main` calls `bench_mix`: one ld link, the stub's report. gcc passes on the stack, so both are `__cdecl`: llrm's default is registers."""
     llrm_c = work / "sum.c"
-    llrm_c.write_text("extern int gcc_scale(int);\nint bench_mix(int *a, int n) { int i, s = 0; for (i = 0; i < n; i++) s += gcc_scale(a[i]); return s; }\n")
+    llrm_c.write_text("extern int __cdecl gcc_scale(int);\nint __cdecl bench_mix(int *a, int n) { int i, s = 0; for (i = 0; i < n; i++) s += gcc_scale(a[i]); return s; }\n")
     first = llrm_object(work, llrm_c, work / "sum.o", "-O2")
     pre = defined_name(first, "bench_mix")[: -len("bench_mix")]
     gcc_c = work / "main.c"

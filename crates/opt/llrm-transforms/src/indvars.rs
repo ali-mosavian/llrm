@@ -147,9 +147,11 @@ pub fn rewound(context: &mut Context, layout: &DataLayout, function: &mut Functi
     if registers == 0 || costs.add > costs.r#move || costs.memory_update > costs.load + costs.store {
         return false;
     }
-    let facts = analyses.fresh().get::<Registers>(context, layout, function);
+    let mut fresh = analyses.fresh();
+    let facts = fresh.get::<Registers>(context, layout, function);
+    let shape = fresh.get::<cfg::Shape>(context, layout, function);
     let plan = {
-        let unit = memory::Unit::within(context, layout, function, analyses.outer());
+        let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&shape);
         _rewinding(&unit, &facts, registers)
     };
     let Some(plan) = plan else {
@@ -308,9 +310,10 @@ pub fn widened(context: &mut Context, layout: &DataLayout, function: &mut Functi
 pub fn widened_with(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &passes::Outer, standing: &mut llrm_analysis::memory::Standing) -> bool {
     let mut changed = false;
     'again: loop {
-        for loop_ in cfg::Shape::of(function).loops {
+        let shape = cfg::Shape::of(function);
+        for loop_ in shape.loops.clone() {
             let found = {
-                let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer);
+                let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer).with_shape(&shape);
                 let facts = standing.of(&unit);
                 _find(&unit.with_registers(facts), &loop_)
             };

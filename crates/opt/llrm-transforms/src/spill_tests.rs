@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 use llrm_analysis::testing::DOS;
 use llrm_analysis::{cfg, liveness};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::module::{Function, Module, ValueId};
+use llrm_mir::module::{Function, InstId, Module, ValueId};
 
-use super::{Room, Site, Traffic, addressed, cells, forecast, integer, segment_view, sites, spilled, transient, traffic, words};
+use super::{Pressure, Room, Site, Traffic, View, addressed, cells, forecast, integer, segment_view, sites, spilled, transient, traffic, words};
 use crate::profit::OperationCosts;
 
 fn module(text: &str) -> Module {
@@ -481,4 +481,26 @@ done:
 ");
     let function = self::function(&module);
     assert!(!integer(&module.context, function, named(function, "p")));
+}
+
+/// Lsr took its sites from a `Pressure` the manager made, the hoist from one made for the candidate: the same
+/// function gets the same forecast either way, and `hide` removes a value from what is live.
+#[test]
+fn test_a_forecast_is_the_same_from_the_managers_pressure_as_from_one_made_for_the_candidate() {
+    let module = module(COUNTED);
+    let function = self::function(&module);
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
+    let room = Room { registers: 1, across_call: 1, ..Room::default() };
+    let across = |_: InstId| 1;
+    let costs = OperationCosts { load: 3, store: 5, ..OperationCosts::default() };
+    let frequency = function.layout().iter().map(|&block| (cfg::id(block), 256)).collect();
+    let made = View::of(&module.context, &layout, function, room, &across);
+    let pressure = Pressure::of(&module.context, function, room.index_scales);
+    let kept = View::over(&pressure, &module.context, &layout, function, room, &across);
+    let (one, two) = (made.forecast(&costs, &frequency), kept.forecast(&costs, &frequency));
+    assert!(one.peak > 0, "the room of one register is crowded");
+    assert_eq!((one.cost, &one.spilled, one.peak), (two.cost, &two.spilled, two.peak));
+    let hidden = |_: ValueId| true;
+    let residents = |view: &View, hide: &dyn Fn(ValueId) -> bool| function.layout().iter().flat_map(|&block| view.sites(block, hide)).map(|site| site.before.residents.len()).sum::<usize>();
+    assert!(residents(&kept, &hidden) < residents(&kept, &|_| false));
 }

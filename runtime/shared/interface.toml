@@ -1,5 +1,5 @@
 # The OS layer's interface: what every target's operating system gives every language's runtime.
-# One symbol per operation, `<symbol_prefix><name>`, in the target's C convention; a target's
+# One symbol per operation, `<symbol_prefix><name>`, in the stack convention a target's `os.toml` names (cdecl16, cdecl32), whatever a language's default is; a target's
 # `os.toml` says which groups it implements, its pointer kind and its convention, and the
 # languages' bindings (os.nib, a C header) are rendered from this file, never written by hand.
 #

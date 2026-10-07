@@ -435,11 +435,12 @@ fn _recurrences(context: &Context, layout: &DataLayout, function: &Function, out
     if !masked_scale {
         return BTreeSet::new();
     }
-    let analysed = Unit::within(context, layout, function, outer);
+    let shape = cfg::Shape::of(function);
+    let analysed = Unit::within(context, layout, function, outer).with_shape(&shape);
     // Found once, for the body as the rounds before left it, not for each loop's recurrences.
     let registers = consts::known(&analysed, None, None, None);
     let analysed = analysed.with_registers(&registers);
-    analysed.shape().loops.iter().flat_map(|one| induction::advances(&analysed, one).into_keys()).collect()
+    shape.loops.iter().flat_map(|one| induction::advances(&analysed, one).into_keys()).collect()
 }
 
 /// `(x & m) * 2^k` is `(x * 2^k) & (m * 2^k)` at every width, where the
@@ -980,7 +981,8 @@ fn _redundant_masks(context: &mut Context, layout: &DataLayout, function: &mut F
     if candidates.is_empty() {
         return false;
     }
-    let unit = Unit::within(context, layout, function, outer);
+    let shape = cfg::Shape::of(function);
+    let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
     // The body is as the rounds before left it: found once, for its ranges and for the proofs beside them.
     let registers = consts::known(&unit, None, None, None);
     let unit = unit.with_registers(&registers);
@@ -1019,7 +1021,8 @@ fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mu
     if candidates.is_empty() {
         return false;
     }
-    let unit = Unit::within(context, layout, function, outer);
+    let shape = cfg::Shape::of(function);
+    let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
     // The body is as the rounds before left it: found once, for its ranges and for the proofs beside them.
     let registers = consts::known(&unit, None, None, None);
     let unit = unit.with_registers(&registers);
@@ -1049,7 +1052,8 @@ fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mu
 /// truncate toward zero: `sdiv` and `srem` by a divisor consts proves, at
 /// a legal integer width, where the shifts cost less than the division.
 fn _divisions(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, facts: &IndexMap<ValueId, Known>) -> bool {
-    let unit = Unit::within(context, layout, function, outer);
+    let shape = cfg::Shape::of(function);
+    let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
     let divisors: Vec<(InstId, u32)> = function
         .walk()
         .map(|(_, inst)| inst)

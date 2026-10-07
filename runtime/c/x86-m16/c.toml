@@ -20,6 +20,9 @@ watcom_cpu = "i86"
 int_bytes = 2
 # The calling convention the front end compiles C under (`calling.toml`): -ecc is Borland's cdecl.
 convention = "cdecl16"
+# The routine the start-up calls, and the convention it calls it in.
+entry = "main"
+entry_convention = "cdecl16"
 # Borland's medium model: far code, near data, cdecl, signed char, 80-bit long double,
 # byte-packed structs, 16-bit enums, x87 inline, no stack probes, no default library. -fp3 is for
 # inline assembly: qcport's own uses 387 instructions. Borland's ABI is the only one here: wccq

@@ -103,6 +103,12 @@ pub struct Insn {
 }
 
 impl Insn {
+    /// The instruction at a function's entry that says which registers its arguments arrive in: it is no
+    /// code, and anything placed at the entry goes after it, or it clobbers an argument.
+    #[must_use]
+    pub fn arrival(&self) -> bool {
+        self.call.is_none() && !self.delivers.is_empty() && self.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Nothing)
+    }
     /// Constructs Python's five-required-field `Insn` form with every later
     /// field at its dataclass default.
     #[must_use]

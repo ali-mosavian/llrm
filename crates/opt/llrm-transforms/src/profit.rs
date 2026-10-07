@@ -24,7 +24,6 @@ use llrm_analysis::branchprob;
 use llrm_analysis::cfg;
 use llrm_analysis::effects::Declarations;
 use llrm_analysis::consts::Known;
-use llrm_analysis::liveness::Liveness;
 use llrm_analysis::{induction, memory};
 
 use crate::spill::{self, Room};
@@ -236,70 +235,24 @@ pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, cal
 
 /// What fitting MIR within `room` spills, a call keeping what `across`
 /// says, as the one spill model (`spill`) forecasts it.
-#[allow(clippy::too_many_arguments)]
-pub fn spill_forecast(
-    context: &Context,
-    layout: &DataLayout,
-    function: &Function,
-    costs: &OperationCosts,
-    room: Room,
-    across: &dyn Fn(InstId) -> i64,
-    frequency: &BTreeMap<i64, i64>,
-    found: &Liveness,
-) -> Option<spill::Forecast<ValueId>> {
+pub fn spill_forecast(context: &Context, layout: &DataLayout, function: &Function, costs: &OperationCosts, room: Room, across: &dyn Fn(InstId) -> i64, frequency: &BTreeMap<i64, i64>) -> Option<spill::Forecast<ValueId>> {
     if !room.priced() {
         return Some(spill::Forecast { cost: 0, spilled: BTreeSet::new(), peak: 0 });
     }
-    let cells = spill::cells(function);
-    let traffic = spill::traffic(function, frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
-    // Every site asks of every value live there, and the answer is the value's alone.
-    let known = std::cell::RefCell::new(llrm_support::hash::HashMap::<ValueId, bool>::default());
-    let counted = |value: ValueId| *known.borrow_mut().entry(value).or_insert_with(|| spill::integer_in(context, function, value, room.index_scales));
-    let addressed = spill::addressed_in(context, function, room.index_scales);
-    let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst, live| spill::transient(context, layout, function, inst, room, live), &cells, &counted, &|value| spill::segment_view(context, layout, room.spaces, function, value), &|value| addressed.contains(&value))).flat_map(spill::Site::points);
-    Some(spill::forecast(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs))))
-}
-
-/// Whole-live-range traffic needed to fit MIR within `room`, a call
-/// keeping what `across` says, as the one spill model (`spill`) prices it.
-#[allow(clippy::too_many_arguments)]
-pub fn spill_risk(
-    context: &Context,
-    layout: &DataLayout,
-    function: &Function,
-    costs: &OperationCosts,
-    room: Room,
-    across: &dyn Fn(InstId) -> i64,
-    frequency: &BTreeMap<i64, i64>,
-    found: &Liveness,
-) -> Option<i64> {
-    spill_forecast(context, layout, function, costs, room, across, frequency, found).map(|one| one.cost)
+    Some(spill::View::of(context, layout, function, room, across).forecast(costs, frequency))
 }
 
 /// Semantic work plus finite-capacity whole-range spill traffic.
-pub fn pressure_adjusted(
-    context: &Context,
-    layout: &DataLayout,
-    function: &Function,
-    callees: &Callees,
-    costs: &OperationCosts,
-    room: Room,
-    across: &dyn Fn(InstId) -> i64,
-    frequency: &BTreeMap<i64, i64>,
-    found: &Liveness,
-) -> Option<i64> {
-    let work = weighted(context, layout, function, callees, costs, frequency);
-    let pressure = spill_risk(context, layout, function, costs, room, across, frequency, found);
-    match (work, pressure) {
-        (Some(work), Some(pressure)) => Some(work + pressure),
-        _ => None,
-    }
+#[allow(clippy::too_many_arguments)]
+pub fn pressure_adjusted(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts, room: Room, across: &dyn Fn(InstId) -> i64, frequency: &BTreeMap<i64, i64>) -> Option<i64> {
+    let work = weighted(context, layout, function, callees, costs, frequency)?;
+    Some(work + spill_forecast(context, layout, function, costs, room, across, frequency)?.cost)
 }
 
 /// What `function` costs at `frequency` under `costs` and `room`: the one
 /// price a motion is judged by, with the motion and without it.
 pub fn motion_price(context: &Context, layout: &DataLayout, outer: &Outer, function: &Function, costs: &OperationCosts, room: Room, frequency: &BTreeMap<i64, i64>) -> Option<i64> {
-    pressure_adjusted(context, layout, function, outer.callees(), costs, room, &|inst| spill::kept_across(outer, context, function, inst), frequency, &llrm_analysis::liveness::live(function))
+    pressure_adjusted(context, layout, function, outer.callees(), costs, room, &|inst| spill::kept_across(outer, context, function, inst), frequency)
 }
 
 #[cfg(test)]

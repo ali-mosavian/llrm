@@ -358,6 +358,20 @@ pub const CONVENTIONS: [(&str, u32); 7] = [("ccc", 0), ("fastcc", 8), ("coldcc",
 
 /// The calling conventions a target names by the `cc` of its description (calling.toml): `ccc` is the
 /// one stating `cc = "cdecl"`, and each other is asked for as `<cc>cc`.
+/// The string attribute that says how an argument is passed where its convention's registers do not: `memory`
+/// (a struct's words, in memory with everything after) or `result-pointer` (where a struct result is written).
+pub const ARGUMENT: &str = "llrm-argument";
+pub const MEMORY: &str = "memory";
+pub const RESULT_POINTER: &str = "result-pointer";
+
+/// What `attrs` say of how its argument is passed: `MEMORY` or `RESULT_POINTER`.
+pub fn argument_class(attrs: &[Attribute]) -> Option<&str> {
+    attrs.iter().find_map(|one| match one {
+        Attribute::Str(key, Some(value)) if key == ARGUMENT => Some(value.as_str()),
+        _ => None,
+    })
+}
+
 /// `watcallcc`: Open Watcom's register convention.
 pub const WATCALL: u32 = 1002;
 

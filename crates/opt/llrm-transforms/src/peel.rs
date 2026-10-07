@@ -73,14 +73,15 @@ fn _candidate(context: &Context, layout: &DataLayout, function: &Function, analy
     let mut closed = function.clone();
     lcssa::closed(&mut closed)?;
     let facts = analyses.fresh().get::<Registers>(context, layout, &closed);
-    for loop_ in cfg::Shape::of(&closed).loops {
+    let shape = cfg::Shape::of(&closed);
+    for loop_ in shape.loops.clone() {
         let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else {
             continue;
         };
         if skip.contains(&latch) {
             continue;
         }
-        let unit = memory::Unit::within(context, layout, &closed, analyses.outer()).with_registers(&facts);
+        let unit = memory::Unit::within(context, layout, &closed, analyses.outer()).with_registers(&facts).with_shape(&shape);
         let Some(count) = induction::trip_count(&unit, &loop_, &facts) else {
             continue;
         };

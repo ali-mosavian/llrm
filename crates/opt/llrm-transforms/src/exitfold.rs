@@ -79,10 +79,11 @@ pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Functio
 /// `folded`, what is known of the body without memory given as `standing` says.
 pub fn folded_with(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, standing: &mut memory::Standing) -> bool {
     let (decided, hoisted, predicated, merged) = {
-        let unit = memory::Unit::within(context, layout, function, outer);
+        let shape = cfg::Shape::of(function);
+        let unit = memory::Unit::within(context, layout, function, outer).with_shape(&shape);
         let facts = standing.of(&unit);
         let unit = unit.with_registers(facts);
-        let loops = unit.shape().loops.clone();
+        let loops = shape.loops.clone();
         let mut decided = Vec::new();
         let mut hoisted = Vec::new();
         let mut predicated = Vec::new();

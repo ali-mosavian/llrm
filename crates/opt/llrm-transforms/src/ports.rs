@@ -30,7 +30,8 @@ impl FunctionPass for Ports {
 /// The port calls, not yet narrowed, whose ports the target says reach no memory.
 fn silent(unit: &passes::Unit, analyses: &mut Analyses) -> Vec<InstId> {
     let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
-    let memory = Unit::within(unit.context, unit.layout, unit.function, analyses.outer()).with_registers(&held);
+    let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+    let memory = Unit::within(unit.context, unit.layout, unit.function, analyses.outer()).with_registers(&held).with_shape(&shape);
     let calls: Vec<_> = unit
         .function
         .walk()
