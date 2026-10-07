@@ -581,6 +581,15 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     // An inlined callee's variables are not this procedure's.
     body.variables.extend(selector.variables.into_iter().filter(|(scope, _)| scope == name).map(|(_, one)| one));
+    // A parameter's home is written after the entry: until then its argument is in the register the convention gives.
+    for one in &mut body.variables {
+        if let (Some(argument), DebugPlace::At(_)) = (one.argument, &one.place) {
+            one.arrives = match usize::try_from(argument).ok().and_then(|argument| convention.parameters.get(argument)) {
+                Some(Parameter::Registers(registers)) if registers.len() == 1 => Some(registers[0]),
+                _ => None,
+            };
+        }
+    }
     Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, pops: selector.pops, depth: selector.depth, landing: selector.landing })
 }
 
@@ -599,7 +608,7 @@ pub(crate) fn parameters(module: &Module, name: &str, convention: &Convention) -
                 // The function has no such argument any more: the optimiser took it out.
                 None => DebugPlace::Gone,
             };
-            Some(DebugVariable { name, r#type, place, parameter: true })
+            Some(DebugVariable { name, r#type, place, parameter: true, argument: None, arrives: None })
         })
         .collect()
 }
@@ -1733,7 +1742,7 @@ impl Selector<'_, '_, '_> {
         let Some(variable) = attached.and_then(|node| llrm_mir::debuginfo::read_variable(self.module, node)) else { return Ok(()) };
         if let Ok(Pointer::Frame { disp, index: None, .. }) = self.pointer(arguments[0]) {
             let addr = Addr::new(Space::Frame, disp + variable.offset);
-            self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, place: DebugPlace::At(addr), parameter: variable.parameter }));
+            self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, place: DebugPlace::At(addr), parameter: variable.parameter, argument: variable.argument, arrives: None }));
         }
         Ok(())
     }
@@ -1897,9 +1906,27 @@ impl Selector<'_, '_, '_> {
             [(position, scale)] => Some((instruction.operands[1 + position], scale as i64)),
             _ => None,
         };
-        if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor)) {
+        if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor, false)) {
             self.pointers.insert(address, scaled);
             // A product the scale took is computed only if something else reads it.
+            if let Some((Operand::Value(product), _)) = one
+                && matches!(function.value(product).def, ValueDef::Instruction(_))
+            {
+                let product = self.value(product);
+                self.folded.insert(product);
+            }
+            return Ok(());
+        }
+        // A pointer something else than an access reads is one `lea` of the same form where the target has it:
+        // base + index * scale, not the index shifted and then added.
+        if !self.only_addressed(address)
+            && self.width(instruction.ty).ok() == Some(4)
+            && let Some(valued) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor, true))
+            && let Pointer::Based { index: Some(_), segment: None, .. } = valued
+        {
+            let cell = Self::memory(valued, 4);
+            let held = Held { value: self.value(address), width: 4 };
+            out.push(insn(at, semantics(Operation::Address, "lea", vec![Loc::Held(held)], vec![Loc::Mem(cell)])));
             if let Some((Operand::Value(product), _)) = one
                 && matches!(function.value(product).def, ValueDef::Instruction(_))
             {
@@ -1932,7 +1959,7 @@ impl Selector<'_, '_, '_> {
             _ => None,
         };
         if !taken.is_empty() {
-            if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor)) {
+            if let Some(scaled) = one.map(|(index, scale)| self.unscaled(index, scale)).and_then(|(index, scale, factor)| self.widened(inst, index, pointer.moved(offset as i64), scale, factor, false)) {
                 self.pointers.insert(address, scaled);
                 for &add in &taken {
                     let add = self.value(add);
@@ -2260,7 +2287,7 @@ impl Selector<'_, '_, '_> {
     /// defines them (`addressforms::promote`), so no register is added. The
     /// wider sum names the same byte where the index is a non-negative word
     /// at every access, and the access is typed or its offset exact.
-    fn widened(&mut self, inst: InstId, index: Operand, pointer: Pointer, scale: i64, factor: i64) -> Option<Pointer> {
+    fn widened(&mut self, inst: InstId, index: Operand, pointer: Pointer, scale: i64, factor: i64, valued: bool) -> Option<Pointer> {
         let Operand::Value(index) = index else { return None };
         let function = self.function;
         // A dword index is already the wide register; a word one is widened
@@ -2269,7 +2296,7 @@ impl Selector<'_, '_, '_> {
         let form = if dword { self.wide? } else { self.secondary? };
         let address = function.instruction(inst).result?;
         let scaled = scale > 1 || (dword && matches!(pointer, Pointer::Frame { .. }));
-        if !scaled || !form.scales.contains(&scale) || !self.only_addressed(address) || !(dword || self.promotable(index)) {
+        if !scaled || !form.scales.contains(&scale) || !(valued || self.only_addressed(address)) || !(dword || self.promotable(index)) {
             return None;
         }
         // A word index is zero-extended, so it must be non-negative; a dword
@@ -3613,7 +3640,9 @@ impl Selector<'_, '_, '_> {
         match (byte, constant) {
             // Tuned for size, one `rep stosb`: no dword count, tail or
             // operand-size prefix.
-            (Some(byte), _) if self.cpu.size => {
+            // Where the dwords fill is as short: zeros through a 32-bit segment, `xor eax, eax` for `mov al, 0` and
+            // no operand-size prefix on `stosd`, the count an immediate of the same width, no tail.
+            (Some(byte), _) if self.cpu.size && !(byte == 0 && self.arch.object().bitness == 32 && constant.is_some_and(|(_, length)| length % 4 == 0)) => {
                 let count = match constant {
                     Some((_, length)) => imm(length, self.address_bytes()),
                     None => Loc::Held(self.held(length, self.function.operand_type(&self.module.context, length).expect("a typed length"), at, out)?),
@@ -3778,8 +3807,13 @@ impl Selector<'_, '_, '_> {
             && let ValueDef::Instruction(and) = self.function.value(value).def
             && self.covered.contains_key(&and)
         {
-            let operands = self.function.instruction(and).operands.clone();
-            let (x, y) = (Loc::Held(self.held(operands[0], ty, at, out)?), Loc::Held(self.held(operands[1], ty, at, out)?));
+            let mut operands = self.function.instruction(and).operands.clone();
+            // The mask is the instruction's immediate: `test r, 1`, not a register made to hold it.
+            if matches!(operands[0], Operand::Constant(_)) {
+                operands.swap(0, 1);
+            }
+            let x = Loc::Held(self.held(operands[0], ty, at, out)?);
+            let y = if matches!(operands[1], Operand::Constant(_)) { self.source(operands[1], ty, at, out)? } else { Loc::Held(self.held(operands[1], ty, at, out)?) };
             out.push(insn(at, semantics(Operation::Compare, "test", vec![], vec![x, y])));
             return Ok(Test::One(condition_code(predicate)));
         }

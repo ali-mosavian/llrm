@@ -346,3 +346,32 @@ fn gdb_backtraces_through_a_function_with_no_frame_register_at_o2() {
     }
 }
 
+
+/// A parameter arrives in a register and the function stores it into its frame cell a few instructions in; until
+/// then the cell holds nothing and the frame register is the caller's. gdb stopped at the first instruction of
+/// `add` read `a` from the cell (garbage) where it is in `eax`: the location is the register until the store and the
+/// cell after it.
+#[test]
+fn gdb_reads_a_parameter_at_the_first_instruction_from_the_register_it_arrived_in() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
+    let scratch = tempfile::tempdir().unwrap();
+    let (Some(gdb), Some(ld), Some(assembler)) = (tool("gdb"), tool("ld"), tool("as")) else {
+        skipped("needs gdb, GNU ld and as");
+        return;
+    };
+    let (start, object, program) = (scratch.path().join("start.o"), scratch.path().join("gdb.o"), scratch.path().join("gdb"));
+    let made = Command::new(assembler).arg("--32").arg("-o").arg(&start).arg(fixtures.join("start.s")).output().unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let made = compile(&fixtures.join("gdb.c"), &["-m32", "-O0", "-fobject-format=elf", "-g"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(ld).args(["-m", "elf_i386", "-o"]).arg(&program).arg(&start).arg(&object).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    if Command::new(&program).output().ok().and_then(|ran| ran.status.code()) != Some(12) {
+        skipped("this host does not run i386 programs");
+        return;
+    }
+    let said = Command::new(gdb).args(["-batch", "-nx", "-ex", "break *add", "-ex", "run", "-ex", "print a", "-ex", "print *p", "-ex", "stepi", "-ex", "stepi", "-ex", "stepi", "-ex", "stepi", "-ex", "stepi", "-ex", "print a"]).arg(&program).current_dir(&fixtures).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    assert!(text.contains("$1 = 1") && text.contains("$2 = {x = 3, y = 4}"), "at the entry:\n{text}");
+    assert!(text.contains("$3 = 1"), "after the store, from the cell:\n{text}");
+}

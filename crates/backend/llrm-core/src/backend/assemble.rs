@@ -136,6 +136,21 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
     timed("stack checks", || crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names), &*arch));
+    // A function this module declares and names only in data (a table of function pointers) is an external too: no call says so.
+    let declared: BTreeSet<&str> = module
+        .globals
+        .iter()
+        .enumerate()
+        .filter(|(_, global)| matches!(&global.kind, GlobalKind::Function(function) if function.is_declaration()))
+        .filter_map(|(at, _)| names.get(&(globals::space(module, GlobalId(at as u32)), at as i64)).map(String::as_str))
+        .collect();
+    for datum in &data {
+        if let masm::Datum::Pointer(pointer) = datum
+            && declared.contains(pointer.name.as_str())
+        {
+            referenced.entry(pointer.name.clone()).or_insert(pointer.far);
+        }
+    }
     let defined: BTreeSet<&str> = procedures.iter().map(|one| one.name.as_str()).collect();
     let mut externs: Vec<(String, String)> = referenced
         .iter()

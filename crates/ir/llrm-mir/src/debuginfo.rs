@@ -162,6 +162,8 @@ pub struct Variable {
     pub offset: i64,
     /// Where a parameter's value is kept, not a variable the body declares.
     pub parameter: bool,
+    /// Of a parameter's home: the argument the function was passed it as.
+    pub argument: Option<i64>,
 }
 
 fn node(module: &mut Module, operands: Vec<MetadataOperand>) -> MetadataId {
@@ -346,13 +348,17 @@ pub fn add_variable(module: &mut Module, one: &Variable) -> MetadataId {
     // After the offset, only where true: a node without it is no parameter's.
     if one.parameter {
         operands.push(int(module, 1));
+        // And after that, only for a home whose argument is known.
+        if let Some(argument) = one.argument {
+            operands.push(int(module, argument));
+        }
     }
     node(module, operands)
 }
 
 pub fn read_variable(module: &Module, id: MetadataId) -> Option<Variable> {
     let one = Reader::of(module, id)?;
-    Some(Variable { scope: one.text(0)?, name: one.text(1)?, r#type: one.node(2)?, offset: one.int(3)?, parameter: one.int(4).is_some_and(|flag| flag != 0) })
+    Some(Variable { scope: one.text(0)?, name: one.text(1)?, r#type: one.node(2)?, offset: one.int(3)?, parameter: one.int(4).is_some_and(|flag| flag != 0), argument: one.int(5) })
 }
 
 fn listed<'m>(module: &'m Module, name: &str) -> impl Iterator<Item = MetadataId> + 'm {
@@ -422,7 +428,7 @@ mod tests {
         let global = Global { global: "g".into(), offset: 4, name: "G".into(), r#type: int16, scope: Some("f".into()) };
         add_global(&mut module, &global);
         assert_eq!(globals(&module), [global]);
-        let variable = Variable { scope: "f".into(), name: "v".into(), r#type: pt, offset: -2, parameter: false };
+        let variable = Variable { scope: "f".into(), name: "v".into(), r#type: pt, offset: -2, parameter: false, argument: None };
         let id = add_variable(&mut module, &variable);
         assert_eq!(read_variable(&module, id), Some(variable));
     }
@@ -434,7 +440,7 @@ mod tests {
         let mut module = Module::default();
         let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new(), spelling: None };
         let int16 = add_type(&mut module, &scalar);
-        let home = Variable { scope: "f".into(), name: "a".into(), r#type: int16, offset: 0, parameter: true };
+        let home = Variable { scope: "f".into(), name: "a".into(), r#type: int16, offset: 0, parameter: true, argument: None };
         let local = Variable { parameter: false, name: "l".into(), ..home.clone() };
         let (home_id, local_id) = (add_variable(&mut module, &home), add_variable(&mut module, &local));
         assert_eq!(module.metadata[local_id.0 as usize].operands.len(), 4, "a local's node is what it was");

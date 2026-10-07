@@ -1,48 +1,46 @@
-reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
+reason = "a mask compared with zero is test with the mask as its immediate, not a copy and-ed for its flags (isel pattern and_tested takes a constant mask): parity/control, qbsp, recpow and others fewer instructions"
 blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 1064
+instructions = 1056
 memory_operands = 463
-code_bytes = 738
+code_bytes = 734
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0231
 
 [bas.Os]
-instructions = 1157
+instructions = 1149
 memory_operands = 535
-code_bytes = 663
+code_bytes = 662
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0247
 
 [c.O2]
-instructions = 337
+instructions = 329
 memory_operands = 87
-code_bytes = 413
+code_bytes = 407
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0049
 
 [c.Os]
-instructions = 337
+instructions = 326
 memory_operands = 87
-code_bytes = 356
+code_bytes = 355
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 316
-memory_operands = 96
-code_bytes = 442
+instructions = 320
+memory_operands = 118
+code_bytes = 462
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0051
 
 [nib.Os]
-instructions = 320
-memory_operands = 93
-code_bytes = 392
+instructions = 324
+memory_operands = 123
+code_bytes = 410
 data_bytes = 0
 bss_bytes = 0
 
