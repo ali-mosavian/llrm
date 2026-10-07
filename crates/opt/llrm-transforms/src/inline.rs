@@ -120,6 +120,10 @@ const FRAME_LIMIT: u64 = 256;
 const LARGE_FUNCTION: i64 = 2700;
 const LARGE_GROWTH: i64 = 100;
 
+/// LLVM's last-call-to-static bonus (15000) over the cost of an instruction (5): the largest body it moves into its
+/// one caller, where gcc's limits above let a large callee into a small caller whole.
+const LAST_CALL_OPERATIONS: i64 = 3000;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Candidate {
     pub body: Rc<Function>,
@@ -279,7 +283,7 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         };
         // Only once nothing else is: a body that a call in it is about to be inlined into would
         // be copied with that call still in it, and the call's callee counted once too many.
-        let last = threshold.last && copies == 0 && !always && !admitted();
+        let last = threshold.last && copies == 0 && semantic_count(body) <= LAST_CALL_OPERATIONS && !always && !admitted();
         // A body held only to inline from (`available_externally`) is priced by the trial of what
         // it leaves, not by its size: any size is a candidate there, never in the plain round.
         let verdict = always || admitted() || module.global(name).linkage == Linkage::AvailableExternally;
