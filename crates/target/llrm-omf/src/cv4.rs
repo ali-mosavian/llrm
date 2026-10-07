@@ -105,7 +105,14 @@ impl Types<'_> {
         self.records[usize::from(at) - FIRST_TYPE] = record;
     }
 
+    /// A finished record's index: that of an identical one if there is, as two model types that read alike (a
+    /// pointer to `int` and one to `long`, both four bytes) are one record.
     fn add(&mut self, leaf: u16, data: &[u8]) -> Result<u16, Error> {
+        let mut record = leaf.to_le_bytes().to_vec();
+        record.extend(data);
+        if let Some(at) = self.records.iter().position(|one| *one == record) {
+            return narrow((FIRST_TYPE + at) as i64, "a type index");
+        }
         let at = self.reserve()?;
         self.fill(at, leaf, data);
         Ok(at)
@@ -144,7 +151,7 @@ impl Types<'_> {
         }
         let one = self.info.types.get(id).ok_or_else(|| Error::Unencodable(format!("CodeView 4: type {id} is not in the model")))?.clone();
         let made = match one {
-            Type::Scalar(scalar) => self.primitive(scalar)?,
+            Type::Scalar(scalar) | Type::Basic { scalar, .. } => self.primitive(scalar)?,
             Type::Typedef { target, .. } => self.of(target)?,
             Type::Pointer { target, bytes, reach } => {
                 let target = self.of(target)?;

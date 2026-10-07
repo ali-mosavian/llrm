@@ -139,8 +139,23 @@ plain_record!(Type, None, id => "id", name => "name", kind => "kind", width => "
 plain_record!(Place, None, id => "id", name => "name", r#type => "type", storage => "storage", offset => "offset",
     symbol => "symbol", extent => "extent", address => "address", volatile => "volatile");
 plain_record!(Value, None, id => "id", r#type => "type");
-plain_record!(DebugType, None, id => "id", kind => "kind", name => "name", target => "target", size => "size",
-    reach => "reach", members => "members");
+// `spelling` only where there is one: every other type writes as before.
+impl _Plain for model::DebugType {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("id".to_owned(), self.id._plain());
+        out.insert("kind".to_owned(), self.kind._plain());
+        out.insert("name".to_owned(), self.name._plain());
+        out.insert("target".to_owned(), self.target._plain());
+        out.insert("size".to_owned(), self.size._plain());
+        out.insert("reach".to_owned(), self.reach._plain());
+        out.insert("members".to_owned(), self.members._plain());
+        if let Some(spelling) = &self.spelling {
+            out.insert("spelling".to_owned(), spelling._plain());
+        }
+        Json::Dict(out)
+    }
+}
 // A bit field's keys only where it is one: every other member writes as before.
 impl _Plain for model::DebugMember {
     fn _plain(&self) -> JSON {
@@ -1377,6 +1392,7 @@ static DEBUG_TYPE: _Record = _Record {
         ("size", _Hint::Int, true),
         ("reach", enum_hint!(DebugReach), true),
         ("members", _Hint::Tuple(&_Hint::Record(&DEBUG_MEMBER)), true),
+        ("spelling", OPTIONAL_STR, false),
     ],
     build: |args| {
         _object(model::DebugType {
@@ -1387,6 +1403,7 @@ static DEBUG_TYPE: _Record = _Record {
             size: _required(args, "size")?,
             reach: _required(args, "reach")?,
             members: _required(args, "members")?,
+            spelling: _default(args, "spelling", None)?,
         })
     },
 };

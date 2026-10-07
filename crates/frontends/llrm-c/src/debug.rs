@@ -82,7 +82,11 @@ impl<'u> Described<'u> {
             return made;
         }
         let made = match self.debug.types.get(&handle)?.clone() {
-            DebugType::Scalar { name, cg } => Self::scalar(&name, &cg).map(|one| self.builder.scalar(one)),
+            DebugType::Scalar { name, cg } => Self::scalar(&name, &cg).map(|one| match one {
+                DebugScalar::Void => self.builder.scalar(one),
+                // The spelling is the source's own, which a debugger prints.
+                _ => self.builder.spelled_scalar(one, &name),
+            }),
             DebugType::Enum { cg } => Self::scalar("", &cg).map(|one| self.builder.scalar(one)),
             DebugType::Pointer { cg, base } => {
                 let reach = self.reach(&cg);

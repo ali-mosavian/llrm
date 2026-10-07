@@ -104,7 +104,7 @@ impl Builder<'_> {
         }
         let one = self.info.types.get(id).ok_or_else(|| Unsupported(format!("CodeView: type {id} is not in the model")))?.clone();
         let made = match one {
-            Type::Scalar(scalar) => primitive(scalar)?,
+            Type::Scalar(scalar) | Type::Basic { scalar, .. } => primitive(scalar)?,
             Type::Typedef { target, .. } => self.of(target)?,
             Type::Pointer { target, bytes, reach } => {
                 if reach != Reach::Near {

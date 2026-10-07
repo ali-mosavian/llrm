@@ -158,3 +158,27 @@ fn a_rotated_loop_is_not_unrolled_or_peeled() {
     assert!(!through(&rotated, Peel::default()).0);
     assert!(through(&summing("4"), Unroll::default()).0);
 }
+
+/// A step made in the header that a header phi takes round the back edge is not skipped on entry: rotation read it as test-only
+/// and the counter's next value was its own (`sub %x, 1` of itself, #811).
+#[test]
+fn a_step_in_the_header_that_a_phi_reads_keeps_the_header() {
+    let text = "define i16 @f(i16 %x) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 4, %b0 ], [ %next, %b2 ]
+  %next = sub i16 %i, 1
+  %go = icmp ne i16 %i, 0
+  br i1 %go, label %b2, label %b3
+
+b2:
+  br label %b1
+
+b3:
+  ret i16 %i
+}
+";
+    assert!(!through(text, Rotate).0);
+}

@@ -85,6 +85,17 @@ impl Selector<'_, '_, '_> {
             self.float_loaded(into, "fild", cell, 8, false, at, out);
             return Ok(());
         }
+        // fistp stores a qword, truncating as the control word is set: read back as the halves.
+        if op == CastOp::FPToSI && self.is_float(from) {
+            let held = self.float(operand, at, out)?;
+            let cell = self.float_stored(held, "fisttp", 8, at, out);
+            let (low, high) = (self.half(), self.half());
+            for (half, by) in [(low, 0), (high, 4)] {
+                self.put(semantics(Operation::Move, "mov", vec![Loc::Held(half)], vec![Loc::Mem(Self::memory(cell.moved(by), 4))]), at, out);
+            }
+            self.wides.insert(result, (low, high));
+            return Ok(());
+        }
         if !self.is_wide(to) {
             let (low, _) = self.wide(operand, at, out)?;
             let into = Held { value: self.value(result), width: self.width(to)? };
@@ -401,11 +412,13 @@ impl Selector<'_, '_, '_> {
             requires,
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
-            call: Some(self.listed(llrm_mir::memory::Effects::NONE)),
+            call: Some(self.listed(llrm_mir::memory::Effects::NONE, Default::default())),
             ..Insn::new(at, Some((at, at)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![], vec![])
         }));
         self.calls.insert(at, name.to_owned());
-        self.inline.insert(at, code.to_vec());
+        // The bytes are 386 code for a 16-bit segment.
+        let code = if self.arch.object().bitness == 32 { crate::backend::lower_int64::flat(code) } else { code.to_vec() };
+        self.inline.insert(at, code);
         Ok((quotient, remainder))
     }
 
