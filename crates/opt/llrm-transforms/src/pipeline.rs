@@ -36,7 +36,7 @@ use llrm_mir::program::Program;
 use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
-    promote, rotate, tailrec, unroll, unswitch, window,
+    promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -184,6 +184,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(floatloop::FloatLoop),
         Box::new(hoist::Hoist { size: applied.options.prefers_size() }),
         Box::new(loopmotion::LoopMotion),
+        // The loop's exit tests that nothing in it changes are made once, with the loop's entry.
+        Box::new(trivialunswitch::TrivialUnswitch),
         // Before gvn: a far pointer cast from a near one is read as the near one.
         Box::new(inferspace::InferAddressSpaces),
         Box::new(dse::Dse),

@@ -35,6 +35,8 @@ pub struct Aggregate {
     /// `after-arguments`: pushed past the last argument; `register`: held in `pointer_register`.
     pub pointer: String,
     pub pointer_register: Option<String>,
+    /// The address is a far pointer where the target has far data (Borland's); else a near one.
+    pub pointer_far: bool,
     pub pointer_returned: String,
     pub pointer_popped_by: String,
 }
@@ -61,7 +63,7 @@ pub struct Convention {
     pub results_clobbered: bool,
     /// The convention a variadic call uses in place of this one: it moves the arguments, not the symbol.
     pub variadic: Option<String>,
-    /// How a symbol is written in each object format, `*` standing for its name.
+    /// How a symbol is written in each object format, `*` standing for its name and `^*` for its name in capitals (`spell`).
     pub symbol: BTreeMap<String, String>,
     pub return_address_bytes: i64,
     /// Where the first argument lies from the frame register, past the saved frame register and
@@ -111,6 +113,7 @@ const KEYS: &[&str] = &[
     "variadic",
     "symbol",
     "aggregate_pointer_register",
+    "aggregate_pointer_far",
     "slot_bytes",
     "order",
     "cleanup",
@@ -291,6 +294,7 @@ impl Convention {
                 in_register_bytes: names_as_integers(table.get("aggregate_in_register_bytes"), &at("aggregate_in_register_bytes"))?,
                 pointer: text("aggregate_pointer")?,
                 pointer_register: table.contains_key("aggregate_pointer_register").then(|| text("aggregate_pointer_register")).transpose()?,
+                pointer_far: table.get("aggregate_pointer_far").map_or(Ok(false), |one| one.as_bool().ok_or_else(|| format!("{} is not true or false", at("aggregate_pointer_far"))))?,
                 pointer_returned: text("aggregate_pointer_returned")?,
                 pointer_popped_by: text("aggregate_pointer_popped_by")?,
             }),
@@ -432,13 +436,18 @@ impl Convention {
 
     /// `name` as an object in `format` (`omf`, `elf`, `macho`) spells it under this convention, where the description gives it.
     pub fn decorated(&self, format: &str, name: &str) -> Option<String> {
-        self.symbol.get(format).map(|pattern| pattern.replace('*', name))
+        self.symbol.get(format).map(|pattern| spell(pattern, name))
     }
 
     /// The registers kept for the caller that a value may be held in: all but the frame register.
     pub fn callee_saved(&self) -> Vec<&Kept> {
         self.preserved.iter().filter(|one| one.full != self.frame && one.pushed != self.frame).collect()
     }
+}
+
+/// `name` in a symbol `pattern`: `*` is the name, `^*` the name in capitals.
+pub fn spell(pattern: &str, name: &str) -> String {
+    pattern.replace("^*", &name.to_ascii_uppercase()).replace('*', name)
 }
 
 fn names_as_integers(value: Option<&toml::Value>, at: &str) -> Result<Vec<i64>, String> {

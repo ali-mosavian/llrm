@@ -98,12 +98,12 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
 }
 
 /// The frontend for the target `-m<N>` among `arguments` names, those arguments taken out of
-/// them: for the tools that run or declare a program and take no other target flag.
+/// them: for the tools that run or declare a program and take no other target flag (`-mabi=` too: it says what `"c"` is).
 pub fn frontend_with_mode(arguments: &mut Vec<String>) -> Result<super::Frontend, String> {
     let mut flags = llrm_core::driver::flags::Flags::default();
     let mut rest = Vec::new();
     for argument in std::mem::take(arguments) {
-        if llrm_core::driver::flags::Flags::mode_flag(&argument).is_some() {
+        if llrm_core::driver::flags::Flags::mode_flag(&argument).is_some() || argument.starts_with("-mabi=") {
             flags.take(&[argument], &mut 0)?;
         } else {
             rest.push(argument);
@@ -111,7 +111,12 @@ pub fn frontend_with_mode(arguments: &mut Vec<String>) -> Result<super::Frontend
     }
     *arguments = rest;
     let bound = llrm_driver::target(&flags, None)?;
-    super::Frontend::for_target(&*bound.target)
+    let format = flags.format(&*bound.target)?.name();
+    Ok(super::Frontend {
+        symbols: super::Frontend::symbols_for(&*bound.target, format),
+        native_name: flags.convention(&*bound.target)?.name.clone(),
+        ..super::Frontend::for_target(&*bound.target)?
+    })
 }
 
 /// What the target's OS layer says of Nib's runtime; a target without one is refused.

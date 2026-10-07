@@ -154,7 +154,7 @@ impl TypeRegistry {
     /// The object symbol of `name` under `abi`: its convention's pattern in the object format, else `Abi::symbol`'s.
     pub(super) fn symbol(&self, abi: Abi, name: &str) -> String {
         match self.symbols.get(abi.name()) {
-            Some(pattern) => pattern.replace('*', name),
+            Some(pattern) => llrm_target::calling::spell(pattern, name),
             None => abi.symbol(name),
         }
     }
