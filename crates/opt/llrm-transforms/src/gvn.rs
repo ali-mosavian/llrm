@@ -69,7 +69,8 @@ impl FunctionPass for Gvn {
         let trips = if !profit::registers(analyses.outer()).priced() {
             IndexMap::default()
         } else {
-            profit::proven_trips(&memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer()).with_registers(&registers).with_shape(&shape), &registers)
+            let counted = analyses.get::<llrm_analysis::manager::Counted>(unit.context, unit.layout, unit.function);
+            profit::proven_trips(&memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer()).with_registers(&registers).with_shape(&shape).with_counted(&counted), &registers)
         };
         match accesses.and_then(|accesses| optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape)) {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
