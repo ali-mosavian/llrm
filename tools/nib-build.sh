@@ -16,6 +16,11 @@ shift $(($# < 3 ? $# : 3))
 bin=$(python3 "$root/tools/llrmbin.py" bin)
 toolchain=${TOOLCHAIN:-$HOME/work/other/d32x/toolchains/native/bin}
 
+# The ABI the program is built for is the runtime's and the foreign C's too: their calls cross it.
+abi=""
+for flag in ${NIB_FLAGS:-}; do
+    case $flag in -mabi=*) abi="$abi $flag" ;; esac
+done
 work=$(mktemp -d "${TMPDIR:-/tmp}/nib-build.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
@@ -31,7 +36,8 @@ for part in "$@"; do
     name=$(basename "$part")
     case $part in
     *.asm) "$toolchain/jwasm" -q -c -Cp -Zg $omf $defines "-Fo$work/$name.obj" "$part" ;;
-    *) "$bin/llrm-c" "$part" -I "$work" -o "$work/$name.obj" "$level" >/dev/null ;;
+    # shellcheck disable=SC2086
+    *) "$bin/llrm-c" "$part" -I "$work" -o "$work/$name.obj" "$level" $abi >/dev/null ;;
     esac
     objects="$objects file $work/$name.obj"
     used="$used --used-by $work/$name.obj"
@@ -52,7 +58,7 @@ if [ -n "$hook" ]; then
 fi
 # jwlink keeps whatever any segment references, even one it drops, so the
 # runtime keeps only the routines the other objects name.
-"$bin/llrm-nib" "$root/crates/frontends/llrm-nib/src/runtime/runtime.nib" -o "$work/runtime.obj" "$level" --procedure-segments $used >/dev/null
+"$bin/llrm-nib" "$root/crates/frontends/llrm-nib/src/runtime/runtime.nib" -o "$work/runtime.obj" "$level" --procedure-segments $abi $used >/dev/null
 objects="file $work/runtime.obj$objects"
 "$toolchain/jwlink" option quiet option eliminate ${NIB_MAP:+option map=$NIB_MAP} $(recipe format) name "$work/program.exe" \
     file "$work/start.obj" ${hookobj:-} file "$work/program.obj" $objects \
