@@ -54,7 +54,7 @@ symbols, COMDAT (COFF needs it for inline functions and templates; no frontend p
 
 ## Choosing a format
 
-`object.toml`: `formats = ["omf", "elf"]`, `default = "omf"`. `-fobject-format=omf|elf|macho` picks one;
+`object.toml`: `formats = ["omf", "elf", "coff"]`, `default = "omf"`. `-fobject-format=omf|elf|macho|coff` picks one;
 without it the default applies. A format the target does not list is refused, and so is an `Object` the
 writer cannot express.
 

@@ -261,11 +261,6 @@ mod tests {
         assert_eq!([4, 8].map(|width| M32.results(width)), [vec![EAX], vec![EAX, EDX]]);
         assert_eq!(llrm_x86::calling::callee_saved(CALLING.named("cdecl32").unwrap()), [(EBX, EBX), (ESI, ESI), (EDI, EDI)]);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     /// Every convention that decorates a symbol for OMF says how for COFF: Open Watcom's own
     /// COFF objects (wcc386 -eoc) name `_c` for cdecl and `w_` for its register convention, as
