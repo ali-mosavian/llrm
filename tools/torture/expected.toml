@@ -26,3 +26,11 @@ reason = "GNU C does arithmetic on a bit-field in the field's own precision (an 
 [[differs]]
 program = "pr34971"
 reason = "The same: GNU C's bit-field precision (GCC PR middle-end/34971, expr.c ChangeLog 2008-02-27) against ISO C11 6.3.1.1p2, which llrm follows."
+
+[[differs]]
+program = "20021127-1"
+reason = "The program defines `llabs` (a body that aborts) and expects the compiler to replace the call by GCC's builtin (`-std=c99`: llabs is a reserved library name, so defining it is undefined behaviour); llrm calls the definition as written."
+
+[[differs]]
+program = "nestfunc-4"
+reason = "A 1000-level call chain that needs about 24 KB of stack at -O0 (the test itself says `dg-add-options stack_size` and sizes DEPTH from STACK_SIZE); the m32 DOS program's stack is 16 KB and faults at its guard (exception 0Bh). Depth 200 passes."
