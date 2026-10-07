@@ -48,7 +48,6 @@ fn test_a_stored_loop_carried_float_is_spilled_to_the_cell_the_program_stores_it
 /// -Os hoisted `x[i]` and `y[i]` out of the inner loop of 1.5 trips: two `fld` before it and two `fstp st(0)` after,
 /// 4 B and 800 instructions more than not hoisting (x86-m32 priced -Os in clocks, and nothing priced the release).
 #[test]
-#[ignore = "#698: late hoist prices freed pointers above the release"]
 fn test_os_does_not_hold_floats_across_a_loop_for_the_release_they_cost() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();

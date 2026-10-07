@@ -254,8 +254,8 @@ pub fn spill_forecast(
     let traffic = spill::traffic(function, frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
     // Every site asks of every value live there, and the answer is the value's alone.
     let known = std::cell::RefCell::new(llrm_support::hash::HashMap::<ValueId, bool>::default());
-    let counted = |value: ValueId| *known.borrow_mut().entry(value).or_insert_with(|| spill::integer(context, function, value));
-    let addressed = spill::addressed(function);
+    let counted = |value: ValueId| *known.borrow_mut().entry(value).or_insert_with(|| spill::integer_in(context, function, value, room.index_scales));
+    let addressed = spill::addressed_in(context, function, room.index_scales);
     let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst, live| spill::transient(context, layout, function, inst, room, live), &cells, &counted, &|value| spill::segment_view(context, layout, room.spaces, function, value), &|value| addressed.contains(&value))).flat_map(spill::Site::points);
     Some(spill::forecast(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs))))
 }
