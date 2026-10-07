@@ -440,7 +440,15 @@ pub fn _computed(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Interval>,
     } else {
         return None;
     }
-    fits(&low, &high, width).then_some(Interval { low, high, width })
+    if fits(&low, &high, width) {
+        return Some(Interval { low, high, width });
+    }
+    // A sum, product or shift that does not wrap (`nsw`) of values never negative is never negative, and stays below the signed
+    // maximum whatever its operands' corners say: poison otherwise. Where it may be negative the corners decide, as before.
+    if op.flags.contains(llrm_mir::opcode::Flags::NSW) && low >= BigInt::from(0_u8) {
+        return Some(Interval { low, high: (BigInt::from(1_u8) << (width - 1)) - 1u8, width });
+    }
+    None
 }
 
 /// The values `a * b` takes, before any wrap. `same` is that both are one value, a square:
@@ -784,6 +792,25 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
                     known.insert(counter.value, interval);
                 }
             }
+        }
+        // A counter that steps by a constant from a known start and never wraps (its update is `nsw`) does not go back past its
+        // start, however many trips: SCEV's range of `{start,+,step}<nsw>`, and enough for what asks a counter's sign.
+        for counter in induction::basics(unit, &loop_).values() {
+            if known.contains_key(&counter.value) {
+                continue;
+            }
+            let width = counter.start.width();
+            let (Some(start), Some(step)) = (induction::_signed(&counter.start, facts, width), induction::_signed(&counter.step, facts, width)) else { continue };
+            let ValueDef::Instruction(phi) = function.value(counter.value).def else { continue };
+            let wraps = function.instruction(phi).operands.chunks(2).filter(|pair| matches!(pair[1], Operand::Block(from) if loop_.body.contains(&cfg::id(from)))).any(|pair| {
+                !matches!(pair[0], Operand::Value(next) if matches!(function.value(next).def, ValueDef::Instruction(update) if function.instruction(update).flags.contains(llrm_mir::opcode::Flags::NSW)))
+            });
+            let sign = BigInt::from(1_u8) << (width - 1);
+            if wraps || step == BigInt::from(0_u8) || start < -sign.clone() || start >= sign {
+                continue;
+            }
+            let interval = if step > BigInt::from(0_u8) { Interval { low: start, high: &sign - 1u8, width } } else { Interval { low: -sign, high: start, width } };
+            known.insert(counter.value, interval);
         }
         let counted = !known.is_empty();
         // What is known above the loop of the values made outside it.

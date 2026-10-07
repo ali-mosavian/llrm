@@ -193,7 +193,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
         Box::new(indvars::IndVars),
-        Box::new(algebraic::Algebraic),
+        Box::new(algebraic::Algebraic { size: applied.options.prefers_size() }),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
         Box::new(peel::Peel { limits: limits() }),

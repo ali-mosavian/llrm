@@ -442,7 +442,7 @@ fn a_constant_division_expanded_to_shifts_folds() {
     for (dividend, quotient) in [(1073741831, 1048576), (-1073741831, -1048576)] {
         let mut module = parsed(&format!("define i32 @f(i32 %x) {{\nb0:\n  %q = sdiv i32 {dividend}, 1024\n  ret i32 %q\n}}\n"));
         let before = results(&module, &[&[0]]);
-        managed(&mut module, crate::algebraic::Algebraic);
+        managed(&mut module, crate::algebraic::Algebraic::default());
         let expanded = managed(&mut module, Fold);
         assert!(expanded.contains(&format!("ret i32 {quotient}")), "{expanded}");
         assert_eq!(results(&module, &[&[0]]), before);
