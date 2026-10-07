@@ -154,7 +154,11 @@ impl Types<'_> {
             Type::Scalar(scalar) | Type::Basic { scalar, .. } => self.primitive(scalar)?,
             Type::Typedef { target, .. } => self.of(target)?,
             Type::Pointer { target, bytes, reach } => {
-                let target = self.of(target)?;
+                // A pointer to a procedure that is far to reach is to one that is called far.
+                let target = match self.procedure_through(target) {
+                    Some(procedure) => self.procedure(procedure, reach != Reach::Near)?,
+                    None => self.of(target)?,
+                };
                 if let Some(done) = self.index[id] {
                     return Ok(done);
                 }
@@ -247,6 +251,17 @@ impl Types<'_> {
         put16(&mut data, target);
         put32(&mut data, 0);
         self.sealed(LF_POINTER, data)
+    }
+
+    /// The procedure type `id` is, or is a typedef of.
+    fn procedure_through(&self, mut id: TypeId) -> Option<TypeId> {
+        loop {
+            match self.info.types.get(id)? {
+                Type::Typedef { target, .. } => id = *target,
+                Type::Procedure { .. } => return Some(id),
+                _ => return None,
+            }
+        }
     }
 
     /// The model's procedure `id`, called far or near.
