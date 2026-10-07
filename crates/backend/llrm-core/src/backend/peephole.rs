@@ -780,11 +780,41 @@ pub fn _register_operand(one: &Loc, before: Register, after: Register) -> Loc {
     }
 }
 
+thread_local! {
+    static DECODED: std::cell::RefCell<crate::support::hash::HashMap<(u32, usize), (Semantics, Option<Vec<iced_x86::Instruction>>)>> = std::cell::RefCell::new(Default::default());
+    static DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has assembled and decoded an instruction, for a test that asking again of one does not.
+pub fn decodes() -> usize {
+    DECODES.with(std::cell::Cell::get)
+}
+
 /// The machine instructions `what` encodes to.
+///
+/// Every pass of the peephole asks of the instructions of the body, which a pass leaves as they were (the same
+/// `Semantics`, at the same address), and the answer costs the assembly of its text and a decode: remembered
+/// by address, and kept only where the instruction is the one it was made of.
 fn _decoded(bits: u32, what: &Semantics) -> Option<Vec<iced_x86::Instruction>> {
-    let encoded = emit(bits, what)?;
-    let mut decoder = Decoder::new(bits, &encoded.code, DecoderOptions::NONE);
-    Some((&mut decoder).into_iter().collect())
+    let key = (bits, what as *const Semantics as usize);
+    let found = DECODED.with(|held| held.borrow().get(&key).filter(|(was, _)| was == what).map(|(_, decoded)| decoded.clone()));
+    if let Some(found) = found {
+        return found;
+    }
+    DECODES.with(|count| count.set(count.get() + 1));
+    let decoded = emit(bits, what).map(|encoded| {
+        let mut decoder = Decoder::new(bits, &encoded.code, DecoderOptions::NONE);
+        (&mut decoder).into_iter().collect::<Vec<_>>()
+    });
+    DECODED.with(|held| {
+        let mut held = held.borrow_mut();
+        // A function's instructions, not the run's.
+        if held.len() > 100_000 {
+            held.clear();
+        }
+        held.insert(key, (what.clone(), decoded.clone()));
+    });
+    decoded
 }
 
 /// The bytes a constant register shift carries, as `(written, source)`, and

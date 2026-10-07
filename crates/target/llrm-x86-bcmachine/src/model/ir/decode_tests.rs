@@ -245,7 +245,7 @@ fn test_semantics_never_claims_a_register_or_cell_the_effects_do_not() {
                         assert!(defs.contains(&root(one.register)), "{semantics:?}");
                     }
                     if let Loc::Mem(one) = where_ {
-                        assert!(effects.stores.contains(one), "{semantics:?}");
+                        assert!(effects.stores.iter().any(|cell| cell.same_place(one)), "{semantics:?}");
                     }
                 }
                 for where_ in &semantics.sources {
@@ -253,7 +253,7 @@ fn test_semantics_never_claims_a_register_or_cell_the_effects_do_not() {
                         assert!(uses.contains(&root(one.register)), "{semantics:?}");
                     }
                     if let Loc::Mem(one) = where_ {
-                        assert!(effects.loads.contains(one), "{semantics:?}");
+                        assert!(effects.loads.iter().any(|cell| cell.same_place(one)), "{semantics:?}");
                     }
                 }
             }
