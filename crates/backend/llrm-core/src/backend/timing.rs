@@ -37,6 +37,18 @@ pub fn signed_multiply<'a>(
     Ok(None)
 }
 
+/// Clocks of a multiply whose multiplier has `bits` significant bits (`None`: unknown), for a CPU whose multiply ends
+/// early on a short multiplier: the stated minimum at 3 bits to the stated maximum at the full width, a step per bit
+/// (the 486's `10 + max(bits, 3)`, Intel 240440-002 Table 10.1 note 3). A CPU whose two bounds are one has no such
+/// dependence. An unknown multiplier is priced at the middle of the range: the estimate with no information on which
+/// bit length it has, an assumption and not a fact about any program.
+pub fn multiply_clocks<'a>(cpu: impl Into<ProfileOrName<'a>>, width: i64, bits: Option<i64>) -> Result<Option<i64>, String> {
+    let Some(Clocks { minimum, maximum }) = signed_multiply(cpu, width, false)? else { return Ok(None) };
+    let Some(bits) = bits else { return Ok(Some((minimum + maximum + 1) / 2)) };
+    let bits = bits.clamp(3, width * 8);
+    Ok(Some(minimum + (maximum - minimum) * (bits - 3) / (width * 8 - 3)))
+}
+
 pub fn signed_divide<'a>(
     cpu: impl Into<ProfileOrName<'a>>,
     width: i64,
@@ -94,7 +106,7 @@ mod tests {
         ];
         let held = ir::Held { value: 1, width: 4 };
         assert_eq!(
-            division::reciprocal(held, 7, &results, &mut fresh, "486", true),
+            division::reciprocal(held, 7, &results, &mut fresh, "486", true, None),
             Ok(None)
         );
     }
@@ -115,7 +127,7 @@ mod tests {
         let mut count = 4..;
         let mut fresh = || count.next().unwrap();
         let held = ir::Held { value: 1, width: 4 };
-        let parts = division::reciprocal(held, 7, &[quotient, remainder], &mut fresh, "P5", false)
+        let parts = division::reciprocal(held, 7, &[quotient, remainder], &mut fresh, "P5", false, None)
             .unwrap()
             .expect("a reciprocal");
         assert_eq!(parts[parts.len() - 1].dests, [ir::Loc::Held(quotient)]);
