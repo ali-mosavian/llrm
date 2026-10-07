@@ -566,9 +566,11 @@ impl _Stack {
 
     /// An instruction replacing the top with its result.
     fn consume(&mut self, source: u32, what: Semantics, result: u32) -> Result<(), Raised> {
-        self.top(source)?;
+        // A value that stays is copied from where it is: exchanging it up first moved what lay above it.
         if self.survives(source) {
             self.duplicate(source)?;
+        } else {
+            self.top(source)?;
         }
         self.emit(what);
         self.values[0] = result;
