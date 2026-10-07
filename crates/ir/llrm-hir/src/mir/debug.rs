@@ -25,16 +25,25 @@ impl Types<'_> {
             return Ok(made);
         }
         let one = *self.of.get(&id).ok_or_else(|| format!("no debug type {id}"))?;
+        // An aggregate may be reached from one of its own members: its node is made first, set after.
+        let reserved = matches!(one.kind, di::Kind::Struct | di::Kind::Union).then(|| di::reserve_type(module));
+        if let Some(reserved) = reserved {
+            self.made.insert(id, reserved);
+        }
         let target = one.target.map(|target| self.node(module, target)).transpose()?;
         let members = one
             .members
             .iter()
             .map(|member| Ok(di::Member { name: member.name.clone(), r#type: self.node(module, member.r#type)?, offset: member.offset, bits: member.bit_start.zip(member.bit_width) }))
             .collect::<Emit<Vec<_>>>()?;
-        let made = di::add_type(
-            module,
-            &di::Type { kind: one.kind, name: one.name.clone(), size: one.size, reach: one.reach, target, members },
-        );
+        let described = di::Type { kind: one.kind, name: one.name.clone(), size: one.size, reach: one.reach, target, members };
+        let made = match reserved {
+            Some(reserved) => {
+                di::set_type(module, reserved, &described);
+                reserved
+            }
+            None => di::add_type(module, &described),
+        };
         self.made.insert(id, made);
         Ok(made)
     }

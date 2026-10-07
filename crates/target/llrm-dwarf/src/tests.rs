@@ -189,7 +189,7 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
         for version in [4u16, 5] {
             let types = vec![
                 int(),
-                Type::Struct { name: "pt".into(), bytes: 8, fields: vec![llrm_object::debug::Field { name: "x".into(), r#type: 0, offset: 0, bits: None }, llrm_object::debug::Field { name: "f".into(), r#type: 0, offset: 4, bits: Some((3, 5)) }] },
+                Type::Struct { name: "pt".into(), bytes: 8, fields: vec![llrm_object::debug::Field { name: "x".into(), r#type: 0, offset: 0, bits: None }, llrm_object::debug::Field { name: "f".into(), r#type: 0, offset: 4, bits: Some((3, 5)) }], union: false },
                 Type::Array { element: 1, bytes: Some(32) },
                 Type::Pointer { target: 1, bytes: 4, reach: Reach::Near },
             ];

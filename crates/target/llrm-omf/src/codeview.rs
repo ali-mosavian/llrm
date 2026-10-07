@@ -46,7 +46,8 @@ fn typed(one: &model::Type) -> Result<Type, Error> {
         M::FixedString(length) => Type::FixedString(narrow(i64::from(*length), "a STRING's length")?),
         M::Array { element, bytes: None } => Type::Array(*element),
         M::Array { element, bytes: Some(bytes) } => Type::Sized { element: *element, bytes: *bytes },
-        M::Struct { name, bytes, fields } => {
+        // CodeView 4's record is the same for a union: its fields all start at 0.
+        M::Struct { name, bytes, fields, .. } => {
             let fields = fields
                 .iter()
                 .map(|field| Ok(cvwrite::Field { name: field.name.clone(), r#type: field.r#type, offset: narrow(i64::from(field.offset), "a field's offset")?, bits: field.bits }))
