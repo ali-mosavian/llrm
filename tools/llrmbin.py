@@ -14,4 +14,10 @@ def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
         return Path(env["LLRM_BIN"])
     if env.get("CARGO_TARGET_DIR"):
         return Path(env["CARGO_TARGET_DIR"]) / "release"
-    return repo / "target" / "release"
+    return target_dir(env, repo) / "release"
+
+
+def target_dir(env: dict | None = None, repo: Path = REPO) -> Path:
+    """Cargo's target directory, which the tools' scratch work goes under: CARGO_TARGET_DIR, else <repo>/target."""
+    env = os.environ if env is None else env
+    return Path(env["CARGO_TARGET_DIR"]) if env.get("CARGO_TARGET_DIR") else repo / "target"

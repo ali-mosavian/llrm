@@ -36,6 +36,7 @@ import corpus  # noqa: E402
 import sizes  # noqa: E402
 import icount  # noqa: E402
 import dosbatch  # noqa: E402
+llrmbin = dosbatch.llrmbin
 import run_tests  # noqa: E402
 from dosbatch import BIN, ROOT, Job  # noqa: E402
 
@@ -584,7 +585,7 @@ def main() -> int:
     parser.add_argument("--bless", action="store_true")
     parser.add_argument("--reason", default="")
     parser.add_argument("--json", type=Path)
-    parser.add_argument("--work", type=Path, default=ROOT / "target" / "bench")
+    parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
     args = parser.parse_args()
     if args.bless and not args.reason:
         parser.error("--bless needs --reason: every change to expected.toml says why")

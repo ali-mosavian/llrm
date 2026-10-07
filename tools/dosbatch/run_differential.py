@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
+llrmbin = dosbatch.llrmbin
 import run_tests  # noqa: E402
 from dosbatch import ROOT, Job  # noqa: E402
 from run_tests import Program, first_difference, lines  # noqa: E402
@@ -28,7 +29,7 @@ CASES = ROOT / "tests" / "differential" / "qb-bc"
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
-    parser.add_argument("--work", type=Path, default=ROOT / "target" / "tests-differential")
+    parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "tests-differential")
     args = parser.parse_args()
     sources = [one for one in sorted(CASES.glob("*.bas")) if one.with_suffix(".out").exists() and (not args.select or one.stem in args.select)]
     if not sources:
