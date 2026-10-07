@@ -358,14 +358,18 @@ fn _frame_object(function: &Function, value: ValueId) -> bool {
     }
 }
 
-/// Whether `value` is a frame object's address plus constants.
+/// Whether `value` is a frame object's or a symbol's address plus constants.
 fn _frame_offset(function: &Function, value: ValueId) -> bool {
     let ValueDef::Instruction(def) = function.value(value).def else { return false };
     let op = function.instruction(def);
     let Opcode::GetElementPtr { .. } = op.opcode else { return false };
-    let [Operand::Value(base), indexes @ ..] = op.operands.as_slice() else { return false };
+    let [base, indexes @ ..] = op.operands.as_slice() else { return false };
     indexes.iter().all(|one| matches!(one, Operand::Constant(_)))
-        && (_frame_object(function, *base) || _frame_offset(function, *base))
+        && match base {
+            Operand::Value(base) => _frame_object(function, *base) || _frame_offset(function, *base),
+            Operand::Constant(_) => true,
+            _ => false,
+        }
 }
 
 /// Whether `value` is a frame object's address plus one index scaled by what an address takes (`x * 8`, a
