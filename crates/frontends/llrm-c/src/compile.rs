@@ -549,6 +549,24 @@ mod tests {
         assert_eq!(without_path(&recorded), without_path(&committed));
     }
 
+    /// A far pointer made from a long in memory had its segment as a word-wide view of the shifted dword, a second width of one
+    /// value: the allocator loaded ES again on every iteration of the loop that stores through it.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_far_pointer_made_from_a_long_loads_its_segment_once() {
+        let profile = super::Profile::of(&llrm_x86_m16::M16).unwrap();
+        let source = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/farcast.c");
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records farcast.c");
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let built = super::selected(&text, "farcast", None, &llrm_driver::m16_options(machine)).unwrap();
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find("_fill proc").expect("the function");
+        let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+        let loop_at = body.iter().position(|line| line.ends_with(':') && line.starts_with('L') && body.iter().any(|one| one.starts_with("jne") && line.starts_with(&one[4..]))).expect("the loop");
+        assert!(body.iter().filter(|line| line.starts_with("mov es,")).count() == 1 && !body[loop_at..].iter().any(|line| line.starts_with("mov es,")), "{body:?}");
+    }
+
     /// A long double global got its initializer as a double, 8 bytes, while
     /// code loads it as 10 bytes: `gld` read 1.07e-49 and took two bytes of `after`.
     // It records C through wccq, which only the toolchain feature builds.
