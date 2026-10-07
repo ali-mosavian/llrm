@@ -206,6 +206,11 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
                     let width = widths_for(unit.flat, type_).unwrap_or(2) as usize;
                     object.bytes.extend(&number(value)?.to_le_bytes()[..width]);
                 }
+                // A 64-bit datum: its eight bytes, whatever the sign the front end spells the value in.
+                ("DGInteger64", [value, _]) => {
+                    let value = value.trim().parse::<i128>().map_err(|_| Unsupported(format!("not a number: {value}")))?;
+                    object.bytes.extend(&value.to_le_bytes()[..8]);
+                }
                 ("DGFEPtr", [symbol, type_, offset]) => {
                     let far = far_pointers(type_) || *type_ == "TY_LONG_CODE_PTR" || (*type_ == "TY_CODE_PTR" && unit.target & hir::BIG_CODE != 0);
                     pointer(object, Key::Symbol(hir::handle(symbol)), offset, far)?;
