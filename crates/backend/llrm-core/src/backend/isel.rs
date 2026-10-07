@@ -529,6 +529,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     let body = selector.body(name, &convention)?;
     let mut body = lined(module, function, &selector.ats, body);
     body.spares = Arc::new(spared(module, function, &selector.ats));
+    body.homes = Arc::new(homed(module, function, &selector.ats, &selector.values, &body));
     body.variables = parameters(module, name, &convention);
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     // An inlined callee's variables are not this procedure's.
@@ -565,6 +566,30 @@ fn spared(module: &Module, function: &Function, ats: &IndexMap<InstId, i64>) -> 
         }
     }
     pairs
+}
+
+/// Each phi's value that the program also holds in a fixed cell (`!llrm.home`): the cell the store it names wrote.
+fn homed(module: &Module, function: &Function, ats: &IndexMap<InstId, i64>, values: &IndexMap<ValueId, u32>, body: &LirBody) -> std::collections::BTreeMap<u32, Mem> {
+    let mut found = std::collections::BTreeMap::new();
+    for (inst, _) in ats {
+        let instruction = function.instruction(*inst);
+        let (Opcode::Phi, Some(result)) = (&instruction.opcode, instruction.result) else { continue };
+        let Some(&value) = values.get(&result) else { continue };
+        for (_, node) in instruction.metadata.iter().filter(|(kind, _)| kind == llrm_transforms::homes::KIND) {
+            let Some(llrm_mir::MetadataOperand::Constant(store)) = module.metadata[node.0 as usize].operands.first() else { continue };
+            let ConstantKind::Int(store) = module.context.get(*store).kind else { continue };
+            let Some(&at) = u32::try_from(store).ok().and_then(|store| ats.get(&InstId(store))) else { continue };
+            // The cell its store wrote, where selection left one fixed address.
+            let cell = body.blocks.iter().flat_map(|block| &block.insns).filter(|one| one.at == at).filter_map(|one| one.what.as_ref()).find_map(|what| match what.dests.as_slice() {
+                [Loc::Mem(cell)] if cell.base.is_none() && cell.index.is_none() && cell.addr.is_some() => Some(cell.clone()),
+                _ => None,
+            });
+            if let Some(cell) = cell {
+                found.insert(value, cell);
+            }
+        }
+    }
+    found
 }
 
 /// `body` with each instruction's source line: that of the MIR instruction

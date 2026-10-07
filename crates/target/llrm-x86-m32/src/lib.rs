@@ -172,7 +172,7 @@ impl llrm_target::Target for M32 {
     }
 
     fn cost_model(&self) -> CostModel {
-        llrm_target::described
+        |prices| llrm_target::described_by_size(prices, Some(OPCOSTS.size_costs()))
     }
 
     fn results(&self, width: u32) -> Vec<Register> {
@@ -186,6 +186,18 @@ mod tests {
     use llrm_target::Target;
 
     use super::*;
+
+    /// -Os on m32 priced in clocks: the description had no byte table, so `size_costs` was the clock costs and a
+    /// pass asked what a hoisted float costs in bytes was told 3, a load's clocks, not the 2 bytes of its release.
+    #[test]
+    fn test_m32_prices_code_size_in_bytes() {
+        use llrm_mir::target::Machine;
+        let prices = llrm_target::CpuPrices { costs: vec![("mov_rm".into(), 1)], prefix: 1, address_stall: 0, registers: 6, call_registers: 3, address_forms: Vec::new(), operations: OperationCosts { load: 1, ..Default::default() }, spaces: layout().spaces.roles };
+        let model = (M32.cost_model())(&prices);
+        let sizes = model.size_costs();
+        assert_eq!((sizes.load, sizes.float_release, sizes.call, sizes.r#move), (6, 2, 5, 4));
+        assert_eq!(model.costs().load, 1, "the clock prices are the CPU's");
+    }
 
     /// Flat code indexes by dwords natively: one form, no prefix, any scale.
     #[test]
