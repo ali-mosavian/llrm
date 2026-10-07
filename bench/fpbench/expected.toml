@@ -15,7 +15,7 @@ memory_operands = 5120
 code_bytes = 707
 data_bytes = 23
 bss_bytes = 0
-kernel_ms = 0.3014
+kernel_ms = 0.3015
 
 [c.O2]
 instructions = 16927
@@ -31,7 +31,7 @@ memory_operands = 3004
 code_bytes = 350
 data_bytes = 8
 bss_bytes = 0
-kernel_ms = 0.2675
+kernel_ms = 0.2676
 
 [nib.O2]
 instructions = 17321
@@ -47,7 +47,7 @@ memory_operands = 3003
 code_bytes = 496
 data_bytes = 16
 bss_bytes = 0
-kernel_ms = 0.2701
+kernel_ms = 0.2702
 
 [ow.O2]
 instructions = 21603

@@ -145,13 +145,13 @@ _dot proc far
     push si                         ; si and di are callee-saved
     push di
 L0_0:
-    mov si, word ptr [bp+6]         ; [hoisted] si = a
-    mov di, word ptr [bp+8]         ; [hoisted] di = b
     mov cx, word ptr [bp+10]        ; cx = n
     lea ax, [ecx+ecx]               ; ax = 2n, the byte length of each array
     mov bx, ax
     neg bx                          ; [one induction variable] bx = -2n is the counter and the offset
+    mov si, word ptr [bp+6]         ; [load sunk] si = a, read where it is added to
     add si, ax                      ; [biased] a + 2n, so a[i] is at [bx+si]
+    mov di, word ptr [bp+8]         ; [load sunk] di = b
     add di, ax                      ; [biased] b + 2n
     xor eax, eax                    ; total = 0
     or cx, cx

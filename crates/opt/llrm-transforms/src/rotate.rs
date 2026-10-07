@@ -206,15 +206,17 @@ pub(crate) fn _rotate(context: &mut Context, function: &mut Function, shape: &Sh
 
 /// The first proven loop not in `done` entered at its body; whether one was.
 pub fn rotated(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &Analyses, done: &mut BTreeSet<BlockId>) -> Result<bool, String> {
-    let facts = analyses.fresh().get::<Registers>(context, layout, function);
-    for loop_ in cfg::Shape::of(function).loops {
+    let mut fresh = analyses.fresh();
+    let facts = fresh.get::<Registers>(context, layout, function);
+    let found = fresh.get::<cfg::Shape>(context, layout, function);
+    for loop_ in found.loops.clone() {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
         }
         let Some(shape) = _shape(function, &loop_) else {
             continue;
         };
-        let unit = memory::Unit::within(context, layout, function, analyses.outer());
+        let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
         if induction::trip_count(&unit, &loop_, &facts).is_none() {
             continue;
         }

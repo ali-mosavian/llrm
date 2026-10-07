@@ -59,12 +59,12 @@ impl llrm_target::Target for M32 {
         &CPUS
     }
 
-    fn calling(&self) -> &'static llrm_target::calling::Calling {
-        &CALLING
-    }
-
     fn conventions(&self) -> &'static [&'static str] {
         &CONVENTIONS
+    }
+
+    fn calling(&self) -> &'static llrm_target::calling::Calling {
+        &CALLING
     }
 
     fn physical_addresses(&self) -> Vec<(String, u64)> {

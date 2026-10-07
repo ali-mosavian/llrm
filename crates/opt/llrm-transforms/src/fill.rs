@@ -232,9 +232,10 @@ pub fn filled_with(context: &mut Context, layout: &DataLayout, callees: &Callees
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
     let mut changed = false;
     'again: loop {
-        for loop_ in cfg::Shape::of(function).loops {
+        let shape = cfg::Shape::of(function);
+        for loop_ in shape.loops.clone() {
             let found = {
-                let unit = Unit::within(context, layout, function, outer);
+                let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
                 let facts = standing.of(&unit);
                 _fill(&unit.with_registers(facts), callees, &loop_, &costs, size)
             };

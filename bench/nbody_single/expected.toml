@@ -7,15 +7,15 @@ memory_operands = 204072
 code_bytes = 1118
 data_bytes = 165
 bss_bytes = 0
-kernel_ms = 12.2715
+kernel_ms = 12.2716
 
 [bas.Os]
-instructions = 1037194
+instructions = 1037188
 memory_operands = 138105
-code_bytes = 385
+code_bytes = 383
 data_bytes = 145
 bss_bytes = 0
-kernel_ms = 13.847
+kernel_ms = 13.8468
 
 [c.O2]
 instructions = 901107
@@ -23,15 +23,15 @@ memory_operands = 146077
 code_bytes = 1069
 data_bytes = 68
 bss_bytes = 96
-kernel_ms = 12.0217
+kernel_ms = 12.0218
 
 [c.Os]
-instructions = 1037194
+instructions = 1037188
 memory_operands = 138111
-code_bytes = 346
+code_bytes = 344
 data_bytes = 24
 bss_bytes = 96
-kernel_ms = 13.8372
+kernel_ms = 13.8369
 
 [nib.O2]
 instructions = 948123
@@ -47,7 +47,7 @@ memory_operands = 230138
 code_bytes = 562
 data_bytes = 32
 bss_bytes = 0
-kernel_ms = 18.0144
+kernel_ms = 18.0145
 
 [ow.O2]
 instructions = 1088249
