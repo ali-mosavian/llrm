@@ -164,8 +164,10 @@ impl llrm_target::Target for M16 {
         llrm_x86::calling::callee_saved(CALLING.native())
     }
 
+    /// Where a routine with no convention of its own answers (BASIC's, the runtime's): the stack convention's, cdecl16's. A function
+    /// with a convention answers as its description says.
     fn results(&self, width: u32) -> Vec<iced_x86::Register> {
-        llrm_x86::calling::results(CALLING.native(), width)
+        llrm_x86::calling::results(CALLING.by_cc("cdecl").expect("the stack convention"), width)
     }
 }
 
