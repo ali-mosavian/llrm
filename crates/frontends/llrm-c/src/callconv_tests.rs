@@ -179,10 +179,17 @@ fn agrees(reference: &[String], llrm: &[String]) -> bool {
     reference.len() == llrm.len() && reference.iter().zip(llrm).all(|(want, got)| want == "-" || want == got)
 }
 
-fn llrm(file: &str) -> Result<BTreeMap<String, Procedure>, String> {
-    let stream = crate::compile::recorded(&fixtures().join(format!("{file}.c")), &[], false, &[]).map_err(|error| error.0)?;
+/// `source` recorded and compiled as Borland's compiler has it: the cdecl ABI, which these tests compare llrm with.
+fn borland(source: &Path) -> Result<llrm_core::backend::masm::Module, String> {
+    let profile = crate::compile::Profile::for_abi(&llrm_x86_m16::M16, Some("cdecl"))?;
+    let stream = crate::compile::recorded_for(source, &[], false, &[], &profile).map_err(|error| error.0)?;
     let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-    let built = crate::compile::selected(&stream, file, None, &llrm_driver::m16_options(machine)).map_err(|error| format!("{error:?}"))?;
+    let options = llrm_core::driver::Options { abi: Some("cdecl".to_owned()), ..llrm_driver::m16_options(machine) };
+    crate::compile::selected(&stream, &source.file_stem().unwrap().to_string_lossy(), None, &options).map_err(|error| format!("{error:?}"))
+}
+
+fn llrm(file: &str) -> Result<BTreeMap<String, Procedure>, String> {
+    let built = borland(&fixtures().join(format!("{file}.c")))?;
     Ok(boundary::procedures(&llrm_core::backend::masm::text(&built).map_err(|error| format!("{error:?}"))?))
 }
 
@@ -274,9 +281,7 @@ fn llrm_text(text: &str) -> BTreeMap<String, Procedure> {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("probe.c");
     std::fs::write(&source, text).unwrap();
-    let stream = crate::compile::recorded(&source, &[], false, &[]).unwrap();
-    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-    let built = crate::compile::selected(&stream, "probe", None, &llrm_driver::m16_options(machine)).unwrap();
+    let built = borland(&source).unwrap();
     boundary::procedures(&llrm_core::backend::masm::text(&built).unwrap())
 }
 
@@ -302,8 +307,6 @@ fn test_a_variadic_struct_parameter_address_is_in_its_slots() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("probe.c");
     std::fs::write(&source, "typedef struct { char b[3]; } S3;\nint g;\nvoid far v(S3 s, ...) { char *p = (char *)&s; g = p[4]; }\n").unwrap();
-    let stream = crate::compile::recorded(&source, &[], false, &[]).unwrap();
-    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-    let built = crate::compile::selected(&stream, "probe", None, &llrm_driver::m16_options(machine));
+    let built = borland(&source);
     assert!(built.is_ok(), "{:?}", built.err());
 }

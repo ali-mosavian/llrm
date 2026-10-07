@@ -37,7 +37,7 @@ pub fn spaces() -> llrm_mir::spaces::Spaces {
 pub struct M16;
 
 fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
-    std::rc::Rc::new(Dos::priced(&prices.costs, prices.prefix, prices.address_stall, prices.registers, prices.call_registers).private(prices.private.clone()))
+    std::rc::Rc::new(Dos::priced(&prices.costs, prices.prefix, prices.address_stall, prices.registers, prices.call_registers).private(prices.private.clone()).calling(prices.calling))
 }
 
 impl llrm_target::Target for M16 {
@@ -183,7 +183,7 @@ mod tests {
     /// The conventions a program may name are `calling.toml`'s, the language's own first; BASIC's are Pascal's.
     #[test]
     fn test_calling_toml_gives_the_conventions_their_names() {
-        assert_eq!(M16.conventions(), ["cdecl16", "pascal16", "qb45", "pds71", "vbdos", "interrupt16", "watcall16", "ia16", "regparm3"]);
+        assert_eq!(M16.conventions(), ["cdecl16", "pascal16", "qb45", "pds71", "vbdos", "interrupt16", "watcall16", "ia16", "regparm3", "regparm3pop"]);
         let pascal = CALLING.named("pascal16").unwrap();
         for name in ["qb45", "pds71", "vbdos"] {
             assert_eq!(CALLING.named(name).unwrap().cleanup, llrm_target::calling::Cleanup::Callee);

@@ -47,7 +47,7 @@ fn compiled(inlined: bool) -> Vec<Rc<omf::Record>> {
     omf::parse(&crate::compile::object(&module, Path::new("probe.nib"), CodeLayout::OneSegment, llrm_target::object::Format::Omf).expect("writes")).expect("parses")
 }
 
-/// Each source parameter, local and module variable with its Nib type; no
+/// Each source local and module variable, and each parameter that arrives on the stack, with its Nib type; no
 /// compiler temporary.
 #[test]
 fn nib_symbols_read_with_their_types() {
@@ -62,8 +62,7 @@ fn nib_symbols_read_with_their_types() {
             "LOCAL main.small: UNSIGNED CHAR",
             "LOCAL main.values: 8 BYTES OF INTEGER",
             "LOCAL scale.doubled: LONG",
-            "PARAM scale.factor: INTEGER",
-            "PARAM scale.p: BYREF TYPE point",
+            // `scale`'s parameters arrive in registers (regparm3), which this dialect has no record for (#883).
             "PROC main flags 4 () -> INTEGER",
             "PROC scale flags 0 (BYREF TYPE point, INTEGER) -> LONG",
         ]

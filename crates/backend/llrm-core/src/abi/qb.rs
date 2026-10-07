@@ -861,6 +861,14 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.private_convention()
     }
 
+    fn callee_pop(&self, convention: u32) -> Option<u32> {
+        self.machine.callee_pop(convention)
+    }
+
+    fn stack_argument_bytes(&self, convention: u32, arguments: &[llrm_mir::target::Argument]) -> Option<i64> {
+        self.machine.stack_argument_bytes(convention, arguments)
+    }
+
     fn address_registers(&self) -> i64 {
         self.machine.address_registers()
     }

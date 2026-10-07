@@ -156,6 +156,7 @@ sized_arguments = true
 skip_memory = true
 aggregate_arguments_in_memory = true
 variadic = "cdecl16"
+pops_as = "regparm3pop"
 
 # Spelled apart from cdecl16's `_name`: a routine declared in the other convention fails to link where it would call with its
 # arguments in the wrong place. The 3 counts the argument registers (regparm 3); Windows' stdcall `@N` counts stack bytes.
@@ -169,3 +170,9 @@ omf = "_*@3"
 8 = ["eax", "edx"]
 pointer = ["eax"]
 float = ["st0"]
+
+# What a function of regparm3's becomes when `calleepop` has it remove its own stack arguments (`retf n`), as it does a cdecl16 one.
+[regparm3pop]
+like = "regparm3"
+cc = "regparm3pop"
+cleanup = "callee"

@@ -27,6 +27,8 @@ pub struct Profile {
     pub spaces: llrm_mir::spaces::Spaces,
     /// The convention its description gives a function nothing outside the program reaches.
     pub private: Option<llrm_mir::target::PrivateConvention>,
+    /// The conventions as the description states them, which decide where a call's arguments go and what removes them.
+    pub calling: Option<llrm_target::calling::Stated>,
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
     pub call_register_capacity: i64,
@@ -67,6 +69,7 @@ impl Profile {
             operations: self.operations.clone(),
             spaces: self.spaces,
             private: self.private.clone(),
+            calling: self.calling.map(|one| one.0),
         }
     }
 
@@ -101,6 +104,7 @@ impl Profile {
             register_capacity: arch.register_capacity(),
             spaces: arch.layout().spaces.roles,
             private: private_convention(arch),
+            calling: Some(llrm_target::calling::Stated(arch.calling())),
             operand_bytes: arch.operand_bytes(),
             call_register_capacity: arch.callee_saved().len() as i64,
             address_scales: BTreeSet::from([1]),
@@ -408,19 +412,11 @@ mod tests {
 }
 
 
-/// MIR's number for the convention a description's `cc` names: C's is `ccc`, the others `<cc>cc`.
-fn cc_number(cc: Option<&str>) -> Option<u32> {
-    match cc? {
-        "cdecl" => Some(0),
-        other => llrm_mir::opcode::CONVENTIONS.iter().find(|(name, _)| name.strip_suffix("cc") == Some(other)).map(|(_, number)| *number),
-    }
-}
-
 /// The convention `arch`'s description gives a private function, and the ones that may take it.
 fn private_convention(arch: &dyn Target) -> Option<llrm_mir::target::PrivateConvention> {
     let calling = arch.calling();
-    let to = cc_number(calling.private()?.cc.as_deref())?;
-    let mut from: Vec<u32> = calling.conventions.iter().filter(|one| calling.replaceable(one)).filter_map(|one| cc_number(one.cc.as_deref())).collect();
+    let to = llrm_target::calling::Calling::number_of(calling.private()?.cc.as_deref())?;
+    let mut from: Vec<u32> = calling.conventions.iter().filter(|one| calling.replaceable(one)).filter_map(|one| llrm_target::calling::Calling::number_of(one.cc.as_deref())).collect();
     from.sort_unstable();
     from.dedup();
     Some(llrm_mir::target::PrivateConvention { to, from })
