@@ -888,6 +888,8 @@ pub fn _falls_to(block: &lir::LirBlock, name: &str) -> Result<Option<i64>, Unpri
     if rest.is_empty() {
         rest = block.succ.clone();
     }
+    // Both edges of a branch may meet at one block (two cases of a switch emptied to the same place): it falls there.
+    rest.dedup();
     if rest.len() > 1 {
         return Err(Unprintable(format!(
             "{name}: block {} leaves for {} with no instruction choosing",
