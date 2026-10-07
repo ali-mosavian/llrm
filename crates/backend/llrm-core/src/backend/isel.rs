@@ -566,7 +566,7 @@ fn parameters(module: &Module, name: &str, convention: &Convention) -> Vec<Debug
     function
         .parameters
         .into_iter()
-        .filter_map(|(index, name, r#type)| Some(DebugVariable { name, r#type, addr: Addr::new(Space::Frame, cell(index)?) }))
+        .filter_map(|(index, name, r#type)| Some(DebugVariable { name, r#type, addr: Addr::new(Space::Frame, cell(index)?), parameter: true }))
         .collect()
 }
 
@@ -1689,7 +1689,7 @@ impl Selector<'_, '_, '_> {
         let Some(variable) = attached.and_then(|node| llrm_mir::debuginfo::read_variable(self.module, node)) else { return Ok(()) };
         if let Ok(Pointer::Frame { disp, index: None, .. }) = self.pointer(arguments[0]) {
             let addr = Addr::new(Space::Frame, disp + variable.offset);
-            self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, addr }));
+            self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, addr, parameter: variable.parameter }));
         }
         Ok(())
     }

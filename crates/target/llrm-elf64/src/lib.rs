@@ -57,7 +57,7 @@ mod tests {
 
     fn section(name: &str, role: Role, image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
         let spans = vec![[0, image.len()]];
-        Section { name: name.into(), role, near: true, align: 8, image, spans, relocs, lines: Vec::new() }
+        Section { name: name.into(), role, near: true, align: 8, image, spans, relocs }
     }
 
     fn symbol(name: &str, binding: Binding, section: usize, offset: usize) -> Symbol {
@@ -151,5 +151,14 @@ mod tests {
         let mut made = hello();
         made.sections[0].relocs[0].kind = Kind::SegmentBase;
         assert!(write(&made).is_err());
+    }
+
+    /// `-g` reached a writer with no debug format: the information was refused, not left out of
+    /// an object a debugger then found empty.
+    #[test]
+    fn debug_information_is_refused_not_dropped() {
+        let mut made = hello();
+        made.debug = Some(llrm_object::debug::Info::default());
+        assert!(write(&made).unwrap_err().0.contains("debug information"));
     }
 }

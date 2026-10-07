@@ -103,7 +103,7 @@ fn spelling(section: &Section) -> Result<(&'static str, u32, u64), Unsupported> 
         Role::Data => (".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE),
         Role::Bss => (".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE),
         Role::Stack => return Err(unsupported(format!("{}: an OMF stack segment has no ELF section", section.name))),
-        Role::Debug(_) => return Err(unsupported(format!("{}: CodeView debug information is OMF's", section.name))),
+        Role::Debug => return Err(unsupported(format!("{}: a debug section is its format's writer's", section.name))),
     })
 }
 
@@ -132,7 +132,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         return Err(unsupported(format!("{:?} is not the {:?} this ELF writer is for", object.arch, M::ARCH)));
     }
     if object.debug.is_some() {
-        return Err(unsupported("CodeView debug information is OMF's"));
+        return Err(unsupported("-g: this writer does not write debug information yet"));
     }
     if !object.omf_groups.is_empty() {
         return Err(unsupported("a group of segments is OMF's"));

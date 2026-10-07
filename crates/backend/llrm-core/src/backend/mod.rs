@@ -11,7 +11,7 @@ pub mod allocate;
 pub mod arithmetic;
 pub mod asm;
 pub mod coalesce;
-pub mod codeview;
+pub mod debuginfo;
 pub mod comparefold;
 pub mod constrain;
 pub mod copyprop;

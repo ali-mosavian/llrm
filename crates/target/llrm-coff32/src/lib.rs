@@ -80,7 +80,7 @@ mod tests {
 
     fn text(image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
         let spans = vec![[0, image.len()]];
-        Section { name: "A_TEXT".into(), role: Role::Text, near: true, align: 16, image, spans, relocs, lines: Vec::new() }
+        Section { name: "A_TEXT".into(), role: Role::Text, near: true, align: 16, image, spans, relocs }
     }
 
     fn data(image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
@@ -242,5 +242,14 @@ mod tests {
         assert!(listing.contains("calll\t0x401008") || listing.contains("call\t0x401008"), "{listing}");
         let said = Command::new(&objdump).args(["-s", "-j", ".data"]).arg(&exe).output().unwrap();
         assert!(String::from_utf8_lossy(&said.stdout).contains("08104000"), "{}", String::from_utf8_lossy(&said.stdout));
+    }
+
+    /// `-g` reached a writer with no debug format: refused, not left out of an object a debugger
+    /// then found empty.
+    #[test]
+    fn debug_information_is_refused_not_dropped() {
+        let mut made = object(vec![text(vec![0], vec![])], vec![]);
+        made.debug = Some(llrm_object::debug::Info::default());
+        assert!(write(&made).unwrap_err().0.contains("debug information"));
     }
 }

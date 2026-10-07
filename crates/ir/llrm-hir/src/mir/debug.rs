@@ -85,7 +85,7 @@ pub(super) fn emitted<'h>(
             match place.storage {
                 Storage::Local => {
                     let group = groups.iter().find(|group| group.places.iter().any(|one| one.id == place.id)).ok_or("a local outside the frame")?;
-                    let node = di::Variable { scope: scope.clone(), name: variable.name.clone(), r#type, offset: place.offset - group.start };
+                    let node = di::Variable { scope: scope.clone(), name: variable.name.clone(), r#type, offset: place.offset - group.start, parameter: variable.parameter };
                     variables.insert((function.id, place.id), di::add_variable(module, &node));
                 }
                 // Where it was passed: its argument's cell.

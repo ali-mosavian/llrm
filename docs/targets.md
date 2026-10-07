@@ -37,7 +37,7 @@ A target crate ships, and generic code reads:
 
 | File | Format | Says |
 |---|---|---|
-| registers | line table | registers, subregisters, classes, kind letters (`r` is gpr, `s` is x87), allocation order, reserved |
+| registers | line table | registers, subregisters, classes, kind letters (`r` is gpr, `s` is x87), allocation order, reserved, DWARF and CodeView register numbers |
 | forms | line table (`x86.instr`) | operands, widths, ties, fixed registers, flags read and written, cost key, opaque `encoding` |
 | patterns, peephole | `patterns.isel`, `peephole.peep` | MIR shape to forms; form windows to forms |
 | timings | `timings.times`: a column per CPU, scalars and `[clocks]`/`[latency]` tables | clocks, latencies, issue and prefix costs; read by `llrm-target` |

@@ -33,6 +33,7 @@ toolchain = []
 
 [dev-dependencies]
 iced-x86 = { workspace = true }
+llrm-object = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
 regex = { workspace = true }
