@@ -2005,3 +2005,33 @@ fn test_a_difference_is_one_sub_from_a_copy_of_the_minuend() {
     assert_eq!(super::_scaled(&target, &BigInt::from(2), true), (costs.shift + costs.r#move, false), "`2r + rest`: a shift of a copy");
     assert_eq!(super::_scaled(&target, &BigInt::from(1), true), (0, false));
 }
+
+/// `d += n; while (n--) *--d = 0;`, every backward clear: the counter's step is made in the header before the test, and
+/// lsr's rotation behind its guard made it read its own result. `after lsr: sub in %b4 uses a value whose definition does not
+/// dominate it` at -O1 and -O2 (gcc.c-torture, #811).
+#[test]
+fn test_a_counter_stepped_in_the_header_is_not_rotated_to_read_itself() {
+    let text = "define i32 @f(ptr %d, i32 %n) {
+b0:
+  %e = getelementptr inbounds i8, ptr %d, i32 %n
+  br label %b1
+
+b1:
+  %c = phi i32 [ %n, %b0 ], [ %c1, %b2 ]
+  %p = phi ptr [ %e, %b0 ], [ %q, %b2 ]
+  %c1 = sub nsw i32 %c, 1
+  %go = icmp ne i32 %c, 0
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %q = getelementptr inbounds i8, ptr %p, i32 -1
+  store i8 0, ptr %q
+  br label %b1
+
+b3:
+  ret i32 %c
+}
+";
+    // reduced() verifies each pass's output.
+    reduced(text);
+}
