@@ -1,21 +1,19 @@
-reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 for push/mov/sub (Intel 240440-002); -Os counts and bytes rise by what enter saved (2 bytes, 2 instructions per frame), rec* rows are #777's and untouched here"
+reason = "ranges: a counter that steps by a constant without wrapping (nsw) from a known start does not go below it, and an nsw product of non-negative values is non-negative (sieve bas: the index is zero-extended: -5.5% instructions, +2 bytes code). A non-negative dividend by a constant is the unsigned division in a 32-bit segment, tuned for speed."
 blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 18662
+instructions = 17641
 memory_operands = 7059
-code_bytes = 289
+code_bytes = 291
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 0.27
 
 [bas.Os]
-instructions = 18690
+instructions = 17669
 memory_operands = 7082
-code_bytes = 269
+code_bytes = 271
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 0.2705
 
 [c.O2]
 instructions = 12107

@@ -17,6 +17,17 @@
 - Every run's `report()` values equal `bench/NAME.out` (test_harness.py).
 - Two instrument faults found and fixed on the way: gcc/clang scroll gave 32636400, not 32634864, because my `memmove` stand-in copied forwards over an overlap; gcc inlined three kernels into `main`, reading 0 instructions. Both have tests in `test_harness.py`.
 
+- The clock column is estimated, and the multiply is its one data-dependent term: the 486's `MUL`/`IMUL` early-out
+  reads the multiplier's most significant bit, `10 + max(bits of |m|, n)` clocks, n = 3 for a positive and 5 for a
+  negative multiplier (Intel 240440-002, Nov 1989 i486 data sheet, Table 10.1, PDF p.135 and printed p.143 note 3;
+  https://bitsavers.trailing-edge.com/components/intel/80486/240440-002_i486_Microprocessor_Nov89.pdf). The data
+  sheet names the multiplier beside the register or memory operand, not the accumulator, so `harness.multiplier_of`
+  reads the r/m source of `imul r/m32` and the immediate of the three-operand form. recmany shows what rests on it:
+  gcc's reciprocal multiply holds the magic number in EAX and the numerator in the r/m operand (about 14 clocks),
+  clang's the reverse (10 + 32 = 42, the same as `idiv`). The rounding of the logarithm is not stated, see
+  docs/measurement/timing-audit.md; a program whose ratio rests on an `imul` is not read as a compiler finding
+  until its operand order is.
+
 ## Table (-O2; -Os and memory operands in table.md)
 
 | program | llrm ins | gcc | clang | llrm/best | llrm clk | gcc | clang | llrm/best | llrm B | gcc B | clang B |

@@ -139,6 +139,13 @@ impl<'u> Described<'u> {
         }
     }
 
+    /// A parameter's home, `place`, that holds the function's `argument`th argument once it has stored it.
+    pub fn parameter_home(&mut self, place: i64, name: &str, handle: i64, argument: i64) {
+        if let Some(r#type) = self.r#type(handle) {
+            self.builder.parameter_home(place, name, r#type, argument);
+        }
+    }
+
     /// A function's static `name`, in data object `object`.
     pub fn local_static(&mut self, object: i64, name: &str, handle: i64) {
         if let Some(r#type) = self.r#type(handle) {

@@ -22,6 +22,7 @@ fn object(variables: Vec<Variable>, mut types: Vec<Type>, format: Format) -> Obj
         module: false,
         variables,
         blocks: Vec::new(),
+        frame: Vec::new(),
     };
     let register = |name: &str, dwarf| Register { name: name.into(), bits: 32, dwarf, codeview: None };
     let info = Info {
@@ -259,6 +260,30 @@ fn a_removed_variable_has_no_location_and_the_others_have_theirs() {
     assert!(!parameter.contains("DW_AT_location"), "{parameter}");
     let local = &shown[shown.find("DW_AT_name\t(\"x\")").expect("the local")..];
     assert!(local.contains("DW_OP_fbreg +8"), "{local}");
+}
+
+/// `.debug_frame`: the CIE says the frame address is `esp+4` and the return address is DWARF column 8 just below
+/// it; the function's FDE says each change by the shortest instruction: an offset change alone, a register
+/// change alone, both, a register saved (`DW_CFA_offset`, the offset in units of -4) and restored.
+#[test]
+fn a_functions_frame_rows_are_the_cfa_instructions_the_dwarf_standard_gives() {
+    use llrm_object::debug::FrameRow;
+    let row = |offset, register: &str, cfa, saved: &[(&str, i64)]| FrameRow { offset, cfa_register: register.into(), cfa_offset: cfa, saved: saved.iter().map(|&(name, at)| (name.to_owned(), at)).collect() };
+    let mut made = object(Vec::new(), vec![int()], Format::Dwarf { version: 4 });
+    let info = made.debug.as_mut().unwrap();
+    let register = |name: &str, number| Register { name: name.into(), bits: 32, dwarf: Some(number), codeview: None };
+    info.registers.extend([register("esp", 4), register("eip", 8)]);
+    info.return_register = "eip".into();
+    info.functions[0].frame = vec![row(0, "esp", 4, &[]), row(1, "esp", 8, &[("ebp", -8)]), row(3, "ebp", 8, &[("ebp", -8)]), row(70, "esp", 4, &[])];
+    let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
+    let image = &named(&written, ".debug_frame").1.image;
+    let cie = [0x10, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 4, 0, 4, 0, 1, 0x7C, 8, 0x0C, 4, 4, 0x88, 1];
+    assert_eq!(image[..20], cie);
+    // Past the length, the CIE's offset, the address and its range.
+    let fde = &image[20 + 16..];
+    let expected = [0x41, 0x0E, 8, 0x85, 2, 0x42, 0x0D, 5, 0x02, 67, 0x0C, 4, 4, 0xC5];
+    assert_eq!(fde[..expected.len()], expected, "{fde:x?}");
+    assert!(fde[expected.len()..].iter().all(|&one| one == 0), "padded with DW_CFA_nop");
 }
 
 /// A base type is named as the source spells it: `int` and `unsigned long` where the frontend said so, and

@@ -106,7 +106,13 @@ impl Builder {
 
     /// A variable of the function, held in `place`.
     pub fn variable(&mut self, place: i64, name: &str, r#type: i64, parameter: bool) {
-        self.variables.push(DebugVariable { place, name: name.to_owned(), r#type, parameter });
+        self.variables.push(DebugVariable { place, name: name.to_owned(), r#type, parameter, argument: None });
+    }
+
+    /// A parameter's home, which holds the value of the function's `argument`th argument once the function has
+    /// stored it: until then the argument is where the convention passes it.
+    pub fn parameter_home(&mut self, place: i64, name: &str, r#type: i64, argument: i64) {
+        self.variables.push(DebugVariable { place, name: name.to_owned(), r#type, parameter: true, argument: Some(argument) });
     }
 
     /// A variable of the module, `offset` bytes into data object `object`.

@@ -97,6 +97,8 @@ struct Types<'a> {
     info: &'a Info,
     of: Vec<Option<u16>>,
     records: Vec<Rc<Record>>,
+    /// A procedure type called far or near: far is the pointer's, or the function's, not the type's.
+    procedures: Vec<((usize, bool), u16)>,
     /// Each record's name, size, kind and tail (its index apart), by the index it has.
     shapes: Vec<((String, u16, u8, Vec<u8>), u16)>,
     next: u16,
@@ -138,13 +140,49 @@ impl Types<'_> {
         }
     }
 
+    /// The procedure type `id` is, or is a typedef of.
+    fn procedure_through(&self, mut id: usize) -> Option<usize> {
+        loop {
+            match self.info.types.get(id)? {
+                Type::Typedef { target, .. } | Type::Qualified { target, .. } => id = *target,
+                Type::Procedure { .. } => return Some(id),
+                _ => return None,
+            }
+        }
+    }
+
+    /// The record of the procedure type `id` called far or near, made once for each.
+    fn procedure_code(&mut self, id: usize, far: bool) -> Result<u16, Error> {
+        if let Some(&(_, done)) = self.procedures.iter().find(|(key, _)| *key == (id, far)) {
+            return Ok(done);
+        }
+        let at = self.next;
+        self.next += 1;
+        self.procedures.push(((id, far), at));
+        let info = self.info;
+        let Type::Procedure { result, .. } = &info.types[id] else { unreachable!("found as one") };
+        let ret = match result {
+            Some(result) => self.code(*result)?,
+            None => 0x01,
+        };
+        // The call's own flags: far is 4. A Pascal call is the function's own, set where a name is.
+        let data = [index(at)?, pascal("")?, 0u16.to_le_bytes().to_vec(), vec![TID_FUNCTION], index(ret)?, vec![if far { 0x04 } else { 0x00 }, 0x00]].concat();
+        self.records.push(comment(TYPE_DEFINITION, data));
+        Ok(at)
+    }
+
     /// A composite type's name, size, kind and what follows its kind; its members' records first.
     fn composite<'t>(&mut self, one: &'t Type) -> Result<(&'t str, u16, u8, Vec<u8>), Error> {
         let size = |bytes: u32| u16::try_from(bytes).or_else(|_| refused(format!("a type of {bytes} bytes does not fit its size")));
         Ok(match one {
             Type::Pointer { target, bytes, reach } => {
-                let to = self.code(*target)?;
-                let function = matches!(self.info.types[*target], Type::Procedure { .. });
+                // What a pointer to a function points to is called as far as the pointer reaches.
+                let procedure = self.procedure_through(*target);
+                let to = match procedure {
+                    Some(procedure) => self.procedure_code(procedure, *reach != model::Reach::Near)?,
+                    None => self.code(*target)?,
+                };
+                let function = procedure.is_some();
                 let (tid, kind) = match reach {
                     model::Reach::Near => (TID_NEAR_POINTER, if function { 0x02 } else { 0x04 }),
                     model::Reach::Far => (TID_FAR_POINTER, 0x00),
@@ -219,6 +257,18 @@ struct Builder<'a> {
     types: Types<'a>,
 }
 
+/// `variables` with a frame cell it settles in where it was over ranges: these records name one place for a scope,
+/// and a parameter in its register only until the function stored it is in that cell for the rest.
+fn settled(variables: &[model::Variable], scope: &[model::Range]) -> Vec<model::Variable> {
+    variables
+        .iter()
+        .map(|one| match one.location.settled(scope) {
+            Some(cell @ Location::Frame { .. }) if matches!(one.location, Location::List(_)) => model::Variable { location: cell.clone(), ..one.clone() },
+            _ => one.clone(),
+        })
+        .collect()
+}
+
 impl Builder<'_> {
     /// One local's entry in an E6 record.
     fn entry(&mut self, variable: &model::Variable) -> Result<Vec<u8>, Error> {
@@ -266,7 +316,8 @@ impl Builder<'_> {
     fn block(&mut self, out: &mut Vec<Rc<Record>>, block: &model::Block) -> Result<(), Error> {
         let [range] = block.ranges[..] else { return refused("a block of several ranges is not written yet") };
         out.push(self.scope(range.section, range.offset)?);
-        let variables: Vec<&model::Variable> = block.variables.iter().collect();
+        let own = settled(&block.variables, &block.ranges);
+        let variables: Vec<&model::Variable> = own.iter().collect();
         out.extend(self.locals(&variables)?);
         for inner in &block.blocks {
             self.block(out, inner)?;
@@ -278,6 +329,7 @@ impl Builder<'_> {
     /// A function's scopes: its own, with the parameters as passed in, and its body's, with the
     /// locals.
     fn function(&mut self, out: &mut Vec<Rc<Record>>, function: &Function) -> Result<(), Error> {
+        let function = &Function { variables: settled(&function.variables, &function.ranges), ..function.clone() };
         let [range] = function.ranges[..] else { return refused(format!("{} has {} ranges: one is written", function.name, function.ranges.len())) };
         out.push(self.scope(range.section, range.offset)?);
         let parameters: Vec<&model::Variable> = function.variables.iter().filter(|one| one.kind == Kind::Parameter).collect();
@@ -332,7 +384,7 @@ pub fn records(object: &Object, info: &Info) -> Result<Debug, Error> {
     if info.language != model::Language::C {
         return refused(format!("only C's information is written, not {:?}'s", info.language));
     }
-    let mut builder = Builder { object, info, types: Types { info, of: vec![None; info.types.len()], records: Vec::new(), shapes: Vec::new(), next: FIRST_INDEX } };
+    let mut builder = Builder { object, info, types: Types { info, of: vec![None; info.types.len()], records: Vec::new(), procedures: Vec::new(), shapes: Vec::new(), next: FIRST_INDEX } };
     // Each function's records, in the order of its code.
     let mut functions: Vec<&Function> = info.functions.iter().collect();
     functions.sort_by_key(|one| one.ranges.first().map(|range| (range.section, range.offset)));
@@ -429,6 +481,7 @@ mod tests {
             module: false,
             variables,
             blocks: Vec::new(),
+            frame: Vec::new(),
         };
         let mut made = Info {
             format: Format::TurboDebugger,
@@ -574,6 +627,30 @@ mod tests {
         assert!(write::write(&wide).unwrap_err().to_string().contains("w is in register eax"));
     }
 
+    /// A pointer to a function points to a function type called as far as the pointer reaches: a near pointer's is a
+    /// near call (call byte 0), a far one's a far call (4). Turbo C++ says `near pointer _CS function near C` and
+    /// `far pointer function far C`; every such type was far, so a near pointer read `function far C`.
+    #[test]
+    fn a_pointer_to_a_function_points_to_a_function_called_as_far_as_it_reaches() {
+        use llrm_object::debug::Reach::{Far, Near};
+        let short = int();
+        let call = |wanted: bool| {
+            let made = object(
+                vec![short.clone(), Type::Procedure { result: Some(0), parameters: vec![0], convention: None }, Type::Pointer { target: 1, bytes: if wanted { 4 } else { 2 }, reach: if wanted { Far } else { Near } }],
+                vec![variable("p", 2, Kind::Local, Location::Frame { disp: -2 })],
+                |_| {},
+            );
+            // The function types among the type records: each ends with its call byte and a zero.
+            let types: Vec<Vec<u8>> = comments(&made).into_iter().filter(|(class, data)| *class == TYPE_DEFINITION && data.contains(&TID_FUNCTION) && data.len() > 3).map(|(_, data)| data).collect();
+            types
+        };
+        let far: Vec<u8> = call(true).iter().map(|data| data[data.len() - 2]).collect();
+        let near: Vec<u8> = call(false).iter().map(|data| data[data.len() - 2]).collect();
+        // The function's own type (near here) and the pointer's target: far for a far pointer, near for a near one.
+        assert!(far.contains(&0x04), "a far pointer's function is called far: {far:?}");
+        assert!(!near.contains(&0x04), "a near pointer's function is called near: {near:?}");
+    }
+
     /// Two types of the model that read alike, a pointer to `int` and one to `long` (the source spells each, so they
     /// are two), are one record: Turbo C++ writes one, and a second only moved every later index.
     #[test]
@@ -588,5 +665,17 @@ mod tests {
         let definitions = comments(&made).into_iter().filter(|(class, _)| *class == TYPE_DEFINITION).count();
         // The pointer, and the function's own type.
         assert_eq!(definitions, 2);
+    }
+
+    /// A parameter in its register until the function stores it into its cell is, for Turbo Debugger, the cell: a
+    /// parameter of the function's own scope, not the body's register parameter.
+    #[test]
+    fn a_parameter_in_a_register_and_then_its_cell_is_the_functions_parameter_in_the_cell() {
+        let list = Location::List(vec![(Range { section: 0, offset: 0, length: 9 }, Location::Register("ax".into())), (Range { section: 0, offset: 9, length: 0x20 - 9 }, Location::Frame { disp: 6 })]);
+        let made = object(vec![int()], vec![variable("a", 0, Kind::Parameter, list)], |_| {});
+        let scopes: Vec<(u8, Vec<u8>)> = comments(&made).into_iter().filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE)).collect();
+        // The function's scope holds it, as a frame parameter; the body's holds nothing of it.
+        assert_eq!(scopes[1], (LOCALS, vec![1, b'a', 0x04, 0x0A, 0x06, 0x00]));
+        assert!(!scopes.iter().any(|(class, data)| *class == LOCALS && data.windows(2).any(|pair| pair == [0x04, 0x0C])), "{scopes:?}");
     }
 }

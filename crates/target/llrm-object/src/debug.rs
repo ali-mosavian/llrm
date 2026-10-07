@@ -59,6 +59,9 @@ pub struct Info {
     pub producer: Producer,
     /// The register a [`Location::Frame`] is relative to.
     pub frame_register: String,
+    /// The register that stands for the return address in call frame information (the target's `pc`
+    /// class); empty where the target numbers none.
+    pub return_register: String,
     /// The target's register file, so a writer needs no target.
     pub registers: Vec<Register>,
     pub files: Vec<File>,
@@ -166,6 +169,17 @@ pub enum Location {
     Static { symbol: SymbolId, disp: i64 },
 }
 
+impl Location {
+    /// Where the value is from the last range to the end of `scope`: what a format whose records name one place for a
+    /// whole scope can say of it. A list with no range that reaches the end (a register parameter, there only until
+    /// the body starts) has none.
+    pub fn settled(&self, scope: &[Range]) -> Option<&Location> {
+        let Location::List(entries) = self else { return Some(self) };
+        let end = scope.last().map(|last| (last.section, last.offset + last.length))?;
+        entries.iter().find(|(range, _)| (range.section, range.offset + range.length) == end).map(|(_, location)| location)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
     Parameter,
@@ -206,6 +220,20 @@ pub struct Function {
     /// Parameters first, in order, then the locals.
     pub variables: Vec<Variable>,
     pub blocks: Vec<Block>,
+    /// How to find the caller's frame from each place in the code; empty where the code could not be
+    /// followed (a writer then says nothing, rather than something wrong).
+    pub frame: Vec<FrameRow>,
+}
+
+/// From `offset` bytes into a function's first range, until the next row: the canonical frame address is
+/// `cfa_offset` past register `cfa_register`, and each register in `saved` is in memory at that address
+/// plus its offset (negative: below it).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FrameRow {
+    pub offset: usize,
+    pub cfa_register: String,
+    pub cfa_offset: i64,
+    pub saved: Vec<(String, i64)>,
 }
 
 /// The first instruction at `offset` of section `section` is source line `line` of `file`.
@@ -278,5 +306,30 @@ mod tests {
     fn a_basic_array_has_no_size_of_its_own() {
         let info = Info { types: vec![Type::Scalar(Scalar::Int { bytes: 2, signed: true }), Type::Array { element: 0, bytes: None }], ..Info::default() };
         assert_eq!(info.size_of(1), None);
+    }
+}
+
+#[cfg(test)]
+mod settled_tests {
+    use super::*;
+
+    fn range(offset: usize, length: usize) -> Range {
+        Range { section: 0, offset, length }
+    }
+
+    /// Where a value settles is the entry that reaches the end of the scope: a parameter in its register until the
+    /// function stores it settles in its cell; one in a register only until the body starts, or removed, settles
+    /// nowhere; a plain place is its own.
+    #[test]
+    fn a_value_settles_where_its_last_range_reaches_the_end_of_the_scope() {
+        let scope = [range(0, 32)];
+        let homed = Location::List(vec![(range(0, 10), Location::Register("eax".into())), (range(10, 22), Location::Frame { disp: -4 })]);
+        assert_eq!(homed.settled(&scope), Some(&Location::Frame { disp: -4 }));
+        let entry_only = Location::List(vec![(range(0, 7), Location::Register("eax".into()))]);
+        assert_eq!(entry_only.settled(&scope), None);
+        assert_eq!(Location::List(Vec::new()).settled(&scope), None);
+        assert_eq!(Location::Frame { disp: 8 }.settled(&scope), Some(&Location::Frame { disp: 8 }));
+        let whole = Location::List(vec![(range(0, 32), Location::Register("esi".into()))]);
+        assert_eq!(whole.settled(&scope), Some(&Location::Register("esi".into())));
     }
 }

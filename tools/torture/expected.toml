@@ -1,0 +1,100 @@
+# What llrm refuses by design, by the text of the refusal (a regular expression on the cause the runner prints). Each entry says
+# why; a refusal no entry matches is a finding, never skipped.
+
+[[refused]]
+match = "^wccq: Unable to open"
+reason = "a header the runner's tools/torture/include does not provide (stdio, stdarg, setjmp, signal, math, ctype, ...): the program needs a libc facility the runner has none of"
+
+[[refused]]
+match = "^wccq: (Expecting|Missing|Expression must be constant|Expression has void type|Type required in parameter list|An id list not allowed|Dimension cannot be|Initializer list cannot be empty|Cannot perform operation with pointer to void|Type mismatch|Symbol '_' has not been declared)"
+reason = "Open Watcom's C front end (wccq) does not parse the program: GNU C or C99 syntax it lacks (statement expressions, typeof, __attribute__, labels as values, designated and empty initializers, zero-length arrays, K&R forms, implicit declarations of builtins)"
+
+[[refused]]
+match = "^wccq: (Field width too large|Maximum struct or union size is 64K|Variable must be)"
+reason = "a 16-bit target's limits in Open Watcom's front end: a bit-field wider than the 16-bit int, a struct or array over a 64 KB segment, a bit-field of a type wider than int"
+
+[[refused]]
+match = "^undefined symbol __builtin_"
+reason = "a GCC builtin the front end calls as an external of that name and the runner does not implement (libc.c has the string and memory ones)"
+
+[[refused]]
+match = "^undefined symbol (alloca|asm|floor|ceil|fabs|sqrt|mempcpy|sprintf|printf|snprintf|puts|putchar|fprintf|isprint|isalpha|isdigit|isspace|toupper|tolower|qsort|bsearch|atoi|strtol|getenv|rand|srand|time|clock|signal|raise|setjmp|longjmp|strstr|strncat|strpbrk|strspn|strcspn|strdup|memchr|strcasecmp)"
+reason = "a libc routine tools/torture/libc.c does not implement"
+
+# Programs that run and exit non-zero by design (a wrong result of one is reported as `differs`, with its reason, at any level).
+
+[[differs]]
+program = "pr32244-1"
+reason = "GNU C does arithmetic on a bit-field in the field's own precision (an `unsigned long long : 40` shifts and rotates in 40 bits: GCC PR middle-end/32244, expr.c ChangeLog 2008-01-25; implement-c.texi, 'Structures, Unions, Enumerations, and Bit-Fields'). ISO C11 6.3.1.1p2 leaves a bit-field wider than int in its declared type (64 bits), so `x.b << 32` is not 0: llrm, on Open Watcom's front end, follows ISO."
+
+[[differs]]
+program = "pr34971"
+reason = "The same: GNU C's bit-field precision (GCC PR middle-end/34971, expr.c ChangeLog 2008-02-27) against ISO C11 6.3.1.1p2, which llrm follows."
+
+[[differs]]
+program = "20021127-1"
+reason = "The program defines `llabs` (a body that aborts) and expects the compiler to replace the call by GCC's builtin (`-std=c99`: llabs is a reserved library name, so defining it is undefined behaviour); llrm calls the definition as written."
+
+[[differs]]
+program = "nestfunc-4"
+reason = "A 1000-level call chain that needs about 24 KB of stack at -O0 (the test itself says `dg-add-options stack_size` and sizes DEPTH from STACK_SIZE); the m32 DOS program's stack is 16 KB and faults at its guard (exception 0Bh). Depth 200 passes."
+
+[[differs]]
+program = "widechar-3"
+reason = "Open Watcom defines no `__BYTE_ORDER__` or `__ORDER_BIG_ENDIAN__`: both are 0 in the `#if` and the big-endian branch is taken, which expects strlen of L\"abcdef\" to be 0 (the little-endian answer, 1, is right: checked with the branch removed)."
+
+[[differs]]
+program = "pushpop_macro"
+reason = "Open Watcom's preprocessor ignores `#pragma push_macro` and `pop_macro` (GNU/MSVC): `_` keeps the last definition."
+
+[[differs]]
+program = "pr58943"
+reason = "`x[0] |= foo ()` where foo changes x[0]: the order of the read of x[0] and the call is unspecified (C11 6.5.16.2, 6.5.2.2p10); GCC calls first (PR c/58943), Open Watcom's front end reads first and gets 3, not 131."
+
+[[differs]]
+program = "bf-sign-2"
+reason = "wccq non-conforming (front-end route): it types a bit-field by its declared type, so `unsigned :15` and `unsigned long :31` stay unsigned in arithmetic, where ISO C11 6.3.1.1p2 promotes any bit-field whose values fit an int to int (checked on both targets: u15 and u31 give the unsigned answer)."
+
+[[differs]]
+program = "memcpy-1"
+reason = "Two 128 KB local arrays: 256 KB of stack, where the m32 DOS program's is 16 KB (the test sizes them from STACK_SIZE with `dg-add-options stack_size`); the stack overflows and the emulator ends the program or loses it."
+
+[[differs]]
+program = "920710-1"
+reason = "`16777217L != (float)16777217e0`: the long is converted to float in the standard (16777216.0f, equal); the x87 compares the long as extended (exact, not equal), as GCC's own x87 code does for a variable (FLT_EVAL_METHOD 2); GCC passes by folding the constants. The first check, (double)(2^64-1), passes since the unsigned conversion exists."
+
+[[differs]]
+program = "20031003-1"
+reason = "`(int)2147483648.0f`: a conversion out of range is undefined (C11 6.3.1.4p1); GCC folds the constant saturated, the x87 `fistp` gives 0x80000000, the integer indefinite."
+
+[[differs]]
+program = "20030714-1"
+reason = "`EPosition _position : 2` holding 3 (FIXED): the compatible type of an enum is implementation-defined (C11 6.7.2.2p4); GCC's is unsigned for an enum with no negative enumerator, Open Watcom's is int, so the 2-bit field reads -1 (checked: enum, unsigned and int bit-fields of 2 bits hold 3 as 3, 3 and -1 under GCC's rule, -1 for the enum here)."
+
+[[differs]]
+program = "wchar_t-1"
+reason = "The source has `L'Ä'` in UTF-8 (`-finput-charset=utf-8`): Open Watcom reads its source bytes as the code page's characters, so the wide literal is two characters."
+
+[[differs]]
+program = "divmod-1"
+reason = "x86-m16 only: `-(1 << 15) / -1` in a 16-bit int overflows idiv (#DE); the test assumes a 32-bit int (it has no dg-require-effective-target)."
+
+[[differs]]
+program = "920730-1"
+reason = "x86-m16 only: INT_MIN, INT_MAX and `(unsigned)(INT_MAX + 2)` of a 16-bit int; the test has no dg-require-effective-target for a 32-bit int."
+
+[[differs]]
+program = "doloop-2"
+reason = "x86-m16 only: `i != USHRT_MAX + 1U` is 65535 + 1 = 0 in a 16-bit unsigned int."
+
+[[differs]]
+program = "bitfld-1"
+reason = "x86-m16 only: the bit-field promotions (`unsigned int u : 7`, `-13U % 61`) are computed in a 16-bit int where the test's values assume 32."
+
+[[differs]]
+program = "921202-1"
+reason = "x86-m16 only: three arrays of 2055 longs on the stack (the test sizes them from STACK_SIZE with `dg-add-options stack_size`), against an 8 KB stack."
+
+[[differs]]
+program = "960521-1"
+reason = "x86-m16 only: two blocks of 32768 ints (BLOCK_SIZE without STACK_SIZE), larger than a real-mode segment's heap."

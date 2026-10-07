@@ -1,4 +1,4 @@
-reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 for push/mov/sub (Intel 240440-002); -Os counts and bytes rise by what enter saved (2 bytes, 2 instructions per frame), rec* rows are #777's and untouched here"
+reason = "an integer of 32 bits or more made a float is rounded to a float, as C requires (the x87 register kept the extra bits and a compare against a float read them): a store and a load per conversion"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -41,9 +41,9 @@ bss_bytes = 0
 kernel_ms = 12.648
 
 [nib.Os]
-instructions = 1350436
-memory_operands = 230138
-code_bytes = 564
+instructions = 1350472
+memory_operands = 230174
+code_bytes = 582
 data_bytes = 32
 bss_bytes = 0
 

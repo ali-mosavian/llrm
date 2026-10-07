@@ -84,6 +84,7 @@ llrm-x86 = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
 llrm-driver = { workspace = true }
+llrm-object = { workspace = true }
 regex = { workspace = true }
 toml = { workspace = true }
 

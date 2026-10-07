@@ -38,7 +38,11 @@ use crate::counting;
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
 
-pub struct Algebraic;
+/// `size`: code size outranks speed, and a division by a constant that is not a power of two stays signed.
+#[derive(Default)]
+pub struct Algebraic {
+    pub size: bool,
+}
 
 impl FunctionPass for Algebraic {
     fn name(&self) -> &'static str {
@@ -47,7 +51,7 @@ impl FunctionPass for Algebraic {
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         // Blocks and edges are as they were.
-        if simplified(unit.context, unit.layout, unit.function, analyses) {
+        if simplified(unit.context, unit.layout, unit.function, analyses, self.size) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()
@@ -87,7 +91,7 @@ impl FunctionPass for Differences {
 }
 
 /// Every rule, to a fixed point; whether anything changed.
-pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses) -> bool {
+pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, size: bool) -> bool {
     // A number proved before stays proved: every rewrite keeps each
     // surviving value's meaning, and none divides by a value.
     let divided_by_values = function.walk().any(|(_, inst)| {
@@ -99,7 +103,7 @@ pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Fun
     let mut changed = false;
     loop {
         let mut round = _whole_fixed(context, layout, function, &outer);
-        round |= _unsigned_divisions(context, layout, function, &outer, &facts);
+        round |= _unsigned_divisions(context, layout, function, &outer, &facts, size);
         round |= _divisions(context, layout, function, &outer, &facts);
         round |= _redundant_masks(context, layout, function, &outer);
         let recurrences = _recurrences(context, layout, function, &outer);
@@ -1063,7 +1067,7 @@ fn _redundant_masks(context: &mut Context, layout: &DataLayout, function: &mut F
 /// division is a `div` for an `idiv` (three clocks on a 486) and a byte more (`xor edx,edx` for `cdq`), which is
 /// selection's to weigh, not a rewrite's. The proof is `ranges`' (a loop's `rest > 0`, a sum of squares) or the
 /// dividend's clear sign bit.
-fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, facts: &IndexMap<ValueId, Known>) -> bool {
+fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, facts: &IndexMap<ValueId, Known>, size: bool) -> bool {
     let candidates: Vec<(llrm_mir::module::BlockId, InstId, u32)> = function
         .walk()
         .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Binary(BinaryOp::SDiv | BinaryOp::SRem)))
@@ -1084,7 +1088,11 @@ fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mu
             let operands = &function.instruction(inst).operands;
             let fact = consts::_operand(&unit, operands[1], facts, None)?;
             let divisor = BigInt::from(consts::masked(&fact.n, width));
-            let positive = fact.width >= width && divisor > BigInt::from(1u8) && divisor < BigInt::from(1u8) << (width - 1) && (&divisor & (&divisor - 1u8)) == BigInt::from(0u8);
+            // A power of two is shifts either way. Any other constant is a multiply by its reciprocal, which has no sign to
+            // correct where the dividend is never negative; selection prices it (a dword's, in a 32-bit segment: a 16-bit one runs the dword through prefixes and a longer multiply), and where it declines `div` and
+            // `idiv` are alike but a byte (`xor edx, edx` for `cdq`), which size does not pay.
+            let power = (&divisor & (&divisor - 1u8)) == BigInt::from(0u8);
+            let positive = fact.width >= width && divisor > BigInt::from(1u8) && divisor < BigInt::from(1u8) << (width - 1) && (power || (!size && width == 32 && layout.pointer(0).bits == 32));
             let scope = scoped.get(&cfg::id(block)).cloned().unwrap_or_default();
             let proved = ranges::_operand(&unit, operands[0], &scope, &registers).filter(|interval| interval.width == width).is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
                 || llrm_mir::valuetracking::known_zero(context, function, operands[0]) >> (width - 1) & 1 == 1;

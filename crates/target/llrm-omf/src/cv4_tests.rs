@@ -18,7 +18,7 @@ fn variable(name: &str, r#type: usize, kind: Kind, location: Location) -> Variab
 fn object(arch: Arch, types: Vec<T>, variables: Vec<Variable>) -> Object {
     let text = Section { name: "_TEXT".into(), role: Role::Text, near: true, align: 1, image: vec![0x90; 0x16], spans: vec![[0, 0x16]], relocs: Vec::new() };
     let range = Range { section: 0, offset: 0, length: 0x16 };
-    let function = Function { name: "f".into(), symbol: 0, r#type: types.len() - 1, ranges: vec![range], body: Some((6, 0x16)), far: false, module: false, variables, blocks: Vec::new() };
+    let function = Function { name: "f".into(), symbol: 0, r#type: types.len() - 1, ranges: vec![range], body: Some((6, 0x16)), far: false, module: false, variables, blocks: Vec::new(), frame: Vec::new() };
     let info = Info { language: Language::C, frame_register: if arch == Arch::I8086 { "bp" } else { "ebp" }.into(), code: vec![range], types, functions: vec![function], ..Info::default() };
     Object {
         name: "t.obj".into(),
@@ -328,6 +328,31 @@ fn the_32_bit_writers_object_reads_as_mls_flat_object_does() {
     assert_eq!(ours, ml);
 }
 
+/// A pointer to a function reaches it far or near, and the procedure it points to is called as that reach says: a far
+/// pointer's is a far call (LF_PROCEDURE call kind 1), a near one's a near call. The procedure type was one record
+/// called near, whatever pointed to it, so a debugger took a call through `int (far *fp)(int)` for a near one.
+#[test]
+fn a_pointer_to_a_function_points_to_a_procedure_called_as_far_as_the_pointer_reaches() {
+    use llrm_object::debug::Reach::{Far, Near};
+    let short = T::Scalar(S::Int { bytes: 2, signed: true });
+    let types = vec![
+        short,
+        T::Procedure { result: Some(0), parameters: vec![0], convention: None },
+        T::Pointer { target: 1, bytes: 4, reach: Far },
+        T::Pointer { target: 1, bytes: 2, reach: Near },
+        T::Procedure { result: None, parameters: Vec::new(), convention: None },
+    ];
+    let made = object(Arch::I8086, types, vec![variable("p", 2, Kind::Local, Location::Frame { disp: -4 }), variable("q", 3, Kind::Local, Location::Frame { disp: -6 })]);
+    let (_, table, _) = written(&made);
+    let index = |one: usize| 0x1000 + one as u16;
+    let one_parameter: Vec<(u16, u8)> = table.iter().enumerate().filter(|(_, (leaf, data))| *leaf == 0x0008 && data[4] == 1).map(|(at, (_, data))| (index(at), data[2])).collect();
+    // Two procedures of one parameter: the far one (call 1) and the near one (call 0).
+    let call = |wanted: u8| one_parameter.iter().find(|(_, kind)| *kind == wanted).map(|(at, _)| *at);
+    let (far, near) = (call(1).expect("a far procedure"), call(0).expect("a near procedure"));
+    let target = |reach: u16| table.iter().find(|(leaf, data)| *leaf == 0x0002 && u16::from_le_bytes([data[0], data[1]]) == reach).map(|(_, data)| u16::from_le_bytes([data[2], data[3]]));
+    assert_eq!((target(1), target(0)), (Some(far), Some(near)), "a far pointer to the far procedure, a near one to the near");
+}
+
 /// Two types of the model that read alike, an array of `int` and one of `long` (the source spells each, so they are
 /// two), are one record: a second only grew the table, and every later index with it.
 #[test]
@@ -343,4 +368,15 @@ fn arrays_of_scalars_of_two_spellings_are_one_record() {
     assert_eq!(types.iter().filter(|(leaf, _)| *leaf == 0x0003).count(), 1, "one LF_ARRAY");
     let bprels: Vec<&[u8]> = symbols.iter().filter(|(code, _)| *code == 0x0100).map(|(_, data)| &data[2..4]).collect();
     assert_eq!(bprels[0], bprels[1], "both locals name it");
+}
+
+/// A parameter in its register until the function stores it and in its frame cell for the rest has one place for the
+/// scope as CodeView 4 names it, the cell: written as a frame variable. Left out, as any list was, a debugger lost every
+/// parameter of a C function.
+#[test]
+fn a_parameter_in_a_register_and_then_its_cell_is_written_as_the_cell() {
+    let list = Location::List(vec![(Range { section: 0, offset: 0, length: 9 }, Location::Register("ax".into())), (Range { section: 0, offset: 9, length: 0x16 - 9 }, Location::Frame { disp: 4 })]);
+    let made = object(Arch::I8086, vec![int(), procedure()], vec![variable("a", 0, Kind::Parameter, list)]);
+    let (symbols, ..) = written(&made);
+    assert_eq!(symbols[3..], [(0x0100, vec![4, 0, 0x21, 0, 1, b'a']), (0x0006, vec![])]);
 }
