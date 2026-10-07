@@ -1,21 +1,21 @@
-reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
-blessed = "2026-10-06"
+reason = "integer spiller reads a phi's value from the cell the program stores it to (storedhomes): frames bas -0.6%, nbody_fixed -0.7% ins and -7% bytes, queens bas -2.7%"
+blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 332047
-memory_operands = 105996
-code_bytes = 437
+instructions = 323224
+memory_operands = 104026
+code_bytes = 434
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.4364
+kernel_ms = 4.3183
 
 [bas.Os]
-instructions = 336156
-memory_operands = 106009
-code_bytes = 414
+instructions = 327333
+memory_operands = 104039
+code_bytes = 408
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.4913
+kernel_ms = 4.3736
 
 [c.O2]
 instructions = 230917
@@ -23,7 +23,7 @@ memory_operands = 39902
 code_bytes = 215
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.073
+kernel_ms = 3.0804
 
 [c.Os]
 instructions = 233900
@@ -31,7 +31,7 @@ memory_operands = 39902
 code_bytes = 199
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.1128
+kernel_ms = 3.1202
 
 [nib.O2]
 instructions = 231273
@@ -39,7 +39,7 @@ memory_operands = 46010
 code_bytes = 239
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.2073
+kernel_ms = 3.0854
 
 [nib.Os]
 instructions = 272455

@@ -72,6 +72,7 @@ pub mod select {
     }
 }
 pub mod spiller;
+pub mod storedhomes;
 pub mod ssarepair;
 pub mod regclass;
 pub mod ssaspill;
