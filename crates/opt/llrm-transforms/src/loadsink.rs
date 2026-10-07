@@ -1,11 +1,11 @@
-//! A load made where its one reader is: what lies between them only computes, so the load moves down to just before
+//! A floating load made where its one reader is: what lies between them only computes, so the load moves down to just before
 //! the reader. A value held on a stack machine (x87) is on the stack from the load, and what is computed meanwhile has
 //! to work around it, with exchanges, or leave it. LLVM's MachineSink and the scheduler's bottom-up order, within one
 //! block, for the loads.
 
 use llrm_analysis::memoryssa::Accesses;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::module::InstId;
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 
@@ -35,6 +35,10 @@ fn _only_computes(unit: &passes::Unit, accesses: &Accesses, inst: InstId) -> boo
 
 /// Each block's loads with one reader in it, moved before that reader where only computation lies between.
 pub fn sunk(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
+    // Where only some registers can address, two loads moved together may want the same few: the target says so.
+    if crate::spill::Room::of(analyses.outer()).addresses > 0 {
+        return false;
+    }
     let Ok(accesses) = Accesses::managed(unit.context, unit.layout, unit.function, analyses) else { return false };
     let mut moves: Vec<(InstId, InstId)> = Vec::new();
     for &block in unit.function.layout() {
@@ -42,6 +46,10 @@ pub fn sunk(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
         for (index, &inst) in insts.iter().enumerate() {
             let instruction = unit.function.instruction(inst);
             let (Opcode::Load { volatile: false, .. }, Some(result)) = (&instruction.opcode, instruction.result) else { continue };
+            // Only a floating value is held on a stack: any other is in a register, wherever its load is.
+            if !matches!(unit.context.types.get(unit.function.value(result).ty), llrm_mir::types::Type::Float(_)) {
+                continue;
+            }
             let users = unit.function.users(result);
             let [only] = users else { continue };
             let user = only.user;
@@ -52,8 +60,6 @@ pub fn sunk(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
             if at <= index + 1 || !insts[index + 1..at].iter().all(|&between| _only_computes(unit, &accesses, between)) {
                 continue;
             }
-            // Its address is still computed before it, wherever it lands: the operands were defined above.
-            let _ = Operand::Block;
             moves.push((inst, user));
         }
     }
