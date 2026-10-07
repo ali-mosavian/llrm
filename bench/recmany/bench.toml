@@ -1,0 +1,9 @@
+description = "Six values carried round the recursion, more than the registers kept across a call"
+repetitions = 1
+
+[region]
+c = "bench_recmany"
+
+[gaps]
+bas = "#784 only the C version is written"
+nib = "#784 only the C version is written"
