@@ -1,4 +1,4 @@
-reason = "pressuresink: a load is made just before its reader where no register class gains; fewer memory operands overall, matmul +1 and parity/loop +2 from the order sensitivity of lea fusion and coalescing (#729)"
+reason = "no level opens a frame with enter: 14 clocks against 3 on the 486 for push/mov/sub (Intel 240440-002); -Os counts and bytes rise by what enter saved (2 bytes, 2 instructions per frame), rec* rows are #777's and untouched here"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -20,7 +20,7 @@ bss_bytes = 3056
 kernel_ms = 3415.7936
 
 [c.Os]
-code_bytes = 534
+code_bytes = 539
 data_bytes = 81
 bss_bytes = 3056
 kernel_ms = 3415.6629
@@ -32,7 +32,7 @@ bss_bytes = 0
 kernel_ms = 4239.5804
 
 [nib.Os]
-code_bytes = 1492
+code_bytes = 1513
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.6052

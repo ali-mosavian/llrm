@@ -272,7 +272,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     }
     // Each loop's counters chosen once, on the loop the passes above leave.
     if applied.options.wanted("lsr") {
-        manager.add(lsr::Lsr);
+        manager.add(lsr::Lsr { size: applied.options.prefers_size() });
         // What the counters it chose leave behind (a bound subtracted from a counter rebased by it), as LLVM's LSR cleans with SimplifyInstructions.
         manager.add(algebraic::Differences);
     }

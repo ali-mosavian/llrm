@@ -43,7 +43,11 @@ use crate::expand::{self, Expander};
 use crate::spill::{self, Room, Traffic};
 use crate::{dead, profit, rotate};
 
-pub struct Lsr;
+/// `size`: code size outranks speed, and a loop that has another way out is left as it is.
+#[derive(Default)]
+pub struct Lsr {
+    pub size: bool,
+}
 
 impl FunctionPass for Lsr {
     fn name(&self) -> &'static str {
@@ -52,7 +56,7 @@ impl FunctionPass for Lsr {
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        if reduced(unit, analyses, &outer) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if reduced(unit, analyses, &outer, self.size) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -78,7 +82,7 @@ enum Resident {
 }
 
 /// Each loop's counters chosen, innermost first; whether any changed.
-pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer) -> bool {
+pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer, size: bool) -> bool {
     let target = Target { machine: outer.target(), costs: profit::costs(outer), room: profit::registers(outer), forms: outer.target().address_forms() };
     let mut done = BTreeSet::<i64>::new();
     let mut changed = false;
@@ -96,14 +100,41 @@ pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer) -> bool {
             _plan(&view, outer, &loop_, &target, &pressure)
         };
         let Some(plan) = plan else { continue };
+        // A loop with another way out was never counted before: its choice is held to the function's whole price, work and
+        // spill, as hoist's is, where the loop's own model has been wrong about the registers a call leaves it. Where
+        // size outranks speed it stays as it is: the setup is code, and the trips that repay it are an estimate.
+        let leaves = plan.exit.as_ref().is_some_and(|(exit, _)| exit.proof.leaves);
+        if leaves && size {
+            continue;
+        }
+        let saved = leaves.then(|| (unit.function.clone(), _function_price(unit, analyses, outer, &target)));
         if let Some(first) = _applied(unit, &plan) {
             done.insert(cfg::id(first));
+        }
+        if let Some((before, Some(kept))) = saved {
+            dead::dead(unit.context, outer.callees(), unit.function);
+            let moved_price = _function_price(unit, analyses, outer, &target);
+            llrm_support::debug!("lsr", "leaving loop: kept {kept}, moved {moved_price:?}");
+            if moved_price.is_some_and(|moved| moved > kept) {
+                *unit.function = before;
+                continue;
+            }
         }
         // What the loop no longer reads is no use for the loop around it.
         dead::dead(unit.context, outer.callees(), unit.function);
         changed = true;
     }
     changed
+}
+
+/// What the function costs as it stands: `profit::motion_price` at the frequencies lsr's own prices use.
+fn _function_price(unit: &Unit, analyses: &Analyses, outer: &Outer, target: &Target) -> Option<i64> {
+    let mut fresh = analyses.fresh();
+    let facts = fresh.get::<Registers>(unit.context, unit.layout, unit.function);
+    let shape = fresh.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+    let view = memory::Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(&facts).with_shape(&shape);
+    let frequencies = profit::_loop_products_by_branch(view.context, view.metadata, &outer.globals, unit.function, Some(&profit::proven_trips(&view, &facts)))?;
+    profit::motion_price(unit.context, unit.layout, outer, unit.function, &target.costs, target.room, &frequencies)
 }
 
 /// A recurrence the loop could carry, and the phi that already does.

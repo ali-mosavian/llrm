@@ -33,7 +33,7 @@ fn reduced_for(text: &str, machine: Tuned) -> (Module, String) {
     let mut after = before.clone();
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut after, Rc::new(machine)).unwrap();
     let text = printed(&after);
     (before, text)
@@ -1316,7 +1316,7 @@ fn test_frame_arrays_keep_their_own_pointers() {
     let mut after = before.clone();
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut after, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     let printed = printed(&after);
     let inputs: &[&[i128]] = &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]];
@@ -1500,7 +1500,7 @@ fn on_core(text: &str) -> String {
     let mut module = parsed(&format!("{DOS}{text}"));
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut module, Rc::new(machine)).unwrap();
     printed(&module)
 }
@@ -1611,7 +1611,7 @@ fn on_p5(text: &str) -> String {
     let mut module = parsed(&format!("{DOS}{text}"));
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut module, Rc::new(machine)).unwrap();
     printed(&module)
 }
@@ -1781,7 +1781,7 @@ fn test_a_huge_pointer_walk_is_not_swapped_for_an_offset_that_carries_too() {
     let mut after = parsed(HUGE_WALK);
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut after, Rc::new(machine)).unwrap();
     let printed = printed(&after);
     assert!(!printed.contains("lsr.iv"), "{printed}");
@@ -1855,7 +1855,7 @@ fn test_a_pointer_steps_at_the_price_of_an_add_whatever_an_address_costs() {
         let machine = Tuned { costs: OperationCosts { address, ..target().costs }, ..target() };
         let mut after = parsed(&format!("{DOS}{POINTER_WALK}"));
         let mut manager = PassManager::default();
-        manager.add(Lsr);
+        manager.add(Lsr::default());
         manager.run_module(&mut after, Rc::new(machine)).unwrap();
         printed(&after)
     };
