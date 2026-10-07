@@ -3312,7 +3312,9 @@ impl Selector<'_, '_, '_> {
         let changed = placed.as_ref().map(|(entry, placement)| {
             let result = (!self.types().is_void(instruction.ty)).then(|| self.size(instruction.ty)).transpose()?.map(i64::from);
             let names = entry.clobbers(&placement.used, result);
-            Ok::<_, Unselected>(names.iter().filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st")).map(|name| llrm_x86::calling::register(name)).map(|register| if register.is_gpr() { register.full_register32() } else { register }).collect::<BTreeSet<Register>>())
+            // The selectors the description names no more than a contract does (FS, GS) are as much the callee's to use.
+            let unnamed = crate::backend::callregs::unnamed_selectors_clobbered(&contract, self.segments);
+            Ok::<_, Unselected>(names.iter().filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st")).map(|name| llrm_x86::calling::register(name)).map(|register| if register.is_gpr() { register.full_register32() } else { register }).chain(unnamed).collect::<BTreeSet<Register>>())
         });
         let changed = changed.transpose()?;
         // What its convention says it disturbs, which a caller that keeps those for its own caller saves before it.
