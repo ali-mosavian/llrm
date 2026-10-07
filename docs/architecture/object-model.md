@@ -52,6 +52,12 @@ Writers are target-blind: `llrm-omf::codeview` writes $$SYMBOLS, $$TYPES and LIN
 Enums, typedefs, qualifiers, block scopes, register and listed locations, columns and checksums are in
 the model; a frontend fills them as it learns to, and a writer that cannot say one refuses it by name.
 
+With `-g`, a variable the program declares is read from its frame cell at any line, so each store to it
+is lowered volatile (`hir/mir.rs`, `declared_place`) and no pass drops, merges or moves one. At
+-O>0 that costs code a gcc or clang `-g` build does not (they note each value's place with `dbg.value`
+and leave the code alone); without `-g` nothing changes. The lift is `dbg.value` plus the allocator's
+ranges as location lists, which makes the stores unnecessary. Tracking issue: #755.
+
 ## Moves
 
 | from | to |
@@ -84,6 +90,14 @@ writer cannot express.
 of a role is `.text$name`, which the linker merges into `.text`. A COFF object refuses what OMF alone has,
 as ELF does. A pc-relative field's value is `addend - (from - baked)`, `baked` being what the relocation
 type already subtracts (`REL32`: 4). More than 65535 relocations in a section use `LNK_NRELOC_OVFL`.
+
+COFF debug information is CodeView C13, written from `Info` into `.debug$S` and `.debug$T` (`llrm-coff/src/codeview`):
+a function is `S_GPROC32`/`S_LPROC32`, a variable `S_LOCAL` with one `S_DEFRANGE_REGISTER_REL` (frame) or
+`S_DEFRANGE_REGISTER` per range (pieces of 0xF000 bytes, a range's length being 16 bits), a block `S_BLOCK32`, a
+global `S_GDATA32`/`S_LDATA32`, a named struct, enum or typedef `S_UDT`. A code or data address is a `SECREL` and a
+`SECTION` relocation against the object's symbol. A struct reached from its own field is written as a forward
+reference first. Register numbers come from `Info.registers`. Refused by name: far and huge pointers, BASIC's types,
+a function or block in several ranges, a register with no CodeView number.
 
 `llrm-elf` holds the container both share (sections, symbols, relocation tables); a machine gives it
 its ELF number, its relocation types, and REL or RELA.
