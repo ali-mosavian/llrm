@@ -50,3 +50,7 @@ reason = "`x[0] |= foo ()` where foo changes x[0]: the order of the read of x[0]
 [[differs]]
 program = "bf-sign-2"
 reason = "Open Watcom types a bit-field by its declared type, so `unsigned :15` and `unsigned long :31` stay unsigned in arithmetic; ISO C11 6.3.1.1p2 promotes any bit-field whose values fit an int to int (checked on both targets: the unsigned u15 and u31 give the unsigned answer)."
+
+[[differs]]
+program = "memcpy-1"
+reason = "Two 128 KB local arrays: 256 KB of stack, where the m32 DOS program's is 16 KB (the test sizes them from STACK_SIZE with `dg-add-options stack_size`); the stack overflows and the emulator ends the program or loses it."
