@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::induction::{self, Affine, AffineOperand};
-use llrm_analysis::memory::Unit;
+use llrm_analysis::memory::{Standing, Unit};
 use llrm_analysis::{cfg, occurrence, ranges};
 use llrm_analysis::graph::loops::Loop;
 use llrm_mir::context::Context;
@@ -52,7 +52,8 @@ impl FunctionPass for LoopExit {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        match evaluated(unit.context, unit.layout, unit.function, analyses.outer()) {
+        let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
+        match evaluated_with(unit.context, unit.layout, unit.function, analyses.outer(), &mut Standing::held(&registers)) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("loopexit: {error}"),
@@ -73,22 +74,30 @@ enum Evaluation {
 
 /// Loops evaluated, one at a time to a fixed point; whether any changed.
 pub fn evaluated(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> Result<bool, String> {
+    evaluated_with(context, layout, function, outer, &mut Standing::underived())
+}
+
+/// `evaluated`, what is known of the body without memory given as `standing` says: the manager's for the body as
+/// the caller has it, derived again after each loop is changed.
+pub fn evaluated_with(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, standing: &mut Standing) -> Result<bool, String> {
     let mut changed = false;
     loop {
-        let found = _evaluation(context, layout, function, outer)?;
+        let found = _evaluation(context, layout, function, outer, standing)?;
         match found {
             None => return Ok(changed),
             Some(Evaluation::Deleted { header, exit, exits }) => _deleted(context, function, header, exit, &exits)?,
             Some(Evaluation::Constant { exit, following, swap }) => _substituted_exits(context, function, exit, &following, &swap)?,
         }
+        standing.changed();
         changed = true;
     }
 }
 
 /// The first loop whose exit values change something: the old `evaluated`.
-fn _evaluation(context: &Context, layout: &DataLayout, function: &Function, outer: &Outer) -> Result<Option<Evaluation>, String> {
+fn _evaluation(context: &Context, layout: &DataLayout, function: &Function, outer: &Outer, standing: &mut Standing) -> Result<Option<Evaluation>, String> {
     let unit = Unit::within(context, layout, function, outer);
-    let facts = unit.registers();
+    let facts = standing.of(&unit);
+    let unit = unit.with_registers(facts);
     for loop_ in cfg::Shape::of(function).loops {
         let Some(&latch) = loop_.latches.first() else { continue };
         if loop_.body.len() != 2 || loop_.latches.len() != 1 || !edges::phis(function, cfg::block(latch)).is_empty() {

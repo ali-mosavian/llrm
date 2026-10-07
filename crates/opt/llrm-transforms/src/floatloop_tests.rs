@@ -55,7 +55,7 @@ fn specialize(body: &str) -> (bool, String) {
     let (context, function) = module.function_mut("f").expect("@f");
     let calls = llrm_analysis::consts::Calls::default();
     let solved = {
-        let unit = llrm_analysis::memory::Unit::within(context, &layout, function, &outer);
+        let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(context, &layout, function, &outer));
         llrm_analysis::floatfacts::solved_with(&unit, &calls, None)
     };
     let changed = specialized(context, &layout, &callees, function, &outer, &calls, &solved);

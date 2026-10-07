@@ -1,13 +1,13 @@
-reason = "x87 homes: a stored loop-carried float is spilled to its own cell"
+reason = "x87: a squared value below the top is copied with fld st(i), not exchanged up (nbody -4%, fpbench -9%)"
 blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 20253
+instructions = 19653
 memory_operands = 5241
-code_bytes = 2515
+code_bytes = 2503
 data_bytes = 67
 bss_bytes = 0
-kernel_ms = 0.2811
+kernel_ms = 0.2731
 
 [bas.Os]
 instructions = 21763
@@ -15,15 +15,15 @@ memory_operands = 5120
 code_bytes = 707
 data_bytes = 23
 bss_bytes = 0
-kernel_ms = 0.3013
+kernel_ms = 0.3015
 
 [c.O2]
-instructions = 20949
+instructions = 18949
 memory_operands = 3032
-code_bytes = 1258
+code_bytes = 1218
 data_bytes = 52
 bss_bytes = 0
-kernel_ms = 0.2801
+kernel_ms = 0.2535
 
 [c.Os]
 instructions = 20007
@@ -31,15 +31,15 @@ memory_operands = 3004
 code_bytes = 350
 data_bytes = 8
 bss_bytes = 0
-kernel_ms = 0.2675
+kernel_ms = 0.2676
 
 [nib.O2]
-instructions = 18321
+instructions = 17721
 memory_operands = 4205
-code_bytes = 917
+code_bytes = 905
 data_bytes = 60
 bss_bytes = 0
-kernel_ms = 0.2455
+kernel_ms = 0.2375
 
 [nib.Os]
 instructions = 20174
@@ -47,7 +47,7 @@ memory_operands = 3003
 code_bytes = 496
 data_bytes = 16
 bss_bytes = 0
-kernel_ms = 0.2701
+kernel_ms = 0.2702
 
 [ow.O2]
 instructions = 21603

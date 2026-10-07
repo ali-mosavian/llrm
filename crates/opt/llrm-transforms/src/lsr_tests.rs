@@ -57,7 +57,7 @@ fn counters(printed: &str) -> usize {
     let mut module = parsed(printed);
     let (layout, outer) = (llrm_analysis::testing::layout(&module), llrm_mir::passes::Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    let unit = llrm_analysis::memory::Unit::within(context, &layout, function, &outer);
+    let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(context, &layout, function, &outer));
     let filling = |loop_: &llrm_analysis::graph::loops::Loop| function.block(llrm_analysis::cfg::block(loop_.header)).name.as_deref().is_some_and(|name| name.starts_with("fill_"));
     unit.shape()
         .loops

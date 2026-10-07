@@ -70,7 +70,7 @@ entry:
 
 /// What `alias::annotated` says of @f of `module`, asked directly.
 fn direct(module: &Module) -> Answer {
-    alias::annotated(&Unit::of(module, &layout(module), function(module, "f")))
+    alias::annotated(&crate::testing::with_registers(Unit::of(module, &layout(module), function(module, "f"))))
 }
 
 /// What the passes saw of `Annotated`, run in turn on `TWO`, and the
@@ -161,7 +161,7 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
         let outer = Rc::new(outer);
         for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
             let at = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
-            let unit = Unit::of(&module, &layout, function);
+            let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
             let mut analyses = Analyses::new(Rc::clone(&outer));
             assert_eq!(*analyses.get::<Pointers>(&module.context, &layout, function), alias::points_to(&unit, None, None), "{at}");
             assert_eq!(*analyses.get::<Annotated>(&module.context, &layout, function), alias::annotated(&unit), "{at}");

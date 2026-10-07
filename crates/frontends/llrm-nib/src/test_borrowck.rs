@@ -949,6 +949,8 @@ fn main() -> i16:
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
     let function = module.functions().find(|(_, global, _)| global.name.as_deref().is_some_and(|name| name.contains("area"))).expect("area").2;
     let unit = llrm_analysis::memory::Unit::of(&module, &layout, function);
+    let registers = llrm_analysis::consts::known(&unit, None, None, None);
+    let unit = unit.with_registers(&registers);
     let known = llrm_analysis::ranges::scoped(&unit).expect("ranges");
     let tag_loads: Vec<_> = function.walk().filter(|&(_, inst)| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. }) && function.instruction(inst).metadata.iter().any(|(kind, _)| kind == "range")).collect();
     assert!(!tag_loads.is_empty(), "the tag loads carry !range");
