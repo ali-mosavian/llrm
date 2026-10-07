@@ -36,6 +36,11 @@ pub struct Debug {
     pub language: model::Language,
     pub producer: model::Producer,
     pub frame_register: String,
+    /// What the target calls a call's return address in call frame information; empty where it numbers none.
+    pub return_register: String,
+    /// The frame and stack registers of 32-bit code, and the bytes a call pushes (near, far): what its frame
+    /// rows are read from.
+    pub frame: Option<(iced_x86::Register, iced_x86::Register, [i64; 2])>,
     pub registers: Vec<model::Register>,
     pub types: Vec<model::Type>,
     /// Each MIR type node's type.
@@ -76,7 +81,13 @@ fn typed(one: &di::Type, nodes: &IndexMap<MetadataId, model::TypeId>, near: u8) 
     let node = |id: MetadataId| nodes.get(&id).copied().ok_or_else(|| format!("debug type !{} is not listed", id.0));
     let target = || one.target.map(node).ok_or_else(|| format!("a {} of nothing", one.kind.value()))?;
     Ok(match one.kind {
-        di::Kind::Scalar => model::Type::Scalar(scalar(di::Scalar::from_value(&one.name).ok_or_else(|| format!("no debug scalar {}", one.name))?)),
+        di::Kind::Scalar => {
+            let described = scalar(di::Scalar::from_value(&one.name).ok_or_else(|| format!("no debug scalar {}", one.name))?);
+            match &one.spelling {
+                Some(spelling) => model::Type::Basic { name: spelling.clone(), scalar: described },
+                None => model::Type::Scalar(described),
+            }
+        }
         di::Kind::FixedString => model::Type::FixedString(narrow(one.size, "a STRING's length")?),
         di::Kind::Array => model::Type::Array { element: target()?, bytes: None },
         di::Kind::Sized => model::Type::Array { element: target()?, bytes: Some(narrow(one.size, "an array's size")?) },
@@ -139,6 +150,11 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
     }
     let file = llrm_target::registers::parse(&arch.registers_text())?;
     let frame_register = llrm_target::registers::of_class(&file, "frame").first().map(|one| (*one).to_owned()).ok_or("the target's register file has no frame register")?;
+    let return_register = llrm_target::registers::of_class(&file, "pc").first().map(|one| (*one).to_owned()).unwrap_or_default();
+    let frame = (near == 32).then(|| {
+        let registers = arch.frame_registers();
+        (registers.pointer, registers.stack, [arch.return_address_bytes(false), arch.return_address_bytes(true)])
+    });
     let registers = file.into_iter().map(|one| model::Register { name: one.name, bits: one.bits, dwarf: one.dwarf, codeview: one.codeview }).collect();
     let language = match di::language(module) {
         Some(di::Language::C) => model::Language::C,
@@ -146,7 +162,7 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
         Some(di::Language::Nib) => model::Language::Nib,
         None => model::Language::Unknown,
     };
-    Ok(Some(Debug { format: model::Format::Default, language, producer, frame_register, registers, types, nodes, procedures, globals: out }))
+    Ok(Some(Debug { format: model::Format::Default, language, producer, frame_register, return_register, frame, registers, types, nodes, procedures, globals: out }))
 }
 
 /// `module`'s debug information for the object `source`, its code laid out in `segments` (the
@@ -159,7 +175,7 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
     let variable = |name: &str, r#type: model::TypeId, kind: Kind, symbol: &str, disp: i64| Variable { name: name.to_owned(), r#type, kind, location: Location::Static { symbol: ids[symbol], disp } };
     let mut starts: Vec<usize> = module.procedures.iter().filter_map(|one| symbols.get(&one.name).map(|&(_, at)| at)).collect();
     starts.sort_unstable();
-    let mut info = Info { format: debug.format, language: debug.language, producer: debug.producer, frame_register: debug.frame_register.clone(), registers: debug.registers.clone(), files: vec![model::File { name: source.to_owned(), checksum: None }], types: debug.types.clone(), ..Info::default() };
+    let mut info = Info { format: debug.format, language: debug.language, producer: debug.producer, frame_register: debug.frame_register.clone(), return_register: debug.return_register.clone(), registers: debug.registers.clone(), files: vec![model::File { name: source.to_owned(), checksum: None }], types: debug.types.clone(), ..Info::default() };
     info.globals = debug.globals.iter().filter(|one| one.scope.is_none() && defined(&one.symbol)).map(|one| variable(&one.name, one.r#type, Kind::Local, &one.symbol, one.displacement)).collect();
     for procedure in &module.procedures {
         let (Some(described), Some(&(_, start))) = (debug.procedures.get(&procedure.name), symbols.get(&procedure.name)) else { continue };
@@ -194,13 +210,33 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                 }
             };
             match addr.space {
-                Space::Frame => variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::Frame { disp: addr.disp } }),
+                Space::Frame => {
+                    let home = Location::Frame { disp: addr.disp };
+                    // The argument is in its register until the function stores it into the home.
+                    let stored = one.arrives.zip(debug.frame).and_then(|(register, (frame, ..))| super::arrival::stored(&code.image[start..end], frame, addr.disp, register).map(|at| (register, at)));
+                    let location = match stored {
+                        Some((register, at)) if at < end - start => {
+                            let section = |offset, length| model::Range { section: 0, offset, length };
+                            Location::List(vec![(section(start, at), Location::Register(format!("{register:?}").to_lowercase())), (section(start + at, end - start - at), home)])
+                        }
+                        _ => home,
+                    };
+                    variables.push(Variable { name: one.name.clone(), r#type, kind, location })
+                }
                 space => {
                     let Some(symbol) = module.names.get(&(space, addr.index)).filter(|one| defined(one)) else { continue };
                     variables.push(variable(&one.name, r#type, kind, symbol, addr.disp));
                 }
             }
         }
+        // How to find the caller from each place in the code, where the code can be followed.
+        let frame = debug.frame.and_then(|(frame, stack, entry)| {
+            let pops: Vec<(usize, i64)> = code.bodies.iter().filter_map(|&(mark, at)| match mark {
+                masm::Mark::Pops(bytes) if (start + 1..=end).contains(&at) => Some((at - start, bytes)),
+                _ => None,
+            }).collect();
+            super::cfi::rows(&code.image[start..end], frame, stack, entry[usize::from(procedure.far)], &pops).ok()
+        });
         info.functions.push(model::Function {
             name: described.name.clone(),
             symbol: ids[&procedure.name],
@@ -211,6 +247,7 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
             module: described.module,
             variables,
             blocks: Vec::new(),
+            frame: frame.unwrap_or_default(),
         });
     }
     let first = starts.first().copied().unwrap_or(0);

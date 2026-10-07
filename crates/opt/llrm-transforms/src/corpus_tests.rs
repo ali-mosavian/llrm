@@ -62,7 +62,7 @@ fn algebraic_keeps_every_corpus_module_verifying_and_settles() {
         let layout = llrm_analysis::testing::layout(module);
         let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(Outer::of(module, None)));
         let (context, function) = function_mut(module, id);
-        crate::algebraic::simplified(context, &layout, function, &mut analyses)
+        crate::algebraic::simplified(context, &layout, function, &mut analyses, false)
     });
     assert!(changed > 0, "the corpus has identities to simplify");
 }

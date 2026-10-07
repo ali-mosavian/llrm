@@ -4,21 +4,19 @@
 //! variables and their types and its lines. Needs Turbo C++ in `TCPP30_DIR` (default
 //! `~/scratch/toolchains/tcpp30`) and the DOSBox-X this crate builds.
 
-use std::collections::{BTreeSet, VecDeque};
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{channel, Receiver};
-use std::sync::{Arc, Mutex};
+use std::process::Command;
 use std::time::{Duration, Instant};
+
+mod common;
+
+use common::dosbox::{self, Session};
 
 /// A test that cannot run says so on stderr, and fails where `LLRM_REQUIRE_TURBO` is set, so a gate that has
 /// Turbo C++ and Turbo Debugger cannot pass by skipping.
 fn skipped(reason: &str) {
-    // Written to the stderr itself, which the harness does not capture: seen when the test passes.
-    let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("SKIPPED: {reason}\n").as_bytes());
-    assert!(std::env::var_os("LLRM_REQUIRE_TURBO").is_none(), "LLRM_REQUIRE_TURBO is set, and: {reason}");
+    dosbox::skipped("LLRM_REQUIRE_TURBO", reason);
 }
 
 fn llrm_c() -> PathBuf {
@@ -29,23 +27,6 @@ fn toolchain() -> Option<(PathBuf, PathBuf)> {
     let borland = std::env::var_os("TCPP30_DIR").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("scratch/toolchains/tcpp30")))?;
     let dosbox = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("dosbox-x");
     (borland.join("bin/TCC.EXE").exists() && borland.join("bin/TLINK.EXE").exists() && borland.join("bin/TDUMP.EXE").exists() && dosbox.exists()).then_some((borland, dosbox))
-}
-
-/// Runs `commands` in DOS with Turbo C++ on C: and `work` on W:.
-fn dos(borland: &Path, dosbox: &Path, work: &Path, commands: &[String]) {
-    let mut conf = format!(
-        "[sdl]\noutput=surface\n[dosbox]\nmemsize=32\nstartquiet=true\nstartbanner=false\nquit warning=false\n[cpu]\ncore=normal\ncputype=pentium\ncycles=max\n[dos]\nxms=true\n[mixer]\nnosound=true\n[autoexec]\nmount c {}\nmount w {}\npath c:\\bin\nw:\n",
-        borland.display(),
-        work.display()
-    );
-    for one in commands {
-        conf.push_str(one);
-        conf.push('\n');
-    }
-    conf.push_str("exit\n");
-    let file = work.join("dos.conf");
-    std::fs::write(&file, conf).unwrap();
-    Command::new(dosbox).args(["-nolog", "-conf"]).arg(&file).env("SDL_VIDEODRIVER", "dummy").output().unwrap();
 }
 
 /// What TDUMP's Module Table says of a program: its type definitions and its variables' kinds, names and
@@ -119,7 +100,7 @@ fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
             commands.push(format!("tdump {prefix}{short}.exe > {prefix}{short}.tx"));
         }
     }
-    dos(&borland, &dosbox, scratch.path(), &commands);
+    dosbox::run(&[('c', &borland), ('w', scratch.path())], "c:\\bin", &commands);
     for short in ["obs", "lst"] {
         let read = |prefix: &str| std::fs::read_to_string(scratch.path().join(format!("{}{}.TX", prefix.to_uppercase(), short.to_uppercase()))).unwrap_or_else(|error| panic!("DOS made no {prefix}{short}.tx: {error}"));
         let (theirs, ours) = (module(&read("t")), module(&read("l")));
@@ -131,65 +112,47 @@ fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
 }
 
 
+/// A pointer to a function points to a function type called as far as the pointer reaches. TDUMP's symbol table names the
+/// type of each public symbol: for the same C program Turbo C++ says `far pointer function far C` of `fp` and `near
+/// pointer _CS function near C` of `np`; llrm's near pointer read `function far C`.
+#[test]
+fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
+    let Some((borland, dosbox)) = toolchain() else {
+        skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/fnptr.c"), scratch.path().join("fnp.c")).unwrap();
+    let made = Command::new(llrm_c()).args(["-m16", "-gtd", "-O0"]).arg(scratch.path().join("fnp.c")).arg("-o").arg(scratch.path().join("lfnp.obj")).output().unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let mut commands = vec!["tcc -v -r- -c -ml fnp.c".to_owned()];
+    for (prefix, object) in [("t", "fnp.obj"), ("l", "lfnp.obj")] {
+        commands.push(format!("tlink /v c:\\lib\\c0l {object}, {prefix}fnp.exe,, c:\\lib\\cl > {prefix}fnp.tl"));
+        commands.push(format!("tdump {prefix}fnp.exe > {prefix}fnp.tx"));
+    }
+    dosbox::run(&[('c', &borland), ('w', scratch.path())], "c:\\bin", &commands);
+    let types = |prefix: &str| -> Vec<String> {
+        let text = std::fs::read_to_string(scratch.path().join(format!("{}FNP.TX", prefix.to_uppercase()))).unwrap_or_else(|error| panic!("DOS made no {prefix}fnp.tx: {error}"));
+        let wanted = ["_CALLEE ", "_INNER ", "_APPLY ", "_FP ", "_NP "];
+        text.lines().filter(|line| wanted.iter().any(|name| line.contains(name))).filter_map(|line| line.split_once("]").map(|(_, rest)| rest.split_whitespace().collect::<Vec<_>>().join(" "))).collect()
+    };
+    let (theirs, ours) = (types("t"), types("l"));
+    assert_eq!(theirs.len(), 5, "premise: Turbo C++'s table names the five: {theirs:?}");
+    assert_eq!(ours, theirs);
+}
+
 /// Turbo Debugger itself, driven. DOSBox-X's debug socket (`DOSBOX_DEBUG_PORT`, a private port) injects keys
 /// and reads the text screen; it stops the emulator at every INT 3, which Turbo Debugger uses for its own
 /// breakpoints, so a reader thread answers those with `continue`.
-struct Dosbox {
-    child: Child,
-    stream: TcpStream,
-    owners: Arc<Mutex<VecDeque<bool>>>,
-    replies: Receiver<serde_json::Value>,
-}
+struct Dosbox(Session);
 
 impl Dosbox {
-    fn start(borland: &Path, debugger: &Path, dosbox: &Path, work: &Path) -> Dosbox {
-        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let conf = format!(
-            "[sdl]\noutput=surface\n[dosbox]\nmemsize=32\nstartquiet=true\nstartbanner=false\nquit warning=false\n[cpu]\ncore=normal\ncputype=pentium\ncycles=max\n[dos]\nxms=true\n[mixer]\nnosound=true\n[autoexec]\nmount c {}\nmount d {}\nmount w {}\npath z:\\;c:\\bin;d:\\\nw:\n",
-            borland.display(),
-            debugger.display(),
-            work.display()
-        );
-        let file = work.join(format!("td{port}.conf"));
-        std::fs::write(&file, conf).unwrap();
-        let child = Command::new(dosbox).args(["-nolog", "-conf"]).arg(&file).env("SDL_VIDEODRIVER", "dummy").env("DOSBOX_DEBUG_PORT", port.to_string()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
-        let mut stream = None;
-        for _ in 0..100 {
-            if let Ok(one) = TcpStream::connect(("127.0.0.1", port)) {
-                stream = Some(one);
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(200));
-        }
-        let stream = stream.expect("the debug socket");
-        let owners: Arc<Mutex<VecDeque<bool>>> = Arc::default();
-        let (send, replies) = channel();
-        let (mut writer, reader) = (stream.try_clone().unwrap(), BufReader::new(stream.try_clone().unwrap()));
-        let ours = Arc::clone(&owners);
-        std::thread::spawn(move || {
-            for line in reader.lines().map_while(Result::ok) {
-                let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
-                if value.get("event").is_some() {
-                    if value["event"] == "stopped" && value["int"] == 3 {
-                        ours.lock().unwrap().push_back(false);
-                        let _ = writeln!(writer, "{{\"cmd\":\"continue\"}}");
-                    }
-                } else if ours.lock().unwrap().pop_front().unwrap_or(true) {
-                    let _ = send.send(value);
-                }
-            }
-        });
-        let this = Dosbox { child, stream, owners, replies };
-        this.command(&serde_json::json!({"cmd": "continue"}));
-        std::thread::sleep(Duration::from_secs(1));
-        this.command(&serde_json::json!({"cmd": "wait_for_shell", "timeoutMs": 5000}));
-        this
+    fn start(borland: &Path, debugger: &Path, work: &Path) -> Dosbox {
+        Dosbox(Session::start(&[('c', borland), ('d', debugger), ('w', work)], "c:\\bin;d:\\"))
     }
 
     fn command(&self, value: &serde_json::Value) -> serde_json::Value {
-        self.owners.lock().unwrap().push_back(true);
-        writeln!(&self.stream, "{value}").unwrap();
-        self.replies.recv_timeout(Duration::from_secs(20)).expect("a reply")
+        self.0.command(value)
     }
 
     fn screen(&self) -> Vec<String> {
@@ -254,12 +217,6 @@ impl Dosbox {
     }
 }
 
-impl Drop for Dosbox {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-    }
-}
-
 /// Borland's own Turbo Debugger, stopped on a line of the program built by Turbo C++ and of the one llrm
 /// built with `-gtd`, shows the same values: a parameter (`n`, a `struct node *` at `[_head]`), a local (`s`),
 /// what the parameter points at (`*n`, a `struct node`) and its field (`n->v`); and both are on the line
@@ -285,11 +242,11 @@ fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
         "tlink /v c:\\lib\\c0m lst.obj, tlst.exe,, c:\\lib\\cm".to_owned(),
         "tlink /v c:\\lib\\c0m llst.obj, llst.exe,, c:\\lib\\cm".to_owned(),
     ];
-    dos(&borland, &dosbox, scratch.path(), &commands);
+    dosbox::run(&[('c', &borland), ('w', scratch.path())], "c:\\bin", &commands);
     let watches = ["s", "n", "*n", "n->v"];
     let mut seen = Vec::new();
     for exe in ["tlst.exe", "llst.exe"] {
-        let session = Dosbox::start(&borland, &debugger, &dosbox, scratch.path());
+        let session = Dosbox::start(&borland, &debugger, scratch.path());
         seen.push(session.debug(exe, 17, 9, &watches));
     }
     // The value of each watch, sorted: `n->v  int 3 (0x3)` is the same on both.

@@ -1924,9 +1924,11 @@ fn test_an_and_only_compared_with_zero_is_test() {
         ))
     };
     assert_eq!(tested("%m", "0")[..4], ["mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "test ax, bx", "je L0_3"]);
-    // Read again, the AND is computed; a constant mask is the old route's AND too.
+    // Read again, the AND is computed; a constant mask is the instruction's immediate (`test ax, 12`), not a copy `and`ed:
+    // collatz's `n & 1` was `mov edi, esi; and edi, 1; jne`.
     assert!(tested("%m", "%a").iter().any(|one| one.starts_with("and ")), "{:?}", tested("%m", "%a"));
-    assert!(tested("12", "0").iter().any(|one| one.starts_with("and ")), "{:?}", tested("12", "0"));
+    let masked = tested("12", "0");
+    assert!(masked.iter().any(|one| one == "test ax, 12") && !masked.iter().any(|one| one.starts_with("and ")), "{masked:?}");
 }
 
 /// A block every path from which ends in `unreachable` is cold, laid out
@@ -3241,7 +3243,7 @@ fn test_dbg_lines_become_linnum() {
     };
     // Lines alone are a BASIC statement table's, not -g.
     assert!(!records(&assembled).iter().any(|one| one.r#type == llrm_omf::omf::LINNUM));
-    assembled.debug = Some(crate::backend::debuginfo::Debug { format: Default::default(), language: Default::default(), producer: llrm_object::debug::Producer::Native, frame_register: "ebp".into(), registers: Vec::new(), types: Vec::new(), nodes: Default::default(), procedures: Default::default(), globals: Vec::new() });
+    assembled.debug = Some(crate::backend::debuginfo::Debug { format: Default::default(), language: Default::default(), return_register: String::new(), frame: None, producer: llrm_object::debug::Producer::Native, frame_register: "ebp".into(), registers: Vec::new(), types: Vec::new(), nodes: Default::default(), procedures: Default::default(), globals: Vec::new() });
     let records = records(&assembled);
     let lines: Vec<(u16, u16)> = records.iter().filter(|one| one.r#type == llrm_omf::omf::LINNUM).flat_map(|one| llrm_omf::omf::lines(one).1).collect();
     // push bp; mov bp, sp (3 bytes) is line 7's; mov ax, [bp+6]; sub ax, [bp+8] (6 bytes) too.
@@ -4072,7 +4074,7 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
     use iced_x86::Register;
     use llrm_mir::debuginfo as di;
     let mut module = llrm_mir::Module::default();
-    let int = di::add_type(&mut module, &di::Type { kind: di::Kind::Scalar, name: "int16".into(), size: 0, reach: di::Reach::Near, target: None, members: Vec::new() });
+    let int = di::add_type(&mut module, &di::Type { kind: di::Kind::Scalar, name: "int16".into(), size: 0, reach: di::Reach::Near, target: None, members: Vec::new(), spelling: None });
     let named = ["a", "b", "c", "d"];
     let parameters = named.iter().enumerate().map(|(at, name)| (at as i64, (*name).to_owned(), int)).collect();
     di::add_function(&mut module, &di::Function { function: "f".into(), module: false, name: "f".into(), r#type: int, parameters });

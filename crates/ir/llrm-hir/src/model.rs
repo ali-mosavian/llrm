@@ -670,6 +670,8 @@ pub struct DebugType {
     pub size: i64,
     pub reach: DebugReach,
     pub members: Vec<DebugMember>,
+    /// A scalar's name in the source, where it has one.
+    pub spelling: Option<String>,
 }
 
 /// A structure's field, or a procedure's parameter by its type alone.
@@ -699,6 +701,8 @@ pub struct DebugVariable {
     pub r#type: i64,
     /// The place is where a parameter's value is kept, not a variable the body declares.
     pub parameter: bool,
+    /// Of a parameter's home: the argument it was passed as, where the convention says how it arrives.
+    pub argument: Option<i64>,
 }
 
 /// A function as a debugger names it: its procedure type, its source

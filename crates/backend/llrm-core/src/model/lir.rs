@@ -41,6 +41,9 @@ pub fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
 pub struct CallMemory {
     pub effects: llrm_mir::memory::Effects,
     pub private: Vec<(Addr, u32)>,
+    /// The registers the callee's convention (the description's) disturbs: a function that keeps one for its caller saves it
+    /// before such a call, as it does before writing it. Empty where the callee's contract is what the call went by.
+    pub disturbs: BTreeSet<iced_x86::Register>,
 }
 
 impl CallMemory {
@@ -278,6 +281,11 @@ pub struct DebugVariable {
     pub place: DebugPlace,
     /// Passed in, not declared in the body.
     pub parameter: bool,
+    /// Of a parameter's home: the argument it was passed as.
+    pub argument: Option<i64>,
+    /// The register that argument arrives in, where one does: it holds the value until the function stores it
+    /// into the home.
+    pub arrives: Option<iced_x86::Register>,
 }
 
 /// Where a `-g` variable is.

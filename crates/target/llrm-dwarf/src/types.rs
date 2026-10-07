@@ -85,7 +85,8 @@ impl Tree<'_> {
         let one = self.info.types[index].clone();
         let mut die = match &one {
             Type::Scalar(Scalar::Void) => return Ok(()),
-            Type::Scalar(scalar) => base(*scalar)?,
+            Type::Scalar(scalar) => base(*scalar, None)?,
+            Type::Basic { name, scalar } => base(*scalar, Some(name))?,
             Type::FixedString(_) => return refused("a BASIC STRING * n has no DWARF type"),
             Type::Array { element, bytes: Some(bytes) } => {
                 let each = self.info.size_of(*element).filter(|&one| one > 0).ok_or_else(|| Unsupported("DWARF: an array of an element with no size".into()))?;
@@ -315,7 +316,11 @@ impl Tree<'_> {
         }
         die.attrs.push((AT_LOW_PC, self.address(range.section, range.offset)?));
         die.attrs.push((AT_HIGH_PC, Value::Len(range.length as u32)));
-        let framed = one.variables.iter().chain(one.blocks.iter().flat_map(|block| &block.variables)).any(|variable| matches!(variable.location, Location::Frame { .. }));
+        let framed = one.variables.iter().chain(one.blocks.iter().flat_map(|block| &block.variables)).any(|variable| match &variable.location {
+            Location::Frame { .. } => true,
+            Location::List(entries) => entries.iter().any(|(_, place)| matches!(place, Location::Frame { .. })),
+            _ => false,
+        });
         if framed {
             let base = self.info.registers.iter().find(|register| register.name == self.info.frame_register).map(|register| register.name.clone()).ok_or_else(|| Unsupported("DWARF: no frame register".into()))?;
             die.attrs.push((AT_FRAME_BASE, Value::Expr(self.register(&base)?)));
@@ -325,7 +330,8 @@ impl Tree<'_> {
     }
 }
 
-fn base(scalar: Scalar) -> Result<Die, Unsupported> {
+/// A base type of `scalar`, named as the source spells it where it says.
+fn base(scalar: Scalar, spelling: Option<&str>) -> Result<Die, Unsupported> {
     let (name, encoding, bytes): (String, u8, u8) = match scalar {
         Scalar::Void => unreachable!("void has no DIE"),
         Scalar::Bool { bytes } => ("bool".into(), ATE_BOOLEAN, bytes),
@@ -336,7 +342,7 @@ fn base(scalar: Scalar) -> Result<Die, Unsupported> {
         Scalar::BasicString { .. } => return refused("BASIC's STRING has no DWARF type"),
     };
     let mut die = Die::new(TAG_BASE);
-    die.attrs.push((AT_NAME, Value::Str(name)));
+    die.attrs.push((AT_NAME, Value::Str(spelling.map_or(name, str::to_owned))));
     die.attrs.push((AT_ENCODING, Value::U8(encoding)));
     die.attrs.push((AT_BYTE_SIZE, Value::U8(bytes)));
     Ok(die)
@@ -345,7 +351,7 @@ fn base(scalar: Scalar) -> Result<Die, Unsupported> {
 /// The types `one` names.
 fn references(one: &Type) -> Vec<usize> {
     match one {
-        Type::Scalar(_) | Type::FixedString(_) => Vec::new(),
+        Type::Scalar(_) | Type::Basic { .. } | Type::FixedString(_) => Vec::new(),
         Type::Array { element, .. } => vec![*element],
         Type::Struct { fields, .. } => fields.iter().map(|field| field.r#type).collect(),
         Type::Enum { underlying, .. } => vec![*underlying],

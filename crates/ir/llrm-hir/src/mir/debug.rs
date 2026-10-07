@@ -36,7 +36,7 @@ impl Types<'_> {
             .iter()
             .map(|member| Ok(di::Member { name: member.name.clone(), r#type: self.node(module, member.r#type)?, offset: member.offset, bits: member.bit_start.zip(member.bit_width) }))
             .collect::<Emit<Vec<_>>>()?;
-        let described = di::Type { kind: one.kind, name: one.name.clone(), size: one.size, reach: one.reach, target, members };
+        let described = di::Type { kind: one.kind, name: one.name.clone(), size: one.size, reach: one.reach, target, members, spelling: one.spelling.clone() };
         let made = match reserved {
             Some(reserved) => {
                 di::set_type(module, reserved, &described);
@@ -97,7 +97,7 @@ pub(super) fn emitted<'h>(
             match place.storage {
                 Storage::Local => {
                     let group = groups.iter().find(|group| group.places.iter().any(|one| one.id == place.id)).ok_or("a local outside the frame")?;
-                    let node = di::Variable { scope: scope.clone(), name: variable.name.clone(), r#type, offset: place.offset - group.start, parameter: variable.parameter };
+                    let node = di::Variable { scope: scope.clone(), name: variable.name.clone(), r#type, offset: place.offset - group.start, parameter: variable.parameter, argument: variable.argument };
                     variables.insert((function.id, place.id), di::add_variable(module, &node));
                 }
                 // Where it was passed: its argument's cell.

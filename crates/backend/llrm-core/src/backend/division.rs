@@ -75,6 +75,28 @@ pub fn reciprocal<'a>(
     remainder: bool,
     bits: Option<i64>,
 ) -> Result<Option<Vec<ir::Semantics>>, String> {
+    // By a negative divisor the quotient is the negation of the one by its magnitude (truncation is symmetric) and the
+    // remainder is the same (it takes the dividend's sign): LLVM's BuildSDIV negates the quotient the same way. The
+    // divisor INT_MIN, whose magnitude is not an `i32`, and -1 stay divisions.
+    if !(i64::from(i32::MIN) < divisor && divisor < -1) {
+        return positive_reciprocal(dividend, divisor, results, fresh, cpu, remainder, bits);
+    }
+    let width = dividend.width;
+    let magnitude = ir::Held { value: fresh(), width };
+    let Some(mut parts) = positive_reciprocal(dividend, -divisor, &[magnitude, results[1]], fresh, cpu, remainder, bits)? else { return Ok(None) };
+    parts.push(ir::Semantics { name: Some("neg".to_owned()), dests: vec![ir::Loc::Held(results[0])], sources: vec![ir::Loc::Held(magnitude)], ..ir::Semantics::new(ir::Operation::Unary) });
+    Ok(Some(parts))
+}
+
+fn positive_reciprocal<'a>(
+    dividend: ir::Held,
+    divisor: i64,
+    results: &[ir::Held],
+    fresh: &mut dyn FnMut() -> u32,
+    cpu: impl Into<ProfileOrName<'a>>,
+    remainder: bool,
+    bits: Option<i64>,
+) -> Result<Option<Vec<ir::Semantics>>, String> {
     let cpu = targets::profile(cpu)?;
     let width = dividend.width;
     if width != 4 || !(1 < divisor && divisor < 1 << 31) || cpu.size {
@@ -461,10 +483,11 @@ mod tests {
         assert_eq!(unsigned_reciprocal(ir::Held { value: 1, width: 4 }, 7, &results, &mut fresh, m32, true, None), Ok(None));
     }
 
-    /// LNGMXX's q+r needs both answers, including negative truncation and INT_MIN.
+    /// LNGMXX's q+r needs both answers, including negative truncation and INT_MIN; here also by negative divisors, whose
+    /// quotient is the one by the magnitude, negated, and whose remainder is the same.
     #[test]
     fn test_reciprocal_preserves_signed_quotient_and_remainder() {
-        for divisor in [3, 7, 10, 31, 1000, 2147483647] {
+        for divisor in [3, 7, 10, 31, 1000, 2147483647, -3, -7, -10, -31, -1000, -2147483647] {
             let source = ir::Held { value: 1, width: 4 };
             let results = [
                 ir::Held { value: 2, width: 4 },
@@ -511,11 +534,12 @@ mod tests {
                         "shl" => args[0] << args[1],
                         "shr" => (args[0] & 0xffffffff) >> args[1],
                         "sar" => args[0] >> args[1],
+                        "neg" => -args[0],
                         other => panic!("{other}"),
                     };
                     values.insert(held(&part.dests[0]), signed(answer));
                 }
-                let quotient = number.abs() / divisor * if number < 0 { -1 } else { 1 };
+                let quotient = number / divisor;
                 assert_eq!(values[&2], quotient, "{number} / {divisor}");
                 assert_eq!(
                     values[&3],

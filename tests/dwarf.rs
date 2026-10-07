@@ -68,6 +68,10 @@ fn dwarfdump_verifies_every_bench_program_at_both_ends_of_the_optimiser() {
                 let shown = Command::new(&dump).args(["--debug-info", "--debug-line"]).arg(&object).output().unwrap();
                 let shown = String::from_utf8_lossy(&shown.stdout);
                 assert!(shown.contains("DW_TAG_subprogram") && shown.contains("DW_AT_low_pc") && shown.contains("is_stmt"), "{} {level} {flag}: an empty unit", source.display());
+                // Every function has call frame information: one the code could not be followed through has none.
+                let frames = Command::new(&dump).arg("--debug-frame").arg(&object).output().unwrap();
+                let (fdes, functions) = (String::from_utf8_lossy(&frames.stdout).matches(" FDE ").count(), shown.matches("DW_TAG_subprogram").count());
+                assert_eq!(fdes, functions, "{} {level} {flag}: frame rules for every function", source.display());
             }
         }
     }
@@ -109,7 +113,7 @@ fn gdb_stops_at_a_line_and_reads_a_parameter_a_local_a_struct_field_and_the_retu
     let text = String::from_utf8_lossy(&said.stdout).into_owned();
     // The stop is the first statement of the body, not the one after it.
     assert!(text.contains("add (a=1, p=0x") && text.contains("gdb.c:7") && text.contains("int l = a + p->x;"), "{text}");
-    for expected in ["$1 = 1", "$2 = 4", "$3 = {x = 3, y = 4}", "$4 = 4", "type = int32_t (int32_t, struct pt *)", "Value returned is $5 = 12"] {
+    for expected in ["$1 = 1", "$2 = 4", "$3 = {x = 3, y = 4}", "$4 = 4", "type = int (int, struct pt *)", "Value returned is $5 = 12"] {
         assert!(text.contains(expected), "no {expected:?} in:\n{text}");
     }
 }
@@ -239,7 +243,7 @@ fn a_struct_that_names_itself_keeps_the_member_that_does_in_both_formats() {
     let made = compile(&fixtures.join("list.c"), &["-m16", "-g"], &object);
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let records = llrm_core::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
-    let shape = llrm_core::objectfile::cvinfo::parse(&records).shape();
+    let shape = llrm_core::objectfile::cv4info::shape(&records);
     let head = shape.iter().find(|one| one.starts_with("DATA head")).unwrap_or_else(|| panic!("{shape:#?}"));
     assert!(head.contains("next +0") && head.contains("v +2"), "{head}");
     // DWARF, in an ELF object, and read by gdb.
@@ -304,7 +308,70 @@ fn a_64_bit_variable_is_in_dwarf_with_its_value_and_codeview_still_writes() {
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&said.stdout).into_owned();
-    for expected in ["$1 = 5000000000", "$2 = 3", "$3 = 4294967297", "$4 = 5000000003", "$5 = 7", "type = int64_t (int64_t, int32_t)"] {
+    for expected in ["$1 = 5000000000", "$2 = 3", "$3 = 4294967297", "$4 = 5000000003", "$5 = 7", "type = __int64 (__int64, int)"] {
         assert!(text.contains(expected), "no {expected:?} in:\n{text}");
     }
+}
+
+/// A function with no variable has no frame register, and its stack pointer moves with each argument it pushes;
+/// the callee that pops them (`ret 8`) moves it back with no instruction to say so. gdb walks out of the callee
+/// and through that function to `main` only with call frame information: without it the backtrace stopped at
+/// `middle`, one frame short.
+#[test]
+fn gdb_backtraces_through_a_function_with_no_frame_register_at_o2() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
+    let scratch = tempfile::tempdir().unwrap();
+    let (Some(gdb), Some(ld), Some(assembler)) = (tool("gdb"), tool("ld"), tool("as")) else {
+        skipped("needs gdb, GNU ld and as");
+        return;
+    };
+    let (start, object, program) = (scratch.path().join("start.o"), scratch.path().join("frames.o"), scratch.path().join("frames"));
+    let made = Command::new(assembler).arg("--32").arg("-o").arg(&start).arg(fixtures.join("start.s")).output().unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let made = compile(&fixtures.join("frames.c"), &["-m32", "-O2", "-fobject-format=elf", "-g"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(ld).args(["-m", "elf_i386", "-o"]).arg(&program).arg(&start).arg(&object).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    if Command::new(&program).output().ok().and_then(|ran| ran.status.code()) != Some(48) {
+        skipped("this host does not run i386 programs");
+        return;
+    }
+    let said = Command::new(gdb).args(["-batch", "-nx", "-ex", "break leaf", "-ex", "run", "-ex", "bt", "-ex", "continue", "-ex", "bt"]).arg(&program).current_dir(&fixtures).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    let frames: Vec<&str> = text.lines().filter(|line| line.starts_with('#')).collect();
+    // The second call is entered after the first one popped its arguments: its frame rule depends on that.
+    assert!(frames.len() == 6 && frames[0].contains("leaf (a=1, b=2, c=3, d=4, e=5, f=6)") && frames[3].contains("leaf (a=2, b=3, c=4, d=5, e=6, f=7)"), "{text}");
+    for at in [1, 4] {
+        assert!(frames[at].contains("in middle ()") && frames[at + 1].contains("in main ()"), "{text}");
+    }
+}
+
+
+/// A parameter arrives in a register and the function stores it into its frame cell a few instructions in; until
+/// then the cell holds nothing and the frame register is the caller's. gdb stopped at the first instruction of
+/// `add` read `a` from the cell (garbage) where it is in `eax`: the location is the register until the store and the
+/// cell after it.
+#[test]
+fn gdb_reads_a_parameter_at_the_first_instruction_from_the_register_it_arrived_in() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
+    let scratch = tempfile::tempdir().unwrap();
+    let (Some(gdb), Some(ld), Some(assembler)) = (tool("gdb"), tool("ld"), tool("as")) else {
+        skipped("needs gdb, GNU ld and as");
+        return;
+    };
+    let (start, object, program) = (scratch.path().join("start.o"), scratch.path().join("gdb.o"), scratch.path().join("gdb"));
+    let made = Command::new(assembler).arg("--32").arg("-o").arg(&start).arg(fixtures.join("start.s")).output().unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let made = compile(&fixtures.join("gdb.c"), &["-m32", "-O0", "-fobject-format=elf", "-g"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(ld).args(["-m", "elf_i386", "-o"]).arg(&program).arg(&start).arg(&object).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    if Command::new(&program).output().ok().and_then(|ran| ran.status.code()) != Some(12) {
+        skipped("this host does not run i386 programs");
+        return;
+    }
+    let said = Command::new(gdb).args(["-batch", "-nx", "-ex", "break *add", "-ex", "run", "-ex", "print a", "-ex", "print *p", "-ex", "stepi", "-ex", "stepi", "-ex", "stepi", "-ex", "stepi", "-ex", "stepi", "-ex", "print a"]).arg(&program).current_dir(&fixtures).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    assert!(text.contains("$1 = 1") && text.contains("$2 = {x = 3, y = 4}"), "at the entry:\n{text}");
+    assert!(text.contains("$3 = 1"), "after the store, from the cell:\n{text}");
 }

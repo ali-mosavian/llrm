@@ -82,7 +82,11 @@ impl<'u> Described<'u> {
             return made;
         }
         let made = match self.debug.types.get(&handle)?.clone() {
-            DebugType::Scalar { name, cg } => Self::scalar(&name, &cg).map(|one| self.builder.scalar(one)),
+            DebugType::Scalar { name, cg } => Self::scalar(&name, &cg).map(|one| match one {
+                DebugScalar::Void => self.builder.scalar(one),
+                // The spelling is the source's own, which a debugger prints.
+                _ => self.builder.spelled_scalar(one, &name),
+            }),
             DebugType::Enum { cg } => Self::scalar("", &cg).map(|one| self.builder.scalar(one)),
             DebugType::Pointer { cg, base } => {
                 let reach = self.reach(&cg);
@@ -132,6 +136,13 @@ impl<'u> Described<'u> {
     pub fn variable(&mut self, place: i64, name: &str, handle: i64, parameter: bool) {
         if let Some(r#type) = self.r#type(handle) {
             self.builder.variable(place, name, r#type, parameter);
+        }
+    }
+
+    /// A parameter's home, `place`, that holds the function's `argument`th argument once it has stored it.
+    pub fn parameter_home(&mut self, place: i64, name: &str, handle: i64, argument: i64) {
+        if let Some(r#type) = self.r#type(handle) {
+            self.builder.parameter_home(place, name, r#type, argument);
         }
     }
 

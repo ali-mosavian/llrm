@@ -19,7 +19,7 @@ use crate::backend::allocate::{Live, live};
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
 use crate::backend::floatalloc::{
-    _float_copy, _floating, _loads_memory, _memory_name, _terminators, _two_values, cell_of, inserted, name_is, semantics,
+    _compare_name, _float_copy, _floating, _loads_memory, _memory_name, _terminators, _two_values, cell_of, inserted, name_is, semantics,
     unlowered, width_of,
 };
 use crate::backend::floatregions::{Raised, boundary};
@@ -555,7 +555,7 @@ fn _use_costs(what: &Semantics, value: u32, home: &Insn, survives: &dyn Fn(u32) 
     let kept = if survives(value) { load } else { 0.0 };
     match what.op {
         Operation::Compare if matches!(what.sources.get(1), Some(Loc::Held(held)) if held.value == value) => {
-            let fused = select::float_memory("fcomp", cell_of(home), select::At::bits16(0)).is_some();
+            let fused = select::float_memory(_compare_name(home), cell_of(home), select::At::bits16(0)).is_some();
             (kept, if fused { 0.0 } else { load }, fused)
         }
         Operation::FloatStore if _keeps_source(what) => (0.0, load, false),
@@ -1312,9 +1312,9 @@ impl Plan<'_> {
             semantics(Operation::FloatArith, &operation, what.dests.clone(), vec![Loc::Held(other), cell])
         } else if what.op == Operation::Compare
             && matches!(what.sources.as_slice(), [Loc::Held(left), Loc::Held(right)] if right.value == value && left.value != value)
-            && select::float_memory("fcomp", cell_of(home), select::At::bits16(0)).is_some()
+            && select::float_memory(_compare_name(home), cell_of(home), select::At::bits16(0)).is_some()
         {
-            Semantics { name: Some("fcomp".to_owned()), sources: vec![what.sources[0].clone(), cell], ..what.clone() }
+            Semantics { name: Some(_compare_name(home).to_owned()), sources: vec![what.sources[0].clone(), cell], ..what.clone() }
         } else {
             return None;
         };
