@@ -689,6 +689,8 @@ pub struct DebugVariable {
     pub place: i64,
     pub name: String,
     pub r#type: i64,
+    /// The place is where a parameter's value is kept, not a variable the body declares.
+    pub parameter: bool,
 }
 
 /// A function as a debugger names it: its procedure type, its source

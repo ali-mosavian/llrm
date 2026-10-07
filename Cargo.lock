@@ -220,6 +220,7 @@ dependencies = [
  "llrm-core",
  "llrm-driver",
  "llrm-mir",
+ "llrm-object",
  "llrm-target",
  "llrm-transforms",
  "llrm-x86",

@@ -1,6 +1,8 @@
 //! The object the backend lays out, which one writer per format writes. See
 //! `docs/architecture/object-model.md`.
 
+pub mod debug;
+
 /// The machine an object's code is for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -34,14 +36,8 @@ pub enum Role {
     Bss,
     /// The linker's stack: concatenated with the other objects' stacks.
     Stack,
-    Debug(DebugKind),
-}
-
-/// A debug section, by the format of its debug information.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DebugKind {
-    CodeViewSymbols,
-    CodeViewTypes,
+    /// A format's debug section, which only that format's writer makes.
+    Debug,
 }
 
 /// The field a relocation patches, and what the value is relative to.
@@ -109,9 +105,6 @@ pub struct Section {
     /// `[start, end)` of the image that holds data; the rest is zeros that need not be stored.
     pub spans: Vec<[usize; 2]>,
     pub relocs: Vec<Reloc>,
-    /// (source line, offset) of each line's first code, in order. Only where debug information is
-    /// written.
-    pub lines: Vec<(u32, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -143,12 +136,6 @@ pub struct OmfGroup {
     pub members: Vec<usize>,
 }
 
-/// The debug information an object carries, which only its own format's writer can write.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DebugFormat {
-    CodeView,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Object {
     /// The source's name.
@@ -159,7 +146,7 @@ pub struct Object {
     /// are declared.
     pub symbols: Vec<Symbol>,
     pub omf_groups: Vec<OmfGroup>,
-    pub debug: Option<DebugFormat>,
+    pub debug: Option<debug::Info>,
 }
 
 /// What a writer cannot say. A writer returns it; it never writes something near.

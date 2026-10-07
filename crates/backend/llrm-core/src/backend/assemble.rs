@@ -132,7 +132,7 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
     externs.extend(masm::stack_externs(&procedures, &mut names));
     externs.sort();
     externs.dedup();
-    let debug = timed("codeview", || crate::backend::codeview::described(module, &names, llrm_omf::cvwrite::Flavor::default()))?;
+    let debug = timed("debug info", || crate::backend::debuginfo::described(module, &names, llrm_object::debug::Producer::Native, arch.object().bitness))?;
     Ok(masm::Module {
         code: code.to_owned(),
         names,

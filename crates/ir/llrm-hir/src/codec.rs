@@ -155,7 +155,19 @@ impl _Plain for model::DebugMember {
     }
 }
 plain_record!(DebugParameter, None, argument => "argument", name => "name", r#type => "type");
-plain_record!(DebugVariable, None, place => "place", name => "name", r#type => "type");
+// `parameter` only where true: every other variable writes as before.
+impl _Plain for model::DebugVariable {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("place".to_owned(), self.place._plain());
+        out.insert("name".to_owned(), self.name._plain());
+        out.insert("type".to_owned(), self.r#type._plain());
+        if self.parameter {
+            out.insert("parameter".to_owned(), self.parameter._plain());
+        }
+        Json::Dict(out)
+    }
+}
 plain_record!(DebugFunction, None, function => "function", module => "module", name => "name", r#type => "type", parameters => "parameters",
     variables => "variables");
 plain_record!(DebugGlobal, None, function => "function", object => "object", offset => "offset", name => "name", r#type => "type");
@@ -1367,8 +1379,10 @@ static DEBUG_PARAMETER: _Record = _Record {
 
 static DEBUG_VARIABLE: _Record = _Record {
     name: "DebugVariable",
-    fields: &[("place", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true)],
-    build: |args| _object(model::DebugVariable { place: _required(args, "place")?, name: _required(args, "name")?, r#type: _required(args, "type")? }),
+    fields: &[("place", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true), ("parameter", _Hint::Bool, false)],
+    build: |args| {
+        _object(model::DebugVariable { place: _required(args, "place")?, name: _required(args, "name")?, r#type: _required(args, "type")?, parameter: _default(args, "parameter", false)? })
+    },
 };
 
 static DEBUG_FUNCTION: _Record = _Record {
