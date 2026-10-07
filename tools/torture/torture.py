@@ -1,0 +1,168 @@
+"""GCC's gcc.c-torture/execute through llrm-c: each self-checking program built at -O0, -O2 and -Os, run on the emulator,
+and passed if it exits 0.
+
+    uv run --project tools python tools/torture/torture.py [--target NAME] [--levels O0,O2,Os] [--stage compile] [--sample N] [names...]
+
+Every program ends in exactly one class: passed; refused by design (`expected.toml` names the refusal and why); a compile
+failure; a link failure; a wrong result (it exited non-zero, aborted, or did not finish). The last three are the findings:
+none is ever skipped quietly. The corpus is `TORTURE_CORPUS` or ~/work/personal/gcc/gcc/testsuite/gcc.c-torture/execute.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tomllib
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[0] / "dosbatch"))
+import dosbatch  # noqa: E402
+
+BIN = dosbatch.BIN
+CORPUS = Path(os.environ.get("TORTURE_CORPUS", Path.home() / "work/personal/gcc/gcc/testsuite/gcc.c-torture/execute"))
+LEVELS = {"O0": "-O0", "O2": "-O2", "Os": "-Os"}
+BATCH = 150
+BUDGET_MS = 15_000
+COMPILE_SECONDS = 60
+
+
+def programs(names: list[str]) -> list[Path]:
+    found = sorted(CORPUS.glob("*.c"))
+    if names:
+        found = [one for one in found if one.stem in names or one.name in names]
+    return found
+
+
+def cause(text: str) -> str:
+    """What a compiler's complaint says with its place and its names taken out: the key failures are counted by."""
+    lines = [one.strip() for one in text.strip().splitlines() if one.strip()]
+    # wccq's own: the first of its errors says it
+    line = next((one for one in lines if "Error!" in one), lines[0] if lines else "")
+    line = re.sub(r"^.*Error!\s*E\d+:\s*", "wccq: ", line)
+    line = re.sub(r"^llrm-c:\s*", "", line)
+    line = re.sub(r"^\S+\.c:\d+(:\d+)?:\s*", "", line)
+    line = re.sub(r"'[^']*'", "'_'", line)
+    line = re.sub(r"\b\d+\b", "N", line)
+    return line[:160]
+
+
+def expected() -> list[dict]:
+    with open(HERE / "expected.toml", "rb") as handle:
+        return tomllib.load(handle).get("refused", [])
+
+
+def refusal(text: str, rules: list[dict]) -> str | None:
+    for rule in rules:
+        if re.search(rule["match"], text):
+            return rule["reason"]
+    return None
+
+
+def build(source: Path, level: str, target: str, work: Path, support: Path, stem: str, rules: list[dict]) -> tuple[str, str, Path | None]:
+    """(class, why, exe): class is built, refused, compile or link."""
+    obj = work / f"{stem}.obj"
+    try:
+        done = subprocess.run([str(BIN / "llrm-c"), str(source), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), LEVELS[level], "-o", str(obj)],
+                              capture_output=True, text=True, timeout=COMPILE_SECONDS)
+    except subprocess.TimeoutExpired:
+        return "compile", f"did not finish in {COMPILE_SECONDS} s", None
+    if done.returncode != 0 or not obj.exists():
+        found = cause(done.stderr or done.stdout) or f"exit {done.returncode}"
+        why = refusal(found, rules)
+        return ("refused", why, None) if why else ("compile", found, None)
+    exe = work / f"{stem}.exe"
+    try:
+        loaders = dosbatch.link_target(target, obj, exe, work, objects_after=(support,))
+        dosbatch.check_loads(exe)
+    except (dosbatch.BuildError, dosbatch.TooBig) as error:
+        text = str(error)
+        missing = re.search(r"undefined symbol (\S+)", text)
+        text = f"undefined symbol {missing.group(1).rstrip('_')}" if missing else text
+        why = refusal(text, rules)
+        return ("refused", why, None) if why else ("link", text if missing else cause(text), None)
+    return "built", "", exe
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("names", nargs="*")
+    parser.add_argument("--target", default="m32")
+    parser.add_argument("--levels", default="O0,O2,Os")
+    parser.add_argument("--stage", choices=["compile", "run"], default="run")
+    parser.add_argument("--sample", type=int, default=0, help="the first N programs only")
+    parser.add_argument("--work", type=Path, default=Path.home() / "scratch/torture-work")
+    parser.add_argument("--out", type=Path, help="write each program's result here as JSON")
+    args = parser.parse_args()
+    target = dosbatch.linkrecipe.named(32) if args.target == "m32" else dosbatch.linkrecipe.named(16)
+    work = args.work
+    work.mkdir(parents=True, exist_ok=True)
+    rules = expected()
+    chosen = programs(args.names)[: args.sample or None]
+    support_obj = work / "libc.obj"
+    done = subprocess.run([str(BIN / "llrm-c"), str(HERE / "libc.c"), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), "-O2", "-o", str(support_obj)], capture_output=True, text=True)
+    if done.returncode != 0:
+        print("libc.c: " + done.stderr)
+        return 2
+    cases = [(source, level) for source in chosen for level in args.levels.split(",")]
+    names = {case: f"T{at:04d}" for at, case in enumerate(cases)}
+    result: dict[tuple[Path, str], tuple[str, str]] = {}
+    exes: dict[tuple[Path, str], Path] = {}
+
+    def one(case):
+        source, level = case
+        return case, build(source, level, target, work, support_obj, names[case], rules)
+
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        for case, (kind, why, exe) in pool.map(one, cases):
+            if kind == "built":
+                exes[case] = exe
+                result[case] = ("built", "")
+            else:
+                result[case] = (kind, why)
+    if args.stage == "run":
+        order = list(exes)
+        for start in range(0, len(order), BATCH):
+            group = order[start : start + BATCH]
+            loader = dosbatch.target_link(target).get("loader")
+            files = (Path(loader.replace("{ow}", str(dosbatch.ow_root()))),) if loader else ()
+            jobs = [dosbatch.Job(names[case], "exe", exes[case], files=files) for case in group]
+            ran = dosbatch.run(jobs, work / "run", budget_ms=BUDGET_MS)
+            for case in group:
+                outcome = ran[names[case]]
+                if outcome.status != "ok":
+                    result[case] = ("wrong", f"{outcome.status}: {outcome.detail[:80]}")
+                elif outcome.exit_code:
+                    result[case] = ("wrong", "aborted" if outcome.exit_code == 134 else f"exit code {outcome.exit_code}")
+                else:
+                    result[case] = ("pass", "")
+            print(f"ran {min(start + BATCH, len(order))}/{len(order)}", file=sys.stderr)
+    summary(result, args)
+    if args.out:
+        args.out.write_text(json.dumps({f"{case[0].stem}@{case[1]}": list(value) for case, value in result.items()}, indent=1))
+    return 0
+
+
+def summary(result, args) -> None:
+    total = Counter(kind for kind, _ in result.values())
+    print(f"{len(result)} builds: " + ", ".join(f"{count} {kind}" for kind, count in sorted(total.items())))
+    for kind in ("refused", "compile", "link", "wrong"):
+        causes: dict[str, list[str]] = defaultdict(list)
+        for (source, level), (found, why) in result.items():
+            if found == kind:
+                causes[why].append(f"{source.stem}@{level}")
+        if not causes:
+            continue
+        print(f"\n== {kind}: {sum(len(v) for v in causes.values())}")
+        for why, cases in sorted(causes.items(), key=lambda item: -len(item[1]))[:40]:
+            print(f"{len(cases):5d}  {why}  [{', '.join(cases[:3])}]")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

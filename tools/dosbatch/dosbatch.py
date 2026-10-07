@@ -287,6 +287,7 @@ class Result:
     status: str
     text: str = ""
     detail: str = ""
+    exit_code: int | None = None  # the program's, where it ran to its end
 
 
 def check_loads(exe: Path) -> None:
@@ -435,5 +436,5 @@ def collect(jobs: list[Job], work: Path, events: Path) -> dict[str, Result]:
         elif end.get("reason") != "exit":
             out[job.stem] = Result("stopped", written.get(f"{u}.TXT", ""), f"{end.get('reason')} after {end.get('ms')} ms ({events})")
         else:
-            out[job.stem] = Result("ok", read_dos(work, f"{u}.TXT"))
+            out[job.stem] = Result("ok", read_dos(work, f"{u}.TXT"), exit_code=end.get("exit_code"))
     return out
