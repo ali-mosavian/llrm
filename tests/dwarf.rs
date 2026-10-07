@@ -130,3 +130,63 @@ fn the_flavor_asked_for_is_the_formats_or_an_error() {
     let bytes = std::fs::read(&object).unwrap();
     assert!(bytes.windows(6).any(|one| one == b"DEBSYM") && !bytes.windows(11).any(|one| one == b".debug_info"), "-g on OMF is CodeView");
 }
+
+/// The values gdb reads of a program's variables at a line it stops on, as `-O0` and `-O2` leave them.
+fn stopped_at(gdb: &Path, program: &Path, line: u32, fixtures: &Path) -> Option<(u32, Vec<String>)> {
+    let said = Command::new(gdb)
+        .args(["-batch", "-nx", "-ex", &format!("tbreak observed.c:{line}"), "-ex", "run", "-ex", "info locals", "-ex", "info args"])
+        .arg(program)
+        .current_dir(fixtures)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    let at = text.split("observed.c:").nth(1)?.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()?;
+    let values = text.lines().filter(|one| one.split_once(" = ").is_some_and(|(name, _)| name.chars().all(|c| c.is_alphanumeric() || c == '_'))).map(str::to_owned).collect();
+    Some((at, values))
+}
+
+/// A debugger reads a variable from its frame cell, so at -O2 the cell holds what -O0's holds at every
+/// line both stop on: before a store to a declared variable stayed where the source wrote it, the
+/// optimiser kept `a` and `i` in registers and wrote their cells once at the exit, and gdb read
+/// `a = 0, i = 0` through the loop where -O0 reads `a = 20, i = 4`.
+#[test]
+fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
+    let (Some(gdb), Some(ld), Some(assembler)) = (tool("gdb"), tool("ld"), tool("as")) else {
+        eprintln!("skipped: needs gdb, GNU ld and as");
+        return;
+    };
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
+    let scratch = tempfile::tempdir().unwrap();
+    let start = scratch.path().join("start.o");
+    let made = Command::new(assembler).arg("--32").arg("-o").arg(&start).arg(fixtures.join("start.s")).output().unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let mut programs = Vec::new();
+    for level in ["-O0", "-O2"] {
+        let (object, program) = (scratch.path().join(format!("observed{level}.o")), scratch.path().join(format!("observed{level}")));
+        let made = compile(&fixtures.join("observed.c"), &["-m32", level, "-fobject-format=elf", "-g"], &object);
+        assert!(made.status.success(), "{level}: {}", String::from_utf8_lossy(&made.stderr));
+        let linked = Command::new(&ld).args(["-m", "elf_i386", "-o"]).arg(&program).arg(&start).arg(&object).output().unwrap();
+        assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+        programs.push(program);
+    }
+    if Command::new(&programs[0]).output().ok().and_then(|ran| ran.status.code()) != Some(73) {
+        eprintln!("skipped: this host does not run i386 programs");
+        return;
+    }
+    assert_eq!(Command::new(&programs[1]).output().unwrap().status.code(), Some(73), "-O2 computes what -O0 does");
+    let (mut same, mut wrong) = (0, Vec::new());
+    for line in 10..=48 {
+        let (Some(slow), Some(fast)) = (stopped_at(&gdb, &programs[0], line, &fixtures), stopped_at(&gdb, &programs[1], line, &fixtures)) else { continue };
+        // A line with no code stops at the next one that has some: compare where both stopped alike.
+        if slow.0 != fast.0 {
+            continue;
+        }
+        if slow.1 == fast.1 {
+            same += 1;
+        } else {
+            wrong.push(format!("line {}: -O0 {:?}, -O2 {:?}", slow.0, slow.1, fast.1));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    assert!(same >= 20, "only {same} lines were compared");
+}

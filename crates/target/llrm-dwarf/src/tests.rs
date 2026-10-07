@@ -167,7 +167,7 @@ fn dwarfdump() -> Option<std::path::PathBuf> {
     dirs.iter().flat_map(|dir| [dir.join("llvm-dwarfdump"), dir.join("llvm-dwarfdump-20")]).find(|path| path.exists())
 }
 
-/// llvm-dwarfdump verifies the unit in an ELF32 and in an ELF64 object, whose addresses are 4 and 8
+/// llvm-dwarfdump verifies the unit in an ELF32, an ELF64 and a Mach-O object, whose addresses are 4, 8 and 8
 /// bytes, for DWARF 4 and 5, with a struct, an array, a pointer, a static and a register variable.
 #[test]
 fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
@@ -176,7 +176,8 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
         return;
     };
     let scratch = tempfile::tempdir().unwrap();
-    for (arch, bits) in [(Arch::I386, 32), (Arch::X8664, 64)] {
+    // 32 and 64: ELF32 and ELF64; 0: Mach-O, which is 64-bit.
+    for (arch, bits) in [(Arch::I386, 32), (Arch::X8664, 64), (Arch::X8664, 0)] {
         for version in [4u16, 5] {
             let types = vec![
                 int(),
@@ -195,16 +196,21 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
                 Format::Dwarf { version },
             );
             made.arch = arch;
-            let bytes = if bits == 32 { llrm_elf32::write(&made) } else { llrm_elf64::write(&made) }.unwrap();
+            let bytes = match bits {
+                32 => llrm_elf32::write(&made),
+                64 => llrm_elf64::write(&made),
+                _ => llrm_macho::write(&made),
+            }
+            .unwrap();
             let path = scratch.path().join("x.o");
             std::fs::write(&path, bytes).unwrap();
             let said = std::process::Command::new(&dump).arg("--verify").arg(&path).output().unwrap();
             let text = format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
-            assert!(said.status.success() && text.trim_end().ends_with("No errors.") && !text.contains("warning"), "ELF{bits} DWARF {version}:\n{text}");
+            assert!(said.status.success() && text.trim_end().ends_with("No errors.") && !text.contains("warning"), "{bits} DWARF {version}:\n{text}");
             let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
             let shown = String::from_utf8_lossy(&shown.stdout);
             for expected in ["DW_AT_name\t(\"pt\")", "DW_AT_bit_size", "DW_AT_upper_bound\t(3)", "DW_OP_reg0", "DW_OP_addr"] {
-                assert!(shown.contains(expected), "ELF{bits} DWARF {version}: no {expected} in\n{shown}");
+                assert!(shown.contains(expected), "{bits} DWARF {version}: no {expected} in\n{shown}");
             }
         }
     }

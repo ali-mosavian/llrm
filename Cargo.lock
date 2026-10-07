@@ -316,6 +316,7 @@ version = "0.1.0"
 dependencies = [
  "llrm-elf32",
  "llrm-elf64",
+ "llrm-macho",
  "llrm-object",
  "tempfile",
 ]
@@ -368,6 +369,7 @@ dependencies = [
 name = "llrm-macho"
 version = "0.1.0"
 dependencies = [
+ "llrm-dwarf",
  "llrm-object",
  "tempfile",
 ]

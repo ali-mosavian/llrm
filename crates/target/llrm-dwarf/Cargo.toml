@@ -11,4 +11,5 @@ llrm-object = { workspace = true }
 [dev-dependencies]
 llrm-elf32 = { workspace = true }
 llrm-elf64 = { workspace = true }
+llrm-macho = { workspace = true }
 tempfile = { workspace = true }
