@@ -133,7 +133,7 @@ rule shuttle
     match   mov t:reg, s:reg ; any(Binary|Unary|Multiply) t / t, .. ; mov s, t
     when    free(@0, synthetic_tied), free(@1, tied), free(@2, synthetic_tied), same_width(t, s), width_in(t, [8, 16, 32]),
             !same_root(t, s), encodable($0)
-    rewrite @1: =@1 map renamed(t, s) ; @2: mov t, s
+    rewrite @1: =@1 map renamed(t, s) ; @2: mov t, s {defines: joined_defines(@0, @2)}
 
 
 // `mov r,[m]; op r,x; mov [m],r` is `op [m],x`; `mov r,[m]; cmp r,x` is
