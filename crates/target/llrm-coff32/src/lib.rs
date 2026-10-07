@@ -243,4 +243,13 @@ mod tests {
         let said = Command::new(&objdump).args(["-s", "-j", ".data"]).arg(&exe).output().unwrap();
         assert!(String::from_utf8_lossy(&said.stdout).contains("08104000"), "{}", String::from_utf8_lossy(&said.stdout));
     }
+
+    /// `-g` reached a writer with no debug format: refused, not left out of an object a debugger
+    /// then found empty.
+    #[test]
+    fn debug_information_is_refused_not_dropped() {
+        let mut made = object(vec![text(vec![0], vec![])], vec![]);
+        made.debug = Some(llrm_object::debug::Info::default());
+        assert!(write(&made).unwrap_err().0.contains("debug information"));
+    }
 }

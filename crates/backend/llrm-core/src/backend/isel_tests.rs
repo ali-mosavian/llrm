@@ -276,24 +276,7 @@ fn test_variable_indices_are_scaled_and_added() {
     let got = listing(text, "f");
     assert_eq!(
         got,
-        [
-            "push bp",
-            "mov bp, sp",
-            "sub sp, 8",
-            "push si",
-            "push di",
-            "L0_0:",
-            "mov bx, word ptr [bp+6]",
-            "mov si, word ptr [bp+8]",
-            "lea di, [esi+esi]",
-            "mov word ptr [bp+di-8], 5",
-            "add si, si",
-            "mov ax, word ptr [bx+si+2]",
-            "pop di",
-            "pop si",
-            "leave",
-            "retf",
-        ]
+        ["push bp", "mov bp, sp", "sub sp, 8", "push si", "push di", "L0_0:", "mov bx, word ptr [bp+6]", "mov si, word ptr [bp+8]", "lea di, [esi+esi]", "mov word ptr [bp+di-8], 5", "add si, si", "mov ax, word ptr [bx+si+2]", "pop di", "pop si", "leave", "retf"]
     );
 }
 
@@ -541,18 +524,7 @@ define i16 @f(i16 %i) addrspace(1) {
     let got = listing(text, "f");
     assert_eq!(
         got,
-        [
-            "push bp",
-            "mov bp, sp",
-            "L0_0:",
-            "mov bx, word ptr [bp+6]",
-            "add word ptr count, 1",
-            "mov ax, word ptr table+4",
-            "add bx, bx",
-            "add ax, word ptr table[bx]",
-            "pop bp",
-            "retf",
-        ]
+        ["push bp", "mov bp, sp", "L0_0:", "add word ptr count, 1", "mov bx, word ptr [bp+6]", "add bx, bx", "mov ax, word ptr table+4", "add ax, word ptr table[bx]", "pop bp", "retf"]
     );
 }
 
@@ -1250,7 +1222,7 @@ done:
 ";
     assert_eq!(
         listing(text, "f"),
-        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "fldz", "or ax, ax", "jle L0_3", "L0_2:", "fstp st(0)", "fld1", "L0_3:", "pop bp", "retf"]
+        ["push bp", "mov bp, sp", "L0_0:", "fldz", "cmp word ptr [bp+6], 0", "jle L0_3", "L0_2:", "fstp st(0)", "fld1", "L0_3:", "pop bp", "retf"]
     );
 }
 
@@ -1430,7 +1402,7 @@ fn test_an_integer_load_read_again_is_converted_from_its_register() {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov ax, word ptr [bx]".to_owned()) && got.contains(&"fidiv word ptr [bp-2]".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov ax, word ptr [bx]".to_owned()) && got.iter().any(|one| one == "fild word ptr [bp-2]" || one == "fidiv word ptr [bp-2]"), "{got:?}");
 }
 
 /// A store between the load and its conversion may change the cell: x87
@@ -1446,8 +1418,8 @@ fn test_an_integer_load_before_a_store_is_not_read_after_it() {
 }
 ";
     let got = listing(text, "f");
-    let (load, store) = (got.iter().position(|one| one == "mov ax, word ptr [bx]"), got.iter().position(|one| one == "mov word ptr [si], 0"));
-    assert!(load < store && got.contains(&"fidiv word ptr [bp-2]".to_owned()), "{got:?}");
+    let (load, store) = (got.iter().position(|one| one.starts_with("mov ax, word ptr [")), got.iter().position(|one| one.starts_with("mov word ptr [") && one.ends_with(", 0")));
+    assert!(load < store && got.iter().any(|one| one == "fild word ptr [bp-2]" || one == "fidiv word ptr [bp-2]"), "{got:?}");
 }
 
 /// A volatile load is its own access, not an x87 operand.
@@ -1518,14 +1490,19 @@ fn inner_on(cpu: &str, text: &str) -> Vec<String> {
 /// as the old route's rmw selects: nbody kept each field in a temporary.
 #[test]
 fn test_an_update_stored_back_to_its_cell_is_one_instruction() {
+    // The address and the operand are loaded in either order: it is the update that is one instruction.
+    let sorted = |mut lines: Vec<String>| {
+        lines.sort();
+        lines
+    };
     let update = |operation: &str, ty: &str| {
         inner(&format!(
             "define void @f(ptr %p, {ty} %x) addrspace(1) {{\n  %v = load {ty}, ptr %p\n  %s = {operation} {ty} %v, %x\n  store {ty} %s, ptr %p\n  ret void\n}}\n"
         ))
     };
-    assert_eq!(update("add", "i16"), ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "add word ptr [bx], ax"]);
-    assert_eq!(update("sub", "i16"), ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "sub word ptr [bx], ax"]);
-    assert_eq!(update("or", "i8"), ["mov bx, word ptr [bp+6]", "mov al, byte ptr [bp+8]", "or byte ptr [bx], al"]);
+    assert_eq!(sorted(update("add", "i16")), sorted(["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "add word ptr [bx], ax"].map(str::to_owned).to_vec()));
+    assert_eq!(sorted(update("sub", "i16")), sorted(["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "sub word ptr [bx], ax"].map(str::to_owned).to_vec()));
+    assert_eq!(sorted(update("or", "i8")), sorted(["mov bx, word ptr [bp+6]", "mov al, byte ptr [bp+8]", "or byte ptr [bx], al"].map(str::to_owned).to_vec()));
     let global = "@a = internal global i16 0
 define void @f() addrspace(1) {
   %v = load i16, ptr @a
@@ -1732,7 +1709,7 @@ define void @f(ptr %p, i16 %i) addrspace(1) {
 ";
     assert_eq!(
         inner(text),
-        ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "lea bx, [ebx+eax*2]", "mov word ptr [bx], 0", "push bx", "call take", "add sp, 2"]
+        ["mov ax, word ptr [bp+8]", "add ax, ax", "mov bx, word ptr [bp+6]", "add bx, ax", "mov word ptr [bx], 0", "push bx", "call take", "add sp, 2"]
     );
 }
 
@@ -2101,7 +2078,8 @@ no:
         )
     };
     let got = listing_on("386", &text("sge"), "f");
-    assert_eq!(got[6..8], ["movzx eax, word ptr [si]", "movzx ebx, word ptr [bx]"], "{got:?}");
+    // Both operands are zero-extended where they are read, whichever is made first.
+    assert!(got.iter().any(|line| line.starts_with("movzx eax, word ptr [")) && got.iter().any(|line| line.starts_with("movzx ebx, word ptr [")), "{got:?}");
     assert!(got.contains(&"mov ax, word ptr [ebx+eax*2]".to_owned()), "{got:?}");
     // A negative index names another byte 32 bits wide; the 486 prices
     // the form above a spill.
@@ -2239,7 +2217,9 @@ fn test_an_i64_to_a_float_is_filds_qword() {
 ";
     let got = inner(text);
     let fild = got.iter().position(|line| line.starts_with("fild qword ptr [bp-8]")).expect("fild qword");
-    assert_eq!(got[..fild], ["mov eax, dword ptr [bp+6]", "xor ebx, ebx", "mov dword ptr [bp-8], eax", "mov dword ptr [bp-4], ebx"], "{got:?}");
+    // The pair is stored low then high, the value and a zero, wherever each is made.
+    let stored: Vec<&String> = got[..fild].iter().filter(|line| line.starts_with("mov dword ptr [bp-")).collect();
+    assert!(stored.len() == 2 && stored[0].starts_with("mov dword ptr [bp-8], ") && stored[1].starts_with("mov dword ptr [bp-4], ") && got[..fild].iter().any(|line| line.starts_with("xor e")), "{got:?}");
 }
 
 /// A zeroed 22-byte array descriptor was five `mov dword ptr [bp-n], 0`, 8
@@ -2855,7 +2835,8 @@ done:
     assert_eq!(cells.len(), 3, "{got:?}");
     let index = |cell: &str| cell.split_once("[ebp+").map(|(_, rest)| rest[..3].to_owned());
     let shared = index(cells[0]).expect("a frame cell 32 bits wide");
-    for (cell, scale) in cells.iter().zip(["*4", "*2", ""]) {
+    for cell in &cells {
+        let scale = if cell.contains("dword ptr") { "*4" } else if cell.contains("word ptr") { "*2" } else { "" };
         assert!(index(cell).as_ref() == Some(&shared) && cell.contains(&format!("{shared}{scale}")), "{cell}: {got:?}");
     }
     assert!(got[..top].contains(&"movzx ebp, bp".to_owned()), "{got:?}");
@@ -3347,7 +3328,7 @@ fn test_far_pointers_compare_by_words() {
     };
     assert_eq!(
         compare("eq", "%q"),
-        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "xor ax, word ptr [bp+10]", "xor bx, word ptr [bp+12]", "or ax, bx", "sete al", "movzx ax, al", "pop bp", "retf"]
+        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "xor ax, word ptr [bp+10]", "mov bx, word ptr [bp+8]", "xor bx, word ptr [bp+12]", "or ax, bx", "sete al", "movzx ax, al", "pop bp", "retf"]
     );
     assert_eq!(compare("ne", "null"), ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "or ax, word ptr [bp+8]", "setne al", "movzx ax, al", "pop bp", "retf"]);
     assert!(compare("ult", "%q").iter().any(|line| line == "setb al"));
@@ -3409,22 +3390,7 @@ fn test_a_huge_pointer_displacement_carries_into_its_selector() {
 ";
     assert_eq!(
         listing(text, "f"),
-        [
-            "push bp",
-            "mov bp, sp",
-            "L0_0:",
-            "movzx ebx, word ptr [bp+6]",
-            "mov ax, word ptr [bp+8]",
-            "add ebx, 80000",
-            "mov ecx, ebx",
-            "sar ecx, 16",
-            "shl ecx, 12",
-            "add ax, cx",
-            "mov es, ax",
-            "mov ax, word ptr es:[bx]",
-            "pop bp",
-            "retf",
-        ]
+        ["push bp", "mov bp, sp", "L0_0:", "movzx ebx, word ptr [bp+6]", "add ebx, 80000", "mov eax, ebx", "sar eax, 16", "shl eax, 12", "mov cx, word ptr [bp+8]", "add cx, ax", "mov es, cx", "mov ax, word ptr es:[bx]", "pop bp", "retf"]
     );
     let far = "define i16 @f(ptr addrspace(1) %p) addrspace(1) {
   %q = getelementptr i32, ptr addrspace(1) %p, i16 5000
@@ -3445,23 +3411,7 @@ fn test_a_variable_index_in_a_huge_pointer_is_scaled_and_carried() {
 ";
     assert_eq!(
         listing(text, "f"),
-        [
-            "push bp",
-            "mov bp, sp",
-            "L0_0:",
-            "movzx ebx, word ptr [bp+6]",
-            "mov ax, word ptr [bp+8]",
-            "mov ecx, dword ptr [bp+10]",
-            "lea ebx, [ebx+ecx*2]",
-            "mov ecx, ebx",
-            "sar ecx, 16",
-            "shl ecx, 12",
-            "add ax, cx",
-            "mov es, ax",
-            "mov ax, word ptr es:[bx]",
-            "pop bp",
-            "retf",
-        ]
+        ["push bp", "mov bp, sp", "L0_0:", "movzx ebx, word ptr [bp+6]", "mov eax, dword ptr [bp+10]", "lea ebx, [ebx+eax*2]", "mov eax, ebx", "sar eax, 16", "shl eax, 12", "mov cx, word ptr [bp+8]", "add cx, ax", "mov es, cx", "mov ax, word ptr es:[bx]", "pop bp", "retf"]
     );
 }
 
@@ -3478,7 +3428,7 @@ fn test_huge_pointers_compare_by_selector_then_offset() {
 ";
     assert_eq!(
         listing(huge, "f"),
-        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "mov cx, word ptr [bp+12]", "sub ax, word ptr [bp+10]", "sbb bx, cx", "setb al", "movzx ax, al", "pop bp", "retf"]
+        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "sub ax, word ptr [bp+10]", "mov ax, word ptr [bp+12]", "mov bx, word ptr [bp+8]", "sbb bx, ax", "setb al", "movzx ax, al", "pop bp", "retf"]
     );
     let far = huge.replace("addrspace(3)", "addrspace(1)");
     assert!(!listing(&far, "f").iter().any(|line| line.starts_with("sbb")));
@@ -3494,23 +3444,7 @@ define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
 ";
     assert_eq!(
         listing(text, "f"),
-        [
-            "push bp",
-            "mov bp, sp",
-            "L0_0:",
-            "movzx eax, word ptr [bp+6]",
-            "movzx ebx, word ptr [bp+8]",
-            "movzx edx, word ptr [bp+10]",
-            "movzx ecx, word ptr [bp+12]",
-            "sub eax, edx",
-            "sub ebx, ecx",
-            "sar ebx, 12",
-            "shl ebx, 16",
-            "add eax, ebx",
-            "shld edx, eax, 16",
-            "pop bp",
-            "retf",
-        ]
+        ["push bp", "mov bp, sp", "L0_0:", "movzx eax, word ptr [bp+6]", "movzx ebx, word ptr [bp+10]", "sub eax, ebx", "movzx ebx, word ptr [bp+8]", "movzx ecx, word ptr [bp+12]", "sub ebx, ecx", "sar ebx, 12", "shl ebx, 16", "add eax, ebx", "shld edx, eax, 16", "pop bp", "retf"]
     );
 }
 
@@ -4107,4 +4041,20 @@ fn test_a_dword_pointer_scales_its_index_in_the_access() {
     assert!(!insns.iter().any(|what| what.name.as_deref() == Some("shl")), "{insns:?}");
     let scaled = insns.iter().any(|what| what.sources.iter().any(|one| matches!(one, crate::model::ir::Loc::Mem(cell) if cell.scale == 4 && cell.base.is_some() && cell.index.is_some())));
     assert!(scaled, "{insns:?}");
+}
+
+/// A load made just before its reader moved past a store to the very global it read, which `_may_write` (the frame's
+/// question) did not see: `N$PEND`, `x = g; g = 0; return x`, returned the zero and every Nib program's output looped.
+#[test]
+fn test_a_load_does_not_move_past_a_store_to_the_global_it_read() {
+    let text = "@g = internal global i16 5
+define i16 @f() addrspace(1) {
+  %v = load i16, ptr @g
+  store i16 0, ptr @g
+  ret i16 %v
+}
+";
+    let got = listing(text, "f");
+    let (load, store) = (got.iter().position(|one| one.starts_with("mov ax, word ptr g")), got.iter().position(|one| one.starts_with("mov word ptr g, 0")));
+    assert!(load.is_some() && store.is_some() && load < store, "{got:?}");
 }

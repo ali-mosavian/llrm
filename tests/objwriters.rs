@@ -133,7 +133,7 @@ fn lld_link_makes_a_pdb_of_a_c_program() {
 }
 
 /// An llrm COFF object and a clang-cl one link into one image, each calling the other with the
-/// cdecl both use: lld-link resolves `_start` and `_clang_add`, and every call in the image lands
+/// cdecl both use (llrm's default is Open Watcom's registers, so the functions say `__cdecl`): lld-link resolves `_start` and `_clang_add`, and every call in the image lands
 /// on the address the link map gives its callee.
 #[test]
 fn an_llrm_coff_object_links_with_a_clang_cl_object() {
@@ -144,7 +144,7 @@ fn an_llrm_coff_object_links_with_a_clang_cl_object() {
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
     std::fs::write(dir.join("m.c"), "int clang_add(int a, int b) { return a + b; }\nint start(void);\nint entry(void) { return start(); }\n").unwrap();
-    std::fs::write(dir.join("l.c"), "int clang_add(int a, int b);\nint start(void) { return clang_add(1, 2) + 4; }\n").unwrap();
+    std::fs::write(dir.join("l.c"), "int __cdecl clang_add(int a, int b);\nint __cdecl start(void) { return clang_add(1, 2) + 4; }\n").unwrap();
     let made = Command::new(clang).args(["--target=i386-pc-windows-msvc", "/c", "/GS-", "/Fo:m.obj", "m.c"]).current_dir(dir).output().unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let made = compile(&dir.join("l.c"), &["-m32", "-O2", "-fobject-format=coff"], &dir.join("l.obj"));
@@ -175,7 +175,8 @@ fn without_a_format_the_target_writes_its_default() {
     }
 }
 
-/// COFF's i386 machine number opens the file, and its symbols carry the target's `coff` decoration.
+/// COFF's i386 machine number opens the file, and its symbols carry the `coff` decoration of the convention the function has: the
+/// default's, Open Watcom's, is a trailing underscore (what `wcc386 -eoc` writes).
 #[test]
 fn coff_is_a_coff_object_for_a_target_that_lists_it() {
     let scratch = tempfile::tempdir().unwrap();
@@ -184,7 +185,7 @@ fn coff_is_a_coff_object_for_a_target_that_lists_it() {
     assert!(compile(&source, &["-m32", "-O2", "-fobject-format=coff"], &object).status.success());
     let bytes = std::fs::read(&object).unwrap();
     assert_eq!(&bytes[..2], [0x4C, 0x01]);
-    assert!(bytes.windows(7).any(|window| window == b"_twice\0"), "no _twice in the string table or symbols");
+    assert!(bytes.windows(7).any(|window| window == b"twice_\0"), "no twice_ in the string table or symbols");
 }
 
 #[test]
