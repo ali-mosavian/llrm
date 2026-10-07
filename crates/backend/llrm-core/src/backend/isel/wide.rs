@@ -99,12 +99,14 @@ impl Selector<'_, '_, '_> {
             return Ok(());
         }
         let width = self.width(from)?;
-        if self.types().int_bits(from) == Some(1) {
-            return refuse("an i1 made i64");
-        }
         let source = self.held(operand, from, at, out)?;
         let low = match (op, width) {
             (_, 4) => source,
+            // An i1 is a byte holding 0 or 1; made signed it is 0 or -1.
+            (CastOp::SExt, _) if self.types().int_bits(from) == Some(1) => {
+                let one = self.made(Operation::Extend, "movzx", vec![Loc::Held(source)], at, out);
+                self.made(Operation::Unary, "neg", vec![Loc::Held(one)], at, out)
+            }
             (CastOp::SExt, _) => self.made(Operation::Extend, "movsx", vec![Loc::Held(source)], at, out),
             (CastOp::ZExt, _) => self.made(Operation::Extend, "movzx", vec![Loc::Held(source)], at, out),
             _ => return refuse(format!("{op:?} to an i64")),
