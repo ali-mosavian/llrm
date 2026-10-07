@@ -16,6 +16,10 @@ assembler_defines = ["stack_base:STACK_BYTES", "init:LANG_INIT"]
 # Which of its trees: i86 (16-bit) or 386 (flat 32-bit). The build makes one front end for each
 # CPU the targets name.
 watcom_cpu = "i86"
+# What the front end calls `int`, in bytes: the C ABI's, which the data layout does not state.
+int_bytes = 2
+# The calling convention the front end compiles C under (`calling.toml`): -ecc is Borland's cdecl.
+convention = "cdecl16"
 # Borland's medium model: far code, near data, cdecl, signed char, 80-bit long double,
 # byte-packed structs, 16-bit enums, x87 inline, no stack probes, no default library. -fp3 is for
 # inline assembly: qcport's own uses 387 instructions. Borland's ABI is the only one here: wccq
@@ -23,3 +27,6 @@ watcom_cpu = "i86"
 flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq"]
 # The header it includes first, from the repository root.
 header = "crates/frontends/llrm-c/src/borland.h"
+# Borland C's interrupt handler parameters, in order: the registers its handler saved, each at its slot of the frame
+# (`calling.toml`'s `interrupt_frame`); what it writes to them is what it returns to.
+interrupt_parameters = ["bp", "di", "si", "ds", "es", "dx", "cx", "bx", "ax", "ip", "cs", "flags"]

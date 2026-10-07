@@ -46,3 +46,15 @@ class StaleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FromTheDescriptionTests(unittest.TestCase):
+    def test_cpus_and_the_default_are_timings_times_not_a_copy(self):
+        """build.py kept its own CPU tuple and a default of "486": a CPU the target adds or a default it changes was missed."""
+        text = (build.ROOT / "crates/target/llrm-x86-m16/src/timings.times").read_text()
+        self.assertIn(f"default_cpu           {build.DEFAULT_CPU}", text)
+        self.assertEqual(build.Config().cpu, build.DEFAULT_CPU)
+        self.assertEqual(list(build.CPUS), [cpu for cpu in ("386", "486", "P5", "P6", "K5", "K6", "K7", "Core") if cpu in build.OW_CPU])
+        source = (build.HERE / "build.py").read_text()
+        self.assertNotIn('CPUS = ("386"', source)
+        self.assertNotIn('cpu: str = "486"', source)

@@ -10,8 +10,8 @@
 | `crates/target/llrm-x86-m16` | The 16-bit x86 target: the `Dos` cost model passes see as `llrm_mir::target::Machine`, and the machine description (`machine`) |
 | `crates/target/llrm-omf` | OMF records, the code segment as a module, CodeView debug info |
 | `crates/backend/llrm-core` | The compile driver, instruction selection, the machine phases and object writing; the HIR interpreter |
-| `crates/bc/llrm-bcmachine` | BC objects: x86 decode, the instruction model and its classification (`model::ir::lift`), object reading, flags |
-| `crates/bc/llrm-bc` | The BC object frontend: machine code raised onto MIR |
+| `crates/target/llrm-x86-bcmachine` | BC objects: x86 decode, the instruction model and its classification (`model::ir::lift`), object reading, flags |
+| `crates/target/llrm-x86-bc` | The BC object frontend: machine code raised onto MIR |
 | `crates/bc/llrm-bcdriver` | The rich route for BC objects |
 | `crates/frontends/llrm-qbruntime` | The QB-family runtime's `B$` routine contracts and `runtime.toml` |
 | `crates/frontends/llrm-nib` | The Nib frontend and language server; its runtime, `std` and `abi` modules |
@@ -43,7 +43,7 @@ phases. The rest is grouped by responsibility:
 | `analysis` | Loops, intervals and block frequency over LIR |
 | `backend` | Instruction selection, allocation, frame/layout, peepholes, object writing |
 | `abi` | Runtime contracts (`llrm-qbruntime`, as `abi::runtime`) and the QB runtime ABI (`abi::qb`) |
-| `frontends::bc` | `llrm-bcmachine`'s BC decoding, re-exported |
+| `frontends::bc` | `llrm-x86-bcmachine`'s BC decoding, re-exported |
 
 Recognition belongs in the frontend, machine-independent optimization in
 `llrm-transforms`, and physical placement in the backend; see `split.md`.

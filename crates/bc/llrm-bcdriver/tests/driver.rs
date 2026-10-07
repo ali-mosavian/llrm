@@ -146,7 +146,7 @@ fn a_far_pointer_to_dgroup_names_dgroup() {
 /// runtime, as MIR text.
 fn fpdeep(name: &str) -> String {
     let found = llrm_omf::module::load(&fixture(name)).expect("reads").expect("an object");
-    let raised = llrm_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
+    let raised = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
     let mut program = llrm_mir::program::Program::new(vec![raised.module], Rc::new(llrm_x86_m16::Dos::default())).and_then(|one| one.with_runtime(raised.runtime)).unwrap();
     llrm_transforms::pipeline::applied(&mut program, &llrm_transforms::pipeline::Applied::default()).unwrap();
     let text = llrm_mir::print::module(&program.modules[0]);

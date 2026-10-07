@@ -59,12 +59,12 @@ impl llrm_target::Target for M32 {
         &CPUS
     }
 
-    fn conventions(&self) -> &'static [&'static str] {
-        &CONVENTIONS
-    }
-
     fn calling(&self) -> &'static llrm_target::calling::Calling {
         &CALLING
+    }
+
+    fn conventions(&self) -> &'static [&'static str] {
+        &CONVENTIONS
     }
 
     fn physical_addresses(&self) -> Vec<(String, u64)> {
@@ -102,6 +102,10 @@ impl llrm_target::Target for M32 {
 
     fn frame_register(&self) -> Register {
         llrm_x86::calling::frame(CALLING.native())
+    }
+
+    fn frame_optional(&self) -> bool {
+        CALLING.native().frame_optional
     }
 
     /// Past EBP and the return address; there is no far call.

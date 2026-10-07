@@ -17,6 +17,10 @@ use crate::model::ir::{self, Addr, Loc, Operation, Semantics, Space};
 use crate::model::lir;
 use crate::support::pyrepr::Repr;
 
+/// What LIR calls the frame register and the stack pointer, whatever the target: `spelled` gives each its own.
+const FRAME: Register = Register::BP;
+const STACK: Register = Register::SP;
+
 /// `SIZES`.
 pub static SIZES: LazyLock<IndexMap<u32, &'static str>> =
     LazyLock::new(|| IndexMap::from_iter([(1, "byte"), (2, "word"), (4, "dword"), (8, "qword"), (10, "tbyte")]));
@@ -53,6 +57,8 @@ pub enum InlinePart {
 pub struct Callee {
     pub name: String,
     pub far: bool,
+    /// The argument bytes it pops as it returns: the stack is that much higher after the call.
+    pub pops: i64,
     /// Inline assembly laid down in place of a call.
     pub code: Vec<InlinePart>,
 }
@@ -60,7 +66,7 @@ pub struct Callee {
 impl Callee {
     /// `Callee(name, far)`, with no inline code.
     pub fn new(name: impl Into<String>, far: bool) -> Self {
-        Self { name: name.into(), far, code: Vec::new() }
+        Self { name: name.into(), far, pops: 0, code: Vec::new() }
     }
 }
 
@@ -110,7 +116,11 @@ pub struct Fill {
 pub struct Pointer {
     pub name: String,
     pub offset: i64,
+    /// A selector and an offset, where the target has selectors.
     pub far: bool,
+    /// The bytes of the cell it fills: the target's pointer width (or the offset's, for a far one made of an offset
+    /// word and a selector word).
+    pub bytes: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -213,8 +223,8 @@ pub fn datum(item: &Datum) -> Vec<String> {
         Datum::Fill(Fill { size, byte }) => {
             vec![format!("    db {size} dup ({})", byte.map_or_else(|| "?".to_owned(), |one| one.to_string()))]
         }
-        Datum::Pointer(Pointer { name, offset, far }) => {
-            vec![format!("    {} {name}{}", if *far { "dd" } else { "dw" }, _signed(*offset))]
+        Datum::Pointer(Pointer { name, offset, bytes, .. }) => {
+            vec![format!("    {} {name}{}", match bytes { 4 => "dd", 2 => "dw", other => panic!("a pointer of {other} bytes") }, _signed(*offset))]
         }
         Datum::Align(Align { to }) => vec![format!("    align {to}")],
         Datum::Bytes(item) => _code(&[InlinePart::Bytes(item.clone())]),
@@ -315,7 +325,7 @@ pub fn cold_at(body: &lir::LirBody) -> i64 {
 }
 
 fn sp_reg() -> Loc {
-    reg(Register::SP)
+    reg(STACK)
 }
 
 /// The registers `procedure` keeps for its caller: each one it names that the convention leaves to the
@@ -336,18 +346,30 @@ fn wrap_of(procedure: &Procedure) -> Option<crate::backend::shrinkwrap::Wrap> {
 
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
+    parts(procedure, stack_addressed(procedure, 0).is_some())
+}
+
+/// `_frame_parts`, with no frame register where `omit`: the entry sets none and the return takes back
+/// what the entry reserved.
+fn parts(procedure: &Procedure, omit: bool) -> (Vec<Semantics>, Vec<Semantics>) {
     let roots = _roots(&procedure.body);
     let saved = saved_of(procedure);
     let slot = procedure.registers.slot;
     let reserve = (procedure.reserve + slot - 1) / slot * slot;
+    // Where the frame register's own cell was stays reserved: a cell addressed through an index has
+    // no sign to say whether it lies above that cell or below it, so every one keeps its distance from it.
+    let reserve = if omit && reserve != 0 { reserve + slot } else { reserve };
     // Inline code is bytes this printer cannot read, so it may address the frame.
-    let framed = reserve != 0
-        || roots.contains(&Register::EBP)
-        || procedure.callees.values().any(|one| !one.code.is_empty());
-    let (bp, sp) = (reg(Register::BP), reg(Register::SP));
+    let framed = !omit
+        && (reserve != 0
+            || roots.contains(&ir::root(procedure.registers.pointer))
+            || procedure.callees.values().any(|one| !one.code.is_empty()));
+    let (bp, sp) = (reg(FRAME), reg(STACK));
     let mut leave: Vec<Semantics> =
         saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![])).collect();
-    if reserve != 0 {
+    if omit && reserve != 0 {
+        leave.push(semantics(Operation::Binary, "add", vec![sp_reg()], vec![sp_reg(), Loc::Imm(ir::Imm { value: reserve, width: 2, address: None })]));
+    } else if reserve != 0 && framed {
         leave.push(semantics(Operation::Nothing, "leave", vec![], vec![]));
     } else if framed {
         leave.push(semantics(Operation::Pop, "pop", vec![bp.clone()], vec![]));
@@ -395,7 +417,7 @@ pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
 
 /// Where the frame an interrupt handler saved starts above its own BP: the
 /// last register it saved, past what its entry pushes after those and the BP
-/// its frame pushes. `llrm_mir::opcode::X86_INTR_FRAME` is the frame.
+/// its frame pushes. the target's `interrupt_frame` (calling.toml) is the frame.
 pub fn interrupt_parameters() -> i64 {
     let (enter, _) = _interrupt_parts(Addr::new(Space::Group, 0));
     let pushed: i64 = enter[INTERRUPT_SAVED..]
@@ -416,7 +438,7 @@ const INTERRUPT_SAVED: usize = 5;
 
 /// What an interrupt handler wraps its frame in. It may interrupt anything,
 /// so it saves every register it or a callee may change once, as the frame
-/// `llrm_mir::opcode::X86_INTR_FRAME` lays out, and gives compiled code what
+/// the target's `interrupt_frame` (calling.toml) lays out, and gives compiled code what
 /// it assumes: DGROUP in DS and ES, the direction flag clear. A handler's
 /// register parameters are slots of that frame, so what it writes to them is
 /// what POPAD or `iret` goes back with. The x87 state is not saved.
@@ -459,7 +481,16 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
 /// The procedure as emitted, frame included: what this prints and objbuild
 /// encodes. A branch's target is still a block; `label(number, at)` names it.
 pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprintable> {
-    let (mut enter, mut leave) = _frame_parts(procedure);
+    let items = match stack_addressed(procedure, number) {
+        Some(items) => items,
+        None => built(procedure, number, false)?,
+    };
+    Ok(items.into_iter().map(|item| spelled(item, &procedure.registers)).collect())
+}
+
+/// The procedure's items with the frame register LIR names BP, or not where `omit`.
+fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, Unprintable> {
+    let (mut enter, mut leave) = parts(procedure, omit);
     // Saved where first needed, restored where that path returns: not at the entry and every return.
     let wrap = wrap_of(procedure);
     let (saves, restores): (Vec<Semantics>, Vec<Semantics>) = match &wrap {
@@ -561,7 +592,167 @@ pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprin
         out.push(Item::Label(Label { name: label(number, cold_at(&procedure.body)) }));
         out.push(Item::Callee(Callee::new(check.handler.clone(), check.far)));
     }
-    Ok(out.into_iter().map(|item| spelled(item, &procedure.registers)).collect())
+    Ok(out)
+}
+
+/// The items of a procedure that needs no frame register, its cells addressed through the stack
+/// pointer: gcc's `-fomit-frame-pointer`, as the target's `frame_optional` allows. A cell the frame
+/// register held at `[bp+d]` is at `[sp+d+depth-slot]`, `depth` the bytes pushed since the entry, which
+/// each instruction's stack effect moves and every way into a block must agree on. Where anything
+/// puts that out of reach (a stack pointer written another way, inline code, an indirect call whose
+/// callee may pop, a frame register read as a value) the frame stays.
+fn stack_addressed(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
+    let registers = &procedure.registers;
+    if !registers.optional
+        || procedure.far
+        || procedure.interrupt.is_some()
+        || procedure.entry != 0
+        || procedure.body.bits != 32
+        || !procedure.body.variables.is_empty()
+        || procedure.callees.values().any(|one| !one.code.is_empty())
+    {
+        return None;
+    }
+    let slot = registers.slot;
+    let items = built(procedure, number, true).ok()?;
+    let mut out = Vec::with_capacity(items.len());
+    // The depth at each label, from whichever edge reached it first.
+    let mut known: IndexMap<String, i64> = IndexMap::default();
+    let mut depth: Option<i64> = Some(0);
+    let name_of = |target: i64| label(number, target);
+    for item in items {
+        match item {
+            Item::Label(label) => {
+                match (depth, known.get(&label.name).copied()) {
+                    (Some(here), Some(there)) if here != there => return refused(procedure, &format!("label {} reached at depth {here} and {there}", label.name)),
+                    (None, Some(there)) => depth = Some(there),
+                    (None, None) => return refused(procedure, &format!("label {} follows a jump and none reaches it", label.name)),
+                    _ => {}
+                }
+                known.insert(label.name.clone(), depth?);
+                out.push(Item::Label(label));
+            }
+            Item::Callee(callee) => {
+                depth = Some(depth? - callee.pops);
+                out.push(Item::Callee(callee));
+            }
+            Item::Mark(mark) => out.push(Item::Mark(mark)),
+            Item::Semantics(mut what) => {
+                let here = depth?;
+                for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
+                    *place = match through_stack(place, here, slot, registers.pointer) {
+                        Some(placed) => placed,
+                        None => return refused(procedure, &format!("the frame register is read as a value in {place:?}")),
+                    };
+                }
+                match what.op {
+                    Operation::Push | Operation::Pop => {
+                        // A push or pop moves the stack by the width it names: a 16-bit `pop cx` takes back two bytes.
+                        let (places, sign) = if what.op == Operation::Push { (&what.sources, 1) } else { (&what.dests, -1) };
+                        let [place] = &places[..] else { return refused(procedure, &format!("{what:?}")) };
+                        if what.op == Operation::Pop && !matches!(place, Loc::Reg(_)) {
+                            return refused(procedure, &format!("{what:?}"));
+                        }
+                        match width_of(place) {
+                            Some(bytes @ (2 | 4)) => depth = Some(here + sign * bytes),
+                            _ => return refused(procedure, &format!("{what:?}")),
+                        }
+                    }
+                    Operation::Leave | Operation::Exchange | Operation::Escape | Operation::Barrier | Operation::Call => return refused(procedure, &format!("{what:?}")),
+                    // `pushf` and its kind move the stack and carry no operand to read the amount from.
+                    Operation::Nothing if what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")) => return refused(procedure, &format!("{what:?}")),
+                    Operation::Return => {
+                        if here != 0 {
+                            return refused(procedure, &format!("a return at depth {here}"));
+                        }
+                        depth = None;
+                    }
+                    Operation::Jump | Operation::Branch => {
+                        if what.indirect {
+                            return refused(procedure, "an indirect jump");
+                        }
+                        let target = name_of(what.target?);
+                        match known.get(&target) {
+                            Some(&there) if there != here => return refused(procedure, &format!("a jump to {target} at depth {here} and {there}")),
+                            Some(_) => {}
+                            None => {
+                                known.insert(target, here);
+                            }
+                        }
+                        if what.op == Operation::Jump {
+                            depth = None;
+                        }
+                    }
+                    _ if what.dests.iter().any(writes_stack_pointer) => {
+                        // Only `add sp, n` and `sub sp, n` are understood.
+                        let amount = match (&what.dests[..], &what.sources[..]) {
+                            ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Imm(ir::Imm { value, address: None, .. })]) if dest.register == STACK && source.register == STACK => *value,
+                            _ => return refused(procedure, &format!("the stack pointer written by {what:?}")),
+                        };
+                        depth = Some(match what.name.as_deref() {
+                            Some("add") => here - amount,
+                            Some("sub") => here + amount,
+                            _ => return refused(procedure, &format!("the stack pointer written by {what:?}")),
+                        });
+                    }
+                    _ => {}
+                }
+                out.push(Item::Semantics(what));
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Why `procedure` keeps its frame register, for `LLRM_DEBUG=frame`.
+fn refused<T>(procedure: &Procedure, why: &str) -> Option<T> {
+    llrm_support::debug!("frame", "{}: kept: {why}", procedure.name);
+    None
+}
+
+/// The width of a register or memory operand, where it has one.
+fn width_of(place: &Loc) -> Option<i64> {
+    match place {
+        // A register is as wide as it is: its own `width` is where it was selected.
+        Loc::Reg(one) => Some(one.register.size() as i64),
+        Loc::Imm(one) => Some(i64::from(one.width)),
+        Loc::Mem(one) => Some(i64::from(one.width)),
+        _ => None,
+    }
+}
+
+fn writes_stack_pointer(place: &Loc) -> bool {
+    matches!(place, Loc::Reg(one) if one.register == STACK)
+}
+
+/// `place` with a frame cell addressed through the stack pointer; none where it reads the frame register
+/// as anything but a base. The frame register would have held the entry's stack pointer less `slot`.
+fn through_stack(place: &Loc, depth: i64, slot: i64, pointer: Register) -> Option<Loc> {
+    let shift = |_disp: i64| depth - slot;
+    let is_pointer = |one: Register| one == FRAME || one == pointer;
+    // A frame place with no register, or a cell the frame register's own address names: a 32-bit
+    // index has no frame space, only `[ebp+index+d]`.
+    let based = |through: Register, addr: &Option<Addr>| match addr {
+        Some(addr) if addr.space == Space::Frame => through == Register::None || is_pointer(through),
+        Some(addr) if addr.space == Space::Literal => is_pointer(through),
+        _ => false,
+    };
+    match place {
+        Loc::Reg(one) if is_pointer(one.register) => None,
+        Loc::Mem(cell) if is_pointer(cell.index_through) => None,
+        Loc::Mem(cell) if based(cell.through, &cell.addr) => {
+            let addr = cell.addr.as_ref()?;
+            Some(Loc::Mem(ir::Mem { through: STACK, addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr.clone() }), disp_width: 0, ..cell.clone() }))
+        }
+        Loc::Mem(cell) if is_pointer(cell.through) => None,
+        Loc::Address(address) if is_pointer(address.index) => None,
+        Loc::Address(address) if based(address.through, &address.addr) => {
+            let addr = address.addr.as_ref()?;
+            Some(Loc::Address(ir::Address { through: STACK, addr: Some(Addr { disp: addr.disp + shift(addr.disp), ..addr.clone() }), disp_width: 0, ..address.clone() }))
+        }
+        Loc::Address(address) if is_pointer(address.through) => None,
+        other => Some(other.clone()),
+    }
 }
 
 /// `item` with the frame register and stack pointer LIR calls BP and SP as the
@@ -1054,15 +1245,16 @@ mod tests {
         assert_eq!(names, ["bp", "bx", "cx", "di", "ds", "dx", "es", "fs", "gs", "ax", "si", "sp"].iter().map(|one| one.to_string()).collect::<BTreeSet<_>>().into_iter().collect::<Vec<_>>());
     }
 
-    /// The frame MIR states (`X86_INTR_FRAME`) is the one the entry builds, so
+    /// The frame the target's calling.toml states (`interrupt_frame`) is the one the entry builds, so
     /// a handler's parameters read the registers they name.
     #[test]
     fn test_the_entry_builds_the_frame_mir_states() {
-        let stated: Vec<(String, i64)> = llrm_mir::opcode::X86_INTR_FRAME.iter().map(|&(name, size)| (name.to_owned(), size)).collect();
+        let calling = llrm_target::Target::calling(&llrm_x86_m16::M16);
+        let stated = calling.interrupt().expect("an interrupt convention").interrupt_frame.clone();
         assert_eq!(saved_by_the_entry()[..], stated[..12]);
         assert_eq!(interrupt_parameters(), 2);
-        assert_eq!(llrm_mir::opcode::x86_intr_slot("ax"), Some(36));
-        assert_eq!(llrm_mir::opcode::x86_intr_slot("ds"), Some(6));
+        assert_eq!(llrm_x86::calling::interrupt_slot(calling.interrupt().unwrap(), "ax"), Some(36));
+        assert_eq!(llrm_x86::calling::interrupt_slot(calling.interrupt().unwrap(), "ds"), Some(6));
     }
 
     fn _printed(sources: Vec<Loc>, reserve: i64) -> Vec<String> {
@@ -1198,12 +1390,72 @@ mod tests {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
         let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
         let body = lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, vec![r#move, leave])], IndexMap::default(), IndexMap::default());
-        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4 };
+        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4, optional: false };
         let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 4, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers };
         let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
         assert!(has(&lines, "push ebp") && has(&lines, "mov ebp, esp") && has(&lines, "sub esp, 4"), "{lines:?}");
         assert!(lines.iter().any(|one| one.contains("[ebp+6]")), "{lines:?}");
         assert!(!lines.iter().any(|one| one.contains("[bp") || one.contains(" bp") || one.contains(" sp")), "{lines:?}");
+    }
+
+    /// A flat procedure whose frame register the target may leave out, `body` its instructions.
+    fn flat(optional: bool, reserve: i64, body: Vec<Arc<lir::Insn>>, callees: IndexMap<i64, Callee>) -> Vec<String> {
+        let body = lir::LirBody { bits: 32, ..lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, body)], IndexMap::default(), IndexMap::default()) };
+        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4, optional };
+        let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve, callees, interrupt: None, size: false, entry: 0, stack_check: None, registers };
+        _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
+    }
+
+    fn eax() -> Loc {
+        Loc::Reg(ir::Reg { register: Register::EAX, width: 4 })
+    }
+
+    /// A cell of the frame, `disp` from the frame register.
+    fn cell(disp: i64) -> Loc {
+        Loc::Mem(ir::Mem { through: Register::BP, ..ir::Mem::new(Some(Addr::new(Space::Frame, disp)), 4) })
+    }
+
+    fn ret() -> Arc<lir::Insn> {
+        insn(9, semantics(Operation::Return, "ret", vec![], vec![]))
+    }
+
+    /// bench/fib's `push ebp; mov ebp,esp ... leave` cost three instructions a call. A function whose
+    /// cells the stack pointer can name keeps no frame register: an argument, above the return address,
+    /// is `[esp + depth + 4]` and a local `[esp + depth - 4 - n]`, `depth` the bytes pushed so far, which
+    /// a push moves and a callee's pop moves back.
+    #[test]
+    fn test_a_frame_the_stack_pointer_can_address_has_no_frame_register() {
+        let push = insn(1, semantics(Operation::Push, "push", vec![], vec![eax()]));
+        let call = insn(2, semantics(Operation::Call, "call", vec![], vec![]));
+        let callees = IndexMap::from_iter([(2, Callee { pops: 4, ..Callee::new("_f", false) })]);
+        let body = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![eax()], vec![cell(8)])),
+            push,
+            insn(3, semantics(Operation::Move, "mov", vec![eax()], vec![cell(8)])),
+            insn(4, semantics(Operation::Move, "mov", vec![eax()], vec![cell(-4)])),
+            call,
+            insn(5, semantics(Operation::Move, "mov", vec![eax()], vec![cell(8)])),
+            ret(),
+        ];
+        let lines = flat(true, 8, body, callees);
+        assert!(!lines.iter().any(|one| one.contains("ebp")), "{lines:?}");
+        assert_eq!(lines.iter().filter(|one| one.starts_with("mov eax, dword ptr")).collect::<Vec<_>>(), ["mov eax, dword ptr [esp+16]", "mov eax, dword ptr [esp+20]", "mov eax, dword ptr [esp+8]", "mov eax, dword ptr [esp+16]"], "{lines:?}");
+        assert!(has(&lines, "sub esp, 12") && has(&lines, "add esp, 12"), "{lines:?}");
+    }
+
+    /// A target that does not let its frame register go, and a body that reads it as a value or calls
+    /// through a pointer, keep the frame.
+    #[test]
+    fn test_a_frame_register_that_is_read_or_may_not_go_stays() {
+        let read = || vec![insn(0, semantics(Operation::Move, "mov", vec![eax()], vec![cell(8)])), ret()];
+        assert!(has(&flat(false, 8, read(), IndexMap::default()), "push ebp"));
+        let value = vec![insn(0, semantics(Operation::Move, "mov", vec![eax()], vec![Loc::Reg(ir::Reg { register: Register::EBP, width: 4 })])), ret()];
+        assert!(has(&flat(true, 8, value, IndexMap::default()), "push ebp"));
+        let indirect = vec![insn(0, Semantics { indirect: true, ..semantics(Operation::Call, "call", vec![], vec![eax()]) }), ret()];
+        assert!(has(&flat(true, 8, indirect, IndexMap::default()), "push ebp"));
+        let flags = vec![insn(0, semantics(Operation::Nothing, "pushf", vec![], vec![])), insn(1, semantics(Operation::Move, "mov", vec![eax()], vec![cell(8)])), ret()];
+        assert!(has(&flat(true, 8, flags, IndexMap::default()), "push ebp"));
+        assert!(!has(&flat(true, 8, read(), IndexMap::default()), "push ebp"));
     }
 
     /// The frame's reserve was rounded to a word: a flat target keeps its stack in dwords, and
@@ -1213,7 +1465,7 @@ mod tests {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
         let leave = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
         let body = lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, vec![r#move, leave])], IndexMap::default(), IndexMap::default());
-        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4 };
+        let registers = llrm_target::FrameRegisters { pointer: Register::EBP, stack: Register::ESP, saved: Vec::new(), slot: 4, optional: false };
         let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 70, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers };
         let lines: Vec<String> = _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect();
         assert!(has(&lines, "sub esp, 72"), "{lines:?}");

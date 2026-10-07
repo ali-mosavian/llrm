@@ -216,7 +216,7 @@ pub fn statement_table(rows: &[(i64, i64, String, i64)], registers: llrm_target:
         far: false,
         body,
         reserve: 0,
-        callees: crate::support::hash::IndexMap::from_iter([(1, masm::Callee { name: "$statement-table".into(), far: false, code })]),
+        callees: crate::support::hash::IndexMap::from_iter([(1, masm::Callee { name: "$statement-table".into(), far: false, pops: 0, code })]),
         interrupt: None,
         size: false,
         entry: 0,

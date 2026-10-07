@@ -90,7 +90,7 @@ pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen:
         if unit.flat != codegen.arch.layout().spaces.far_is_near() {
             return Err(hir::Unsupported(format!("the front end is {} but target {} is {}", if unit.flat { "flat" } else { "segmented" }, codegen.arch.name(), if unit.flat { "segmented" } else { "flat" })).into());
         }
-        let program = translate::program(&unit, module)?;
+        let program = translate::program(&unit, module, codegen.arch.calling(), &Profile::of(&*codegen.arch).map_err(hir::Unsupported)?)?;
         for warning in unit.warnings.borrow().iter() {
             eprintln!("{module}: {warning}");
         }
@@ -139,9 +139,14 @@ struct Args {
 pub struct Profile {
     /// The front end's tree: its CPU, `i86` or `386`.
     pub cpu: String,
+    /// The calling convention it compiles C under, by its name in `calling.toml`.
+    pub convention: String,
     pub flags: Vec<String>,
     /// The header it includes first, from the repository root.
     pub header: String,
+    /// An interrupt handler's parameters, in order: the registers its frame holds, by name. None where the target has no
+    /// interrupt handlers.
+    pub interrupt_parameters: Vec<String>,
 }
 
 impl Profile {
@@ -154,7 +159,11 @@ impl Profile {
         let frontend = table.get("frontend").and_then(toml::Value::as_table).ok_or("the C runtime description has no [frontend]")?;
         let text = |key: &str| frontend.get(key).and_then(toml::Value::as_str).map(str::to_owned).ok_or_else(|| format!("frontend.{key} is not a string"));
         let flags = frontend.get("flags").and_then(toml::Value::as_array).ok_or("frontend.flags is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("a frontend flag is not a string")).collect::<Result<_, _>>()?;
-        Ok(Self { cpu: text("watcom_cpu")?, flags, header: text("header")? })
+        let interrupt_parameters = match frontend.get("interrupt_parameters") {
+            None => Vec::new(),
+            Some(list) => list.as_array().ok_or("frontend.interrupt_parameters is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("an interrupt parameter is not a string")).collect::<Result<_, _>>()?,
+        };
+        Ok(Self { cpu: text("watcom_cpu")?, convention: text("convention")?, flags, header: text("header")?, interrupt_parameters })
     }
 }
 
@@ -395,7 +404,7 @@ mod tests {
     /// tests/fixtures/c/`path`.cgs's MIR as the front end emits it.
     fn emitted(path: &str) -> String {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{path}.cgs"))).unwrap();
-        let program = crate::translate::program(&crate::hir::unit(&crate::stream::parse(&text)).unwrap(), "t").unwrap();
+        let program = crate::translate::program(&crate::hir::unit(&crate::stream::parse(&text)).unwrap(), "t", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap();
         let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
         let (mir, _) = llrm_core::driver::emitted(&program, &options).unwrap();
         llrm_mir::print::module(&mir.modules[0])
@@ -988,15 +997,15 @@ mod tests {
         llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect()
     }
 
-    /// `int add(int, int)` as flat 32-bit code: cdecl32's arguments at [ebp+8] and [ebp+12],
-    /// the result in EAX, EBP the frame. It listed `bp`, `[bp+4]` and a DX:AX result, and
-    /// never reached the allocator, before the target stated them.
+    /// `int add(int, int)` as flat 32-bit code: cdecl32's arguments at [esp+4] and [esp+8] (EBP is
+    /// no frame where nothing needs one), the result in EAX. It listed `bp`, `[bp+4]` and a DX:AX
+    /// result, and never reached the allocator, before the target stated them.
     #[test]
     fn test_m32_lists_add_as_flat_cdecl32() {
         let lines = flat_listing("add");
         assert_eq!(&lines[..2], [".386", ".model flat"]);
         let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_add proc near").skip(1).take_while(|line| *line != "_add endp").map(String::as_str).collect();
-        assert_eq!(body, ["push ebp", "mov ebp, esp", "L0_0:", "mov eax, dword ptr [ebp+8]", "add eax, dword ptr [ebp+12]", "pop ebp", "ret"]);
+        assert_eq!(body, ["L0_0:", "mov eax, dword ptr [esp+4]", "add eax, dword ptr [esp+8]", "ret"]);
     }
 
     /// A narrow argument goes as a stack slot: `push ax` pushed two bytes, and cdecl32's next
@@ -1012,11 +1021,12 @@ mod tests {
     /// cell read 32 bits wide (a 16-bit frame's `[bp]` under 32-bit addressing) wrote `movzx ebp, ebp`
     /// into a flat frame, and the reserve was 70 bytes, not a multiple of the dword stack.
     #[test]
-    fn test_m32_keeps_ebp_and_the_dword_stack() {
+    fn test_m32_keeps_the_dword_stack() {
         let lines = flat_listing("bytes");
         assert!(lines.iter().all(|line| !line.starts_with("movzx ebp")), "{lines:#?}");
-        assert!(lines.contains(&"sub esp, 72".to_owned()), "{lines:#?}");
-        assert!(lines.contains(&"mov byte ptr [ebp+eax-70], al".to_owned()), "{lines:#?}");
+        assert!(lines.contains(&"sub esp, 76".to_owned()), "{lines:#?}");
+        // 70 under the frame register, 76 reserved with its cell: 2 above the stack pointer.
+        assert!(lines.contains(&"mov byte ptr [esp+eax+2], al".to_owned()), "{lines:#?}");
     }
 
     /// `fixture`'s flat object, as records: (type, body).
@@ -1050,7 +1060,7 @@ mod tests {
         assert_eq!(kinds, [0x80, 0x96, 0x99, 0x99, 0x91, 0xA1, 0x8A], "THEADR LNAMES SEGDEF32 x2 PUBDEF32 LEDATA32 MODEND");
         assert!(records[2].1[0] & 1 == 1 && records[3].1[0] & 1 == 1, "both segments are USE32: {records:?}");
         let code = &records[5].1;
-        assert_eq!(hex(&code[5..]), "558bec8b450803450c5dc3", "push ebp; mov ebp,esp; mov eax,[ebp+8]; add eax,[ebp+12]; pop ebp; ret");
+        assert_eq!(hex(&code[5..]), "8b44240403442408c3", "mov eax,[esp+4]; add eax,[esp+8]; ret");
     }
 
     /// A near procedure that pops its own arguments returns `ret 4` (`c2 0400`): the word form,
@@ -1070,7 +1080,7 @@ mod tests {
         let lines = flat_listing("strings");
         let at = lines.iter().position(|line| line == "rep movsd").expect("a rep movsd");
         let before = &lines[..at];
-        assert!(before.iter().any(|line| line.starts_with("lea esi, [ebp")) && before.iter().any(|line| line.starts_with("lea edi, [ebp")), "{before:#?}");
+        assert!(before.iter().any(|line| line.starts_with("lea esi, [esp")) && before.iter().any(|line| line.starts_with("lea edi, [esp")), "{before:#?}");
         assert!(before.iter().rev().take(4).any(|line| line == "shr ecx, 2" || line.starts_with("mov ecx")), "{before:#?}");
         let object = flat_object("strings");
         let code = hex(&object.iter().find(|(kind, _)| *kind == 0xA1).expect("code").1);
@@ -1128,7 +1138,7 @@ mod tests {
             let destination = destination.trim();
             if destination.len() == 3 && destination.starts_with('e') && operation.starts_with("mov") {
                 // A pointer is what an argument load puts in a register.
-                if operation == "mov" && rest.starts_with("dword ptr [ebp+") {
+                if operation == "mov" && (rest.starts_with("dword ptr [ebp+") || rest.starts_with("dword ptr [esp+")) {
                     if !pointers.contains(&destination) {
                         pointers.push(destination);
                     }
