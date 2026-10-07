@@ -16,6 +16,7 @@ const LF_BITFIELD: u16 = 0x1205;
 const LF_ENUMERATE: u16 = 0x1502;
 const LF_ARRAY: u16 = 0x1503;
 const LF_STRUCTURE: u16 = 0x1505;
+const LF_UNION: u16 = 0x1506;
 const LF_ENUM: u16 = 0x1507;
 const LF_MEMBER: u16 = 0x150D;
 const FORWARD_REFERENCE: u16 = 0x80;
@@ -193,7 +194,7 @@ impl Builder<'_> {
                 name(&mut data, &label);
                 self.add(LF_ENUM, &data)?
             }
-            Type::Struct { name: label, bytes, fields } => return self.structure(id, &label, bytes, &fields),
+            Type::Struct { name: label, bytes, fields, union } => return self.structure(id, &label, bytes, &fields, union),
             Type::Procedure { result, parameters, convention: called } => {
                 let result = result.map(|one| self.of(one)).transpose()?.unwrap_or(T_VOID);
                 let parameters = parameters.iter().map(|&one| self.of(one)).collect::<Result<Vec<_>, _>>()?;
@@ -216,7 +217,7 @@ impl Builder<'_> {
 
     /// A struct that is reached again while its fields are being written (a list's `next`) is its
     /// forward reference; the whole struct has the same name, which is how a reader joins them.
-    fn structure(&mut self, id: TypeId, label: &str, bytes: u32, fields: &[llrm_object::debug::Field]) -> Result<u32, Unsupported> {
+    fn structure(&mut self, id: TypeId, label: &str, bytes: u32, fields: &[llrm_object::debug::Field], union: bool) -> Result<u32, Unsupported> {
         if self.started[id] {
             if let Some(forward) = self.forward[id] {
                 return Ok(forward);
@@ -225,11 +226,14 @@ impl Builder<'_> {
             put16(&mut data, 0);
             put16(&mut data, FORWARD_REFERENCE);
             put32(&mut data, 0);
-            put32(&mut data, 0);
-            put32(&mut data, 0);
+            // A struct has its derived class and vshape here; a union has neither.
+            if !union {
+                put32(&mut data, 0);
+                put32(&mut data, 0);
+            }
             numeric(&mut data, 0);
             name(&mut data, label);
-            let forward = self.add(LF_STRUCTURE, &data)?;
+            let forward = self.add(if union { LF_UNION } else { LF_STRUCTURE }, &data)?;
             self.forward[id] = Some(forward);
             return Ok(forward);
         }
@@ -257,11 +261,13 @@ impl Builder<'_> {
         put16(&mut data, fields.len() as u16);
         put16(&mut data, 0);
         put32(&mut data, list);
-        put32(&mut data, 0);
-        put32(&mut data, 0);
+        if !union {
+            put32(&mut data, 0);
+            put32(&mut data, 0);
+        }
         numeric(&mut data, i64::from(bytes));
         name(&mut data, label);
-        let whole = self.add(LF_STRUCTURE, &data)?;
+        let whole = self.add(if union { LF_UNION } else { LF_STRUCTURE }, &data)?;
         self.index[id] = Some(whole);
         Ok(whole)
     }
