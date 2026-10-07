@@ -1,0 +1,19 @@
+--- a/bld/cc/c/cstmt.c
++++ b/bld/cc/c/cstmt.c
+@@ -183,8 +183,14 @@
+     sym = SymGetPtr( sym_handle );
+     tree->op.u2.func.sym_handle = sym_handle;
+     tree->op.u2.func.flags = FUNC_NONE;
+-    if( TOGGLE( inline )
+-      || (sym->mods & FLAG_INLINE) ) {
++    /*
++     * qbopt: a function is never marked for inline expansion here. The code
++     * generator that asks the front end to expand a call (FEGenProc) is
++     * not the shim, which records the call and nothing else, so a function
++     * marked OK_TO_INLINE was called and never emitted. Inlining is llrm's own, on MIR.
++     */
++    if( 0 && (TOGGLE( inline )
++      || (sym->mods & FLAG_INLINE)) ) {
+         if( !sym->attribs.naked ) {
+             if( strcmp( sym->name, "main" ) != 0 ) {
+                 tree->op.u2.func.flags |= FUNC_OK_TO_INLINE;
