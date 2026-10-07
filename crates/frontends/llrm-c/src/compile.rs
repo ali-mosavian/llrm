@@ -205,10 +205,15 @@ pub fn recorded_for(source: &Path, includes: &[String], debug: bool, watcom: &[&
     let root = Path::new(env!("LLRM_ROOT"));
     let unbuilt = || hir::Unsupported("llrm was built without the toolchain feature".into());
     let wccq = Path::new(option_env!("LLRM_WCCQ_DIR").ok_or_else(unbuilt)?).join(&profile.cpu).join("wccq");
-    let header = format!("-fi={}", root.join(&profile.header).display());
-    let flags: Vec<&str> = profile.flags.iter().map(String::as_str).chain([header.as_str()]).collect();
     let failed = |detail: String| hir::Unsupported(format!("wccq failed on {}:\n{detail}", source.display()));
     let scratch = tempfile::tempdir().map_err(|error| failed(error.to_string()))?;
+    // One forced include (a second `-fi=` replaces the first): what GCC predefines and programs test (`__INT_MAX__`, `__SIZE_TYPE__`,
+    // `__BYTE_ORDER__`), as the target's sizes make them, and then the target's own header.
+    let forced = scratch.path().join("predefined.h");
+    let text = format!("{}#include \"{}\"\n", crate::predefined::header(profile.cpu == "386"), root.join(&profile.header).display());
+    fs::write(&forced, text).map_err(|error| failed(error.to_string()))?;
+    let header = format!("-fi={}", forced.display());
+    let flags: Vec<&str> = profile.flags.iter().map(String::as_str).chain([header.as_str()]).collect();
     let out = scratch.path().join("unit.cgs");
     let absolute = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let searched = includes.iter().map(|one| format!("-I{}", absolute(Path::new(one)).display()));
@@ -582,6 +587,21 @@ mod tests {
         let body = |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).map(str::to_owned).collect::<Vec<_>>();
         assert!(recorded.starts_with("INIT ") && recorded.lines().next().unwrap().ends_with(" flat=1"), "{recorded}");
         assert_eq!(body(&recorded), body(&committed));
+    }
+
+    /// A second `-fi=` replaces the first: the predefined macros' header was forced after the target's, `far` was a far pointer
+    /// again on the flat target, and DWARF refused every bench program that used one ("a far or huge pointer has no DWARF type").
+    /// The target's header and the predefined macros are both in the one forced file.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_the_targets_header_and_the_predefined_macros_are_both_forced() {
+        let scratch = tempfile::tempdir().unwrap();
+        let source = scratch.path().join("far.c");
+        std::fs::write(&source, "int far *cell;\nint widest = __INT_MAX__;\nint main(void) { return *cell + (widest != 2147483647); }\n").unwrap();
+        let recorded = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap()).expect("records far.c");
+        assert!(!recorded.contains("TY_LONG_POINTER"), "`far` is a far pointer on a flat target: {recorded}");
+        assert!(recorded.contains("2147483647"), "__INT_MAX__ is defined: {recorded}");
     }
 
     /// The loop in `function` that reads `marker`, from its label to its backward branch, as the rich route selects it.
