@@ -585,6 +585,8 @@ pub fn optimized<E: From<String>>(
     for at in 0..count {
         for id in crate::deadargs::removed(&mut program.modules[at]) {
             edited(&mut modules[at], &[id]);
+            // A body with fewer values to carry is another body to the loop passes and the recursion's.
+            reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-deadargs.")?;
         }
     }
     // Propagation may have left a body doing less than it states.

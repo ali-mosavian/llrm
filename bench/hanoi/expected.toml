@@ -1,5 +1,5 @@
-reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
-blessed = "2026-10-06"
+reason = "dead-argument elimination to a fixed point (LLVM DAE's MaybeLive): hanoi's three pegs only trade places in its calls and are never read, as gcc's hanoi.isra.0(n); memory operands -75% on C, -54% on Nib, every row better"
+blessed = "2026-10-07"
 
 [bas.O2]
 instructions = 344048
@@ -18,36 +18,32 @@ bss_bytes = 0
 kernel_ms = 5.691
 
 [c.O2]
-instructions = 327664
-memory_operands = 65530
-code_bytes = 105
+instructions = 278516
+memory_operands = 16384
+code_bytes = 79
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 4.3715
 
 [c.Os]
-instructions = 327665
-memory_operands = 65530
-code_bytes = 100
+instructions = 278516
+memory_operands = 16384
+code_bytes = 76
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 4.3715
 
 [nib.O2]
-instructions = 262127
-memory_operands = 106484
-code_bytes = 109
+instructions = 212980
+memory_operands = 49147
+code_bytes = 78
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.4977
 
 [nib.Os]
-instructions = 229363
-memory_operands = 106484
-code_bytes = 102
+instructions = 180214
+memory_operands = 49147
+code_bytes = 75
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.4977
 
 [ow.O2]
 instructions = 376809
