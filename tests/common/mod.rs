@@ -3,6 +3,8 @@
 
 use std::path::Path;
 
+pub mod dosbox;
+
 fn recipe() -> toml::Table {
     let target = llrm_driver::all().into_iter().find(|one| one.name() == llrm_driver::DEFAULT).expect("the default target is built in");
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/target").join(format!("llrm-{}", target.name())).join("src/machines/object.toml");
