@@ -26,7 +26,9 @@ from dataclasses import dataclass
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 import linkrecipe  # noqa: E402
-BIN = Path(os.environ.get("LLRM_BIN", ROOT / "target" / "release"))
+import llrmbin  # noqa: E402
+
+BIN = llrmbin.bin_dir()
 QB45 = Path(os.environ.get("QB45_DIR", Path.home() / "work/42-labs/mini-qb/dosbox/qb45"))
 PDS71 = Path(os.environ.get("PDS71_DIR", Path.home() / "work/other/d32x/toolchains/pds71"))
 VBDOS = Path(os.environ.get("VBDOS_DIR", Path.home() / "work/other/d32x/toolchains/vbdos"))

@@ -10,8 +10,10 @@ from pathlib import Path
 
 import pytest
 
+from tools import llrmbin
+
 ROOT = Path(__file__).resolve().parents[1]
-BIN = Path(os.environ.get("LLRM_BIN", ROOT / "target" / "release"))
+BIN = llrmbin.bin_dir()
 DOT = ROOT / "examples" / "dot"
 
 CASES = [

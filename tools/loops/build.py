@@ -6,12 +6,16 @@ configuration each. Every compile keeps its MIR stages beside its object.
 from __future__ import annotations
 
 import os
+import sys
 import subprocess
 from pathlib import Path
 from dataclasses import dataclass
 
 ROOT = Path(__file__).resolve().parents[2]
-BIN = ROOT / "target" / "release"
+sys.path.insert(0, str(ROOT / "tools"))
+import llrmbin  # noqa: E402
+
+BIN = llrmbin.bin_dir()
 HERE = Path(__file__).resolve().parent
 
 OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/build/binbuild"))
