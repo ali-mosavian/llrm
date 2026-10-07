@@ -123,6 +123,9 @@ pub struct Enumerator {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Type {
     Scalar(Scalar),
+    /// A scalar the source spells `name` (`unsigned long`): laid out as `scalar`, which only a format that names
+    /// base types (DWARF) tells apart from the plain one.
+    Basic { name: String, scalar: Scalar },
     /// BASIC's `STRING * n`.
     FixedString(u32),
     /// `bytes` of its elements in place, as C lays one out; None: BASIC's, whose bounds are its
@@ -220,7 +223,7 @@ impl Type {
     /// The types this one names, which a writer that cannot write one cannot write this one for.
     pub fn references(&self) -> Vec<TypeId> {
         match self {
-            Type::Scalar(_) | Type::FixedString(_) => Vec::new(),
+            Type::Scalar(_) | Type::Basic { .. } | Type::FixedString(_) => Vec::new(),
             Type::Array { element, .. } => vec![*element],
             Type::Struct { fields, .. } => fields.iter().map(|field| field.r#type).collect(),
             Type::Enum { underlying, .. } => vec![*underlying],
@@ -235,7 +238,7 @@ impl Info {
     /// of its own (void, a procedure, BASIC's array whose bounds are a descriptor's).
     pub fn size_of(&self, ty: TypeId) -> Option<u64> {
         Some(match self.types.get(ty)? {
-            Type::Scalar(scalar) => match *scalar {
+            Type::Scalar(scalar) | Type::Basic { scalar, .. } => match *scalar {
                 Scalar::Void => return None,
                 Scalar::Bool { bytes } | Scalar::Int { bytes, .. } | Scalar::Float { bytes } => u64::from(bytes),
                 Scalar::Char => 1,

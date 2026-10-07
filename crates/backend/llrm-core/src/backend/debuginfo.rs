@@ -76,7 +76,13 @@ fn typed(one: &di::Type, nodes: &IndexMap<MetadataId, model::TypeId>, near: u8) 
     let node = |id: MetadataId| nodes.get(&id).copied().ok_or_else(|| format!("debug type !{} is not listed", id.0));
     let target = || one.target.map(node).ok_or_else(|| format!("a {} of nothing", one.kind.value()))?;
     Ok(match one.kind {
-        di::Kind::Scalar => model::Type::Scalar(scalar(di::Scalar::from_value(&one.name).ok_or_else(|| format!("no debug scalar {}", one.name))?)),
+        di::Kind::Scalar => {
+            let described = scalar(di::Scalar::from_value(&one.name).ok_or_else(|| format!("no debug scalar {}", one.name))?);
+            match &one.spelling {
+                Some(spelling) => model::Type::Basic { name: spelling.clone(), scalar: described },
+                None => model::Type::Scalar(described),
+            }
+        }
         di::Kind::FixedString => model::Type::FixedString(narrow(one.size, "a STRING's length")?),
         di::Kind::Array => model::Type::Array { element: target()?, bytes: None },
         di::Kind::Sized => model::Type::Array { element: target()?, bytes: Some(narrow(one.size, "an array's size")?) },
