@@ -54,3 +54,11 @@ reason = "wccq non-conforming (front-end route): it types a bit-field by its dec
 [[differs]]
 program = "memcpy-1"
 reason = "Two 128 KB local arrays: 256 KB of stack, where the m32 DOS program's is 16 KB (the test sizes them from STACK_SIZE with `dg-add-options stack_size`); the stack overflows and the emulator ends the program or loses it."
+
+[[differs]]
+program = "920710-1"
+reason = "`16777217L != (float)16777217e0`: the long is converted to float in the standard (16777216.0f, equal); the x87 compares the long as extended (exact, not equal), as GCC's own x87 code does for a variable (FLT_EVAL_METHOD 2); GCC passes by folding the constants. The first check, (double)(2^64-1), passes since the unsigned conversion exists."
+
+[[differs]]
+program = "20031003-1"
+reason = "`(int)2147483648.0f`: a conversion out of range is undefined (C11 6.3.1.4p1); GCC folds the constant saturated, the x87 `fistp` gives 0x80000000, the integer indefinite."
