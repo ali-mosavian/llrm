@@ -2,7 +2,7 @@
 # build.sh PROG: llrm (OMF, and ELF as llrmElfO2/llrmElfOs), gcc and clang (ELF) at -O2 and -Os into $VSGCC_WORK, flags as tools/bench plus -fno-inline-functions
 set -e
 P=$1; R=$(cd "$(dirname "$0")/../../../.." && pwd); O=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}; S=$R/bench/$P/$P.c
-LLRM=${LLRM:-${CARGO_TARGET_DIR:-$R/target}/release/llrm-c}
+LLRM=${LLRM:-$(python3 "$R/tools/llrmbin.py" bin)/llrm-c}
 mkdir -p $O/b $O/o
 $LLRM -m32 -O2 -march=i486 -fno-inline-functions -o $O/o/$P.llrm.obj $S 2>$O/o/$P.llrm.err || echo "FAIL llrm $P"
 $LLRM -m32 -Os -march=i486 -fno-inline-functions -o $O/o/$P.llrmOs.obj $S 2>$O/o/$P.llrmOs.err || echo "FAIL llrmOs $P"

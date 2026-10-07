@@ -13,7 +13,7 @@ source=$1
 output=${2:-${source%.*}.exe}
 level=${3:--O2}
 shift $(($# < 3 ? $# : 3))
-bin=${LLRM_BIN:-$root/target/release}
+bin=$(python3 "$root/tools/llrmbin.py" bin)
 toolchain=${TOOLCHAIN:-$HOME/work/other/d32x/toolchains/native/bin}
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/nib-build.XXXXXX")
