@@ -1,4 +1,4 @@
-reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
+reason = "an integer of 32 bits or more made a float is rounded to a float, as C requires (the x87 register kept the extra bits and a compare against a float read them): a store and a load per conversion"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -41,9 +41,9 @@ bss_bytes = 0
 kernel_ms = 12.648
 
 [nib.Os]
-instructions = 1350436
-memory_operands = 230138
-code_bytes = 564
+instructions = 1350472
+memory_operands = 230174
+code_bytes = 582
 data_bytes = 32
 bss_bytes = 0
 

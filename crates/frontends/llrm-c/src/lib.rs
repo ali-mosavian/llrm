@@ -3,6 +3,7 @@
 pub mod compile;
 pub mod debug;
 pub mod hir;
+pub mod predefined;
 pub mod raise_hir;
 pub mod libfunc;
 pub mod ow_facts;

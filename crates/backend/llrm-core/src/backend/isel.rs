@@ -1593,12 +1593,21 @@ impl Selector<'_, '_, '_> {
             blocks.push(LirBlock { succ: vec![block_at[&default]], phis, ..LirBlock::new(from, insns) });
             return Ok(());
         }
-        let value = Loc::Held(self.held(operand, ty, at, &mut insns)?);
+        // A selector wider than a register (an i64 on a 32-bit target) is compared by its halves.
+        let wide = self.is_wide(ty);
+        let value = if wide { None } else { Some(Loc::Held(self.held(operand, ty, at, &mut insns)?)) };
         let chain: Vec<i64> = std::iter::once(from).chain(self.chains.get(&inst).cloned().unwrap_or_default()).collect();
         for (index, (case, target)) in cases.into_iter().enumerate() {
             let next = chain.get(index + 1).copied().unwrap_or(block_at[&default]);
-            let case = self.source(case, ty, at, &mut insns)?;
-            insns.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![value.clone(), case])));
+            match &value {
+                Some(value) => {
+                    let case = self.source(case, ty, at, &mut insns)?;
+                    insns.push(insn(at, semantics(Operation::Compare, "cmp", vec![], vec![value.clone(), case])));
+                }
+                None => {
+                    self.wide_compare(IntPredicate::Eq, operand, case, at, &mut insns)?;
+                }
+            }
             let branch = Semantics { target: Some(block_at[&target]), ..semantics(Operation::Branch, "je", vec![], vec![]) };
             insns.push(insn(at, branch));
             let succ = vec![block_at[&target], next];
@@ -1752,10 +1761,12 @@ impl Selector<'_, '_, '_> {
     fn va_start(&mut self, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let Some(disp) = self.variadic else { return refuse("va_start with no parameter before the variadic arguments") };
         self.unsealed = true;
-        let held = Held { value: self.fresh(), width: 2 };
+        // The list holds a near data pointer.
+        let width = self.layout.pointer(self.spaces.data).bits / 8;
+        let held = Held { value: self.fresh(), width };
         out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1 }, held)));
         let list = self.pointer(arguments[0])?;
-        out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(list, 2))], vec![Loc::Held(held)])));
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(list, width))], vec![Loc::Held(held)])));
         Ok(())
     }
 
@@ -2776,8 +2787,7 @@ impl Selector<'_, '_, '_> {
                 }
                 let cell = self.temporary(i64::from(held.width));
                 out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell, held.width))], vec![Loc::Held(held)])));
-                let into = Held { value: self.value(result), width: FLOAT };
-                self.float_loaded(into, "fild", cell, held.width, false, at, out);
+                self.integer_made_float(held.width, result, to, cell, held.width, at, out)?;
             }
             // An unsigned integer of n bytes is exactly a signed one of 2n,
             // zero-extended: fild reads a word, a dword or a qword.
@@ -2796,13 +2806,35 @@ impl Selector<'_, '_, '_> {
                 } else {
                     return refuse(format!("an unsigned {}-byte integer to a float: x87 reads no signed integer wider than 8 bytes", held.width));
                 }
-                let into = Held { value: self.value(result), width: FLOAT };
-                self.float_loaded(into, "fild", cell, width, false, at, out);
+                self.integer_made_float(held.width, result, to, cell, width, at, out)?;
             }
             CastOp::FPToSI => self.float_to_integer(operand, "fisttp", result, to, false, at, out)?,
             CastOp::FPToUI => self.float_to_integer(operand, "fisttp", result, to, true, at, out)?,
             _ => return refuse(format!("{op:?} of a float")),
         }
+        Ok(())
+    }
+
+    /// `fild` of the integer in `cell`, as the float or double `to` it is converted to: a source of a dword or more has bits a
+    /// float's 24 (a double's 53 for a qword) do not hold, and the conversion rounds to the type's width where the x87's register
+    /// would keep them (C11 6.3.1.4p2): through a store of that width.
+    #[allow(clippy::too_many_arguments)]
+    fn integer_made_float(&mut self, source_bytes: u32, result: ValueId, to: TypeId, cell: Pointer, width: u32, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let size = self.size(to)?;
+        let into = Held { value: self.value(result), width: FLOAT };
+        let mantissa = match size {
+            4 => 24,
+            8 => 53,
+            _ => 64,
+        };
+        if source_bytes * 8 <= mantissa {
+            self.float_loaded(into, "fild", cell, width, false, at, out);
+            return Ok(());
+        }
+        let loaded = self.fresh_held(FLOAT);
+        self.float_loaded(loaded, "fild", cell, width, false, at, out);
+        let rounded = self.float_stored(loaded, "fstp", size as u32, at, out);
+        self.float_loaded(into, "fld", rounded, size as u32, false, at, out);
         Ok(())
     }
 
@@ -3119,6 +3151,14 @@ impl Selector<'_, '_, '_> {
             }
             requires.push((held, register));
         }
+        // A call of a function with more arguments than it declares parameters (an old-style `()` definition): the callee pops what
+        // it declares, and the rest, which were pushed first, are the caller's to remove.
+        let declared = llrm_mir::memory::callee(&self.module.context, function, inst).and_then(|id| self.module.global(id).function()).map(|one| one.parameters().len());
+        let extra = match declared {
+            Some(declared) if pops && !variadic && registers.arguments.is_empty() => (arguments.len() + in_registers.len()).saturating_sub(declared).min(arguments.len()),
+            _ => 0,
+        };
+        let described = arguments.len() - extra;
         // The convention's own: each argument by where the description puts it.
         let mut placed = None;
         let mut stack_only: Vec<usize> = (0..arguments.len()).collect();
@@ -3129,7 +3169,7 @@ impl Selector<'_, '_, '_> {
             };
             let class = |index: usize| llrm_mir::opcode::argument_class(attrs.get(index).map_or(&[], Vec::as_slice));
             let mut kinds = Vec::new();
-            for (index, &argument) in arguments.iter().enumerate() {
+            for (index, &argument) in arguments.iter().enumerate().take(described) {
                 if class(index) == Some(llrm_mir::opcode::RESULT_POINTER) {
                     continue;
                 }
@@ -3140,7 +3180,9 @@ impl Selector<'_, '_, '_> {
             let mut next = placement.places.clone().into_iter();
             let mut places = Vec::new();
             for index in 0..arguments.len() {
-                if class(index) == Some(llrm_mir::opcode::RESULT_POINTER) {
+                if index >= described {
+                    places.push(llrm_target::calling::Place::Stack(0));
+                } else if class(index) == Some(llrm_mir::opcode::RESULT_POINTER) {
                     let Some(register) = entry.aggregate.as_ref().and_then(|one| one.pointer_register.clone()) else { return refuse(format!("@{name}'s struct result has no register for its address")) };
                     placement.used.push(register.clone());
                     places.push(llrm_target::calling::Place::Registers(vec![register]));
@@ -3180,7 +3222,9 @@ impl Selector<'_, '_, '_> {
             order.reverse();
         }
         let mut pushed = 0;
+        let mut spans: Vec<(usize, i64)> = Vec::new();
         for index in order {
+            spans.push((index, pushed));
             let argument = arguments[index];
             let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
             if self.is_float(ty) {
@@ -3252,6 +3296,7 @@ impl Selector<'_, '_, '_> {
             pushed += slot(self.arch, held.width);
             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
         }
+        let excess: i64 = spans.iter().enumerate().filter(|(_, (index, _))| *index >= described).map(|(at, (_, from))| spans.get(at + 1).map_or(pushed, |(_, next)| *next) - from).sum();
         // A struct result's address the callee pops is not the caller's to remove.
         let hidden_popped = match (&instruction.opcode, self::entry(self.arch, convention, variadic)) {
             (Opcode::Call(info) | Opcode::Invoke(info), Some(one)) if hidden_slot_popped_by_callee(one, info.argument_attrs.iter().map(|attrs| llrm_mir::opcode::argument_class(attrs))) => self.arch.stack_slot_bytes(),
@@ -3260,6 +3305,7 @@ impl Selector<'_, '_, '_> {
         let contract = match callee {
             Callee::Inline(..) if Intrinsic::named(&name) == Some(Intrinsic::Asm) => self.abi.contract(&name, pops, pushed - hidden_popped).map_err(Unselected)?,
             Callee::Inline(..) => crate::abi::runtime::inline_code(&name),
+            _ if extra > 0 => self.abi.contract(&name, false, excess).map_err(Unselected)?,
             _ => self.abi.contract(&name, pops, pushed - hidden_popped).map_err(Unselected)?,
         };
         // A convention that passes in registers states what a call destroys, by the registers it used.
