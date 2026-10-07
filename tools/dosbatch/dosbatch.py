@@ -16,6 +16,7 @@ import re
 import sys
 import json
 import threading
+import time
 import shutil
 import tomllib
 import subprocess
@@ -310,7 +311,39 @@ def discard(work: Path) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
-def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS, conf: str = CONF) -> dict[str, Result]:
+OUTPUT_CAP = 32 << 20
+
+
+def _oversized(work: Path, cap: int) -> str | None:
+    """A file in `work` past `cap` bytes: a program that prints without end fills the disk and the event log."""
+    for entry in os.scandir(work):
+        if entry.is_file() and entry.stat().st_size > cap:
+            return entry.name
+    return None
+
+
+def _launch(command: list[str], work: Path, timeout: int, cap: int, **options) -> str | None:
+    """Run `command` until it exits, or until a file in `work` passes `cap` bytes, which stops it: the file's name. A
+    launch that outlives `timeout` is an error."""
+    process = subprocess.Popen(command, **options)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            process.wait(timeout=0.2)
+            return None
+        except subprocess.TimeoutExpired:
+            pass
+        if (over := _oversized(work, cap)) is not None:
+            process.kill()
+            process.wait()
+            return over
+        if time.monotonic() > deadline:
+            process.kill()
+            process.wait()
+            raise subprocess.TimeoutExpired(command, timeout)
+
+
+def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS, conf: str = CONF, cap: int = OUTPUT_CAP) -> dict[str, Result]:
     """Every job's result. One dosrun launch: a first job builds (BC, LINK),
     then each program runs as its own job with `budget_ms` of emulated time, so
     a hang ends that program alone."""
@@ -346,13 +379,20 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
     events = work / "events.txt"
     with open(work / "jobs.txt") as stdin, open(events, "w") as sink:
         try:
-            subprocess.run([str(DOSBOX), "-nolog", "-conf", str(work / "job.conf")], stdin=stdin,
+            over = _launch([str(DOSBOX), "-nolog", "-conf", str(work / "job.conf")], work, timeout, cap, stdin=stdin,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, pass_fds=(sink.fileno(),),
-                           env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())},
-                           timeout=timeout)
+                           env={**os.environ, "SDL_VIDEODRIVER": "dummy", "DOSRUN_FD": str(sink.fileno())})
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"DOSBox did not finish in {timeout}s ({work})")
+    if over is not None:
+        return stopped_for_output(jobs, work, over, cap)
     return collect(jobs, work, events)
+
+
+def stopped_for_output(jobs: list[Job], work: Path, over: str, cap: int) -> dict[str, Result]:
+    """Every job's result when the launch was stopped for the size of `over`: the program whose output it is failed, the
+    rest did not run to the end. What the files hold is not read: it is as big as the disk allows."""
+    return {job.stem: Result("over the output cap", detail=f"{over} passed {cap} bytes") if over.upper() == f"{job.stem.upper()}.TXT" else Result("stopped", detail=f"the launch was stopped when {over} passed {cap} bytes") for job in jobs}
 
 
 def collect(jobs: list[Job], work: Path, events: Path) -> dict[str, Result]:

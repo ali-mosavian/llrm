@@ -90,7 +90,8 @@ pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer) -> bool {
             loops.sort_by_key(|one| (one.body.len(), one.header));
             let Some(loop_) = loops.into_iter().find(|one| !done.contains(&one.header)) else { break };
             done.insert(loop_.header);
-            _plan(&view, outer, &loop_, &target)
+            let pressure = analyses.fresh().get::<spill::Pressure>(unit.context, unit.layout, unit.function);
+            _plan(&view, outer, &loop_, &target, &pressure)
         };
         let Some(plan) = plan else { continue };
         if let Some(first) = _applied(unit, &plan) {
@@ -247,7 +248,7 @@ fn _preheader(function: &Function, loop_: &Loop) -> Option<BlockId> {
     }
 }
 
-fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> Option<Plan> {
+fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pressure: &spill::Pressure) -> Option<Plan> {
     let function = view.function;
     let preheader = _preheader(function, loop_)?;
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
@@ -314,12 +315,12 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
     let candidates = _candidates(view, target, &users, &sites, exit.as_ref());
     let web_values = users.values.keys().copied().collect::<BTreeSet<_>>();
     let live = _live_anyway(function, loop_, &users, exit.as_ref());
-    let cells = spill::cells(function);
-    let fixed = _fixed(view, outer, loop_, target.room, &cells, &web_values, &users, exit.as_ref(), &live);
+    let cells = pressure.cells();
+    let fixed = _fixed(view, outer, loop_, target.room, pressure, &web_values, &users, exit.as_ref(), &live);
     // The web's reads are the uses the choice replaces; each use adds its own back.
     let kept = |inst: InstId| !users.web.contains(&inst);
     let traffic = spill::traffic(function, &frequencies, &cells, &target.costs, &kept, &|value| spill::words(view.context, view.layout, function, value));
-    let alive = _alive(function, loop_, &sites);
+    let alive = _alive(function, pressure.found(), loop_, &sites);
     let mut keys = Vec::new();
     let latch_block = cfg::block(latch);
     // The most backedges: the counted exit's, or what an in-bounds access allows.
@@ -532,7 +533,7 @@ fn _fixed(
     outer: &Outer,
     loop_: &Loop,
     room: Room,
-    cells: &BTreeMap<ValueId, ValueId>,
+    pressure: &spill::Pressure,
     web: &BTreeSet<ValueId>,
     users: &Users,
     exit: Option<&Exit>,
@@ -540,24 +541,19 @@ fn _fixed(
 ) -> BTreeMap<i64, Vec<spill::Site>> {
     let function = view.function;
     let symbols = _symbols(users, exit);
-    let counted = |value: ValueId| spill::integer_in(view.context, function, value, room.index_scales) && !web.contains(&value) && !(symbols.contains(&value) && !live.contains(&value));
-    let found = liveness::live(function);
     let across = |inst: InstId| spill::kept_across(outer, view.context, function, inst);
-    let transient = |inst: InstId, live: &BTreeSet<ValueId>| spill::transient(view.context, view.layout, function, inst, room, live);
-    let segment = |value: ValueId| spill::segment_view(view.context, view.layout, room.spaces, function, value);
-    let addressed = spill::addressed_in(view.context, function, room.index_scales);
-    let routed = |value: ValueId| addressed.contains(&value);
-    loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted, &segment, &routed))).collect()
+    let model = spill::View::over(pressure, view.context, view.layout, function, room, &across);
+    let hide = |value: ValueId| web.contains(&value) || (symbols.contains(&value) && !live.contains(&value));
+    loop_.body.iter().map(|&at| (at, model.sites(cfg::block(at), &hide))).collect()
 }
 
 /// Where each site's value is live in the loop, before each instruction.
-fn _alive(function: &Function, loop_: &Loop, sites: &[Site]) -> Vec<BTreeMap<i64, Vec<bool>>> {
-    let found = liveness::live(function);
+fn _alive(function: &Function, found: &liveness::Liveness, loop_: &Loop, sites: &[Site]) -> Vec<BTreeMap<i64, Vec<bool>>> {
     sites
         .iter()
         .map(|site| {
             let own = |value: ValueId| value == site.one.value;
-            loop_.body.iter().map(|&at| (at, liveness::live_points(function, &found, cfg::block(at)).into_iter().map(|(_, before, _)| before.iter().any(|&one| own(one))).collect())).collect()
+            loop_.body.iter().map(|&at| (at, liveness::live_points(function, found, cfg::block(at)).into_iter().map(|(_, before, _)| before.iter().any(|&one| own(one))).collect())).collect()
         })
         .collect()
 }
