@@ -235,16 +235,28 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
     }
     // A float leaves in st(0), which no register names.
     let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) { Vec::new() } else { arch.results(size_of(module, layout, result)?) };
-    let popped = if pops { cursor - first } else { 0 };
-    let saved = saved(arch, entry(arch, function.calling_convention, variadic), &parameters, &returns);
+    let described = entry(arch, function.calling_convention, variadic);
+    // A struct result's address, a stack argument the callee pops though the caller removes the rest.
+    let result_slot = described.is_some_and(|one| hidden_slot_popped_by_callee(one, (0..function.parameters().len()).map(|index| llrm_mir::opcode::argument_class(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice)))));
+    let popped = if pops { cursor - first } else if result_slot { arch.stack_slot_bytes() } else { 0 };
+    let saved = saved(arch, described, &parameters, &returns);
     Ok(Convention { parameters, returns, popped, saved })
+}
+
+/// Whether `entry` passes a struct result's address in a stack slot that its callee pops, and one of `classes` is that address.
+fn hidden_slot_popped_by_callee<'a>(entry: &llrm_target::calling::Convention, mut classes: impl Iterator<Item = Option<&'a str>>) -> bool {
+    entry.aggregate.as_ref().is_some_and(|one| one.pointer_register.is_none() && one.pointer_popped_by == "callee") && classes.any(|class| class == Some(llrm_mir::opcode::RESULT_POINTER))
 }
 
 /// The registers `entry` keeps for its caller that a function with these parameters and results
 /// need save: all it keeps, but those its own parameters arrive in and its result leaves in.
 fn saved(arch: &dyn llrm_target::Target, entry: Option<&llrm_target::calling::Convention>, parameters: &[Parameter], returns: &[Register]) -> Vec<(Register, Register)> {
-    let kept = arch.callee_saved();
-    let Some(entry) = entry.filter(|entry| entry.arguments_clobbered || entry.results_clobbered) else { return kept };
+    // What the function's own convention keeps, not the target's default's.
+    let Some(entry) = entry else { return arch.callee_saved() };
+    let kept = llrm_x86::calling::callee_saved(entry);
+    if !(entry.arguments_clobbered || entry.results_clobbered) {
+        return kept;
+    }
     let changed: Vec<Register> = parameters.iter().filter_map(|one| if let Parameter::Registers(registers) = one { Some(registers.iter().copied()) } else { None }).flatten().chain(returns.iter().copied().filter(|_| entry.results_clobbered)).collect();
     kept.into_iter().filter(|(whole, _)| !changed.iter().any(|one| one.full_register32() == *whole)).collect()
 }
@@ -3149,10 +3161,15 @@ impl Selector<'_, '_, '_> {
             pushed += slot(self.arch, held.width);
             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
         }
+        // A struct result's address the callee pops is not the caller's to remove.
+        let hidden_popped = match (&instruction.opcode, self::entry(self.arch, convention, variadic)) {
+            (Opcode::Call(info) | Opcode::Invoke(info), Some(one)) if hidden_slot_popped_by_callee(one, info.argument_attrs.iter().map(|attrs| llrm_mir::opcode::argument_class(attrs))) => self.arch.stack_slot_bytes(),
+            _ => 0,
+        };
         let contract = match callee {
-            Callee::Inline(..) if Intrinsic::named(&name) == Some(Intrinsic::Asm) => self.abi.contract(&name, pops, pushed).map_err(Unselected)?,
+            Callee::Inline(..) if Intrinsic::named(&name) == Some(Intrinsic::Asm) => self.abi.contract(&name, pops, pushed - hidden_popped).map_err(Unselected)?,
             Callee::Inline(..) => crate::abi::runtime::inline_code(&name),
-            _ => self.abi.contract(&name, pops, pushed).map_err(Unselected)?,
+            _ => self.abi.contract(&name, pops, pushed - hidden_popped).map_err(Unselected)?,
         };
         // A convention that passes in registers states what a call destroys, by the registers it used.
         let changed = placed.as_ref().map(|(entry, placement)| {

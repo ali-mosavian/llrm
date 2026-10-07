@@ -91,7 +91,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         (None, None) => return Err("the following arguments are required: source".to_owned()),
     };
     let bound = llrm_driver::target(&flags, None)?;
-    let frontend = super::Frontend { debug: flags.debug, checked_stack: flags.sanitize.stack, unchecked_bounds, warn_target_width, ..super::Frontend::for_target(&*bound.target)? };
+    let frontend = super::Frontend { debug: flags.debug, checked_stack: flags.sanitize.stack, unchecked_bounds, warn_target_width, symbols: super::Frontend::symbols_for(&*bound.target, flags.format(&*bound.target)?.name()), native_name: flags.convention(&*bound.target)?.name.clone(), ..super::Frontend::for_target(&*bound.target)? };
     let codegen = bound.options(&flags, flags.machine(&*bound.target, nib::machine(&*bound.target, &frontend.os))?);
     let os_layer = field.map(|field| bound.target.os_layer().ok_or_else(|| "this target has no OS layer".to_owned()).and_then(|layer| layer.report(&bound.target.runtime("nib").ok_or("this target has no Nib runtime")?, &field)));
     Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen, os_layer, declare })

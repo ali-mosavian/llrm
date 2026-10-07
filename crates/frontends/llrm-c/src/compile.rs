@@ -86,16 +86,19 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
 pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options, stack_check: Option<llrm_core::hir::model::StackCheck>) -> Result<masm::Module, CompileError> {
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
         let mut unit = hir::unit(&stream::parse(text))?;
-        let profile = Profile::of(&*codegen.arch).map_err(hir::Unsupported)?;
+        let profile = Profile::for_abi(&*codegen.arch, codegen.abi.as_deref()).map_err(hir::Unsupported)?;
         let calling = codegen.arch.calling();
-        unit.entry = profile.entry;
+        let cc_of = |name: &str| calling.named(name).and_then(|one| one.cc.clone()).ok_or_else(|| hir::Unsupported(format!("calling.toml has no {name} with a cc")));
+        unit.cdecl_cc = Some(cc_of(&profile.cdecl)?).filter(|cc| cc != "cdecl");
+        unit.registers_cc = Some(cc_of(&profile.registers)?).filter(|cc| cc != "cdecl");
+        unit.entry = profile.entry.clone();
         unit.entry_cc = calling.named(&profile.entry_convention).and_then(|one| one.cc.clone()).ok_or_else(|| hir::Unsupported(format!("calling.toml has no {} with a cc", profile.entry_convention)))?;
         unit.decorate(calling, codegen.object_format);
         // The front end was picked by the shim's flat flag; the target says what flat is.
         if unit.flat != codegen.arch.layout().spaces.far_is_near() {
             return Err(hir::Unsupported(format!("the front end is {} but target {} is {}", if unit.flat { "flat" } else { "segmented" }, codegen.arch.name(), if unit.flat { "segmented" } else { "flat" })).into());
         }
-        let program = translate::program(&unit, module, codegen.arch.calling(), &Profile::of(&*codegen.arch).map_err(hir::Unsupported)?)?;
+        let program = translate::program(&unit, module, codegen.arch.calling(), &profile)?;
         for warning in unit.warnings.borrow().iter() {
             eprintln!("{module}: {warning}");
         }
@@ -144,12 +147,16 @@ struct Args {
 pub struct Profile {
     /// The front end's tree: its CPU, `i86` or `386`.
     pub cpu: String,
-    /// The calling convention it compiles C under, by its name in `calling.toml`.
+    /// The convention whose contract a call to a routine that states none has, by its name in `calling.toml`.
     pub convention: String,
     /// The routine the runtime's start calls, and the convention it calls it in by its name in `calling.toml`.
     pub entry: String,
     pub entry_convention: String,
+    /// The ABI the front end is asked for: what it is run with, and what its records mean in `calling.toml`'s conventions: one it
+    /// records as cdecl, and one it records in its default registers.
     pub flags: Vec<String>,
+    pub cdecl: String,
+    pub registers: String,
     /// The header it includes first, from the repository root.
     pub header: String,
     /// An interrupt handler's parameters, in order: the registers its frame holds, by name. None where the target has no
@@ -158,20 +165,29 @@ pub struct Profile {
 }
 
 impl Profile {
+    /// The target's profile under its default ABI.
     pub fn of(target: &dyn llrm_target::Target) -> Result<Self, String> {
-        let description = target.runtime("c").ok_or_else(|| format!("target {} has no C runtime", target.name()))?;
-        Self::parse(&description.table()?)
+        Self::for_abi(target, None)
     }
 
-    pub fn parse(table: &toml::Table) -> Result<Self, String> {
+    /// The profile under `-mabi=family`, the target's default without.
+    pub fn for_abi(target: &dyn llrm_target::Target, family: Option<&str>) -> Result<Self, String> {
+        let description = target.runtime("c").ok_or_else(|| format!("target {} has no C runtime", target.name()))?;
+        let calling = target.calling();
+        calling.chosen(family)?;
+        Self::parse(&description.table()?, family.unwrap_or(&calling.default))
+    }
+
+    pub fn parse(table: &toml::Table, family: &str) -> Result<Self, String> {
         let frontend = table.get("frontend").and_then(toml::Value::as_table).ok_or("the C runtime description has no [frontend]")?;
-        let text = |key: &str| frontend.get(key).and_then(toml::Value::as_str).map(str::to_owned).ok_or_else(|| format!("frontend.{key} is not a string"));
-        let flags = frontend.get("flags").and_then(toml::Value::as_array).ok_or("frontend.flags is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("a frontend flag is not a string")).collect::<Result<_, _>>()?;
+        let text = |from: &toml::Table, key: &str| from.get(key).and_then(toml::Value::as_str).map(str::to_owned).ok_or_else(|| format!("frontend.{key} is not a string"));
+        let abi = frontend.get("abi").and_then(|one| one.get(family)).and_then(toml::Value::as_table).ok_or_else(|| format!("the C runtime description has no [frontend.abi.{family}]"))?;
+        let flags = abi.get("flags").and_then(toml::Value::as_array).ok_or("frontend.abi.flags is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("a frontend flag is not a string")).collect::<Result<_, _>>()?;
         let interrupt_parameters = match frontend.get("interrupt_parameters") {
             None => Vec::new(),
             Some(list) => list.as_array().ok_or("frontend.interrupt_parameters is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("an interrupt parameter is not a string")).collect::<Result<_, _>>()?,
         };
-        Ok(Self { cpu: text("watcom_cpu")?, convention: text("convention")?, entry: text("entry")?, entry_convention: text("entry_convention")?, flags, header: text("header")?, interrupt_parameters })
+        Ok(Self { cpu: text(frontend, "watcom_cpu")?, convention: text(frontend, "convention")?, entry: text(frontend, "entry")?, entry_convention: text(frontend, "entry_convention")?, flags, cdecl: text(abi, "cdecl")?, registers: text(abi, "registers")?, header: text(frontend, "header")?, interrupt_parameters })
     }
 }
 
@@ -294,7 +310,7 @@ pub fn main(argv: &[String]) -> i32 {
                 // The target's physical addresses reach the program as `PHYSICAL_<NAME>`.
                 let defines: Vec<String> = args.codegen.arch.physical_addresses().iter().map(|(name, address)| format!("-dPHYSICAL_{}=0x{address:X}UL", name.to_uppercase())).collect();
                 let switches: Vec<&str> = args.watcom.iter().copied().chain(defines.iter().map(String::as_str)).collect();
-                recorded_for(&args.source, &args.include, args.flags.debug, &switches, &Profile::of(&*args.codegen.arch).map_err(hir::Unsupported)?)
+                recorded_for(&args.source, &args.include, args.flags.debug, &switches, &Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).map_err(hir::Unsupported)?)
             })?
         };
         let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
@@ -548,7 +564,7 @@ mod tests {
         assert_eq!((real.cpu.as_str(), real.header.as_str(), real.flags.contains(&"-mm".to_owned())), ("i86", "crates/frontends/llrm-c/src/borland.h", true));
         assert_eq!((flat.cpu.as_str(), flat.header.as_str(), flat.flags.contains(&"-zp4".to_owned())), ("386", "crates/frontends/llrm-c/src/flat.h", true));
         let none: toml::Table = "stack = \"stack.toml\"\n".parse().unwrap();
-        assert_eq!(super::Profile::parse(&none).unwrap_err(), "the C runtime description has no [frontend]");
+        assert_eq!(super::Profile::parse(&none, "x").unwrap_err(), "the C runtime description has no [frontend]");
     }
 
     /// The 386 front end records `sum.c` as the committed flat stream: `flat=1` in INIT, int and
@@ -1021,6 +1037,33 @@ mod tests {
     fn regs_body(name: &str) -> Vec<String> {
         let lines = flat_listing("regs");
         lines.iter().skip_while(|line| **line != format!("{name} proc near")).skip(1).take_while(|line| **line != format!("{name} endp")).cloned().collect()
+    }
+
+    /// `fixture`'s flat listing under `-mabi=sysv`: gcc's i386 convention.
+    fn sysv_body(name: &str) -> Vec<String> {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32/sysv.cgs")).unwrap();
+        let argv: Vec<String> = ["-m32", "-O2", "-mabi=sysv", "x.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        let built = super::selected(&text, "sysv", None, &args.codegen).unwrap();
+        let lines: Vec<String> = llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect();
+        lines.iter().skip_while(|line| **line != format!("{name} proc near")).skip(1).take_while(|line| **line != format!("{name} endp")).cloned().collect()
+    }
+
+    /// gcc -m32 writes every struct result, a one-byte one too, through a pointer that is the first argument and pops it,
+    /// `ret 4`: Open Watcom's rule (a 1, 2 or 4 byte struct in EAX, the address in ESI) was applied whatever the ABI.
+    #[test]
+    fn test_m32_sysv_writes_a_struct_result_through_the_first_argument_and_the_callee_pops_it() {
+        assert_eq!(sysv_body("_r1"), ["L0_0:", "mov eax, dword ptr [esp+4]", "mov ecx, dword ptr [esp+8]", "mov byte ptr [eax], cl", "ret 4"]);
+        assert_eq!(sysv_body("_r12").last().map(String::as_str), Some("ret 4"));
+    }
+
+    /// The caller of such a function removes the arguments but the address: gcc added 8 after pushing 12 bytes.
+    #[test]
+    fn test_m32_sysv_caller_does_not_remove_the_result_address_the_callee_popped() {
+        let body = sysv_body("_calls");
+        let after = body.iter().skip_while(|line| **line != "call _away").skip(1).cloned().collect::<Vec<_>>();
+        assert!(after.iter().any(|line| line == "add esp, 8"), "{body:?}");
+        assert!(!after.iter().any(|line| line == "add esp, 12"), "{body:?}");
     }
 
     /// An ELF object has no `_` before a C name and no `_` after a default one: `six_` and `_explicit_cdecl` were

@@ -232,7 +232,7 @@ mod tests {
     #[test]
     fn test_calling_toml_states_watcall32_at_the_top_of_its_table() {
         let one = CALLING.native();
-        assert_eq!((one.name.as_str(), CONVENTIONS.as_slice()), ("watcall32", &["watcall32", "cdecl32"][..]));
+        assert_eq!((one.name.as_str(), CONVENTIONS.as_slice()), ("watcall32", &["watcall32", "cdecl32", "sysv32"][..]));
         assert_eq!(one.aggregate.as_ref().map(|one| one.style.as_str()), Some("hidden-pointer"));
         assert_eq!((one.promotion.as_str(), one.wide_slots, one.results.keys().cloned().collect::<Vec<_>>()), ("slot", 2, vec!["1", "2", "4", "8", "float", "pointer"].into_iter().map(String::from).collect::<Vec<_>>()));
         assert_eq!(CALLING.by_cc("cdecl").map(|one| one.name.as_str()), Some("cdecl32"));

@@ -220,7 +220,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
             return "compile: " + (done.stderr or done.stdout).strip()[-600:]
         try:
             foreign = build_foreign(program, target, work, stem)
-            loaders = dosbatch.link_nib(target, program.source, obj, exe, work, program.flags[0] if program.flags else "-O2", foreign)
+            loaders = dosbatch.link_nib(target, program.source, obj, exe, work, program.flags[0] if program.flags else "-O2", foreign, tuple(one for one in program.flags if one.startswith("-mabi=")))
             dosbatch.check_loads(exe)
         except (dosbatch.BuildError, dosbatch.TooBig) as error:
             return f"link: {error}"

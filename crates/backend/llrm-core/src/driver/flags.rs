@@ -11,7 +11,7 @@ use llrm_transforms::pipeline;
 use crate::abi::machine::Machine;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [-m[no-]far-bss] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,6 +129,8 @@ pub struct Flags {
     pub debug: bool,
     /// `-fobject-format=`: the object format to write, where the target has more than its default.
     pub object_format: Option<Format>,
+    /// `-mabi=`: the ABI an unmarked function has, by the family name the target's `calling.toml` gives; its default without.
+    pub abi: Option<String>,
     /// `-fstack-usage`.
     pub stack_usage: bool,
     /// `-Wstack-usage=N`.
@@ -137,7 +139,7 @@ pub struct Flags {
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { level: Level::O2, passes: Vec::new(), march: None, mtune: None, machine: None, mode: None, stack_is_data: None, far_bss: None, milliclocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, object_format: None, stack_usage: false, stack_limit: None }
+        Self { level: Level::O2, passes: Vec::new(), march: None, mtune: None, machine: None, mode: None, stack_is_data: None, far_bss: None, milliclocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, object_format: None, abi: None, stack_usage: false, stack_limit: None }
     }
 }
 
@@ -182,6 +184,7 @@ impl Flags {
                 let limit = &flag["-Wstack-usage=".len()..];
                 self.stack_limit = Some(limit.parse().map_err(|_| format!("-Wstack-usage={limit}: expected a number of bytes"))?);
             }
+            _ if flag.starts_with("-mabi=") => self.abi = Some(flag["-mabi=".len()..].to_owned()),
             _ if flag.starts_with("-fobject-format=") => self.object_format = Some(Format::parse(&flag["-fobject-format=".len()..]).map_err(|error| format!("{flag}: {error}"))?),
             "-ftrapv" | "-fno-trapv" => self.sanitize.signed_integer_overflow = flag == "-ftrapv",
             _ if flag.starts_with("-fsanitize=") => self.sanitize.set(&flag["-fsanitize=".len()..], true)?,
@@ -199,6 +202,11 @@ impl Flags {
             _ => return Ok(false),
         }
         Ok(true)
+    }
+
+    /// The convention an unmarked function has on `target`: the `-mabi=` family's, else the target's default.
+    pub fn convention(&self, target: &dyn llrm_target::Target) -> Result<&'static llrm_target::calling::Convention, String> {
+        target.calling().chosen(self.abi.as_deref()).map_err(|error| format!("-mabi={}: {error}", self.abi.as_deref().unwrap_or_default()))
     }
 
     /// The object format to write for `target`: `-fobject-format=`, else the target's default.
@@ -265,7 +273,7 @@ impl Flags {
 
     /// The driver's options for `machine`.
     pub fn driver(&self, machine: Machine, arch: std::rc::Rc<dyn llrm_target::Target>, selection: &'static crate::backend::isel::Compiled) -> super::Options {
-        super::Options { pipeline: self.pipeline(), stack_usage: self.stack_usage, stack_limit: self.stack_limit, ..super::Options::new(machine, arch, selection) }
+        super::Options { pipeline: self.pipeline(), stack_usage: self.stack_usage, stack_limit: self.stack_limit, abi: self.abi.clone(), ..super::Options::new(machine, arch, selection) }
     }
 }
 
