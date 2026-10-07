@@ -142,6 +142,17 @@ pub trait Analysis: 'static {
     /// it builds on. One that does not outlives a change to the module.
     const READS_OUTER: bool = true;
 
+    /// Whether `update` can bring a result the function has since changed up to date: such a result is kept past an
+    /// invalidation, with the point in the function's history it was true at.
+    const INCREMENTAL: bool = false;
+
+    /// `previous`, which was true of the function before `changes`, made true of it now; none where it would be
+    /// derived afresh. Must give what `run` gives, as `LLRM_CHECK_REPLAY` asserts.
+    #[allow(unused_variables)]
+    fn update(previous: &Self::Result, changes: &[crate::module::Change], context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Option<Self::Result> {
+        None
+    }
+
     /// Whether a pass returning `preserved` left the result true: when it
     /// names this analysis, or keeps the function and the result reads
     /// nothing else. One derived from others asks after them, as LLVM's
@@ -395,9 +406,14 @@ trait Cached {
     fn as_any(&self) -> &dyn Any;
     fn still_true(&self, context: &Context, layout: &DataLayout, function: &Function, outer: &Rc<Outer>) -> bool;
     fn preserved(&self, preserved: &PreservedAnalyses) -> bool;
+    fn incremental(&self) -> bool;
 }
 
-struct Entry<A: Analysis>(Rc<A::Result>);
+struct Entry<A: Analysis> {
+    result: Rc<A::Result>,
+    /// The function's history when the result was derived.
+    mark: crate::module::Mark,
+}
 
 impl<A: Analysis> Cached for Entry<A> {
     fn name(&self) -> &'static str {
@@ -409,23 +425,34 @@ impl<A: Analysis> Cached for Entry<A> {
     }
 
     fn still_true(&self, context: &Context, layout: &DataLayout, function: &Function, outer: &Rc<Outer>) -> bool {
-        *self.0 == A::run(context, layout, function, &mut Analyses::new(Rc::clone(outer)))
+        *self.result == A::run(context, layout, function, &mut Analyses::new(Rc::clone(outer)))
     }
 
     fn preserved(&self, preserved: &PreservedAnalyses) -> bool {
         A::preserved(preserved)
+    }
+
+    fn incremental(&self) -> bool {
+        A::INCREMENTAL
     }
 }
 
 /// One function's cached analyses, and what they may read of its module.
 pub struct Analyses {
     cache: HashMap<TypeId, Box<dyn Cached>>,
+    /// Results invalidated that `update` may bring up to date.
+    kept: HashMap<TypeId, Box<dyn Cached>>,
     outer: Rc<Outer>,
+}
+
+fn check_replay() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_REPLAY").is_some())
 }
 
 impl Analyses {
     pub fn new(outer: Rc<Outer>) -> Self {
-        Self { cache: HashMap::new(), outer }
+        Self { cache: HashMap::new(), kept: HashMap::new(), outer }
     }
 
     /// An empty cache over the same module and target, for another body.
@@ -439,7 +466,7 @@ impl Analyses {
 
     /// `A`'s result, if computed: LLVM's `getCachedResult`.
     pub fn cached<A: Analysis>(&self) -> Option<Rc<A::Result>> {
-        self.cache.get(&TypeId::of::<A>()).map(|entry| Rc::clone(&entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").0))
+        self.cache.get(&TypeId::of::<A>()).map(|entry| Rc::clone(&entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result))
     }
 
     /// `A`'s result for `function`, computed once until invalidated.
@@ -448,18 +475,37 @@ impl Analyses {
         if let Some(entry) = self.cache.get(&key) {
             let entry = entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
             counted(A::NAME, true);
-            return Rc::clone(&entry.0);
+            return Rc::clone(&entry.result);
         }
         counted(A::NAME, false);
-        let result = Rc::new(spanned_as("analysis", A::NAME, || A::run(context, layout, function, self)));
-        self.cache.insert(key, Box::new(Entry::<A>(Rc::clone(&result))));
+        let updated = self.kept.remove(&key).and_then(|old| {
+            let old = old.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+            let changes = function.changes_since(old.mark)?;
+            let made = spanned_as("analysis", A::NAME, || A::update(&old.result, changes, context, layout, function, self))?;
+            if check_replay() {
+                let whole = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
+                assert!(made == whole, "{}: the result brought up to date is not what deriving it afresh gives", A::NAME);
+            }
+            Some(made)
+        });
+        let result = Rc::new(match updated {
+            Some(made) => made,
+            None => spanned_as("analysis", A::NAME, || A::run(context, layout, function, self)),
+        });
+        self.cache.insert(key, Box::new(Entry::<A> { result: Rc::clone(&result), mark: function.mark() }));
         result
     }
 
     /// Drops what `preserved` does not keep: LLVM's
     /// `FunctionAnalysisManager::invalidate`, for a pass running others.
     pub fn invalidate(&mut self, preserved: &PreservedAnalyses) {
-        self.cache.retain(|_, entry| entry.preserved(preserved));
+        let gone: Vec<TypeId> = self.cache.iter().filter(|(_, entry)| !entry.preserved(preserved)).map(|(key, _)| *key).collect();
+        for key in gone {
+            let entry = self.cache.remove(&key).expect("held");
+            if entry.incremental() {
+                self.kept.insert(key, entry);
+            }
+        }
     }
 
     /// The cached analyses a fresh computation disagrees with.
