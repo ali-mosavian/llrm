@@ -1,6 +1,6 @@
 # x86-m32: OMF with USE32 segments and 32-bit offsets, linked as an LE
 # executable under a DOS extender, and the listing's MASM header.
-formats = ["omf", "elf"]
+formats = ["omf", "elf", "coff"]
 default = "omf"
 bitness = 32
 header = [".386", ".model flat"]
@@ -18,3 +18,7 @@ loader = "{ow}/bld/redist/dos32a/dos32a.exe"
 # The ELF objects, linked by GNU ld: its emulation (`-m`).
 [link.elf]
 emulation = "elf_i386"
+
+# The COFF objects, linked by lld-link (or link.exe): its `/machine:`.
+[link.coff]
+machine = "x86"

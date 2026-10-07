@@ -1,0 +1,13 @@
+[package]
+name = "llrm-coff32"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "llrm's COFF object writer, for i386"
+
+[dependencies]
+llrm-coff = { workspace = true }
+llrm-object = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
