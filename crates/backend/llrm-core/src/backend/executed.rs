@@ -116,6 +116,10 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
     let reads_slot = |one: &Insn| {
         one.what.as_ref().is_some_and(|what| what.sources.iter().any(|at| matches!(at, Loc::Mem(cell) if cell.addr.is_some_and(|addr| slots.contains(&addr)))))
     };
+    // An argument's incoming home is above the frame: read where it runs more often than the function does,
+    // it is a register's one load made again.
+    let incoming = |one: &Insn| one.what.as_ref().is_some_and(|what| what.sources.iter().any(|at| matches!(at, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0))));
+    let entry = frequency.block(body.entry);
     let mut out = Executed::default();
     for block in &body.blocks {
         // What reaches each instruction: the block's runs less those an
@@ -136,7 +140,7 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
             let spill = match () {
                 _ if x87(one) => None,
                 _ if one.rematerialized => Some(&mut out.remats),
-                _ if one.spill_reload || reads_slot(one) => Some(&mut out.reloads),
+                _ if one.spill_reload || reads_slot(one) || (incoming(one) && runs > entry) => Some(&mut out.reloads),
                 _ if one.spill_store => Some(&mut out.stores),
                 _ => None,
             };
@@ -219,6 +223,25 @@ mod tests {
         let body = LirBody::new("folded", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
         let done = executed(&body).expect("straight-line");
         assert_eq!((done.stores, done.reloads), (1.0, 1.0));
+    }
+
+    /// An argument passed on the stack is read from its incoming home, a memory operand in the loop that
+    /// reads it (`sub esi,[esp+32]`): the work a register holds once, per trip. It carried no spill flag and
+    /// showed 0 reloads beside a forecast that put the value in a register (queens `safe`).
+    #[test]
+    fn test_a_loop_reading_an_incoming_argument_home_reloads_it_each_trip() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let home = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, 8)), 2));
+        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let blocks = vec![
+            block(1, vec![insn(1, Operation::Move, "mov", vec![ax.clone()], vec![home.clone()]), insn(2, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
+            block(2, vec![insn(3, Operation::Multiply, "imul", vec![ax.clone()], vec![ax, home]), insn(4, Operation::Branch, "jne", vec![], vec![])], vec![2, 3]),
+            block(3, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
+        ];
+        let mut body = LirBody::new("args", 1, blocks, IndexMap::default(), IndexMap::default());
+        body.loop_trip_counts = vec![(2, 5)];
+        // The entry's own read is the load every path makes; the loop's five trips are the reloads.
+        assert_eq!(executed(&body).expect("a counted loop").reloads.round(), 5.0);
     }
 
     /// A loop tested at its header runs its body as many times as its trip
