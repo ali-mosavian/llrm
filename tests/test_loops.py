@@ -64,7 +64,7 @@ def test_a_stopped_program_s_reports_come_from_what_it_wrote(tmp_path):
         '{"ev":"out","handle":1,"file":"P.TXT","text":"5\\r\\n-7\\r\\n"}\n'
         '{"ev":"end","reason":"crash","ms":3}\n'
     )
-    got = dos.collect([dos.Job("p", "exe", tmp_path / "P.EXE")], tmp_path, events)["p"]
+    got = dos.reports(dos.dosbatch.collect([dos.Job("p", "exe", tmp_path / "P.EXE")], tmp_path, events)["p"])
     assert isinstance(got, dos.Stopped) and got.partial == [5, -7]
 
 
@@ -322,7 +322,7 @@ def test_a_nib_case_keeps_its_symbolic_stride(tmp_path):
     body = body[: body.index("\n}\n")]
     header, rest = body.split("\n", 1)
     import re
-    m = re.findall(r"(%\d+)[,)]", header)[3]  # the fourth parameter: m
+    m = re.findall(r"(%\d+)[,)]", header)[-1]  # the last parameter: m (an unused one before it is dropped)
     assert re.search(re.escape(m) + r"\b", rest)
 
 
@@ -343,7 +343,7 @@ def test_a_program_bc_refused_is_not_run(tmp_path):
     (tmp_path / "V1.BCO").write_text("    0 Warning Error(s)\n    3 Severe  Error(s)\n")
     events = tmp_path / "events.txt"
     events.write_text('{"ev":"end","reason":"exit"}\n{"ev":"end","reason":"crash","ms":1}\n')
-    got = dos.collect([dos.Job("v1", "bas", tmp_path / "V1.BAS")], tmp_path, events)["v1"]
+    got = dos.reports(dos.dosbatch.collect([dos.Job("v1", "bas", tmp_path / "V1.BAS")], tmp_path, events)["v1"])
     assert isinstance(got, str) and got.startswith("not built")
 
 
