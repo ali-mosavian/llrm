@@ -504,3 +504,17 @@ fn test_a_forecast_is_the_same_from_the_managers_pressure_as_from_one_made_for_t
     let residents = |view: &View, hide: &dyn Fn(ValueId) -> bool| function.layout().iter().flat_map(|&block| view.sites(block, hide)).map(|site| site.before.residents.len()).sum::<usize>();
     assert!(residents(&kept, &hidden) < residents(&kept, &|_| false));
 }
+
+/// A loop whose sites hold as many values as the room has registers is crowded; one with a spare is not.
+/// indvars' `rewound` counted every live value, folded addresses and floats too, for the same question.
+#[test]
+fn test_a_loop_is_crowded_where_its_sites_fill_the_registers() {
+    let module = module(COUNTED);
+    let function = self::function(&module);
+    let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
+    let across = |_: InstId| 1;
+    let blocks = function.layout().iter().map(|&block| cfg::id(block)).collect();
+    let pressure = Pressure::of(&module.context, function, 0);
+    let crowded = |registers| View::over(&pressure, &module.context, &layout, function, Room { registers, across_call: registers, ..Room::default() }, &across).crowded(&blocks);
+    assert!(crowded(1) && !crowded(8));
+}

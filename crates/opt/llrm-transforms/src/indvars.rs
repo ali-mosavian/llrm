@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::induction::{self, AffineOperand};
 use llrm_analysis::manager::Registers;
-use llrm_analysis::{cfg, liveness, memory};
+use llrm_analysis::{cfg, memory};
 use llrm_analysis::graph::loops::Loop;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -150,7 +150,12 @@ pub fn rewound(context: &mut Context, layout: &DataLayout, function: &mut Functi
     let facts = analyses.fresh().get::<Registers>(context, layout, function);
     let plan = {
         let unit = memory::Unit::within(context, layout, function, analyses.outer());
-        _rewinding(&unit, &facts, registers)
+        let outer = analyses.outer();
+        let room = crate::profit::registers(outer);
+        let across = |inst: InstId| crate::spill::kept_across(outer, context, function, inst);
+        let pressure = analyses.fresh().get::<crate::spill::Pressure>(context, layout, function);
+        let view = crate::spill::View::over(&pressure, context, layout, function, room, &across);
+        _rewinding(&unit, &facts, &view)
     };
     let Some(plan) = plan else {
         return false;
@@ -197,7 +202,7 @@ struct Rewinding {
     parent_latch: BlockId,
 }
 
-fn _rewinding(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, registers: i64) -> Option<Rewinding> {
+fn _rewinding(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, view: &crate::spill::View) -> Option<Rewinding> {
     let function = unit.function;
     let shape = unit.shape();
     let found = &shape.loops;
@@ -205,7 +210,6 @@ fn _rewinding(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, registers: 
         return None;
     }
     let dominance = &shape.dominance;
-    let live = liveness::live(function);
     let graph = cfg::graph(function);
     for inner in found {
         let Some(parent) = found.iter().filter(|parent| inner.body.is_subset(&parent.body) && inner.body != parent.body).min_by_key(|parent| parent.body.len()) else {
@@ -219,7 +223,7 @@ fn _rewinding(unit: &memory::Unit, facts: &IndexMap<ValueId, Known>, registers: 
         };
         let parent_header = cfg::block(parent.header);
         let preds = function.predecessors(parent_header).into_iter().collect::<BTreeSet<_>>();
-        if !parent.body.contains(&cfg::id(inner_preheader)) || preds != BTreeSet::from([parent_preheader, cfg::block(*parent_latch)]) || (liveness::pressure(function, Some(&live), Some(&inner.body)) as i64) < registers {
+        if !parent.body.contains(&cfg::id(inner_preheader)) || preds != BTreeSet::from([parent_preheader, cfg::block(*parent_latch)]) || !view.crowded(&inner.body) {
             continue;
         }
         let exiting = graph.iter().filter(|block| inner.body.contains(&block.at)).flat_map(|block| block.succ.iter().filter(|at| !inner.body.contains(at)).map(move |at| (block.at, *at))).collect::<Vec<_>>();

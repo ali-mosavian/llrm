@@ -678,6 +678,11 @@ impl<'a> View<'a> {
         )
     }
 
+    /// Whether the registers run out somewhere in `inside`: a site holds as many values as it has registers.
+    pub fn crowded(&self, inside: &BTreeSet<i64>) -> bool {
+        self.function.layout().iter().filter(|&&block| inside.contains(&cfg::id(block))).flat_map(|&block| self.sites(block, &|_| false)).any(|site| site.before.residents.len() as i64 >= site.before.registers)
+    }
+
     /// What fitting the function spills, each cell priced by its traffic.
     pub fn forecast(&self, costs: &OperationCosts, frequency: &BTreeMap<i64, i64>) -> Forecast<ValueId> {
         let traffic = traffic(self.function, frequency, &self.pressure.cells, costs, &|_| true, &|value| words(self.context, self.layout, self.function, value));
