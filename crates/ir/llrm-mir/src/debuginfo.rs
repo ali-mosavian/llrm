@@ -87,6 +87,16 @@ spelled!(
     }
 );
 
+spelled!(
+    /// The language a program is written in, which a debugger reads its values by.
+    Language {
+        C = "c",
+        Basic = "basic",
+        Nib = "nib",
+    }
+);
+
+pub const LANGUAGE: &str = "llrm.dbg.language";
 pub const TYPES: &str = "llrm.dbg.types";
 pub const FUNCTIONS: &str = "llrm.dbg.functions";
 pub const GLOBALS: &str = "llrm.dbg.globals";
@@ -264,6 +274,17 @@ pub fn add_function(module: &mut Module, one: &Function) {
     let flag = int(module, i64::from(one.module));
     let id = node(module, vec![text(&one.function), text(&one.name), MetadataOperand::Node(one.r#type), parameters, flag]);
     named(module, FUNCTIONS, id);
+}
+
+/// The module's source language.
+pub fn set_language(module: &mut Module, language: Language) {
+    let id = node(module, vec![text(language.value())]);
+    named(module, LANGUAGE, id);
+}
+
+pub fn language(module: &Module) -> Option<Language> {
+    let id = listed(module, LANGUAGE).next()?;
+    Language::from_value(&Reader::of(module, id)?.text(0)?)
 }
 
 pub fn functions(module: &Module) -> Vec<Function> {

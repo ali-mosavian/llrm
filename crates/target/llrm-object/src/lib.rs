@@ -85,6 +85,9 @@ pub enum Target {
     Symbol(usize),
     /// An index into `Object::omf_groups`.
     OmfGroup(usize),
+    /// The start of a section, by its index in `Object::sections`: what a debug section refers to
+    /// another one by.
+    Section(usize),
 }
 
 /// One field of a section's image, filled when the object is linked. The image holds zeros there.

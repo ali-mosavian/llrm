@@ -21,7 +21,7 @@ pub struct Described<'u> {
 impl<'u> Described<'u> {
     /// None unless the unit was compiled with -d2.
     pub fn of(unit: &'u hir::Unit) -> Option<Self> {
-        Some(Self { unit, debug: unit.debug.as_ref()?, builder: Builder::default(), made: HashMap::new() })
+        Some(Self { unit, debug: unit.debug.as_ref()?, builder: Builder::for_language(llrm_core::hir::model::DebugLanguage::C), made: HashMap::new() })
     }
 
     /// A pointer's reach, as the memory model makes a default one.

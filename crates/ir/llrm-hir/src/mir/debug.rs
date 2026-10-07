@@ -56,6 +56,9 @@ pub(super) fn emitted<'h>(
 ) -> Emit<HashMap<(i64, i64), MetadataId>> {
     let mut variables = HashMap::new();
     let Some(debug) = &hir.debug else { return Ok(variables) };
+    if let Some(language) = debug.language {
+        di::set_language(module, language);
+    }
     let mut types = Types { of: debug.types.iter().map(|one| (one.id, one)).collect(), made: HashMap::new() };
     for global in &debug.globals {
         let Some(&object) = data.get(&global.object) else { continue };

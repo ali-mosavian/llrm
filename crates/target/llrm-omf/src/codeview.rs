@@ -125,6 +125,11 @@ fn module(object: &Object, info: &Info) -> Result<cvwrite::Module, Error> {
 
 /// `info`'s two debug sections for `object`: $$SYMBOLS, then $$TYPES.
 pub fn sections(object: &Object, info: &Info) -> Result<[Section; 2], Error> {
+    match info.format {
+        model::Format::Default | model::Format::CodeView => {}
+        model::Format::Dwarf { .. } => return refused("OMF cannot carry DWARF: use -gcodeview, or -fobject-format=elf"),
+        model::Format::TurboDebugger => return refused("this writer does not write Turbo Debugger's information yet"),
+    }
     let flavor = Flavor { qb45: info.producer == model::Producer::Qb45 };
     let encoded = cvwrite::written(&module(object, info)?, flavor).map_err(Error::Unencodable)?;
     let mut relocs = Vec::new();

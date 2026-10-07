@@ -1,7 +1,7 @@
 //! `-g`: builds a module's [`Debug`] as a frontend declares its source
 //! types, procedures, parameters and variables. Each type is made once.
 
-use crate::model::{Debug, DebugFunction, DebugGlobal, DebugKind, DebugMember, DebugParameter, DebugReach, DebugScalar, DebugType, DebugVariable};
+use crate::model::{Debug, DebugFunction, DebugGlobal, DebugKind, DebugLanguage, DebugMember, DebugParameter, DebugReach, DebugScalar, DebugType, DebugVariable};
 
 #[derive(Default)]
 pub struct Builder {
@@ -13,6 +13,11 @@ pub struct Builder {
 }
 
 impl Builder {
+    /// A builder for a program written in `language`.
+    pub fn for_language(language: DebugLanguage) -> Self {
+        Self { debug: Debug { language: Some(language), ..Debug::default() }, ..Self::default() }
+    }
+
     /// The type `kind` and the rest describe, made once.
     fn intern(&mut self, kind: DebugKind, name: &str, target: Option<i64>, size: i64, reach: DebugReach, members: Vec<DebugMember>) -> i64 {
         let types = &mut self.debug.types;
