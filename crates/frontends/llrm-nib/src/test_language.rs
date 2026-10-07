@@ -2068,6 +2068,18 @@ fn an_array_field_is_declared_for_c_and_assembler_and_refused_for_basic() {
     assert!(declarations(&module, "t", Language::Basic).expect_err("refused").message.contains("\"bound\" has no declaration in BASIC"));
 }
 
+/// A near pointer field in the assembler's struct was `dw` whatever the target: on a flat one it is a dword, so a
+/// struct a C or assembler caller laid out from it was two bytes short and every field after the pointer was misplaced.
+#[test]
+fn a_pointer_field_in_an_assembler_struct_is_the_targets_pointer_width() {
+    use super::declarations::{Language, declarations_on};
+    let source = "@repr(\"c\")\nstruct Node:\n    next: *near mut i16\n    id: i16\n\nfn main() -> i16:\n    return 0\n";
+    let module = super::parse(super::lex(source).expect("lexes")).expect("parses");
+    let on = |target: &dyn llrm_target::Target| declarations_on(&module, "t", Language::Assembler, crate::Frontend::for_target(target).unwrap().sizes()).expect("declares");
+    assert!(on(&llrm_x86_m16::M16).contains("    next dw ?\n"));
+    assert!(on(&llrm_x86_m32::M32).contains("    next dd ?\n"));
+}
+
 /// `source`'s refusal, its imports supplied by the compiler.
 fn refused_with_imports(source: &str) -> String {
     let module = super::modules::load(source, &mut |name| Err(format!("{name} is not supplied"))).expect("loads");

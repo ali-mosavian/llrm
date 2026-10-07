@@ -227,8 +227,8 @@ mod tests {
         fn register_capacity(&self) -> i64 { self.0.register_capacity() }
         fn address_forms(&self, costs: &llrm_mir::target::OperationCosts, address_stall: i64) -> Vec<llrm_mir::target::AddressForm> { self.0.address_forms(costs, address_stall) }
         fn cost_model(&self) -> llrm_target::CostModel { self.0.cost_model() }
-        fn conventions(&self) -> &'static [&'static str] { self.0.conventions() }
         fn calling(&self) -> &'static llrm_target::calling::Calling { self.0.calling() }
+        fn conventions(&self) -> &'static [&'static str] { self.0.conventions() }
         fn object(&self) -> llrm_target::object::ObjectFormat { self.0.object() }
     }
 

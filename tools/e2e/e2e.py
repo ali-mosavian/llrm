@@ -28,6 +28,8 @@ from collections.abc import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import llrmbin  # noqa: E402
 from dosbox import Run
 from configs import Config
 from configs import CONFIGS
@@ -193,7 +195,7 @@ def judge(
 
 def rewriter_command() -> list[str]:
     subprocess.run(["cargo", "build", "--quiet", "--release", "--bin", "llrm-omf"], cwd=ROOT, check=True)
-    return [str(ROOT / "target" / "release" / "llrm-omf")]
+    return [str(llrmbin.bin_dir() / "llrm-omf")]
 
 
 def driver(command: list[str], cfg: Config, *options: str) -> Callable[[bytes], bytes]:

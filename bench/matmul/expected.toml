@@ -1,5 +1,5 @@
-reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
-blessed = "2026-10-06"
+reason = "lsr prices the copy a two-address target makes before a negation or a shift of a live counter (#705): matmul nib -O2 2463 -> 2439 instructions, shellsort nib 11434 -> 11370 (-Os 11856 -> 11792)"
+blessed = "2026-10-07"
 
 [bas.O2]
 instructions = 3587
@@ -34,12 +34,11 @@ bss_bytes = 0
 kernel_ms = 0.0797
 
 [nib.O2]
-instructions = 2463
+instructions = 2439
 memory_operands = 1344
-code_bytes = 2289
+code_bytes = 2284
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0351
 
 [nib.Os]
 instructions = 6408

@@ -388,7 +388,7 @@ pub fn _computed(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Interval>,
     }
     // Every other operation answers None below, whatever its operands.
     let kind = match op.opcode {
-        Opcode::Cast(CastOp::SExt) => None,
+        Opcode::Cast(CastOp::SExt | CastOp::ZExt) => None,
         Opcode::Binary(kind @ (BinaryOp::Shl | BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::And)) => Some(kind),
         _ => return None,
     };
@@ -411,7 +411,9 @@ pub fn _computed(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Interval>,
         -&sign <= *low && low <= high && *high < sign
     };
     if kind.is_none() {
-        return (args.len() == 1 && first.width < width && fits(&first.low, &first.high, first.width))
+        // A zero extension keeps the numbers only of a non-negative interval.
+        let zero = matches!(op.opcode, Opcode::Cast(CastOp::ZExt));
+        return (args.len() == 1 && first.width < width && fits(&first.low, &first.high, first.width) && (!zero || first.low >= BigInt::from(0_u8)))
             .then(|| Interval { low: first.low.clone(), high: first.high.clone(), width });
     }
     if first.width != width || args.len() != 2 {

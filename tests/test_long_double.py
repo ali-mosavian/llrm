@@ -20,7 +20,8 @@ from tools.e2e.configs import QB45
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "dosbatch"))
 import dosbatch  # noqa: E402
-BIN = ROOT / "target" / "release"
+from tools import llrmbin  # noqa: E402
+BIN = llrmbin.bin_dir()
 SOURCE = ROOT / "tests" / "fixtures" / "c" / "longdouble.c"
 
 

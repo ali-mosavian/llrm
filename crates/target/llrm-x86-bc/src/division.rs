@@ -3,8 +3,8 @@
 //! fit a word the machine traps and `sdiv i16` is undefined, as the core's
 //! 32-by-16 division leaves it.
 
-use llrm_bcmachine::model::ir::Operation;
-use llrm_bcmachine::model::ir::nodes::Node;
+use llrm_x86_bcmachine::model::ir::Operation;
+use llrm_x86_bcmachine::model::ir::nodes::Node;
 use llrm_mir::BinaryOp;
 
 use crate::emit::{Emit, Emitter};

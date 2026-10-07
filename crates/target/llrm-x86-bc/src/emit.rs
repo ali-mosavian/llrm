@@ -21,14 +21,14 @@ use std::rc::Rc;
 
 use iced_x86::Register;
 use llrm_analysis::ssa::{SsaUpdater, provider};
-use llrm_bcmachine::analysis::flags::{self as flagged, Flag};
-use llrm_bcmachine::frontends::bc::blocks::{self, Block, Ends};
-use llrm_bcmachine::frontends::bc::declen::Insn;
-use llrm_bcmachine::frontends::bc::extent::BodyKind;
-use llrm_bcmachine::model::ir::nodes::{Node, span};
-use llrm_bcmachine::model::ir::{Effects, Imm, Loc, Operation, Reg, Semantics};
-use llrm_bcmachine::objectfile::module::{Addr, Space};
-use llrm_bcmachine::support::hash::IndexMap;
+use llrm_x86_bcmachine::analysis::flags::{self as flagged, Flag};
+use llrm_x86_bcmachine::frontends::bc::blocks::{self, Block, Ends};
+use llrm_x86_bcmachine::frontends::bc::declen::Insn;
+use llrm_x86_bcmachine::frontends::bc::extent::BodyKind;
+use llrm_x86_bcmachine::model::ir::nodes::{Node, span};
+use llrm_x86_bcmachine::model::ir::{Effects, Imm, Loc, Operation, Reg, Semantics};
+use llrm_x86_bcmachine::objectfile::module::{Addr, Space};
+use llrm_x86_bcmachine::support::hash::IndexMap;
 use llrm_mir::build::Builder;
 use llrm_mir::{
     BinaryOp, BlockId, CastOp, Constant, ConstantId, ConstantKind, FloatKind, Flags, InstId, IntPredicate, Opcode, Operand, Position, Type, TypeId, ValueId,
@@ -1796,7 +1796,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let size = self.constant(size).ok_or("a frame of variable size")?;
         // VBDOS's B$ENRA takes in BX the string temporaries it gives the
         // frame; QB 4.5's and PDS's code sets no BX for it.
-        if self.unit.facts.family() == llrm_bcmachine::objectfile::module::Family::Vbdos {
+        if self.unit.facts.family() == llrm_x86_bcmachine::objectfile::module::Family::Vbdos {
             let temporaries = self.register(Register::BX)?;
             if self.constant(temporaries) != Some(0) {
                 return Err(format!("{FRAME_ENTRY} with string temporaries"));

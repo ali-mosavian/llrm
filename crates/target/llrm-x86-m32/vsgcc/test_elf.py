@@ -11,7 +11,7 @@ sys.path.insert(0, str(harness.REPO / "tools"))
 import linkrecipe  # noqa: E402
 
 EMULATION = linkrecipe.ld_emulation("x86-m32")
-LLRM = harness.REPO / "target/release/llrm-c"
+LLRM = harness.LLRM
 STUB = Path(__file__).parent / "stub.s"
 
 
