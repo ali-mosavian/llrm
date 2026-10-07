@@ -488,10 +488,20 @@ impl<'a> Unit<'a> {
 
     /// What consts knows without memory: the manager's where the unit
     /// carries it.
+    ///
+    /// A unit that carries none was made without the manager, and deriving them here would be a second derivation of
+    /// a fact the manager holds (or a stale copy of it): asking is a bug. A caller over a body the manager has not
+    /// seen states what it computes with `with_registers`.
     pub fn registers(&self) -> Cow<'a, IndexMap<ValueId, Known>> {
         match self.registers {
-            Some(registers) => Cow::Borrowed(registers),
-            None => Cow::Owned(crate::consts::known(self, None, None, None)),
+            Some(registers) => {
+                if std::env::var_os("LLRM_CHECK_FACTS").is_some() {
+                    let fresh = crate::consts::known(&Unit { registers: None, ..*self }, None, None, None);
+                    assert!(*registers == fresh, "the registers a unit carries are not those of the body it stands over: stale");
+                }
+                Cow::Borrowed(registers)
+            }
+            None => panic!("a unit with no registers was asked for them: take them from the analysis manager"),
         }
     }
 
@@ -571,6 +581,40 @@ impl<'a> Unit<'a> {
 /// Whether `inst` marks an object's lifetime, which names it without handing out its address.
 pub fn is_lifetime_marker(unit: &Unit, inst: InstId) -> bool {
     matches!(unit.intrinsic(inst), Some(llrm_mir::intrinsics::Intrinsic::LifetimeStart | llrm_mir::intrinsics::Intrinsic::LifetimeEnd))
+}
+
+/// What is known of a body without memory (`consts::known`), for a caller that changes the body as it goes: the
+/// manager's where the body is as the manager saw it, derived again, once for each state, once it is not. The one
+/// place a unit's registers are derived outside the manager.
+pub struct Standing<'h> {
+    held: Option<&'h IndexMap<ValueId, Known>>,
+    derived: Option<IndexMap<ValueId, Known>>,
+}
+
+impl<'h> Standing<'h> {
+    /// The body is as `registers` were found of it.
+    pub fn held(registers: &'h IndexMap<ValueId, Known>) -> Self {
+        Self { held: Some(registers), derived: None }
+    }
+
+    /// No one has found them: derived when first asked.
+    pub fn underived() -> Self {
+        Self { held: None, derived: None }
+    }
+
+    /// The body changed: what was found of it no longer holds.
+    pub fn changed(&mut self) {
+        self.held = None;
+        self.derived = None;
+    }
+
+    /// What is known of `unit`'s body as it stands, which it must be the one these were asked of.
+    pub fn of(&mut self, unit: &Unit) -> &IndexMap<ValueId, Known> {
+        if let Some(held) = self.held {
+            return held;
+        }
+        self.derived.get_or_insert_with(|| crate::consts::known(&Unit { registers: None, ..*unit }, None, None, None))
+    }
 }
 
 /// The allocas of `unit`'s function whose address is exposed, in one pass: what `object_of` reads of

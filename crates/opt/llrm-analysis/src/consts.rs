@@ -752,9 +752,16 @@ pub fn holds(predicate: IntPredicate, left: &Known, right: &Known) -> bool {
 /// know is some absolute segment; the ones that came out numbers keep the
 /// assumption and the rest lose it, until every one still assumed resolved.
 pub fn known(unit: &Unit, calls: Option<&Calls>, edges: Option<&IndexMap<(i64, i64), Cells>>, initial: Option<&Cells>) -> IndexMap<ValueId, Known> {
+    if calls.is_none() {
+        REGISTER_DERIVATIONS.with(|count| count.set(count.get() + 1));
+    }
     // Each access asks whether its frame object is exposed: found once for the body, if no caller has.
     let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
     let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
+    // What alias annotates a store with reads what is known without memory: found here, with the memory's, where the
+    // unit carries none.
+    let registers = (calls.is_some() && unit.registers.is_none()).then(|| known(unit, None, None, None));
+    let unit = &registers.as_ref().map_or(*unit, |found| unit.with_registers(found));
     // A store kills the cells alias's provenance leaves it able to reach.
     let annotated = (calls.is_some() && unit.references.is_none()).then(|| unit.annotated().ok()).flatten();
     let unit = &annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
@@ -769,6 +776,16 @@ pub fn known(unit: &Unit, calls: Option<&Calls>, edges: Option<&IndexMap<(i64, i
         }
         allowed = Some(resolved);
     }
+}
+
+thread_local! {
+    static REGISTER_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has derived what is known of a body without memory, for a test that a pass asks of the
+/// manager, or of itself once for each state of the body, and not once for each loop.
+pub fn register_derivations() -> usize {
+    REGISTER_DERIVATIONS.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]

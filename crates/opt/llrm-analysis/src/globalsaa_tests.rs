@@ -48,7 +48,7 @@ b0:
     let outer = modules.outer(module);
     let f = function(module, "f");
     if !summarized {
-        let unit = Unit::within(&module.context, &layout, f, &outer);
+        let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
         let calls: Calls = call_effects(&unit, &outer).unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect();
         return known(&unit, Some(&calls), None, None).get(&value(f, "r")).cloned();
     }
@@ -291,7 +291,7 @@ fn a_callee_declared_after_the_outer_facts_may_call_back() {
     outer.require::<GlobalsAA>(&taken);
     let layout = layout(&now);
     let f = function(&now, "f");
-    let unit = Unit::within(&now.context, &layout, f, &outer);
+    let unit = crate::testing::with_registers(Unit::within(&now.context, &layout, f, &outer));
     let (_, call) = f.walk().next().expect("the call");
     assert!(crate::globalsaa::calls_back(&unit, call));
 }

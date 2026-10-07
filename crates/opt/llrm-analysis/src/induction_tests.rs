@@ -41,7 +41,7 @@ impl Parsed {
     }
 
     pub fn unit(&self) -> Unit<'_> {
-        Unit::of(&self.module, &self.layout, self.function())
+        crate::testing::with_registers(Unit::of(&self.module, &self.layout, self.function()))
     }
 
     pub fn value(&self, name: &str) -> ValueId {
@@ -1018,7 +1018,7 @@ fn test_every_corpus_count_is_where_its_test_first_fails() {
             if function.entry().is_none() {
                 continue;
             }
-            let unit = Unit::of(&module, &layout, function);
+            let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
             let facts = consts::known(&unit, None, None, None);
             for loop_ in loops::loops(&cfg::graph(function), None) {
                 for proof in counted_unless_stopped(&unit, &loop_, Some(&facts), false) {
@@ -1055,7 +1055,7 @@ fn test_every_corpus_recurrence_is_computed_inside_its_loop() {
     for (name, module) in corpus() {
         let layout = layout(&module);
         for (_, _, function) in module.functions().filter(|(_, _, one)| one.entry().is_some()) {
-            let unit = Unit::of(&module, &layout, function);
+            let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
             for loop_ in unit.shape().loops.iter() {
                 let counters = basics(&unit, loop_);
                 for inst in recurrences(&unit, loop_, &counters).web {
@@ -1799,7 +1799,7 @@ fn loop_count_table() {
         let layout = layout(&module);
         for (_, global, function) in module.functions().filter(|(_, _, one)| one.entry().is_some()) {
             let gname = global.name.clone();
-            let unit = Unit::of(&module, &layout, function);
+            let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
             for loop_ in unit.shape().loops.iter() {
                 let proofs = counted_unless_stopped(&unit, loop_, None, false);
                 let placed = |proof: &CountedLoop| proof.count.is_some() || trips(proof, &mut |_, args| args[0].clone()).is_some();

@@ -81,10 +81,12 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses, size: bool) -> 
     let pressure = room.priced() && !_slots_remain(unit);
     let frequency = (pressure || room.priced() && costs.float_release > 0).then(|| _frequency(unit, analyses, &outer, size)).flatten();
     let room = if pressure { room } else { crate::spill::Room { registers: 0, ..room } };
+    // What is known without memory holds as instructions move: no block, edge or value changes.
+    let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
     let mut changed = false;
     for one in found {
         let Some(into) = _preheader(&graph, one) else { continue };
-        let run = _invariant_run(unit, &outer, one, into, &accesses, &terminal);
+        let run = _invariant_run(unit, &outer, one, into, &accesses, &terminal, &registers);
         if _crossed_values(unit.function, &run).is_empty() {
             continue;
         }
@@ -217,7 +219,7 @@ pub fn _preheader(graph: &[cfg::Block], loop_: &Loop) -> Option<i64> {
 /// The loop's instructions whose results never change, in an order each
 /// reads only what is outside the loop or earlier in it. Grown, to a fixed
 /// point.
-pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, accesses: &Accesses, terminal: &BTreeSet<InstId>) -> Vec<InstId> {
+pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, accesses: &Accesses, terminal: &BTreeSet<InstId>, registers: &llrm_support::hash::IndexMap<ValueId, llrm_analysis::consts::Known>) -> Vec<InstId> {
     let function = &*unit.function;
     let inside = |block: BlockId| loop_.body.contains(&cfg::id(block));
     let insts: Vec<InstId> = function.layout().iter().filter(|&&block| inside(block)).flat_map(|&block| function.block(block).instructions().to_vec()).collect();
@@ -242,8 +244,8 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
             });
             if !ready
                 || (_may_fault(unit, outer, inst)
-                    && !certain.get_or_insert_with(|| _guaranteed(unit, outer, loop_, into, terminal)).contains(&inst)
-                    && !_bounded_inside(unit, outer, inst, into, loop_.header, &mut bounded))
+                    && !certain.get_or_insert_with(|| _guaranteed(unit, outer, loop_, into, terminal, registers)).contains(&inst)
+                    && !_bounded_inside(unit, outer, inst, into, loop_.header, &mut bounded, registers))
             {
                 continue;
             }
@@ -297,11 +299,11 @@ fn _may_fault(unit: &passes::Unit, outer: &Outer, inst: InstId) -> bool {
 /// Whether `inst` loads only bytes inside its object wherever the
 /// preheader `into` enters the loop at `header`, its index's bounds on
 /// that edge as `ranges` finds them.
-fn _bounded_inside(unit: &passes::Unit, outer: &Outer, inst: InstId, into: i64, header: i64, bounded: &mut Option<ranges::Facts>) -> bool {
+fn _bounded_inside(unit: &passes::Unit, outer: &Outer, inst: InstId, into: i64, header: i64, bounded: &mut Option<ranges::Facts>, registers: &llrm_support::hash::IndexMap<ValueId, llrm_analysis::consts::Known>) -> bool {
     if !matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. }) {
         return false;
     }
-    let memory = Unit::within(unit.context, unit.layout, unit.function, outer);
+    let memory = Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(registers);
     let Some(reference) = memory.reference(inst) else { return false };
     if bounded.is_none() {
         *bounded = Some(ranges::bounded(&memory).unwrap_or_default());
@@ -327,7 +329,7 @@ pub fn _cannot_fault(unit: &passes::Unit, inst: InstId) -> bool {
 /// `into`: the header's, and once induction proves a trip, those of every
 /// block each path from the header's one successor in the loop reaches
 /// before leaving or coming back. A call that cannot return ends its block.
-pub fn _guaranteed(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, terminal: &BTreeSet<InstId>) -> BTreeSet<InstId> {
+pub fn _guaranteed(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, terminal: &BTreeSet<InstId>, registers: &llrm_support::hash::IndexMap<ValueId, llrm_analysis::consts::Known>) -> BTreeSet<InstId> {
     let function = &*unit.function;
     if function.successors(cfg::block(into)) != [cfg::block(loop_.header)] {
         return BTreeSet::new();
@@ -342,7 +344,7 @@ pub fn _guaranteed(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, 
     let successors = |at: i64| function.successors(cfg::block(at)).into_iter().map(cfg::id).collect::<Vec<_>>();
     let starts: Vec<i64> = successors(loop_.header).into_iter().filter(|at| loop_.body.contains(at) && *at != loop_.header).collect();
     let [start] = starts[..] else { return out };
-    if ends(loop_.header) || !induction::nonempty(&Unit::within(unit.context, unit.layout, function, outer), loop_) {
+    if ends(loop_.header) || !induction::nonempty(&Unit::within(unit.context, unit.layout, function, outer).with_registers(registers), loop_) {
         return out;
     }
     for &target in &loop_.body {

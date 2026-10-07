@@ -63,7 +63,9 @@ impl FunctionPass for Fill {
     }
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        if filled(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), unit.declared, self.size) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
+        let changed = filled_with(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), unit.declared, self.size, &mut llrm_analysis::memory::Standing::held(&registers));
+        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -220,13 +222,25 @@ fn _adjacent(unit: &Unit, open: Vec<_Cell>) -> Vec<(Vec<_Cell>, u32, u32)> {
 
 /// `function` with every such loop's body made one fill; whether any was.
 pub fn filled(context: &mut Context, layout: &DataLayout, callees: &Callees, function: &mut Function, outer: &Outer, declared: &mut Declared, size: bool) -> bool {
+    filled_with(context, layout, callees, function, outer, declared, size, &mut llrm_analysis::memory::Standing::underived())
+}
+
+/// `filled`, what is known of the body without memory given as `standing` says: derived once for each state of the
+/// body, not once for each loop.
+#[allow(clippy::too_many_arguments)]
+pub fn filled_with(context: &mut Context, layout: &DataLayout, callees: &Callees, function: &mut Function, outer: &Outer, declared: &mut Declared, size: bool, standing: &mut llrm_analysis::memory::Standing) -> bool {
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
     let mut changed = false;
     'again: loop {
         for loop_ in cfg::Shape::of(function).loops {
-            let found = _fill(&Unit::within(context, layout, function, outer), callees, &loop_, &costs, size);
+            let found = {
+                let unit = Unit::within(context, layout, function, outer);
+                let facts = standing.of(&unit);
+                _fill(&unit.with_registers(facts), callees, &loop_, &costs, size)
+            };
             if let Some(found) = found {
                 _filled(context, declared, function, &found);
+                standing.changed();
                 changed = true;
                 continue 'again;
             }
