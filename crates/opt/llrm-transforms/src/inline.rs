@@ -123,6 +123,7 @@ const FRAME_LIMIT: u64 = 256;
 /// instructions and 2.2 above. A MIR operation is about an LIR instruction in a large body (0.7 to 1.0 in bench's matmul,
 /// particle and lru; 2 to 3.6 in a body of twenty, which carries its prologue). Called-once inlining (#769) merged
 /// part_frame from 435 to 1647 instructions: backend 271 ms -> 11,385 ms.
+// Re-measure when the allocator's slot numbering lands: https://github.com/ali-mosavian/llrm/issues/794. Measured 2026-10-07.
 const ALLOCATION_KNEE: i64 = 250;
 
 /// gcc's rule of `caller_growth_limits` with the knee for `large-function-insns`: an inline that leaves its caller over
