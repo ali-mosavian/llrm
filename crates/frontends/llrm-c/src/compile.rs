@@ -297,7 +297,8 @@ pub fn main(argv: &[String]) -> i32 {
             .and_then(|one| one.to_str())
             .unwrap_or_default();
         let format = args.flags.format(&*args.codegen.arch)?;
-        let built = selected_checking(&text, module, args.dump.as_deref(), &args.codegen, args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)))?;
+        let spelled = llrm_core::driver::Options { object_format: format.name(), ..args.codegen.clone() };
+        let built = selected_checking(&text, module, args.dump.as_deref(), &spelled, args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)))?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if !args.flags.assembly && matches!(output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref(), Some("obj" | "o")) {
             let bytes = objbuild::written_in(&built, name, objbuild::CodeLayout::OneSegment, format)?;
