@@ -30,7 +30,7 @@ impl<'a> Unit<'a> {
     /// as `outer` holds them.
     pub fn within(context: &'a Context, layout: &'a DataLayout, function: &'a Function, outer: &'a Outer) -> Self {
         let globals_aa = outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok());
-        Self { program: Some(outer.program()), spaces: outer.target().spaces(), context, layout, metadata: &outer.metadata, tbaa: Some(outer.tbaa()), globals: &outer.globals, function, globals_aa, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, counted: None, exposed: None }
+        Self { program: Some(outer.program()), spaces: outer.target().spaces(), context, layout, metadata: &outer.metadata, tbaa: Some(outer.tbaa()), globals: &outer.globals, function, globals_aa, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, counted: None, edges: None, exposed: None }
     }
 }
 
@@ -232,7 +232,11 @@ impl Analysis for Annotated {
         let shape = analyses.get::<Shape>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let counted = analyses.get::<Counted>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_pointers(pointers).with_exposed(&exposed).with_counted(&counted);
+        let edges = analyses.get::<DominatedEdges>(context, layout, function);
+        let mut unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_pointers(pointers).with_exposed(&exposed).with_counted(&counted);
+        if let Ok(edges) = &*edges {
+            unit = unit.with_edges(edges);
+        }
         alias::annotated_with(&unit, pointers, &registers)
     }
 }
@@ -416,13 +420,29 @@ impl Analysis for ThroughMemory {
 pub struct DominatedEdges;
 
 impl Analysis for DominatedEdges {
-    type Result = Result<IndexMap<i64, IndexMap<ValueId, Interval>>, String>;
+    type Result = Result<ranges::EdgeStates, String>;
     const NAME: &'static str = "dominated-edges";
+    const INCREMENTAL: bool = true;
+
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        Self::solved(context, layout, function, analyses, None)
+    }
+
+    /// A block's state is of its operations, the state it starts from and the facts of the values they read; those of
+    /// the blocks a change reaches, and those that start from a state that changed, are worked again.
+    fn update(previous: &Self::Result, changes: &[Change], context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Option<Self::Result> {
+        let states = previous.as_ref().ok()?;
+        let reached = reached_by(function, changes)?;
+        Some(Self::solved(context, layout, function, analyses, Some((states, &reached))))
+    }
+}
+
+impl DominatedEdges {
+    fn solved(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses, before: Option<(&ranges::EdgeStates, &BTreeSet<BlockId>)>) -> <Self as Analysis>::Result {
         let registers = analyses.get::<Registers>(context, layout, function);
         let shape = analyses.get::<Shape>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        ranges::dominated_edges_with(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_exposed(&exposed), &registers)
+        ranges::edges_solved(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_exposed(&exposed), &registers, before)
     }
 }
 
