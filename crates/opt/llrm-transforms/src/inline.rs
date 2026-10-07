@@ -126,7 +126,12 @@ const FRAME_LIMIT: u64 = 256;
 /// where its parts were 175 and 465: backend 0.36 s -> 2.4 s. Called-once inlining (#769) merged part_frame from 435 to 1647
 /// instructions: backend 271 ms -> 11,385 ms.
 // Re-measure when the allocator's slot numbering lands: https://github.com/ali-mosavian/llrm/issues/794. Measured 2026-10-07.
-const ALLOCATION_KNEE: i64 = 140;
+const KNEE_INSTRUCTIONS: i64 = 250;
+/// LIR instructions a MIR operation comes to, in percent: the median over QCport's 108 functions of 60 operations or more at
+/// -O2 (186) and 15 on the 32-bit target (166), taken as 180.
+const INSTRUCTIONS_PER_OPERATION: i64 = 180;
+/// The knee in the unit this counts, MIR operations.
+const ALLOCATION_KNEE: i64 = KNEE_INSTRUCTIONS * 100 / INSTRUCTIONS_PER_OPERATION;
 
 /// gcc's rule of `caller_growth_limits` with the knee for `large-function-insns`: an inline that leaves its caller over
 /// `ALLOCATION_KNEE` operations and over the larger of the caller's own size (before any inlining) and the callee's grown

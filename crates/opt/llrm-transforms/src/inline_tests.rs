@@ -752,3 +752,11 @@ fn test_a_body_moved_into_a_caller_past_the_allocation_knee_stays_a_call() {
     let mut within = parsed(&text(50));
     assert!(inline_with(&mut within, "main", 8, Threshold::default()));
 }
+
+/// The knee is measured in LIR instructions and counted in MIR operations: a body of the knee's operations comes to the
+/// knee's instructions at the stated rate. Counted as the same number it let sb_build's merge through (667 instructions).
+#[test]
+fn test_the_knee_in_operations_is_the_knee_in_instructions_over_their_rate() {
+    assert!((ALLOCATION_KNEE * INSTRUCTIONS_PER_OPERATION / 100 - KNEE_INSTRUCTIONS).abs() <= 2);
+    assert!(ALLOCATION_KNEE < KNEE_INSTRUCTIONS);
+}
