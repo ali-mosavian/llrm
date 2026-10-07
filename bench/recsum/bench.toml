@@ -1,0 +1,9 @@
+description = "A tail call with the accumulator a parameter: 2000 steps"
+repetitions = 1
+
+[region]
+c = "bench_recsum"
+
+[gaps]
+bas = "#784 only the C version is written"
+nib = "#784 only the C version is written"
