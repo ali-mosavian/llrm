@@ -22,9 +22,22 @@ pub enum Producer {
     Qb45,
 }
 
+/// A register of the target, with its number in each debug format that gives it one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Register {
+    pub name: String,
+    pub bits: u32,
+    pub dwarf: Option<u16>,
+    pub codeview: Option<u16>,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Info {
     pub producer: Producer,
+    /// The register a [`Location::Frame`] is relative to.
+    pub frame_register: String,
+    /// The target's register file, so a writer needs no target.
+    pub registers: Vec<Register>,
     pub files: Vec<File>,
     /// The module's code, from its first function to its last byte.
     pub code: Vec<Range>,

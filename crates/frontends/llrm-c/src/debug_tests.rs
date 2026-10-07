@@ -121,6 +121,10 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
     assert!(range.length > 0 && range.offset + range.length <= object.sections[range.section].image.len());
     assert_eq!(info.lines.iter().map(|one| one.line).collect::<Vec<_>>(), [13, 15, 16, 17]);
     assert!(info.lines.iter().all(|one| one.file == 0));
+    // The target's register file, once, for writers that know no target.
+    assert_eq!(info.frame_register, "ebp");
+    let number = |name: &str| info.registers.iter().find(|one| one.name == name).map(|one| (one.dwarf, one.codeview));
+    assert_eq!(number("bp"), Some((None, Some(14))));
 }
 
 /// HIR's codec writes a variable's `parameter` key only where it is true, so a program with none

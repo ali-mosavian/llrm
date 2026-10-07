@@ -715,7 +715,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
     externs.sort();
     externs.dedup();
     let producer = if runtime == model::RuntimeProfile::Qb45 { llrm_object::debug::Producer::Qb45 } else { llrm_object::debug::Producer::Native };
-    let debug = timed("debug info", || debuginfo::described(module, &names, producer, 16))?;
+    let debug = timed("debug info", || debuginfo::described(module, &names, producer, &*options.arch))?;
     Ok(masm::Module {
         code: object.code.clone(),
         names,
