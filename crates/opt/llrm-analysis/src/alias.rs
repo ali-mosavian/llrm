@@ -1804,14 +1804,37 @@ pub fn annotated(unit: &Unit) -> Result<IndexMap<InstId, MemRef>, String> {
 
 /// `annotated`, given the points-to facts and what `consts::known` finds
 /// without memory.
+/// `ranges::bounded`'s facts, the manager's where the unit carries them for the registers asked of, else worked out.
+enum Bounded<'a> {
+    Held(&'a ranges::Bounds),
+    Worked(ranges::Facts),
+}
+
+impl Bounded<'_> {
+    fn at(&self, at: i64) -> Option<&IndexMap<ValueId, ranges::Interval>> {
+        match self {
+            Bounded::Held(held) => held.at(at),
+            Bounded::Worked(worked) => worked.get(&at),
+        }
+    }
+}
+
 pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, Known>) -> Result<IndexMap<InstId, MemRef>, String> {
-    let bounded = ranges::bounded_with(unit, known)?;
+    let bounded = match (unit.bounds, unit.registers) {
+        (Some(held), Some(registers)) if std::ptr::eq(known, registers) => {
+            if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+                assert!(held.facts() == ranges::bounded_with(unit, known)?, "the bounds a unit carries are not those of the body it stands over: stale");
+            }
+            Bounded::Held(held)
+        }
+        _ => Bounded::Worked(ranges::bounded_with(unit, known)?),
+    };
     let strides = congruences_with(unit, known);
     let constants = ranges::intervals(known);
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {
         let mut got = facts.reference(unit, reference);
-        let interval = reference.base.and_then(|base| bounded.get(&at).and_then(|known| known.get(&base)).or_else(|| constants.get(&base)));
+        let interval = reference.base.and_then(|base| bounded.at(at).and_then(|known| known.get(&base)).or_else(|| constants.get(&base)));
         if let (Some(current), true, Some(base), Some(interval)) = (&got, reference.object, reference.base, interval) {
             if interval.width == reference.base_width && current.slices.len() == 1 && reference.scale > 0 {
                 let source = current.slices.first().expect("one slice");
@@ -1837,7 +1860,7 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
         // A far access whose selector's range lands it in foreign memory
         // names those linear bytes, whatever its pointer's provenance.
         if let (None, Some(Operand::Value(segment))) = (reference.selector, reference.segment) {
-            let lookup = |value: ValueId| bounded.get(&at).and_then(|known| known.get(&value)).or_else(|| constants.get(&value)).map(|one| (value, one.clone()));
+            let lookup = |value: ValueId| bounded.at(at).and_then(|known| known.get(&value)).or_else(|| constants.get(&value)).map(|one| (value, one.clone()));
             let known = [Some(segment), reference.base].into_iter().flatten().filter_map(lookup).collect();
             if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {
                 got = Some(foreign);

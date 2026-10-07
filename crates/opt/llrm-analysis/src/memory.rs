@@ -427,6 +427,8 @@ pub struct Unit<'a> {
     pub counted: Option<&'a crate::induction::Counted>,
     /// What the unavoidable branch edges bound at each block, under `registers`: the manager's `DominatedEdges`.
     pub edges: Option<&'a crate::ranges::EdgeStates>,
+    /// What each counted loop bounds at each block, under `registers`: the manager's `Bounded`.
+    pub bounds: Option<&'a crate::ranges::Bounds>,
     /// The allocas whose address is exposed, the manager's `ExposedFrames`; without it each ask scans
     /// the alloca's uses.
     pub exposed: Option<&'a BTreeSet<ValueId>>,
@@ -446,7 +448,7 @@ impl<'a> Unit<'a> {
     }
 
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { program: None, spaces: llrm_mir::spaces::Spaces::FLAT, context: &module.context, layout, metadata: &module.metadata, tbaa: None, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, counted: None, edges: None, exposed: None }
+        Self { program: None, spaces: llrm_mir::spaces::Spaces::FLAT, context: &module.context, layout, metadata: &module.metadata, tbaa: None, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, counted: None, edges: None, bounds: None, exposed: None }
     }
 
     pub fn with_spaces(self, spaces: llrm_mir::spaces::Spaces) -> Self {
@@ -467,6 +469,10 @@ impl<'a> Unit<'a> {
 
     pub fn with_shape(self, shape: &'a Shape) -> Self {
         Self { shape: Some(shape), ..self }
+    }
+
+    pub fn with_bounds(self, bounds: &'a crate::ranges::Bounds) -> Self {
+        Self { bounds: Some(bounds), ..self }
     }
 
     pub fn with_edges(self, edges: &'a crate::ranges::EdgeStates) -> Self {

@@ -407,3 +407,62 @@ fn a_change_to_a_branch_bound_reworks_the_blocks_past_it() {
     let mut fresh = fresh;
     assert_eq!(after, states(&mut fresh, &module), "what was brought up to date is what working every block gives");
 }
+
+/// The second loop starts straight from the first's header, below no block of its own, and carries what the first
+/// knows of values it never reads.
+const DIRECT: &str = "define i16 @f() {
+b0:
+  %nine = add i16 4, 5
+  %three = add i16 1, 2
+  %four = add i16 2, 2
+  br label %h0
+
+h0:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %l0 ]
+  %t = mul i16 %i, %three
+  br label %l0
+
+l0:
+  %i.next = add i16 %i, 1
+  %c = icmp slt i16 %i.next, %nine
+  br i1 %c, label %h0, label %h1
+
+h1:
+  %j = phi i16 [ 0, %h0 ], [ %j.next, %l1 ]
+  %d = icmp slt i16 %j, 5
+  br i1 %d, label %l1, label %end
+
+l1:
+  %j.next = add i16 %j, 1
+  br label %h1
+
+end:
+  ret i16 %j
+}
+";
+
+/// What a loop knows is read from the loop its header's dominator is in, as well as from the blocks above: a change in
+/// the first of two such loops to a value the second never reads left the second's facts, which carry it, stale.
+#[test]
+fn a_change_to_a_loop_reworks_the_loop_that_starts_from_it() {
+    let mut module = parsed(&format!("{DOS}{DIRECT}"));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
+        let function = function(module, "f");
+        analyses.get::<super::Bounded>(&module.context, &layout, function).as_ref().as_ref().map(ranges::Bounds::facts).map_err(String::clone).unwrap()
+    };
+    let before = facts(&mut analyses, &module);
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let t = value(function, "t");
+        let t = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(t)).unwrap();
+        let four = Operand::Value(value(function, "four"));
+        function.set_operand(t, 1, four);
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    let after = facts(&mut analyses, &module);
+    assert_ne!(before, after, "the value the change reached");
+    assert_eq!(after, facts(&mut Analyses::new(outer), &module), "what was brought up to date is what working every loop gives");
+}

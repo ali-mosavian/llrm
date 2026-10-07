@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::opcode::Opcode;
 use llrm_mir::module::{BlockId, Change, Function, InstId, Linkage, Module, ValueId};
 use llrm_mir::passes::{Analyses, Analysis, ModuleAnalyses, ModuleAnalysis, Outer};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy};
@@ -30,7 +31,7 @@ impl<'a> Unit<'a> {
     /// as `outer` holds them.
     pub fn within(context: &'a Context, layout: &'a DataLayout, function: &'a Function, outer: &'a Outer) -> Self {
         let globals_aa = outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok());
-        Self { program: Some(outer.program()), spaces: outer.target().spaces(), context, layout, metadata: &outer.metadata, tbaa: Some(outer.tbaa()), globals: &outer.globals, function, globals_aa, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, counted: None, edges: None, exposed: None }
+        Self { program: Some(outer.program()), spaces: outer.target().spaces(), context, layout, metadata: &outer.metadata, tbaa: Some(outer.tbaa()), globals: &outer.globals, function, globals_aa, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, counted: None, edges: None, bounds: None, exposed: None }
     }
 }
 
@@ -233,9 +234,13 @@ impl Analysis for Annotated {
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let counted = analyses.get::<Counted>(context, layout, function);
         let edges = analyses.get::<DominatedEdges>(context, layout, function);
+        let bounds = analyses.get::<Bounded>(context, layout, function);
         let mut unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_pointers(pointers).with_exposed(&exposed).with_counted(&counted);
         if let Ok(edges) = &*edges {
             unit = unit.with_edges(edges);
+        }
+        if let Ok(bounds) = &*bounds {
+            unit = unit.with_bounds(bounds);
         }
         alias::annotated_with(&unit, pointers, &registers)
     }
@@ -304,7 +309,7 @@ impl Analysis for Counted {
     /// the values it makes: a loop none reaches keeps its proofs. A change to the CFG, or to the loops themselves,
     /// derives them afresh.
     fn update(previous: &Self::Result, changes: &[Change], context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Option<Self::Result> {
-        let reached = reached_by(function, changes)?;
+        let reached = reached_by(function, changes)?.blocks;
         let shape = analyses.get::<Shape>(context, layout, function);
         if !shape.loops.iter().map(|one| one.header).eq(previous.keys().copied()) {
             return None;
@@ -316,9 +321,16 @@ impl Analysis for Counted {
     }
 }
 
-/// The blocks holding an instruction `changes` touched, or one that reads a value a touched instruction makes, or
-/// one that reads the value such a reader makes, and so on; none where a change was to the CFG.
-pub fn reached_by(function: &Function, changes: &[Change]) -> Option<BTreeSet<BlockId>> {
+/// What a change reached: the blocks holding an instruction it touched, or one that reads a value a touched
+/// instruction makes, or one that reads the value such a reader makes, and so on; and of those the blocks whose
+/// branch, or assume, or call, is one that reads a value the change made, which can alter what holds below them.
+pub struct Reach {
+    pub blocks: BTreeSet<BlockId>,
+    pub conditions: BTreeSet<BlockId>,
+}
+
+/// What `changes` reached; none where a change was to the CFG.
+pub fn reached_by(function: &Function, changes: &[Change]) -> Option<Reach> {
     let mut blocks = BTreeSet::new();
     let mut work: Vec<InstId> = Vec::new();
     for change in changes {
@@ -336,8 +348,14 @@ pub fn reached_by(function: &Function, changes: &[Change]) -> Option<BTreeSet<Bl
         work.push(inst);
     }
     let mut seen: BTreeSet<InstId> = work.iter().copied().collect();
+    let mut conditions = BTreeSet::new();
     while let Some(inst) = work.pop() {
         blocks.extend(function.parent(inst));
+        if let Some(block) = function.parent(inst)
+            && (function.instruction(inst).opcode.is_terminator() || matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)))
+        {
+            conditions.insert(block);
+        }
         if let Some(result) = function.instruction(inst).result {
             for user in function.users(result) {
                 if seen.insert(user.user) {
@@ -346,7 +364,7 @@ pub fn reached_by(function: &Function, changes: &[Change]) -> Option<BTreeSet<Bl
             }
         }
     }
-    Some(blocks)
+    Some(Reach { blocks, conditions })
 }
 
 /// What each call writes, as `CallEffects` says: the `Calls` consts and
@@ -432,7 +450,7 @@ impl Analysis for DominatedEdges {
     /// the blocks a change reaches, and those that start from a state that changed, are worked again.
     fn update(previous: &Self::Result, changes: &[Change], context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Option<Self::Result> {
         let states = previous.as_ref().ok()?;
-        let reached = reached_by(function, changes)?;
+        let reached = reached_by(function, changes)?.blocks;
         Some(Self::solved(context, layout, function, analyses, Some((states, &reached))))
     }
 }
@@ -443,6 +461,44 @@ impl DominatedEdges {
         let shape = analyses.get::<Shape>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         ranges::edges_solved(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_exposed(&exposed), &registers, before)
+    }
+}
+
+/// The facts each counted loop gives its blocks, and where there is none the edges': `ranges::bounded`.
+pub struct Bounded;
+
+impl Analysis for Bounded {
+    type Result = Result<ranges::Bounds, String>;
+    const NAME: &'static str = "bounded";
+    const INCREMENTAL: bool = true;
+
+    fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        Self::solved(context, layout, function, analyses, None)
+    }
+
+    /// A loop's facts read its own blocks, the facts of the values its operations read, the edges' facts above it
+    /// and the facts of the loops it starts from; the loops a change reaches by any of these are worked again.
+    fn update(previous: &Self::Result, changes: &[Change], context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Option<Self::Result> {
+        let bounds = previous.as_ref().ok()?;
+        let reach = reached_by(function, changes)?;
+        let shape = analyses.get::<Shape>(context, layout, function);
+        let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions);
+        Some(Self::solved(context, layout, function, analyses, Some((bounds, &dirty))))
+    }
+}
+
+impl Bounded {
+    fn solved(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses, prior: Option<(&ranges::Bounds, &BTreeSet<i64>)>) -> <Self as Analysis>::Result {
+        let shape = analyses.get::<Shape>(context, layout, function);
+        let registers = analyses.get::<Registers>(context, layout, function);
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let counted = analyses.get::<Counted>(context, layout, function);
+        let edges = analyses.get::<DominatedEdges>(context, layout, function);
+        let mut unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_exposed(&exposed).with_counted(&counted);
+        if let Ok(edges) = &*edges {
+            unit = unit.with_edges(edges);
+        }
+        ranges::bounded_solved(&unit, &registers, prior)
     }
 }
 

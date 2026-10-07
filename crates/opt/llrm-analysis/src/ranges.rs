@@ -512,6 +512,11 @@ pub struct EdgeStates {
 }
 
 impl EdgeStates {
+    /// `blocks`, the maps shared.
+    pub fn shared(&self, function: &llrm_mir::module::Function) -> IndexMap<i64, Scope> {
+        function.layout().iter().filter_map(|&block| self.own.get(&cfg::id(block)).filter(|scoped| !scoped.is_empty()).map(|scoped| (cfg::id(block), Rc::clone(scoped)))).collect()
+    }
+
     /// The blocks with something known, in layout order.
     pub fn blocks(&self, function: &llrm_mir::module::Function) -> IndexMap<i64, IndexMap<ValueId, Interval>> {
         function
@@ -624,6 +629,81 @@ pub fn bounded(unit: &Unit) -> Result<Facts, String> {
 
 /// `bounded`, given what `consts::known` finds without memory.
 pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Facts, String> {
+    Ok(bounded_solved(unit, facts, None)?.facts())
+}
+
+/// `bounded`'s facts at each block, as the solve left them: those the counted loops give (`within`), and those with
+/// the edges' facts where a block is in none (`blocks`). A block that did not change shares its map with the solve
+/// before.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bounds {
+    headers: Vec<i64>,
+    within: IndexMap<i64, Scope>,
+    blocks: IndexMap<i64, Scope>,
+}
+
+impl Bounds {
+    /// What is known at `at`.
+    pub fn at(&self, at: i64) -> Option<&IndexMap<ValueId, Interval>> {
+        self.blocks.get(&at).map(|scope| &**scope)
+    }
+
+    /// As `bounded` gives them.
+    pub fn facts(&self) -> Facts {
+        self.blocks.iter().map(|(at, scope)| (*at, (**scope).clone())).collect()
+    }
+}
+
+/// The headers of the loops whose bounds a change can alter: the loops holding a block it reached, the loops under a
+/// branch (or an assume, or any call) whose condition it reached, and then every loop in the same nest, and every loop
+/// that starts from what one of those leaves: the block its header's dominator is in, or a block that enters it.
+pub fn loops_reached(function: &llrm_mir::module::Function, shape: &cfg::Shape, blocks: &BTreeSet<BlockId>, conditions: &BTreeSet<BlockId>) -> BTreeSet<i64> {
+    let loops = &shape.loops;
+    let reached: BTreeSet<i64> = blocks.iter().map(|block| cfg::id(*block)).collect();
+    let judged: Vec<i64> = conditions.iter().map(|block| cfg::id(*block)).collect();
+    let mut dirty: BTreeSet<i64> = loops
+        .iter()
+        .filter(|one| one.body.iter().any(|at| reached.contains(at)) || judged.iter().any(|above| shape.dominance.dominates(*above, one.header)))
+        .map(|one| one.header)
+        .collect();
+    let graph = cfg::graph(function);
+    let entering = loops::predecessors(&graph);
+    // What each loop starts from, held by other loops.
+    let hosts: Vec<(i64, Vec<i64>)> = loops
+        .iter()
+        .map(|one| {
+            let from = shape.dominance.immediate(one.header).into_iter().chain(entering.get(&one.header).into_iter().flatten().copied().filter(|at| !one.body.contains(at)));
+            let held: BTreeSet<i64> = from.flat_map(|at| loops.iter().filter(move |other| other.body.contains(&at)).map(|other| other.header)).filter(|header| *header != one.header).collect();
+            (one.header, held.into_iter().collect())
+        })
+        .collect();
+    loop {
+        let before = dirty.len();
+        for one in loops {
+            let nested = loops.iter().any(|other| dirty.contains(&other.header) && (other.body.is_superset(&one.body) || one.body.is_superset(&other.body)));
+            let hosted = hosts.iter().any(|(header, held)| *header == one.header && held.iter().any(|at| dirty.contains(at)));
+            if nested || hosted {
+                dirty.insert(one.header);
+            }
+        }
+        if dirty.len() == before {
+            return dirty;
+        }
+    }
+}
+
+thread_local! {
+    static LOOPS_SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many loops this thread has worked the bounds of, for a test that a change reworks the loops it reaches.
+pub fn loops_solved() -> usize {
+    LOOPS_SOLVED.with(std::cell::Cell::get)
+}
+
+/// `bounded_with`'s solve: all of it, or, given the bounds of the function before and the headers of the loops a change
+/// can alter (`dirty`), only those loops; the blocks of the rest keep what they had.
+pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Option<(&Bounds, &BTreeSet<i64>)>) -> Result<Bounds, String> {
     let function = unit.function;
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
@@ -633,19 +713,32 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
     // The manager's, where the facts asked of are the unit's own registers.
     let edges_above = match (unit.edges, unit.registers) {
         (Some(states), Some(registers)) if std::ptr::eq(facts, registers) => {
-            let held = states.blocks(function);
+            let held = states.shared(function);
             if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
-                assert!(held == dominated_edges_with(unit, facts)?, "the edges a unit carries are not those of the body it stands over: stale");
+                assert!(held.iter().map(|(at, scope)| (*at, (**scope).clone())).collect::<IndexMap<_, _>>() == dominated_edges_with(unit, facts)?, "the edges a unit carries are not those of the body it stands over: stale");
             }
             held
         }
-        _ => dominated_edges_with(unit, facts)?,
+        _ => dominated_edges_with(unit, facts)?.into_iter().map(|(at, scope)| (at, Rc::new(scope))).collect(),
     };
-    let mut result = Facts::default();
+    let headers: Vec<i64> = shape.loops.iter().map(|one| one.header).collect();
     // An enclosing loop's facts are in `result` before an inner loop reads them.
     let mut nest: Vec<_> = shape.loops.iter().collect();
     nest.sort_by_key(|loop_| std::cmp::Reverse(loop_.body.len()));
+    let mut result: IndexMap<i64, Scope> = match prior.filter(|(held, _)| held.headers == headers) {
+        // The blocks of a loop to be worked again start from nothing: what its loops narrow is put in anew.
+        Some((held, dirty)) => {
+            let redone: BTreeSet<i64> = nest.iter().filter(|one| dirty.contains(&one.header)).flat_map(|one| one.body.iter().copied()).collect();
+            held.within.iter().filter(|(at, _)| !redone.contains(at)).map(|(at, scope)| (*at, Rc::clone(scope))).collect()
+        }
+        None => IndexMap::default(),
+    };
+    let prior = prior.filter(|(held, _)| held.headers == headers);
     for loop_ in nest {
+        if prior.is_some_and(|(_, dirty)| !dirty.contains(&loop_.header)) {
+            continue;
+        }
+        LOOPS_SOLVED.with(|count| count.set(count.get() + 1));
         let proofs = induction::counted_unless_stopped(unit, &loop_, Some(facts), false);
         // A header that tests before the trip also sees the exit value; one
         // tested after it sees only the trip's.
@@ -676,8 +769,8 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
         let counted = !known.is_empty();
         // What is known above the loop of the values made outside it.
         let at_entry = |at: i64| {
-            let mut found = edges_above.get(&at).cloned().unwrap_or_default();
-            for (value, interval) in result.get(&at).into_iter().flatten() {
+            let mut found = edges_above.get(&at).map(|scope| (**scope).clone()).unwrap_or_default();
+            for (value, interval) in result.get(&at).into_iter().flat_map(|scope| scope.iter()) {
                 narrow(&mut found, *value, interval.clone());
             }
             found
@@ -807,16 +900,17 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
         let known = closed(known);
         for &at in &inside {
             let scoped = scope_at(at, &known)?;
-            let destination = result.entry(at).or_default();
+            let destination = Rc::make_mut(result.entry(at).or_default());
             for (value, interval) in scoped {
                 narrow(destination, value, interval);
             }
         }
     }
+    let within = result.clone();
     for (at, known) in edges_above {
         result.entry(at).or_insert(known);
     }
-    Ok(result)
+    Ok(Bounds { headers, within, blocks: result })
 }
 
 #[cfg(test)]
