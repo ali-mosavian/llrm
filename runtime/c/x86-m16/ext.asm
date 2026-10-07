@@ -171,4 +171,42 @@ _lcopy proc far
     ret
 _lcopy endp
 
+; The same routines for a program in Open Watcom's register convention (-mabi=watcom): a long in DX:AX, an int in AX, a near
+; pointer in AX; the callee keeps every register but AX and its arguments'. They call the cdecl ones above.
+public report_
+report_ proc far
+    push bx
+    push cx
+    push dx
+    push ax
+    call far ptr _report
+    add sp, 4
+    pop cx
+    pop bx
+    retf
+report_ endp
+
+public input_read_
+input_read_ proc far
+    push bx
+    push cx
+    push dx
+    push ax
+    call far ptr _input_read
+    add sp, 4
+    pop cx
+    pop bx
+    retf
+input_read_ endp
+
+public keep_
+keep_ proc far
+    retf
+keep_ endp
+
+public keep32_
+keep32_ proc far
+    retf
+keep32_ endp
+
 end

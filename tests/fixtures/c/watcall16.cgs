@@ -1,0 +1,186 @@
+INIT sw=0x808000 target=0xec size=50 rev=0x23
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=2
+SEG 3 attr=0xc name="CONST2" align=2
+SEG 4 attr=0x6 name="_DATA" align=2
+START
+f1 DBSrcFile "/home/alim/scratch/abi32/tests/fixtures/c/watcall16.c" main=1
+- DBSrcCue f1 2 1
+SYM y1 name="six" base="six" pattern="*_" attr=0x7 seg=1
+CALLCONV y1 class=0x0 target=0x4 parms=[ff:0] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_INTEGER
+SYM y3 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_INTEGER
+SYM y4 name="c" base="c" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y4 TY_INTEGER
+SYM y5 name="d" base="d" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y5 TY_INTEGER
+SYM y6 name="e" base="e" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y6 TY_INTEGER
+SYM y7 name="f" base="f" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y7 TY_INTEGER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+n4 CGFEName y2 TY_INTEGER
+n5 CGUnary O_POINTS n4 TY_INTEGER
+n6 CGFEName y3 TY_INTEGER
+n7 CGUnary O_POINTS n6 TY_INTEGER
+n8 CGBinary O_MINUS n5 n7 TY_INTEGER
+n9 CGFEName y4 TY_INTEGER
+n10 CGUnary O_POINTS n9 TY_INTEGER
+n11 CGFEName y5 TY_INTEGER
+n12 CGUnary O_POINTS n11 TY_INTEGER
+n13 CGBinary O_TIMES n10 n12 TY_INTEGER
+n14 CGBinary O_PLUS n8 n13 TY_INTEGER
+n15 CGFEName y6 TY_INTEGER
+n16 CGUnary O_POINTS n15 TY_INTEGER
+n17 CGBinary O_MINUS n14 n16 TY_INTEGER
+n18 CGFEName y7 TY_INTEGER
+n19 CGUnary O_POINTS n18 TY_INTEGER
+n20 CGBinary O_PLUS n17 n19 TY_INTEGER
+n21 CGUnary O_CONVERT n20 TY_INTEGER
+n22 CGTempName t3 TY_INTEGER
+n23 CGAssign n22 n21 TY_INTEGER
+- CGDone n23
+n24 CGTempName t3 TY_INTEGER
+n25 CGUnary O_POINTS n24 TY_INTEGER
+- CGReturn n25 TY_INTEGER
+- DBSrcCue f1 3 1
+SYM y8 name="mixed" base="mixed" pattern="*_" attr=0x7 seg=1
+CALLCONV y8 class=0x0 target=0x4 parms=[ff:0] ret=0:0
+- CGProcDecl y8 TY_INT_4
+SYM y9 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y9 TY_INTEGER
+SYM y10 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y10 TY_INT_4
+SYM y11 name="c" base="c" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y11 TY_INTEGER
+l26 CGLastParm
+t27 CGTemp TY_INT_4
+n28 CGFEName y9 TY_INTEGER
+n29 CGUnary O_POINTS n28 TY_INTEGER
+n30 CGFEName y10 TY_INT_4
+n31 CGUnary O_POINTS n30 TY_INT_4
+n32 CGBinary O_PLUS n29 n31 TY_INT_4
+n33 CGFEName y11 TY_INTEGER
+n34 CGUnary O_POINTS n33 TY_INTEGER
+n35 CGBinary O_PLUS n32 n34 TY_INT_4
+n36 CGUnary O_CONVERT n35 TY_INT_4
+n37 CGTempName t27 TY_INT_4
+n38 CGAssign n37 n36 TY_INT_4
+- CGDone n38
+n39 CGTempName t27 TY_INT_4
+n40 CGUnary O_POINTS n39 TY_INT_4
+- CGReturn n40 TY_INT_4
+- DBSrcCue f1 4 1
+SYM y12 name="far_pointer" base="far_pointer" pattern="*_" attr=0x7 seg=1
+CALLCONV y12 class=0x0 target=0x4 parms=[ff:0] ret=0:0
+- CGProcDecl y12 TY_INTEGER
+SYM y13 name="p" base="p" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y13 TY_LONG_POINTER
+SYM y14 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y14 TY_INTEGER
+SYM y15 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y15 TY_INTEGER
+l41 CGLastParm
+t42 CGTemp TY_INTEGER
+n43 CGFEName y13 TY_LONG_POINTER
+n44 CGUnary O_POINTS n43 TY_LONG_POINTER
+n45 CGUnary O_POINTS n44 TY_INT_1
+n46 CGFEName y14 TY_INTEGER
+n47 CGUnary O_POINTS n46 TY_INTEGER
+n48 CGBinary O_PLUS n45 n47 TY_INTEGER
+n49 CGFEName y15 TY_INTEGER
+n50 CGUnary O_POINTS n49 TY_INTEGER
+n51 CGBinary O_PLUS n48 n50 TY_INTEGER
+n52 CGUnary O_CONVERT n51 TY_INTEGER
+n53 CGTempName t42 TY_INTEGER
+n54 CGAssign n53 n52 TY_INTEGER
+- CGDone n54
+n55 CGTempName t42 TY_INTEGER
+n56 CGUnary O_POINTS n55 TY_INTEGER
+- CGReturn n56 TY_INTEGER
+- DBSrcCue f1 5 1
+TYPE T25 size=6 align=1
+SYM y16 name="result" base="result" pattern="*_" attr=0x7 seg=1
+CALLCONV y16 class=0x0 target=0x4 parms=[ff:0] ret=0:0
+- CGProcDecl y16 T25
+SYM y17 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y17 TY_INTEGER
+SYM y18 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y18 TY_INTEGER
+l57 CGLastParm
+t58 CGTemp T25
+SYM y19 name="s" base="s" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y19 T25
+n59 CGFEName y19 T25
+n60 CGInteger 0 TY_UNSIGNED
+n61 CGBinary O_PLUS n59 n60 TY_POINTER
+n62 CGFEName y17 TY_INTEGER
+n63 CGUnary O_POINTS n62 TY_INTEGER
+n64 CGAssign n61 n63 TY_INTEGER
+- CGDone n64
+n65 CGFEName y19 T25
+n66 CGInteger 2 TY_UNSIGNED
+n67 CGBinary O_PLUS n65 n66 TY_POINTER
+n68 CGFEName y18 TY_INTEGER
+n69 CGUnary O_POINTS n68 TY_INTEGER
+n70 CGAssign n67 n69 TY_INTEGER
+- CGDone n70
+n71 CGFEName y19 T25
+n72 CGInteger 4 TY_UNSIGNED
+n73 CGBinary O_PLUS n71 n72 TY_POINTER
+n74 CGFEName y17 TY_INTEGER
+n75 CGUnary O_POINTS n74 TY_INTEGER
+n76 CGFEName y18 TY_INTEGER
+n77 CGUnary O_POINTS n76 TY_INTEGER
+n78 CGBinary O_PLUS n75 n77 TY_INTEGER
+n79 CGAssign n73 n78 TY_INTEGER
+- CGDone n79
+n80 CGFEName y19 T25
+n81 CGUnary O_POINTS n80 T25
+n82 CGTempName t58 T25
+n83 CGAssign n82 n81 T25
+- CGDone n83
+n84 CGTempName t58 T25
+n85 CGUnary O_POINTS n84 T25
+- CGReturn n85 T25
+- DBSrcCue f1 7 1
+SYM y20 name="calls" base="calls" pattern="*_" attr=0x7 seg=1
+CALLCONV y20 class=0x0 target=0x4 parms=[ff:0] ret=0:0
+- CGProcDecl y20 TY_INT_4
+SYM y21 name="x" base="x" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y21 TY_INT_4
+l86 CGLastParm
+t87 CGTemp TY_INT_4
+SYM y22 name="away" base="away" pattern="*_" attr=0xf seg=1
+CALLCONV y22 class=0x0 target=0x4 parms=[ff:0] ret=0:0
+n88 CGFEName y22 TY_CODE_PTR
+c89 CGInitCall n88 TY_INT_4 y22
+n90 CGInteger 5 TY_INTEGER
+- CGAddParm c89 n90 TY_INTEGER
+n91 CGFEName y21 TY_INT_4
+n92 CGUnary O_POINTS n91 TY_INT_4
+- CGAddParm c89 n92 TY_INT_4
+n93 CGCall c89
+n94 CGUnary O_POINTS n93 TY_INT_4
+n95 CGFEName y22 TY_CODE_PTR
+c96 CGInitCall n95 TY_INT_4 y22
+n97 CGInteger 2 TY_INTEGER
+- CGAddParm c96 n97 TY_INTEGER
+n98 CGInteger 1 TY_INT_4
+- CGAddParm c96 n98 TY_INT_4
+n99 CGCall c96
+n100 CGUnary O_POINTS n99 TY_INT_4
+n101 CGBinary O_PLUS n94 n100 TY_INT_4
+n102 CGUnary O_CONVERT n101 TY_INT_4
+n103 CGTempName t87 TY_INT_4
+n104 CGAssign n103 n102 TY_INT_4
+- CGDone n104
+n105 CGTempName t87 TY_INT_4
+n106 CGUnary O_POINTS n105 TY_INT_4
+- CGReturn n106 TY_INT_4
+STOP
+FINI

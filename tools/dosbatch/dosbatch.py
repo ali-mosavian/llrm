@@ -114,19 +114,27 @@ def ow_root() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "llrm" / f"open-watcom-v2-{commit}"
 
 
-def watcom_cc() -> Path:
-    """Open Watcom's own 386 compiler, built beside wccq in the same tree (`bwcc386`): the ground truth of its register convention."""
-    return ow_root() / "build" / "binbuild" / "bwcc386"
+def watcom_cc(target: str) -> Path:
+    """Open Watcom's own compiler for `target`, built in the same tree as wccq (`bwcc386` for 32 bits, `bwcc` for 16): the ground
+    truth of its register convention."""
+    return ow_root() / "build" / "binbuild" / ("bwcc386" if target_bits(target) == 32 else "bwcc")
 
 
-def watcom_compile(source: Path, obj: Path) -> None:
-    """`source` compiled by Open Watcom's own wcc386: -3r, its default convention, no library calls, flat structs at -zp4."""
-    _host([str(watcom_cc()), "-zq", "-3r", "-s", "-zl", "-ox", "-zp4", f"-fo={obj}", str(source)])
+def watcom_compile(source: Path, obj: Path, target: str) -> None:
+    """`source` compiled by Open Watcom's own compiler for `target`: its default convention, no library calls, the target's
+    struct packing (byte-packed medium model in 16 bits, -zp4 flat)."""
+    flags = ["-zq", "-3r", "-zp4"] if target_bits(target) == 32 else ["-zq", "-mm", "-ecw", "-zp1"]
+    _host([str(watcom_cc(target)), *flags, "-s", "-zl", "-ox", f"-fo={obj}", str(source)])
 
 
 def target_modes() -> dict[str, int]:
     """Each target's gcc `-m` number (tools/linkrecipe.py)."""
     return linkrecipe.modes()
+
+
+def target_bits(target: str) -> int:
+    """The bits of `target`'s code: its `-m` number."""
+    return target_modes()[target]
 
 
 def m_flag(target: str) -> str:

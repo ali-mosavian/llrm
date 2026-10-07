@@ -75,6 +75,7 @@ pub mod testing;
 pub mod tailrec;
 pub mod transform;
 pub mod unroll;
+pub mod trivialunswitch;
 pub mod unswitch;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called

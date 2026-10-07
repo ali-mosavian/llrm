@@ -197,12 +197,7 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
             .zip(&sizes)
             .zip(&classes)
             .filter(|(_, class)| **class != Some(llrm_mir::opcode::RESULT_POINTER))
-            .map(|((&one, &size), class)| match types.get(function.value(one).ty) {
-                _ if *class == Some(llrm_mir::opcode::MEMORY) => llrm_target::calling::Kind::Memory(i64::from(size)),
-                _ if types.int_bits(function.value(one).ty) == Some(64) => llrm_target::calling::Kind::Wide,
-                Type::Float(_) => llrm_target::calling::Kind::Memory(i64::from(size)),
-                _ => llrm_target::calling::Kind::Word,
-            })
+            .map(|((&one, &size), class)| kind_of(types, function.value(one).ty, size, arch.stack_slot_bytes(), *class))
             .collect();
         let placed = entry.place(&kinds);
         let mut places = placed.places.iter();
@@ -241,6 +236,20 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
     let popped = if pops { cursor - first } else if result_slot { arch.stack_slot_bytes() } else { 0 };
     let saved = saved(arch, described, &parameters, &returns);
     Ok(Convention { parameters, returns, popped, saved })
+}
+
+/// How a convention's registers take a value of `ty`, `size` bytes: a word that fits a slot, a pair of registers for an integer
+/// or a pointer of two slots (an i64 in 32 bits, a long or a far pointer in 16), and memory for the rest.
+fn kind_of(types: &llrm_mir::types::Types, ty: TypeId, size: u32, slot: i64, class: Option<&str>) -> llrm_target::calling::Kind {
+    use llrm_target::calling::Kind;
+    let bytes = i64::from(size);
+    let two_slots_of_integer = types.int_bits(ty).is_some() || matches!(types.get(ty), Type::Pointer(_));
+    match () {
+        _ if class == Some(llrm_mir::opcode::MEMORY) || matches!(types.get(ty), Type::Float(_)) => Kind::Memory(bytes),
+        _ if bytes <= slot => Kind::Word,
+        _ if bytes == 2 * slot && two_slots_of_integer => Kind::Wide,
+        _ => Kind::Memory(bytes),
+    }
 }
 
 /// Whether `entry` passes a struct result's address in a stack slot that its callee pops, and one of `classes` is that address.
@@ -879,15 +888,23 @@ impl Selector<'_, '_, '_> {
                 Parameter::Cell(disp) => *disp,
                 // It arrives in registers: an instruction at entry delivers each value in its register.
                 Parameter::Registers(registers) => {
-                    let width = if registers.len() == 1 { self.width(ty)? } else { 4 };
+                    // A pair holds two halves: an i64's dwords, a far pointer's offset and selector, or a long's words.
+                    let width = if registers.len() == 1 { self.width(ty)? } else { registers[0].size() as u32 };
                     let mut halves = Vec::new();
                     for &register in registers {
-                        let own = if registers.len() == 1 { Held { value: self.value(parameter), width } } else { self.fresh_held(4) };
+                        let own = if registers.len() == 1 { Held { value: self.value(parameter), width } } else { self.fresh_held(width) };
                         arrived.push((own, crate::backend::target::named(register, i64::from(width))));
                         halves.push(own);
                     }
                     if let [low, high] = halves[..] {
-                        self.wides.insert(parameter, (low, high));
+                        if self.is_wide(ty) {
+                            self.wides.insert(parameter, (low, high));
+                        } else if self.is_far(ty) {
+                            self.fars.insert(parameter, (Some(low), high));
+                        } else {
+                            let into = Held { value: self.value(parameter), width: 4 };
+                            self.joined(into, low, high, block_at[&entry], &mut prologue);
+                        }
                     }
                     continue;
                 }
@@ -3003,6 +3020,17 @@ impl Selector<'_, '_, '_> {
         self.called(inst, convention, Callee::Inline(name, bytes), &[], at, out)
     }
 
+    /// The low and the high word of a dword: the words it was joined from, else its low word and its high word shifted down.
+    fn words(&mut self, held: Held, at: i64, out: &mut Vec<Arc<Insn>>) -> (Held, Held) {
+        if let Some(&(low, high)) = self.joins.get(&held.value).filter(|_| held.width == 4) {
+            return (low, high);
+        }
+        let top = Held { value: self.fresh(), width: 4 };
+        let sixteen = Loc::Imm(Imm { value: 16, width: 1, address: None });
+        out.push(insn(at, semantics(Operation::Binary, "shr", vec![Loc::Held(top)], vec![Loc::Held(held), sixteen])));
+        (Held { width: 2, ..held }, Held { width: 2, ..top })
+    }
+
     /// `held` widened to `width` bytes, as its `signext` says, where it is narrower.
     fn extended(&mut self, held: Held, width: u32, signed: bool, at: i64, out: &mut Vec<Arc<Insn>>) -> Held {
         if held.width >= width {
@@ -3056,12 +3084,7 @@ impl Selector<'_, '_, '_> {
                     continue;
                 }
                 let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
-                kinds.push(match self.types().get(ty) {
-                    _ if class(index) == Some(llrm_mir::opcode::MEMORY) => llrm_target::calling::Kind::Memory(i64::from(self.size(ty)?)),
-                    _ if self.is_wide(ty) => llrm_target::calling::Kind::Wide,
-                    Type::Float(_) => llrm_target::calling::Kind::Memory(i64::from(self.size(ty)?)),
-                    _ => llrm_target::calling::Kind::Word,
-                });
+                kinds.push(kind_of(self.types(), ty, self.size(ty)?, self.arch.stack_slot_bytes(), class(index)));
             }
             let mut placement = entry.place(&kinds);
             let mut next = placement.places.clone().into_iter();
@@ -3082,7 +3105,15 @@ impl Selector<'_, '_, '_> {
                 let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
                 let registers: Vec<Register> = names.iter().map(|name| llrm_x86::calling::register(name)).collect();
                 if let [low, high] = registers[..] {
-                    let (lo, hi) = self.wide(argument, at, out)?;
+                    // A pair: an i64's dwords, a far pointer's offset and selector, or a long's words.
+                    let (lo, hi) = if self.is_wide(ty) {
+                        self.wide(argument, at, out)?
+                    } else if self.is_far(ty) {
+                        self.far(argument, at, out)?
+                    } else {
+                        let held = self.held(argument, ty, at, out)?;
+                        self.words(held, at, out)
+                    };
                     requires.extend([(lo, low), (hi, high)]);
                 } else {
                     let held = self.held(argument, ty, at, out)?;
@@ -3185,7 +3216,7 @@ impl Selector<'_, '_, '_> {
         let changed = placed.as_ref().map(|(entry, placement)| {
             let result = (!self.types().is_void(instruction.ty)).then(|| self.size(instruction.ty)).transpose()?.map(i64::from);
             let names = entry.clobbers(&placement.used, result);
-            Ok::<_, Unselected>(names.iter().filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st")).map(|name| llrm_x86::calling::register(name)).collect::<BTreeSet<Register>>())
+            Ok::<_, Unselected>(names.iter().filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st")).map(|name| llrm_x86::calling::register(name)).map(|register| if register.is_gpr() { register.full_register32() } else { register }).collect::<BTreeSet<Register>>())
         });
         let changed = changed.transpose()?;
         let mut delivers = Vec::new();
@@ -3257,7 +3288,11 @@ impl Selector<'_, '_, '_> {
         out.push(Arc::new(Insn {
             call: Some(self.listed(effects)),
             clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments)),
-            clobbers_high: if changed.is_some() { BTreeSet::new() } else { call_clobbered_high_keeping(&contract, self.segments, &whole) },
+            clobbers_high: match &placed {
+                // What the convention keeps only the pushed part of (a 16-bit push of a 32-bit register) loses its upper half.
+                Some((entry, _)) => llrm_x86::calling::callee_saved(entry).into_iter().filter(|(full, pushed)| full != pushed).map(|(full, _)| full).collect(),
+                None => call_clobbered_high_keeping(&contract, self.segments, &whole),
+            },
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
             uses: requires.iter().map(|(held, _)| held.value).chain(through).collect(),

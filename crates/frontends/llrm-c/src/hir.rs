@@ -23,10 +23,6 @@ pub const FE_GLOBAL: i64 = 0x4;
 pub const FE_IMPORT: i64 = 0x8;
 pub const PRIVATE: i64 = 0x40; // a segment of its own, outside DGROUP
 // call_class and call_class_target (cgauxcc.h, x86auxcc.h)
-/// What the flat front end records of a function it passes in its default registers (`wcc386 -3r`'s own list): any other
-/// list is a `#pragma aux` or `__fastcall`.
-pub const DEFAULT_REGISTERS: &str = "[f0000ff:0]";
-
 pub const REVERSE_PARMS: i64 = 0x1;
 pub const HAS_VARARGS: i64 = 0x20;
 pub const CALLER_POPS: i64 = 0x80;
@@ -137,8 +133,9 @@ pub struct Symbol {
     pub call_class: i64,
     pub call_target: i64,
     pub register_parms: bool, // any argument passed in a register
-    /// The registers are the front end's default list (Open Watcom's own, not an `aux` pragma's or `__fastcall`'s).
-    pub default_registers: bool,
+    /// The register list the front end recorded, as it writes it (`[ff:0]`): the default one is its description's
+    /// `default_registers`; any other is an `aux` pragma's or `__fastcall`'s.
+    pub register_list: String,
     pub code: Option<Code>,
     pub segment: i64,
 }
@@ -199,7 +196,7 @@ impl Symbol {
         if self.pattern.is_empty() {
             base.to_owned()
         } else {
-            self.pattern.replace('*', base)
+            llrm_target::calling::spell(&self.pattern, base)
         }
     }
 }
@@ -312,6 +309,8 @@ pub struct Unit {
     /// The routine the runtime's start calls, and the `cc` of the convention it calls it in (the C runtime description's).
     pub entry: String,
     pub entry_cc: String,
+    /// What the front end records of a function it passes in its default registers.
+    pub default_registers: String,
     /// The `cc` of the convention a function the front end records as cdecl has, and one it records in its default registers;
     /// none where that is the C one (`ccc`).
     pub cdecl_cc: Option<String>,
@@ -507,7 +506,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                         call_class: 0,
                         call_target: 0,
                         register_parms: false,
-                        default_registers: false,
+                        register_list: String::new(),
                         code: None,
                         segment: int(one.fields.get("seg").map_or("0", String::as_str)),
                     },
@@ -522,7 +521,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                 symbol.call_target = hex(field(one, "target"));
                 let parms = one.fields.get("parms").map_or("[]", String::as_str);
                 symbol.register_parms = parms != "[]";
-                symbol.default_registers = parms == DEFAULT_REGISTERS;
+                symbol.register_list = parms.to_owned();
             }
             "CODE" => {
                 let fixups = field(one, "fix")
