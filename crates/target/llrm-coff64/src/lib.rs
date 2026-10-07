@@ -119,6 +119,7 @@ mod tests {
                 module: false,
                 variables: vec![Variable { name: "p".into(), r#type: 1, kind: K::Parameter, location: Location::Frame { disp: 16 } }],
                 blocks: Vec::new(),
+                frame: Vec::new(),
             }],
             ..Info::default()
         };
