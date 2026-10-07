@@ -611,6 +611,11 @@ fn passed_as_scalar(calling: &llrm_target::calling::Calling, convention: &Option
 /// A struct argument's words, by byte offset, in parameter order: they lie
 /// as the struct does, the first lowest, so last first where arguments are
 /// pushed in order.
+/// The low `bits` bits set: 64 of them are every bit, which `1 << 64` is not.
+fn ones(bits: i64) -> i64 {
+    if bits >= 64 { -1 } else { (1i64 << bits) - 1 }
+}
+
 fn struct_words(size: i64, in_order: bool, word: i64) -> Vec<i64> {
     let words = (0..(size + word - 1) / word).map(|at| at * word);
     if in_order { words.rev().collect() } else { words.collect() }
@@ -1546,17 +1551,82 @@ impl<'a, 't> Body<'a, 't> {
         self.unit.symbols.get(&hir::handle(symbol)).filter(|one| one.name.starts_with('.') && !one.proc())
     }
 
+    /// Where a bit field's bytes are: its byte offset in the unit, its first bit within them, and how many bytes (a unit of the
+    /// declared type, from its start, where that is a register's width; a long long's is cut to the bytes the field covers, as a
+    /// packed struct's last field leaves nothing after them to read or write).
+    fn container(&self, start: i64, width: i64, unit: i64) -> (i64, i64, i64) {
+        let unit_bytes = self.types.get(unit).width;
+        if unit_bytes <= 4 {
+            return (0, start, unit_bytes);
+        }
+        let (first, bit) = (start / 8, start % 8);
+        (first, bit, (bit + width + 7) / 8)
+    }
+
+    /// The `bytes` at `first` of what `pointer` addresses, as a `unit`, the most significant bytes zero: in pieces of 4, 2 and 1.
+    fn loaded(&mut self, pointer: i64, volatile: bool, first: i64, bytes: i64, unit: i64) -> i64 {
+        if bytes == self.types.get(unit).width {
+            return self.op(Op::Load, unit, vec![Operand::IndirectPlace(indirect(pointer, first, unit, volatile))]);
+        }
+        let mut whole: Option<i64> = None;
+        for (at, size) in Self::pieces(bytes) {
+            let part = self.types.raw(size);
+            let loaded = self.op(Op::Load, part, vec![Operand::IndirectPlace(indirect(pointer, first + at, part, volatile))]);
+            let mut value = self.op(Op::ZeroExtend, unit, vec![value_ref(loaded)]);
+            if at > 0 {
+                let up = self.constant(unit, Number::Int((8 * at).into()));
+                value = self.op(Op::Shl, unit, vec![value_ref(value), value_ref(up)]);
+            }
+            whole = Some(match whole {
+                Some(low) => self.op(Op::Or, unit, vec![value_ref(low), value_ref(value)]),
+                None => value,
+            });
+        }
+        whole.expect("a field has a byte")
+    }
+
+    /// The low `bytes` of `value` (a `unit`) stored at `first` of what `pointer` addresses.
+    fn stored(&mut self, pointer: i64, volatile: bool, first: i64, bytes: i64, unit: i64, value: i64) {
+        if bytes == self.types.get(unit).width {
+            self.instruction(Op::Store, Vec::new(), vec![Operand::IndirectPlace(indirect(pointer, first, unit, volatile)), value_ref(value)]);
+            return;
+        }
+        for (at, size) in Self::pieces(bytes) {
+            let part = self.types.raw(size);
+            let mut piece = value;
+            if at > 0 {
+                let down = self.constant(unit, Number::Int((8 * at).into()));
+                piece = self.op(Op::Shr, unit, vec![value_ref(value), value_ref(down)]);
+            }
+            let piece = self.op(Op::Convert, part, vec![value_ref(piece)]);
+            self.instruction(Op::Store, Vec::new(), vec![Operand::IndirectPlace(indirect(pointer, first + at, part, volatile)), value_ref(piece)]);
+        }
+    }
+
+    /// `bytes` as (offset, size) pieces of 4, 2 and 1, the largest first.
+    fn pieces(bytes: i64) -> Vec<(i64, i64)> {
+        let (mut at, mut found) = (0, Vec::new());
+        for size in [8, 4, 2, 1] {
+            while bytes - at >= size {
+                found.push((at, size));
+                at += size;
+            }
+        }
+        found
+    }
+
     /// A bit field's value, in its unit's type.
     fn read_bits(&mut self, got: Got) -> R<i64> {
         let Got::Bits { pointer, volatile, start, width, unit, signed } = got else { return self.refuse("a bit field read of a non-field") };
         let bits = self.types.get(unit).width * 8;
-        let whole = self.op(Op::Load, unit, vec![Operand::IndirectPlace(indirect(pointer, 0, unit, volatile))]);
+        let (first, start, bytes) = self.container(start, width, unit);
+        let whole = self.loaded(pointer, volatile, first, bytes, unit);
         Ok(if signed {
             let (up, down) = (self.constant(unit, Number::Int((bits - start - width).into())), self.constant(unit, Number::Int((bits - width).into())));
             let raised = self.op(Op::Shl, unit, vec![value_ref(whole), value_ref(up)]);
             self.op(Op::Sar, unit, vec![value_ref(raised), value_ref(down)])
         } else {
-            let (shift, mask) = (self.constant(unit, Number::Int(start.into())), self.constant(unit, Number::Int(((1i64 << width) - 1).into())));
+            let (shift, mask) = (self.constant(unit, Number::Int(start.into())), self.constant(unit, Number::Int(ones(width).into())));
             let lowered = self.op(Op::Shr, unit, vec![value_ref(whole), value_ref(shift)]);
             self.op(Op::And, unit, vec![value_ref(lowered), value_ref(mask)])
         })
@@ -1567,11 +1637,11 @@ impl<'a, 't> Body<'a, 't> {
     fn write_bits(&mut self, got: Got, value: i64) -> R<i64> {
         let Got::Bits { pointer, volatile, start, width, unit, signed } = got else { return self.refuse("a bit field write to a non-field") };
         let bits = self.types.get(unit).width * 8;
-        let field = ((1i64 << width) - 1) << start;
-        let kept = !field & ((1i64 << bits) - 1);
+        let (first, start, bytes) = self.container(start, width, unit);
+        let field = ones(width) << start;
+        let kept = !field & ones(bits);
         let value = self.resized(value, signed, unit);
-        let place = || Operand::IndirectPlace(indirect(pointer, 0, unit, volatile));
-        let whole = self.op(Op::Load, unit, vec![place()]);
+        let whole = self.loaded(pointer, volatile, first, bytes, unit);
         let (shift, inside, outside) = (
             self.constant(unit, Number::Int(start.into())),
             self.constant(unit, Number::Int(field.into())),
@@ -1581,14 +1651,14 @@ impl<'a, 't> Body<'a, 't> {
         let part = self.op(Op::And, unit, vec![value_ref(placed), value_ref(inside)]);
         let rest = self.op(Op::And, unit, vec![value_ref(whole), value_ref(outside)]);
         let joined = self.op(Op::Or, unit, vec![value_ref(rest), value_ref(part)]);
-        self.instruction(Op::Store, Vec::new(), vec![place(), value_ref(joined)]);
+        self.stored(pointer, volatile, first, bytes, unit, joined);
         Ok(if signed {
             let (up, down) = (self.constant(unit, Number::Int((bits - start - width).into())), self.constant(unit, Number::Int((bits - width).into())));
             let raised = self.op(Op::Shl, unit, vec![value_ref(part), value_ref(up)]);
             self.op(Op::Sar, unit, vec![value_ref(raised), value_ref(down)])
         } else {
             let lowered = self.op(Op::Shr, unit, vec![value_ref(part), value_ref(shift)]);
-            let mask = self.constant(unit, Number::Int(((1i64 << width) - 1).into()));
+            let mask = self.constant(unit, Number::Int(ones(width).into()));
             self.op(Op::And, unit, vec![value_ref(lowered), value_ref(mask)])
         })
     }
