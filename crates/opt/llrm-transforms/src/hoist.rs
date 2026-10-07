@@ -210,7 +210,8 @@ fn _frequency(unit: &passes::Unit, analyses: &mut Analyses, outer: &Outer, size:
     }
     let facts = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
     let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-    let trips = profit::proven_trips(&Unit::within(unit.context, unit.layout, unit.function, outer).with_shape(&shape), &facts);
+    let counted = analyses.get::<llrm_analysis::manager::Counted>(unit.context, unit.layout, unit.function);
+    let trips = profit::proven_trips(&Unit::within(unit.context, unit.layout, unit.function, outer).with_shape(&shape).with_registers(&facts).with_counted(&counted), &facts);
     profit::_frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips))
 }
 

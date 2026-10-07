@@ -385,9 +385,50 @@ pub fn counted(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap<ValueId, Known
     counted_unless_stopped(unit, loop_, facts, inbounds).into_iter().filter(|proof| !proof.stops).collect()
 }
 
+/// Each loop's `counted_unless_stopped` proofs by header, from what is known without memory.
+pub type Counted = IndexMap<i64, Vec<CountedLoop>>;
+
+thread_local! {
+    static PROVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many loops this thread has proved the counts of, for a test that a body's are proved once.
+pub fn proved() -> usize {
+    PROVED.with(std::cell::Cell::get)
+}
+
+/// `counted_unless_stopped` of every loop of `unit`'s shape, under the registers it carries.
+pub fn counted_all(unit: &Unit) -> Counted {
+    counted_renewed(unit, &Counted::default(), |_| true)
+}
+
+/// `counted_all`, taking `previous`'s proofs of each loop `dirty` does not name.
+pub fn counted_renewed(unit: &Unit, previous: &Counted, dirty: impl Fn(&Loop) -> bool) -> Counted {
+    let registers = unit.registers();
+    let shape = unit.shape();
+    shape
+        .loops
+        .iter()
+        .map(|loop_| match previous.get(&loop_.header) {
+            Some(proofs) if !dirty(loop_) => (loop_.header, proofs.clone()),
+            _ => (loop_.header, _counted_unless_stopped(unit, loop_, &registers, false)),
+        })
+        .collect()
+}
+
 /// `counted`, also for a loop that may leave into a block that never returns.
 pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap<ValueId, Known>>, inbounds: bool) -> Vec<CountedLoop> {
-    let function = unit.function;
+    // The manager's, where the facts asked of are the unit's own registers.
+    if let (false, Some(held), Some(registers)) = (inbounds, unit.counted, unit.registers) {
+        if facts.is_none_or(|facts| std::ptr::eq(facts, registers)) {
+            if let Some(found) = held.get(&loop_.header) {
+                if std::env::var_os("LLRM_CHECK_COUNTED").is_some() {
+                    assert!(*found == _counted_unless_stopped(unit, loop_, registers, false), "the counted proofs a unit carries are not those of the body it stands over: stale");
+                }
+                return found.clone();
+            }
+        }
+    }
     let computed;
     let facts = match facts {
         Some(facts) => facts,
@@ -396,6 +437,12 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
             &*computed
         }
     };
+    _counted_unless_stopped(unit, loop_, facts, inbounds)
+}
+
+fn _counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: &IndexMap<ValueId, Known>, inbounds: bool) -> Vec<CountedLoop> {
+    PROVED.with(|count| count.set(count.get() + 1));
+    let function = unit.function;
     let Some(shape) = _control(function, loop_) else { return Vec::new() };
     let branch = function.terminator(cfg::block(shape.block)).expect("_control proved a branch");
     let [condition, Operand::Block(taken), Operand::Block(_)] = function.instruction(branch).operands[..] else { return Vec::new() };
