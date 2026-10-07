@@ -208,6 +208,20 @@ fn a_variable_over_a_long_function_is_written_in_pieces() {
     assert_eq!(lengths.iter().sum::<usize>(), 130_000 * 6, "{lengths:?}");
 }
 
+/// A record's length is 16 bits, a line's 31 and a column's 16: what overflows is refused, not
+/// written with a wrapped length that makes every later record unreadable. A struct of 5000 fields
+/// is a field list over 64 KiB.
+#[test]
+fn what_overflows_a_field_is_refused_not_wrapped() {
+    let huge = |made: &mut Object| {
+        let fields = (0..5000).map(|at| Field { name: format!("field_number_{at}"), r#type: 0, offset: at * 4, bits: None }).collect();
+        made.debug.as_mut().unwrap().types[2] = Type::Struct { name: "S".into(), bytes: 20_000, fields };
+    };
+    assert!(refusal(huge).contains("16-bit length"));
+    assert!(refusal(|made| made.debug.as_mut().unwrap().lines[0].column = 70_000).contains("does not fit a line entry"));
+    assert!(refusal(|made| made.debug.as_mut().unwrap().lines[0].line = 0x8000_0000).contains("does not fit a line entry"));
+}
+
 /// A column anywhere turns the line table's columns on for the range.
 #[test]
 fn a_column_is_written_with_its_line() {

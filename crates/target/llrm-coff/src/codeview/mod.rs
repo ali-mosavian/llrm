@@ -61,12 +61,14 @@ pub(crate) fn name(out: &mut Vec<u8>, text: &str) {
 
 /// A record: its length (everything after the field), its kind and its data, the whole padded to
 /// four bytes. `pad` is the filler: zeros in symbols, `LF_PAD` in types.
-pub(crate) fn record(out: &mut Vec<u8>, kind: u16, data: &[u8], pad: fn(usize) -> u8) {
+pub(crate) fn record(out: &mut Vec<u8>, kind: u16, data: &[u8], pad: fn(usize) -> u8) -> Result<(), Unsupported> {
     let missing = (4 - (4 + data.len()) % 4) % 4;
-    put16(out, (2 + data.len() + missing) as u16);
+    let length = u16::try_from(2 + data.len() + missing).or_else(|_| refused(format!("a record of kind {kind:#x} is {} bytes, which its 16-bit length cannot say", data.len())))?;
+    put16(out, length);
     put16(out, kind);
     out.extend(data);
     out.extend((0..missing).map(|left| pad(missing - left)));
+    Ok(())
 }
 
 /// `object`'s debug sections.

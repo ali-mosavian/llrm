@@ -59,12 +59,11 @@ impl Data {
         build(&mut inner)?;
         let at = self.bytes.len() + 4;
         self.relocs.extend(inner.relocs.into_iter().map(|one| Reloc { at: at + one.at, ..one }));
-        record(&mut self.bytes, kind, &inner.bytes, zeros);
-        Ok(())
+        record(&mut self.bytes, kind, &inner.bytes, zeros)
     }
 
-    fn end(&mut self) {
-        record(&mut self.bytes, S_END, &[], zeros);
+    fn end(&mut self) -> Result<(), Unsupported> {
+        record(&mut self.bytes, S_END, &[], zeros)
     }
 }
 
@@ -195,7 +194,7 @@ impl Writer<'_> {
         for inner in &block.blocks {
             self.block(out, inner)?;
         }
-        out.end();
+        out.end()?;
         Ok(())
     }
 
@@ -228,7 +227,7 @@ impl Writer<'_> {
         for block in &function.blocks {
             self.block(out, block)?;
         }
-        out.end();
+        out.end()?;
         Ok(())
     }
 }
@@ -250,6 +249,9 @@ fn lines(object: &Object, info: &Info, function: usize, range: Range, offsets: &
         return Ok(None);
     }
     inside.sort_by_key(|one| one.offset);
+    if let Some(one) = inside.iter().find(|one| one.line >= IS_STATEMENT || one.column > u32::from(u16::MAX)) {
+        return refused(format!("line {} column {} does not fit a line entry's 31 and 16 bits", one.line, one.column));
+    }
     let columns = inside.iter().any(|one| one.column != 0);
     let mut out = Data::default();
     out.secrel(function, anchor(object, function, range)?);

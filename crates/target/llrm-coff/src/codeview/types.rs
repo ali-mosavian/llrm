@@ -115,10 +115,10 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
-    fn add(&mut self, kind: u16, data: &[u8]) -> u32 {
-        record(&mut self.records, kind, data, pad);
+    fn add(&mut self, kind: u16, data: &[u8]) -> Result<u32, Unsupported> {
+        record(&mut self.records, kind, data, pad)?;
         self.count += 1;
-        FIRST + self.count - 1
+        Ok(FIRST + self.count - 1)
     }
 
     fn pointer(&mut self, target: u32, bytes: u8, mode: u32) -> Result<u32, Unsupported> {
@@ -130,7 +130,7 @@ impl Builder<'_> {
         let mut data = Vec::new();
         put32(&mut data, target);
         put32(&mut data, kind | mode << 5 | u32::from(bytes) << 13);
-        Ok(self.add(LF_POINTER, &data))
+        Ok(self.add(LF_POINTER, &data))?
     }
 
     /// `id`'s index, writing it and what it names first.
@@ -158,7 +158,7 @@ impl Builder<'_> {
                 let mut data = Vec::new();
                 put32(&mut data, target);
                 put16(&mut data, u16::from(constant) | u16::from(volatile) << 1);
-                self.add(LF_MODIFIER, &data)
+                self.add(LF_MODIFIER, &data)?
             }
             Type::Array { element, bytes } => {
                 let Some(bytes) = bytes else { return refused("BASIC's array, whose bounds are its descriptor's") };
@@ -168,7 +168,7 @@ impl Builder<'_> {
                 put32(&mut data, T_UQUAD);
                 numeric(&mut data, i64::from(bytes));
                 name(&mut data, "");
-                self.add(LF_ARRAY, &data)
+                self.add(LF_ARRAY, &data)?
             }
             Type::FixedString(_) => return refused("BASIC's STRING * n"),
             Type::Enum { name: label, underlying, enumerators } => {
@@ -184,14 +184,14 @@ impl Builder<'_> {
                         list.push(pad(4 - list.len() % 4));
                     }
                 }
-                let list = self.add(LF_FIELDLIST, &list);
+                let list = self.add(LF_FIELDLIST, &list)?;
                 let mut data = Vec::new();
                 put16(&mut data, enumerators.len() as u16);
                 put16(&mut data, 0);
                 put32(&mut data, underlying);
                 put32(&mut data, list);
                 name(&mut data, &label);
-                self.add(LF_ENUM, &data)
+                self.add(LF_ENUM, &data)?
             }
             Type::Struct { name: label, bytes, fields } => return self.structure(id, &label, bytes, &fields),
             Type::Procedure { result, parameters, convention: called } => {
@@ -200,14 +200,14 @@ impl Builder<'_> {
                 let mut list = Vec::new();
                 put32(&mut list, parameters.len() as u32);
                 parameters.iter().for_each(|&one| put32(&mut list, one));
-                let list = self.add(LF_ARGLIST, &list);
+                let list = self.add(LF_ARGLIST, &list)?;
                 let mut data = Vec::new();
                 put32(&mut data, result);
                 data.push(convention(called.as_deref())?);
                 data.push(0);
                 put16(&mut data, parameters.len() as u16);
                 put32(&mut data, list);
-                self.add(LF_PROCEDURE, &data)
+                self.add(LF_PROCEDURE, &data)?
             }
         };
         self.index[id] = Some(made);
@@ -229,7 +229,7 @@ impl Builder<'_> {
             put32(&mut data, 0);
             numeric(&mut data, 0);
             name(&mut data, label);
-            let forward = self.add(LF_STRUCTURE, &data);
+            let forward = self.add(LF_STRUCTURE, &data)?;
             self.forward[id] = Some(forward);
             return Ok(forward);
         }
@@ -241,7 +241,7 @@ impl Builder<'_> {
                 let mut data = Vec::new();
                 put32(&mut data, kind);
                 data.extend([width, start]);
-                kind = self.add(LF_BITFIELD, &data);
+                kind = self.add(LF_BITFIELD, &data)?;
             }
             put16(&mut list, LF_MEMBER);
             put16(&mut list, 3);
@@ -252,7 +252,7 @@ impl Builder<'_> {
                 list.push(pad(4 - list.len() % 4));
             }
         }
-        let list = self.add(LF_FIELDLIST, &list);
+        let list = self.add(LF_FIELDLIST, &list)?;
         let mut data = Vec::new();
         put16(&mut data, fields.len() as u16);
         put16(&mut data, 0);
@@ -261,7 +261,7 @@ impl Builder<'_> {
         put32(&mut data, 0);
         numeric(&mut data, i64::from(bytes));
         name(&mut data, label);
-        let whole = self.add(LF_STRUCTURE, &data);
+        let whole = self.add(LF_STRUCTURE, &data)?;
         self.index[id] = Some(whole);
         Ok(whole)
     }
