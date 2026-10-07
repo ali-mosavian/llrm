@@ -456,6 +456,27 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// A byte product, by the operand size's own multiply of both factors extended: only the low byte is kept, which no
+    /// extension changes.
+    fn hook_byte_multiply(&mut self, m: &Match, out: &mut Vec<Arc<Insn>>, left: Operand, right: Operand) -> Result<(), Unselected> {
+        let wide = self.cpu.operand_bytes as u32;
+        let extend = |this: &mut Self, operand: Operand, out: &mut Vec<Arc<Insn>>| -> Result<Loc, Unselected> {
+            if let Some(value) = this.constant(operand, 1) {
+                return Ok(Loc::Imm(Imm { value, width: wide, address: None }));
+            }
+            let byte = this.op_held(m, out, operand)?;
+            let into = this.fresh_held(wide);
+            out.push(insn(m.at, semantics(Operation::Extend, "movzx", vec![Loc::Held(into)], vec![byte])));
+            Ok(Loc::Held(into))
+        };
+        let (a, b) = (extend(self, left, out)?, extend(self, right, out)?);
+        let product = self.fresh_held(wide);
+        out.push(insn(m.at, semantics(Operation::Multiply, "imul", vec![Loc::Held(product)], vec![a, b])));
+        let Loc::Held(result) = self.op_result(m, out)? else { unreachable!("a register") };
+        out.push(insn(m.at, semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(Held { width: 1, ..product })])));
+        Ok(())
+    }
+
     fn hook_divide(&mut self, m: &Match, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let Opcode::Binary(op) = *self.opcode(m) else { unreachable!("a division") };
         self.divide(op, m.inst, out)
