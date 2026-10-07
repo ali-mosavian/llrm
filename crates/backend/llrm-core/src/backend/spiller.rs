@@ -1241,10 +1241,8 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
     result
 }
 
-#[cfg(test)]
-thread_local! {
-    static KEEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
+// (On one line: tests/target_facts.rs reads what comes before a line that is only the attribute as the code.)
+#[cfg(test)] thread_local! { static KEEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 /// The blocks of a body by address, and each one's predecessors.
 struct Flow<'a> {
@@ -1262,8 +1260,7 @@ impl<'a> Flow<'a> {
 /// Whether `cell` still holds what it held at `define` after `one`.
 /// Whether `cell`, as the load `define` read it, still holds after `one`, given it held before.
 pub(crate) fn _keeps(one: &Arc<Insn>, define: &Insn, cell: &Mem, holds: bool, body: &LirBody) -> bool {
-    #[cfg(test)]
-    KEEPS.with(|asked| asked.set(asked.get() + 1));
+    #[cfg(test)] KEEPS.with(|asked| asked.set(asked.get() + 1));
     if std::ptr::eq(Arc::as_ptr(one), define) {
         return true;
     }
