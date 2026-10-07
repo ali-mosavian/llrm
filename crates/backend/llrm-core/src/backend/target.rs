@@ -322,10 +322,21 @@ pub fn needs_data_group(one: &crate::model::lir::Insn) -> bool {
     ) {
         return true;
     }
-    let name = what.name.as_deref().unwrap_or("");
-    let bare = name.trim_start_matches("rep ").trim_start_matches("repe ").trim_start_matches("repne ");
-    ["movs", "lods", "cmps", "outs", "stos", "scas", "ins", "xlat", "int", "wait", "fwait"].iter().any(|one| bare.starts_with(one))
-        || name.starts_with('f')
+    named_for_data_group(what.name.as_deref().unwrap_or(""))
+}
+
+/// Whether an instruction of this mnemonic is a string instruction, an x87 one, a trap or a wait. Prefixes are taken off
+/// by hand: `str::trim_start_matches` with a `&str` pattern builds a substring searcher for each call, which was 2.4% of
+/// a large module's compile, asked of every instruction at every rebuild of the allocator's facts.
+fn named_for_data_group(name: &str) -> bool {
+    fn without<'a>(mut text: &'a str, prefix: &str) -> &'a str {
+        while let Some(rest) = text.strip_prefix(prefix) {
+            text = rest;
+        }
+        text
+    }
+    let bare = without(without(without(name, "rep "), "repe "), "repne ");
+    ["movs", "lods", "cmps", "outs", "stos", "scas", "ins", "xlat", "int", "wait", "fwait"].iter().any(|one| bare.starts_with(one)) || name.starts_with('f')
 }
 // One far load per selector: its selector result is in the class, not pinned,
 // and the rewriter spells the instruction for the register it was given.
@@ -414,6 +425,26 @@ pub fn name_of(register: Register) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The mnemonic test as it was written with `trim_start_matches`.
+    fn named_as_it_was(name: &str) -> bool {
+        let bare = name.trim_start_matches("rep ").trim_start_matches("repe ").trim_start_matches("repne ");
+        ["movs", "lods", "cmps", "outs", "stos", "scas", "ins", "xlat", "int", "wait", "fwait"].iter().any(|one| bare.starts_with(one)) || name.starts_with('f')
+    }
+
+    /// Taking the prefixes off by hand must leave every mnemonic where it was: repeated prefixes, one prefix after
+    /// another, and a prefix that is not one.
+    #[test]
+    fn test_a_mnemonic_is_told_as_a_string_or_x87_instruction_as_it_always_was() {
+        let bases = ["mov", "movsb", "movsw", "lodsb", "cmpsw", "outsb", "stosw", "scasb", "insb", "xlatb", "int", "int3", "into", "wait", "fwait", "fld", "fstp", "f2xm1", "add", "ret", "call", "rep", "rep movsb", "", "i", "in"];
+        let prefixes = ["", "rep ", "repe ", "repne ", "rep rep ", "repe rep ", "rep repe ", "repne repe ", "rep repne ", "repeat ", "repn ", "REP "];
+        for prefix in prefixes {
+            for base in bases {
+                let name = format!("{prefix}{base}");
+                assert_eq!(named_for_data_group(&name), named_as_it_was(&name), "{name:?}");
+            }
+        }
+    }
 
     /// What the allocator may hand out for an operand that reaches memory: the addressing registers it holds values in.
     fn bases(classes: &RegisterClasses) -> Vec<Register> {
