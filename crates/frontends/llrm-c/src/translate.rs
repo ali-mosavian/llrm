@@ -1437,7 +1437,7 @@ impl<'a, 't> Body<'a, 't> {
             ("CGCompare", _) => Got::Value(self.compare(&tree.args)?),
             ("CGFlow", _) => {
                 let truth = self.types.of(Shape::Bool, None);
-                let flowed = self.local(&format!("n{}", hir::handle(node)), truth, 2);
+                let flowed = self.local(&format!("n{}", hir::handle(node)), truth, self.types.get(truth).width);
                 let no = self.block();
                 let join = self.block();
                 self.branch(node, no, false)?;
