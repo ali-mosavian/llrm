@@ -1,7 +1,7 @@
 #!/bin/bash
 # run.sh: build llrm-c (release), every program with every compiler, run them all, print the tables.
 # Needs gcc, clang (32-bit objects), GNU ld/nm/size, uv. Products go to $VSGCC_WORK (default ~/scratch/vsgcc-work).
-set -e
+set -eo pipefail   # a harness that fails (an unresolved symbol) stops the run, not a blank row
 R=$(cd "$(dirname "$0")/../../../.." && pwd); H=$R/crates/target/llrm-x86-m32/vsgcc; export VSGCC_WORK=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}
 PROGS=$(ls $R/bench | grep -v -E "readme|parity|huge|textfill|grep")   # 16-bit only, no input, or timed only
 mkdir -p $VSGCC_WORK

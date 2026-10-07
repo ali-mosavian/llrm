@@ -2,6 +2,15 @@ import json, math, os
 from pathlib import Path
 
 
+VARIANTS = ['llrm', 'gccO2', 'clangO2', 'llrmOs', 'gccOs', 'clangOs']
+
+
+def complete(P):
+    """Every program has a row for every variant: a link that failed leaves none, and a table of what is left reads as a result."""
+    missing = [(p, v) for p, d in P.items() for v in VARIANTS if v not in d]
+    assert not missing, f"no result for {missing}"
+
+
 def summary(P):
     """Per level and counter, llrm against the best of gcc and clang: the geomean over the programs, and the worst one with its program."""
     lines = []
@@ -21,6 +30,7 @@ if __name__ == '__main__':
     rows=[json.loads(l) for l in open(WORK/'results.jsonl') if l.startswith('{')]
     P={}
     for r in rows: P.setdefault(r['prog'],{})[r['variant']]=r
+    complete(P)
     assert all(r['ok'] for r in rows), [(r['prog'], r['variant']) for r in rows if not r['ok']]
     V=['llrm','gccO2','clangO2','llrmOs','gccOs','clangOs']
     print("| program | compiler | instr | mem ops | 486 clk | nops | code B | llrm/best ins | llrm/best clk |"); print("|---|---|--:|--:|--:|--:|--:|--:|--:|")

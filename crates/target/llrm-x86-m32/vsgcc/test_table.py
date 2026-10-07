@@ -1,4 +1,6 @@
 """The vsgcc report's summary: the geomean hid hanoi's 2.6x behind twenty programs near 1.0."""
+import pytest
+
 import table
 
 
@@ -14,3 +16,11 @@ def test_the_summary_names_the_worst_program_beside_each_geomean():
     assert "worst llrm/best O2 clocks: 4.00 (b)" in lines
     assert "worst llrm/best Os code: 4.00 (b)" in lines
     assert len(lines) == 12
+
+
+def test_a_program_without_a_variant_is_refused_not_averaged():
+    """An unresolved symbol left the harness without a row, and the table averaged what remained."""
+    P = programs({'a': 1.0, 'b': 2.0})
+    del P['b']['clangOs']
+    with pytest.raises(AssertionError, match="clangOs"):
+        table.complete(P)
