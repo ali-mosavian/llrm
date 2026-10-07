@@ -1,0 +1,16 @@
+"""The vsgcc report's summary: the geomean hid hanoi's 2.6x behind twenty programs near 1.0."""
+import table
+
+
+def programs(ratios):
+    """llrm at `ratio` times gcc and clang on every counter, at both levels."""
+    one = lambda n: {'ins': n, 'clocks': n, 'code': n}
+    return {name: {'llrm': one(100 * r), 'llrmOs': one(100 * r), 'gccO2': one(100), 'clangO2': one(200), 'gccOs': one(100), 'clangOs': one(200)} for name, r in ratios.items()}
+
+
+def test_the_summary_names_the_worst_program_beside_each_geomean():
+    lines = table.summary(programs({'a': 1.0, 'b': 4.0, 'c': 1.0}))
+    assert "geomean llrm/best O2 clocks: 1.59" in lines
+    assert "worst llrm/best O2 clocks: 4.00 (b)" in lines
+    assert "worst llrm/best Os code: 4.00 (b)" in lines
+    assert len(lines) == 12
