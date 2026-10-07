@@ -47,6 +47,8 @@ pub enum Value {
     Expr(Vec<u8>),
     /// `DW_OP_addr`: an address `delta` bytes from `symbol`.
     ExprAddr { symbol: usize, delta: i64 },
+    /// A location list, at this offset of the section of them.
+    LocList(u32),
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +71,8 @@ pub struct Places {
     pub line: usize,
     pub info: usize,
     pub line_strings: Option<usize>,
+    /// `.debug_loclists` (5) or `.debug_loc` (4), where a variable has a list.
+    pub locations: Option<usize>,
 }
 
 pub struct Out {
@@ -96,14 +100,14 @@ fn form(value: &Value) -> u16 {
         Value::Flag => 0x19,
         Value::Ref(_) => 0x13,
         Value::Addr { .. } => 0x01,
-        Value::Line => 0x17,
+        Value::Line | Value::LocList(_) => 0x17,
         Value::Expr(_) | Value::ExprAddr { .. } => 0x18,
     }
 }
 
 fn size(value: &Value, address: usize) -> usize {
     match value {
-        Value::Str(_) | Value::Len(_) | Value::Ref(_) | Value::Line => 4,
+        Value::Str(_) | Value::Len(_) | Value::Ref(_) | Value::Line | Value::LocList(_) => 4,
         Value::U8(_) => 1,
         Value::U16(_) => 2,
         Value::Udata(one) => uleb(*one).len(),
@@ -122,8 +126,8 @@ fn shape(die: &Die) -> Shape {
 }
 
 /// The unit's `.debug_info` and `.debug_abbrev`.
-pub fn unit(object: &Object, info: &Info, out: &mut Out) -> Result<(Done, Done), Unsupported> {
-    let dies = crate::types::tree(object, info)?;
+pub fn unit(object: &Object, info: &Info, out: &mut Out) -> Result<(Done, Done, Done), Unsupported> {
+    let (dies, locations) = crate::types::tree(object, info, out.version, usize::from(out.address))?;
     let address = usize::from(out.address);
     // Abbreviations in the order DIEs are first met, and each DIE's offset.
     let mut layout = Layout { codes: HashMap::new(), order: Vec::new(), code_of: vec![0; dies.len()], offsets: vec![0; dies.len()], address };
@@ -159,7 +163,7 @@ pub fn unit(object: &Object, info: &Info, out: &mut Out) -> Result<(Done, Done),
         abbrev.uleb(0);
     }
     abbrev.uleb(0);
-    Ok((buf.done(), abbrev.done()))
+    Ok((buf.done(), abbrev.done(), locations))
 }
 
 struct Layout {
@@ -210,6 +214,7 @@ fn write(dies: &[Die], codes: &[u64], offsets: &[usize], index: usize, out: &mut
             Value::Ref(target) => buf.u32(offsets[*target] as u32),
             Value::Addr { symbol, delta } => buf.address(address, *symbol, *delta),
             Value::Line => buf.section_offset(out.places.line, 0),
+            Value::LocList(at) => buf.section_offset(out.places.locations.expect("a section of lists"), *at),
             Value::Expr(bytes) => {
                 buf.uleb(bytes.len() as u64);
                 buf.bytes.extend(bytes);

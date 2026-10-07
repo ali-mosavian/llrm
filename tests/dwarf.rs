@@ -5,6 +5,14 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// A test that cannot run says so on stderr, and fails where `LLRM_REQUIRE_DWARF` is set, so a gate that
+/// has the tools cannot pass by skipping.
+fn skipped(reason: &str) {
+    // Written to the stderr itself, which the harness does not capture: seen when the test passes.
+    let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("SKIPPED: {reason}\n").as_bytes());
+    assert!(std::env::var_os("LLRM_REQUIRE_DWARF").is_none(), "LLRM_REQUIRE_DWARF is set, and: {reason}");
+}
+
 fn llrm_c() -> PathBuf {
     Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("llrm-c")
 }
@@ -42,7 +50,7 @@ fn bench_programs() -> Vec<PathBuf> {
 #[test]
 fn dwarfdump_verifies_every_bench_program_at_both_ends_of_the_optimiser() {
     let Some(dump) = dwarfdump() else {
-        eprintln!("skipped: llvm-dwarfdump is not installed");
+        skipped("llvm-dwarfdump is not installed");
         return;
     };
     let scratch = tempfile::tempdir().unwrap();
@@ -71,11 +79,11 @@ fn dwarfdump_verifies_every_bench_program_at_both_ends_of_the_optimiser() {
 #[test]
 fn gdb_stops_at_a_line_and_reads_a_parameter_a_local_a_struct_field_and_the_return_type() {
     let (Some(gdb), Some(ld), Some(assembler)) = (tool("gdb"), tool("ld"), tool("as")) else {
-        eprintln!("skipped: needs gdb, GNU ld and as");
+        skipped("needs gdb, GNU ld and as");
         return;
     };
     if cfg!(not(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "x86")))) {
-        eprintln!("skipped: needs an x86 Linux host that runs i386 programs");
+        skipped("needs an x86 Linux host that runs i386 programs");
         return;
     }
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
@@ -88,7 +96,7 @@ fn gdb_stops_at_a_line_and_reads_a_parameter_a_local_a_struct_field_and_the_retu
     let linked = Command::new(ld).args(["-m", "elf_i386", "-o"]).arg(&program).arg(&start).arg(&object).output().unwrap();
     assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
     if Command::new(&program).output().ok().and_then(|ran| ran.status.code()) != Some(12) {
-        eprintln!("skipped: this host does not run i386 programs");
+        skipped("this host does not run i386 programs");
         return;
     }
     let script = scratch.path().join("script.gdb");
@@ -160,7 +168,7 @@ fn stopped_at(gdb: &Path, program: &Path, line: u32, fixtures: &Path) -> Option<
 #[test]
 fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
     let (Some(gdb), Some(ld), Some(assembler)) = (tool("gdb"), tool("ld"), tool("as")) else {
-        eprintln!("skipped: needs gdb, GNU ld and as");
+        skipped("needs gdb, GNU ld and as");
         return;
     };
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
@@ -178,7 +186,7 @@ fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
         programs.push(program);
     }
     if Command::new(&programs[0]).output().ok().and_then(|ran| ran.status.code()) != Some(73) {
-        eprintln!("skipped: this host does not run i386 programs");
+        skipped("this host does not run i386 programs");
         return;
     }
     assert_eq!(Command::new(&programs[1]).output().unwrap().status.code(), Some(73), "-O2 computes what -O0 does");
@@ -216,7 +224,7 @@ fn a_struct_that_names_itself_keeps_the_member_that_does_in_both_formats() {
     assert!(head.contains("next +0") && head.contains("v +2"), "{head}");
     // DWARF, in an ELF object, and read by gdb.
     let (Some(gdb), Some(ld), Some(assembler)) = (tool("gdb"), tool("ld"), tool("as")) else {
-        eprintln!("skipped: needs gdb, GNU ld and as");
+        skipped("needs gdb, GNU ld and as");
         return;
     };
     let (start, object, program) = (scratch.path().join("start.o"), scratch.path().join("list.o"), scratch.path().join("list"));
@@ -227,7 +235,7 @@ fn a_struct_that_names_itself_keeps_the_member_that_does_in_both_formats() {
     let linked = Command::new(ld).args(["-m", "elf_i386", "-o"]).arg(&program).arg(&start).arg(&object).output().unwrap();
     assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
     if Command::new(&program).output().ok().and_then(|ran| ran.status.code()) != Some(10) {
-        eprintln!("skipped: this host does not run i386 programs");
+        skipped("this host does not run i386 programs");
         return;
     }
     let said = Command::new(gdb)

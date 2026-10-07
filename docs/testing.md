@@ -34,6 +34,12 @@ compile (#238 made the driver's verifier refuse five, unseen):
 
     QCPORT=~/scratch/qcport/src QCPORT_INC=~/scratch/qctc/inc tools/qcport-compile.sh
 
+## Debug information
+
+`tests/dwarf.rs` and `crates/target/llrm-dwarf` run llvm-dwarfdump, gdb, ld and as over the DWARF llrm
+writes. A test whose tool is missing prints `SKIPPED: why` and passes; with `LLRM_REQUIRE_DWARF=1` it
+fails instead. A gate that has the tools sets it: `. tools/debug-gate.env`.
+
 ## The loop corpus
 
 `tools/loops` judges loop code: every case is one loop program in a neutral

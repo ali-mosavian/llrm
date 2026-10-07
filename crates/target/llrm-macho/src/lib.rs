@@ -55,6 +55,8 @@ fn debug_name(name: &str) -> Result<&'static str, Unsupported> {
         ".debug_info" => "__debug_info",
         ".debug_line" => "__debug_line",
         ".debug_line_str" => "__debug_line_str",
+        ".debug_loc" => "__debug_loc",
+        ".debug_loclists" => "__debug_loclists",
         ".debug_str" => "__debug_str",
         other => return Err(unsupported(format!("{other}: no Mach-O name for this debug section"))),
     })

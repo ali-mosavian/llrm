@@ -35,6 +35,12 @@ fn _named_clobbers(names: &IndexMap<Register, BTreeSet<String>>, disturbed: &BTr
     names.iter().filter(|(_, spelled)| disturbed.iter().any(|named| spelled.contains(&named.value().to_lowercase()))).map(|(register, _)| *register).collect()
 }
 
+/// The registers a call under `contract` keeps only the 16-bit half of, less `whole`: those the callee's
+/// convention saves in full (`Target::callee_saved` names the same register to keep and to push).
+pub fn call_clobbered_high_keeping(contract: &runtime::Contract, segments: &Segments, whole: &BTreeSet<Register>) -> BTreeSet<Register> {
+    call_clobbered_high(contract, segments).into_iter().filter(|register| !whole.contains(&ir::root(*register))).collect()
+}
+
 /// The registers a call under `contract` keeps only the 16-bit half of.
 pub fn call_clobbered_high(contract: &runtime::Contract, segments: &Segments) -> BTreeSet<Register> {
     if !contract.i386 {

@@ -22,9 +22,9 @@ use crate::backend::cpu::Profile;
 use crate::backend::peep;
 use crate::backend::target::Segments;
 use crate::backend::{addressforms, division};
-use crate::backend::callregs::{call_clobbered_high, call_clobbers};
+use crate::backend::callregs::{call_clobbered_high_keeping, call_clobbers};
 use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
-use crate::model::lir::{BlockOdds, DebugVariable, Insn, LirBlock, LirBody, Phi};
+use crate::model::lir::{BlockOdds, DebugPlace, DebugVariable, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::AddressForm;
 use crate::support::hash::IndexMap;
 
@@ -557,16 +557,22 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
 }
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes them in.
-fn parameters(module: &Module, name: &str, convention: &Convention) -> Vec<DebugVariable> {
+pub(crate) fn parameters(module: &Module, name: &str, convention: &Convention) -> Vec<DebugVariable> {
     let Some(function) = llrm_mir::debuginfo::functions(module).into_iter().find(|one| one.function == name) else { return Vec::new() };
-    let cell = |index: i64| match usize::try_from(index).ok().and_then(|index| convention.parameters.get(index)) {
-        Some(Parameter::Cell(disp)) => Some(*disp),
-        _ => None,
-    };
     function
         .parameters
         .into_iter()
-        .filter_map(|(index, name, r#type)| Some(DebugVariable { name, r#type, addr: Addr::new(Space::Frame, cell(index)?), parameter: true }))
+        .filter_map(|(index, name, r#type)| {
+            let place = match usize::try_from(index).ok().and_then(|index| convention.parameters.get(index)) {
+                Some(Parameter::Cell(disp)) => DebugPlace::At(Addr::new(Space::Frame, *disp)),
+                // One register holds it; a value in two (a long in dx:ax) is no register's, and is left out.
+                Some(Parameter::Registers(registers)) if registers.len() == 1 => DebugPlace::Register(registers[0]),
+                Some(Parameter::Registers(_)) => return None,
+                // The function has no such argument any more: the optimiser took it out.
+                None => DebugPlace::Gone,
+            };
+            Some(DebugVariable { name, r#type, place, parameter: true })
+        })
         .collect()
 }
 
@@ -1689,7 +1695,7 @@ impl Selector<'_, '_, '_> {
         let Some(variable) = attached.and_then(|node| llrm_mir::debuginfo::read_variable(self.module, node)) else { return Ok(()) };
         if let Ok(Pointer::Frame { disp, index: None, .. }) = self.pointer(arguments[0]) {
             let addr = Addr::new(Space::Frame, disp + variable.offset);
-            self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, addr, parameter: variable.parameter }));
+            self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, place: DebugPlace::At(addr), parameter: variable.parameter }));
         }
         Ok(())
     }
@@ -3229,11 +3235,12 @@ impl Selector<'_, '_, '_> {
                 (Semantics { indirect: true, ..semantics(Operation::Call, "call", vec![], vec![target.clone()]) }, through)
             }
         };
+        let whole: BTreeSet<Register> = self.arch.callee_saved().into_iter().filter(|(full, pushed)| full == pushed).map(|(full, _)| crate::model::ir::root(full)).collect();
         let effects = llrm_mir::memory::of(&self.module.context, &self.callees, function, inst);
         out.push(Arc::new(Insn {
             call: Some(self.listed(effects)),
             clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments)),
-            clobbers_high: if changed.is_some() { BTreeSet::new() } else { call_clobbered_high(&contract, self.segments) },
+            clobbers_high: if changed.is_some() { BTreeSet::new() } else { call_clobbered_high_keeping(&contract, self.segments, &whole) },
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
             uses: requires.iter().map(|(held, _)| held.value).chain(through).collect(),

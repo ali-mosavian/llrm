@@ -140,8 +140,10 @@ fn what_dwarf_cannot_say_is_refused_by_name() {
     assert!(written(vec![basic], vec![int(), array], Format::Default).unwrap_err().0.contains("BASIC array"));
     let high = Variable { name: "h".into(), r#type: 0, kind: Kind::Local, location: Location::Register("ah".into()) };
     assert!(written(vec![high], vec![int()], Format::Default).unwrap_err().0.contains("register ah has no DWARF number"));
-    let moved = Variable { name: "m".into(), r#type: 0, kind: Kind::Local, location: Location::List(Vec::new()) };
-    assert!(written(vec![moved], vec![int()], Format::Default).unwrap_err().0.contains("location list"));
+    // A list of one that holds neither a frame cell nor a register (a static, say) has no expression here.
+    let range = Range { section: 0, offset: 0, length: 4 };
+    let moved = Variable { name: "m".into(), r#type: 0, kind: Kind::Local, location: Location::List(vec![(range, Location::Static { symbol: 0, disp: 0 })]) };
+    assert!(written(vec![moved], vec![int()], Format::Default).unwrap_err().0.contains("holds frame cells and registers"));
 }
 
 /// A format this writer does not write is refused with which: an object cannot carry the
@@ -161,6 +163,14 @@ fn a_registers_location_is_its_dwarf_number() {
     assert!(info.image.windows(2).any(|pair| pair == [1, 0x50]), "a one-byte expression, DW_OP_reg0");
 }
 
+/// A test that cannot run says so on stderr, and fails where `LLRM_REQUIRE_DWARF` is set, so a gate that
+/// has the tools cannot pass by skipping.
+fn skipped(reason: &str) {
+    // Written to the stderr itself, which the harness does not capture: seen when the test passes.
+    let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("SKIPPED: {reason}\n").as_bytes());
+    assert!(std::env::var_os("LLRM_REQUIRE_DWARF").is_none(), "LLRM_REQUIRE_DWARF is set, and: {reason}");
+}
+
 fn dwarfdump() -> Option<std::path::PathBuf> {
     let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
     dirs.push("/usr/lib/llvm-20/bin".into());
@@ -172,7 +182,7 @@ fn dwarfdump() -> Option<std::path::PathBuf> {
 #[test]
 fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
     let Some(dump) = dwarfdump() else {
-        eprintln!("skipped: llvm-dwarfdump is not installed");
+        skipped("llvm-dwarfdump is not installed");
         return;
     };
     let scratch = tempfile::tempdir().unwrap();
@@ -191,6 +201,13 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
                     Variable { name: "s".into(), r#type: 2, kind: Kind::Local, location: Location::Frame { disp: -40 } },
                     Variable { name: "p".into(), r#type: 3, kind: Kind::Parameter, location: Location::Register("eax".into()) },
                     Variable { name: "g".into(), r#type: 0, kind: Kind::Local, location: Location::Static { symbol: 0, disp: 4 } },
+                    // In eax over the first seven bytes, then in its frame cell: a list of two.
+                    Variable {
+                        name: "q".into(),
+                        r#type: 0,
+                        kind: Kind::Parameter,
+                        location: Location::List(vec![(Range { section: 0, offset: 0, length: 7 }, Location::Register("eax".into())), (Range { section: 0, offset: 7, length: 9 }, Location::Frame { disp: -4 })]),
+                    },
                 ],
                 types,
                 Format::Dwarf { version },
@@ -212,6 +229,34 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
             for expected in ["DW_AT_name\t(\"pt\")", "DW_AT_bit_size", "DW_AT_upper_bound\t(3)", "DW_OP_reg0", "DW_OP_addr"] {
                 assert!(shown.contains(expected), "{bits} DWARF {version}: no {expected} in\n{shown}");
             }
+            // The list: register 0 over [0, 7) and fbreg -4 over [7, 16), in the section of lists its version has.
+            let lists = std::process::Command::new(&dump).arg(if version >= 5 { "--debug-loclists" } else { "--debug-loc" }).arg(&path).output().unwrap();
+            let lists = String::from_utf8_lossy(&lists.stdout);
+            assert!(lists.contains("DW_OP_reg0 ") && lists.contains("DW_OP_fbreg -4"), "{bits} DWARF {version}: the list in\n{lists}");
         }
     }
+}
+
+/// A variable the optimiser removed (a list of no entry) is a DIE with a name and a type and no location, which
+/// a debugger shows as optimized out; one with a location has it.
+#[test]
+fn a_removed_variable_has_no_location_and_the_others_have_theirs() {
+    let Some(dump) = dwarfdump() else {
+        skipped("llvm-dwarfdump is not installed");
+        return;
+    };
+    let removed = Variable { name: "gone".into(), r#type: 0, kind: Kind::Parameter, location: Location::List(Vec::new()) };
+    let made = written(vec![removed, frame("x", 8)], vec![int()], Format::Default).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let path = scratch.path().join("x.o");
+    std::fs::write(&path, llrm_elf32::write(&made).unwrap()).unwrap();
+    let said = std::process::Command::new(&dump).arg("--verify").arg(&path).output().unwrap();
+    assert!(String::from_utf8_lossy(&said.stdout).trim_end().ends_with("No errors."), "{}", String::from_utf8_lossy(&said.stdout));
+    let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
+    let shown = String::from_utf8_lossy(&shown.stdout).into_owned();
+    let parameter = &shown[shown.find("DW_AT_name\t(\"gone\")").expect("the parameter")..];
+    let parameter = &parameter[..parameter.find("DW_TAG").unwrap_or(parameter.len())];
+    assert!(!parameter.contains("DW_AT_location"), "{parameter}");
+    let local = &shown[shown.find("DW_AT_name\t(\"x\")").expect("the local")..];
+    assert!(local.contains("DW_OP_fbreg +8"), "{local}");
 }
