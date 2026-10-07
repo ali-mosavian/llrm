@@ -1261,6 +1261,25 @@ impl<'a, 't> Body<'a, 't> {
         }
     }
 
+    /// The type `target op= source` computes in where it is not the target's: the integer promotions of the target for a shift, the
+    /// usual arithmetic conversions of both otherwise. None where the target's own type is it (or an operand is no integer).
+    fn compound_type(&self, cg_op: &str, target: &str, source: &str) -> Option<String> {
+        let (target, source) = (self.unit.canonical_type(target), self.unit.canonical_type(&self.type_of_node(source)));
+        let int = i64::from(widths_for(self.unit.flat, "TY_INTEGER")?);
+        let integer = |name: &str| (matches!(name, "TY_INT_1" | "TY_UINT_1" | "TY_INT_2" | "TY_UINT_2" | "TY_INT_4" | "TY_UINT_4" | "TY_INT_8" | "TY_UINT_8" | "TY_INTEGER" | "TY_UNSIGNED")).then(|| (i64::from(widths_for(self.unit.flat, name).unwrap_or(0)), signed(name)));
+        let promoted = |(width, signed): (i64, bool)| if width < int { (int, true) } else { (width, signed) };
+        let (target_class, source_class) = (integer(&target)?, integer(&source)?);
+        let (left, right) = (promoted(target_class), promoted(source_class));
+        let common = if matches!(cg_op, "O_LSHIFT" | "O_RSHIFT") {
+            left
+        } else if left.0 != right.0 {
+            if left.0 > right.0 { left } else { right }
+        } else {
+            (left.0, left.1 && right.1)
+        };
+        (common != target_class).then(|| format!("TY_{}INT_{}", if common.1 { "" } else { "U" }, common.0))
+    }
+
     /// `node`'s scalar value as `type_`.
     fn value_as(&mut self, node: &str, type_: &str) -> R<i64> {
         let got = self.eval(node)?;
@@ -1417,6 +1436,13 @@ impl<'a, 't> Body<'a, 't> {
                     let got = self.eval(source)?;
                     let by = self.scalar(got)?;
                     self.moved(old, by, &from, *cg_op == "O_MINUS")?
+                } else if let Some(common) = self.compound_type(cg_op, type_, source) {
+                    // `x op= y` is `x = (T)(x op y)` in the usual arithmetic conversions of both, not in T: `unsigned char x /= short y`
+                    // divided in 8 bits, the front end having typed the operation by the target's.
+                    let old = self.converted(old, type_, &common)?;
+                    let by = self.value_as(source, &common)?;
+                    let made = self.arithmetic(cg_op, old, by, &common)?;
+                    self.converted(made, &common, type_)?
                 } else {
                     let by = self.value_as(source, type_)?;
                     self.arithmetic(cg_op, old, by, type_)?
