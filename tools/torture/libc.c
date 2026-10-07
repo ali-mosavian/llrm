@@ -110,3 +110,8 @@ char *__builtin_strchr(const char *s, int c) { return strchr(s, c); }
 void __builtin_abort(void) { abort(); }
 void __builtin_trap(void) { abort(); }
 void __builtin_exit(int code) { exit(code); }
+void *__builtin_malloc(size_t_ n) { return malloc(n); }
+void *__builtin_calloc(size_t_ n, size_t_ size) { return calloc(n, size); }
+void __builtin_free(void *p) { free(p); }
+int __builtin_abs(int x) { return abs(x); }
+char *__builtin_strncpy(char *to, const char *from, size_t_ n) { return strncpy(to, from, n); }

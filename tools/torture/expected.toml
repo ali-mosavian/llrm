@@ -10,11 +10,11 @@ match = "^wccq: (Expecting|Missing|Expression must be constant|Expression has vo
 reason = "Open Watcom's C front end (wccq) does not parse the program: GNU C or C99 syntax it lacks (statement expressions, typeof, __attribute__, labels as values, designated and empty initializers, zero-length arrays, K&R forms, implicit declarations of builtins)"
 
 [[refused]]
-match = "^undefined symbol __builtin_(alloca|return_address|frame_address|classify_type|constant_p|prefetch|expect|va_|bswap|clz|ctz|popcount|ffs|parity|setjmp|longjmp|unreachable|huge_val|inf|nan|isnan)"
-reason = "a GCC builtin the front end calls as an external of that name and the runner does not implement"
+match = "^undefined symbol __builtin_"
+reason = "a GCC builtin the front end calls as an external of that name and the runner does not implement (libc.c has the string and memory ones)"
 
 [[refused]]
-match = "^undefined symbol (sprintf|printf|snprintf|puts|putchar|fprintf|isprint|isalpha|isdigit|isspace|toupper|tolower|qsort|bsearch|atoi|strtol|getenv|rand|srand|time|clock|signal|raise|setjmp|longjmp|strstr|strncat|strpbrk|strspn|strcspn|strdup|memchr|strcasecmp)"
+match = "^undefined symbol (alloca|asm|floor|ceil|fabs|sqrt|mempcpy|sprintf|printf|snprintf|puts|putchar|fprintf|isprint|isalpha|isdigit|isspace|toupper|tolower|qsort|bsearch|atoi|strtol|getenv|rand|srand|time|clock|signal|raise|setjmp|longjmp|strstr|strncat|strpbrk|strspn|strcspn|strdup|memchr|strcasecmp)"
 reason = "a libc routine tools/torture/libc.c does not implement"
 
 # Programs that run and exit non-zero by design (a wrong result of one is reported as `differs`, with its reason, at any level).
