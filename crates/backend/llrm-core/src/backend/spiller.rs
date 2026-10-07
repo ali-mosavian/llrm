@@ -1213,6 +1213,8 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
     }
 
     let mut result: IndexMap<u32, Mem> = IndexMap::default();
+    // What every value asks of the body's blocks alike, found for the first that asks.
+    let flow = std::cell::OnceCell::new();
     for value in values {
         let Some(found) = definitions.get(value) else {
             continue;
@@ -1227,17 +1229,41 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
         if uses[value].iter().any(|one| one.group.is_some()) {
             continue;
         }
-        if _unchanged(body, define, cell, &uses[value]) {
+        let flow = flow.get_or_init(|| Flow::of(body));
+        let held = _unchanged(body, flow, define, cell, &uses[value]);
+        if std::env::var_os("LLRM_CHECK_UNCHANGED").is_some() {
+            assert!(held == _unchanged_reference(body, define, cell, &uses[value]), "{}: whether the cell holds differs from working it out as before", body.name);
+        }
+        if held {
             result.insert(*value, cell.clone());
         }
     }
     result
 }
 
+#[cfg(test)]
+thread_local! {
+    static KEEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The blocks of a body by address, and each one's predecessors.
+struct Flow<'a> {
+    predecessors: IndexMap<i64, Vec<i64>>,
+    blocks: IndexMap<i64, &'a LirBlock>,
+}
+
+impl<'a> Flow<'a> {
+    fn of(body: &'a LirBody) -> Self {
+        Self { predecessors: _predecessors(body), blocks: body.blocks.iter().map(|block| (block.at, block)).collect() }
+    }
+}
+
 
 /// Whether `cell` still holds what it held at `define` after `one`.
 /// Whether `cell`, as the load `define` read it, still holds after `one`, given it held before.
 pub(crate) fn _keeps(one: &Arc<Insn>, define: &Insn, cell: &Mem, holds: bool, body: &LirBody) -> bool {
+    #[cfg(test)]
+    KEEPS.with(|asked| asked.set(asked.get() + 1));
     if std::ptr::eq(Arc::as_ptr(one), define) {
         return true;
     }
@@ -1336,7 +1362,79 @@ fn _predecessors(body: &LirBody) -> IndexMap<i64, Vec<i64>> {
 }
 
 /// Whether every use of the loaded value sees the cell the load saw.
-fn _unchanged(body: &LirBody, define: &Arc<Insn>, cell: &Mem, uses: &[Arc<Insn>]) -> bool {
+///
+/// A block takes the cell in as it leaves its predecessors alike and, one instruction after another, keeps it unless that
+/// instruction may write it: `_keeps(one, ..., holds) = holds && K(one)` for every instruction but the load, which makes it
+/// hold. So a block's answer is that of its instructions after its last load, or of all of them: asked of each
+/// instruction once, not once for each time the blocks are gone over until they settle.
+fn _unchanged(body: &LirBody, flow: &Flow, define: &Arc<Insn>, cell: &Mem, uses: &[Arc<Insn>]) -> bool {
+    let (predecessors, blocks) = (&flow.predecessors, &flow.blocks);
+    // Per block: whether the cell holds out of it whatever came in, and where it is made to hold from.
+    let mut gives: IndexMap<i64, (bool, bool)> = IndexMap::default();
+    let mut kept: IndexMap<i64, Vec<bool>> = IndexMap::default();
+    let wanted: BTreeSet<usize> = uses.iter().map(key).collect();
+    for (at, block) in blocks {
+        let mut after_load = None;
+        let mut every = true;
+        let mut sure = true;
+        let mut per_insn: Vec<bool> = Vec::with_capacity(block.insns.len());
+        for one in &block.insns {
+            // Whether the instruction leaves a held cell held.
+            let keeps = std::ptr::eq(Arc::as_ptr(one), Arc::as_ptr(define)) || _keeps(one, define, cell, true, body);
+            per_insn.push(keeps);
+            if std::ptr::eq(Arc::as_ptr(one), Arc::as_ptr(define)) {
+                after_load = Some(true);
+                sure = true;
+            } else if !keeps {
+                every = false;
+                sure = false;
+            }
+        }
+        // (holds out when nothing held coming in, holds out when it did)
+        gives.insert(*at, (after_load.is_some() && sure, if after_load.is_some() { sure } else { every }));
+        if block.insns.iter().any(|one| wanted.contains(&key(one))) {
+            kept.insert(*at, per_insn);
+        }
+    }
+    let mut into: IndexMap<i64, bool> = blocks.keys().map(|at| (*at, *at != body.entry)).collect();
+    let mut outof: IndexMap<i64, bool> = IndexMap::default();
+    let mut changing = true;
+    while changing {
+        changing = false;
+        for at in blocks.keys() {
+            let (empty, full) = gives[at];
+            let holds = if into[at] { full } else { empty };
+            if outof.get(at) != Some(&holds) {
+                outof.insert(*at, holds);
+                changing = true;
+            }
+        }
+        for at in blocks.keys() {
+            if *at == body.entry || predecessors[at].is_empty() {
+                continue;
+            }
+            let met = predecessors[at].iter().all(|parent| outof.get(parent).copied().unwrap_or(true));
+            if met != into[at] {
+                into.insert(*at, met);
+                changing = true;
+            }
+        }
+    }
+    for block in &body.blocks {
+        let Some(per_insn) = kept.get(&block.at) else { continue };
+        let mut holds = into[&block.at];
+        for (position, one) in block.insns.iter().enumerate() {
+            if wanted.contains(&key(one)) && !holds {
+                return false;
+            }
+            holds = if std::ptr::eq(Arc::as_ptr(one), Arc::as_ptr(define)) { true } else { holds && per_insn[position] };
+        }
+    }
+    true
+}
+
+/// `_unchanged` as it was written: the blocks gone over, each instruction asked of again, until they settle.
+fn _unchanged_reference(body: &LirBody, define: &Arc<Insn>, cell: &Mem, uses: &[Arc<Insn>]) -> bool {
     let predecessors = _predecessors(body);
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut into: IndexMap<i64, bool> = blocks.keys().map(|at| (*at, *at != body.entry)).collect();
@@ -3732,6 +3830,29 @@ mod tests {
             !reloads.is_empty() && reloads.iter().all(|one| as_held(&what(one).dests[0]).width == 4),
             "{out:?}"
         );
+    }
+
+    /// Whether the cell a load read holds at its uses was found by going over every block, each instruction asked of again, until
+    /// the blocks settled: three passes at least, so a body of 40 blocks asked of its instructions well over a hundred times
+    /// for one load. Each is asked of once, and the load is found stable all the same.
+    #[test]
+    fn test_whether_a_loaded_cell_holds_asks_of_each_instruction_once() {
+        let cell = Loc::Mem(mem(Addr::new(Space::Frame, 4), 2, Register::BP, 4, 1));
+        let load = insn(0, (0, 1), semantics(Operation::Move, "mov", vec![held(1, 2)], vec![cell]), &[1], &[]);
+        let mut blocks = vec![LirBlock { succ: vec![1], ..LirBlock::new(0, vec![Arc::new(load)]) }];
+        for at in 1..=40_i64 {
+            let work = insn(at * 10, (at * 10, at * 10 + 1), semantics(Operation::Binary, "add", vec![held(100 + at as u32, 2)], vec![held(100 + at as u32 - 1, 2), Loc::Imm(Imm { value: 1, width: 2, address: None })]), &[100 + at as u32], &[100 + at as u32 - 1]);
+            blocks.push(LirBlock { succ: if at < 40 { vec![at + 1] } else { vec![] }, ..LirBlock::new(at, vec![Arc::new(work)]) });
+        }
+        let last = blocks.last_mut().expect("a block");
+        let used = insn(1000, (1000, 1001), semantics(Operation::Push, "push", vec![], vec![held(1, 2)]), &[], &[1]);
+        last.insns.push(Arc::new(used));
+        let body = LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default());
+        let before = super::KEEPS.with(std::cell::Cell::get);
+        let stable = super::_stable_loads(&body, &set(&[1]));
+        let asked = super::KEEPS.with(std::cell::Cell::get) - before;
+        assert_eq!(stable.len(), 1, "the load of a cell nothing writes is stable");
+        assert!(asked <= 2 * 43, "{asked} questions of `_keeps` for a body of 43 instructions");
     }
 
     #[test]
