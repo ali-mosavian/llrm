@@ -728,26 +728,27 @@ fn test_the_last_calls_into_a_large_caller_stop_where_it_has_doubled() {
     assert!(after <= original * 2 + 100, "{after} operations after, from {original}");
 }
 
-/// The knee: a once-called body of 300 operations is not moved into its caller, one of 200 is. part_frame went from 435
+/// The knee: a once-called body of 200 operations is not moved into its caller, one of 100 is. part_frame went from 435
 /// to 1647 instructions by absorbing such callees and took 42 times the backend time.
 #[test]
 fn test_the_only_call_of_a_body_past_the_allocation_knee_stays_a_call() {
     let chain = |count: usize| -> String { (0..count).map(|at| format!("  %t{at} = add i16 {}, {at}\n", if at == 0 { "%x".to_owned() } else { format!("%t{}", at - 1) })).collect() };
     let text = |size: usize| format!("define internal i16 @big(i16 %x) {{\nb0:\n{}  ret i16 %t{}\n}}\n\ndefine i16 @main(i16 %x) {{\nb0:\n  %r = call i16 @big(i16 %x)\n  ret i16 %r\n}}\n", chain(size), size - 1);
-    let mut past = parsed(&text(300));
+    let mut past = parsed(&text(200));
     assert!(!inline_with(&mut past, "main", 8, Threshold::default()));
-    let mut within = parsed(&text(200));
+    let mut within = parsed(&text(100));
     assert!(inline_with(&mut within, "main", 8, Threshold::default()));
 }
 
-/// A caller already past the knee does not grow: sb_build's callee of 175 went into a caller of 465 and its backend time
-/// went from 0.36 s to 2.4 s (compile-time, #791). The same callee goes into a caller within the knee.
+/// A body moved into a caller that is past the knee already stays a call: sb_build's once-called body of 40 operations went
+/// into a caller of 150 (465 LIR instructions) and left 667, backend 0.36 s -> 2.4 s (compile-time, #791). The same body
+/// goes into a caller within the knee.
 #[test]
-fn test_a_caller_past_the_allocation_knee_takes_no_more_calls() {
+fn test_a_body_moved_into_a_caller_past_the_allocation_knee_stays_a_call() {
     let chain = |count: usize| -> String { (0..count).map(|at| format!("  %t{at} = add i16 {}, {at}\n", if at == 0 { "%x".to_owned() } else { format!("%t{}", at - 1) })).collect() };
-    let text = |own: usize| format!("define internal i16 @small(i16 %x) {{\nb0:\n{}  ret i16 %t3\n}}\n\ndefine i16 @main(i16 %x) {{\nb0:\n{}  %a = call i16 @small(i16 %t{})\n  %b = call i16 @small(i16 %a)\n  ret i16 %b\n}}\n", chain(4), chain(own), own - 1);
-    let mut past = parsed(&text(400));
-    assert!(!inline_with(&mut past, "main", 8, Threshold::new(225)));
-    let mut within = parsed(&text(100));
-    assert!(inline_with(&mut within, "main", 8, Threshold::new(225)));
+    let text = |own: usize| format!("define internal i16 @once(i16 %x) {{\nb0:\n{}  ret i16 %t39\n}}\n\ndefine i16 @main(i16 %x) {{\nb0:\n{}  %r = call i16 @once(i16 %t{})\n  ret i16 %r\n}}\n", chain(40), chain(own), own - 1);
+    let mut past = parsed(&text(150));
+    assert!(!inline_with(&mut past, "main", 8, Threshold::default()));
+    let mut within = parsed(&text(50));
+    assert!(inline_with(&mut within, "main", 8, Threshold::default()));
 }
