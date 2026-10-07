@@ -285,3 +285,18 @@ fn a_functions_frame_rows_are_the_cfa_instructions_the_dwarf_standard_gives() {
     assert_eq!(fde[..expected.len()], expected, "{fde:x?}");
     assert!(fde[expected.len()..].iter().all(|&one| one == 0), "padded with DW_CFA_nop");
 }
+
+/// A base type is named as the source spells it: `int` and `unsigned long` where the frontend said so, and
+/// `uint32_t` where it did not. Every base type was `int32_t`/`uint32_t`, which is what gdb printed for a C `int`.
+#[test]
+fn a_base_type_is_named_as_the_source_spells_it() {
+    let strings = |types: Vec<Type>| {
+        let made = written(Vec::new(), types, Format::Dwarf { version: 4 }).unwrap();
+        named(&made, ".debug_str").1.image.clone()
+    };
+    let has = |image: &[u8], name: &str| image.windows(name.len() + 2).any(|window| window[0] == 0 && &window[1..=name.len()] == name.as_bytes() && window[name.len() + 1] == 0) || image.starts_with(name.as_bytes());
+    let spelled = strings(vec![Type::Basic { name: "unsigned long".into(), scalar: Scalar::Int { bytes: 4, signed: false } }]);
+    assert!(has(&spelled, "unsigned long") && !has(&spelled, "uint32_t"), "{:?}", String::from_utf8_lossy(&spelled));
+    let plain = strings(vec![Type::Scalar(Scalar::Int { bytes: 4, signed: false })]);
+    assert!(has(&plain, "uint32_t"), "{:?}", String::from_utf8_lossy(&plain));
+}

@@ -4072,7 +4072,7 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
     use iced_x86::Register;
     use llrm_mir::debuginfo as di;
     let mut module = llrm_mir::Module::default();
-    let int = di::add_type(&mut module, &di::Type { kind: di::Kind::Scalar, name: "int16".into(), size: 0, reach: di::Reach::Near, target: None, members: Vec::new() });
+    let int = di::add_type(&mut module, &di::Type { kind: di::Kind::Scalar, name: "int16".into(), size: 0, reach: di::Reach::Near, target: None, members: Vec::new(), spelling: None });
     let named = ["a", "b", "c", "d"];
     let parameters = named.iter().enumerate().map(|(at, name)| (at as i64, (*name).to_owned(), int)).collect();
     di::add_function(&mut module, &di::Function { function: "f".into(), module: false, name: "f".into(), r#type: int, parameters });

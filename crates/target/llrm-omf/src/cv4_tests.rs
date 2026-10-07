@@ -327,3 +327,20 @@ fn the_32_bit_writers_object_reads_as_mls_flat_object_does() {
     let ours: Vec<String> = cv4info::shape(&omf::parse(&write::write(&made).unwrap()).unwrap()).into_iter().map(|one| one.replace("UINT4", "UNSIGNED LONG")).collect();
     assert_eq!(ours, ml);
 }
+
+/// Two types of the model that read alike, an array of `int` and one of `long` (the source spells each, so they are
+/// two), are one record: a second only grew the table, and every later index with it.
+#[test]
+fn arrays_of_scalars_of_two_spellings_are_one_record() {
+    let spelled = |name: &str| T::Basic { name: name.into(), scalar: S::Int { bytes: 2, signed: true } };
+    let array = |element| T::Array { element, bytes: Some(8) };
+    let made = object(
+        Arch::I8086,
+        vec![spelled("int"), spelled("short"), array(0), array(1), T::Procedure { result: None, parameters: Vec::new(), convention: None }],
+        vec![variable("a", 2, Kind::Local, Location::Frame { disp: -8 }), variable("b", 3, Kind::Local, Location::Frame { disp: -16 })],
+    );
+    let (symbols, types, _) = written(&made);
+    assert_eq!(types.iter().filter(|(leaf, _)| *leaf == 0x0003).count(), 1, "one LF_ARRAY");
+    let bprels: Vec<&[u8]> = symbols.iter().filter(|(code, _)| *code == 0x0100).map(|(_, data)| &data[2..4]).collect();
+    assert_eq!(bprels[0], bprels[1], "both locals name it");
+}

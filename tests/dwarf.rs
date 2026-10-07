@@ -113,7 +113,7 @@ fn gdb_stops_at_a_line_and_reads_a_parameter_a_local_a_struct_field_and_the_retu
     let text = String::from_utf8_lossy(&said.stdout).into_owned();
     // The stop is the first statement of the body, not the one after it.
     assert!(text.contains("add (a=1, p=0x") && text.contains("gdb.c:7") && text.contains("int l = a + p->x;"), "{text}");
-    for expected in ["$1 = 1", "$2 = 4", "$3 = {x = 3, y = 4}", "$4 = 4", "type = int32_t (int32_t, struct pt *)", "Value returned is $5 = 12"] {
+    for expected in ["$1 = 1", "$2 = 4", "$3 = {x = 3, y = 4}", "$4 = 4", "type = int (int, struct pt *)", "Value returned is $5 = 12"] {
         assert!(text.contains(expected), "no {expected:?} in:\n{text}");
     }
 }
@@ -308,7 +308,7 @@ fn a_64_bit_variable_is_in_dwarf_with_its_value_and_codeview_still_writes() {
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&said.stdout).into_owned();
-    for expected in ["$1 = 5000000000", "$2 = 3", "$3 = 4294967297", "$4 = 5000000003", "$5 = 7", "type = int64_t (int64_t, int32_t)"] {
+    for expected in ["$1 = 5000000000", "$2 = 3", "$3 = 4294967297", "$4 = 5000000003", "$5 = 7", "type = __int64 (__int64, int)"] {
         assert!(text.contains(expected), "no {expected:?} in:\n{text}");
     }
 }

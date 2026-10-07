@@ -36,7 +36,7 @@ impl Types<'_> {
             .iter()
             .map(|member| Ok(di::Member { name: member.name.clone(), r#type: self.node(module, member.r#type)?, offset: member.offset, bits: member.bit_start.zip(member.bit_width) }))
             .collect::<Emit<Vec<_>>>()?;
-        let described = di::Type { kind: one.kind, name: one.name.clone(), size: one.size, reach: one.reach, target, members };
+        let described = di::Type { kind: one.kind, name: one.name.clone(), size: one.size, reach: one.reach, target, members, spelling: one.spelling.clone() };
         let made = match reserved {
             Some(reserved) => {
                 di::set_type(module, reserved, &described);
