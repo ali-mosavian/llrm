@@ -2,6 +2,7 @@
 
 import sys
 import tempfile
+import time
 import threading
 import unittest
 from pathlib import Path
@@ -55,3 +56,28 @@ class LinkTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OutputCapTests(unittest.TestCase):
+    """A program that printed without end made T292 and T294 write 931 MB each and the event log 22 GB: a gate hung for hours."""
+
+    def test_a_launch_that_fills_a_file_past_the_cap_is_stopped(self):
+        import sys
+
+        with tempfile.TemporaryDirectory() as where:
+            writer = "import time\nwith open('T001.TXT', 'wb') as f:\n    while True:\n        f.write(b'x' * 65536); f.flush(); time.sleep(0.001)\n"
+            began = time.monotonic()
+            over = dosbatch._launch([sys.executable, "-c", writer], Path(where), 60, 1 << 20, cwd=where)
+            self.assertEqual(over, "T001.TXT")
+            self.assertLess(time.monotonic() - began, 30)
+
+    def test_a_launch_within_the_cap_runs_to_its_end(self):
+        import sys
+
+        with tempfile.TemporaryDirectory() as where:
+            self.assertIsNone(dosbatch._launch([sys.executable, "-c", "open('T001.TXT', 'w').write('ok')"], Path(where), 60, 1 << 20, cwd=where))
+
+    def test_the_program_that_overflowed_fails_and_the_others_are_stopped(self):
+        jobs = [dosbatch.Job("T001", "obj", Path("a.obj")), dosbatch.Job("T002", "obj", Path("b.obj"))]
+        results = dosbatch.stopped_for_output(jobs, Path("."), "T002.TXT", 100)
+        self.assertEqual((results["T002"].status, results["T001"].status), ("over the output cap", "stopped"))
