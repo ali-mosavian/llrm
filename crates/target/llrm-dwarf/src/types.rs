@@ -14,6 +14,7 @@ const TAG_MEMBER: u16 = 0x0d;
 const TAG_POINTER: u16 = 0x0f;
 const TAG_REFERENCE: u16 = 0x10;
 const TAG_STRUCTURE: u16 = 0x13;
+const TAG_UNION: u16 = 0x17;
 const TAG_SUBROUTINE_TYPE: u16 = 0x15;
 const TAG_TYPEDEF: u16 = 0x16;
 const TAG_SUBRANGE: u16 = 0x21;
@@ -93,8 +94,8 @@ impl Tree<'_> {
                 die
             }
             Type::Array { bytes: None, .. } => return refused("a BASIC array is its descriptor's: it has no DWARF type"),
-            Type::Struct { name, bytes, fields } => {
-                let mut die = Die::new(TAG_STRUCTURE);
+            Type::Struct { name, bytes, fields, union } => {
+                let mut die = Die::new(if *union { TAG_UNION } else { TAG_STRUCTURE });
                 if !name.is_empty() {
                     die.attrs.push((AT_NAME, Value::Str(name.clone())));
                 }
@@ -288,6 +289,18 @@ fn base(scalar: Scalar) -> Result<Die, Unsupported> {
     Ok(die)
 }
 
+/// The types `one` names.
+fn references(one: &Type) -> Vec<usize> {
+    match one {
+        Type::Scalar(_) | Type::FixedString(_) => Vec::new(),
+        Type::Array { element, .. } => vec![*element],
+        Type::Struct { fields, .. } => fields.iter().map(|field| field.r#type).collect(),
+        Type::Enum { underlying, .. } => vec![*underlying],
+        Type::Pointer { target, .. } | Type::Reference(target) | Type::Typedef { target, .. } | Type::Qualified { target, .. } => vec![*target],
+        Type::Procedure { result, parameters, .. } => result.iter().chain(parameters).copied().collect(),
+    }
+}
+
 /// The tree: the compile unit is DIE 0 and type `i` is DIE `1 + i`.
 pub fn tree(object: &Object, info: &Info) -> Result<Vec<Die>, Unsupported> {
     let mut tree = Tree { object, info, dies: Vec::new(), bad: vec![None; info.types.len()] };
@@ -307,14 +320,30 @@ pub fn tree(object: &Object, info: &Info) -> Result<Vec<Die>, Unsupported> {
     tree.dies.push(unit);
     tree.dies.extend((0..info.types.len()).map(|_| Die::new(0)));
     let mut children = Vec::new();
+    // A type may name one that comes after it (a struct with a pointer to itself): find every type that
+    // cannot be written, and those that name one, before any is described.
     for index in 0..info.types.len() {
-        match tree.describe(index) {
-            Ok(()) => {
-                if tree.ty(index)?.is_some() {
-                    children.push(1 + index);
+        if let Err(Unsupported(why)) = tree.describe(index) {
+            tree.bad[index] = Some(why.trim_start_matches("DWARF: ").to_owned());
+        }
+    }
+    loop {
+        let mut changed = false;
+        for index in 0..info.types.len() {
+            if tree.bad[index].is_none() {
+                if let Some(why) = references(&info.types[index]).into_iter().find_map(|target| tree.bad.get(target).cloned().flatten()) {
+                    tree.bad[index] = Some(why);
+                    changed = true;
                 }
             }
-            Err(Unsupported(why)) => tree.bad[index] = Some(why.trim_start_matches("DWARF: ").to_owned()),
+        }
+        if !changed {
+            break;
+        }
+    }
+    for index in 0..info.types.len() {
+        if tree.bad[index].is_none() && tree.ty(index)?.is_some() {
+            children.push(1 + index);
         }
     }
     for global in &info.globals {

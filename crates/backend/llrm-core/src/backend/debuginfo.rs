@@ -70,7 +70,7 @@ fn scalar(scalar: di::Scalar) -> model::Scalar {
 
 /// `one`, its targets and members already read into `nodes`; `near` the width of an offset.
 fn typed(one: &di::Type, nodes: &IndexMap<MetadataId, model::TypeId>, near: u8) -> Result<model::Type, String> {
-    let node = |id: MetadataId| nodes.get(&id).copied().ok_or_else(|| format!("debug type !{} listed after its use", id.0));
+    let node = |id: MetadataId| nodes.get(&id).copied().ok_or_else(|| format!("debug type !{} is not listed", id.0));
     let target = || one.target.map(node).ok_or_else(|| format!("a {} of nothing", one.kind.value()))?;
     Ok(match one.kind {
         di::Kind::Scalar => model::Type::Scalar(scalar(di::Scalar::from_value(&one.name).ok_or_else(|| format!("no debug scalar {}", one.name))?)),
@@ -86,7 +86,7 @@ fn typed(one: &di::Type, nodes: &IndexMap<MetadataId, model::TypeId>, near: u8) 
             model::Type::Pointer { target: target()?, bytes, reach }
         }
         di::Kind::Reference => model::Type::Reference(target()?),
-        di::Kind::Struct => {
+        di::Kind::Struct | di::Kind::Union => {
             let fields = one
                 .members
                 .iter()
@@ -95,7 +95,7 @@ fn typed(one: &di::Type, nodes: &IndexMap<MetadataId, model::TypeId>, near: u8) 
                     Ok(model::Field { name: member.name.clone(), r#type: node(member.r#type)?, offset: narrow(member.offset, "a field's offset")?, bits })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            model::Type::Struct { name: one.name.clone(), bytes: narrow(one.size, "a structure's size")?, fields }
+            model::Type::Struct { name: one.name.clone(), bytes: narrow(one.size, "a structure's size")?, fields, union: one.kind == di::Kind::Union }
         }
         di::Kind::Procedure => model::Type::Procedure {
             result: one.target.map(node).transpose()?,
@@ -115,11 +115,13 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
         return Ok(None);
     }
     let symbol = |name: &str| module.named(name).and_then(|id| names.get(&(globals::space(module, id), i64::from(id.0)))).cloned();
-    let (mut types, mut nodes) = (Vec::new(), IndexMap::default());
-    for id in di::types(module) {
+    // Every type has its place before any is read: a member may name one made after it.
+    let listed = di::types(module);
+    let nodes: IndexMap<MetadataId, model::TypeId> = listed.iter().enumerate().map(|(at, &id)| (id, at)).collect();
+    let mut types = Vec::new();
+    for &id in &listed {
         let one = di::read_type(module, id).ok_or_else(|| format!("debug type !{} does not read", id.0))?;
         types.push(typed(&one, &nodes, (near / 8) as u8)?);
-        nodes.insert(id, types.len() - 1);
     }
     let node = |id: MetadataId| nodes.get(&id).copied().ok_or_else(|| format!("debug type !{} unlisted", id.0));
     let mut procedures = IndexMap::default();
