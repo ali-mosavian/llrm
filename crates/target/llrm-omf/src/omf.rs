@@ -394,12 +394,14 @@ pub fn ledata(recs: &[Rc<Record>]) -> Vec<(Rc<Record>, i64, i64, Vec<u8>)> {
             continue;
         }
         let (si, i) = _index(&r.body, 0);
-        let off = unpack_from(&r.body, i);
+        // LEDATA32 (the odd record type) has a four-byte offset.
+        let width = if r.r#type & 1 == 1 { 4 } else { 2 };
+        let off = if width == 4 { i64::from(u32::from_le_bytes(r.body[i..i + 4].try_into().expect("a LEDATA32 offset"))) } else { unpack_from(&r.body, i) };
         out.push((
             r.clone(),
             si,
             off,
-            slice(&r.body, i + 2, r.body.len()).to_vec(),
+            slice(&r.body, i + width, r.body.len()).to_vec(),
         ));
     }
     out

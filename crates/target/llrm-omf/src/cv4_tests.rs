@@ -297,3 +297,33 @@ fn the_writers_object_reads_as_mls_for_the_same_program() {
     let ours = cv4info::shape(&omf::parse(&write::write(&made).unwrap()).unwrap());
     assert_eq!(ours, ml);
 }
+
+/// The 32-bit records have no Microsoft reader here (llvm-readobj reads C13, not CodeView 4 in OMF), so the check
+/// is ML's own flat object of tests/inputs/cv4/p2.asm: a struct of two dwords, a procedure of two dword
+/// parameters, a dword and a struct local. Written by llrm, it reads as ML's does through the one reader.
+/// ML's `dword` is T_ULONG and C's `unsigned int` is T_UINT4, the one name that is mapped.
+#[test]
+fn the_32_bit_writers_object_reads_as_mls_flat_object_does() {
+    use crate::{cv4info, omf, write};
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/cv4/p2.obj");
+    let ml: Vec<String> = cv4info::shape(&omf::parse(&std::fs::read(path).unwrap()).unwrap()).into_iter().filter(|one| !one.starts_with("DATA")).collect();
+    let dword = T::Scalar(S::Int { bytes: 4, signed: false });
+    let point = T::Struct {
+        name: "point".into(),
+        bytes: 8,
+        fields: vec![Field { name: "px".into(), r#type: 0, offset: 0, bits: None }, Field { name: "py".into(), r#type: 0, offset: 4, bits: None }],
+        union: false,
+    };
+    let made = object(
+        Arch::I386,
+        vec![dword, point, T::Procedure { result: None, parameters: vec![0, 0], convention: None }],
+        vec![
+            variable("a", 0, Kind::Parameter, Location::Frame { disp: 8 }),
+            variable("b", 0, Kind::Parameter, Location::Frame { disp: 12 }),
+            variable("x", 0, Kind::Local, Location::Frame { disp: -4 }),
+            variable("q", 1, Kind::Local, Location::Frame { disp: -12 }),
+        ],
+    );
+    let ours: Vec<String> = cv4info::shape(&omf::parse(&write::write(&made).unwrap()).unwrap()).into_iter().map(|one| one.replace("UINT4", "UNSIGNED LONG")).collect();
+    assert_eq!(ours, ml);
+}
