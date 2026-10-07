@@ -112,6 +112,35 @@ fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
 }
 
 
+/// A pointer to a function points to a function type called as far as the pointer reaches. TDUMP's symbol table names the
+/// type of each public symbol: for the same C program Turbo C++ says `far pointer function far C` of `fp` and `near
+/// pointer _CS function near C` of `np`; llrm's near pointer read `function far C`.
+#[test]
+fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
+    let Some((borland, dosbox)) = toolchain() else {
+        skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/fnptr.c"), scratch.path().join("fnp.c")).unwrap();
+    let made = Command::new(llrm_c()).args(["-m16", "-gtd", "-O0"]).arg(scratch.path().join("fnp.c")).arg("-o").arg(scratch.path().join("lfnp.obj")).output().unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let mut commands = vec!["tcc -v -r- -c -ml fnp.c".to_owned()];
+    for (prefix, object) in [("t", "fnp.obj"), ("l", "lfnp.obj")] {
+        commands.push(format!("tlink /v c:\\lib\\c0l {object}, {prefix}fnp.exe,, c:\\lib\\cl > {prefix}fnp.tl"));
+        commands.push(format!("tdump {prefix}fnp.exe > {prefix}fnp.tx"));
+    }
+    dosbox::run(&[('c', &borland), ('w', scratch.path())], "c:\\bin", &commands);
+    let types = |prefix: &str| -> Vec<String> {
+        let text = std::fs::read_to_string(scratch.path().join(format!("{}FNP.TX", prefix.to_uppercase()))).unwrap_or_else(|error| panic!("DOS made no {prefix}fnp.tx: {error}"));
+        let wanted = ["_CALLEE ", "_INNER ", "_APPLY ", "_FP ", "_NP "];
+        text.lines().filter(|line| wanted.iter().any(|name| line.contains(name))).filter_map(|line| line.split_once("]").map(|(_, rest)| rest.split_whitespace().collect::<Vec<_>>().join(" "))).collect()
+    };
+    let (theirs, ours) = (types("t"), types("l"));
+    assert_eq!(theirs.len(), 5, "premise: Turbo C++'s table names the five: {theirs:?}");
+    assert_eq!(ours, theirs);
+}
+
 /// Turbo Debugger itself, driven. DOSBox-X's debug socket (`DOSBOX_DEBUG_PORT`, a private port) injects keys
 /// and reads the text screen; it stops the emulator at every INT 3, which Turbo Debugger uses for its own
 /// breakpoints, so a reader thread answers those with `continue`.

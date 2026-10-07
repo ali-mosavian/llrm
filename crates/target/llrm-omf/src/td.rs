@@ -97,6 +97,8 @@ struct Types<'a> {
     info: &'a Info,
     of: Vec<Option<u16>>,
     records: Vec<Rc<Record>>,
+    /// A procedure type called far or near: far is the pointer's, or the function's, not the type's.
+    procedures: Vec<((usize, bool), u16)>,
     next: u16,
 }
 
@@ -124,13 +126,49 @@ impl Types<'_> {
         }
     }
 
+    /// The procedure type `id` is, or is a typedef of.
+    fn procedure_through(&self, mut id: usize) -> Option<usize> {
+        loop {
+            match self.info.types.get(id)? {
+                Type::Typedef { target, .. } | Type::Qualified { target, .. } => id = *target,
+                Type::Procedure { .. } => return Some(id),
+                _ => return None,
+            }
+        }
+    }
+
+    /// The record of the procedure type `id` called far or near, made once for each.
+    fn procedure_code(&mut self, id: usize, far: bool) -> Result<u16, Error> {
+        if let Some(&(_, done)) = self.procedures.iter().find(|(key, _)| *key == (id, far)) {
+            return Ok(done);
+        }
+        let at = self.next;
+        self.next += 1;
+        self.procedures.push(((id, far), at));
+        let info = self.info;
+        let Type::Procedure { result, .. } = &info.types[id] else { unreachable!("found as one") };
+        let ret = match result {
+            Some(result) => self.code(*result)?,
+            None => 0x01,
+        };
+        // The call's own flags: far is 4. A Pascal call is the function's own, set where a name is.
+        let data = [index(at)?, pascal("")?, 0u16.to_le_bytes().to_vec(), vec![TID_FUNCTION], index(ret)?, vec![if far { 0x04 } else { 0x00 }, 0x00]].concat();
+        self.records.push(comment(TYPE_DEFINITION, data));
+        Ok(at)
+    }
+
     /// A composite type's name, size, kind and what follows its kind; its members' records first.
     fn composite<'t>(&mut self, one: &'t Type) -> Result<(&'t str, u16, u8, Vec<u8>), Error> {
         let size = |bytes: u32| u16::try_from(bytes).or_else(|_| refused(format!("a type of {bytes} bytes does not fit its size")));
         Ok(match one {
             Type::Pointer { target, bytes, reach } => {
-                let to = self.code(*target)?;
-                let function = matches!(self.info.types[*target], Type::Procedure { .. });
+                // What a pointer to a function points to is called as far as the pointer reaches.
+                let procedure = self.procedure_through(*target);
+                let to = match procedure {
+                    Some(procedure) => self.procedure_code(procedure, *reach != model::Reach::Near)?,
+                    None => self.code(*target)?,
+                };
+                let function = procedure.is_some();
                 let (tid, kind) = match reach {
                     model::Reach::Near => (TID_NEAR_POINTER, if function { 0x02 } else { 0x04 }),
                     model::Reach::Far => (TID_FAR_POINTER, 0x00),
@@ -318,7 +356,7 @@ pub fn records(object: &Object, info: &Info) -> Result<Debug, Error> {
     if info.language != model::Language::C {
         return refused(format!("only C's information is written, not {:?}'s", info.language));
     }
-    let mut builder = Builder { object, info, types: Types { info, of: vec![None; info.types.len()], records: Vec::new(), next: FIRST_INDEX } };
+    let mut builder = Builder { object, info, types: Types { info, of: vec![None; info.types.len()], records: Vec::new(), procedures: Vec::new(), next: FIRST_INDEX } };
     // Each function's records, in the order of its code.
     let mut functions: Vec<&Function> = info.functions.iter().collect();
     functions.sort_by_key(|one| one.ranges.first().map(|range| (range.section, range.offset)));
@@ -558,5 +596,29 @@ mod tests {
         // A register Turbo Debugger has no number for is refused by name.
         let wide = object(vec![int()], vec![in_register("w", "eax")], |_| {});
         assert!(write::write(&wide).unwrap_err().to_string().contains("w is in register eax"));
+    }
+
+    /// A pointer to a function points to a function type called as far as the pointer reaches: a near pointer's is a
+    /// near call (call byte 0), a far one's a far call (4). Turbo C++ says `near pointer _CS function near C` and
+    /// `far pointer function far C`; every such type was far, so a near pointer read `function far C`.
+    #[test]
+    fn a_pointer_to_a_function_points_to_a_function_called_as_far_as_it_reaches() {
+        use llrm_object::debug::Reach::{Far, Near};
+        let short = int();
+        let call = |wanted: bool| {
+            let made = object(
+                vec![short.clone(), Type::Procedure { result: Some(0), parameters: vec![0], convention: None }, Type::Pointer { target: 1, bytes: if wanted { 4 } else { 2 }, reach: if wanted { Far } else { Near } }],
+                vec![variable("p", 2, Kind::Local, Location::Frame { disp: -2 })],
+                |_| {},
+            );
+            // The function types among the type records: each ends with its call byte and a zero.
+            let types: Vec<Vec<u8>> = comments(&made).into_iter().filter(|(class, data)| *class == TYPE_DEFINITION && data.contains(&TID_FUNCTION) && data.len() > 3).map(|(_, data)| data).collect();
+            types
+        };
+        let far: Vec<u8> = call(true).iter().map(|data| data[data.len() - 2]).collect();
+        let near: Vec<u8> = call(false).iter().map(|data| data[data.len() - 2]).collect();
+        // The function's own type (near here) and the pointer's target: far for a far pointer, near for a near one.
+        assert!(far.contains(&0x04), "a far pointer's function is called far: {far:?}");
+        assert!(!near.contains(&0x04), "a near pointer's function is called near: {near:?}");
     }
 }
