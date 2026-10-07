@@ -91,6 +91,14 @@ of a role is `.text$name`, which the linker merges into `.text`. A COFF object r
 as ELF does. A pc-relative field's value is `addend - (from - baked)`, `baked` being what the relocation
 type already subtracts (`REL32`: 4). More than 65535 relocations in a section use `LNK_NRELOC_OVFL`.
 
+COFF debug information is CodeView C13, written from `Info` into `.debug$S` and `.debug$T` (`llrm-coff/src/codeview`):
+a function is `S_GPROC32`/`S_LPROC32`, a variable `S_LOCAL` with one `S_DEFRANGE_REGISTER_REL` (frame) or
+`S_DEFRANGE_REGISTER` per range (pieces of 0xF000 bytes, a range's length being 16 bits), a block `S_BLOCK32`, a
+global `S_GDATA32`/`S_LDATA32`, a named struct, enum or typedef `S_UDT`. A code or data address is a `SECREL` and a
+`SECTION` relocation against the object's symbol. A struct reached from its own field is written as a forward
+reference first. Register numbers come from `Info.registers`. Refused by name: far and huge pointers, BASIC's types,
+a function or block in several ranges, a register with no CodeView number.
+
 `llrm-elf` holds the container both share (sections, symbols, relocation tables); a machine gives it
 its ELF number, its relocation types, and REL or RELA.
 
