@@ -33,12 +33,17 @@ fn bare(module: &Module) -> String {
 /// `text` through `Algebraic` under the verifier and preserved-analyses
 /// check.
 fn simplified(text: &str) -> (Module, Module) {
+    simplified_for(text, false)
+}
+
+/// `simplified`, tuned for size or not.
+fn simplified_for(text: &str, size: bool) -> (Module, Module) {
     let mut before = parsed(text);
     before.datalayout = Some(LEGAL.to_owned());
     let mut after = before.clone();
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
-    passes.add(super::Algebraic);
+    passes.add(super::Algebraic { size });
     passes.run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap_or_else(|error| panic!("{error}\n{text}"));
     (before, after)
 }
@@ -593,7 +598,7 @@ fn test_a_mask_narrows_only_to_a_native_width() {
         let mut module = parsed(text);
         module.datalayout = Some(layout.to_owned());
         let mut passes = llrm_mir::passes::PassManager::default();
-        passes.add(super::Algebraic);
+        passes.add(super::Algebraic::default());
         passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
         printed(&module)
     };
@@ -713,7 +718,6 @@ b2:
 #[test]
 fn test_a_signed_division_of_an_unknown_sign_stays_signed() {
     unchanged(&unary(32, "  %r = sdiv i32 %x, 16\n  ret i32 %r\n").replace("sdiv i32 %x, 16", "sdiv i32 %x, 10"));
-    unchanged("define i32 @f(i32 range(i32 0, 100) %x) {\nb0:\n  %r = sdiv i32 %x, 10\n  ret i32 %r\n}\n");
     unchanged("define i32 @f(i32 range(i32 0, 100) %x) {\nb0:\n  %r = sdiv i32 %x, -10\n  ret i32 %r\n}\n");
     unchanged("define i32 @f(i32 range(i32 0, 100) %x, i32 %d) {\nb0:\n  %r = sdiv i32 %x, %d\n  ret i32 %r\n}\n");
 }
@@ -798,4 +802,49 @@ b0:
 ";
     let after = checked(nested, &inputs);
     assert!(after.contains("sub i16 0, %y"), "{after}");
+}
+
+/// A non-negative dividend divided by a constant that is not a power of two is the unsigned division: its reciprocal has no sign
+/// to correct, and the loop counter `i * 97 % 211` (x_hash) took an `idiv` where gcc multiplies. Tuned for size it stays, `div` being
+/// a byte over `idiv` where selection declines the reciprocal.
+#[test]
+fn test_a_non_negative_dividend_by_a_constant_is_unsigned_unless_tuned_for_size() {
+    let text = "define i32 @f(i32 range(i32 0, 100000) %x) {\nb0:\n  %r = srem i32 %x, 211\n  %q = sdiv i32 %x, 10\n  %s = add i32 %r, %q\n  ret i32 %s\n}\n";
+    let inputs: Vec<Vec<i128>> = [0, 1, 9, 10, 210, 211, 99999].iter().map(|&one| vec![one]).collect();
+    let done = checked(text, &inputs);
+    assert!(done.contains("urem") && done.contains("udiv") && !done.contains("srem") && !done.contains("sdiv"), "{done}");
+    let (before, after) = simplified_for(text, true);
+    assert_eq!(bare(&after), bare(&before));
+    // A negative divisor stays: the signed reciprocal negates.
+    unchanged("define i32 @f(i32 range(i32 0, 100) %x) {\nb0:\n  %r = sdiv i32 %x, -10\n  ret i32 %r\n}\n");
+}
+
+/// `(i * 97) % 211` over a counter from 0: the counter never goes below its start (its update is `nsw`), and its product by a positive
+/// constant, `nsw`, is never negative: the remainder is unsigned (x_hash took an `idiv` for it, 43 clocks, where gcc multiplies).
+#[test]
+fn test_a_remainder_of_a_counter_s_product_is_unsigned() {
+    let text = "define i32 @f(i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %j, %b2 ]
+  %s = phi i32 [ 0, %b0 ], [ %t, %b2 ]
+  %go = icmp slt i32 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %p = mul nsw i32 %i, 97
+  %r = srem i32 %p, 211
+  %t = add i32 %s, %r
+  %j = add nsw i32 %i, 1
+  br label %b1
+
+b3:
+  ret i32 %s
+}
+";
+    let inputs: Vec<Vec<i128>> = [-3, 0, 1, 5, 40, 300].iter().map(|&one| vec![one]).collect();
+    let done = checked(text, &inputs);
+    assert!(done.contains("urem") && !done.contains("srem"), "{done}");
 }
