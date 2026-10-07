@@ -54,6 +54,7 @@ pub mod hoist;
 pub mod indvars;
 pub mod inline;
 pub mod interprocedural;
+pub mod jumpthread;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loadjoins;
