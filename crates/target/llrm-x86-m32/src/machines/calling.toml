@@ -36,9 +36,10 @@ aggregate_pointer_popped_by = "callee"
 promotion = "slot"
 wide_slots = 2
 variadic_float = "double"
-# Open Watcom decorates a symbol with a trailing underscore; ELF and Mach-O take C's.
+# Open Watcom decorates a symbol with a trailing underscore, in OMF and COFF alike; ELF and Mach-O take C's.
 [watcall32.symbol]
 omf = "*_"
+coff = "*_"
 elf = "*"
 macho = "_*"
 
@@ -93,6 +94,7 @@ variadic_float = "double"
 
 [cdecl32.symbol]
 omf = "_*"
+coff = "_*"
 elf = "*"
 macho = "_*"
 

@@ -268,6 +268,8 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-analysis",
+ "llrm-coff32",
+ "llrm-coff64",
  "llrm-elf32",
  "llrm-elf64",
  "llrm-hir",

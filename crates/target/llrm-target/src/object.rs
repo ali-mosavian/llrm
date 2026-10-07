@@ -8,10 +8,11 @@ pub enum Format {
     Omf,
     Elf,
     MachO,
+    Coff,
 }
 
 impl Format {
-    pub const ALL: [Format; 3] = [Format::Omf, Format::Elf, Format::MachO];
+    pub const ALL: [Format; 4] = [Format::Omf, Format::Elf, Format::MachO, Format::Coff];
 
     /// The name `-fobject-format=` and `object.toml` spell it.
     pub fn name(self) -> &'static str {
@@ -19,6 +20,7 @@ impl Format {
             Format::Omf => "omf",
             Format::Elf => "elf",
             Format::MachO => "macho",
+            Format::Coff => "coff",
         }
     }
 
@@ -88,7 +90,7 @@ mod tests {
     #[test]
     fn a_bad_object_format_is_refused_with_what_is_wrong() {
         let parse = |formats: &str, default: &str, bitness: u32| ObjectFormat::parse(&format!("formats = {formats}\ndefault = \"{default}\"\nbitness = {bitness}\nheader = []\n")).unwrap_err();
-        assert_eq!(parse("[\"coff\"]", "omf", 32), "formats: \"coff\" is not one of \"omf\", \"elf\", \"macho\"");
+        assert_eq!(parse("[\"pe\"]", "omf", 32), "formats: \"pe\" is not one of \"omf\", \"elf\", \"macho\", \"coff\"");
         assert_eq!(parse("[\"omf\"]", "elf", 32), "default \"elf\" is not one of formats");
         assert_eq!(parse("[\"omf\"]", "omf", 24), "bitness is not 16 or 32");
     }
