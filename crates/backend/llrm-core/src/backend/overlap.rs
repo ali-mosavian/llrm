@@ -109,6 +109,26 @@ fn surviving<'s>(spans: &'s BTreeSet<Span>, holes: &BTreeSet<Span>) -> Vec<&'s S
 /// Whether the `one_width` bytes at `one` may overlap the `other_width`
 /// bytes at `other`; an end past 2^63 may.
 pub fn may_overlap(one: Option<Addr>, one_width: u32, other: Option<Addr>, other_width: u32) -> bool {
+    if let Some(answer) = frame_bytes(one, one_width, other, other_width) {
+        return answer;
+    }
+    may_overlap_by_sets(one, one_width, other, other_width)
+}
+
+/// Two fixed frame cells meet when their byte ranges do: the general answer for them, without the sets built to give it
+/// (a body that copies a large struct asks it of every cell against every store).
+fn frame_bytes(one: Option<Addr>, one_width: u32, other: Option<Addr>, other_width: u32) -> Option<bool> {
+    let (one, other) = (one?, other?);
+    let fixed = |address: &Addr| address.space == Space::Frame && address.base == iced_x86::Register::None;
+    if !fixed(&one) || !fixed(&other) {
+        return None;
+    }
+    let end = |address: &Addr, width: u32| address.disp.checked_add(i64::from(width.max(1)));
+    let (one_end, other_end) = (end(&one, one_width)?, end(&other, other_width)?);
+    Some(one.disp < other_end && other.disp < one_end)
+}
+
+fn may_overlap_by_sets(one: Option<Addr>, one_width: u32, other: Option<Addr>, other_width: u32) -> bool {
     let (Some(first), Some(second)) = (spans(one, one_width), spans(other, other_width)) else {
         return true;
     };
@@ -137,5 +157,19 @@ mod tests {
         assert!(!may_overlap(literal, 2, Some(Addr::new(Space::Stack, 2)), 2));
         assert!(may_overlap(literal, 2, frame(-2), 2));
         assert!(may_overlap(None, 2, frame(-2), 2));
+    }
+
+    /// The fast answer for two fixed frame cells is the general one, over widths (0 counts as 1) and displacements at
+    /// both ends of the range.
+    #[test]
+    fn frame_cells_meet_as_the_general_answer_says() {
+        let edges = [i64::MIN, i64::MIN + 3, -(1 << 31) - 1, -100, -9, -8, -5, -4, -1, 0, 1, 3, 4, 8, 100, (1 << 31) + 1, i64::MAX - 3, i64::MAX];
+        for a in edges {
+            for b in edges {
+                for (wa, wb) in [(0, 0), (1, 4), (4, 4), (8, 2), (u32::MAX, 1)] {
+                    assert_eq!(may_overlap(frame(a), wa, frame(b), wb), super::may_overlap_by_sets(frame(a), wa, frame(b), wb), "{a} {wa} {b} {wb}");
+                }
+            }
+        }
     }
 }

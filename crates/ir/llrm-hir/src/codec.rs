@@ -181,6 +181,9 @@ impl _Plain for model::DebugVariable {
         if self.parameter {
             out.insert("parameter".to_owned(), self.parameter._plain());
         }
+        if let Some(argument) = self.argument {
+            out.insert("argument".to_owned(), argument._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -1430,9 +1433,9 @@ static DEBUG_PARAMETER: _Record = _Record {
 
 static DEBUG_VARIABLE: _Record = _Record {
     name: "DebugVariable",
-    fields: &[("place", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true), ("parameter", _Hint::Bool, false)],
+    fields: &[("place", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true), ("parameter", _Hint::Bool, false), ("argument", OPTIONAL_INT, false)],
     build: |args| {
-        _object(model::DebugVariable { place: _required(args, "place")?, name: _required(args, "name")?, r#type: _required(args, "type")?, parameter: _default(args, "parameter", false)? })
+        _object(model::DebugVariable { place: _required(args, "place")?, name: _required(args, "name")?, r#type: _required(args, "type")?, parameter: _default(args, "parameter", false)?, argument: _default(args, "argument", None)? })
     },
 };
 

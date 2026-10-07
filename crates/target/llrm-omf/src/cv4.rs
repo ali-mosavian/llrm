@@ -154,7 +154,11 @@ impl Types<'_> {
             Type::Scalar(scalar) | Type::Basic { scalar, .. } => self.primitive(scalar)?,
             Type::Typedef { target, .. } => self.of(target)?,
             Type::Pointer { target, bytes, reach } => {
-                let target = self.of(target)?;
+                // A pointer to a procedure that is far to reach is to one that is called far.
+                let target = match self.procedure_through(target) {
+                    Some(procedure) => self.procedure(procedure, reach != Reach::Near)?,
+                    None => self.of(target)?,
+                };
                 if let Some(done) = self.index[id] {
                     return Ok(done);
                 }
@@ -247,6 +251,17 @@ impl Types<'_> {
         put16(&mut data, target);
         put32(&mut data, 0);
         self.sealed(LF_POINTER, data)
+    }
+
+    /// The procedure type `id` is, or is a typedef of.
+    fn procedure_through(&self, mut id: TypeId) -> Option<TypeId> {
+        loop {
+            match self.info.types.get(id)? {
+                Type::Typedef { target, .. } => id = *target,
+                Type::Procedure { .. } => return Some(id),
+                _ => return None,
+            }
+        }
     }
 
     /// The model's procedure `id`, called far or near.
@@ -404,13 +419,13 @@ impl Symbols<'_> {
     /// (its records name one place for the whole scope) is left out: one that is in a register only part of the
     /// scope, and one the optimiser removed.
     fn variable(&mut self, types: &mut Types, variable: &model::Variable, scope: &[model::Range]) -> Result<(), Error> {
-        match &variable.location {
+        // One place for the whole scope: where a value settles. A value that is in a register only part of it (a
+        // register parameter, until the body starts), and one the optimiser removed, have none.
+        let Some(location) = variable.location.settled(scope) else { return Ok(()) };
+        match location {
             Location::Static { symbol, disp } => self.data(types, variable, *symbol, *disp),
             Location::Register(register) => self.register(types, variable, register),
-            Location::List(entries) => match &entries[..] {
-                [(range, Location::Register(register))] if scope == [*range] => self.register(types, variable, register),
-                _ => Ok(()),
-            },
+            Location::List(_) => Ok(()),
             Location::Frame { disp } => {
                 let mut data = Vec::new();
                 let frame = &self.info.frame_register;

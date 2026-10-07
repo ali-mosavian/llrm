@@ -210,7 +210,19 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                 }
             };
             match addr.space {
-                Space::Frame => variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::Frame { disp: addr.disp } }),
+                Space::Frame => {
+                    let home = Location::Frame { disp: addr.disp };
+                    // The argument is in its register until the function stores it into the home.
+                    let stored = one.arrives.zip(debug.frame).and_then(|(register, (frame, ..))| super::arrival::stored(&code.image[start..end], frame, addr.disp, register).map(|at| (register, at)));
+                    let location = match stored {
+                        Some((register, at)) if at < end - start => {
+                            let section = |offset, length| model::Range { section: 0, offset, length };
+                            Location::List(vec![(section(start, at), Location::Register(format!("{register:?}").to_lowercase())), (section(start + at, end - start - at), home)])
+                        }
+                        _ => home,
+                    };
+                    variables.push(Variable { name: one.name.clone(), r#type, kind, location })
+                }
                 space => {
                     let Some(symbol) = module.names.get(&(space, addr.index)).filter(|one| defined(one)) else { continue };
                     variables.push(variable(&one.name, r#type, kind, symbol, addr.disp));
