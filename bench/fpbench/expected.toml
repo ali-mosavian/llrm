@@ -1,4 +1,4 @@
-reason = "x87 homes: a stored loop-carried float is spilled to its own cell"
+reason = "x87: a constant nothing reads is not loaded and popped (nbody c -48 B, fpbench c -66 B)"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -15,15 +15,15 @@ memory_operands = 5120
 code_bytes = 707
 data_bytes = 23
 bss_bytes = 0
-kernel_ms = 0.3013
+kernel_ms = 0.3014
 
 [c.O2]
-instructions = 20949
-memory_operands = 3032
-code_bytes = 1258
+instructions = 20927
+memory_operands = 3021
+code_bytes = 1192
 data_bytes = 52
 bss_bytes = 0
-kernel_ms = 0.2801
+kernel_ms = 0.2798
 
 [c.Os]
 instructions = 20007
@@ -31,7 +31,7 @@ memory_operands = 3004
 code_bytes = 350
 data_bytes = 8
 bss_bytes = 0
-kernel_ms = 0.2675
+kernel_ms = 0.2676
 
 [nib.O2]
 instructions = 18321
@@ -47,7 +47,7 @@ memory_operands = 3003
 code_bytes = 496
 data_bytes = 16
 bss_bytes = 0
-kernel_ms = 0.2701
+kernel_ms = 0.2702
 
 [ow.O2]
 instructions = 21603

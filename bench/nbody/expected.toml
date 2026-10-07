@@ -1,4 +1,4 @@
-reason = "nbody c -Os +7 B: x87 release is priced on x86-m16 too; the unhoisted loop leaves LSR a worse shape (#698)"
+reason = "x87: a constant nothing reads is not loaded and popped (nbody c -48 B, fpbench c -66 B)"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -18,12 +18,12 @@ bss_bytes = 0
 kernel_ms = 0.9406
 
 [c.O2]
-instructions = 54283
-memory_operands = 20847
-code_bytes = 595
+instructions = 54261
+memory_operands = 20845
+code_bytes = 547
 data_bytes = 20
 bss_bytes = 0
-kernel_ms = 0.7254
+kernel_ms = 0.7251
 
 [c.Os]
 instructions = 58459
@@ -34,12 +34,12 @@ bss_bytes = 0
 kernel_ms = 0.7811
 
 [nib.O2]
-instructions = 54285
-memory_operands = 20847
-code_bytes = 606
+instructions = 54271
+memory_operands = 20846
+code_bytes = 576
 data_bytes = 32
 bss_bytes = 0
-kernel_ms = 0.7263
+kernel_ms = 0.7261
 
 [nib.Os]
 instructions = 57669
