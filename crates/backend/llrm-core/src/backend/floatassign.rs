@@ -1053,6 +1053,40 @@ fn _stores_itself(one: &Insn, value: u32, cell: &Mem) -> bool {
     one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && matches!(what.dests.as_slice(), [Loc::Mem(dest)] if dest == cell) && _held_floats(&what.sources) == [value])
 }
 
+/// `body` without the constant loads nothing reads: a value whose copies were vacated (read back from its home
+/// instead) leaves `fld1; fstp st(0)` behind in stack form. A fixed-address load is no observable exception in MIR,
+/// as a dead one MIR drops.
+fn _without_dead_loads(body: &LirBody) -> LirBody {
+    let mut read: HashSet<u32> = body.pins.keys().copied().collect();
+    for block in &body.blocks {
+        read.extend(block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)));
+        for one in &block.insns {
+            read.extend(&one.uses);
+            read.extend(one.requires.iter().map(|(held, _)| held.value));
+            if let Some(what) = &one.what {
+                read.extend(_held_floats(&what.sources));
+            }
+        }
+    }
+    let dead = |one: &Insn| {
+        one.what.as_ref().is_some_and(|what| {
+            what.op == Operation::FloatLoad
+                && !one.volatile()
+                && one.group.is_none()
+                && matches!(what.dests.as_slice(), [Loc::Held(result)] if result.width == 10 && !read.contains(&result.value))
+                && match what.sources.as_slice() {
+                    [] => matches!(what.name.as_deref(), Some("fld1" | "fldz")),
+                    [Loc::Mem(cell)] => cell.base.is_none() && cell.index.is_none() && cell.addr.is_some(),
+                    _ => false,
+                }
+        })
+    };
+    if !body.blocks.iter().flat_map(|block| &block.insns).any(|one| dead(one)) {
+        return body.clone();
+    }
+    body.with_blocks(body.blocks.iter().map(|block| block.with_insns(block.insns.iter().filter(|one| !dead(one)).cloned().collect())).collect())
+}
+
 /// Values a block reads from a cell nothing writes before their last
 /// reader: GCC's memory equivalence, read again rather than kept.
 fn _homes(body: &LirBody, floating: &HashSet<u32>) -> IndexMap<u32, Arc<Insn>> {
@@ -1426,7 +1460,7 @@ pub fn assigned(
     loop {
         let rewritten = plan.rewritten(&spilled, &mut frame, cpu)?;
         let Some((block, position)) = _crowded(&rewritten, &_floating_values(&rewritten)) else {
-            return Ok(rewritten);
+            return Ok(_without_dead_loads(&rewritten));
         };
         let originals = rewritten
             .blocks
