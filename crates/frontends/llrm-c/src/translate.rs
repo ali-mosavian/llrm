@@ -546,19 +546,26 @@ fn cleanup(symbol: &hir::Symbol, unit: &hir::Unit) -> R<(StackCleanup, Option<St
 /// An interrupt handler's parameters are the registers it saved, named in
 /// Borland's order, each at its slot of the frame (`x86_intr_slot`); what it
 /// writes to them is what it returns to.
-fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64], struct_homes: &[i64], (calling, profile): (&llrm_target::calling::Calling, &crate::compile::Profile)) -> R<()> {
+fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64], struct_homes: &[(i64, Vec<i64>)], (calling, profile): (&llrm_target::calling::Calling, &crate::compile::Profile)) -> R<()> {
     let Some(abi) = function.abi.as_ref() else { return Ok(()) };
     let (interrupt, variadic) = (abi.distance == CallDistance::Interrupt, abi.variadic);
     if !interrupt && !variadic {
         return Ok(());
     }
     let exposed = llrm_core::hir::escape::exposed_frame(function);
-    // A struct parameter is a copy of its words; its address is not theirs.
-    if struct_homes.iter().any(|home| exposed.contains(home)) {
-        return refuse(format!("{}: the address of a struct parameter where its arguments are addressed", function.name));
-    }
     // STDARG.H's __size: rounded up to an int, the two bytes of Borland's.
     let rounded = |sizes: &[i64]| sizes.iter().map(|size| (size + 1) & !1).sum::<i64>();
+    // A struct parameter whose address is taken lives in its words' slots, which are consecutive and rising (the variadic
+    // functions push right to left), as a scalar's does: the pointer then reaches the arguments around it.
+    for (home, words) in struct_homes.iter().filter(|(home, _)| !interrupt && exposed.contains(home)) {
+        let at = function.parameters.iter().position(|&one| one == words[0]).expect("a parameter");
+        let place = function.places.iter_mut().find(|one| one.id == *home).expect("a home");
+        (place.storage, place.symbol, place.offset) = (Storage::Parameter, words[0], -rounded(&sizes[at..]));
+        let copy = |one: &h::Instruction| one.op == Op::Store && matches!(&one.operands[..], [h::Operand::ProjectedPlace(to), word] if to.place == *home && words.iter().any(|&one| *word == value_ref(one)));
+        for block in &mut function.blocks {
+            block.instructions.retain(|one| !copy(one));
+        }
+    }
     for &(home, parameter) in homes.iter().filter(|(home, _)| interrupt || exposed.contains(home)) {
         let at = function.parameters.iter().position(|&one| one == parameter).expect("a parameter");
         let offset = if interrupt { interrupt_slot(&function.name, at, sizes[at], calling, profile)? } else { -rounded(&sizes[at..]) };
@@ -615,6 +622,11 @@ fn passed_as_scalar(calling: &llrm_target::calling::Calling, convention: &Option
 /// A struct argument's words, by byte offset, in parameter order: they lie
 /// as the struct does, the first lowest, so last first where arguments are
 /// pushed in order.
+/// The low `bits` bits set: 64 of them are every bit, which `1 << 64` is not.
+fn ones(bits: i64) -> i64 {
+    if bits >= 64 { -1 } else { (1i64 << bits) - 1 }
+}
+
 fn struct_words(size: i64, in_order: bool, word: i64) -> Vec<i64> {
     let words = (0..(size + word - 1) / word).map(|at| at * word);
     if in_order { words.rev().collect() } else { words.collect() }
@@ -972,7 +984,7 @@ impl<'a, 't> Body<'a, 't> {
 
     /// Each parameter and auto a place; each parameter stored into its own.
     /// A scalar parameter's home is also returned, by place and parameter.
-    fn frame(&mut self) -> R<(Vec<i64>, Vec<(i64, Fact)>, Vec<(i64, i64)>, Vec<i64>)> {
+    fn frame(&mut self) -> R<(Vec<i64>, Vec<(i64, Fact)>, Vec<(i64, i64)>, Vec<(i64, Vec<i64>)>)> {
         let mut parameters = Vec::new();
         let mut stated = Vec::new();
         let mut homes = Vec::new();
@@ -988,15 +1000,17 @@ impl<'a, 't> Body<'a, 't> {
                     let ty = self.types.of(Shape::Bytes(words * bytes), None);
                     let place = self.local(&format!("y{symbol}"), ty, words * bytes);
                     let word = self.types.raw(bytes);
-                    struct_homes.push(place);
+                    let mut passed = Vec::new();
                     for at in struct_words(size, in_order, bytes) {
                         let parameter = self.value(word);
+                        passed.push(parameter);
                         parameters.push(parameter);
                         stores.push((place, at, parameter));
                         if !scalar && self.convention.is_some() {
                             self.memory.push(parameter);
                         }
                     }
+                    struct_homes.push((place, passed));
                     self.slots.insert(format!("y{symbol}"), place);
                 }
                 None => {
@@ -1032,12 +1046,12 @@ impl<'a, 't> Body<'a, 't> {
             self.slots.insert(key.clone(), place);
         }
         for (place, at, parameter) in stores {
+            // A struct's word is stored by naming the place and its offset: no address is made, so none is handed out.
             let target = if at < 0 {
                 Operand::place_ref(place)
             } else {
-                let base = self.address_of(place);
                 let ty = self.type_of(parameter);
-                Operand::IndirectPlace(indirect(base, at, ty, false))
+                Operand::ProjectedPlace(h::ProjectedPlace { place, indices: Vec::new(), offset: at, r#type: ty, member: None })
             };
             self.instruction(Op::Store, Vec::new(), vec![target, value_ref(parameter)]);
         }
@@ -1597,17 +1611,82 @@ impl<'a, 't> Body<'a, 't> {
         self.unit.symbols.get(&hir::handle(symbol)).filter(|one| one.name.starts_with('.') && !one.proc())
     }
 
+    /// Where a bit field's bytes are: its byte offset in the unit, its first bit within them, and how many bytes (a unit of the
+    /// declared type, from its start, where that is a register's width; a long long's is cut to the bytes the field covers, as a
+    /// packed struct's last field leaves nothing after them to read or write).
+    fn container(&self, start: i64, width: i64, unit: i64) -> (i64, i64, i64) {
+        let unit_bytes = self.types.get(unit).width;
+        if unit_bytes <= 4 {
+            return (0, start, unit_bytes);
+        }
+        let (first, bit) = (start / 8, start % 8);
+        (first, bit, (bit + width + 7) / 8)
+    }
+
+    /// The `bytes` at `first` of what `pointer` addresses, as a `unit`, the most significant bytes zero: in pieces of 4, 2 and 1.
+    fn loaded(&mut self, pointer: i64, volatile: bool, first: i64, bytes: i64, unit: i64) -> i64 {
+        if bytes == self.types.get(unit).width {
+            return self.op(Op::Load, unit, vec![Operand::IndirectPlace(indirect(pointer, first, unit, volatile))]);
+        }
+        let mut whole: Option<i64> = None;
+        for (at, size) in Self::pieces(bytes) {
+            let part = self.types.raw(size);
+            let loaded = self.op(Op::Load, part, vec![Operand::IndirectPlace(indirect(pointer, first + at, part, volatile))]);
+            let mut value = self.op(Op::ZeroExtend, unit, vec![value_ref(loaded)]);
+            if at > 0 {
+                let up = self.constant(unit, Number::Int((8 * at).into()));
+                value = self.op(Op::Shl, unit, vec![value_ref(value), value_ref(up)]);
+            }
+            whole = Some(match whole {
+                Some(low) => self.op(Op::Or, unit, vec![value_ref(low), value_ref(value)]),
+                None => value,
+            });
+        }
+        whole.expect("a field has a byte")
+    }
+
+    /// The low `bytes` of `value` (a `unit`) stored at `first` of what `pointer` addresses.
+    fn stored(&mut self, pointer: i64, volatile: bool, first: i64, bytes: i64, unit: i64, value: i64) {
+        if bytes == self.types.get(unit).width {
+            self.instruction(Op::Store, Vec::new(), vec![Operand::IndirectPlace(indirect(pointer, first, unit, volatile)), value_ref(value)]);
+            return;
+        }
+        for (at, size) in Self::pieces(bytes) {
+            let part = self.types.raw(size);
+            let mut piece = value;
+            if at > 0 {
+                let down = self.constant(unit, Number::Int((8 * at).into()));
+                piece = self.op(Op::Shr, unit, vec![value_ref(value), value_ref(down)]);
+            }
+            let piece = self.op(Op::Convert, part, vec![value_ref(piece)]);
+            self.instruction(Op::Store, Vec::new(), vec![Operand::IndirectPlace(indirect(pointer, first + at, part, volatile)), value_ref(piece)]);
+        }
+    }
+
+    /// `bytes` as (offset, size) pieces of 4, 2 and 1, the largest first.
+    fn pieces(bytes: i64) -> Vec<(i64, i64)> {
+        let (mut at, mut found) = (0, Vec::new());
+        for size in [8, 4, 2, 1] {
+            while bytes - at >= size {
+                found.push((at, size));
+                at += size;
+            }
+        }
+        found
+    }
+
     /// A bit field's value, in its unit's type.
     fn read_bits(&mut self, got: Got) -> R<i64> {
         let Got::Bits { pointer, volatile, start, width, unit, signed } = got else { return self.refuse("a bit field read of a non-field") };
         let bits = self.types.get(unit).width * 8;
-        let whole = self.op(Op::Load, unit, vec![Operand::IndirectPlace(indirect(pointer, 0, unit, volatile))]);
+        let (first, start, bytes) = self.container(start, width, unit);
+        let whole = self.loaded(pointer, volatile, first, bytes, unit);
         Ok(if signed {
             let (up, down) = (self.constant(unit, Number::Int((bits - start - width).into())), self.constant(unit, Number::Int((bits - width).into())));
             let raised = self.op(Op::Shl, unit, vec![value_ref(whole), value_ref(up)]);
             self.op(Op::Sar, unit, vec![value_ref(raised), value_ref(down)])
         } else {
-            let (shift, mask) = (self.constant(unit, Number::Int(start.into())), self.constant(unit, Number::Int(((1i64 << width) - 1).into())));
+            let (shift, mask) = (self.constant(unit, Number::Int(start.into())), self.constant(unit, Number::Int(ones(width).into())));
             let lowered = self.op(Op::Shr, unit, vec![value_ref(whole), value_ref(shift)]);
             self.op(Op::And, unit, vec![value_ref(lowered), value_ref(mask)])
         })
@@ -1618,11 +1697,11 @@ impl<'a, 't> Body<'a, 't> {
     fn write_bits(&mut self, got: Got, value: i64) -> R<i64> {
         let Got::Bits { pointer, volatile, start, width, unit, signed } = got else { return self.refuse("a bit field write to a non-field") };
         let bits = self.types.get(unit).width * 8;
-        let field = ((1i64 << width) - 1) << start;
-        let kept = !field & ((1i64 << bits) - 1);
+        let (first, start, bytes) = self.container(start, width, unit);
+        let field = ones(width) << start;
+        let kept = !field & ones(bits);
         let value = self.resized(value, signed, unit);
-        let place = || Operand::IndirectPlace(indirect(pointer, 0, unit, volatile));
-        let whole = self.op(Op::Load, unit, vec![place()]);
+        let whole = self.loaded(pointer, volatile, first, bytes, unit);
         let (shift, inside, outside) = (
             self.constant(unit, Number::Int(start.into())),
             self.constant(unit, Number::Int(field.into())),
@@ -1632,14 +1711,14 @@ impl<'a, 't> Body<'a, 't> {
         let part = self.op(Op::And, unit, vec![value_ref(placed), value_ref(inside)]);
         let rest = self.op(Op::And, unit, vec![value_ref(whole), value_ref(outside)]);
         let joined = self.op(Op::Or, unit, vec![value_ref(rest), value_ref(part)]);
-        self.instruction(Op::Store, Vec::new(), vec![place(), value_ref(joined)]);
+        self.stored(pointer, volatile, first, bytes, unit, joined);
         Ok(if signed {
             let (up, down) = (self.constant(unit, Number::Int((bits - start - width).into())), self.constant(unit, Number::Int((bits - width).into())));
             let raised = self.op(Op::Shl, unit, vec![value_ref(part), value_ref(up)]);
             self.op(Op::Sar, unit, vec![value_ref(raised), value_ref(down)])
         } else {
             let lowered = self.op(Op::Shr, unit, vec![value_ref(part), value_ref(shift)]);
-            let mask = self.constant(unit, Number::Int(((1i64 << width) - 1).into()));
+            let mask = self.constant(unit, Number::Int(ones(width).into()));
             self.op(Op::And, unit, vec![value_ref(lowered), value_ref(mask)])
         })
     }
@@ -2098,12 +2177,26 @@ impl<'a, 't> Body<'a, 't> {
                 let left = size - at;
                 let value = if left >= unit {
                     self.op(Op::Load, word, vec![Operand::IndirectPlace(indirect(from, at, word, false))])
-                } else if matches!(left, 1 | 2) {
-                    let part = self.types.raw(left);
-                    let value = self.op(Op::Load, part, vec![Operand::IndirectPlace(indirect(from, at, part, false))]);
-                    self.op(Op::ZeroExtend, word, vec![value_ref(value)])
                 } else {
-                    return self.refuse(&format!("a struct of {size} bytes passed by value"));
+                    // The last partial word: its bytes in pieces of 2 and 1, the first at the lowest address and the least significant.
+                    let mut whole: Option<i64> = None;
+                    let mut taken = 0;
+                    while taken < left {
+                        let piece = if left - taken >= 2 { 2 } else { 1 };
+                        let part = self.types.raw(piece);
+                        let loaded = self.op(Op::Load, part, vec![Operand::IndirectPlace(indirect(from, at + taken, part, false))]);
+                        let mut value = self.op(Op::ZeroExtend, word, vec![value_ref(loaded)]);
+                        if taken > 0 {
+                            let up = self.constant(word, Number::Int((8 * taken).into()));
+                            value = self.op(Op::Shl, word, vec![value_ref(value), value_ref(up)]);
+                        }
+                        whole = Some(match whole {
+                            Some(low) => self.op(Op::Or, word, vec![value_ref(low), value_ref(value)]),
+                            None => value,
+                        });
+                        taken += piece;
+                    }
+                    whole.expect("a partial word has a byte")
                 };
                 arguments.push(value);
                 in_memory.push(!scalar && convention.is_some());
