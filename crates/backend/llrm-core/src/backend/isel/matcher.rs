@@ -394,7 +394,7 @@ impl Selector<'_, '_, '_> {
     fn chain(&self, m: &Match, factor: Operand) -> Option<(Vec<(&'static str, i64)>, i64)> {
         let width = self.width(self.function.instruction(m.inst).ty).ok()?;
         let n = self.constant(factor, width).filter(|&n| matches!(width, 2 | 4) && 1 < n)?;
-        arithmetic::cheapest_chain(n, self.cpu).ok().flatten()
+        if width == 4 { arithmetic::cheapest_chain(n, self.cpu) } else { arithmetic::cheapest_narrow_chain(n, self.cpu) }.ok().flatten()
     }
 
     // Costs.
@@ -403,7 +403,12 @@ impl Selector<'_, '_, '_> {
     /// the allocator drops it where the source dies, as `add si, si` shows.
     fn chain_bytes(chain: &[(&str, i64)], width: i64, operand: i64) -> i64 {
         use llrm_x86::encoding::{register_bytes, shift_bytes};
-        chain.iter().map(|&(name, count)| if name == "shl" { shift_bytes(count, width, operand) } else { register_bytes(width, operand) }).sum()
+        // A `lea r,[a+cur*s]` is the opcode, the ModRM and the SIB.
+        chain.iter().map(|&(name, count)| match name {
+            "shl" => shift_bytes(count, width, operand),
+            "lea" => 3 + i64::from(width != operand),
+            _ => register_bytes(width, operand),
+        }).sum()
     }
 
     /// Bytes first, clocks to break a tie: both are under 100.
@@ -437,8 +442,15 @@ impl Selector<'_, '_, '_> {
         let mut current = a.clone();
         for (index, &(name, count)) in chain.iter().enumerate() {
             let into = if index == chain.len() - 1 { result } else { self.fresh_held(result.width) };
-            let other = if name == "shl" { Loc::Imm(Imm { value: count, width: 1, address: None }) } else { a.clone() };
-            out.push(insn(m.at, semantics(Operation::Binary, name, vec![Loc::Held(into)], vec![current, other])));
+            if name == "lea" {
+                // `into = a + current*count`: the shift and add of one digit, made by the address unit.
+                let (Loc::Held(base), Loc::Held(scaled)) = (a.clone(), current.clone()) else { unreachable!("a chain works on registers") };
+                let cell = crate::model::ir::Mem { base: Some(base), index: Some(scaled), scale: count, ..crate::model::ir::Mem::new(None, result.width) };
+                out.push(insn(m.at, semantics(Operation::Address, "lea", vec![Loc::Held(into)], vec![Loc::Mem(cell)])));
+            } else {
+                let other = if name == "shl" { Loc::Imm(Imm { value: count, width: 1, address: None }) } else { a.clone() };
+                out.push(insn(m.at, semantics(Operation::Binary, name, vec![Loc::Held(into)], vec![current, other])));
+            }
             current = Loc::Held(into);
         }
         Ok(())
