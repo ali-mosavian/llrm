@@ -645,16 +645,19 @@ pub fn explicit_selectors(body: &LirBody, pinned: Option<&IndexMap<u32, Register
     body.with_blocks(blocks)
 }
 
-fn _copy_hints(body: &LirBody) -> IndexMap<u32, Vec<u32>> {
-    let mut hints: IndexMap<u32, Vec<u32>> = IndexMap::default();
+/// Each value's copy partners, each with how often its copy runs: a copy in the inner loop is worth more than the
+/// ones around it (LLVM's `RAGreedy` ranks hints by block frequency).
+fn _copy_hints(body: &LirBody, busy: &Frequency) -> IndexMap<u32, Vec<(u32, f64)>> {
+    let mut hints: IndexMap<u32, Vec<(u32, f64)>> = IndexMap::default();
     for block in &body.blocks {
+        let weight = busy.block(block.at);
         for one in &block.insns {
             if let Some(what) = &one.what {
                 if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
                     if let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice()) {
                         if dest.width == source.width && dest.value != source.value {
-                            hints.entry(dest.value).or_default().push(source.value);
-                            hints.entry(source.value).or_default().push(dest.value);
+                            hints.entry(dest.value).or_default().push((source.value, weight));
+                            hints.entry(source.value).or_default().push((dest.value, weight));
                         }
                     }
                 }
@@ -698,13 +701,13 @@ const INF: f64 = f64::INFINITY;
 ///
 /// A loop's sum placed before the return's copy to AX is otherwise seated
 /// where nothing asked, and whatever took AX leaves a move on the exit.
-fn _wanted(hints: &IndexMap<u32, Vec<u32>>, fixed: &IndexMap<u32, Register>) -> IndexMap<u32, Register> {
+fn _wanted(hints: &IndexMap<u32, Vec<(u32, f64)>>, fixed: &IndexMap<u32, Register>) -> IndexMap<u32, Register> {
     let mut wanted: IndexMap<u32, Register> = fixed.iter().map(|(value, register)| (*value, _whole(*register))).collect();
     let mut frontier: Vec<u32> = wanted.keys().copied().collect();
     while !frontier.is_empty() {
         let mut reached = Vec::new();
         for value in frontier {
-            for other in hints.get(&value).into_iter().flatten() {
+            for (other, _) in hints.get(&value).into_iter().flatten() {
                 if !wanted.contains_key(other) {
                     wanted.insert(*other, wanted[&value]);
                     reached.push(*other);
@@ -756,7 +759,7 @@ struct Facts {
     masks: Masks,
     widths: IndexMap<u32, u32>,
     confined: Classes,
-    hints: IndexMap<u32, Vec<u32>>,
+    hints: IndexMap<u32, Vec<(u32, f64)>>,
 }
 
 impl Facts {
@@ -787,7 +790,7 @@ impl Facts {
             }
             found
         });
-        let hints = llrm_support::debug::timed("facts hints", || _copy_hints(body));
+        let hints = llrm_support::debug::timed("facts hints", || _copy_hints(body, busy));
         Self { index, live, masks, widths, confined, hints }
     }
 }
@@ -929,15 +932,15 @@ fn _allocated(
                 .collect();
         }
         if !fixed.contains_key(&value) {
-            let mut votes: IndexMap<Register, i64> = IndexMap::default();
-            for other in facts.hints.get(&value).into_iter().flatten() {
+            let mut votes: IndexMap<Register, f64> = IndexMap::default();
+            for (other, weight) in facts.hints.get(&value).into_iter().flatten() {
                 if let Some(register) = fixed.get(other).or_else(|| r#where.get(other)) {
-                    *votes.entry(_whole(*register)).or_insert(0) += 1;
+                    *votes.entry(_whole(*register)).or_insert(0.0) += weight;
                 }
             }
             if votes.is_empty() {
                 if let Some(register) = wanted.get(&value) {
-                    *votes.entry(*register).or_insert(0) += 1;
+                    *votes.entry(*register).or_insert(0.0) += 1.0;
                 }
             }
             let claimed: BTreeSet<Register> = wanted
@@ -947,9 +950,8 @@ fn _allocated(
                 })
                 .map(|(_, register)| *register)
                 .collect();
-            order.sort_by_key(|register| {
-                (-votes.get(&_whole(*register)).copied().unwrap_or(0), claimed.contains(&_whole(*register)))
-            });
+            let vote = |register: &Register| votes.get(&_whole(*register)).copied().unwrap_or(0.0);
+            order.sort_by(|one, other| vote(other).total_cmp(&vote(one)).then(claimed.contains(&_whole(*one)).cmp(&claimed.contains(&_whole(*other)))));
             if let Some(choice) = preferred.get(&value) {
                 let wanted = _whole(*choice);
                 order = order
@@ -1244,7 +1246,7 @@ struct Settled<'a> {
     live: &'a IndexMap<u32, Interval>,
     masks: &'a Masks,
     widths: &'a IndexMap<u32, u32>,
-    hints: &'a IndexMap<u32, Vec<u32>>,
+    hints: &'a IndexMap<u32, Vec<(u32, f64)>>,
     confined: &'a Classes,
     data_free: bool,
     segments: &'a Segments,
@@ -1265,7 +1267,7 @@ fn _recolored_hints(
     pinned: impl Fn(u32) -> bool,
 ) {
     let joined = |value: u32, register: Register, r#where: &IndexMap<u32, Register>| {
-        settled.hints[&value].iter().filter(|other| r#where.get(*other).is_some_and(|theirs| _whole(*theirs) == register)).count()
+        settled.hints[&value].iter().filter(|(other, _)| r#where.get(other).is_some_and(|theirs| _whole(*theirs) == register)).map(|(_, weight)| weight).sum::<f64>()
     };
     let mut moved = true;
     while moved {
@@ -1276,8 +1278,8 @@ fn _recolored_hints(
                 continue;
             };
             let width = settled.widths.get(&value).copied().unwrap_or(4);
-            let mut best: Option<(usize, Register)> = Some((joined(value, now, r#where), now));
-            for other in &settled.hints[&value] {
+            let mut best: Option<(f64, Register)> = Some((joined(value, now, r#where), now));
+            for (other, _) in &settled.hints[&value] {
                 let Some(theirs) = r#where.get(other).map(|one| _whole(*one)) else {
                     continue;
                 };
