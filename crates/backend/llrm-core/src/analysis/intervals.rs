@@ -54,6 +54,11 @@ impl Interval {
         self.size() + GRACE
     }
 
+    /// What spilling this value costs in all: its weighted references, which `weight` is the rate of.
+    pub fn spill_cost(&self) -> f64 {
+        self.weight * self.spill_size() as f64
+    }
+
     pub fn overlaps(&self, other: &Interval) -> bool {
         let (mut mine, mut theirs) = (self.segments.iter(), other.segments.iter());
         let (mut one, mut two) = (mine.next(), theirs.next());

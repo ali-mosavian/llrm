@@ -89,6 +89,9 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
     let mut parent: IndexMap<u32, u32> = IndexMap::default();
     let empty = BTreeSet::new();
 
+    // Each copy with how often its block runs: what a join between its two values saves.
+    let busy = crate::analysis::frequency::Frequency::of(body);
+    let copies: Vec<(f64, (u32, u32))> = body.blocks.iter().flat_map(|block| { let weight = busy.block(block.at); block.insns.iter().filter_map(move |one| _copy(one).map(|pair| (weight, pair))) }).collect();
     for block in &body.blocks {
         for one in &block.insns {
             let Some(pair) = _copy(one) else {
@@ -154,11 +157,23 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
                         && near.get(*o).map_or(0, BTreeSet::len) >= if constrained { k } else { palette.len() }
                 })
                 .count();
+            // Briggs and George keep a join from making a class that cannot be coloured; where the copies between the
+            // two run more than what the cheapest of those that would then be spilled costs, the join is worth it
+            // (IRA coalesces by the frequency of the copies; LLVM joins and lets the allocator evict by weight).
+            let worth = |here: u32, there: u32, parent: &mut IndexMap<u32, u32>| -> bool {
+                let gain: f64 = copies.iter().filter(|(_, pair)| {
+                    let (a, b) = (_find(parent, pair.0), _find(parent, pair.1));
+                    (a == here && b == there) || (a == there && b == here)
+                }).map(|(weight, _)| weight).sum();
+                let cheapest = neighbours.iter().chain([&here, &there]).filter_map(|value| live.get(value)).map(|one| one.spill_cost()).fold(f64::INFINITY, f64::min);
+                gain > cheapest
+            };
             if significant >= k
                 && (held.contains_key(&here)
                     || held.contains_key(&there)
                     || !(_george(here, there, &allowed, &near, &may, &held, &everything)
                         || _george(there, here, &allowed, &near, &may, &held, &everything)))
+                && (held.contains_key(&here) || held.contains_key(&there) || !worth(here, there, &mut parent))
             {
                 continue; // Briggs and George: the merged class would not be colourable
             }
