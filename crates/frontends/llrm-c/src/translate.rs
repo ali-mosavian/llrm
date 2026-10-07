@@ -1503,10 +1503,11 @@ impl<'a, 't> Body<'a, 't> {
                 Got::Value(self.op(Op::Load, truth, vec![Operand::place_ref(flowed)]))
             }
             ("CGEval", [inner]) | ("CGAttr", [inner, _]) | ("CGFact", [_, inner, _]) => self.eval(inner)?,
-            ("CGVolatile", [inner]) => {
-                let got = self.eval(inner)?;
-                Got::Volatile(self.address(got)?.0)
-            }
+            ("CGVolatile", [inner]) => match self.eval(inner)? {
+                // A bit field of a volatile object is read through its unit, volatile: it has no address of its own.
+                Got::Bits { pointer, start, width, unit, signed, .. } => Got::Bits { pointer, volatile: true, start, width, unit, signed },
+                got => Got::Volatile(self.address(got)?.0),
+            },
             ("CGBitMask", [inner, start, width, type_]) => {
                 let got = self.eval(inner)?;
                 let (pointer, volatile) = self.address(got)?;
