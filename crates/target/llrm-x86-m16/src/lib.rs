@@ -181,13 +181,23 @@ mod tests {
     /// The conventions a program may name are `calling.toml`'s, the language's own first; BASIC's are Pascal's.
     #[test]
     fn test_calling_toml_gives_the_conventions_their_names() {
-        assert_eq!(M16.conventions(), ["cdecl16", "pascal16", "qb45", "pds71", "vbdos", "interrupt16"]);
+        assert_eq!(M16.conventions(), ["cdecl16", "pascal16", "qb45", "pds71", "vbdos", "interrupt16", "watcall16"]);
         let pascal = CALLING.named("pascal16").unwrap();
         for name in ["qb45", "pds71", "vbdos"] {
             assert_eq!(CALLING.named(name).unwrap().cleanup, llrm_target::calling::Cleanup::Callee);
             assert_eq!((CALLING.named(name).unwrap().order, CALLING.named(name).unwrap().slot_bytes), (pascal.order, pascal.slot_bytes));
         }
         assert_eq!(CALLING.named("interrupt16").unwrap().return_address_bytes, 6);
+    }
+
+    /// `like = "cdecl16"` carried Borland's `_name` into Pascal's: a Nib `pascal16` extern asked the linker for `_span`, the
+    /// library defined `SPAN` (examples/pascal/levels.nib: four undefined references).
+    #[test]
+    fn test_pascal_symbols_are_capitals_whatever_they_were_derived_from() {
+        for name in ["pascal16", "qb45", "pds71", "vbdos"] {
+            assert_eq!(CALLING.named(name).unwrap().decorated("omf", "span").as_deref(), Some("SPAN"), "{name}");
+        }
+        assert_eq!(CALLING.named("cdecl16").unwrap().decorated("omf", "span").as_deref(), Some("_span"));
     }
 
     #[test]

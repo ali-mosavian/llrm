@@ -1,4 +1,4 @@
-# flags: -O2 -march=i486 | -O2 -march=i486 -m32
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32 | -O2 -march=i486 -mabi=watcom | -O2 -march=i486 -m32 -mabi=watcom
 # link: geometry.c
 # Calls a C library through the target's C convention ("c": cdecl16 or cdecl32), and exports the
 # rule it calls back. The arrays are static: a near pointer reaches only static data on m16.

@@ -23,6 +23,8 @@ convention = "cdecl16"
 # The routine the start-up calls, and the convention it calls it in.
 entry = "main"
 entry_convention = "cdecl16"
+# What the front end records of a function it passes in its default registers (its own list, which differs by tree).
+default_registers = "[ff:0]"
 # The header it includes first, from the repository root.
 header = "crates/frontends/llrm-c/src/borland.h"
 # Borland C's interrupt handler parameters, in order: the registers its handler saved, each at its slot of the frame
@@ -36,4 +38,11 @@ interrupt_parameters = ["bp", "di", "si", "ds", "es", "dx", "cx", "bx", "ax", "i
 [frontend.abi.cdecl]
 flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq"]
 cdecl = "cdecl16"
-registers = "cdecl16"
+registers = "watcall16"
+
+# Open Watcom's own: no -ecc, so an unmarked function takes its registers; `__watcall` keeps Open Watcom's meaning, which Borland's
+# runtime does not have (borland.h moves its declarations to cdecl).
+[frontend.abi.watcom]
+flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-s", "-zl", "-zq", "-dLLRM_WATCOM_ABI"]
+cdecl = "cdecl16"
+registers = "watcall16"
