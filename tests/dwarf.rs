@@ -207,6 +207,26 @@ fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
     assert!(same >= 20, "only {same} lines were compared");
 }
 
+/// A `Location::Frame` is relative to the frame register, which the backend keeps for any function that has
+/// debug variables (`masm::stack_addressed` refuses a procedure with some): the same function without `-g`
+/// is addressed through the stack pointer and has no frame register at all, so the writers need no frame base
+/// of their own per function. This is what holds that up.
+#[test]
+fn a_function_with_debug_variables_keeps_its_frame_register_at_o2() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("sq.c");
+    std::fs::write(&source, "int sq(int a, int b)\n{\n    int t = a * b;\n    return t + a;\n}\n").unwrap();
+    let listing = |flags: &[&str]| {
+        let out = scratch.path().join("sq.asm");
+        let made = Command::new(llrm_c()).args(["-m32", "-O2", "-S"]).args(flags).arg(&source).arg("-o").arg(&out).output().unwrap();
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        std::fs::read_to_string(&out).unwrap()
+    };
+    assert!(!listing(&[]).contains("ebp"), "premise: without -g the function has no frame register");
+    let debugged = listing(&["-g"]);
+    assert!(debugged.contains("push ebp") && debugged.contains("mov ebp, esp") && debugged.contains("[ebp-4]"), "{debugged}");
+}
+
 /// `struct node { struct node *next; int v; }`: a struct that holds a pointer to itself kept only `v`
 /// in the debug information, whichever format wrote it: asked for while it was being built, it
 /// answered "none" and the member naming it was dropped. gdb follows the list; CodeView keeps the field.
