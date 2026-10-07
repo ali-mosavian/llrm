@@ -198,3 +198,43 @@ fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     assert!(same >= 20, "only {same} lines were compared");
 }
+
+/// A 64-bit integer was no type of the debug model (CodeView 4 had none) and every variable of one was dropped
+/// before any format saw it: `sum`'s `a`, `t` and `u` and the global `total` were in no DWARF. They are types
+/// now; gdb reads their values past 32 bits, and CodeView, which has no record for one, still writes the object
+/// and what is beside them.
+#[test]
+fn a_64_bit_variable_is_in_dwarf_with_its_value_and_codeview_still_writes() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
+    let scratch = tempfile::tempdir().unwrap();
+    // CodeView: the object is written, and `b`, an int, is in it beside what is left out.
+    let object = scratch.path().join("wide.obj");
+    let made = compile(&fixtures.join("wide.c"), &["-m32", "-g"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    // DWARF, read by gdb.
+    let (Some(gdb), Some(ld), Some(assembler)) = (tool("gdb"), tool("ld"), tool("as")) else {
+        skipped("needs gdb, GNU ld and as");
+        return;
+    };
+    let (start, object, program) = (scratch.path().join("start.o"), scratch.path().join("wide.o"), scratch.path().join("wide"));
+    let made = Command::new(assembler).arg("--32").arg("-o").arg(&start).arg(fixtures.join("start.s")).output().unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let made = compile(&fixtures.join("wide.c"), &["-m32", "-O0", "-fobject-format=elf", "-g"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(ld).args(["-m", "elf_i386", "-o"]).arg(&program).arg(&start).arg(&object).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    if Command::new(&program).output().ok().and_then(|ran| ran.status.code()) != Some(11) {
+        skipped("this host does not run i386 programs");
+        return;
+    }
+    let said = Command::new(gdb)
+        .args(["-batch", "-nx", "-ex", "break sum", "-ex", "run", "-ex", "print a", "-ex", "print b", "-ex", "print total", "-ex", "next", "-ex", "next", "-ex", "print t", "-ex", "print u", "-ex", "ptype sum"])
+        .arg(&program)
+        .current_dir(&fixtures)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    for expected in ["$1 = 5000000000", "$2 = 3", "$3 = 4294967297", "$4 = 5000000003", "$5 = 7", "type = int64_t (int64_t, int32_t)"] {
+        assert!(text.contains(expected), "no {expected:?} in:\n{text}");
+    }
+}

@@ -59,6 +59,8 @@ fn scalar(scalar: di::Scalar) -> model::Scalar {
         di::Scalar::UInt16 => S::Int { bytes: 2, signed: false },
         di::Scalar::Int32 => S::Int { bytes: 4, signed: true },
         di::Scalar::UInt32 => S::Int { bytes: 4, signed: false },
+        di::Scalar::Int64 => S::Int { bytes: 8, signed: true },
+        di::Scalar::UInt64 => S::Int { bytes: 8, signed: false },
         di::Scalar::Float32 => S::Float { bytes: 4 },
         di::Scalar::Float64 => S::Float { bytes: 8 },
         di::Scalar::Float80 => S::Float { bytes: 10 },
