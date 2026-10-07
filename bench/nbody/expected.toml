@@ -1,53 +1,53 @@
-reason = "x87: a squared value below the top is copied with fld st(i), not exchanged up (nbody -4%, fpbench -9%)"
+reason = "pressuresink: a load is made just before its reader where no register class gains; fewer memory operands overall, matmul +1 and parity/loop +2 from the order sensitivity of lea fusion and coalescing (#729)"
 blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 61428
+instructions = 56628
 memory_operands = 30238
-code_bytes = 1094
+code_bytes = 1084
 data_bytes = 35
 bss_bytes = 0
-kernel_ms = 0.8357
+kernel_ms = 0.7713
 
 [bas.Os]
-instructions = 66881
+instructions = 62081
 memory_operands = 26085
-code_bytes = 861
+code_bytes = 851
 data_bytes = 31
 bss_bytes = 0
-kernel_ms = 0.9086
+kernel_ms = 0.8443
 
 [c.O2]
-instructions = 51883
+instructions = 47083
 memory_operands = 20847
-code_bytes = 591
+code_bytes = 583
 data_bytes = 20
 bss_bytes = 0
-kernel_ms = 0.6934
+kernel_ms = 0.6291
 
 [c.Os]
-instructions = 56059
+instructions = 51259
 memory_operands = 21645
-code_bytes = 501
+code_bytes = 493
 data_bytes = 16
 bss_bytes = 0
-kernel_ms = 0.7491
+kernel_ms = 0.6848
 
 [nib.O2]
-instructions = 51885
+instructions = 47085
 memory_operands = 20847
-code_bytes = 602
+code_bytes = 594
 data_bytes = 32
 bss_bytes = 0
-kernel_ms = 0.6943
+kernel_ms = 0.63
 
 [nib.Os]
-instructions = 55269
+instructions = 50469
 memory_operands = 20846
-code_bytes = 524
+code_bytes = 516
 data_bytes = 28
 bss_bytes = 0
-kernel_ms = 0.7395
+kernel_ms = 0.6751
 
 [ow.O2]
 instructions = 53725

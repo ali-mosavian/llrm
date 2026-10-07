@@ -1,41 +1,41 @@
-reason = "os.read/os.write_file return a 32-bit count on m16 (a read past 32 KB returned negative): +12 code bytes in grep.nib; executed instructions unchanged (#601)"
-blessed = "2026-10-06"
+reason = "pressuresink: a load is made just before its reader where no register class gains; fewer memory operands overall, matmul +1 and parity/loop +2 from the order sensitivity of lea fusion and coalescing (#729)"
+blessed = "2026-10-07"
 
 [bas.O2]
 code_bytes = 1008
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3887.2017
+kernel_ms = 3887.2013
 
 [bas.Os]
 code_bytes = 976
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3887.2018
+kernel_ms = 3886.6757
 
 [c.O2]
 code_bytes = 564
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3413.0036
+kernel_ms = 3415.7936
 
 [c.Os]
 code_bytes = 534
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3412.8726
+kernel_ms = 3415.6631
 
 [nib.O2]
-code_bytes = 1588
+code_bytes = 1587
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4510.8239
+kernel_ms = 4239.5802
 
 [nib.Os]
-code_bytes = 1492
+code_bytes = 1491
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4510.8539
+kernel_ms = 4239.6047
 
 [ow.O2]
 code_bytes = 544
