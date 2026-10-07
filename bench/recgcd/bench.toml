@@ -1,0 +1,9 @@
+description = "Euclid, a tail call, 600 gcds"
+repetitions = 1
+
+[region]
+c = "bench_recgcd"
+
+[gaps]
+bas = "#784 only the C version is written"
+nib = "#784 only the C version is written"

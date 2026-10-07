@@ -1,0 +1,16 @@
+reason = "seven recursive kernels the tail-recursion rule was not fitted on (held-out validation for #651's hanoi work): first baselines"
+blessed = "2026-10-07"
+
+[c.O2]
+instructions = 2382356
+memory_operands = 291717
+code_bytes = 122
+data_bytes = 0
+bss_bytes = 0
+
+[c.Os]
+instructions = 2187878
+memory_operands = 291717
+code_bytes = 117
+data_bytes = 0
+bss_bytes = 0
