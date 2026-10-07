@@ -18,8 +18,6 @@ assembler_defines = ["stack_base:STACK_BYTES", "init:LANG_INIT"]
 watcom_cpu = "i86"
 # What the front end calls `int`, in bytes: the C ABI's, which the data layout does not state.
 int_bytes = 2
-# The calling convention the front end compiles C under (`calling.toml`): -ecc is Borland's cdecl.
-convention = "cdecl16"
 # The routine the start-up calls, and the convention it calls it in.
 entry = "main"
 entry_convention = "cdecl16"
@@ -36,6 +34,7 @@ interrupt_parameters = ["bp", "di", "si", "ds", "es", "dx", "cx", "bx", "ax", "i
 # inline assembly: qcport's own uses 387 instructions. Borland's ABI is the only one here: wccq
 # also lays bit fields out as BCC 3.1 does, with no switch.
 [frontend.abi.cdecl]
+convention = "cdecl16"
 flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq"]
 cdecl = "cdecl16"
 registers = "watcall16"
@@ -43,6 +42,14 @@ registers = "watcall16"
 # Open Watcom's own: no -ecc, so an unmarked function takes its registers; `__watcall` keeps Open Watcom's meaning, which Borland's
 # runtime does not have (borland.h moves its declarations to cdecl).
 [frontend.abi.watcom]
+convention = "cdecl16"
 flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-s", "-zl", "-zq", "-dLLRM_WATCOM_ABI"]
 cdecl = "cdecl16"
+registers = "watcall16"
+
+# gcc-ia16's: -ecc makes every function cdecl, which is its stack convention.
+[frontend.abi.ia16]
+convention = "ia16"
+flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq"]
+cdecl = "ia16"
 registers = "watcall16"
