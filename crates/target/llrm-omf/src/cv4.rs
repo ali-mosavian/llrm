@@ -419,13 +419,13 @@ impl Symbols<'_> {
     /// (its records name one place for the whole scope) is left out: one that is in a register only part of the
     /// scope, and one the optimiser removed.
     fn variable(&mut self, types: &mut Types, variable: &model::Variable, scope: &[model::Range]) -> Result<(), Error> {
-        match &variable.location {
+        // One place for the whole scope: where a value settles. A value that is in a register only part of it (a
+        // register parameter, until the body starts), and one the optimiser removed, have none.
+        let Some(location) = variable.location.settled(scope) else { return Ok(()) };
+        match location {
             Location::Static { symbol, disp } => self.data(types, variable, *symbol, *disp),
             Location::Register(register) => self.register(types, variable, register),
-            Location::List(entries) => match &entries[..] {
-                [(range, Location::Register(register))] if scope == [*range] => self.register(types, variable, register),
-                _ => Ok(()),
-            },
+            Location::List(_) => Ok(()),
             Location::Frame { disp } => {
                 let mut data = Vec::new();
                 let frame = &self.info.frame_register;

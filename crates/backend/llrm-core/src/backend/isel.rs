@@ -574,6 +574,15 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     // An inlined callee's variables are not this procedure's.
     body.variables.extend(selector.variables.into_iter().filter(|(scope, _)| scope == name).map(|(_, one)| one));
+    // A parameter's home is written after the entry: until then its argument is in the register the convention gives.
+    for one in &mut body.variables {
+        if let (Some(argument), DebugPlace::At(_)) = (one.argument, &one.place) {
+            one.arrives = match usize::try_from(argument).ok().and_then(|argument| convention.parameters.get(argument)) {
+                Some(Parameter::Registers(registers)) if registers.len() == 1 => Some(registers[0]),
+                _ => None,
+            };
+        }
+    }
     Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, pops: selector.pops, depth: selector.depth, landing: selector.landing })
 }
 
@@ -592,7 +601,7 @@ pub(crate) fn parameters(module: &Module, name: &str, convention: &Convention) -
                 // The function has no such argument any more: the optimiser took it out.
                 None => DebugPlace::Gone,
             };
-            Some(DebugVariable { name, r#type, place, parameter: true })
+            Some(DebugVariable { name, r#type, place, parameter: true, argument: None, arrives: None })
         })
         .collect()
 }
@@ -1724,7 +1733,7 @@ impl Selector<'_, '_, '_> {
         let Some(variable) = attached.and_then(|node| llrm_mir::debuginfo::read_variable(self.module, node)) else { return Ok(()) };
         if let Ok(Pointer::Frame { disp, index: None, .. }) = self.pointer(arguments[0]) {
             let addr = Addr::new(Space::Frame, disp + variable.offset);
-            self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, place: DebugPlace::At(addr), parameter: variable.parameter }));
+            self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, place: DebugPlace::At(addr), parameter: variable.parameter, argument: variable.argument, arrives: None }));
         }
         Ok(())
     }

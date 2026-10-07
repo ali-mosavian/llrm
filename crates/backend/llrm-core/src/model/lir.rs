@@ -281,6 +281,11 @@ pub struct DebugVariable {
     pub place: DebugPlace,
     /// Passed in, not declared in the body.
     pub parameter: bool,
+    /// Of a parameter's home: the argument it was passed as.
+    pub argument: Option<i64>,
+    /// The register that argument arrives in, where one does: it holds the value until the function stores it
+    /// into the home.
+    pub arrives: Option<iced_x86::Register>,
 }
 
 /// Where a `-g` variable is.

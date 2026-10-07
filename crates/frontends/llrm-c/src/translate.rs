@@ -726,6 +726,14 @@ impl<'a, 't> Body<'a, 't> {
             for &(symbol, handle) in &proc.debug {
                 let name = &unit.symbols[&symbol].name;
                 match (body.slots.get(&format!("y{symbol}")), shared.keys.get(&Key::Symbol(symbol))) {
+                    // A scalar parameter's home says which argument it is: the one stored into it.
+                    (Some(&place), _) if homes.iter().any(|&(home, _)| home == place) => {
+                        let value = homes.iter().find(|&&(home, _)| home == place).map(|&(_, value)| value);
+                        match value.and_then(|value| function.parameters.iter().position(|&one| one == value)) {
+                            Some(argument) => described.parameter_home(place, name, handle, argument as i64),
+                            None => described.variable(place, name, handle, true),
+                        }
+                    }
                     (Some(&place), _) => described.variable(place, name, handle, proc.parms.iter().any(|&(one, _)| one == symbol)),
                     (None, Some(&object)) => described.local_static(object, name, handle),
                     (None, None) => {}
