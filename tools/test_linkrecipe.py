@@ -51,6 +51,7 @@ class LinkRecipeTests(unittest.TestCase):
         self.assertEqual(linkrecipe.link("x86-m16", "format"), ["format", "dos"])
         self.assertEqual(linkrecipe.link("x86-m32", "format"), ["format", "os2", "le"])
         self.assertEqual(linkrecipe.ld_emulation("x86-m32"), "elf_i386")
+        self.assertEqual(linkrecipe.coff_machine("x86-m32"), "x86")
 
 
 if __name__ == "__main__":

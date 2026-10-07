@@ -305,6 +305,21 @@ def read_dos(workdir: Path, name: str) -> str:
     return ""
 
 
+_PRIVATE = iter(range(1 << 30))
+
+
+def private_work(name: str) -> Path:
+    """A work directory under the target directory that no other run shares: `run` clears its work directory, so two
+    runs given one would delete each other's files, and hang or read each other's results (#736)."""
+    return llrmbin.target_dir() / f"{name}-{os.getpid()}-{next(_PRIVATE)}"
+
+
+def discard(work: Path) -> None:
+    """A private work directory of a run that passed, and the objects beside it."""
+    for path in (work, work.with_name(work.name + "-obj")):
+        shutil.rmtree(path, ignore_errors=True)
+
+
 def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000, build_ms: int = 1_200_000, tools: Toolchain = QB45_TOOLS, conf: str = CONF) -> dict[str, Result]:
     """Every job's result. One dosrun launch: a first job builds (BC, LINK),
     then each program runs as its own job with `budget_ms` of emulated time, so

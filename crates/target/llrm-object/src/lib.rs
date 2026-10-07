@@ -57,6 +57,10 @@ pub enum Kind {
     /// from: width }` says, for the formats that tell a branch from a data reference (Mach-O's
     /// `BRANCH`, which a linker may send through a stub).
     Branch { width: usize },
+    /// COFF: the 1-based index of the target's section, 2 bytes (`IMAGE_REL_*_SECTION`).
+    SectionIndex,
+    /// COFF: the target's offset within its section, `width` bytes (`IMAGE_REL_*_SECREL`).
+    SectionOffset { width: usize },
     /// OMF: the selector of the target's segment.
     SegmentBase,
     /// OMF: a 16:16 pointer, whose offset is the field's first two bytes.
@@ -68,7 +72,8 @@ impl Kind {
     pub fn width(self) -> usize {
         match self {
             Kind::Abs { width } | Kind::PcRel { width, .. } | Kind::Branch { width } => width,
-            Kind::SegmentBase => 2,
+            Kind::SectionIndex | Kind::SegmentBase => 2,
+            Kind::SectionOffset { width } => width,
             Kind::FarPointer => 4,
         }
     }
