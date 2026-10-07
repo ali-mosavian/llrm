@@ -13,6 +13,14 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// A test that cannot run says so on stderr, and fails where `LLRM_REQUIRE_TURBO` is set, so a gate that has
+/// Turbo C++ and Turbo Debugger cannot pass by skipping.
+fn skipped(reason: &str) {
+    // Written to the stderr itself, which the harness does not capture: seen when the test passes.
+    let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("SKIPPED: {reason}\n").as_bytes());
+    assert!(std::env::var_os("LLRM_REQUIRE_TURBO").is_none(), "LLRM_REQUIRE_TURBO is set, and: {reason}");
+}
+
 fn llrm_c() -> PathBuf {
     Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("llrm-c")
 }
@@ -92,7 +100,7 @@ fn module(dump: &str) -> (Vec<String>, Vec<String>, BTreeSet<u32>) {
 #[test]
 fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
     let Some((borland, dosbox)) = toolchain() else {
-        eprintln!("skipped: needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
+        skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
         return;
     };
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
@@ -259,12 +267,12 @@ impl Drop for Dosbox {
 #[test]
 fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
     let Some((borland, dosbox)) = toolchain() else {
-        eprintln!("skipped: needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
+        skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
         return;
     };
     let debugger = std::env::var_os("TD_DIR").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join("scratch/toolchains/td"))).unwrap();
     if !debugger.join("Td.exe").exists() {
-        eprintln!("skipped: needs Turbo Debugger in TD_DIR");
+        skipped("needs Turbo Debugger in TD_DIR");
         return;
     }
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
