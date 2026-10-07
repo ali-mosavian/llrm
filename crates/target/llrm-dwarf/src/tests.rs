@@ -161,6 +161,14 @@ fn a_registers_location_is_its_dwarf_number() {
     assert!(info.image.windows(2).any(|pair| pair == [1, 0x50]), "a one-byte expression, DW_OP_reg0");
 }
 
+/// A test that cannot run says so on stderr, and fails where `LLRM_REQUIRE_DWARF` is set, so a gate that
+/// has the tools cannot pass by skipping.
+fn skipped(reason: &str) {
+    // Written to the stderr itself, which the harness does not capture: seen when the test passes.
+    let _ = std::io::Write::write_all(&mut std::io::stderr(), format!("SKIPPED: {reason}\n").as_bytes());
+    assert!(std::env::var_os("LLRM_REQUIRE_DWARF").is_none(), "LLRM_REQUIRE_DWARF is set, and: {reason}");
+}
+
 fn dwarfdump() -> Option<std::path::PathBuf> {
     let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
     dirs.push("/usr/lib/llvm-20/bin".into());
@@ -172,7 +180,7 @@ fn dwarfdump() -> Option<std::path::PathBuf> {
 #[test]
 fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
     let Some(dump) = dwarfdump() else {
-        eprintln!("skipped: llvm-dwarfdump is not installed");
+        skipped("llvm-dwarfdump is not installed");
         return;
     };
     let scratch = tempfile::tempdir().unwrap();
