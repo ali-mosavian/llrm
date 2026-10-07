@@ -38,8 +38,13 @@ fn simplified(text: &str) -> (Module, Module) {
 
 /// `simplified`, tuned for size or not.
 fn simplified_for(text: &str, size: bool) -> (Module, Module) {
+    simplified_in(text, size, LEGAL)
+}
+
+/// `simplified_for` under datalayout `layout`.
+fn simplified_in(text: &str, size: bool, layout: &str) -> (Module, Module) {
     let mut before = parsed(text);
-    before.datalayout = Some(LEGAL.to_owned());
+    before.datalayout = Some(layout.to_owned());
     let mut after = before.clone();
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
@@ -68,6 +73,19 @@ fn checked(text: &str, inputs: &[Vec<i128>]) -> String {
     assert_eq!(refined.collect::<Vec<_>>(), expected, "{}", bare(&after));
     bare(&after)
 }
+
+/// `checked` in a 32-bit segment (pointers of 32 bits).
+fn checked_flat(text: &str, inputs: &[Vec<i128>]) -> String {
+    let (before, after) = simplified_in(text, false, FLAT);
+    let inputs: Vec<&[i128]> = inputs.iter().map(Vec::as_slice).collect();
+    let expected = results(&before, &inputs);
+    let refined = results(&after, &inputs).into_iter().zip(&expected).map(|(got, wanted)| if *wanted == Val::Poison { Val::Poison } else { got });
+    assert_eq!(refined.collect::<Vec<_>>(), expected, "{}", bare(&after));
+    bare(&after)
+}
+
+/// The legal integers and 32-bit pointers of a flat 32-bit segment.
+const FLAT: &str = "e-p:32:32-n8:16:32";
 
 /// `text` left as it was.
 fn unchanged(text: &str) {
@@ -811,9 +829,12 @@ b0:
 fn test_a_non_negative_dividend_by_a_constant_is_unsigned_unless_tuned_for_size() {
     let text = "define i32 @f(i32 range(i32 0, 100000) %x) {\nb0:\n  %r = srem i32 %x, 211\n  %q = sdiv i32 %x, 10\n  %s = add i32 %r, %q\n  ret i32 %s\n}\n";
     let inputs: Vec<Vec<i128>> = [0, 1, 9, 10, 210, 211, 99999].iter().map(|&one| vec![one]).collect();
-    let done = checked(text, &inputs);
+    let done = checked_flat(text, &inputs);
     assert!(done.contains("urem") && done.contains("udiv") && !done.contains("srem") && !done.contains("sdiv"), "{done}");
-    let (before, after) = simplified_for(text, true);
+    let (before, after) = simplified_in(text, true, FLAT);
+    assert_eq!(bare(&after), bare(&before));
+    // A 16-bit segment's dword divides through prefixes: it stays.
+    let (before, after) = simplified_for(text, false);
     assert_eq!(bare(&after), bare(&before));
     // A negative divisor stays: the signed reciprocal negates.
     unchanged("define i32 @f(i32 range(i32 0, 100) %x) {\nb0:\n  %r = sdiv i32 %x, -10\n  ret i32 %r\n}\n");
@@ -845,6 +866,6 @@ b3:
 }
 ";
     let inputs: Vec<Vec<i128>> = [-3, 0, 1, 5, 40, 300].iter().map(|&one| vec![one]).collect();
-    let done = checked(text, &inputs);
+    let done = checked_flat(text, &inputs);
     assert!(done.contains("urem") && !done.contains("srem"), "{done}");
 }
