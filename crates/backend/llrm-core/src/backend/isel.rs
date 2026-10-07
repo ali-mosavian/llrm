@@ -3613,7 +3613,9 @@ impl Selector<'_, '_, '_> {
         match (byte, constant) {
             // Tuned for size, one `rep stosb`: no dword count, tail or
             // operand-size prefix.
-            (Some(byte), _) if self.cpu.size => {
+            // Where the dwords fill is as short: zeros through a 32-bit segment, `xor eax, eax` for `mov al, 0` and
+            // no operand-size prefix on `stosd`, the count an immediate of the same width, no tail.
+            (Some(byte), _) if self.cpu.size && !(byte == 0 && self.arch.object().bitness == 32 && constant.is_some_and(|(_, length)| length % 4 == 0)) => {
                 let count = match constant {
                     Some((_, length)) => imm(length, self.address_bytes()),
                     None => Loc::Held(self.held(length, self.function.operand_type(&self.module.context, length).expect("a typed length"), at, out)?),
