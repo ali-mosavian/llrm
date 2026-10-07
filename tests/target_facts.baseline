@@ -31,7 +31,7 @@
 3 crates/backend/llrm-core/src/backend/regalloc_input.rs
 4 crates/backend/llrm-core/src/backend/regclass.rs
 7 crates/backend/llrm-core/src/backend/schedule.rs
-6 crates/backend/llrm-core/src/backend/spiller.rs
+5 crates/backend/llrm-core/src/backend/spiller.rs
 1 crates/backend/llrm-core/src/backend/spillforward.rs
 2 crates/backend/llrm-core/src/backend/storecombine.rs
 9 crates/backend/llrm-core/src/backend/target.rs
