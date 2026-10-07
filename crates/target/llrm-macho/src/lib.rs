@@ -59,7 +59,7 @@ fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsu
         Role::Data => ("__DATA", "__data", 0),
         Role::Bss => ("__DATA", "__bss", S_ZEROFILL),
         Role::Stack => return Err(unsupported(format!("{}: an OMF stack segment has no Mach-O section", section.name))),
-        Role::Debug(_) => return Err(unsupported(format!("{}: CodeView debug information is OMF's", section.name))),
+        Role::Debug => return Err(unsupported(format!("{}: a debug section is its format's writer's", section.name))),
     })
 }
 
@@ -90,7 +90,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
         return Err(unsupported(format!("{:?} has no Mach-O writer: only x86-64 is written", object.arch)));
     }
     if object.debug.is_some() {
-        return Err(unsupported("CodeView debug information is OMF's"));
+        return Err(unsupported("-g: this writer does not write debug information yet"));
     }
     if !object.omf_groups.is_empty() {
         return Err(unsupported("a group of segments is OMF's"));
@@ -284,7 +284,7 @@ mod tests {
 
     fn section(name: &str, role: Role, image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
         let spans = vec![[0, image.len()]];
-        Section { name: name.into(), role, near: true, align: 1, image, spans, relocs, lines: Vec::new() }
+        Section { name: name.into(), role, near: true, align: 1, image, spans, relocs }
     }
 
     fn defined(name: &str, section: usize, offset: usize) -> Symbol {
@@ -444,5 +444,14 @@ _flag:  .byte 0
         let mut other = program();
         other.arch = Arch::I386;
         assert!(write(&other).unwrap_err().0.contains("only x86-64"));
+    }
+
+    /// `-g` reached a writer with no debug format: the information was refused, not left out of
+    /// an object a debugger then found empty.
+    #[test]
+    fn debug_information_is_refused_not_dropped() {
+        let mut made = program();
+        made.debug = Some(llrm_object::debug::Info::default());
+        assert!(write(&made).unwrap_err().0.contains("debug information"));
     }
 }

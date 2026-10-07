@@ -112,3 +112,27 @@ fn deleting_a_body_leaves_a_declaration() {
     assert!(f.is_declaration());
     assert_eq!(print::module(&module), "declare i16 @f(i16)\n");
 }
+
+/// A result derived at a mark is brought up to date from what changed after it, only while that is on record and of the
+/// same function: a mark of the log a pass has taken, or of a copy's original, names changes no one can list.
+#[test]
+fn a_mark_names_the_changes_since_while_they_are_on_record_of_that_function() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let (x, value) = named(f, "x");
+    let (y, _) = named(f, "y");
+    let a = f.parameters()[0];
+    let mark = f.mark();
+    assert_eq!(f.changes_since(mark), Some(&[][..]));
+    f.replace_all_uses_with(value, Operand::Value(a));
+    assert_eq!(f.changes_since(mark), Some(&[Change::Rewritten(y)][..]));
+    let mut copy = f.clone();
+    assert_eq!(copy.changes_since(mark), None, "a copy's edits are its own");
+    assert_eq!(copy.changes_since(copy.mark()), Some(&[][..]));
+    f.erase(x).expect("unused now");
+    assert_eq!(f.changes_since(mark).map(<[Change]>::len), Some(2));
+    f.take_changes();
+    assert_eq!(f.changes_since(mark), None, "taken from the log");
+    assert_eq!(f.changes_since(f.mark()), Some(&[][..]));
+    let _ = &mut copy;
+}

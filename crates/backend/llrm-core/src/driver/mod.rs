@@ -112,7 +112,8 @@ fn spill_model(program: &Program) {
             let Some(function) = global.function().filter(|one| !one.is_declaration()) else { continue };
             let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer.clone()));
             let registers = analyses.get::<llrm_analysis::manager::Registers>(&module.context, &layout, function);
-            let unit = llrm_analysis::memory::Unit::of(module, &layout, function).with_spaces(program.target.spaces()).with_registers(&registers);
+            let shape = analyses.get::<llrm_analysis::cfg::Shape>(&module.context, &layout, function);
+            let unit = llrm_analysis::memory::Unit::of(module, &layout, function).with_spaces(program.target.spaces()).with_registers(&registers).with_shape(&shape);
             let trips = profit::proven_trips(&unit, &registers);
             let Some(frequency) = profit::_frequencies(&module.context, &module.metadata, &module.globals, function, Some(&trips)) else { continue };
             let across = |inst| spill::kept_across(&outer, &module.context, function, inst);

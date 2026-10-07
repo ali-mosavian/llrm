@@ -4,7 +4,9 @@
 use std::fmt;
 use std::rc::Rc;
 
-use llrm_object::{DebugFormat, DebugKind, Definition, Kind, Object, Role, Section, Target};
+use std::borrow::Cow;
+
+use llrm_object::{Definition, Kind, Object, Role, Section, Target};
 
 use crate::omf;
 
@@ -76,8 +78,8 @@ fn class(section: &Section) -> &'static str {
         (Role::Bss, true) => "BSS",
         (Role::Bss, false) => "FAR_BSS",
         (Role::Stack, _) => "STACK",
-        (Role::Debug(DebugKind::CodeViewSymbols), _) => "DEBSYM",
-        (Role::Debug(DebugKind::CodeViewTypes), _) => "DEBTYP",
+        (Role::Debug, _) if section.name == crate::codeview::SYMBOLS => "DEBSYM",
+        (Role::Debug, _) => "DEBTYP",
     }
 }
 
@@ -230,6 +232,20 @@ fn ledata(object: &Object, extern_index: &[usize], index: usize) -> Result<Vec<R
 
 /// `object` as an OMF object file.
 pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
+    let debug = object.debug.is_some();
+    // CodeView's two segments are this writer's, made from the object's debug information.
+    let (object, lines): (Cow<Object>, Vec<Vec<(u32, usize)>>) = match &object.debug {
+        None => (Cow::Borrowed(object), Vec::new()),
+        Some(info) => {
+            let mut lines = crate::codeview::lines(object, info)?;
+            let described = crate::codeview::sections(object, info)?;
+            let mut expanded = Object { debug: None, ..object.clone() };
+            expanded.sections.extend(described);
+            lines.resize(expanded.sections.len(), Vec::new());
+            (Cow::Owned(expanded), lines)
+        }
+    };
+    let object = &*object;
     let bits = object.arch.bits();
     if !matches!(bits, 16 | 32) {
         return Err(unencodable(format!("OMF has no {bits}-bit records")));
@@ -287,7 +303,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
     }
 
     let mut records = vec![Rc::new(omf::Record::new(omf::THEADR, string(&object.name))), Rc::new(omf::Record::new(omf::LNAMES, lnames.iter().flat_map(|one| string(one)).collect()))];
-    if object.debug == Some(DebugFormat::CodeView) {
+    if debug {
         // CodeView 4's marker: LINK /CO reads the debug information after it.
         records.push(Rc::new(omf::Record::new(omf::COMENT, vec![0x00, 0xA1, 0x01, b'C', b'V'])));
     }
@@ -326,10 +342,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         records.push(Rc::new(omf::Record::new(if bits == 32 { omf::PUBDEF + 1 } else { omf::PUBDEF }, head)));
     }
     records.extend(data);
-    if object.debug.is_some() {
-        for (index, section) in object.sections.iter().enumerate() {
-            records.extend(linnum(index + 1, &section.lines)?);
-        }
+    for (index, lines) in lines.iter().enumerate() {
+        records.extend(linnum(index + 1, lines)?);
     }
     records.push(Rc::new(omf::Record::new(omf::MODEND, vec![0])));
     Ok(records.iter().flat_map(|record| record.emit()).collect())
@@ -347,7 +361,7 @@ mod tests {
 
     fn section(name: &str, image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
         let spans = vec![[0, image.len()]];
-        Section { name: name.into(), role: Role::Text, near: true, align: 1, image, spans, relocs, lines: Vec::new() }
+        Section { name: name.into(), role: Role::Text, near: true, align: 1, image, spans, relocs, }
     }
 
     fn object(arch: Arch, sections: Vec<Section>, symbols: Vec<Symbol>) -> Object {

@@ -13,8 +13,8 @@ ptr16:16, offset32), plus a `relative` flag.
 ## Model
 
 ```
-Object   { name, arch, sections, symbols, omf_groups, debug }
-Section  { name, role: Text|ROData|Data|Bss|Stack|Debug(kind), near, align, image, spans, relocs, lines }
+Object   { name, arch, sections, symbols, omf_groups, debug: Option<debug::Info> }
+Section  { name, role: Text|ROData|Data|Bss|Stack|Debug, near, align, image, spans, relocs }
 Reloc    { at, kind, target, addend }
 Kind     = Abs{width} | PcRel{width, from} | Branch{width} | SectionIndex | SectionOffset{width} | SegmentBase | FarPointer   (non_exhaustive)
 Target   = Symbol(id) | OmfGroup(id)
@@ -35,12 +35,28 @@ Symbol   { name, binding: Public|Local, definition: Defined{section, offset} | U
 - `SegmentBase`, `FarPointer`, `OmfGroup`, `Stack`, `near == false` exist for OMF. A writer that cannot
   say one returns `Unsupported(what)`; it never writes a near substitute. `Symbol.group` is OMF's
   frame hint; others ignore it.
-- Debug data is ordinary sections with relocs, tagged with its format; a writer refuses a format it
-  does not write.
+- Debug information is `llrm_object::debug::Info`, once (below). A writer encodes it its own way and
+  refuses a fact it cannot say; `Role::Debug` is only the sections a writer makes of it.
 
 Not in the model yet, to be added with the first writer that needs it: arm64 instruction fields
 (`Kind::Insn`, a `Via::Got` beside them), weak and hidden symbols, symbol sizes, a difference of two
 symbols, COMDAT (COFF needs it for inline functions and templates; no frontend produces one yet).
+
+## Debug information
+
+`backend/debuginfo.rs` builds `debug::Info` from MIR's metadata (`llrm_mir::debuginfo`, which the
+frontends write) and the layout: types (an arena), functions (symbol, ranges, body, parameters and
+locals each with a `Location`: frame cell, register, list of ranges, static), module code and data,
+files and lines, and the target's register file with its DWARF and CodeView numbers (`registers.regs`).
+Writers are target-blind: `llrm-omf::codeview` writes $$SYMBOLS, $$TYPES and LINNUM from it.
+Enums, typedefs, qualifiers, block scopes, register and listed locations, columns and checksums are in
+the model; a frontend fills them as it learns to, and a writer that cannot say one refuses it by name.
+
+With `-g`, a variable the program declares is read from its frame cell at any line, so each store to it
+is lowered volatile (`hir/mir.rs`, `declared_place`) and no pass drops, merges or moves one. At
+-O>0 that costs code a gcc or clang `-g` build does not (they note each value's place with `dbg.value`
+and leave the code alone); without `-g` nothing changes. The lift is `dbg.value` plus the allocator's
+ranges as location lists, which makes the stores unnecessary. Tracking issue: #755.
 
 ## Moves
 
@@ -50,7 +66,7 @@ symbols, COMDAT (COFF needs it for inline functions and templates; no frontend p
 | `omfwrite::_records, _ledata, _subrecord, _linnum`, record constants | `llrm-omf::write` |
 | `omfwrite::_fresh_segment`, `_resolved_fixup` (unused) | deleted |
 | layout, relaxation, `_code`, `_data`, `_items` | stay in `llrm-core`, return an `Object` |
-| `codeview::segments` | stays, returns tagged debug sections |
+| `codeview::segments` | `backend/debuginfo.rs` builds `debug::Info`; `llrm-omf::codeview` writes it |
 
 ## Choosing a format
 
@@ -79,7 +95,8 @@ type already subtracts (`REL32`: 4). More than 65535 relocations in a section us
 its ELF number, its relocation types, and REL or RELA.
 
 An ELF object is written for `-m32 -fobject-format=elf` into a file named `*.o`. It refuses what OMF alone
-has: segments with a selector of their own, far pointers, groups, the stack segment, and `-g`'s CodeView.
+has: segments with a selector of their own, far pointers, groups, the stack segment, and (until the DWARF
+writer) `-g`.
 
 Mach-O: the file is not `MH_SUBSECTIONS_VIA_SYMBOLS`, so a code section is one atom, a call between two
 of its functions may be resolved where it is written, and `-dead_strip` keeps the whole section. A local

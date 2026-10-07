@@ -124,7 +124,7 @@ impl Compiler {
         let Some(r#type) = self.debug_type_of(type_id, array) else { return };
         let name = self.debug_name(source, span, type_id);
         match held {
-            Held::Place(place) => self.debug.variable(place.into(), &name, r#type),
+            Held::Place(place) => self.debug.variable(place.into(), &name, r#type, false),
             Held::Data(object, offset) => self.debug.global(object.into(), offset as i64, &name, r#type),
         }
     }
