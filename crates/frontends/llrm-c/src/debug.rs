@@ -55,7 +55,8 @@ impl<'u> Described<'u> {
             (false, 2, false) => DebugScalar::UInt16,
             (false, 4, true) => DebugScalar::Int32,
             (false, 4, false) => DebugScalar::UInt32,
-            // CodeView has no 64-bit integer.
+            (false, 8, true) => DebugScalar::Int64,
+            (false, 8, false) => DebugScalar::UInt64,
             _ => return None,
         })
     }

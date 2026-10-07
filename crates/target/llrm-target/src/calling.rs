@@ -76,6 +76,9 @@ pub struct Convention {
     /// A function that needs no frame register may leave it out: its cells are addressed through the
     /// stack pointer, and the frame register is not set. gcc's `-fomit-frame-pointer`.
     pub frame_optional: bool,
+    /// A frame tuned for size is opened with `enter N,0` (4 bytes against 6). Left false where the target prices it
+    /// above `push bp; mov bp,sp; sub sp,N`: the 486 takes 14 clocks against 3 (Intel 240440-002), and neither GCC nor LLVM emits it.
+    pub frame_enter: bool,
     pub stack: String,
     /// The registers a callee keeps, the frame register among them.
     pub preserved: Vec<Kept>,
@@ -123,6 +126,7 @@ const KEYS: &[&str] = &[
     "first_argument_offset_far",
     "frame",
     "frame_optional",
+    "frame_enter",
     "stack",
     "preserved",
     "clobbered",
@@ -338,6 +342,7 @@ impl Convention {
             first_argument_offset_far: table.contains_key("first_argument_offset_far").then(|| integer("first_argument_offset_far")).transpose()?,
             frame: text("frame")?,
             frame_optional: flag("frame_optional")?,
+            frame_enter: flag("frame_enter")?,
             stack: text("stack")?,
             preserved,
             clobbered: names(table.get("clobbered"), "clobbered")?,
