@@ -328,6 +328,31 @@ fn the_32_bit_writers_object_reads_as_mls_flat_object_does() {
     assert_eq!(ours, ml);
 }
 
+/// A pointer to a function reaches it far or near, and the procedure it points to is called as that reach says: a far
+/// pointer's is a far call (LF_PROCEDURE call kind 1), a near one's a near call. The procedure type was one record
+/// called near, whatever pointed to it, so a debugger took a call through `int (far *fp)(int)` for a near one.
+#[test]
+fn a_pointer_to_a_function_points_to_a_procedure_called_as_far_as_the_pointer_reaches() {
+    use llrm_object::debug::Reach::{Far, Near};
+    let short = T::Scalar(S::Int { bytes: 2, signed: true });
+    let types = vec![
+        short,
+        T::Procedure { result: Some(0), parameters: vec![0], convention: None },
+        T::Pointer { target: 1, bytes: 4, reach: Far },
+        T::Pointer { target: 1, bytes: 2, reach: Near },
+        T::Procedure { result: None, parameters: Vec::new(), convention: None },
+    ];
+    let made = object(Arch::I8086, types, vec![variable("p", 2, Kind::Local, Location::Frame { disp: -4 }), variable("q", 3, Kind::Local, Location::Frame { disp: -6 })]);
+    let (_, table, _) = written(&made);
+    let index = |one: usize| 0x1000 + one as u16;
+    let one_parameter: Vec<(u16, u8)> = table.iter().enumerate().filter(|(_, (leaf, data))| *leaf == 0x0008 && data[4] == 1).map(|(at, (_, data))| (index(at), data[2])).collect();
+    // Two procedures of one parameter: the far one (call 1) and the near one (call 0).
+    let call = |wanted: u8| one_parameter.iter().find(|(_, kind)| *kind == wanted).map(|(at, _)| *at);
+    let (far, near) = (call(1).expect("a far procedure"), call(0).expect("a near procedure"));
+    let target = |reach: u16| table.iter().find(|(leaf, data)| *leaf == 0x0002 && u16::from_le_bytes([data[0], data[1]]) == reach).map(|(_, data)| u16::from_le_bytes([data[2], data[3]]));
+    assert_eq!((target(1), target(0)), (Some(far), Some(near)), "a far pointer to the far procedure, a near one to the near");
+}
+
 /// Two types of the model that read alike, an array of `int` and one of `long` (the source spells each, so they are
 /// two), are one record: a second only grew the table, and every later index with it.
 #[test]
