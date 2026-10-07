@@ -34,3 +34,19 @@ reason = "The program defines `llabs` (a body that aborts) and expects the compi
 [[differs]]
 program = "nestfunc-4"
 reason = "A 1000-level call chain that needs about 24 KB of stack at -O0 (the test itself says `dg-add-options stack_size` and sizes DEPTH from STACK_SIZE); the m32 DOS program's stack is 16 KB and faults at its guard (exception 0Bh). Depth 200 passes."
+
+[[differs]]
+program = "widechar-3"
+reason = "Open Watcom defines no `__BYTE_ORDER__` or `__ORDER_BIG_ENDIAN__`: both are 0 in the `#if` and the big-endian branch is taken, which expects strlen of L\"abcdef\" to be 0 (the little-endian answer, 1, is right: checked with the branch removed)."
+
+[[differs]]
+program = "pushpop_macro"
+reason = "Open Watcom's preprocessor ignores `#pragma push_macro` and `pop_macro` (GNU/MSVC): `_` keeps the last definition."
+
+[[differs]]
+program = "pr58943"
+reason = "`x[0] |= foo ()` where foo changes x[0]: the order of the read of x[0] and the call is unspecified (C11 6.5.16.2, 6.5.2.2p10); GCC calls first (PR c/58943), Open Watcom's front end reads first and gets 3, not 131."
+
+[[differs]]
+program = "bf-sign-2"
+reason = "Open Watcom types a bit-field by its declared type, so `unsigned :15` and `unsigned long :31` stay unsigned in arithmetic; ISO C11 6.3.1.1p2 promotes any bit-field whose values fit an int to int (checked on both targets: the unsigned u15 and u31 give the unsigned answer)."
