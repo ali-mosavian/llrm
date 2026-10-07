@@ -240,6 +240,16 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     manager.require::<GlobalsAA>();
     manager.require::<Summaries>();
     manager.require_program::<ProgramSummaries>();
+    if let (Some(mid), false) = (crate::llvmmid::Mid::from_env(applied.options.inline.limit), std::env::var_os("LLRM_LLVM_AFTER").is_some()) {
+        crate::llvmmid::run(program, &mid, applied.dump.as_deref())?;
+        // LLRM_LLVM_THEN: our own mid end follows opt's, to see what it still finds.
+        if std::env::var_os("LLRM_LLVM_THEN").is_none() {
+            manager.add_program(crate::interprocedural::Stamp);
+            manager.add_program(globaldce::GlobalDce);
+            manager.add_program(availableexternally::EliminateAvailableExternally);
+            return late(manager, applied).run(program);
+        }
+    }
     // As LLVM's O2 runs GlobalOpt before the function pipeline.
     manager.add_module(globalopt::GlobalOpt);
     // Over every body first, so a caller's pipeline sees each callee's
@@ -262,6 +272,25 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
     manager.add_program(availableexternally::EliminateAvailableExternally);
+    // LLRM_LLVM_AFTER: opt runs on what our mid end made, before the passes that read the target.
+    if let (true, Some(mid)) = (std::env::var_os("LLRM_LLVM_AFTER").is_some(), crate::llvmmid::Mid::from_env(applied.options.inline.limit)) {
+        manager.run(program)?;
+        crate::llvmmid::run(program, &mid, applied.dump.as_deref())?;
+        let mut again = PassManager::default();
+        again.verify_each = true;
+        again.dump = applied.dump.as_ref().map(|one| one.join("after"));
+        again.require::<GlobalsAA>();
+        again.require::<Summaries>();
+        again.require_program::<ProgramSummaries>();
+        again.add_program(crate::interprocedural::Stamp);
+        again.add_program(globaldce::GlobalDce);
+        return late(again, applied).run(program);
+    }
+    late(manager, applied).run(program)
+}
+
+/// What follows the machine-independent passes: the ones that read the target.
+fn late(mut manager: PassManager, applied: &Applied) -> PassManager {
     // Once the callers that remain are the ones that stay: an internal function they all call directly pops its own arguments.
     if applied.options.wanted("calleepop") {
         manager.add_module(calleepop::CalleePop { size: applied.options.prefers_size() });
@@ -299,7 +328,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // Last: what it names are the instructions selection sees.
     manager.add_module(crate::spares::Spares);
     manager.add_module(crate::homes::Homes);
-    manager.run(program)
+    manager
 }
 
 /// `fixed` over body `id` alone, as the manager runs a function pass, its

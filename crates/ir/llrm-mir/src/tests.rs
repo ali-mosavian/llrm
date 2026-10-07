@@ -352,6 +352,16 @@ fn noretain_is_a_parameter_attribute_that_round_trips() {
     assert_eq!(round(&once), once);
 }
 
+/// `nearcode`, a frontend's function attribute the printer writes: the parser refused it, so Nib's MIR,
+/// printed for `opt`, could not be read back ("expected `}`, found `nearcode`", every Nib program).
+#[test]
+fn nearcode_is_a_function_attribute_that_round_trips() {
+    let text = format!("{DATALAYOUT}\ndefine void @f() nearcode {{\nb0:\n  ret void\n}}\n");
+    let once = round(&text);
+    assert!(once.contains("define void @f() nearcode"), "{once}");
+    assert_eq!(round(&once), once);
+}
+
 /// Each use asked `instruction_dominates` of its definition, which scanned the block for both: the
 /// verifier was 12% of compiling 800 BASIC statements (#560). The positions are made once.
 #[test]
