@@ -261,7 +261,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
-    parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "tests-run")
+    parser.add_argument("--work", type=Path, help="where to build and run; one private to this run by default")
     parser.add_argument("--retarget", help="build each Nib program for this target instead, against its own .out")
     args = parser.parse_args()
     programs = discover(args.select)
@@ -273,7 +273,8 @@ def main() -> int:
     if not programs:
         print("no programs selected")
         return 1
-    work = args.work
+    own = args.work is None
+    work = dosbatch.private_work("tests-run") if own else args.work
     objs = work.with_name(work.name + "-obj")
     objs.mkdir(parents=True, exist_ok=True)
     stems = {p.name: f"T{at:03d}" for at, p in enumerate(programs)}
@@ -306,6 +307,8 @@ def main() -> int:
         else:
             passed += 1
     print(f"{len(programs)} programs: {passed} pass, {known} known, {bad} fail")
+    if own and not bad:
+        dosbatch.discard(work)
     return 1 if bad else 0
 
 
