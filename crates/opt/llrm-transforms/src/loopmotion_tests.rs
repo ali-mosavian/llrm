@@ -285,6 +285,10 @@ fn test_the_entry_value_is_asked_once_per_block_not_per_path() {
 /// reaches the loops that read what it touched, so the others keep their proofs.
 #[test]
 fn test_sinking_a_loops_store_proves_only_that_loop_again() {
+    // The check derives them afresh to compare, and is counted.
+    if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+        return;
+    }
     let loops = 20;
     let mut text = String::from("define i16 @f(i16 %k) {\nb0:\n  br label %h0\n\n");
     for at in 0..loops {
