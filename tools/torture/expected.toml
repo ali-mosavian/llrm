@@ -70,3 +70,31 @@ reason = "`(int)2147483648.0f`: a conversion out of range is undefined (C11 6.3.
 [[differs]]
 program = "20030714-1"
 reason = "`EPosition _position : 2` holding 3 (FIXED): the compatible type of an enum is implementation-defined (C11 6.7.2.2p4); GCC's is unsigned for an enum with no negative enumerator, Open Watcom's is int, so the 2-bit field reads -1 (checked: enum, unsigned and int bit-fields of 2 bits hold 3 as 3, 3 and -1 under GCC's rule, -1 for the enum here)."
+
+[[differs]]
+program = "wchar_t-1"
+reason = "The source has `L'Ä'` in UTF-8 (`-finput-charset=utf-8`): Open Watcom reads its source bytes as the code page's characters, so the wide literal is two characters."
+
+[[differs]]
+program = "divmod-1"
+reason = "x86-m16 only: `-(1 << 15) / -1` in a 16-bit int overflows idiv (#DE); the test assumes a 32-bit int (it has no dg-require-effective-target)."
+
+[[differs]]
+program = "920730-1"
+reason = "x86-m16 only: INT_MIN, INT_MAX and `(unsigned)(INT_MAX + 2)` of a 16-bit int; the test has no dg-require-effective-target for a 32-bit int."
+
+[[differs]]
+program = "doloop-2"
+reason = "x86-m16 only: `i != USHRT_MAX + 1U` is 65535 + 1 = 0 in a 16-bit unsigned int."
+
+[[differs]]
+program = "bitfld-1"
+reason = "x86-m16 only: the bit-field promotions (`unsigned int u : 7`, `-13U % 61`) are computed in a 16-bit int where the test's values assume 32."
+
+[[differs]]
+program = "921202-1"
+reason = "x86-m16 only: three arrays of 2055 longs on the stack (the test sizes them from STACK_SIZE with `dg-add-options stack_size`), against an 8 KB stack."
+
+[[differs]]
+program = "960521-1"
+reason = "x86-m16 only: two blocks of 32768 ints (BLOCK_SIZE without STACK_SIZE), larger than a real-mode segment's heap."
