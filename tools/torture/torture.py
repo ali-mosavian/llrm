@@ -1,7 +1,7 @@
 """GCC's gcc.c-torture/execute through llrm-c: each self-checking program built at -O0, -O2 and -Os, run on the emulator,
 and passed if it exits 0.
 
-    uv run --project tools python tools/torture/torture.py [--target NAME] [--levels O0,O2,Os] [--stage compile] [--sample N] [names...]
+    uv run --project tools python tools/torture/torture.py [--bits 16|32] [--levels O0,O2,Os] [--stage compile] [--sample N] [names...]
 
 Every program ends in exactly one class: passed; refused by design (`expected.toml` names the refusal and why); a compile
 failure; a link failure; a wrong result (it exited non-zero, aborted, or did not finish). The last three are the findings:
@@ -116,7 +116,7 @@ def launched(jobs: list, work: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("names", nargs="*")
-    parser.add_argument("--target", default="m32")
+    parser.add_argument("--bits", type=int, choices=[16, 32], default=32, help="the target's int width")
     parser.add_argument("--levels", default="O0,O2,Os")
     parser.add_argument("--stage", choices=["compile", "run"], default="run")
     parser.add_argument("--sample", type=int, default=0, help="the first N programs only")
@@ -124,7 +124,7 @@ def main() -> int:
     parser.add_argument("--work", type=Path, default=Path.home() / "scratch/torture-work")
     parser.add_argument("--out", type=Path, help="write each program's result here as JSON")
     args = parser.parse_args()
-    target = dosbatch.linkrecipe.named(32) if args.target == "m32" else dosbatch.linkrecipe.named(16)
+    target = dosbatch.linkrecipe.named(args.bits)
     work = args.work
     work.mkdir(parents=True, exist_ok=True)
     rules = expected()
