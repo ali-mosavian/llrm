@@ -1494,6 +1494,8 @@ struct Body<'b, 'm, 'h> {
     objects: Vec<Value>,
     /// Each value that is a place's address, and that place's size.
     addresses: HashMap<i64, i64>,
+    /// The addresses of the variables `-g` declares.
+    declared_addresses: HashSet<i64>,
     handling: Option<handling::Handling>,
     /// The module handler, where this emits its own function.
     outlined: Option<handling::Outlined>,
@@ -1528,6 +1530,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             passed: None,
             objects: Vec::new(),
             addresses: HashMap::new(),
+            declared_addresses: HashSet::new(),
             handling: None,
             outlined: None,
             destination,
@@ -1721,6 +1724,17 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             other => other,
         };
         Ok(Value::Constant(self.b.context.constant(Constant { ty, kind })))
+    }
+
+    /// Whether `operand` names a variable `-g` declares, or part of one.
+    fn declared_place(&self, operand: &Operand) -> bool {
+        match operand {
+            Operand::PlaceRef(one) => self.tables.variables.contains_key(&(self.function.id, one.place)),
+            Operand::ArrayElement(one) => self.tables.variables.contains_key(&(self.function.id, one.place)),
+            Operand::ProjectedPlace(one) => self.tables.variables.contains_key(&(self.function.id, one.place)),
+            Operand::IndirectPlace(one) => self.declared_addresses.contains(&one.base),
+            _ => false,
+        }
     }
 
     /// A place's address, what it holds, whether it is volatile, and the
@@ -2064,7 +2078,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let (to_space, from_space) = (space(self, to), space(self, from));
                 let callee = Value::Constant(self.tables.callees[&memcpy_name(to_space, from_space)]);
                 let ty = memcpy_type(&mut self.b.context.types, to_space, from_space);
-                let (size, volatile) = (self.b.int(16, i128::from(*bytes)), self.b.int(1, 0));
+                // As a store to a declared variable: the copy into it stays.
+                let observed = self.declared_place(&instruction.operands[0]);
+                let (size, volatile) = (self.b.int(16, i128::from(*bytes)), self.b.int(1, i128::from(observed)));
                 self.b.call(ty, callee, &[to, from, size, volatile], "");
             }
             Op::Copy | Op::Load => {
@@ -2074,7 +2090,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             Op::Store => {
                 let (pointer, _, volatile, tag) = self.place(&instruction.operands[0])?;
                 let value = self.value(&instruction.operands[1])?;
-                self.b.store(value, pointer, volatile);
+                // A debugger reads a declared variable from its cell at any time: every store to
+                // it stays, in order, as one to a volatile does. The optimiser asks nothing else.
+                let observed = self.declared_place(&instruction.operands[0]);
+                self.b.store(value, pointer, volatile || observed);
                 self.tagged(tag);
                 self.stated_access(&instruction.operands[0], false);
             }
@@ -2097,6 +2116,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     (Type::Pointer(_), Type::Pointer(_)) => self.b.cast(CastOp::AddrSpaceCast, pointer, ty, ""),
                     (_, other) => return Err(format!("an address as {other:?}")),
                 };
+                if let (true, Some(&result)) = (self.declared_place(&instruction.operands[0]), instruction.results.first()) {
+                    self.declared_addresses.insert(result);
+                }
                 if let (Operand::PlaceRef(one), Some(&result)) = (&instruction.operands[0], instruction.results.first()) {
                     let place = self.places[&one.place];
                     self.addresses.insert(result, place.extent.unwrap_or(self.tables.types[&place.r#type].width));

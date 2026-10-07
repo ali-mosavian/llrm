@@ -52,6 +52,12 @@ Writers are target-blind: `llrm-omf::codeview` writes $$SYMBOLS, $$TYPES and LIN
 Enums, typedefs, qualifiers, block scopes, register and listed locations, columns and checksums are in
 the model; a frontend fills them as it learns to, and a writer that cannot say one refuses it by name.
 
+With `-g`, a variable the program declares is read from its frame cell at any line, so each store to it
+is lowered volatile (`hir/mir.rs`, `declared_place`) and no pass drops, merges or moves one. At
+-O>0 that costs code a gcc or clang `-g` build does not (they note each value's place with `dbg.value`
+and leave the code alone); without `-g` nothing changes. The lift is `dbg.value` plus the allocator's
+ranges as location lists, which makes the stores unnecessary. Tracking issue: see the PR.
+
 ## Moves
 
 | from | to |
