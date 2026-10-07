@@ -106,6 +106,7 @@ fn synthetic() -> (llrm_object::Object, String) {
         module: false,
         variables: vec![variable("e", 1, Location::Frame { disp: -2 }), variable("r", 0, Location::Register("si".into()))],
         blocks: vec![Block { ranges: vec![Range { section: 0, offset: 14, length: 8 }], variables: vec![variable("k", 2, Location::Frame { disp: -4 })], blocks: Vec::new() }],
+        frame: Vec::new(),
     };
     let info = Info {
         language: Language::C,
