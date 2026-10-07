@@ -436,6 +436,9 @@ fn _recurrences(context: &Context, layout: &DataLayout, function: &Function, out
         return BTreeSet::new();
     }
     let analysed = Unit::within(context, layout, function, outer);
+    // Found once, for the body as the rounds before left it, not for each loop's recurrences.
+    let registers = consts::known(&analysed, None, None, None);
+    let analysed = analysed.with_registers(&registers);
     analysed.shape().loops.iter().flat_map(|one| induction::advances(&analysed, one).into_keys()).collect()
 }
 
@@ -978,8 +981,10 @@ fn _redundant_masks(context: &mut Context, layout: &DataLayout, function: &mut F
         return false;
     }
     let unit = Unit::within(context, layout, function, outer);
+    // The body is as the rounds before left it: found once, for its ranges and for the proofs beside them.
+    let registers = consts::known(&unit, None, None, None);
+    let unit = unit.with_registers(&registers);
     let scoped = ranges::scoped(&unit).unwrap_or_default();
-    let registers = unit.registers().into_owned();
     let made: Vec<(InstId, Operand)> = candidates
         .into_iter()
         .filter_map(|(block, inst, value, mask, width)| {
@@ -1015,8 +1020,10 @@ fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mu
         return false;
     }
     let unit = Unit::within(context, layout, function, outer);
+    // The body is as the rounds before left it: found once, for its ranges and for the proofs beside them.
+    let registers = consts::known(&unit, None, None, None);
+    let unit = unit.with_registers(&registers);
     let scoped = ranges::scoped(&unit).unwrap_or_default();
-    let registers = unit.registers().into_owned();
     let made: Vec<(InstId, BinaryOp)> = candidates
         .into_iter()
         .filter_map(|(block, inst, width)| {

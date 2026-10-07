@@ -101,7 +101,7 @@ pub fn expanded(context: &Context, layout: &DataLayout, function: &mut Function,
     let graph = cfg::graph(function);
     let mut found = None;
     for loop_ in cfg::Shape::of(function).loops {
-        let unit = memory::Unit::within(context, layout, function, analyses.outer());
+        let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_registers(&facts);
         let Some(shape) = _shape(&unit, &graph, &loop_) else {
             continue;
         };

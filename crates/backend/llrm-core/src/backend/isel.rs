@@ -452,6 +452,9 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
     let layout = DataLayout::parse(layout).map_err(Unselected)?;
     let convention = convention(module, &layout, global, arch)?;
     let unit = Unit::of(module, &layout, function).with_spaces(arch.layout().spaces.roles);
+    // The body is not changed while it is selected: what is known of it without memory is found once.
+    let registers = llrm_analysis::consts::known(&unit, None, None, None);
+    let unit = unit.with_registers(&registers);
     let exact = ranges::exact_offsets(&unit).map_err(Unselected)?;
     let wide = cpu.dword_address_form();
     let secondary = wide.filter(|form| form.before_spill(&cpu.operations));
@@ -493,6 +496,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         compiled,
         segments,
         exact,
+        registers,
         exact_sums: BTreeSet::new(),
         secondary,
         wide,
@@ -651,6 +655,8 @@ struct Selector<'m, 'c, 'p> {
     segments: &'c Segments,
     /// Index values every access names exactly at any wider width.
     exact: BTreeSet<ValueId>,
+    /// What is known of the function without memory: found once, for the body as selected.
+    registers: IndexMap<ValueId, llrm_analysis::consts::Known>,
     /// The registers indexing cells `exact` proves: each such cell is
     /// `Mem::exact`, for `exactaddress`.
     exact_sums: BTreeSet<u32>,
@@ -1021,7 +1027,7 @@ impl Selector<'_, '_, '_> {
 
     /// Each loop's header and constant trips, as `induction` proves them.
     fn trip_counts(&self, block_at: &IndexMap<BlockId, i64>) -> Vec<(i64, i64)> {
-        let unit = Unit::of(self.module, &self.layout, self.function).with_spaces(self.spaces);
+        let unit = Unit::of(self.module, &self.layout, self.function).with_spaces(self.spaces).with_registers(&self.registers);
         let facts = unit.registers();
         let mut counts: Vec<(i64, i64)> = unit
             .shape()

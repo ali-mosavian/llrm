@@ -41,10 +41,22 @@ impl FunctionPass for IndVars {
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        let evaluated = crate::loopexit::evaluated(unit.context, unit.layout, unit.function, &outer).unwrap_or_else(|error| panic!("indvars: {error}"));
-        let folded = crate::exitfold::folded(unit.context, unit.layout, unit.function, &outer);
+        // What is known without memory is the manager's until a step changes the body.
+        let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
+        let mut standing = llrm_analysis::memory::Standing::held(&held);
+        let evaluated = crate::loopexit::evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing).unwrap_or_else(|error| panic!("indvars: {error}"));
+        if evaluated {
+            standing.changed();
+        }
+        let folded = crate::exitfold::folded_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        if folded {
+            standing.changed();
+        }
         let sunk = crate::exitsink::sunk(unit.function);
-        let widened = widened(unit.context, unit.layout, unit.function, &outer);
+        if sunk {
+            standing.changed();
+        }
+        let widened = widened_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
         let rewound = rewound(unit.context, unit.layout, unit.function, analyses, crate::profit::registers(&outer).registers, &crate::profit::costs(&outer));
         let dead = (sunk || rewound || widened) && dead::dead(unit.context, outer.callees(), unit.function);
         if evaluated || folded {
@@ -288,11 +300,23 @@ mod tests;
 /// what else reads the narrow one reads its low part. Every counter widened;
 /// whether any was.
 pub fn widened(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &passes::Outer) -> bool {
+    widened_with(context, layout, function, outer, &mut llrm_analysis::memory::Standing::underived())
+}
+
+/// `widened`, what is known of the body without memory given as `standing` says: derived once for each state of the
+/// body, not once for each loop.
+pub fn widened_with(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &passes::Outer, standing: &mut llrm_analysis::memory::Standing) -> bool {
     let mut changed = false;
     'again: loop {
         for loop_ in cfg::Shape::of(function).loops {
-            if let Some(found) = _find(&llrm_analysis::memory::Unit::within(context, layout, function, outer), &loop_) {
+            let found = {
+                let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer);
+                let facts = standing.of(&unit);
+                _find(&unit.with_registers(facts), &loop_)
+            };
+            if let Some(found) = found {
                 _widen(context, function, &found);
+                standing.changed();
                 changed = true;
                 continue 'again;
             }

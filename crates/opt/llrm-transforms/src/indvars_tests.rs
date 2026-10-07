@@ -223,3 +223,56 @@ fn a_counter_from_a_start_the_loop_does_not_define_is_widened() {
     assert!(after.contains("icmp ult i32 %widen.iv") && after.contains("zext i16 %s to i32"), "{after}");
     assert!(!after.contains("zext i16 %i to i32"), "{after}");
 }
+
+/// Each loop asked what is known of the body without memory and derived it again: `widened` over a body of
+/// loops derived it once for each (#560). It derives it once for the body.
+#[test]
+fn what_is_known_of_a_body_is_derived_once_for_all_its_loops() {
+    let text = "define i32 @f(i32 %n) {
+b0:
+  br label %h1
+
+h1:
+  %i1 = phi i32 [ 0, %b0 ], [ %x1, %l1 ]
+  %g1 = icmp ult i32 %i1, %n
+  br i1 %g1, label %l1, label %p2
+
+l1:
+  %x1 = add i32 %i1, 1
+  br label %h1
+
+p2:
+  br label %h2
+
+h2:
+  %i2 = phi i32 [ 0, %p2 ], [ %x2, %l2 ]
+  %g2 = icmp ult i32 %i2, %n
+  br i1 %g2, label %l2, label %p3
+
+l2:
+  %x2 = add i32 %i2, 1
+  br label %h2
+
+p3:
+  br label %h3
+
+h3:
+  %i3 = phi i32 [ 0, %p3 ], [ %x3, %l3 ]
+  %g3 = icmp ult i32 %i3, %n
+  br i1 %g3, label %l3, label %done
+
+l3:
+  %x3 = add i32 %i3, 1
+  br label %h3
+
+done:
+  ret i32 0
+}
+";
+    let mut module = parsed(text);
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let before = llrm_analysis::consts::register_derivations();
+    assert!(!super::widened(context, &layout, function, &outer), "nothing to widen");
+    assert!(llrm_analysis::consts::register_derivations() - before <= 1, "{} derivations for three loops", llrm_analysis::consts::register_derivations() - before);
+}
