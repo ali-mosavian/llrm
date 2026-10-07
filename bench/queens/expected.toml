@@ -1,4 +1,4 @@
-reason = "integer spiller reads a phi's value from the cell the program stores it to (storedhomes): frames bas -0.6%, nbody_fixed -0.7% ins and -7% bytes, queens bas -2.7%"
+reason = "integer spiller reads a phi's value from the cell the program stores it to: frames bas -0.6%, nbody_fixed -7% bytes, queens bas -2.7%"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -7,7 +7,7 @@ memory_operands = 104026
 code_bytes = 434
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.3183
+kernel_ms = 4.3181
 
 [bas.Os]
 instructions = 327333
@@ -15,7 +15,7 @@ memory_operands = 104039
 code_bytes = 408
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.3736
+kernel_ms = 4.373
 
 [c.O2]
 instructions = 230917
@@ -31,7 +31,7 @@ memory_operands = 39902
 code_bytes = 199
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.1202
+kernel_ms = 3.12
 
 [nib.O2]
 instructions = 231273
@@ -47,7 +47,7 @@ memory_operands = 75888
 code_bytes = 302
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.6348
+kernel_ms = 3.6345
 
 [ow.O2]
 instructions = 217955
