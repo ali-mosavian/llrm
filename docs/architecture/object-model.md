@@ -120,3 +120,13 @@ symbol is not in the symbol table. Known gaps: no `LC_BUILD_VERSION` (the platfo
 told), a 32-bit absolute address is `UNSIGNED` and needs a non-PIE link, and arm64 needs local
 symbols (`r_extern=1` only) and `ARM64_RELOC_ADDEND`, so `llrm-macho` takes a `Machine` as `llrm-elf`
 does when the first arm64 target exists.
+
+## Call frame information
+
+`Function.frame` is a table of rows: from an offset into the function, the frame address is `cfa_offset` past
+`cfa_register`, and each register in `saved` is in memory at that address plus its offset. The backend reads it
+from the code it emitted (`backend/cfi.rs`: the code is decoded and followed along every path, so a frame register,
+none, and registers saved where first needed are all the code's own), with the bytes a callee pops after a call from
+the compiler's record of the call (`Mark::Pops`). A function whose paths reach one place at two stack depths has no
+rows. DWARF writes them as `.debug_frame`; CodeView and Turbo Debugger have no such table. The return address's
+column is the target's register of class `pc`.

@@ -20,20 +20,29 @@ impl Builder {
 
     /// The type `kind` and the rest describe, made once.
     fn intern(&mut self, kind: DebugKind, name: &str, target: Option<i64>, size: i64, reach: DebugReach, members: Vec<DebugMember>) -> i64 {
+        self.intern_spelled(kind, name, target, size, reach, members, None)
+    }
+
+    fn intern_spelled(&mut self, kind: DebugKind, name: &str, target: Option<i64>, size: i64, reach: DebugReach, members: Vec<DebugMember>, spelling: Option<&str>) -> i64 {
         let types = &mut self.debug.types;
         let same = |one: &&DebugType| {
-            one.kind == kind && one.name == name && one.target == target && one.size == size && one.reach == reach && one.members == members
+            one.kind == kind && one.name == name && one.target == target && one.size == size && one.reach == reach && one.members == members && one.spelling.as_deref() == spelling
         };
         if let Some(one) = types.iter().find(same) {
             return one.id;
         }
         let id = types.len() as i64 + 1;
-        types.push(DebugType { id, kind, name: name.to_owned(), target, size, reach, members });
+        types.push(DebugType { id, kind, name: name.to_owned(), target, size, reach, members, spelling: spelling.map(str::to_owned) });
         id
     }
 
     pub fn scalar(&mut self, scalar: DebugScalar) -> i64 {
         self.intern(DebugKind::Scalar, scalar.value(), None, 0, DebugReach::Near, Vec::new())
+    }
+
+    /// `scalar` as the source spells it (`unsigned long`): one type for each spelling, though two share a width.
+    pub fn spelled_scalar(&mut self, scalar: DebugScalar, spelling: &str) -> i64 {
+        self.intern_spelled(DebugKind::Scalar, scalar.value(), None, 0, DebugReach::Near, Vec::new(), Some(spelling))
     }
 
     /// BASIC's `STRING * length`.
@@ -66,7 +75,7 @@ impl Builder {
     /// that read alike are two until each is defined.
     pub fn declare_aggregate(&mut self, kind: DebugKind, name: &str, bytes: i64) -> i64 {
         let id = self.debug.types.len() as i64 + 1;
-        self.debug.types.push(DebugType { id, kind, name: name.to_owned(), target: None, size: bytes, reach: DebugReach::Near, members: Vec::new() });
+        self.debug.types.push(DebugType { id, kind, name: name.to_owned(), target: None, size: bytes, reach: DebugReach::Near, members: Vec::new(), spelling: None });
         id
     }
 
@@ -162,6 +171,17 @@ impl Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `int` and `long` are both four bytes and signed on a 32-bit target, but two types: the source's spelling is part of
+    /// a scalar's identity, and is shared by every use of it.
+    #[test]
+    fn scalars_of_one_width_with_two_spellings_are_two_types() {
+        let mut builder = Builder::default();
+        let (int, long, again) = (builder.spelled_scalar(DebugScalar::Int32, "int"), builder.spelled_scalar(DebugScalar::Int32, "long"), builder.spelled_scalar(DebugScalar::Int32, "int"));
+        assert_ne!(int, long);
+        assert_eq!(int, again);
+        assert_ne!(int, builder.scalar(DebugScalar::Int32), "no spelling is its own type");
+    }
 
     /// Two structs of one name and size that are declared are two until each is defined, and one
     /// that holds a pointer to itself names its own id: `structure` made it after its members, so

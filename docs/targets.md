@@ -125,6 +125,12 @@ i16 pairs), not a refactor, and is not part of this task.
 
 - **m16**: real mode. Segments, selectors, far calls, 16-bit addressing
   (`bx/bp/si/di`), dword ops under a 66h prefix.
+  Its default convention is `cdecl16`, Borland's. `-mabi=watcom` makes it Open Watcom's register
+  convention (`wcc -ecw`, `watcall16`): arguments in AX, DX, BX, CX, a long or a far pointer in DX:AX or CX:BX,
+  the first that fits no register and all after it on the stack, which the callee pops (`retf n`); a struct
+  result larger than a dword through the near address in SI, returned in AX. `-mabi=ia16` makes it
+  gcc-ia16's (`ia16`): the stack convention with ES kept and a struct result through a near first argument.
+  Both are read from the compilers' own output (`calling.toml` says so).
 - **m32**: CS = DS = SS, flat, base 0, 4 GB. One pointer type, `p:32:32`. No
   selectors. ES = DS is a fact the description states, not an assumption: string
   ops read it or set ES. FS and GS are never assumed (TLS). Any GPR is a base,

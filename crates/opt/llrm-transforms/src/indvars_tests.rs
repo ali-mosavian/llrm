@@ -136,7 +136,7 @@ fn rewinding_the_corpus_loses_no_trip_count() {
     for (name, mut module) in llrm_analysis::testing::corpus() {
         // Emitted counters live in allocas until promoted.
         managed(&mut module, crate::promote::Promote);
-        managed(&mut module, crate::lsr::Lsr);
+        managed(&mut module, crate::lsr::Lsr::default());
         let (layout, outer) = (layout(&module), Outer::of(&module, None));
         let analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
         let names = crate::testing::bodies(&module).into_iter().filter_map(|id| module.global(id).name.clone()).collect::<Vec<_>>();

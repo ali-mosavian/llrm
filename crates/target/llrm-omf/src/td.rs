@@ -97,6 +97,8 @@ struct Types<'a> {
     info: &'a Info,
     of: Vec<Option<u16>>,
     records: Vec<Rc<Record>>,
+    /// Each record's name, size, kind and tail (its index apart), by the index it has.
+    shapes: Vec<((String, u16, u8, Vec<u8>), u16)>,
     next: u16,
 }
 
@@ -108,7 +110,7 @@ impl Types<'_> {
         }
         let info = self.info;
         match &info.types[id] {
-            Type::Scalar(one) => scalar(*one),
+            Type::Scalar(one) | Type::Basic { scalar: one, .. } => scalar(*one),
             // Const and volatile are not in the records; a typedef is a name, set by `names`.
             Type::Qualified { target, .. } | Type::Typedef { target, .. } => self.code(*target),
             one => {
@@ -116,6 +118,18 @@ impl Types<'_> {
                 self.next += 1;
                 self.of[id] = Some(at);
                 let (name, size, tid, tail) = self.composite(one)?;
+                // The same record under another index, with nothing numbered since this one: two model types that
+                // read alike (a pointer to `int` and one to `long`) are one.
+                let key = (name.to_owned(), size, tid, tail.clone());
+                if let Some((_, same)) = self.shapes.iter().find(|(shape, _)| *shape == key) {
+                    if self.next == at + 1 {
+                        let same = *same;
+                        self.next = at;
+                        self.of[id] = Some(same);
+                        return Ok(same);
+                    }
+                }
+                self.shapes.push((key, at));
                 let mut data = [index(at)?, pascal(name)?, size.to_le_bytes().to_vec(), vec![tid]].concat();
                 data.extend(tail);
                 self.records.push(comment(TYPE_DEFINITION, data));
@@ -177,7 +191,7 @@ impl Types<'_> {
             Type::Enum { name, .. } => return refused(format!("enum {name} is not written yet")),
             Type::Reference(_) => return refused("a BASIC reference has no type here"),
             Type::FixedString(_) => return refused("a BASIC STRING * n has no type here"),
-            Type::Scalar(_) | Type::Qualified { .. } | Type::Typedef { .. } => unreachable!("handled by `code`"),
+            Type::Scalar(_) | Type::Basic { .. } | Type::Qualified { .. } | Type::Typedef { .. } => unreachable!("handled by `code`"),
         })
     }
 }
@@ -318,7 +332,7 @@ pub fn records(object: &Object, info: &Info) -> Result<Debug, Error> {
     if info.language != model::Language::C {
         return refused(format!("only C's information is written, not {:?}'s", info.language));
     }
-    let mut builder = Builder { object, info, types: Types { info, of: vec![None; info.types.len()], records: Vec::new(), next: FIRST_INDEX } };
+    let mut builder = Builder { object, info, types: Types { info, of: vec![None; info.types.len()], records: Vec::new(), shapes: Vec::new(), next: FIRST_INDEX } };
     // Each function's records, in the order of its code.
     let mut functions: Vec<&Function> = info.functions.iter().collect();
     functions.sort_by_key(|one| one.ranges.first().map(|range| (range.section, range.offset)));
@@ -415,6 +429,7 @@ mod tests {
             module: false,
             variables,
             blocks: Vec::new(),
+            frame: Vec::new(),
         };
         let mut made = Info {
             format: Format::TurboDebugger,
@@ -558,5 +573,21 @@ mod tests {
         // A register Turbo Debugger has no number for is refused by name.
         let wide = object(vec![int()], vec![in_register("w", "eax")], |_| {});
         assert!(write::write(&wide).unwrap_err().to_string().contains("w is in register eax"));
+    }
+
+    /// Two types of the model that read alike, a pointer to `int` and one to `long` (the source spells each, so they
+    /// are two), are one record: Turbo C++ writes one, and a second only moved every later index.
+    #[test]
+    fn pointers_to_scalars_of_two_spellings_are_one_record() {
+        let spelled = |name: &str| Type::Basic { name: name.into(), scalar: Scalar::Int { bytes: 2, signed: true } };
+        let pointer = |target| Type::Pointer { target, bytes: 2, reach: llrm_object::debug::Reach::Near };
+        let made = object(
+            vec![spelled("int"), spelled("short"), pointer(0), pointer(1)],
+            vec![variable("p", 2, Kind::Parameter, Location::Frame { disp: 6 }), variable("q", 3, Kind::Parameter, Location::Frame { disp: 8 })],
+            |_| {},
+        );
+        let definitions = comments(&made).into_iter().filter(|(class, _)| *class == TYPE_DEFINITION).count();
+        // The pointer, and the function's own type.
+        assert_eq!(definitions, 2);
     }
 }

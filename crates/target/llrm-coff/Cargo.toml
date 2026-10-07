@@ -7,3 +7,4 @@ description = "llrm's COFF object container: sections, symbols and relocations f
 
 [dependencies]
 llrm-object = { workspace = true }
+llrm-support = { workspace = true }
