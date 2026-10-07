@@ -60,6 +60,7 @@ fn object() -> Object {
             variable("n", 7, Kind::Local, Location::Frame { disp: -52 }),
         ],
         blocks: vec![llrm_object::debug::Block { ranges: vec![Range { section: 0, offset: 4, length: 8 }], variables: vec![variable("t", 0, Kind::Local, Location::Frame { disp: -56 })], blocks: Vec::new() }],
+        frame: Vec::new(),
     };
     let info = Info {
         frame_register: "ebp".into(),

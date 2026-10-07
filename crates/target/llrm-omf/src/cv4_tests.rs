@@ -18,7 +18,7 @@ fn variable(name: &str, r#type: usize, kind: Kind, location: Location) -> Variab
 fn object(arch: Arch, types: Vec<T>, variables: Vec<Variable>) -> Object {
     let text = Section { name: "_TEXT".into(), role: Role::Text, near: true, align: 1, image: vec![0x90; 0x16], spans: vec![[0, 0x16]], relocs: Vec::new() };
     let range = Range { section: 0, offset: 0, length: 0x16 };
-    let function = Function { name: "f".into(), symbol: 0, r#type: types.len() - 1, ranges: vec![range], body: Some((6, 0x16)), far: false, module: false, variables, blocks: Vec::new() };
+    let function = Function { name: "f".into(), symbol: 0, r#type: types.len() - 1, ranges: vec![range], body: Some((6, 0x16)), far: false, module: false, variables, blocks: Vec::new(), frame: Vec::new() };
     let info = Info { language: Language::C, frame_register: if arch == Arch::I8086 { "bp" } else { "ebp" }.into(), code: vec![range], types, functions: vec![function], ..Info::default() };
     Object {
         name: "t.obj".into(),
@@ -351,4 +351,21 @@ fn a_pointer_to_a_function_points_to_a_procedure_called_as_far_as_the_pointer_re
     let (far, near) = (call(1).expect("a far procedure"), call(0).expect("a near procedure"));
     let target = |reach: u16| table.iter().find(|(leaf, data)| *leaf == 0x0002 && u16::from_le_bytes([data[0], data[1]]) == reach).map(|(_, data)| u16::from_le_bytes([data[2], data[3]]));
     assert_eq!((target(1), target(0)), (Some(far), Some(near)), "a far pointer to the far procedure, a near one to the near");
+}
+
+/// Two types of the model that read alike, an array of `int` and one of `long` (the source spells each, so they are
+/// two), are one record: a second only grew the table, and every later index with it.
+#[test]
+fn arrays_of_scalars_of_two_spellings_are_one_record() {
+    let spelled = |name: &str| T::Basic { name: name.into(), scalar: S::Int { bytes: 2, signed: true } };
+    let array = |element| T::Array { element, bytes: Some(8) };
+    let made = object(
+        Arch::I8086,
+        vec![spelled("int"), spelled("short"), array(0), array(1), T::Procedure { result: None, parameters: Vec::new(), convention: None }],
+        vec![variable("a", 2, Kind::Local, Location::Frame { disp: -8 }), variable("b", 3, Kind::Local, Location::Frame { disp: -16 })],
+    );
+    let (symbols, types, _) = written(&made);
+    assert_eq!(types.iter().filter(|(leaf, _)| *leaf == 0x0003).count(), 1, "one LF_ARRAY");
+    let bprels: Vec<&[u8]> = symbols.iter().filter(|(code, _)| *code == 0x0100).map(|(_, data)| &data[2..4]).collect();
+    assert_eq!(bprels[0], bprels[1], "both locals name it");
 }

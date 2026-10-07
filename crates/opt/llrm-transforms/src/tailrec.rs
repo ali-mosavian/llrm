@@ -128,7 +128,7 @@ fn by_copy(function: &Function) -> bool {
 fn returns_twice(context: &Context, globals: &[GlobalValue], function: &Function) -> bool {
     function.walk().any(|(_, inst)| {
         let Opcode::Call(info) = &function.instruction(inst).opcode else { return false };
-        memory::has(&info.attrs, "returns_twice") || memory::callee(context, function, inst).and_then(|one| globals[one.0 as usize].function()).is_some_and(|one| memory::has(&one.attrs, "returns_twice"))
+        memory::has(&info.attrs, "returns_twice") || memory::callee(context, function, inst).and_then(|one| globals.get(one.0 as usize)?.function()).is_some_and(|one| memory::has(&one.attrs, "returns_twice"))
     })
 }
 

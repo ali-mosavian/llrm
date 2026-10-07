@@ -328,6 +328,12 @@ impl Alive {
         Self { order: Vec::new(), at: Default::default() }
     }
 
+    /// Nothing alive, the room kept for the next block.
+    fn clear(&mut self) {
+        self.order.clear();
+        self.at.clear();
+    }
+
     fn insert_if_absent(&mut self, value: u32, end: i64) {
         if !self.at.contains_key(&value) {
             self.at.insert(value, self.order.len());
@@ -366,6 +372,9 @@ fn _walked_at(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bool, give
     let mut pieces: IndexMap<u32, Vec<Segment>> = IndexMap::default();
     let mut starts: Vec<i64> = Vec::new();
     let (mut defined, mut used): (Vec<u32>, Vec<u32>) = (Vec::new(), Vec::new());
+    // One for every block, emptied at its start: a table grown anew for each block was a rehash of its own.
+    let mut alive = Alive::new();
+    let mut written: crate::support::hash::HashSet<u32> = Default::default();
     for (block_index, block) in body.blocks.iter().enumerate() {
         let (first, last) = index.span[&block.at];
         // Each instruction's slot: the block's first after its phis' slot, then two for each that is no mark.
@@ -381,11 +390,11 @@ fn _walked_at(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bool, give
                 }
             }
         }
-        let mut alive = Alive::new();
+        alive.clear();
         for one in live.leaving(block.at).filter(|one| keep(*one)) {
             alive.insert_if_absent(one, last);
         }
-        let mut written: crate::support::hash::HashSet<u32> = Default::default();
+        written.clear();
         let mut position = block.insns.len() as i64 - 1;
         while position >= 0 {
             let at = position as usize;

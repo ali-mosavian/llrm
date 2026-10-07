@@ -239,7 +239,8 @@ pub fn report_times() {
         }
         let mut functions = clock.functions;
         functions.sort_by_key(|(_, steps)| std::cmp::Reverse(steps.iter().map(|(_, own)| *own).sum::<Duration>()));
-        for (function, mut steps) in functions.into_iter().take(10) {
+        let shown = std::env::var("LLRM_TIME_FUNCS").ok().and_then(|one| one.parse().ok()).unwrap_or(10);
+        for (function, mut steps) in functions.into_iter().take(shown) {
             steps.sort_by_key(|(_, own)| std::cmp::Reverse(*own));
             let all: Duration = steps.iter().map(|(_, own)| *own).sum();
             let worst: Vec<String> = steps.iter().take(4).map(|(name, own)| format!("{name} {:.1}", ms(*own))).collect();
