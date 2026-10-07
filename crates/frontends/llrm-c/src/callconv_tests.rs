@@ -292,18 +292,18 @@ fn test_a_variadic_byte_is_promoted_by_its_signedness() {
     assert_eq!(stack[2..], [Byte::Global("_s".into(), 0), sign, Byte::Global("_u".into(), 0), Byte::Const(0)]);
 }
 
-/// A variadic function taking a struct parameter's address got the address
-/// of the struct's local copy, so STDARG.H's `va_start` stepped from there
-/// into the frame; it is refused rather than miscompiled.
+/// A variadic function taking a struct parameter's address got the address of the struct's local copy, so STDARG.H's `va_start`
+/// stepped from there into the frame: it was refused. The struct lives in its words' slots now, as a scalar parameter does, and the
+/// address steps into the arguments after it (`tests/run/c/variadic.c` runs it).
 // It records C through wccq, which only the toolchain feature builds.
 #[cfg(feature = "toolchain")]
 #[test]
-fn test_a_variadic_struct_parameter_address_is_refused() {
+fn test_a_variadic_struct_parameter_address_is_in_its_slots() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("probe.c");
     std::fs::write(&source, "typedef struct { char b[3]; } S3;\nint g;\nvoid far v(S3 s, ...) { char *p = (char *)&s; g = p[4]; }\n").unwrap();
     let stream = crate::compile::recorded(&source, &[], false, &[]).unwrap();
     let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
     let built = crate::compile::selected(&stream, "probe", None, &llrm_driver::m16_options(machine));
-    assert!(format!("{:?}", built.err()).contains("the address of a struct parameter"));
+    assert!(built.is_ok(), "{:?}", built.err());
 }

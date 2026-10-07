@@ -30,6 +30,13 @@ int after_struct(struct big pa, int pb, ...)
     return pb + pa.i[5] * 10 + last * 100;
 }
 
+/* The address of a struct parameter steps into the arguments after it, as STDARG.H's va_start does. */
+int walk(struct big pa, ...)
+{
+    char *p = (char *)&pa + sizeof pa;
+    return *(int *)p + pa.i[0];
+}
+
 int main(void)
 {
     struct big g;
@@ -39,5 +46,6 @@ int main(void)
     report(sum(4, 1, 2, 3, 4));
     report(sum(0));
     report(after_struct(g, 7, 5));
+    report(walk(g, 40));
     return 0;
 }
