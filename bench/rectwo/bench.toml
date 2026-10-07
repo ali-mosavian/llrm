@@ -1,0 +1,5 @@
+description = "Two calls, nothing between: lattice paths of a 9x9 grid"
+repetitions = 1
+
+[region]
+c = "bench_rectwo"

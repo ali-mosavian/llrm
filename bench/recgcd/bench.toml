@@ -1,0 +1,5 @@
+description = "Euclid, a tail call, 600 gcds"
+repetitions = 1
+
+[region]
+c = "bench_recgcd"

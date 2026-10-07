@@ -1,0 +1,5 @@
+description = "A tail call carrying two doubles: 1000 steps"
+repetitions = 1
+
+[region]
+c = "bench_recfloat"

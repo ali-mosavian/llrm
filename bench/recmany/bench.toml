@@ -1,0 +1,5 @@
+description = "Six values carried round the recursion, more than the registers kept across a call"
+repetitions = 1
+
+[region]
+c = "bench_recmany"
