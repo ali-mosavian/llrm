@@ -103,7 +103,8 @@ fn spelling(section: &Section) -> Result<(&'static str, u32, u64), Unsupported> 
         Role::Data => (".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE),
         Role::Bss => (".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE),
         Role::Stack => return Err(unsupported(format!("{}: an OMF stack segment has no ELF section", section.name))),
-        Role::Debug => return Err(unsupported(format!("{}: a debug section is its format's writer's", section.name))),
+        // Named as the DWARF writer names it.
+        Role::Debug => (".debug", SHT_PROGBITS, 0),
     })
 }
 
@@ -131,9 +132,15 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     if object.arch != M::ARCH {
         return Err(unsupported(format!("{:?} is not the {:?} this ELF writer is for", object.arch, M::ARCH)));
     }
-    if object.debug.is_some() {
-        return Err(unsupported("-g: this writer does not write debug information yet"));
-    }
+    // DWARF's sections are this writer's, made from the object's debug information.
+    let expanded;
+    let object = match &object.debug {
+        Some(info) => {
+            expanded = llrm_dwarf::expanded(object, info)?;
+            &expanded
+        }
+        None => object,
+    };
     if !object.omf_groups.is_empty() {
         return Err(unsupported("a group of segments is OMF's"));
     }
@@ -144,8 +151,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     // A role's first section is `.text`, `.data`...; a further one is told apart by its own name.
     let mut section_names: Vec<String> = Vec::new();
     for (index, section) in object.sections.iter().enumerate() {
-        let taken = spelled[..index].iter().any(|one| one.0 == spelled[index].0);
-        section_names.push(if taken { format!("{}.{}", spelled[index].0, section.name) } else { spelled[index].0.to_owned() });
+        let taken = section.role != Role::Debug && spelled[..index].iter().any(|one| one.0 == spelled[index].0);
+        section_names.push(if section.role == Role::Debug { section.name.clone() } else if taken { format!("{}.{}", spelled[index].0, section.name) } else { spelled[index].0.to_owned() });
     }
 
     // Symbols: null, the source's file, one section symbol per section, then the globals.
@@ -203,6 +210,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             let Relocation { kind, width, from } = M::relocation(one.kind)?;
             let (symbol, own) = match one.target {
                 Target::OmfGroup(_) => return Err(unsupported("a reference to a group is OMF's")),
+                // The section's own symbol.
+                Target::Section(index) => (2 + index as u32, 0),
                 Target::Symbol(index) => match (elf_symbol[index], object.symbols[index].definition) {
                     (Some(symbol), _) => (symbol, 0),
                     // A local symbol is its section's symbol and its offset.

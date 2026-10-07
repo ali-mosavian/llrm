@@ -127,6 +127,7 @@ fn resolved(object: &Object, extern_index: &[usize], section: &Section, at: usiz
     let in_group = |section: usize| object.omf_groups.iter().position(|group| group.members.contains(&section));
     let (method, datum, group) = match reloc.target {
         Target::OmfGroup(group) => (GROUP_TARGET, group as i64 + 1, Some(group)),
+        Target::Section(section) => (SEGMENT_TARGET, section as i64 + 1, in_group(section)),
         Target::Symbol(symbol) => match (&object.symbols[symbol], object.symbols[symbol].definition) {
             (_, Definition::Defined { section, .. }) => (SEGMENT_TARGET, section as i64 + 1, in_group(section)),
             (named, Definition::Undefined) => (EXTERNAL_TARGET, extern_index[symbol] as i64 + 1, named.group),
@@ -137,7 +138,7 @@ fn resolved(object: &Object, extern_index: &[usize], section: &Section, at: usiz
             Definition::Defined { offset, .. } => Some(offset as i64),
             Definition::Undefined => None,
         },
-        Target::OmfGroup(_) => None,
+        Target::OmfGroup(_) | Target::Section(_) => None,
     };
     let own = if matches!(loc, OFFSET | POINTER | OFFSET32) && !relative { local.unwrap_or(0) } else { 0 };
     let subrecord = match group {

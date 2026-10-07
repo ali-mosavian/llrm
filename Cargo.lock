@@ -311,9 +311,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-dwarf"
+version = "0.1.0"
+dependencies = [
+ "llrm-elf32",
+ "llrm-elf64",
+ "llrm-macho",
+ "llrm-object",
+ "tempfile",
+]
+
+[[package]]
 name = "llrm-elf"
 version = "0.1.0"
 dependencies = [
+ "llrm-dwarf",
  "llrm-object",
 ]
 
@@ -357,6 +369,7 @@ dependencies = [
 name = "llrm-macho"
 version = "0.1.0"
 dependencies = [
+ "llrm-dwarf",
  "llrm-object",
  "tempfile",
 ]

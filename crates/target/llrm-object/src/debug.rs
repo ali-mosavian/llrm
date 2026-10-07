@@ -31,8 +31,31 @@ pub struct Register {
     pub codeview: Option<u16>,
 }
 
+/// The debug format a writer is asked for.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Format {
+    /// The object format's own: CodeView for OMF, DWARF for ELF and Mach-O.
+    #[default]
+    Default,
+    CodeView,
+    Dwarf { version: u16 },
+    TurboDebugger,
+}
+
+/// The source language, which a debugger reads values by.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Language {
+    #[default]
+    Unknown,
+    C,
+    Basic,
+    Nib,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Info {
+    pub format: Format,
+    pub language: Language,
     pub producer: Producer,
     /// The register a [`Location::Frame`] is relative to.
     pub frame_register: String,
