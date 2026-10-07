@@ -128,7 +128,9 @@ fn a_dynamic_array_in_a_nested_loop() {
 fn accesses(module: &Module) -> Vec<(InstId, MemRef)> {
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("parses");
     let function = module.global(module.named("main").expect("a main")).function().expect("a function");
-    let references = annotated(&Unit::of(module, &layout, function)).expect("annotates");
+    let unit = Unit::of(module, &layout, function);
+    let registers = llrm_analysis::consts::known(&unit, None, None, None);
+    let references = annotated(&unit.with_registers(&registers)).expect("annotates");
     references.into_iter().collect()
 }
 

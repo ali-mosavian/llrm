@@ -125,7 +125,7 @@ fn a_rewound_loop_keeps_its_count_for_rotate() {
 fn rewinding_the_corpus_loses_no_trip_count() {
     let later = OperationCosts { add: 1, r#move: 1, load: 1, store: 1, memory_update: 1, ..OperationCosts::default() };
     let counts = |context: &Context, layout: &DataLayout, function: &Function, outer: &Outer| {
-        let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer);
+        let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(context, layout, function, outer));
         let facts = llrm_analysis::consts::known(&unit, None, None, None);
         loops::loops(&cfg::graph(function), function.entry().map(cfg::id))
             .into_iter()

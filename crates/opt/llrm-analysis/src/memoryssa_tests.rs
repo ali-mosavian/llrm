@@ -25,7 +25,7 @@ impl Parsed {
     }
 
     fn unit(&self) -> Unit<'_> {
-        Unit::of(&self.module, &self.layout, function(&self.module, "f"))
+        crate::testing::with_registers(Unit::of(&self.module, &self.layout, function(&self.module, "f")))
     }
 }
 
@@ -545,7 +545,7 @@ b0:
 "
     ));
     let unit = parsed.unit();
-    let seth = Procedure::of(Unit::of(&parsed.module, &parsed.layout, function(&parsed.module, "seth")));
+    let seth = Procedure::of(crate::testing::with_registers(Unit::of(&parsed.module, &parsed.layout, function(&parsed.module, "seth"))));
     let known = alias::summaries(&IndexMap::from_iter([("seth".to_owned(), seth)]), None).unwrap();
     let (first, second, call, load) = (site(&unit, "b0", 0), site(&unit, "b0", 1), site(&unit, "b0", 2), site(&unit, "b0", 3));
     for (accesses, clobber) in [

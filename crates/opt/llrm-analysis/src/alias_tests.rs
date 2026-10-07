@@ -25,7 +25,7 @@ impl Parsed {
     }
 
     fn unit_of(&self, name: &str) -> Unit<'_> {
-        Unit::of(&self.module, &self.layout, function(&self.module, name))
+        crate::testing::with_registers(Unit::of(&self.module, &self.layout, function(&self.module, name)))
     }
 
     fn unit(&self) -> Unit<'_> {

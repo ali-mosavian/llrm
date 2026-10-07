@@ -437,7 +437,7 @@ mod tests {
     fn subexpressions_of(module: &mut Module) -> bool {
         let layout = DataLayout::default();
         let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-        let accesses = Accesses::resolved(&Unit::of(module, &layout, function), &IndexMap::default()).unwrap();
+        let accesses = Accesses::resolved(&llrm_analysis::testing::with_registers(Unit::of(module, &layout, function)), &IndexMap::default()).unwrap();
         subexpressions(f(module), &accesses, false, None).unwrap()
     }
 
@@ -488,7 +488,7 @@ b0:
             let program = llrm_mir::program::ProgramProxy::of(&module, std::rc::Rc::new(llrm_x86_m16::Dos::default()));
             let program = dos.then_some(&*program);
             let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-            let accesses = Accesses::resolved(&Unit { program, ..Unit::of(&module, &layout, function) }, &IndexMap::default()).unwrap();
+            let accesses = Accesses::resolved(&Unit { program, ..llrm_analysis::testing::with_registers(Unit::of(&module, &layout, function)) }, &IndexMap::default()).unwrap();
             subexpressions(f(&mut module), &accesses, false, program).unwrap()
         };
         assert!(reused(true) && !reused(false));
@@ -502,10 +502,10 @@ b0:
         let (layout, outer) = (llrm_analysis::testing::layout(&module), Outer::of(&module, None));
         let accesses = {
             let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-            Accesses::resolved(&Unit::within(&module.context, &layout, function, &outer), &IndexMap::default()).unwrap()
+            Accesses::resolved(&llrm_analysis::testing::with_registers(Unit::within(&module.context, &layout, function, &outer)), &IndexMap::default()).unwrap()
         };
         let (context, function) = module.function_mut("f").expect("@f");
-        let registers = llrm_analysis::consts::known(&Unit::within(context, &layout, function, &outer), None, None, None);
+        let registers = llrm_analysis::consts::known(&llrm_analysis::testing::with_registers(Unit::within(context, &layout, function, &outer)), None, None, None);
         let changed = forwarded(context, &layout, function, &outer, &accesses, &registers, avoid_store_crossing).unwrap();
         let text = printed(&module);
         assert_eq!(changed, text != printed(&before), "{text}");

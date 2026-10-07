@@ -501,10 +501,6 @@ impl<'a> Unit<'a> {
                 }
                 Cow::Borrowed(registers)
             }
-            // Tests build units over bodies of their own, with no manager.
-            #[cfg(any(test, feature = "testing"))]
-            None => Cow::Owned(crate::consts::known(self, None, None, None)),
-            #[cfg(not(any(test, feature = "testing")))]
             None => panic!("a unit with no registers was asked for them: take them from the analysis manager"),
         }
     }
