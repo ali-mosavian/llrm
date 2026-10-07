@@ -54,7 +54,7 @@ impl FunctionPass for JumpThread {
             return PreservedAnalyses::all();
         }
         // What the copies know of their state: a product by a constant, a compare of one. Only where something was copied.
-        for pass in [&mut crate::fold::Fold as &mut dyn FunctionPass, &mut crate::algebraic::Algebraic, &mut crate::decide::Decide, &mut crate::dead::Dead] {
+        for pass in [&mut crate::fold::Fold as &mut dyn FunctionPass, &mut crate::algebraic::Algebraic { size: false }, &mut crate::decide::Decide, &mut crate::dead::Dead] {
             analyses.invalidate(&PreservedAnalyses::none());
             pass.run(unit, analyses);
         }
