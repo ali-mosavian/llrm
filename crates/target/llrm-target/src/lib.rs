@@ -165,6 +165,11 @@ pub trait Target {
     /// The registers an allocator may hold values in.
     fn register_capacity(&self) -> i64;
 
+    /// How deep the floating register stack is: the roots of class `x87` its register file states.
+    fn float_stack(&self) -> usize {
+        registers::parse(&self.registers_text()).map_or(0, |all| registers::of_class(&all, "x87").len())
+    }
+
     /// The indexed addresses a memory access may use, priced by `costs` (its
     /// operand-size prefix in `prefix`) and `address_stall`: native form first.
     fn address_forms(&self, costs: &OperationCosts, address_stall: i64) -> Vec<AddressForm>;
