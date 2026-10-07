@@ -124,8 +124,7 @@ fn _affordable(unit: &passes::Unit, outer: &Outer, mut run: Vec<InstId>, before:
         // A floating value held across the loop is released after it, once for each time the loop is entered.
         let floats: BTreeSet<ValueId> = _crossed_values(&hoisted, &run).into_iter().filter(|&value| matches!(unit.context.types.get(hoisted.value(value).ty), Type::Float(_))).collect();
         let moved = moved + floats.len() as i64 * costs.float_release * frequency.get(&into).copied().unwrap_or(1);
-        let found = llrm_analysis::liveness::live(&hoisted);
-        let Some(forecast) = profit::spill_forecast(unit.context, unit.layout, &hoisted, costs, room, &|inst| crate::spill::kept_across(outer, unit.context, &hoisted, inst), frequency, &found) else { return run };
+        let Some(forecast) = profit::spill_forecast(unit.context, unit.layout, &hoisted, costs, room, &|inst| crate::spill::kept_across(outer, unit.context, &hoisted, inst), frequency) else { return run };
         let cells = crate::spill::cells(&hoisted);
         let traffic = crate::spill::traffic(&hoisted, frequency, &cells, costs, &|_| true, &|value| crate::spill::words(unit.context, unit.layout, &hoisted, value));
         let free = |value: ValueId| _displacement(&hoisted, value) || traffic.get(&value).is_some_and(|one| one.rebuild.is_some());

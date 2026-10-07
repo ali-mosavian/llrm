@@ -1,0 +1,25 @@
+/* Compiled by Open Watcom's own wcc386 (-3r, its default convention): llrm's code calls these, and these call llrm's. No
+   library call is made (no i64 multiply or shift, no float conversion), as nothing links Open Watcom's runtime. */
+struct S { int a, b, c; };
+struct T { char x; };
+
+extern int llrm_mixed(int a, long long b, int c);
+extern long long llrm_wide(int a, long long b);
+extern int llrm_six(int a, int b, int c, int d, int e, int f);
+extern struct S llrm_result(int a, int b);
+extern int llrm_after_double(int a, double x, int b);
+
+int wc_mixed(int a, long long b, int c) { return a * 3 + (int)b * 7 + c * 11; }
+int wc_six(int a, int b, int c, int d, int e, int f) { return a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6; }
+struct S wc_result(int a, int b) { struct S s; s.a = a; s.b = b; s.c = a + b; return s; }
+int wc_small(struct T t, int a) { return t.x * 10 + a; }
+int wc_by_value(struct S s, int a) { return s.a + s.b * 2 + s.c * 3 + a * 4; }
+int wc_after_double(int a, double x, int b) { return a * 100 + (x > 2.5 ? 30 : 20) + b; }
+long long wc_wide(int a, long long b) { return b + b + b + a; }
+
+/* Open Watcom calling llrm's functions of the same shapes. */
+int wc_calls_mixed(void) { return llrm_mixed(1, 0x200000003LL, 4); }
+long long wc_calls_wide(void) { return llrm_wide(5, 0x100000002LL); }
+int wc_calls_six(void) { return llrm_six(1, 2, 3, 4, 5, 6); }
+int wc_calls_result(void) { struct S s = llrm_result(4, 5); return s.a * 10000 + s.b * 100 + s.c; }
+int wc_calls_double(void) { return llrm_after_double(2, 3.0, 4); }

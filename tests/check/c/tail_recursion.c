@@ -22,11 +22,11 @@
 // CHECK-LABEL: _exposed proc
 // CHECK: call {{.*}}_exposed
 // CHECK: _exposed endp
-int gcd(int a, int b) { return b == 0 ? a : gcd(b, a % b); }
-int sum(int n) { return n == 0 ? 0 : n + sum(n - 1); }
-int fact(int n) { return n <= 1 ? 1 : n * fact(n - 1); }
-int moves(int n) { return n == 0 ? 0 : moves(n - 1) + 1 + moves(n - 1); }
+int __cdecl gcd(int a, int b) { return b == 0 ? a : gcd(b, a % b); }
+int __cdecl sum(int n) { return n == 0 ? 0 : n + sum(n - 1); }
+int __cdecl fact(int n) { return n <= 1 ? 1 : n * fact(n - 1); }
+int __cdecl moves(int n) { return n == 0 ? 0 : moves(n - 1) + 1 + moves(n - 1); }
 int tree[300];
-void insert(int at, int v) { if (tree[at] == 0) tree[at] = v; else insert(at + 1, v); }
-int sub(int n) { return n == 0 ? 0 : n - sub(n - 1); }
-int exposed(int n, int *p) { int cell = n; return n == 0 ? 0 : exposed(n - 1, &cell) + *p; }
+void __cdecl insert(int at, int v) { if (tree[at] == 0) tree[at] = v; else insert(at + 1, v); }
+int __cdecl sub(int n) { return n == 0 ? 0 : n - sub(n - 1); }
+int __cdecl exposed(int n, int *p) { int cell = n; return n == 0 ? 0 : exposed(n - 1, &cell) + *p; }

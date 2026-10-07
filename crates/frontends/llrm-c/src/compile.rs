@@ -85,7 +85,12 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
 /// [`selected`], each function checking its stack as `stack_check` says (`-fsanitize=stack`).
 pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options, stack_check: Option<llrm_core::hir::model::StackCheck>) -> Result<masm::Module, CompileError> {
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
-        let unit = hir::unit(&stream::parse(text))?;
+        let mut unit = hir::unit(&stream::parse(text))?;
+        let profile = Profile::of(&*codegen.arch).map_err(hir::Unsupported)?;
+        let calling = codegen.arch.calling();
+        unit.entry = profile.entry;
+        unit.entry_cc = calling.named(&profile.entry_convention).and_then(|one| one.cc.clone()).ok_or_else(|| hir::Unsupported(format!("calling.toml has no {} with a cc", profile.entry_convention)))?;
+        unit.decorate(calling, codegen.object_format);
         // The front end was picked by the shim's flat flag; the target says what flat is.
         if unit.flat != codegen.arch.layout().spaces.far_is_near() {
             return Err(hir::Unsupported(format!("the front end is {} but target {} is {}", if unit.flat { "flat" } else { "segmented" }, codegen.arch.name(), if unit.flat { "segmented" } else { "flat" })).into());
@@ -141,6 +146,9 @@ pub struct Profile {
     pub cpu: String,
     /// The calling convention it compiles C under, by its name in `calling.toml`.
     pub convention: String,
+    /// The routine the runtime's start calls, and the convention it calls it in by its name in `calling.toml`.
+    pub entry: String,
+    pub entry_convention: String,
     pub flags: Vec<String>,
     /// The header it includes first, from the repository root.
     pub header: String,
@@ -163,7 +171,7 @@ impl Profile {
             None => Vec::new(),
             Some(list) => list.as_array().ok_or("frontend.interrupt_parameters is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("an interrupt parameter is not a string")).collect::<Result<_, _>>()?,
         };
-        Ok(Self { cpu: text("watcom_cpu")?, convention: text("convention")?, flags, header: text("header")?, interrupt_parameters })
+        Ok(Self { cpu: text("watcom_cpu")?, convention: text("convention")?, entry: text("entry")?, entry_convention: text("entry_convention")?, flags, header: text("header")?, interrupt_parameters })
     }
 }
 
@@ -296,7 +304,8 @@ pub fn main(argv: &[String]) -> i32 {
             .and_then(|one| one.to_str())
             .unwrap_or_default();
         let format = args.flags.format(&*args.codegen.arch)?;
-        let built = selected_checking(&text, module, args.dump.as_deref(), &args.codegen, args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)))?;
+        let spelled = llrm_core::driver::Options { object_format: format.name(), ..args.codegen.clone() };
+        let built = selected_checking(&text, module, args.dump.as_deref(), &spelled, args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)))?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if !args.flags.assembly && matches!(output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref(), Some("obj" | "o")) {
             let bytes = objbuild::written_in(&built, name, objbuild::CodeLayout::OneSegment, format)?;
@@ -1008,6 +1017,61 @@ mod tests {
         assert_eq!(body, ["L0_0:", "mov eax, dword ptr [esp+4]", "add eax, dword ptr [esp+8]", "ret"]);
     }
 
+    /// The body of `name`'s procedure in the flat listing of `regs.c`, as the default convention compiles it.
+    fn regs_body(name: &str) -> Vec<String> {
+        let lines = flat_listing("regs");
+        lines.iter().skip_while(|line| **line != format!("{name} proc near")).skip(1).take_while(|line| **line != format!("{name} endp")).cloned().collect()
+    }
+
+    /// An ELF object has no `_` before a C name and no `_` after a default one: `six_` and `_explicit_cdecl` were
+    /// printed whatever object format was asked, where the convention's `symbol` table says `*` for elf.
+    #[test]
+    fn test_m32_an_elf_object_spells_its_symbols_without_decoration() {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32/regs.cgs")).unwrap();
+        let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
+        let mut args = super::parse_args(&argv).unwrap();
+        args.codegen.object_format = "elf";
+        let built = super::selected(&text, "regs", None, &args.codegen).unwrap();
+        let listing = llrm_core::backend::masm::text(&built).unwrap();
+        for name in ["six", "result", "explicit_cdecl", "far_away"] {
+            assert!(listing.contains(&format!("\n{name} proc near")) || listing.contains(&format!("extern {name}:near")), "{name} in {listing}");
+        }
+        assert!(!listing.contains("six_") && !listing.contains("_explicit_cdecl"), "{listing}");
+    }
+
+    /// An unmarked C function takes Open Watcom's register convention: `six` read its fifth and sixth from the
+    /// stack and popped them with `ret 8`, the first four being in EAX, EDX, EBX and ECX. It had refused such
+    /// a function ("has a register calling convention"), compiled with -ecc.
+    #[test]
+    fn test_m32_an_unmarked_function_takes_registers_and_pops_its_stack_arguments() {
+        let body = regs_body("six_");
+        assert_eq!(body, ["L0_0:", "add eax, edx", "add eax, ebx", "add eax, ecx", "add eax, dword ptr [esp+4]", "add eax, dword ptr [esp+8]", "ret 8"]);
+    }
+
+    /// A struct larger than a dword is written through the address in ESI, which comes back in EAX, as `wcc386` has it.
+    #[test]
+    fn test_m32_a_struct_result_is_written_through_esi_and_returned_in_eax() {
+        let body = regs_body("result_");
+        assert!(body.contains(&"mov dword ptr [esi], eax".to_owned()) && body.contains(&"mov eax, esi".to_owned()), "{body:?}");
+        assert_eq!(body.last().map(String::as_str), Some("ret"));
+    }
+
+    /// A one-byte struct argument travels in AL as an integer does; a twelve-byte one is in memory with `a` after it.
+    #[test]
+    fn test_m32_a_small_struct_argument_is_a_register_and_a_large_one_is_memory() {
+        assert_eq!(regs_body("small_"), ["L4_0:", "movsx eax, al", "add eax, edx", "ret"]);
+        let body = regs_body("by_value_");
+        assert!(body.contains(&"mov eax, dword ptr [esp+4]".to_owned()) && body.contains(&"add eax, dword ptr [esp+16]".to_owned()), "{body:?}");
+        assert_eq!(body.last().map(String::as_str), Some("ret 16"));
+    }
+
+    /// `__cdecl` names the stack convention and its `_name` symbol on a target whose default is registers.
+    #[test]
+    fn test_m32_an_explicit_cdecl_function_keeps_the_stack_and_its_caller_pops() {
+        let body = regs_body("_explicit_cdecl");
+        assert_eq!(body, ["L5_0:", "mov eax, dword ptr [esp+4]", "sub eax, dword ptr [esp+8]", "ret"]);
+    }
+
     /// A narrow argument goes as a stack slot: `push ax` pushed two bytes, and cdecl32's next
     /// argument, and the callee's read of it, lay a dword apart.
     #[test]
@@ -1192,7 +1256,7 @@ mod tests {
     #[test]
     fn test_m32_lists_a_loop_over_int_pointers() {
         let lines = flat_listing("sum");
-        let body: Vec<&str> = lines.iter().skip_while(|line| *line != "_sum proc near").skip(1).take_while(|line| *line != "_sum endp").map(String::as_str).collect();
+        let body: Vec<&str> = lines.iter().skip_while(|line| *line != "sum_ proc near").skip(1).take_while(|line| *line != "sum_ endp").map(String::as_str).collect();
         // The load is the add's operand, and the add of the stride sets the flags the branch reads.
         assert!(body.iter().any(|line| line.starts_with("add e") && line.contains("dword ptr [e") && line.contains("+e")), "{body:#?}");
         assert!(body.iter().any(|line| line.starts_with("add e") && line.ends_with(", 4")), "{body:#?}");
