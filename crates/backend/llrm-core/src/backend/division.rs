@@ -63,6 +63,9 @@ fn bit_length(value: i64) -> i64 {
     i64::from(64 - value.leading_zeros())
 }
 
+/// A reciprocal is not taken for size: its magic number is a 32-bit immediate (5 bytes, a `mov`) before the multiply and
+/// the shifts and corrections after it, where `cdq; idiv r` is 3 bytes. Tuned for size the division stays, as GCC's
+/// `-Os` leaves it (LLVM's, which multiplies, differs: it does not weigh the bytes here).
 pub fn reciprocal<'a>(
     dividend: ir::Held,
     divisor: i64,
@@ -74,7 +77,7 @@ pub fn reciprocal<'a>(
 ) -> Result<Option<Vec<ir::Semantics>>, String> {
     let cpu = targets::profile(cpu)?;
     let width = dividend.width;
-    if width != 4 || !(1 < divisor && divisor < 1 << 31) {
+    if width != 4 || !(1 < divisor && divisor < 1 << 31) || cpu.size {
         return Ok(None);
     }
     // The magic is in the accumulator and the dividend where the early-out reads: its bits set the price.
@@ -298,7 +301,7 @@ pub fn unsigned_reciprocal<'a>(
 ) -> Result<Option<Vec<ir::Semantics>>, String> {
     let cpu = targets::profile(cpu)?;
     let width = dividend.width;
-    if width != 4 || !(2 < divisor && divisor < 1 << 31) || (divisor & (divisor - 1)) == 0 {
+    if width != 4 || !(2 < divisor && divisor < 1 << 31) || (divisor & (divisor - 1)) == 0 || cpu.size {
         return Ok(None);
     }
     let (Some(multiply), Some(divide)) = (timing::multiply_clocks(cpu, 4, bits)?, timing::unsigned_divide(cpu, 4)?) else {
@@ -411,6 +414,51 @@ mod tests {
             assert!(!parts.iter().any(|one| one.name.as_deref() == Some("lea") && one.op == ir::Operation::Binary), "signed {signed}: {parts:?}");
             assert!(parts.iter().any(|one| one.name.as_deref() == Some("lea") && one.op == ir::Operation::Address), "signed {signed}: {parts:?}");
         }
+    }
+
+    /// The 486's multiply ends early on its r/m operand, the last source of the one-operand form: the magic number
+    /// (31 bits whatever the divisor) is in the accumulator and the dividend where its length is read. The other way
+    /// round every division took 42 clocks, as long as `idiv`'s 43.
+    #[test]
+    fn test_the_dividend_is_the_operand_the_early_out_reads() {
+        let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
+        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        let dividend = ir::Held { value: 1, width: 4 };
+        for signed in [true, false] {
+            let mut count = 4..;
+            let mut fresh = || count.next().unwrap();
+            let parts = if signed { reciprocal(dividend, 7, &results, &mut fresh, m32, false, None) } else { unsigned_reciprocal(dividend, 7, &results, &mut fresh, m32, false, None) }.unwrap().expect("a reciprocal");
+            let high = parts.iter().find(|one| one.op == ir::Operation::Multiply && one.dests.len() == 2).expect("the high multiply");
+            assert_eq!(high.sources.last(), Some(&ir::Loc::Held(dividend)), "signed {signed}: {high:?}");
+        }
+    }
+
+    /// A signed dividend known to need all 32 bits keeps the division on the 486 (42 + the fixups against 43); one of
+    /// unknown length is priced at the middle of 13 to 42; a short one is cheaper still. The middle is an assumption.
+    #[test]
+    fn test_a_signed_reciprocal_is_priced_by_the_dividends_length() {
+        let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
+        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        let attempt = |divisor: i64, bits: Option<i64>| {
+            let mut count = 4..;
+            let mut fresh = || count.next().unwrap();
+            reciprocal(ir::Held { value: 1, width: 4 }, divisor, &results, &mut fresh, m32, true, bits).unwrap().is_some()
+        };
+        for divisor in [3, 7, 10, 641] {
+            assert_eq!((attempt(divisor, Some(32)), attempt(divisor, None), attempt(divisor, Some(12))), (false, true, true), "divisor {divisor}");
+        }
+    }
+
+    /// recsum -Os grew from 64 to 78 bytes and recmany -Os from 167 to 200 when every `x % n` took the reciprocal for its
+    /// clocks: the magic number alone is 5 bytes against `cdq; idiv`'s 3. Tuned for size the division stays.
+    #[test]
+    fn test_tuned_for_size_a_division_by_a_constant_stays_a_division() {
+        let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).unwrap();
+        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        let mut count = 4..;
+        let mut fresh = || count.next().unwrap();
+        assert_eq!(reciprocal(ir::Held { value: 1, width: 4 }, 7, &results, &mut fresh, m32, true, None), Ok(None));
+        assert_eq!(unsigned_reciprocal(ir::Held { value: 1, width: 4 }, 7, &results, &mut fresh, m32, true, None), Ok(None));
     }
 
     /// LNGMXX's q+r needs both answers, including negative truncation and INT_MIN.
