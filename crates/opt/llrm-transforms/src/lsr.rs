@@ -471,7 +471,7 @@ fn _exit(view: &memory::Unit, loop_: &Loop, users: &Users) -> Option<Exit> {
     if guarded && (proof.posttested || rotate::_shape(function, loop_).is_none()) {
         return None;
     }
-    let fused = proof.posttested || guarded || !proof.stops;
+    let fused = proof.posttested || guarded || !proof.leaves;
     Some(Exit { proof: proof.clone(), trips, most, guarded, fused })
 }
 

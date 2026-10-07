@@ -1,8 +1,8 @@
-reason = "pressuresink: a load is made just before its reader where no register class gains; fewer memory operands overall, matmul +1 and parity/loop +2 from the order sensitivity of lea fusion and coalescing (#729)"
+reason = "lsr counts a loop with another way out to zero at its own exit (queens, quicksort, tile). queens bas -O2/-Os instructions +4.7%/+3.5% and queens c/nib code +2..3 bytes: the setup is ~9 instructions a call and saves one a trip; the model assumes 10 trips where Safe's early exits give about 3 (filed as a trip estimate from exit probabilities)."
 blessed = "2026-10-07"
 
 [bas.O2]
-code_bytes = 1008
+code_bytes = 1006
 data_bytes = 113
 bss_bytes = 0
 kernel_ms = 3887.2019

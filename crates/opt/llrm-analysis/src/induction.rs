@@ -131,6 +131,8 @@ pub struct CountedLoop {
     pub stepped: bool,
     /// Some other exit stops the program; `count` is the trips when it goes on.
     pub stops: bool,
+    /// Another exit goes on, to code that returns (only where `counted_leaving` asked); `count` is then the trips as long as it is not taken.
+    pub leaves: bool,
     /// A loop tested after its trips whose symbolic trips assume the first
     /// would have continued, which the branches over its preheader prove.
     pub entry_guarded: bool,
@@ -286,6 +288,7 @@ struct _Control {
     exit: i64,
     posttested: bool,
     stops: bool,
+    leaves: bool,
     /// A header that holds its whole trip, its latch only a jump back: its
     /// test may read the stepped value, as after a trip.
     after: bool,
@@ -340,7 +343,8 @@ fn _control(function: &Function, loop_: &Loop, leaving: bool) -> Option<_Control
         .flat_map(|at| blocks[at].succ.iter().copied().filter(|to| !inside.contains(to)))
         .collect::<BTreeSet<_>>();
     // Or, where `leaving`, go on: the count then holds as long as the loop does.
-    if !leaving && !elsewhere.is_empty() && !elsewhere.is_subset(&noreturn::stranded(function, header.at)) {
+    let leaves = !elsewhere.is_empty() && !elsewhere.is_subset(&noreturn::stranded(function, header.at));
+    if !leaving && leaves {
         return None;
     }
     let outside =
@@ -356,6 +360,7 @@ fn _control(function: &Function, loop_: &Loop, leaving: bool) -> Option<_Control
         exit: exits[0],
         posttested: control.at == latch.at || matches!(forwarded, Some(Some(_))),
         stops: !elsewhere.is_empty(),
+        leaves,
         after: header_holds_trip,
     })
 }
@@ -618,6 +623,7 @@ fn _proven(
             posttested: shape.posttested,
             stepped,
             stops: shape.stops,
+            leaves: shape.leaves,
             entry_guarded,
             reach,
             count,
@@ -689,7 +695,7 @@ pub fn exits(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap<ValueId, Known>>
             if !shape.dominance.dominates(at, latch) {
                 return found;
             }
-            let shaped = |posttested: bool| _Control { block: at, preheader, entered, exit, posttested, stops: false, after: false };
+            let shaped = |posttested: bool| _Control { block: at, preheader, entered, exit, posttested, stops: false, leaves: false, after: false };
             let stays = inside.contains(&cfg::id(taken));
             let (leaves, first) = _leaves(function, condition, stays);
             let mut counts = Vec::new();

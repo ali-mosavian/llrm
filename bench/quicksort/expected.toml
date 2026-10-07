@@ -1,53 +1,47 @@
-reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
-blessed = "2026-10-06"
+reason = "lsr counts a loop with another way out to zero at its own exit (queens, quicksort, tile). queens bas -O2/-Os instructions +4.7%/+3.5% and queens c/nib code +2..3 bytes: the setup is ~9 instructions a call and saves one a trip; the model assumes 10 trips where Safe's early exits give about 3 (filed as a trip estimate from exit probabilities)."
+blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 225989
+instructions = 224965
 memory_operands = 113692
-code_bytes = 563
+code_bytes = 561
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 3.0373
 
 [bas.Os]
-instructions = 215428
+instructions = 214404
 memory_operands = 113705
-code_bytes = 504
+code_bytes = 501
 data_bytes = 17
 bss_bytes = 0
-kernel_ms = 2.8965
 
 [c.O2]
-instructions = 161743
+instructions = 160719
 memory_operands = 58880
-code_bytes = 318
+code_bytes = 316
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 2.1592
 
 [c.Os]
-instructions = 147753
+instructions = 146729
 memory_operands = 58880
-code_bytes = 277
+code_bytes = 274
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 1.9726
 
 [nib.O2]
-instructions = 181425
+instructions = 180401
 memory_operands = 66202
-code_bytes = 443
+code_bytes = 441
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 2.4249
 
 [nib.Os]
-instructions = 164329
+instructions = 163305
 memory_operands = 73745
-code_bytes = 424
+code_bytes = 421
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 2.3805
 
 [ow.O2]
 instructions = 239036

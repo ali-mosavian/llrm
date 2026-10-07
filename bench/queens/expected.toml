@@ -1,51 +1,47 @@
-reason = "the last call of a function nothing else reaches inlines at any size (LLVM's last-call-to-static bonus, gcc's -finline-functions-called-once): C kernels' static helpers go with their one call; every row better"
+reason = "lsr counts a loop with another way out to zero at its own exit (queens, quicksort, tile). queens bas -O2/-Os instructions +4.7%/+3.5% and queens c/nib code +2..3 bytes: the setup is ~9 instructions a call and saves one a trip; the model assumes 10 trips where Safe's early exits give about 3 (filed as a trip estimate from exit probabilities)."
 blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 323224
-memory_operands = 104026
-code_bytes = 434
+instructions = 338429
+memory_operands = 103461
+code_bytes = 443
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.3181
 
 [bas.Os]
-instructions = 327333
-memory_operands = 104039
-code_bytes = 408
+instructions = 338961
+memory_operands = 103474
+code_bytes = 424
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.373
 
 [c.O2]
-instructions = 177154
-memory_operands = 30723
-code_bytes = 210
+instructions = 149297
+memory_operands = 30158
+code_bytes = 213
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 183170
-memory_operands = 30723
-code_bytes = 190
+instructions = 151769
+memory_operands = 30158
+code_bytes = 192
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 231273
-memory_operands = 46010
-code_bytes = 239
+instructions = 195078
+memory_operands = 40297
+code_bytes = 235
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.0854
 
 [nib.Os]
-instructions = 272455
-memory_operands = 75888
-code_bytes = 302
+instructions = 262041
+memory_operands = 75881
+code_bytes = 305
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.6345
 
 [ow.O2]
 instructions = 217955
