@@ -30,12 +30,12 @@ pub fn numeric(out: &mut Vec<u8>, value: i64) {
                 out.extend(value.to_le_bytes());
             }
         }
-    } else if value <= 0xFFFF {
+    } else if let Ok(one) = u16::try_from(value) {
         put16(out, 0x8002);
-        put16(out, value as u16);
-    } else if value <= i64::from(u32::MAX) {
+        put16(out, one);
+    } else if let Ok(one) = u32::try_from(value) {
         put16(out, 0x8004);
-        out.extend((value as u32).to_le_bytes());
+        out.extend(one.to_le_bytes());
     } else {
         put16(out, 0x800A);
         out.extend(value.to_le_bytes());
