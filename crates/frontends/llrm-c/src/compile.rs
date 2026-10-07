@@ -1174,7 +1174,8 @@ mod tests {
     /// `66 c2 0400`, pops a 16-bit return address and sent the flat program into the vector table.
     #[test]
     fn test_m32_returns_popping_arguments_with_a_dword_ret() {
-        let object = flat_object("pop");
+        // The function that pops is called once: kept as one.
+        let object = flat_object_with("pop", &["-fno-inline-functions-called-once"]);
         let code = hex(&object.iter().find(|(kind, _)| *kind == 0xA1).expect("code").1);
         assert!(code.contains("c20400") && !code.contains("66c2"), "{code}");
     }

@@ -1,5 +1,5 @@
-reason = "textfill nib reaches the screen through os.text_screen() (the OS layer builds the pointer from the platform's physical address once): executed instructions 40017 -> 30025, code bytes 113 -> 111 at -O2 and 112 -> 110 at -Os (#605)"
-blessed = "2026-10-06"
+reason = "the last call of a function nothing else reaches inlines at any size (LLVM's last-call-to-static bonus, gcc's -finline-functions-called-once): C kernels' static helpers go with their one call; every row better"
+blessed = "2026-10-07"
 
 [bas.O2]
 instructions = 30047
@@ -18,20 +18,18 @@ bss_bytes = 0
 kernel_ms = 0.4138
 
 [c.O2]
-instructions = 40017
+instructions = 40009
 memory_operands = 8000
-code_bytes = 110
+code_bytes = 89
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.5348
 
 [c.Os]
-instructions = 40017
+instructions = 40009
 memory_operands = 8000
-code_bytes = 109
+code_bytes = 88
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.5348
 
 [nib.O2]
 instructions = 30025

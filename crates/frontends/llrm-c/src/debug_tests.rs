@@ -17,7 +17,7 @@ fn object_of(name: &str) -> Vec<Rc<omf::Record>> {
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).expect("reads");
     let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
     // Not inlined: `twice` is a symbol to read.
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
     let built = super::compile::selected(&text, name, None, &options).expect("compiles");
     omf::parse(&objbuild::written(&built, &format!("{name}.c")).expect("writes")).expect("parses")
@@ -110,7 +110,7 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
     use llrm_object::debug::Kind;
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debug.cgs")).expect("reads");
     let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
     let built = super::compile::selected(&text, "debug", None, &options).expect("compiles");
     let object = objbuild::built(&built, "debug.c", objbuild::CodeLayout::OneSegment).expect("builds");

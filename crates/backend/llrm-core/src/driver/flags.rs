@@ -54,10 +54,11 @@ impl Level {
 }
 
 /// gcc's `-f` pass names, each with the options it sets.
-const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 12] = [
+const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 13] = [
     ("unroll-loops", |options, on| options.unroll = on),
     ("peel-loops", |options, on| options.peel = on),
-    ("inline-functions", |options, on| options.inline = if !on { Threshold::new(0) } else if options.inline.limit == 0 { Threshold { limit: Threshold::default().limit, ..options.inline } } else { options.inline }),
+    ("inline-functions-called-once", |options, on| options.inline.last = on),
+    ("inline-functions", |options, on| options.inline = if !on { Threshold { limit: 0, ..options.inline } } else if options.inline.limit == 0 { Threshold { limit: Threshold::default().limit, ..options.inline } } else { options.inline }),
     ("strength-reduce", |options, on| options.strength = on),
     ("unswitch-loops", |options, on| options.unswitch = on),
     ("gcse", |options, on| (options.forward, options.drop_loads) = (on, on)),

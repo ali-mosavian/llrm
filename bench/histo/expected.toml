@@ -1,5 +1,5 @@
-reason = "udiv/urem by a power of two are a shift and a mask, and sdiv/srem of a provably non-negative dividend by one too: histo.bas's MOD and \\ by a power of two"
-blessed = "2026-10-06"
+reason = "the last call of a function nothing else reaches inlines at any size (LLVM's last-call-to-static bonus, gcc's -finline-functions-called-once): C kernels' static helpers go with their one call; every row better"
+blessed = "2026-10-07"
 
 [bas.O2]
 instructions = 83615
@@ -16,20 +16,18 @@ data_bytes = 8719
 bss_bytes = 0
 
 [c.O2]
-instructions = 79517
-memory_operands = 12674
-code_bytes = 158
+instructions = 79508
+memory_operands = 12673
+code_bytes = 142
 data_bytes = 0
 bss_bytes = 4608
-kernel_ms = 1.139
 
 [c.Os]
-instructions = 71709
-memory_operands = 13058
-code_bytes = 149
+instructions = 71700
+memory_operands = 13057
+code_bytes = 133
 data_bytes = 0
 bss_bytes = 4608
-kernel_ms = 1.0361
 
 [nib.O2]
 instructions = 83604

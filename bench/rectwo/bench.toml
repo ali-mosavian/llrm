@@ -1,0 +1,9 @@
+description = "Two calls, nothing between: lattice paths of a 9x9 grid"
+repetitions = 1
+
+[region]
+c = "bench_rectwo"
+
+[gaps]
+bas = "#784 only the C version is written"
+nib = "#784 only the C version is written"
