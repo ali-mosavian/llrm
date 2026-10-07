@@ -477,7 +477,7 @@ fn _short_update_runs_whole(
             let (into, outof) = pair;
             let width = _width(first, into);
             let slot = index.at[&key(first)];
-            let after = Segment { start: slot + ranges::DEF, end: slot + ranges::DEF + 1 };
+            let after = Segment { start: ranges::def_point(slot), end: ranges::def_point(slot) + 1 };
             let eligible = stored.contains(&into)
                 && !stored.contains(&outof)
                 && !live[&outof].segments.iter().any(|segment| segment.overlaps(&after))
@@ -575,7 +575,7 @@ fn _local_updates_whole(body: &LirBody, stored: &BTreeSet<u32>, frame: &mut Fram
                 continue;
             };
             let slot = index.at[&key(&insns[last])];
-            let after = Segment { start: slot + ranges::DEF, end: slot + ranges::DEF + 1 };
+            let after = Segment { start: ranges::def_point(slot), end: ranges::def_point(slot) + 1 };
             let kept = live[&value].segments.iter().any(|segment| segment.overlaps(&after));
             // Worth it when it saves a memory operand: the update's own
             // and each read's, against one reload and perhaps one store.
@@ -1004,27 +1004,21 @@ fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(
                 }
                 wanted.insert(at, made);
             }
-            // An instruction's slot: the block's first after its phis', then two for each before it that is no mark.
-            // (Counted, not looked up: the same instruction may stand in two places.)
-            let mut next = index.span[&body.blocks[block_index].at].0 + ranges::PER_INSN;
+            // An instruction's slot, which the body's numbering gives its original; `made` stands where that stood.
+            let block = &body.blocks[block_index];
             let mut counted = 0;
             let mut before: Option<usize> = None;
             for (position, one) in wanted {
                 // Two instructions of one parallel copy with others between them are not one run here either.
                 if let (Some(earlier), Some(group)) = (before, one.group) {
                     if position > earlier + 1 && sparse_blocks[block_index].insns.last().is_some_and(|last| last.group == Some(group)) {
-                        starts[block_index].push(next);
+                        starts[block_index].push(index.slot(block, counted));
                         sparse_blocks[block_index].insns.push(Arc::new(Insn::new(0, None, None, Vec::new(), Vec::new())));
                     }
                 }
                 before = Some(position);
-                while counted < position {
-                    if !original[counted].is_meta() {
-                        next += ranges::PER_INSN;
-                    }
-                    counted += 1;
-                }
-                starts[block_index].push(next);
+                counted = position;
+                starts[block_index].push(index.slot(block, position));
                 sparse_blocks[block_index].insns.push(one);
             }
         }

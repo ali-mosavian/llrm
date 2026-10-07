@@ -39,6 +39,25 @@ pub fn magic(divisor: i64, bits: i64) -> Result<(i64, i64), String> {
     Ok((multiplier, exponent - bits))
 }
 
+/// `quotient` times the divisor, by the shifts, adds and `lea`s of `chain` (`arithmetic::scale`): the product of the
+/// step before it is shifted, or added to the quotient, or the quotient plus it scaled, as the address unit makes it.
+fn chain_product(parts: &mut Vec<ir::Semantics>, chain: &[(&'static str, i64)], quotient: ir::Held, fresh: &mut dyn FnMut() -> u32) -> ir::Held {
+    let width = quotient.width;
+    let mut product = quotient;
+    for &(name, amount) in chain {
+        let into = ir::Held { value: fresh(), width };
+        parts.push(if name == "lea" {
+            let cell = ir::Mem { base: Some(quotient), index: Some(product), scale: amount, ..ir::Mem::new(None, width) };
+            ir::Semantics { name: Some("lea".to_owned()), dests: vec![ir::Loc::Held(into)], sources: vec![ir::Loc::Mem(cell)], ..ir::Semantics::new(ir::Operation::Address) }
+        } else {
+            let other = if name == "shl" { ir::Loc::Imm(ir::Imm { value: amount, width: 1, address: None }) } else { ir::Loc::Held(quotient) };
+            ir::Semantics { name: Some(name.to_owned()), dests: vec![ir::Loc::Held(into)], sources: vec![ir::Loc::Held(product), other], ..ir::Semantics::new(ir::Operation::Binary) }
+        });
+        product = into;
+    }
+    product
+}
+
 pub fn reciprocal<'a>(
     dividend: ir::Held,
     divisor: i64,
@@ -195,21 +214,7 @@ pub fn reciprocal<'a>(
     }
     let mut product = quotient;
     if let Some(chain) = chained {
-        for (name, amount) in chain {
-            let other = if *name == "shl" {
-                imm(*amount, 1)
-            } else {
-                ir::Loc::Held(quotient)
-            };
-            product = emit(
-                &mut parts,
-                fresh,
-                ir::Operation::Binary,
-                name,
-                vec![ir::Loc::Held(product), other],
-                None,
-            );
-        }
+        product = chain_product(&mut parts, chain, quotient, fresh);
     } else {
         product = emit(
             &mut parts,
@@ -356,10 +361,7 @@ pub fn unsigned_reciprocal<'a>(
     }
     let mut product = quotient;
     if let Some(chain) = chained {
-        for (name, amount) in chain {
-            let other = if *name == "shl" { imm(*amount, 1) } else { ir::Loc::Held(quotient) };
-            product = emit(&mut parts, ir::Operation::Binary, name, vec![ir::Loc::Held(product), other], None, fresh);
-        }
+        product = chain_product(&mut parts, chain, quotient, fresh);
     } else {
         product = emit(&mut parts, ir::Operation::Multiply, "imul", vec![ir::Loc::Held(quotient), imm(divisor, width)], None, fresh);
     }
@@ -381,6 +383,24 @@ mod tests {
         match one {
             ir::Loc::Held(held) => held.value,
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// #789 gave the multiply chains a `lea` step; the remainder's quotient-times-divisor took it for a binary operation
+    /// and named it `lea r, r2`, which no instruction is: a flat target's `x % 10` failed to assemble ("Semantics(op=BINARY,
+    /// name='lea' ...)") at -O2 on a Pentium.
+    #[test]
+    fn test_a_remainders_product_makes_its_lea_step_as_an_address() {
+        let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "P5", false).unwrap();
+        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        let mut count = 4..;
+        let mut fresh = || count.next().unwrap();
+        for signed in [true, false] {
+            let parts = if signed { reciprocal(ir::Held { value: 1, width: 4 }, 10, &results, &mut fresh, m32, true) } else { unsigned_reciprocal(ir::Held { value: 1, width: 4 }, 10, &results, &mut fresh, m32, true) }
+                .unwrap()
+                .expect("a reciprocal");
+            assert!(!parts.iter().any(|one| one.name.as_deref() == Some("lea") && one.op == ir::Operation::Binary), "signed {signed}: {parts:?}");
+            assert!(parts.iter().any(|one| one.name.as_deref() == Some("lea") && one.op == ir::Operation::Address), "signed {signed}: {parts:?}");
         }
     }
 
