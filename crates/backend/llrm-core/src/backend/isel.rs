@@ -2464,10 +2464,11 @@ impl Selector<'_, '_, '_> {
                 next
             };
             let both = remainder == result || self.paired.contains_key(&inst);
+            let bits = self.significant_bits(instruction.operands[0], signed);
             let reciprocal = if signed {
-                division::reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, both)
+                division::reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, both, bits)
             } else {
-                division::unsigned_reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, both)
+                division::unsigned_reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, both, bits)
             }
             .map_err(Unselected)?;
             self.next = next;
@@ -2494,6 +2495,19 @@ impl Selector<'_, '_, '_> {
         );
         out.push(insn(at, what));
         Ok(())
+    }
+
+    /// The bits an integer operand needs, from what MIR proves of it (`valuetracking`: LLVM's `ComputeNumSignBits`,
+    /// and the zero half of `computeKnownBits`): a multiply that ends early on a short multiplier is priced by it.
+    fn significant_bits(&self, operand: Operand, signed: bool) -> Option<i64> {
+        let context = &self.module.context;
+        let width = i64::from(self.function.operand_type(context, operand).and_then(|ty| context.types.int_bits(ty))?);
+        let bits = if signed {
+            width - i64::from(llrm_mir::valuetracking::sign_bits(context, self.function, operand)) + 1
+        } else {
+            width - i64::from(llrm_mir::valuetracking::known_zero(context, self.function, operand).leading_zeros().saturating_sub(128 - width as u32).min(width as u32))
+        };
+        (bits < width).then_some(bits)
     }
 
     fn memory(pointer: Pointer, width: u32) -> Mem {
