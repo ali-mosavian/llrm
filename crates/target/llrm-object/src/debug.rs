@@ -31,8 +31,31 @@ pub struct Register {
     pub codeview: Option<u16>,
 }
 
+/// The debug format a writer is asked for.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Format {
+    /// The object format's own: CodeView for OMF, DWARF for ELF and Mach-O.
+    #[default]
+    Default,
+    CodeView,
+    Dwarf { version: u16 },
+    TurboDebugger,
+}
+
+/// The source language, which a debugger reads values by.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Language {
+    #[default]
+    Unknown,
+    C,
+    Basic,
+    Nib,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Info {
+    pub format: Format,
+    pub language: Language,
     pub producer: Producer,
     /// The register a [`Location::Frame`] is relative to.
     pub frame_register: String,
@@ -105,7 +128,9 @@ pub enum Type {
     /// `bytes` of its elements in place, as C lays one out; None: BASIC's, whose bounds are its
     /// descriptor's.
     Array { element: TypeId, bytes: Option<u32> },
-    Struct { name: String, bytes: u32, fields: Vec<Field> },
+    /// A struct or, with `union`, a union: a type a member may reach again (a pointer to itself), by its
+    /// index, which may be a later one.
+    Struct { name: String, bytes: u32, fields: Vec<Field>, union: bool },
     Enum { name: String, underlying: TypeId, enumerators: Vec<Enumerator> },
     /// A pointer of `bytes` (the offset's width, a far one's too).
     Pointer { target: TypeId, bytes: u8, reach: Reach },

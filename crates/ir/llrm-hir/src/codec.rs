@@ -114,7 +114,8 @@ plain_enums!(
     Op,
     TerminatorKind,
     DebugKind,
-    DebugReach
+    DebugReach,
+    DebugLanguage
 );
 
 macro_rules! plain_record {
@@ -171,7 +172,19 @@ impl _Plain for model::DebugVariable {
 plain_record!(DebugFunction, None, function => "function", module => "module", name => "name", r#type => "type", parameters => "parameters",
     variables => "variables");
 plain_record!(DebugGlobal, None, function => "function", object => "object", offset => "offset", name => "name", r#type => "type");
-plain_record!(Debug, None, types => "types", functions => "functions", globals => "globals");
+// `language` only where the frontend says, so a module without one writes as before.
+impl _Plain for model::Debug {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        if self.language.is_some() {
+            out.insert("language".to_owned(), self.language._plain());
+        }
+        out.insert("types".to_owned(), self.types._plain());
+        out.insert("functions".to_owned(), self.functions._plain());
+        out.insert("globals".to_owned(), self.globals._plain());
+        Json::Dict(out)
+    }
+}
 plain_record!(ValueRef, Some("value"), value => "value");
 plain_record!(Constant, Some("constant"), r#type => "type", value => "value");
 plain_record!(PlaceRef, Some("place"), place => "place");
@@ -792,7 +805,8 @@ made_enums!(
     Op,
     TerminatorKind,
     DebugKind,
-    DebugReach
+    DebugReach,
+    DebugLanguage
 );
 
 macro_rules! made_records {
@@ -1444,11 +1458,14 @@ static DEBUG_GLOBAL: _Record = _Record {
 static DEBUG: _Record = _Record {
     name: "Debug",
     fields: &[
+        ("language", _Hint::Union(&[enum_hint!(DebugLanguage), _Hint::NoneType]), false),
         ("types", _Hint::Tuple(&_Hint::Record(&DEBUG_TYPE)), true),
         ("functions", _Hint::Tuple(&_Hint::Record(&DEBUG_FUNCTION)), true),
         ("globals", _Hint::Tuple(&_Hint::Record(&DEBUG_GLOBAL)), true),
     ],
-    build: |args| _object(model::Debug { types: _required(args, "types")?, functions: _required(args, "functions")?, globals: _required(args, "globals")? }),
+    build: |args| {
+        _object(model::Debug { language: _default(args, "language", None)?, types: _required(args, "types")?, functions: _required(args, "functions")?, globals: _required(args, "globals")? })
+    },
 };
 
 static STATED_FACT: _Record = _Record {

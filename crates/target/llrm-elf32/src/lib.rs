@@ -144,12 +144,15 @@ mod tests {
         assert!(write(&real).is_err());
     }
 
-    /// `-g` reached a writer with no debug format: the information was refused, not left out of
-    /// an object a debugger then found empty.
+    /// An object that asks for CodeView or Turbo Debugger information is refused by name: the
+    /// information of another format is never written in its place.
     #[test]
-    fn debug_information_is_refused_not_dropped() {
-        let mut made = object(vec![text(vec![0], vec![])], vec![]);
-        made.debug = Some(llrm_object::debug::Info::default());
-        assert!(write(&made).unwrap_err().0.contains("debug information"));
+    fn a_debug_format_this_object_cannot_carry_is_refused() {
+        for (format, name) in [(llrm_object::debug::Format::CodeView, "CodeView"), (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger")] {
+            let mut made = object(vec![text(vec![0], vec![])], vec![]);
+            made.debug = Some(llrm_object::debug::Info { format, ..Default::default() });
+            let why = write(&made).unwrap_err().0;
+            assert!(why.contains("cannot carry") && why.contains(name), "{why}");
+        }
     }
 }

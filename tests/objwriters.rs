@@ -83,6 +83,56 @@ fn llvm_accepts_every_bench_coff_object() {
     }
 }
 
+/// `-g`: llvm-readobj reads the C13 of every bench C program's COFF object and llvm-objdump its
+/// code, at both ends of the optimiser. Each object names its functions.
+#[test]
+fn llvm_reads_the_codeview_of_every_bench_coff_object() {
+    let (Some(readobj), Some(objdump)) = (llvm("llvm-readobj"), llvm("llvm-objdump")) else {
+        eprintln!("skipped: LLVM's object tools are not installed");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    for source in &bench_programs() {
+        for level in ["-O0", "-O2"] {
+            let object = scratch.path().join("x.obj");
+            let made = compile(source, &["-m32", level, "-g", "-fobject-format=coff"], &object);
+            assert!(made.status.success(), "{} {level}: {}", source.display(), String::from_utf8_lossy(&made.stderr));
+            for (tool, arguments) in [(&readobj, &["--codeview"][..]), (&objdump, &["-d", "-r"][..])] {
+                let said = Command::new(tool).args(arguments).arg(&object).output().unwrap();
+                let text = format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
+                assert!(said.status.success() && !text.contains("warning") && !text.contains("error"), "{} {} {level}:\n{text}", tool.display(), source.display());
+                if tool == &readobj {
+                    assert!(text.contains("S_GPROC32") && text.contains("FunctionLineTable"), "{} {level}: no function or lines:\n{text}", source.display());
+                }
+            }
+        }
+    }
+}
+
+/// `-g` through the whole path: lld-link links the C program's object with /debug, and the PDB holds
+/// its function with both parameters, its struct, its global and its lines. The same program
+/// as OMF CodeView names the same function, parameters and struct. `__cdecl` is the `_name` the
+/// entry asks for; the default convention spells it `name_`.
+#[test]
+fn lld_link_makes_a_pdb_of_a_c_program() {
+    let (Some(link), Some(pdbutil)) = (llvm("lld-link"), llvm("llvm-pdbutil")) else {
+        eprintln!("skipped: needs lld-link and llvm-pdbutil");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    std::fs::write(dir.join("p.c"), "struct S { int a; char b; };\nint g = 3;\nint __cdecl twice(int a, struct S *p)\n{\n    int y = a + p->a;\n    return y + y + g;\n}\n").unwrap();
+    let made = compile(&dir.join("p.c"), &["-m32", "-O0", "-g", "-fobject-format=coff"], &dir.join("p.obj"));
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(link).args(["/machine:x86", "/subsystem:console", "/entry:twice", "/nodefaultlib", "/debug", "/pdb:p.pdb", "/out:p.exe", "p.obj"]).current_dir(dir).output().unwrap();
+    assert!(linked.status.success(), "{}{}", String::from_utf8_lossy(&linked.stdout), String::from_utf8_lossy(&linked.stderr));
+    let said = Command::new(pdbutil).args(["dump", "-l", "--symbols", "--types", "--globals"]).arg(dir.join("p.pdb")).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout);
+    for wanted in ["S_GPROC32", "`twice`", "S_LOCAL", "`a`", "`p`", "`y`", "flags = param", "LF_STRUCTURE", "`S`", "sizeof 8", "S_GDATA32", "`g`", "line/addr entries"] {
+        assert!(text.contains(wanted), "no {wanted}:\n{text}");
+    }
+}
+
 /// An llrm COFF object and a clang-cl one link into one image, each calling the other with the
 /// cdecl both use (llrm's default is Open Watcom's registers, so the functions say `__cdecl`): lld-link resolves `_start` and `_clang_add`, and every call in the image lands
 /// on the address the link map gives its callee.
@@ -168,4 +218,89 @@ fn a_format_the_target_does_not_write_is_refused() {
     assert!(unknown.contains("-fobject-format=pe") && unknown.contains("\"coff\""), "{unknown}");
     let unwritten = refused(&["-m32", "-fobject-format=macho"]);
     assert!(unwritten.contains("cannot write macho"), "{unwritten}");
+}
+
+/// With debug information on both sides: lld-link merges llrm's C13 and clang-cl's into one PDB,
+/// which names the function of each module.
+#[test]
+fn a_pdb_holds_the_functions_of_an_llrm_object_and_a_clang_cl_object() {
+    let (Some(clang), Some(link), Some(pdbutil)) = (llvm("clang-cl"), llvm("lld-link"), llvm("llvm-pdbutil")) else {
+        eprintln!("skipped: needs clang-cl, lld-link and llvm-pdbutil");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    std::fs::write(dir.join("m.c"), "int clang_add(int a, int b) { int s = a + b; return s; }\nint start(void);\nint entry(void) { return start(); }\n").unwrap();
+    std::fs::write(dir.join("l.c"), "int __cdecl clang_add(int a, int b);\nint __cdecl start(void) { int r = clang_add(1, 2); return r + 4; }\n").unwrap();
+    let made = Command::new(clang).args(["--target=i386-pc-windows-msvc", "/c", "/GS-", "/Zi", "/Fo:m.obj", "m.c"]).current_dir(dir).output().unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let made = compile(&dir.join("l.c"), &["-m32", "-O0", "-g", "-fobject-format=coff"], &dir.join("l.obj"));
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(link).args(["/machine:x86", "/subsystem:console", "/entry:entry", "/nodefaultlib", "/debug", "/pdb:m.pdb", "/out:m.exe", "m.obj", "l.obj"]).current_dir(dir).output().unwrap();
+    assert!(linked.status.success(), "{}{}", String::from_utf8_lossy(&linked.stdout), String::from_utf8_lossy(&linked.stderr));
+    let said = Command::new(pdbutil).args(["dump", "--symbols"]).arg(dir.join("m.pdb")).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout);
+    for wanted in ["l.obj", "m.obj", "S_GPROC32", "`start`", "`clang_add`", "`entry`", "`r`", "`s`"] {
+        assert!(text.contains(wanted), "no {wanted}:\n{text}");
+    }
+}
+
+/// Whether some instruction between a backward branch's target and the branch writes the frame
+/// cell at `offset` from ebp, in `listing` (llvm-objdump's): a loop that keeps its variable in a
+/// register and stores it after the loop leaves the debugger's cell stale in every iteration.
+fn stores_in_a_loop(listing: &str, offset: i64) -> bool {
+    let lines: Vec<(u64, &str)> = listing
+        .lines()
+        .filter_map(|line| {
+            let (address, instruction) = line.trim().split_once(':')?;
+            Some((u64::from_str_radix(address, 16).ok()?, instruction.trim()))
+        })
+        .collect();
+    let cell = if offset < 0 { format!("-0x{:x}(%ebp)", -offset) } else { format!("0x{offset:x}(%ebp)") };
+    lines.iter().any(|&(at, instruction)| {
+        let Some(target) = instruction.strip_prefix('j').and_then(|jump| u64::from_str_radix(jump.split("0x").nth(1)?.split_whitespace().next()?, 16).ok()) else { return false };
+        target < at && lines.iter().any(|&(inside, one)| (target..=at).contains(&inside) && one.ends_with(&cell))
+    })
+}
+
+/// -O2 with `-g`: a loop's variables are read where the PDB says they are. `s` and `i` are live
+/// across the loop, so each iteration writes the frame cell the PDB's `S_DEFRANGE_REGISTER_REL`
+/// names; before #757 the loop kept both in registers and stored them after it, and a debugger
+/// read the initial values at every line of the loop. The same loop without `-g` stores nothing
+/// there, which shows the check can see a stale cell.
+#[test]
+fn a_loops_variables_are_current_in_the_frame_cell_the_pdb_names() {
+    let (Some(link), Some(pdbutil), Some(objdump)) = (llvm("lld-link"), llvm("llvm-pdbutil"), llvm("llvm-objdump")) else {
+        eprintln!("skipped: needs lld-link, llvm-pdbutil and llvm-objdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    std::fs::write(dir.join("l.c"), "int __cdecl sum(int n)\n{\n    int s = 0;\n    int i;\n    for (i = 0; i < n; i++)\n        s += i * 3;\n    return s;\n}\n").unwrap();
+    let disassembly = |flags: &[&str], exe: &str| {
+        let made = compile(&dir.join("l.c"), &[&["-m32", "-O2", "-fobject-format=coff"], flags].concat(), &dir.join("l.obj"));
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        let linked = Command::new(&link).args(["/machine:x86", "/subsystem:console", "/entry:sum", "/nodefaultlib", "/debug", "/pdb:l.pdb", &format!("/out:{exe}"), "l.obj"]).current_dir(dir).output().unwrap();
+        assert!(linked.status.success(), "{}{}", String::from_utf8_lossy(&linked.stdout), String::from_utf8_lossy(&linked.stderr));
+        String::from_utf8_lossy(&Command::new(&objdump).args(["-d", "--no-show-raw-insn", exe]).current_dir(dir).output().unwrap().stdout).into_owned()
+    };
+    let listing = disassembly(&["-g"], "g.exe");
+    let symbols = String::from_utf8_lossy(&Command::new(&pdbutil).args(["dump", "--symbols"]).arg(dir.join("l.pdb")).output().unwrap().stdout).into_owned();
+    // Each local's frame offset: its S_LOCAL, then the S_DEFRANGE_REGISTER_REL that follows.
+    let mut offsets = std::collections::BTreeMap::new();
+    let mut current = String::new();
+    for line in symbols.lines().map(str::trim) {
+        if line.split_once("| ").is_some_and(|(_, record)| record.starts_with("S_LOCAL")) {
+            current = line.split('`').nth(1).unwrap_or_default().to_owned();
+        } else if let Some(rest) = line.strip_prefix("register = EBP, offset = ") {
+            offsets.insert(current.clone(), rest.split(',').next().unwrap().parse::<i64>().unwrap());
+        }
+    }
+    for variable in ["s", "i"] {
+        let offset = *offsets.get(variable).unwrap_or_else(|| panic!("no frame location for {variable}:\n{symbols}"));
+        assert!(stores_in_a_loop(&listing, offset), "{variable} at ebp{offset:+} is not written in the loop:\n{listing}");
+    }
+    // The negative control: the same loop without -g has no homes, and the check says so.
+    let bare = disassembly(&[], "b.exe");
+    assert!(offsets.values().all(|&offset| !stores_in_a_loop(&bare, offset)), "the check sees stores that are not there:\n{bare}");
 }

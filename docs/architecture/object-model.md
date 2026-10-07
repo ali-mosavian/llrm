@@ -48,7 +48,13 @@ symbols, COMDAT (COFF needs it for inline functions and templates; no frontend p
 frontends write) and the layout: types (an arena), functions (symbol, ranges, body, parameters and
 locals each with a `Location`: frame cell, register, list of ranges, static), module code and data,
 files and lines, and the target's register file with its DWARF and CodeView numbers (`registers.regs`).
-Writers are target-blind: `llrm-omf::codeview` writes $$SYMBOLS, $$TYPES and LINNUM from it.
+Writers are target-blind: `llrm-omf::codeview` writes $$SYMBOLS, $$TYPES and LINNUM from it, and
+`llrm-dwarf` writes DWARF 5 (4 with `-gdwarf-4`: the same writer, its units and line table headers
+differ) as `.debug_info`, `.debug_abbrev`, `.debug_str`, `.debug_line`, `.debug_line_str` and
+`.debug_aranges`; `llrm-elf` and `llrm-macho` (`__DWARF`, whose sections one another refer to by
+offset, unrelocated) call it where an object has `Info`. DWARF 5 is the default for its range lists,
+`line_strp` and MD5 file checksums, which gdb 10+ and LLVM read. Its location, type and register
+facts are the model's: a register's number is the target's `registers.regs` `dwarf` column.
 Enums, typedefs, qualifiers, block scopes, register and listed locations, columns and checksums are in
 the model; a frontend fills them as it learns to, and a writer that cannot say one refuses it by name.
 
@@ -79,7 +85,7 @@ writer cannot express.
 | format | crate | status |
 | --- | --- | --- |
 | OMF | `llrm-omf` (`write`) | 16- and 32-bit |
-| ELF32 | `llrm-elf32` | i386: `.text`/`.data`/`.rodata`/`.bss`, REL, `R_386_32`, `R_386_PC32`, `_16`, `PC16`, `_8`, `PC8` |
+| ELF32 | `llrm-elf32` | i386: `.text`/`.data`/`.rodata`/`.bss`, REL, `R_386_32`, `R_386_PC32`, `_16`, `PC16`, `_8`, `PC8`; `-g` is DWARF |
 
 | ELF64 | `llrm-elf64` | x86-64: RELA, `R_X86_64_64`, `_PC32`, `_32`, `_16`, `_PC16`, `_8`, `_PC8`, `_PC64`; no target produces one yet |
 | COFF i386 | `llrm-coff32` | `.text`/`.rdata`/`.data`/`.bss`; `DIR32`, `REL32`, `SECTION`, `SECREL`; `@feat.00` = 1 |
@@ -91,12 +97,20 @@ of a role is `.text$name`, which the linker merges into `.text`. A COFF object r
 as ELF does. A pc-relative field's value is `addend - (from - baked)`, `baked` being what the relocation
 type already subtracts (`REL32`: 4). More than 65535 relocations in a section use `LNK_NRELOC_OVFL`.
 
+COFF debug information is CodeView C13, written from `Info` into `.debug$S` and `.debug$T` (`llrm-coff/src/codeview`):
+a function is `S_GPROC32`/`S_LPROC32`, a variable `S_LOCAL` with one `S_DEFRANGE_REGISTER_REL` (frame) or
+`S_DEFRANGE_REGISTER` per range (pieces of 0xF000 bytes, a range's length being 16 bits), a block `S_BLOCK32`, a
+global `S_GDATA32`/`S_LDATA32`, a named struct, enum or typedef `S_UDT`. A code or data address is a `SECREL` and a
+`SECTION` relocation against the object's symbol. A struct reached from its own field is written as a forward
+reference first. Register numbers come from `Info.registers`. Refused by name: far and huge pointers, BASIC's types,
+a function or block in several ranges, a register with no CodeView number.
+
 `llrm-elf` holds the container both share (sections, symbols, relocation tables); a machine gives it
 its ELF number, its relocation types, and REL or RELA.
 
 An ELF object is written for `-m32 -fobject-format=elf` into a file named `*.o`. It refuses what OMF alone
-has: segments with a selector of their own, far pointers, groups, the stack segment, and (until the DWARF
-writer) `-g`.
+has: segments with a selector of their own, far pointers, groups, the stack segment, and `-g`'s CodeView or
+Turbo Debugger flavors (`-g` and `-gdwarf[-4|-5]` are DWARF).
 
 Mach-O: the file is not `MH_SUBSECTIONS_VIA_SYMBOLS`, so a code section is one atom, a call between two
 of its functions may be resolved where it is written, and `-dead_strip` keeps the whole section. A local
