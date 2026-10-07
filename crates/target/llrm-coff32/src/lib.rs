@@ -36,12 +36,6 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     llrm_coff::write::<I386>(object)
 }
 
-/// `object` as a COFF object file with its debug information as C13, `registers` naming where a
-/// variable is.
-pub fn write_with(object: &Object, registers: &llrm_coff::codeview::Registers) -> Result<Vec<u8>, Unsupported> {
-    llrm_coff::write_with::<I386>(object, Some(registers))
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -248,14 +242,5 @@ mod tests {
         assert!(listing.contains("calll\t0x401008") || listing.contains("call\t0x401008"), "{listing}");
         let said = Command::new(&objdump).args(["-s", "-j", ".data"]).arg(&exe).output().unwrap();
         assert!(String::from_utf8_lossy(&said.stdout).contains("08104000"), "{}", String::from_utf8_lossy(&said.stdout));
-    }
-
-    /// `-g` reached a writer with no debug format: refused, not left out of an object a debugger
-    /// then found empty.
-    #[test]
-    fn debug_information_is_refused_not_dropped() {
-        let mut made = object(vec![text(vec![0], vec![])], vec![]);
-        made.debug = Some(llrm_object::debug::Info::default());
-        assert!(write(&made).unwrap_err().0.contains("debug information"));
     }
 }

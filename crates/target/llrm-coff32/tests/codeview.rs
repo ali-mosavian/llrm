@@ -4,8 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command;
 
-use llrm_coff::codeview::Registers;
-use llrm_object::debug::{Enumerator, Field, File, Function, Info, Kind, Line, Location, Range, Reach, Scalar, Type, Variable};
+use llrm_object::debug::{Enumerator, Field, File, Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable};
 use llrm_object::{Arch, Binding, Definition, Object, Role, Section, Symbol};
 
 fn llvm(tool: &str) -> Option<PathBuf> {
@@ -14,8 +13,8 @@ fn llvm(tool: &str) -> Option<PathBuf> {
     dirs.iter().map(|dir| dir.join(tool)).find(|path| path.exists())
 }
 
-fn registers() -> Registers {
-    Registers { frame: 22, numbers: BTreeMap::from([("eax".to_owned(), 17), ("ebx".to_owned(), 20)]) }
+fn registers() -> Vec<Register> {
+    [("ebp", 22), ("eax", 17), ("ebx", 20)].map(|(name, number)| Register { name: name.into(), bits: 32, dwarf: None, codeview: Some(number) }).to_vec()
 }
 
 fn public(name: &str, section: usize, offset: usize) -> Symbol {
@@ -62,6 +61,8 @@ fn object() -> Object {
         blocks: vec![llrm_object::debug::Block { ranges: vec![Range { section: 0, offset: 4, length: 8 }], variables: vec![variable("t", 0, Kind::Local, Location::Frame { disp: -56 })], blocks: Vec::new() }],
     };
     let info = Info {
+        frame_register: "ebp".into(),
+        registers: registers(),
         files: vec![File { name: "f.c".into(), checksum: None }],
         code: vec![Range { section: 0, offset: 0, length: 16 }],
         types,
@@ -85,7 +86,7 @@ fn dump(tool: &str, arguments: &[&str], bytes: &[u8]) -> Option<String> {
 }
 
 fn written() -> Vec<u8> {
-    llrm_coff32::write_with(&object(), &registers()).unwrap()
+    llrm_coff32::write(&object()).unwrap()
 }
 
 /// Every record of both sections reads, and says what the model said: the function and its
@@ -163,14 +164,21 @@ fn function(made: &mut Object) -> &mut Function {
 fn refusal(change: impl FnOnce(&mut Object)) -> String {
     let mut made = object();
     change(&mut made);
-    llrm_coff32::write_with(&made, &registers()).unwrap_err().0
+    llrm_coff32::write(&made).unwrap_err().0
 }
 
 /// What C13 as written cannot say is refused by name, never written as something near: a register
 /// the target gives no CodeView number, a far function, BASIC's types, a function in two pieces.
 #[test]
 fn what_the_writer_cannot_say_is_refused_by_name() {
-    assert!(refusal(|made| function(made).variables[1].location = Location::Register("zmm0".into())).contains("register zmm0 has no CodeView number"));
+    assert!(refusal(|made| function(made).variables[1].location = Location::Register("zmm0".into())).contains("register zmm0 is not in the target's register file"));
+    let unnumbered = |made: &mut Object| made.debug.as_mut().unwrap().registers.push(Register { name: "st0".into(), bits: 80, dwarf: Some(11), codeview: None });
+    assert!(refusal(|made| {
+        unnumbered(made);
+        function(made).variables[1].location = Location::Register("st0".into());
+    })
+    .contains("register st0 has no CodeView number"));
+    assert!(refusal(|made| made.debug.as_mut().unwrap().frame_register = "esp".into()).contains("register esp is not in the target's register file"));
     assert!(refusal(|made| function(made).far = true).contains("f is a far function"));
     assert!(refusal(|made| made.debug.as_mut().unwrap().types.push(Type::Scalar(Scalar::Currency))).contains("no primitive type"));
     assert!(refusal(|made| made.debug.as_mut().unwrap().types.push(Type::FixedString(4))).contains("STRING * n"));
@@ -192,7 +200,7 @@ fn a_variable_over_a_long_function_is_written_in_pieces() {
     info.functions[0].body = Some((3, 129_990));
     info.functions[0].blocks.clear();
     info.lines.clear();
-    let bytes = llrm_coff32::write_with(&made, &registers()).unwrap();
+    let bytes = llrm_coff32::write(&made).unwrap();
     let text = dump("llvm-readobj", &["--codeview"], &bytes).unwrap();
     let lengths: Vec<usize> = text.lines().filter_map(|one| one.trim().strip_prefix("Range: 0x")).map(|one| usize::from_str_radix(one, 16).unwrap()).collect();
     // Seven variables of one piece each, but `x` is three.
@@ -205,6 +213,6 @@ fn a_variable_over_a_long_function_is_written_in_pieces() {
 fn a_column_is_written_with_its_line() {
     let mut made = object();
     made.debug.as_mut().unwrap().lines[1].column = 9;
-    let text = dump("llvm-readobj", &["--codeview"], &llrm_coff32::write_with(&made, &registers()).unwrap()).unwrap();
+    let text = dump("llvm-readobj", &["--codeview"], &llrm_coff32::write(&made).unwrap()).unwrap();
     assert!(text.contains("Flags: 0x1") && text.contains("ColStart: 9"), "{text}");
 }

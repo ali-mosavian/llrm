@@ -101,7 +101,7 @@ fn pieces(range: Range) -> Vec<Range> {
 
 struct Writer<'a> {
     object: &'a Object,
-    registers: &'a Registers,
+    registers: &'a Registers<'a>,
     types: &'a Types,
     /// The symbol the function being written is, which its code is reached through.
     function: usize,
@@ -109,7 +109,7 @@ struct Writer<'a> {
 
 impl Writer<'_> {
     fn register(&self, register: &str) -> Result<u16, Unsupported> {
-        self.registers.numbers.get(register).copied().map_or_else(|| refused(format!("register {register} has no CodeView number")), Ok)
+        self.registers.number(register)
     }
 
     /// `S_DEFRANGE_*` for `location` over each piece of `ranges`.
@@ -124,7 +124,7 @@ impl Writer<'_> {
                 };
                 match location {
                     Location::Frame { disp } => out.symbol(S_DEFRANGE_REGISTER_REL, |out| {
-                        put16(&mut out.bytes, self.registers.frame);
+                        put16(&mut out.bytes, self.registers.frame()?);
                         put16(&mut out.bytes, 0);
                         put32(&mut out.bytes, i32::try_from(*disp).or_else(|_| refused(format!("a frame offset {disp} does not fit its field")))? as u32);
                         at(out);
@@ -279,7 +279,7 @@ fn lines(object: &Object, info: &Info, function: usize, range: Range, offsets: &
     Ok(Some(out))
 }
 
-pub fn encode(object: &Object, info: &Info, registers: &Registers, types: &Types) -> Result<Section, Unsupported> {
+pub fn encode(object: &Object, info: &Info, registers: &Registers<'_>, types: &Types) -> Result<Section, Unsupported> {
     let mut strings = Strings { bytes: vec![0] };
     let mut checksums = Data::default();
     let mut offsets = Vec::new();

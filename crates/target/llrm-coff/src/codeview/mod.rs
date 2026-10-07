@@ -5,21 +5,29 @@
 pub mod symbols;
 mod types;
 
-use std::collections::BTreeMap;
-
 use llrm_object::debug::Info;
 use llrm_object::{Arch, Object, Reloc, Unsupported};
 
 /// `CV_SIGNATURE_C13`: what opens both sections.
 const SIGNATURE: u32 = 4;
 
-/// The register numbers a variable's location can name, from the target's description.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct Registers {
+/// The register numbers a variable's location can name: the model's own, by the target's name.
+pub(crate) struct Registers<'a> {
+    info: &'a Info,
+}
+
+impl Registers<'_> {
+    pub(crate) fn number(&self, register: &str) -> Result<u16, Unsupported> {
+        match self.info.registers.iter().find(|one| one.name == register) {
+            Some(one) => one.codeview.map_or_else(|| refused(format!("register {register} has no CodeView number")), Ok),
+            None => refused(format!("register {register} is not in the target's register file")),
+        }
+    }
+
     /// The register a frame location is relative to.
-    pub frame: u16,
-    /// CodeView's number of each register, by the target's name for it.
-    pub numbers: BTreeMap<String, u16>,
+    pub(crate) fn frame(&self) -> Result<u16, Unsupported> {
+        self.number(&self.info.frame_register)
+    }
 }
 
 /// A section's bytes and the relocations that fill its section and offset fields.
@@ -62,9 +70,9 @@ pub(crate) fn record(out: &mut Vec<u8>, kind: u16, data: &[u8], pad: fn(usize) -
 }
 
 /// `object`'s debug sections.
-pub fn encode(object: &Object, info: &Info, registers: &Registers) -> Result<Encoded, Unsupported> {
+pub fn encode(object: &Object, info: &Info) -> Result<Encoded, Unsupported> {
     let types = types::encode(object, info)?;
-    let symbols = symbols::encode(object, info, registers, &types)?;
+    let symbols = symbols::encode(object, info, &Registers { info }, &types)?;
     let mut image = Vec::new();
     put32(&mut image, SIGNATURE);
     image.extend(types.records);

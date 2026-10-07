@@ -83,6 +83,55 @@ fn llvm_accepts_every_bench_coff_object() {
     }
 }
 
+/// `-g`: llvm-readobj reads the C13 of every bench C program's COFF object and llvm-objdump its
+/// code, at both ends of the optimiser. Each object names its functions.
+#[test]
+fn llvm_reads_the_codeview_of_every_bench_coff_object() {
+    let (Some(readobj), Some(objdump)) = (llvm("llvm-readobj"), llvm("llvm-objdump")) else {
+        eprintln!("skipped: LLVM's object tools are not installed");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    for source in &bench_programs() {
+        for level in ["-O0", "-O2"] {
+            let object = scratch.path().join("x.obj");
+            let made = compile(source, &["-m32", level, "-g", "-fobject-format=coff"], &object);
+            assert!(made.status.success(), "{} {level}: {}", source.display(), String::from_utf8_lossy(&made.stderr));
+            for (tool, arguments) in [(&readobj, &["--codeview"][..]), (&objdump, &["-d", "-r"][..])] {
+                let said = Command::new(tool).args(arguments).arg(&object).output().unwrap();
+                let text = format!("{}{}", String::from_utf8_lossy(&said.stdout), String::from_utf8_lossy(&said.stderr));
+                assert!(said.status.success() && !text.contains("warning") && !text.contains("error"), "{} {} {level}:\n{text}", tool.display(), source.display());
+                if tool == &readobj {
+                    assert!(text.contains("S_GPROC32") && text.contains("FunctionLineTable"), "{} {level}: no function or lines:\n{text}", source.display());
+                }
+            }
+        }
+    }
+}
+
+/// `-g` through the whole path: lld-link links the C program's object with /debug, and the PDB holds
+/// its function with both parameters, its struct, its global and its lines. The same program
+/// as OMF CodeView names the same function, parameters and struct.
+#[test]
+fn lld_link_makes_a_pdb_of_a_c_program() {
+    let (Some(link), Some(pdbutil)) = (llvm("lld-link"), llvm("llvm-pdbutil")) else {
+        eprintln!("skipped: needs lld-link and llvm-pdbutil");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let dir = scratch.path();
+    std::fs::write(dir.join("p.c"), "struct S { int a; char b; };\nint g = 3;\nint twice(int a, struct S *p)\n{\n    int y = a + p->a;\n    return y + y + g;\n}\n").unwrap();
+    let made = compile(&dir.join("p.c"), &["-m32", "-O0", "-g", "-fobject-format=coff"], &dir.join("p.obj"));
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(link).args(["/machine:x86", "/subsystem:console", "/entry:twice", "/nodefaultlib", "/debug", "/pdb:p.pdb", "/out:p.exe", "p.obj"]).current_dir(dir).output().unwrap();
+    assert!(linked.status.success(), "{}{}", String::from_utf8_lossy(&linked.stdout), String::from_utf8_lossy(&linked.stderr));
+    let said = Command::new(pdbutil).args(["dump", "-l", "--symbols", "--types", "--globals"]).arg(dir.join("p.pdb")).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout);
+    for wanted in ["S_GPROC32", "`twice`", "S_LOCAL", "`a`", "`p`", "`y`", "flags = param", "LF_STRUCTURE", "`S`", "sizeof 8", "S_GDATA32", "`g`", "line/addr entries"] {
+        assert!(text.contains(wanted), "no {wanted}:\n{text}");
+    }
+}
+
 const SOURCE: &str = "int twice(int a) { return a + a; }\n";
 
 /// The default format is the target's own, OMF: THEADR opens the file.

@@ -137,21 +137,12 @@ fn pad(bytes: &mut Vec<u8>, to: usize) {
     }
 }
 
-/// `object` as a COFF object file of machine `M`.
+/// `object` as a COFF object file of machine `M`, its debug information, if any, as C13.
 pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
-    if object.debug.is_some() {
-        return Err(unsupported("-g: this writer does not write debug information yet"));
-    }
-    write_with::<M>(object, None)
-}
-
-/// `object` as a COFF object file of machine `M`, its debug information, if any, as C13 with
-/// `registers` to name where a variable is.
-pub fn write_with<M: Machine>(object: &Object, registers: Option<&codeview::Registers>) -> Result<Vec<u8>, Unsupported> {
     let expanded;
-    let object = match (&object.debug, registers) {
-        (Some(info), Some(registers)) => {
-            let encoded = codeview::encode(object, info, registers)?;
+    let object = match &object.debug {
+        Some(info) => {
+            let encoded = codeview::encode(object, info)?;
             let section = |name: &str, one: codeview::Section| Section { name: name.to_owned(), role: Role::Debug, near: true, align: 1, spans: vec![[0, one.image.len()]], image: one.image, relocs: one.relocs };
             let mut sections = object.sections.clone();
             sections.push(section(".debug$S", encoded.symbols));
@@ -159,11 +150,8 @@ pub fn write_with<M: Machine>(object: &Object, registers: Option<&codeview::Regi
             expanded = Object { sections, debug: None, ..object.clone() };
             &expanded
         }
-        _ => object,
+        None => object,
     };
-    if object.debug.is_some() {
-        return Err(unsupported("-g: debug information needs the target's register numbers"));
-    }
     if object.arch != M::ARCH {
         return Err(unsupported(format!("{:?} is not the {:?} this COFF writer is for", object.arch, M::ARCH)));
     }
