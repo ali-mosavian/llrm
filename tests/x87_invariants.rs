@@ -44,3 +44,17 @@ fn test_a_stored_loop_carried_float_is_spilled_to_the_cell_the_program_stores_it
     let stores = listing.lines().filter(|line| line.trim_start().starts_with("fstp qword ptr [") || line.trim_start().starts_with("fst qword ptr [")).count();
     assert_eq!(stores, 12, "{listing}");
 }
+
+/// -Os hoisted `x[i]` and `y[i]` out of the inner loop of 1.5 trips: two `fld` before it and two `fstp st(0)` after,
+/// 4 B and 800 instructions more than not hoisting (x86-m32 priced -Os in clocks, and nothing priced the release).
+#[test]
+#[ignore = "#698: late hoist prices freed pointers above the release"]
+fn test_os_does_not_hold_floats_across_a_loop_for_the_release_they_cost() {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    std::fs::write(directory.join("a.c"), KERNEL).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).args(["-m32", "-Os", "-march=i486", "-S", "-o", "a.s", "a.c"]).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let listing = std::fs::read_to_string(directory.join("a.s")).unwrap();
+    assert_eq!(listing.matches("fstp st(0)").count(), 0, "{listing}");
+}
