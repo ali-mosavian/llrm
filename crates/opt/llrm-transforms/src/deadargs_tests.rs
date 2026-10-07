@@ -107,3 +107,75 @@ b0:
 ");
     assert!(after.contains("call i16 @f(i16 %m, i16 %b, i16 %a)"), "{after}");
 }
+
+/// A parameter handed to another function is read there: it is live, and so is the one it is traded with.
+#[test]
+fn a_parameter_passed_to_another_function_is_live_through_the_call() {
+    let after = run("declare void @use(i16)
+define internal i16 @f(i16 %n, i16 %a, i16 %b) {
+b0:
+  %done = icmp eq i16 %n, 0
+  br i1 %done, label %out, label %again
+again:
+  call void @use(i16 %a)
+  %m = sub i16 %n, 1
+  %x = call i16 @f(i16 %m, i16 %b, i16 %a)
+  ret i16 %x
+out:
+  ret i16 0
+}
+define i16 @top(i16 %x) {
+b0:
+  %r = call i16 @f(i16 %x, i16 1, i16 3)
+  ret i16 %r
+}
+");
+    assert!(after.contains("call i16 @f(i16 %m, i16 %b, i16 %a)"), "{after}");
+}
+
+/// Whoever takes the address of the function may call it with all its arguments: the signature stays.
+#[test]
+fn a_function_whose_address_is_taken_keeps_its_parameters() {
+    let after = run("@hook = global ptr @f
+define internal i16 @f(i16 %n, i16 %a, i16 %b) {
+b0:
+  %done = icmp eq i16 %n, 0
+  br i1 %done, label %out, label %again
+again:
+  %m = sub i16 %n, 1
+  %x = call i16 @f(i16 %m, i16 %b, i16 %a)
+  ret i16 %x
+out:
+  ret i16 0
+}
+define i16 @top(i16 %x) {
+b0:
+  %r = call i16 @f(i16 %x, i16 1, i16 3)
+  ret i16 %r
+}
+");
+    assert!(after.contains("call i16 @f(i16 %x, i16 1, i16 3)"), "{after}");
+}
+
+/// A call through a variadic type passes more than the parameters name: nothing is dropped.
+#[test]
+fn a_variadic_function_keeps_its_parameters() {
+    let after = run("define internal i16 @f(i16 %n, i16 %a, ...) {
+b0:
+  %done = icmp eq i16 %n, 0
+  br i1 %done, label %out, label %again
+again:
+  %m = sub i16 %n, 1
+  %x = call i16 (i16, i16, ...) @f(i16 %m, i16 %a)
+  ret i16 %x
+out:
+  ret i16 0
+}
+define i16 @top(i16 %x) {
+b0:
+  %r = call i16 (i16, i16, ...) @f(i16 %x, i16 1, i16 5)
+  ret i16 %r
+}
+");
+    assert!(after.contains("i16 %x, i16 1, i16 5)"), "{after}");
+}
