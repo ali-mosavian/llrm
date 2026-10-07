@@ -94,3 +94,88 @@ pub(crate) fn _four_clobbers() -> BTreeSet<Reg> {
     out.insert(Reg::Flags);
     out
 }
+
+/// `bytes`, 386 code for a 16-bit segment, as the same instructions in a 32-bit one: each `66` operand-size prefix gone with
+/// the instruction's own operand size, a `ret` and a near jump or call taking the wider forms, every branch aimed again.
+/// Run as they were in a 32-bit segment the prefixes made 16-bit operations of them: a 64-bit remainder was garbage.
+pub(crate) fn flat(bytes: &[u8]) -> Vec<u8> {
+    use iced_x86::{BlockEncoder, BlockEncoderOptions, Code, Decoder, DecoderOptions, FlowControl, Instruction, InstructionBlock};
+    let wide: std::collections::HashMap<String, Code> = Code::values().map(|code| (format!("{code:?}"), code)).collect();
+    let mut decoder = Decoder::with_ip(16, bytes, 0, DecoderOptions::NONE);
+    let mut found = Vec::new();
+    while decoder.can_decode() {
+        let one = decoder.decode();
+        assert!(!one.is_invalid(), "an instruction of the helper at {}", one.ip());
+        let name = format!("{:?}", one.code());
+        let flat = match one.flow_control() {
+            FlowControl::UnconditionalBranch | FlowControl::ConditionalBranch | FlowControl::Call if one.near_branch16() != 0 || name.contains("rel") => {
+                let target = name.replace("_rel16", "_rel32_32").replace("_rel8_16", "_rel8_32");
+                let mut branch = Instruction::with_branch(wide[&target], one.near_branch_target()).expect("a branch");
+                branch.set_ip(one.ip());
+                branch
+            }
+            FlowControl::Return => {
+                let mut again = one;
+                again.set_code(wide[&name.replace("Retnw", "Retnd")]);
+                again
+            }
+            _ => {
+                // The operand size is in the code: the same instruction encodes without the prefix at 32 bits.
+                one
+            }
+        };
+        found.push(flat);
+    }
+    // A branch to the end of the helper aims at what follows it: a nop there is the target, and is cut off after.
+    let mut end = Instruction::with(Code::Nopd);
+    end.set_ip(bytes.len() as u64);
+    found.push(end);
+    let block = InstructionBlock::new(&found, 0);
+    let mut code = BlockEncoder::encode(32, block, BlockEncoderOptions::NONE).expect("the helper in 32 bits").code_buffer;
+    code.pop();
+    code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iced_x86::{Decoder, DecoderOptions, Formatter, NasmFormatter};
+
+    /// The instructions of `bytes`, a branch's target as the index of the instruction it aims at (or their count, for the end).
+    fn text(bytes: &[u8], bits: u32) -> Vec<String> {
+        let mut decoder = Decoder::with_ip(bits, bytes, 0, DecoderOptions::NONE);
+        let mut formatter = NasmFormatter::new();
+        let mut found = Vec::new();
+        while decoder.can_decode() {
+            found.push(decoder.decode());
+        }
+        let index = |ip: u64| {
+            let at = found.iter().position(|one| one.ip() == ip);
+            assert!(at.is_some() || ip == bytes.len() as u64, "a branch aims at {ip:#x}, inside no instruction of {} bytes", bytes.len());
+            at.unwrap_or(found.len())
+        };
+        found
+            .iter()
+            .map(|one| {
+                let mut line = String::new();
+                formatter.format(one, &mut line);
+                match one.flow_control() {
+                    iced_x86::FlowControl::UnconditionalBranch | iced_x86::FlowControl::ConditionalBranch | iced_x86::FlowControl::Call if one.near_branch_target() != 0 || line.contains("short") || line.contains("near") => {
+                        format!("{} -> {}", line.split_whitespace().next().unwrap(), index(one.near_branch_target()))
+                    }
+                    _ => line,
+                }
+            })
+            .collect()
+    }
+
+    /// Run in a 32-bit segment, the helpers' `66` prefixes made 16-bit operations of them: a 64-bit remainder by a variable
+    /// was wrong at every level (torture 920501-2). Each helper's instructions are the same ones, without prefixes.
+    #[test]
+    fn test_the_division_helpers_are_the_same_instructions_at_32_bits() {
+        for blob in [&*_UDIV, &*_SDIV, &*_UDIV_CONST32, &*_SDIV_CONST32] {
+            let flat = flat(blob);
+            assert_eq!(text(&flat, 32), text(blob, 16));
+        }
+    }
+}

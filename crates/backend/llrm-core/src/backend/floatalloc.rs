@@ -121,6 +121,11 @@ pub(super) fn _memory_name(name: &str, cell_is_left: bool, load: &Insn) -> Optio
     select::float_memory(&name, cell_of(load), select::At::bits16(0)).is_some().then_some(name)
 }
 
+/// The compare of a value against `load`'s cell: `fcomp`, or `ficomp` where the cell holds an integer `fild` reads.
+pub(super) fn _compare_name(load: &Insn) -> &'static str {
+    if name_is(load.what.as_ref().expect("a home load has semantics"), "fild") { "ficomp" } else { "fcomp" }
+}
+
 /// A stack slot whose value is overwritten: popped at once.
 const DEAD: u32 = u32::MAX;
 
@@ -496,7 +501,9 @@ impl _Stack {
             self.duplicate(left)?;
         }
         let what = self.one().what.clone().expect("a floating instruction has semantics");
-        self.emit(Semantics { name: Some("fcomp".to_owned()), dests: Vec::new(), sources: vec![st(0), cell], ..what });
+        // Fused from a home load, it is already `fcomp` or, over an integer cell, `ficomp`.
+        let name = if name_is(&what, "ficomp") { "ficomp" } else { "fcomp" };
+        self.emit(Semantics { name: Some(name.to_owned()), dests: Vec::new(), sources: vec![st(0), cell], ..what });
         self.values.remove(0);
         self.status()
     }

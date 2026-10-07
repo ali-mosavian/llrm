@@ -6,6 +6,7 @@ pub mod debug;
 pub mod diagnostic;
 pub mod graph;
 pub mod hash;
+pub mod leaf;
 pub mod pyjson;
 pub mod pypath;
 pub mod pyrepr;

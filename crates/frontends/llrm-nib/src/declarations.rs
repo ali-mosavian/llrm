@@ -144,7 +144,7 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
                 return Err(unsupported(&function.name, "C; BASIC calls it", span));
             }
             let convention = match abi {
-                Abi::C | Abi::Cdecl16 | Abi::Cdecl32 | Abi::Sysv32 => "__cdecl",
+                Abi::C | Abi::Cdecl16 | Abi::Cdecl32 | Abi::Sysv32 | Abi::Ia16 => "__cdecl",
                 Abi::Watcall32 | Abi::Watcall16 => "__watcall",
                 Abi::Interrupt16 => "__interrupt",
                 Abi::Pascal16 | Abi::Basic(_) => "__pascal",
@@ -192,7 +192,7 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
                 .collect::<Vec<_>>()
                 .join(", ");
             let cleanup = match abi {
-                Abi::C | Abi::Cdecl16 | Abi::Cdecl32 | Abi::Sysv32 => "caller removes the arguments".to_owned(),
+                Abi::C | Abi::Cdecl16 | Abi::Cdecl32 | Abi::Sysv32 | Abi::Ia16 => "caller removes the arguments".to_owned(),
                 Abi::Interrupt16 => "iret".to_owned(),
                 Abi::Watcall32 | Abi::Watcall16 => "the callee removes the stack arguments".to_owned(),
                 _ => format!("retf {words}"),

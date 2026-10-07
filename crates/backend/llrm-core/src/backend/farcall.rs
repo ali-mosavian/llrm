@@ -52,6 +52,8 @@ pub fn materialized(body: &LirBody, frame: &mut Frame) -> Result<LirBody, frames
                 Some(what)
                     if what.op == Operation::Call
                         && what.indirect
+                        // A far pointer packs selector and offset in four bytes of a 16-bit segment; in a 32-bit one a dword is a near pointer.
+                        && body.bits == 16
                         && matches!(what.sources.as_slice(), [Loc::Held(Held { width: 4, .. })]) =>
                 {
                     let Loc::Held(target) = what.sources[0] else { unreachable!() };
@@ -78,7 +80,8 @@ pub fn materialized(body: &LirBody, frame: &mut Frame) -> Result<LirBody, frames
                         sources: vec![cell],
                         ..what.clone()
                     });
-                    call.uses = Vec::new();
+                    // The target now comes from the cell; what the call still reads (its register arguments) stays read.
+                    call.uses.retain(|&value| value != target.value);
                     insns.push(Arc::new(call));
                 }
                 _ => insns.push(Arc::clone(one)),
@@ -149,5 +152,39 @@ mod tests {
         assert_eq!(got, vec![store.clone(), called.clone(), near, store, called]);
         assert_eq!(frame.borrow().slots, IndexMap::from_iter([(SlotKey::from(("far-indirect-call", 0)), -20)]));
         assert_eq!(frame.borrow().size(), 4);
+    }
+
+    /// A far indirect call that takes a register argument still reads it: the pass emptied the call's uses, so an
+    /// instruction ahead of it was free to write the argument's register (`mov eax, ecx` passed the wrong value).
+    #[test]
+    fn a_far_call_keeps_reading_its_register_arguments() {
+        let mut call = Insn::new(
+            4,
+            Some((4, 7)),
+            Some(Semantics { name: Some("call".to_owned()), sources: vec![Loc::Held(Held { value: 5, width: 4 })], indirect: true, ..Semantics::new(Operation::Call) }),
+            vec![],
+            vec![7, 5],
+        );
+        call.requires = vec![(Held { value: 7, width: 4 }, iced_x86::Register::EAX)];
+        let body = LirBody::new("far", 0, vec![LirBlock::new(0, vec![Arc::new(call)])], IndexMap::default(), IndexMap::default());
+        let out = FarIndirectCalls::new(Rc::new(RefCell::new(Frame::new(-16)))).transform(body).unwrap();
+        let called = out.insns().into_iter().find(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call)).unwrap();
+        assert_eq!(called.uses, vec![7]);
+    }
+
+    /// In a 32-bit segment a dword target is a near pointer: the call stays as it was.
+    #[test]
+    fn a_dword_target_in_a_32_bit_segment_is_not_a_far_pointer() {
+        let call = Arc::new(Insn::new(
+            4,
+            Some((4, 7)),
+            Some(Semantics { name: Some("call".to_owned()), sources: vec![Loc::Held(Held { value: 5, width: 4 })], indirect: true, ..Semantics::new(Operation::Call) }),
+            vec![],
+            vec![5],
+        ));
+        let mut body = LirBody::new("near", 0, vec![LirBlock::new(0, vec![call])], IndexMap::default(), IndexMap::default());
+        body.bits = 32;
+        let out = FarIndirectCalls::new(Rc::new(RefCell::new(Frame::new(-16)))).transform(body).unwrap();
+        assert_eq!(out.insns().len(), 1);
     }
 }

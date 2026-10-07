@@ -7,6 +7,9 @@ convention = "cdecl16"
 [abi.watcom]
 convention = "watcall16"
 
+[abi.ia16]
+convention = "ia16"
+
 # cdecl16, m16's C ABI: Borland's medium model as `wccq` is asked for it (-mm -ecc; `_name`
 # symbols). A far call (a procedure that is exported) leaves a 4-byte return address.
 
@@ -118,3 +121,18 @@ aggregate_pointer_popped_by = "callee"
 
 [watcall16.symbol]
 omf = "*_"
+
+# ia16: gcc-ia16's convention, as `ia16-elf-gcc -O2` (6.3) emits it, small and medium model alike: every argument on the stack, pushed
+# right to left in word slots, which the caller removes; results in AL, AX or DX:AX. A struct result of 1, 2 or 4 bytes is that
+# integer; any other is written through a near pointer that is the first argument, which the callee returns in AX. BP, SI, DI and ES are
+# kept (gcc uses ES as a general register and saves it), AX, BX, CX and DX are not. Symbols are `_name` in OMF, bare in ELF.
+[ia16]
+like = "cdecl16"
+cc = "ia16"
+preserved = ["bp", ["esi", "si"], ["edi", "di"], "es"]
+clobbered = ["ax", "bx", "cx", "dx", "flags"]
+aggregate_pointer_far = false
+
+[ia16.symbol]
+omf = "_*"
+elf = "*"

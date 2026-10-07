@@ -116,6 +116,8 @@ pub struct Type {
     pub reach: Reach,
     pub target: Option<MetadataId>,
     pub members: Vec<Member>,
+    /// A scalar's name in the source, where it has one (`unsigned long`, not `uint32`): what a debugger prints.
+    pub spelling: Option<String>,
 }
 
 /// A structure's field, or a procedure's parameter by its type alone.
@@ -264,7 +266,10 @@ pub fn set_type(module: &mut Module, id: MetadataId, one: &Type) {
     let members = list(module, members);
     let size = int(module, one.size);
     let target = one.target.map_or(MetadataOperand::Null, MetadataOperand::Node);
-    module.metadata[id.0 as usize].operands = vec![text(one.kind.value()), text(&one.name), size, text(one.reach.value()), target, members];
+    let mut operands = vec![text(one.kind.value()), text(&one.name), size, text(one.reach.value()), target, members];
+    // After the members, only where there is one: a node without it has no spelling.
+    operands.extend(one.spelling.as_deref().map(text));
+    module.metadata[id.0 as usize].operands = operands;
 }
 
 /// Every type node, in the order they were made: a member may name one made after it (an aggregate that
@@ -282,6 +287,7 @@ pub fn read_type(module: &Module, id: MetadataId) -> Option<Type> {
         reach: Reach::from_value(&one.text(3)?)?,
         target: one.node(4),
         members: one.list(5, |member| Some(Member { name: member.text(0)?, r#type: member.node(1)?, offset: member.int(2)?, bits: member.int(3).zip(member.int(4)) }))?,
+        spelling: one.text(6),
     })
 }
 
@@ -364,10 +370,10 @@ mod tests {
     #[test]
     fn a_bit_fields_member_round_trips_and_an_older_member_reads_as_none() {
         let mut module = Module::default();
-        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new() };
+        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new(), spelling: None };
         let int16 = add_type(&mut module, &scalar);
         let members = vec![Member { name: "x".into(), r#type: int16, offset: 0, bits: None }, Member { name: "f".into(), r#type: int16, offset: 2, bits: Some((3, 5)) }];
-        let structure = Type { kind: Kind::Struct, name: "Pt".into(), size: 4, reach: Reach::Near, target: None, members };
+        let structure = Type { kind: Kind::Struct, name: "Pt".into(), size: 4, reach: Reach::Near, target: None, members, spelling: None };
         add_type(&mut module, &structure);
         let reparsed = crate::parse::module(&crate::print::module(&module)).expect("parses");
         let read: Vec<Type> = types(&reparsed).into_iter().filter_map(|id| read_type(&reparsed, id)).collect();
@@ -380,12 +386,12 @@ mod tests {
     #[test]
     fn a_struct_that_points_to_itself_reads_back_whole() {
         let mut module = Module::default();
-        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new() };
+        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new(), spelling: None };
         let int16 = add_type(&mut module, &scalar);
         let node = reserve_type(&mut module);
-        let pointer = add_type(&mut module, &Type { kind: Kind::Pointer, name: String::new(), size: 0, reach: Reach::Near, target: Some(node), members: Vec::new() });
+        let pointer = add_type(&mut module, &Type { kind: Kind::Pointer, name: String::new(), size: 0, reach: Reach::Near, target: Some(node), members: Vec::new(), spelling: None });
         let members = vec![Member { name: "next".into(), r#type: pointer, offset: 0, bits: None }, Member { name: "v".into(), r#type: int16, offset: 2, bits: None }];
-        set_type(&mut module, node, &Type { kind: Kind::Struct, name: "node".into(), size: 4, reach: Reach::Near, target: None, members });
+        set_type(&mut module, node, &Type { kind: Kind::Struct, name: "node".into(), size: 4, reach: Reach::Near, target: None, members, spelling: None });
         let reparsed = crate::parse::module(&crate::print::module(&module)).expect("parses");
         let read: Vec<Type> = types(&reparsed).into_iter().filter_map(|id| read_type(&reparsed, id)).collect();
         assert_eq!(read.len(), 3);
@@ -399,10 +405,15 @@ mod tests {
     #[test]
     fn each_record_reads_back() {
         let mut module = Module::default();
-        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new() };
+        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new(), spelling: None };
         let int16 = add_type(&mut module, &scalar);
-        let structure = Type { kind: Kind::Struct, name: "Pt".into(), size: 4, reach: Reach::Near, target: None, members: vec![Member { name: "x".into(), r#type: int16, offset: 2, bits: None }, Member { name: "f".into(), r#type: int16, offset: 0, bits: Some((3, 5)) }] };
+        let structure = Type { kind: Kind::Struct, name: "Pt".into(), size: 4, reach: Reach::Near, target: None, spelling: None, members: vec![Member { name: "x".into(), r#type: int16, offset: 2, bits: None }, Member { name: "f".into(), r#type: int16, offset: 0, bits: Some((3, 5)) }] };
         let pt = add_type(&mut module, &structure);
+        // A spelling is written only where there is one, and reads back.
+        let spelled = Type { spelling: Some("short".into()), ..scalar.clone() };
+        let short = add_type(&mut module, &spelled);
+        assert_eq!(read_type(&module, short), Some(spelled));
+        assert_eq!(module.metadata[int16.0 as usize].operands.len(), 6, "a type without one is written as before");
         assert_eq!(read_type(&module, int16), Some(scalar));
         assert_eq!(read_type(&module, pt), Some(structure));
         let function = Function { function: "f".into(), module: false, name: "F".into(), r#type: pt, parameters: vec![(1, "n".into(), int16)] };
@@ -421,7 +432,7 @@ mod tests {
     #[test]
     fn a_parameters_home_reads_back_as_one_and_a_plain_node_as_none() {
         let mut module = Module::default();
-        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new() };
+        let scalar = Type { kind: Kind::Scalar, name: "int16".into(), size: 0, reach: Reach::Near, target: None, members: Vec::new(), spelling: None };
         let int16 = add_type(&mut module, &scalar);
         let home = Variable { scope: "f".into(), name: "a".into(), r#type: int16, offset: 0, parameter: true };
         let local = Variable { parameter: false, name: "l".into(), ..home.clone() };

@@ -62,7 +62,8 @@ pub fn program(unit: &hir::Unit, name: &str, calling: &llrm_target::calling::Cal
     let valueless: HashSet<i64> = unit
         .procs
         .iter()
-        .filter(|proc| proc.body.iter().filter(|one| one.call == "CGReturn").all(|one| one.args[0] == "n0") && !answered_by_inline_code(unit, proc))
+        // `main` is the exception: reaching its closing brace returns 0 (C99 5.1.2.2.3), a value the host reads.
+        .filter(|proc| proc.body.iter().filter(|one| one.call == "CGReturn").all(|one| one.args[0] == "n0") && !answered_by_inline_code(unit, proc) && unit.symbols[&proc.symbol].base != "main")
         .map(|proc| proc.symbol)
         .collect();
     let module = Shared { calling, unit, data: &data, keys: &keys, valueless: &valueless };
@@ -169,8 +170,13 @@ fn number(text: &str) -> R<i64> {
 /// Each data segment's labelled objects, as the stream lays them down.
 fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
     let mut out: Vec<Object> = Vec::new();
-    for segment in unit.segments.values().filter(|one| one.attr & 0x1 == 0) {
+    // A flat unit's initializer of a local aggregate is laid down under `_TEXT` (the segment current when the front end
+    // names it): data in a code segment is still data, so a segment with items is read whatever its attributes.
+    for segment in unit.segments.values().filter(|one| one.attr & 0x1 == 0 || !one.items.is_empty()) {
         let first = out.len();
+        // Data the front end laid under a code segment goes to the first data segment of the unit: a name of code
+        // holds nothing the linker may put with the program's code.
+        let placed = if segment.attr & 0x1 == 0 { segment.name.clone() } else { unit.segments.values().find(|one| one.attr & 0x1 == 0).map_or_else(|| segment.name.clone(), |one| one.name.clone()) };
         let continues = out.last().is_some_and(|one| one.bytes.len() % HUGE_SEGMENT == 0 && !one.bytes.is_empty());
         let mut align = None;
         for (call, args) in &segment.items {
@@ -181,7 +187,7 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
                     Key::Symbol(symbol) => unit.symbols[&symbol].object_name(),
                     Key::Literal(back) => format!("L_b{back}"),
                 };
-                out.push(Object { key, name, segment: segment.name.clone(), bytes: Vec::new(), relocations: Vec::new(), align: align.take() });
+                out.push(Object { key, name, segment: placed.clone(), bytes: Vec::new(), relocations: Vec::new(), align: align.take() });
                 continue;
             }
             if let ("DGAlign", [to]) = (call.as_str(), &args[..]) {
@@ -1102,6 +1108,12 @@ impl<'a, 't> Body<'a, 't> {
             self.terminate(TerminatorKind::Return, vec![value_ref(value)], Vec::new());
             return Ok(());
         }
+        if node == "n0" && self.unit.symbols[&self.proc.symbol].base == "main" {
+            let zero = self.int(1, 0);
+            let value = self.converted(zero, "TY_INT_1", &self.proc.type_.clone())?;
+            self.terminate(TerminatorKind::Return, vec![value_ref(value)], Vec::new());
+            return Ok(());
+        }
         if node == "n0" {
             // A value-less return from a function that has one: nothing the caller may read.
             self.terminate(TerminatorKind::Return, Vec::new(), Vec::new());
@@ -1252,6 +1264,25 @@ impl<'a, 't> Body<'a, 't> {
             "CGFlow" | "CGCompare" => "TY_BOOLEAN".to_owned(),
             _ => tree.args.last().cloned().unwrap_or_default(),
         }
+    }
+
+    /// The type `target op= source` computes in where it is not the target's: the integer promotions of the target for a shift, the
+    /// usual arithmetic conversions of both otherwise. None where the target's own type is it (or an operand is no integer).
+    fn compound_type(&self, cg_op: &str, target: &str, source: &str) -> Option<String> {
+        let (target, source) = (self.unit.canonical_type(target), self.unit.canonical_type(&self.type_of_node(source)));
+        let int = i64::from(widths_for(self.unit.flat, "TY_INTEGER")?);
+        let integer = |name: &str| (matches!(name, "TY_INT_1" | "TY_UINT_1" | "TY_INT_2" | "TY_UINT_2" | "TY_INT_4" | "TY_UINT_4" | "TY_INT_8" | "TY_UINT_8" | "TY_INTEGER" | "TY_UNSIGNED")).then(|| (i64::from(widths_for(self.unit.flat, name).unwrap_or(0)), signed(name)));
+        let promoted = |(width, signed): (i64, bool)| if width < int { (int, true) } else { (width, signed) };
+        let (target_class, source_class) = (integer(&target)?, integer(&source)?);
+        let (left, right) = (promoted(target_class), promoted(source_class));
+        let common = if matches!(cg_op, "O_LSHIFT" | "O_RSHIFT") {
+            left
+        } else if left.0 != right.0 {
+            if left.0 > right.0 { left } else { right }
+        } else {
+            (left.0, left.1 && right.1)
+        };
+        (common != target_class).then(|| format!("TY_{}INT_{}", if common.1 { "" } else { "U" }, common.0))
     }
 
     /// `node`'s scalar value as `type_`.
@@ -1410,6 +1441,13 @@ impl<'a, 't> Body<'a, 't> {
                     let got = self.eval(source)?;
                     let by = self.scalar(got)?;
                     self.moved(old, by, &from, *cg_op == "O_MINUS")?
+                } else if let Some(common) = self.compound_type(cg_op, type_, source) {
+                    // `x op= y` is `x = (T)(x op y)` in the usual arithmetic conversions of both, not in T: `unsigned char x /= short y`
+                    // divided in 8 bits, the front end having typed the operation by the target's.
+                    let old = self.converted(old, type_, &common)?;
+                    let by = self.value_as(source, &common)?;
+                    let made = self.arithmetic(cg_op, old, by, &common)?;
+                    self.converted(made, &common, type_)?
                 } else {
                     let by = self.value_as(source, type_)?;
                     self.arithmetic(cg_op, old, by, type_)?
@@ -1419,7 +1457,15 @@ impl<'a, 't> Body<'a, 't> {
             }
             ("CGCall", [call]) => {
                 let call = &self.unit.calls[&hir::handle(call)];
-                self.call(call)?
+                match self.call(call)? {
+                    // A function whose body returns no value is a MIR void function; `int f(int i) { }` called as `return f(i)`
+                    // has the value the C standard leaves undefined, and the front end types its call as an int either way.
+                    Got::Returned(None) if self.types.aggregate(&call.type_).is_none() && self.ty(&call.type_).is_ok() => {
+                        let ty = self.ty(&call.type_)?;
+                        Got::Returned(Some(self.constant(ty, Number::Int(0))))
+                    }
+                    got => got,
+                }
             }
             ("CGChoose", [test, yes, no, type_]) => {
                 // A local both arms store, which promotion makes a phi.
@@ -1442,7 +1488,7 @@ impl<'a, 't> Body<'a, 't> {
             ("CGCompare", _) => Got::Value(self.compare(&tree.args)?),
             ("CGFlow", _) => {
                 let truth = self.types.of(Shape::Bool, None);
-                let flowed = self.local(&format!("n{}", hir::handle(node)), truth, 2);
+                let flowed = self.local(&format!("n{}", hir::handle(node)), truth, self.types.get(truth).width);
                 let no = self.block();
                 let join = self.block();
                 self.branch(node, no, false)?;
@@ -1457,10 +1503,11 @@ impl<'a, 't> Body<'a, 't> {
                 Got::Value(self.op(Op::Load, truth, vec![Operand::place_ref(flowed)]))
             }
             ("CGEval", [inner]) | ("CGAttr", [inner, _]) | ("CGFact", [_, inner, _]) => self.eval(inner)?,
-            ("CGVolatile", [inner]) => {
-                let got = self.eval(inner)?;
-                Got::Volatile(self.address(got)?.0)
-            }
+            ("CGVolatile", [inner]) => match self.eval(inner)? {
+                // A bit field of a volatile object is read through its unit, volatile: it has no address of its own.
+                Got::Bits { pointer, start, width, unit, signed, .. } => Got::Bits { pointer, volatile: true, start, width, unit, signed },
+                got => Got::Volatile(self.address(got)?.0),
+            },
             ("CGBitMask", [inner, start, width, type_]) => {
                 let got = self.eval(inner)?;
                 let (pointer, volatile) = self.address(got)?;
