@@ -1734,10 +1734,12 @@ impl Selector<'_, '_, '_> {
     fn va_start(&mut self, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let Some(disp) = self.variadic else { return refuse("va_start with no parameter before the variadic arguments") };
         self.unsealed = true;
-        let held = Held { value: self.fresh(), width: 2 };
+        // The list holds a near data pointer.
+        let width = self.layout.pointer(self.spaces.data).bits / 8;
+        let held = Held { value: self.fresh(), width };
         out.push(insn(at, self.address(Pointer::Frame { disp, index: None, scale: 1 }, held)));
         let list = self.pointer(arguments[0])?;
-        out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(list, 2))], vec![Loc::Held(held)])));
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(list, width))], vec![Loc::Held(held)])));
         Ok(())
     }
 

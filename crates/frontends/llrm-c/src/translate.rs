@@ -535,19 +535,26 @@ fn cleanup(symbol: &hir::Symbol, unit: &hir::Unit) -> R<(StackCleanup, Option<St
 /// An interrupt handler's parameters are the registers it saved, named in
 /// Borland's order, each at its slot of the frame (`x86_intr_slot`); what it
 /// writes to them is what it returns to.
-fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64], struct_homes: &[i64], (calling, profile): (&llrm_target::calling::Calling, &crate::compile::Profile)) -> R<()> {
+fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64], struct_homes: &[(i64, Vec<i64>)], (calling, profile): (&llrm_target::calling::Calling, &crate::compile::Profile)) -> R<()> {
     let Some(abi) = function.abi.as_ref() else { return Ok(()) };
     let (interrupt, variadic) = (abi.distance == CallDistance::Interrupt, abi.variadic);
     if !interrupt && !variadic {
         return Ok(());
     }
     let exposed = llrm_core::hir::escape::exposed_frame(function);
-    // A struct parameter is a copy of its words; its address is not theirs.
-    if struct_homes.iter().any(|home| exposed.contains(home)) {
-        return refuse(format!("{}: the address of a struct parameter where its arguments are addressed", function.name));
-    }
     // STDARG.H's __size: rounded up to an int, the two bytes of Borland's.
     let rounded = |sizes: &[i64]| sizes.iter().map(|size| (size + 1) & !1).sum::<i64>();
+    // A struct parameter whose address is taken lives in its words' slots, which are consecutive and rising (the variadic
+    // functions push right to left), as a scalar's does: the pointer then reaches the arguments around it.
+    for (home, words) in struct_homes.iter().filter(|(home, _)| !interrupt && exposed.contains(home)) {
+        let at = function.parameters.iter().position(|&one| one == words[0]).expect("a parameter");
+        let place = function.places.iter_mut().find(|one| one.id == *home).expect("a home");
+        (place.storage, place.symbol, place.offset) = (Storage::Parameter, words[0], -rounded(&sizes[at..]));
+        let copy = |one: &h::Instruction| one.op == Op::Store && matches!(&one.operands[..], [h::Operand::ProjectedPlace(to), word] if to.place == *home && words.iter().any(|&one| *word == value_ref(one)));
+        for block in &mut function.blocks {
+            block.instructions.retain(|one| !copy(one));
+        }
+    }
     for &(home, parameter) in homes.iter().filter(|(home, _)| interrupt || exposed.contains(home)) {
         let at = function.parameters.iter().position(|&one| one == parameter).expect("a parameter");
         let offset = if interrupt { interrupt_slot(&function.name, at, sizes[at], calling, profile)? } else { -rounded(&sizes[at..]) };
@@ -953,7 +960,7 @@ impl<'a, 't> Body<'a, 't> {
 
     /// Each parameter and auto a place; each parameter stored into its own.
     /// A scalar parameter's home is also returned, by place and parameter.
-    fn frame(&mut self) -> R<(Vec<i64>, Vec<(i64, Fact)>, Vec<(i64, i64)>, Vec<i64>)> {
+    fn frame(&mut self) -> R<(Vec<i64>, Vec<(i64, Fact)>, Vec<(i64, i64)>, Vec<(i64, Vec<i64>)>)> {
         let mut parameters = Vec::new();
         let mut stated = Vec::new();
         let mut homes = Vec::new();
@@ -969,15 +976,17 @@ impl<'a, 't> Body<'a, 't> {
                     let ty = self.types.of(Shape::Bytes(words * bytes), None);
                     let place = self.local(&format!("y{symbol}"), ty, words * bytes);
                     let word = self.types.raw(bytes);
-                    struct_homes.push(place);
+                    let mut passed = Vec::new();
                     for at in struct_words(size, in_order, bytes) {
                         let parameter = self.value(word);
+                        passed.push(parameter);
                         parameters.push(parameter);
                         stores.push((place, at, parameter));
                         if !scalar && self.convention.is_some() {
                             self.memory.push(parameter);
                         }
                     }
+                    struct_homes.push((place, passed));
                     self.slots.insert(format!("y{symbol}"), place);
                 }
                 None => {
@@ -1013,12 +1022,12 @@ impl<'a, 't> Body<'a, 't> {
             self.slots.insert(key.clone(), place);
         }
         for (place, at, parameter) in stores {
+            // A struct's word is stored by naming the place and its offset: no address is made, so none is handed out.
             let target = if at < 0 {
                 Operand::place_ref(place)
             } else {
-                let base = self.address_of(place);
                 let ty = self.type_of(parameter);
-                Operand::IndirectPlace(indirect(base, at, ty, false))
+                Operand::ProjectedPlace(h::ProjectedPlace { place, indices: Vec::new(), offset: at, r#type: ty, member: None })
             };
             self.instruction(Op::Store, Vec::new(), vec![target, value_ref(parameter)]);
         }
