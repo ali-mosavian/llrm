@@ -2767,8 +2767,7 @@ impl Selector<'_, '_, '_> {
                 }
                 let cell = self.temporary(i64::from(held.width));
                 out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell, held.width))], vec![Loc::Held(held)])));
-                let into = Held { value: self.value(result), width: FLOAT };
-                self.float_loaded(into, "fild", cell, held.width, false, at, out);
+                self.integer_made_float(held.width, result, to, cell, held.width, at, out)?;
             }
             // An unsigned integer of n bytes is exactly a signed one of 2n,
             // zero-extended: fild reads a word, a dword or a qword.
@@ -2787,13 +2786,35 @@ impl Selector<'_, '_, '_> {
                 } else {
                     return refuse(format!("an unsigned {}-byte integer to a float: x87 reads no signed integer wider than 8 bytes", held.width));
                 }
-                let into = Held { value: self.value(result), width: FLOAT };
-                self.float_loaded(into, "fild", cell, width, false, at, out);
+                self.integer_made_float(held.width, result, to, cell, width, at, out)?;
             }
             CastOp::FPToSI => self.float_to_integer(operand, "fisttp", result, to, false, at, out)?,
             CastOp::FPToUI => self.float_to_integer(operand, "fisttp", result, to, true, at, out)?,
             _ => return refuse(format!("{op:?} of a float")),
         }
+        Ok(())
+    }
+
+    /// `fild` of the integer in `cell`, as the float or double `to` it is converted to: a source of a dword or more has bits a
+    /// float's 24 (a double's 53 for a qword) do not hold, and the conversion rounds to the type's width where the x87's register
+    /// would keep them (C11 6.3.1.4p2): through a store of that width.
+    #[allow(clippy::too_many_arguments)]
+    fn integer_made_float(&mut self, source_bytes: u32, result: ValueId, to: TypeId, cell: Pointer, width: u32, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let size = self.size(to)?;
+        let into = Held { value: self.value(result), width: FLOAT };
+        let mantissa = match size {
+            4 => 24,
+            8 => 53,
+            _ => 64,
+        };
+        if source_bytes * 8 <= mantissa {
+            self.float_loaded(into, "fild", cell, width, false, at, out);
+            return Ok(());
+        }
+        let loaded = self.fresh_held(FLOAT);
+        self.float_loaded(loaded, "fild", cell, width, false, at, out);
+        let rounded = self.float_stored(loaded, "fstp", size as u32, at, out);
+        self.float_loaded(into, "fld", rounded, size as u32, false, at, out);
         Ok(())
     }
 
