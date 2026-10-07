@@ -274,4 +274,21 @@ mod tests {
             assert_eq!(symbol.get("coff"), symbol.get("omf"), "{name}");
         }
     }
+
+    /// The debug numbers of the file: the i386 psABI's DWARF registers (eax 0 .. edi 7, st0 at 11)
+    /// and CodeView's (ebp 22, ax 9), checked against llvm's CodeViewRegisters.def. A view at lane 0
+    /// is read from its root's low bytes, so it has the root's DWARF number; one at lane 8 has none.
+    #[test]
+    fn the_register_file_numbers_each_debug_format() {
+        let file = &*REGISTERS;
+        let find = |name: &str| file.iter().find(|one| one.name == name).unwrap_or_else(|| panic!("no {name}"));
+        let numbers = |name: &str| (find(name).dwarf, find(name).codeview);
+        assert_eq!(numbers("eax"), (Some(0), Some(17)));
+        assert_eq!(numbers("ebp"), (Some(5), Some(22)));
+        assert_eq!(numbers("esp"), (Some(4), Some(21)));
+        assert_eq!(numbers("ax"), (Some(0), Some(9)));
+        assert_eq!(numbers("ah"), (None, Some(5)));
+        assert_eq!(numbers("st3"), (Some(14), Some(131)));
+        assert!(file.iter().filter(|one| one.lane != 0 && one.name != one.root).all(|one| one.dwarf.is_none()), "a view past lane 0 has no DWARF number");
+    }
 }

@@ -32,6 +32,8 @@ pub struct Global {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Debug {
     pub producer: model::Producer,
+    pub frame_register: String,
+    pub registers: Vec<model::Register>,
     pub types: Vec<model::Type>,
     /// Each MIR type node's type.
     pub nodes: IndexMap<MetadataId, model::TypeId>,
@@ -101,9 +103,10 @@ fn typed(one: &di::Type, nodes: &IndexMap<MetadataId, model::TypeId>, near: u8) 
     })
 }
 
-/// `module`'s debug information, each global and function by the symbol `names` gives it, an
-/// offset `near` bits wide; None without any.
-pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), String>, producer: model::Producer, near: u32) -> Result<Option<Debug>, String> {
+/// `module`'s debug information for `arch`, each global and function by the symbol `names` gives
+/// it; None without any.
+pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), String>, producer: model::Producer, arch: &dyn llrm_target::Target) -> Result<Option<Debug>, String> {
+    let near = arch.object().bitness;
     let functions = di::functions(module);
     let globals = di::globals(module);
     if functions.is_empty() && globals.is_empty() {
@@ -127,7 +130,10 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
         let Some(at) = symbol(&global.global) else { continue };
         out.push(Global { name: global.name, r#type: node(global.r#type)?, symbol: at, displacement: global.offset, scope: global.scope.as_deref().and_then(&symbol) });
     }
-    Ok(Some(Debug { producer, types, nodes, procedures, globals: out }))
+    let file = llrm_target::registers::parse(&arch.registers_text())?;
+    let frame_register = llrm_target::registers::of_class(&file, "frame").first().map(|one| (*one).to_owned()).ok_or("the target's register file has no frame register")?;
+    let registers = file.into_iter().map(|one| model::Register { name: one.name, bits: one.bits, dwarf: one.dwarf, codeview: one.codeview }).collect();
+    Ok(Some(Debug { producer, frame_register, registers, types, nodes, procedures, globals: out }))
 }
 
 /// `module`'s debug information for the object `source`, its code laid out in `segments` (the
@@ -140,7 +146,7 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
     let variable = |name: &str, r#type: model::TypeId, kind: Kind, symbol: &str, disp: i64| Variable { name: name.to_owned(), r#type, kind, location: Location::Static { symbol: ids[symbol], disp } };
     let mut starts: Vec<usize> = module.procedures.iter().filter_map(|one| symbols.get(&one.name).map(|&(_, at)| at)).collect();
     starts.sort_unstable();
-    let mut info = Info { producer: debug.producer, files: vec![model::File { name: source.to_owned(), checksum: None }], types: debug.types.clone(), ..Info::default() };
+    let mut info = Info { producer: debug.producer, frame_register: debug.frame_register.clone(), registers: debug.registers.clone(), files: vec![model::File { name: source.to_owned(), checksum: None }], types: debug.types.clone(), ..Info::default() };
     info.globals = debug.globals.iter().filter(|one| one.scope.is_none() && defined(&one.symbol)).map(|one| variable(&one.name, one.r#type, Kind::Local, &one.symbol, one.displacement)).collect();
     for procedure in &module.procedures {
         let (Some(described), Some(&(_, start))) = (debug.procedures.get(&procedure.name), symbols.get(&procedure.name)) else { continue };
