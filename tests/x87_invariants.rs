@@ -58,3 +58,18 @@ fn test_os_does_not_hold_floats_across_a_loop_for_the_release_they_cost() {
     let listing = std::fs::read_to_string(directory.join("a.s")).unwrap();
     assert_eq!(listing.matches("fstp st(0)").count(), 0, "{listing}");
 }
+
+/// A phi's input read back from its cell leaves its constant unread: `fld1; fstp st(0)`, eleven pairs in nbody's
+/// prologue, 40 B of code and 22 instructions that do nothing.
+#[test]
+fn test_a_constant_nothing_reads_is_not_loaded_and_popped() {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    std::fs::write(directory.join("a.c"), KERNEL).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).args(["-m32", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"]).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let listing = std::fs::read_to_string(directory.join("a.s")).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let pairs = lines.windows(2).filter(|pair| (pair[0] == "fld1" || pair[0] == "fldz" || pair[0].starts_with("fld dword ptr $K")) && pair[1] == "fstp st(0)").count();
+    assert_eq!(pairs, 0, "{listing}");
+}
