@@ -21,9 +21,15 @@ fn apart(cell: &Mem, other: &Mem) -> bool {
     fixed(cell) && fixed(other) && !overlap::may_overlap(cell.addr, cell.width, other.addr, other.width)
 }
 
-/// Whether `one` may write a byte of `cell`: the spiller's answer for the frame, and for any other memory a store
-/// that is not certainly elsewhere. (The spiller's alone said no to a store to the very global a load read: nothing
-/// in it but frame cells was asked.)
+/// Whether `one` stores to bytes of `cell` by a fixed address: the same global, the same frame cell.
+fn writes_there(one: &Insn, cell: &Mem) -> bool {
+    let fixed = |one: &Mem| one.base.is_none() && one.index.is_none() && one.selector.is_none() && one.addr.is_some();
+    fixed(cell) && one.what.as_ref().is_some_and(|what| what.dests.iter().any(|place| matches!(place, Loc::Mem(other) if fixed(other) && !apart(cell, other))))
+}
+
+/// Whether `one` may write a byte of `cell`, where nothing else vouches for what a pointer reaches: the spiller's answer
+/// for the frame, and for any other memory a store that is not certainly elsewhere. (The spiller's alone said no to a
+/// store to the very global a load read: nothing in it but frame cells was asked.)
 pub fn may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
     _may_write(one, cell, sealed) || one.what.as_ref().is_some_and(|what| what.dests.iter().any(|place| matches!(place, Loc::Mem(other) if !apart(cell, other))))
 }
@@ -66,7 +72,8 @@ pub fn held(body: &LirBody, wanted: &dyn Fn(u32, &Mem) -> bool) -> IndexMap<u32,
     for block in &body.blocks {
         let mut alive: BTreeSet<u32> = live_out[&block.at].iter().copied().filter(|value| found.contains_key(value)).collect();
         for one in block.insns.iter().rev() {
-            let disturbed: Vec<u32> = alive.iter().copied().filter(|value| may_write(one, &found[value], body.sealed_arguments) && !stores(one, *value, &found[value])).collect();
+            // What a pointer reaches is the optimizer's proof; what is checked is a write to the cell itself.
+            let disturbed: Vec<u32> = alive.iter().copied().filter(|value| (_may_write(one, &found[value], body.sealed_arguments) || writes_there(one, &found[value])) && !stores(one, *value, &found[value])).collect();
             for value in disturbed {
                 found.shift_remove(&value);
                 alive.remove(&value);
