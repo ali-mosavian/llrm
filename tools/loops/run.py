@@ -102,13 +102,13 @@ def unique(lang: str) -> str:
 def mir_name(lang: str, case: Case, number: int) -> str:
     if lang == "bas":
         return f'F{number}{"&" if case.ret.bits == 32 else "%"}'
-    return case.symbol if lang == "nib" else f"_{case.symbol}"
+    return case.symbol if lang == "nib" else dos.dosbatch.linkrecipe.symbol(dos.dosbatch.REAL_MODE, case.symbol)
 
 
 def symbol(lang: str, case: Case, number: int) -> str:
     if lang == "bas":
         return f"F{number}"
-    return f"_{case.symbol}"
+    return dos.dosbatch.linkrecipe.symbol(dos.dosbatch.REAL_MODE, case.symbol)
 
 
 class Batch:
