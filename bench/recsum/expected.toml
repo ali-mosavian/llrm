@@ -1,16 +1,16 @@
-reason = "seven recursive kernels the tail-recursion rule was not fitted on (held-out validation for #651's hanoi work): first baselines"
+reason = "baselines of the held-out recursion kernels (#777) predate main's later changes, not #785's (the same rows come out with main's own binary): recfloat loads 100.0 from a 4-byte pooled constant instead of an integer built and loaded (code 136 -> 108 B, data 8 -> 12 B, net -24 B; instructions -10); recsum/recmany one memory operand and 13 bytes fewer"
 blessed = "2026-10-07"
 
 [c.O2]
-instructions = 14020
-memory_operands = 2
-code_bytes = 85
+instructions = 14014
+memory_operands = 1
+code_bytes = 72
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 14020
-memory_operands = 2
-code_bytes = 81
+instructions = 14014
+memory_operands = 1
+code_bytes = 68
 data_bytes = 0
 bss_bytes = 0
