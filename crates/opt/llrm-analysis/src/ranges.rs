@@ -20,6 +20,7 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use crate::graph::loops;
 use llrm_mir::context::signed;
@@ -495,25 +496,85 @@ pub fn dominated_edges(unit: &Unit) -> Result<IndexMap<i64, IndexMap<ValueId, In
 
 /// `dominated_edges`, given what `consts::known` finds without memory.
 pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<IndexMap<i64, IndexMap<ValueId, Interval>>, String> {
+    Ok(edges_solved(unit, facts, None)?.blocks(unit.function))
+}
+
+type Scope = Rc<IndexMap<ValueId, Interval>>;
+
+/// `dominated_edges`' state at each block, as the solve left it: what the block's operations leave (`own`) and what
+/// holds below it once its assumes are taken (`below`), which is what its successors start from. A block that did not
+/// change shares its maps with the solve before.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EdgeStates {
+    order: Vec<i64>,
+    own: BTreeMap<i64, Scope>,
+    below: BTreeMap<i64, Scope>,
+}
+
+impl EdgeStates {
+    /// `blocks`, the maps shared.
+    pub fn shared(&self, function: &llrm_mir::module::Function) -> IndexMap<i64, Scope> {
+        function.layout().iter().filter_map(|&block| self.own.get(&cfg::id(block)).filter(|scoped| !scoped.is_empty()).map(|scoped| (cfg::id(block), Rc::clone(scoped)))).collect()
+    }
+
+    /// The blocks with something known, in layout order.
+    pub fn blocks(&self, function: &llrm_mir::module::Function) -> IndexMap<i64, IndexMap<ValueId, Interval>> {
+        function
+            .layout()
+            .iter()
+            .filter_map(|&block| self.own.get(&cfg::id(block)).filter(|scoped| !scoped.is_empty()).map(|scoped| (cfg::id(block), (**scoped).clone())))
+            .collect()
+    }
+}
+
+thread_local! {
+    static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many blocks this thread has worked the edges' facts of, for a test that a change reworks the blocks it reaches.
+pub fn blocks_solved() -> usize {
+    SOLVED.with(std::cell::Cell::get)
+}
+
+/// `dominated_edges_with`'s solve, over `unit`'s function: all of it, or, given the states of the function before and
+/// the blocks a change reached (`reached`), only the blocks that change can alter. A block is worked again when it
+/// was reached, when it follows a reached block along the one edge whose branch condition it reads, or when the
+/// state it starts from changed; where its own comes out as it was, what follows it is not asked.
+pub fn edges_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, before: Option<(&EdgeStates, &BTreeSet<BlockId>)>) -> Result<EdgeStates, String> {
     let function = unit.function;
     let Some(entry) = function.entry() else {
-        return Ok(IndexMap::default());
+        return Ok(EdgeStates { order: Vec::new(), own: BTreeMap::new(), below: BTreeMap::new() });
     };
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let immediate = unit.shape().dominance.immediate_dominators(function);
-    let mut known: BTreeMap<i64, IndexMap<ValueId, Interval>> = BTreeMap::new();
-    let mut own: BTreeMap<i64, IndexMap<ValueId, Interval>> = BTreeMap::new();
+    let order = loops::reverse_postorder(&graph, cfg::id(entry));
+    // The blocks as they were: none to reuse where the order of blocks is not the same.
+    let before = before.filter(|(states, _)| states.order == order);
+    let mut known: BTreeMap<i64, Scope> = BTreeMap::new();
+    let mut own: BTreeMap<i64, Scope> = BTreeMap::new();
+    let mut moved: BTreeSet<i64> = BTreeSet::new();
     let assumed = unit.assumptions();
-    for at in loops::reverse_postorder(&graph, cfg::id(entry)) {
+    for &at in &order {
         let block = cfg::block(at);
         let sole = predecessors.get(&at).filter(|parents| parents.len() == 1).and_then(|parents| parents.first());
+        let from_parent = sole.is_some_and(|parent| known.contains_key(parent) && edges(unit, cfg::block(*parent), block) == 1);
+        let source = if from_parent { sole.copied() } else { immediate.get(&at).copied().flatten() };
+        if let Some((states, reached)) = before {
+            let stale = reached.contains(&block) || (from_parent && sole.is_some_and(|parent| reached.contains(&cfg::block(*parent)))) || source.is_some_and(|up| moved.contains(&up));
+            if !stale && let (Some(kept_own), Some(kept_below)) = (states.own.get(&at), states.below.get(&at)) {
+                own.insert(at, Rc::clone(kept_own));
+                known.insert(at, Rc::clone(kept_below));
+                continue;
+            }
+        }
+        SOLVED.with(|count| count.set(count.get() + 1));
         let seeded = if at == cfg::id(entry) { declared_arguments(unit) } else { IndexMap::default() };
         let mut scoped = match sole.and_then(|parent| Some((*parent, known.get(parent)?))) {
             Some((parent, inherited)) if edges(unit, cfg::block(parent), block) == 1 => {
-                on_edge(unit, cfg::block(parent), block, inherited, Some(facts))?.unwrap_or_else(|| inherited.clone())
+                on_edge(unit, cfg::block(parent), block, inherited, Some(facts))?.unwrap_or_else(|| (**inherited).clone())
             }
-            _ => immediate.get(&at).copied().flatten().and_then(|up| known.get(&up)).cloned().unwrap_or(seeded),
+            _ => immediate.get(&at).copied().flatten().and_then(|up| known.get(&up)).map(|up| (**up).clone()).unwrap_or(seeded),
         };
         for &inst in function.block(block).instructions() {
             let (Some(interval), Some(result)) = (_computed(unit, inst, &scoped, facts), function.instruction(inst).result) else {
@@ -533,20 +594,20 @@ pub fn dominated_edges_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Re
         }
         // What the block assumes holds below it, not in it: the code before the
         // assume is not covered.
-        let mut below = scoped.clone();
+        let scoped = Rc::new(scoped);
+        let mut below = Rc::clone(&scoped);
         for &condition in assumed.here(at) {
             if let Some(narrower) = narrowed(unit, condition, true, &below, facts) {
-                below = narrower;
+                below = Rc::new(narrower);
             }
+        }
+        if before.is_some_and(|(states, _)| states.below.get(&at) != Some(&below)) {
+            moved.insert(at);
         }
         own.insert(at, scoped);
         known.insert(at, below);
     }
-    Ok(function
-        .layout()
-        .iter()
-        .filter_map(|&block| own.get(&cfg::id(block)).filter(|scoped| !scoped.is_empty()).map(|scoped| (cfg::id(block), scoped.clone())))
-        .collect())
+    Ok(EdgeStates { order, own, below: known })
 }
 
 /// How many of `parent`'s terminator's targets are `block`.
@@ -568,18 +629,135 @@ pub fn bounded(unit: &Unit) -> Result<Facts, String> {
 
 /// `bounded`, given what `consts::known` finds without memory.
 pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Facts, String> {
+    Ok(bounded_solved(unit, facts, None)?.facts())
+}
+
+/// `bounded`'s facts at each block, as the solve left them: those the counted loops give (`within`), and those with
+/// the edges' facts where a block is in none (`blocks`). A block that did not change shares its map with the solve
+/// before.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bounds {
+    headers: Vec<i64>,
+    /// The edges' facts it was worked out under: a loop reads them where it starts from.
+    edges: IndexMap<i64, Scope>,
+    within: IndexMap<i64, Scope>,
+    blocks: IndexMap<i64, Scope>,
+}
+
+impl Bounds {
+    /// What is known at `at`.
+    pub fn at(&self, at: i64) -> Option<&IndexMap<ValueId, Interval>> {
+        self.blocks.get(&at).map(|scope| &**scope)
+    }
+
+    /// As `bounded` gives them.
+    pub fn facts(&self) -> Facts {
+        self.blocks.iter().map(|(at, scope)| (*at, (**scope).clone())).collect()
+    }
+}
+
+/// The headers of the loops whose bounds a change can alter: the loops holding a block it reached, the loops under a
+/// branch (or an assume, or any call) whose condition it reached, the loops that start from a block whose edges' facts
+/// changed (those `bounds` was worked under against `held`, now), and then every loop that starts from what one of
+/// those leaves: the block its header's dominator is in, or a block that enters it. (A loop around a dirty one is
+/// dirty by the first two: they name its blocks, and its header dominates theirs.)
+pub fn loops_reached(
+    function: &llrm_mir::module::Function,
+    shape: &cfg::Shape,
+    blocks: &BTreeSet<BlockId>,
+    conditions: &BTreeSet<BlockId>,
+    bounds: &Bounds,
+    held: &EdgeStates,
+) -> BTreeSet<i64> {
+    let loops = &shape.loops;
+    let reached: BTreeSet<i64> = blocks.iter().map(|block| cfg::id(*block)).collect();
+    let judged: Vec<i64> = conditions.iter().map(|block| cfg::id(*block)).collect();
+    let graph = cfg::graph(function);
+    let entering = loops::predecessors(&graph);
+    let now = held.shared(function);
+    // Where each loop starts from: the block its header's dominator is, and the blocks that enter it.
+    let starts = |one: &loops::Loop| -> Vec<i64> {
+        shape.dominance.immediate(one.header).into_iter().chain(entering.get(&one.header).into_iter().flatten().copied().filter(|at| !one.body.contains(at))).collect()
+    };
+    let moved = |at: &i64| match (bounds.edges.get(at), now.get(at)) {
+        (Some(was), Some(is)) => !Rc::ptr_eq(was, is) && was != is,
+        (None, None) => false,
+        _ => true,
+    };
+    let mut dirty: BTreeSet<i64> = loops
+        .iter()
+        .filter(|one| one.body.iter().any(|at| reached.contains(at)) || judged.iter().any(|above| shape.dominance.dominates(*above, one.header)) || starts(one).iter().any(moved))
+        .map(|one| one.header)
+        .collect();
+    // What each loop starts from, held by other loops.
+    let hosts: Vec<(i64, Vec<i64>)> = loops
+        .iter()
+        .map(|one| {
+            let held: BTreeSet<i64> = starts(one).into_iter().flat_map(|at| loops.iter().filter(move |other| other.body.contains(&at)).map(|other| other.header)).filter(|header| *header != one.header).collect();
+            (one.header, held.into_iter().collect())
+        })
+        .collect();
+    loop {
+        let before = dirty.len();
+        for one in loops {
+            let hosted = hosts.iter().any(|(header, held)| *header == one.header && held.iter().any(|at| dirty.contains(at)));
+            if hosted {
+                dirty.insert(one.header);
+            }
+        }
+        if dirty.len() == before {
+            return dirty;
+        }
+    }
+}
+
+thread_local! {
+    static LOOPS_SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many loops this thread has worked the bounds of, for a test that a change reworks the loops it reaches.
+pub fn loops_solved() -> usize {
+    LOOPS_SOLVED.with(std::cell::Cell::get)
+}
+
+/// `bounded_with`'s solve: all of it, or, given the bounds of the function before and the headers of the loops a change
+/// can alter (`dirty`), only those loops; the blocks of the rest keep what they had.
+pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Option<(&Bounds, &BTreeSet<i64>)>) -> Result<Bounds, String> {
     let function = unit.function;
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let positions: BTreeMap<i64, usize> = graph.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
     let shape = unit.shape();
     let assumed = unit.assumptions();
-    let edges_above = dominated_edges_with(unit, facts)?;
-    let mut result = Facts::default();
+    // The manager's, where the facts asked of are the unit's own registers.
+    let edges_above = match (unit.edges, unit.registers) {
+        (Some(states), Some(registers)) if std::ptr::eq(facts, registers) => {
+            let held = states.shared(function);
+            if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+                assert!(held.iter().map(|(at, scope)| (*at, (**scope).clone())).collect::<IndexMap<_, _>>() == dominated_edges_with(unit, facts)?, "the edges a unit carries are not those of the body it stands over: stale");
+            }
+            held
+        }
+        _ => dominated_edges_with(unit, facts)?.into_iter().map(|(at, scope)| (at, Rc::new(scope))).collect(),
+    };
+    let headers: Vec<i64> = shape.loops.iter().map(|one| one.header).collect();
     // An enclosing loop's facts are in `result` before an inner loop reads them.
     let mut nest: Vec<_> = shape.loops.iter().collect();
     nest.sort_by_key(|loop_| std::cmp::Reverse(loop_.body.len()));
+    let mut result: IndexMap<i64, Scope> = match prior.filter(|(held, _)| held.headers == headers) {
+        // The blocks of a loop to be worked again start from nothing: what its loops narrow is put in anew.
+        Some((held, dirty)) => {
+            let redone: BTreeSet<i64> = nest.iter().filter(|one| dirty.contains(&one.header)).flat_map(|one| one.body.iter().copied()).collect();
+            held.within.iter().filter(|(at, _)| !redone.contains(at)).map(|(at, scope)| (*at, Rc::clone(scope))).collect()
+        }
+        None => IndexMap::default(),
+    };
+    let prior = prior.filter(|(held, _)| held.headers == headers);
     for loop_ in nest {
+        if prior.is_some_and(|(_, dirty)| !dirty.contains(&loop_.header)) {
+            continue;
+        }
+        LOOPS_SOLVED.with(|count| count.set(count.get() + 1));
         let proofs = induction::counted_unless_stopped(unit, &loop_, Some(facts), false);
         // A header that tests before the trip also sees the exit value; one
         // tested after it sees only the trip's.
@@ -610,8 +788,8 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
         let counted = !known.is_empty();
         // What is known above the loop of the values made outside it.
         let at_entry = |at: i64| {
-            let mut found = edges_above.get(&at).cloned().unwrap_or_default();
-            for (value, interval) in result.get(&at).into_iter().flatten() {
+            let mut found = edges_above.get(&at).map(|scope| (**scope).clone()).unwrap_or_default();
+            for (value, interval) in result.get(&at).into_iter().flat_map(|scope| scope.iter()) {
                 narrow(&mut found, *value, interval.clone());
             }
             found
@@ -741,16 +919,17 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
         let known = closed(known);
         for &at in &inside {
             let scoped = scope_at(at, &known)?;
-            let destination = result.entry(at).or_default();
+            let destination = Rc::make_mut(result.entry(at).or_default());
             for (value, interval) in scoped {
                 narrow(destination, value, interval);
             }
         }
     }
-    for (at, known) in edges_above {
-        result.entry(at).or_insert(known);
+    let within = result.clone();
+    for (at, known) in &edges_above {
+        result.entry(*at).or_insert_with(|| Rc::clone(known));
     }
-    Ok(result)
+    Ok(Bounds { headers, edges: edges_above, within, blocks: result })
 }
 
 #[cfg(test)]
