@@ -15,7 +15,9 @@ from pathlib import Path
 
 import pytest
 
-BIN = Path(os.environ.get("LLRM_QB", Path(__file__).resolve().parents[1] / "target" / "release" / "llrm-qb"))
+from tools import llrmbin
+
+BIN = Path(os.environ["LLRM_QB"]) if os.environ.get("LLRM_QB") else llrmbin.bin_dir() / "llrm-qb"
 
 
 def test_a_copied_llrm_qb_compiles_with_no_cargo_and_no_tree(tmp_path):

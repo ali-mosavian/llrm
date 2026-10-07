@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import corpus  # noqa: E402
 import dosbatch  # noqa: E402
+llrmbin = dosbatch.llrmbin
 from dosbatch import BIN, ROOT, Job  # noqa: E402
 
 RUN = ROOT / "tests" / "run"
@@ -260,7 +261,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
-    parser.add_argument("--work", type=Path, default=ROOT / "target" / "tests-run")
+    parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "tests-run")
     parser.add_argument("--retarget", help="build each Nib program for this target instead, against its own .out")
     args = parser.parse_args()
     programs = discover(args.select)

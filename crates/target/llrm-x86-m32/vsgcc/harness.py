@@ -22,7 +22,10 @@ from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC
 REPO = Path(__file__).resolve().parents[4]
 OUT = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))   # build products and results, never in the tree
 BENCH = REPO / "bench"
-LLRM = Path(os.environ.get("CARGO_TARGET_DIR", REPO / "target")) / "release" / "llrm-c"   # where cargo put it; build.sh and ctime.py use the same
+sys.path.insert(0, str(REPO / "tools"))
+import llrmbin  # noqa: E402
+
+LLRM = llrmbin.bin_dir() / "llrm-c"   # where cargo put it; build.sh and ctime.py use the same
 STUB, SENT, STACK_TOP, MEM = 0x8000, 0x7000, 0x7F0000, 0x800000
 BASE = 0x10000
 OMF_VARIANTS = ("llrm", "llrmOs")
