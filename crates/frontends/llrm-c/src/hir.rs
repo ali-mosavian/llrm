@@ -329,11 +329,15 @@ impl Unit {
     /// the runtime's start in the convention the description names, whatever the front end made of it.
     pub fn decorate(&mut self, calling: &llrm_target::calling::Calling, format: &str) {
         let entry = calling.by_cc(&self.entry_cc).and_then(|one| one.symbol.get(format)).cloned();
+        let registers = self.registers_cc.as_deref().and_then(|cc| calling.by_cc(cc)).and_then(|one| one.symbol.get(format)).cloned();
         for symbol in self.symbols.values_mut() {
             if symbol.is_entry(&self.entry) {
                 if let Some(pattern) = &entry {
                     symbol.pattern = pattern.clone();
                 }
+            } else if let Some(pattern) = registers.clone().filter(|_| symbol.register_parms && symbol.register_list == self.default_registers) {
+                // In its default registers: the convention this ABI states for them spells it, whatever Open Watcom's was.
+                symbol.pattern = pattern;
             } else if let Some(pattern) = calling.redecorated(&symbol.pattern, format) {
                 symbol.pattern = pattern;
             }

@@ -257,7 +257,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
                 elif source.suffix == ".asm":
                     dosbatch.assemble(source, extra, *dosbatch.os_defines(target, "c"))
                 else:
-                    dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), level, "-o", str(extra)])
+                    dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), *(one for one in program.flags if one.startswith("-mabi=")), level, "-o", str(extra)])
                 others.append(extra)
             loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others))
             dosbatch.check_loads(exe)

@@ -614,9 +614,10 @@ fn returned_as_integer(calling: &llrm_target::calling::Calling, convention: &Opt
 }
 
 /// Whether a struct of `size` bytes passed under `convention` is one scalar of that size: Open Watcom's register
-/// convention takes 1, 2 and 4 byte structs as it takes an integer, and sends every other to memory.
+/// convention takes 1, 2 and 4 byte structs as it takes an integer, and sends every other to memory; a convention that says so
+/// (`aggregate_arguments_in_memory`) sends them all.
 fn passed_as_scalar(calling: &llrm_target::calling::Calling, convention: &Option<String>, size: i64) -> bool {
-    convention.as_deref().and_then(|cc| calling.by_cc(cc)).is_some_and(|one| !one.argument_registers.is_empty()) && returned_as_integer(calling, convention, size).is_some()
+    convention.as_deref().and_then(|cc| calling.by_cc(cc)).is_some_and(|one| !one.argument_registers.is_empty() && !one.aggregate_arguments_in_memory) && returned_as_integer(calling, convention, size).is_some()
 }
 
 /// A struct argument's words, by byte offset, in parameter order: they lie

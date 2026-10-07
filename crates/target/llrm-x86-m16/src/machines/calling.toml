@@ -10,6 +10,9 @@ convention = "watcall16"
 [abi.ia16]
 convention = "ia16"
 
+[abi.regparm3]
+convention = "regparm3"
+
 # cdecl16, m16's C ABI: Borland's medium model as `wccq` is asked for it (-mm -ecc; `_name`
 # symbols). A far call (a procedure that is exported) leaves a 4-byte return address.
 
@@ -136,3 +139,33 @@ aggregate_pointer_far = false
 [ia16.symbol]
 omf = "_*"
 elf = "*"
+
+# regparm3: gcc's `-mregparm=3` (i386), by the size of the argument. The first three integer or pointer arguments, left to right, take EAX,
+# EDX, ECX, each in the part its size names: AL, AX or EAX for 1, 2 or 4 bytes (a long, in one register). Everything else is on the stack
+# as cdecl16's: the fourth and later, floats, i64, structs, far pointers. A float or an i64 takes no register and does not stop the
+# later arguments taking the free ones (gcc counts integers only; Watcom's stops at the first that fits none). Results by the same size:
+# AL, AX, EAX (a long, a near pointer, a far pointer as offset low and segment high), an i64 in EDX:EAX, a float in st(0); a struct
+# of 1, 2 or 4 bytes as that integer, a larger one through cdecl16's hidden far pointer. The caller removes the stack arguments, as
+# cdecl16's; EAX, EDX and ECX are cdecl16's scratch registers. A variadic call is cdecl16's.
+[regparm3]
+like = "cdecl16"
+cc = "regparm3"
+argument_registers = ["eax", "edx", "ecx"]
+register_bytes = 4
+sized_arguments = true
+skip_memory = true
+aggregate_arguments_in_memory = true
+variadic = "cdecl16"
+
+# Spelled apart from cdecl16's `_name`: a routine declared in the other convention fails to link where it would call with its
+# arguments in the wrong place. The 3 counts the argument registers (regparm 3); Windows' stdcall `@N` counts stack bytes.
+[regparm3.symbol]
+omf = "_*@3"
+
+[regparm3.result]
+1 = ["eax"]
+2 = ["eax"]
+4 = ["eax"]
+8 = ["eax", "edx"]
+pointer = ["eax"]
+float = ["st0"]

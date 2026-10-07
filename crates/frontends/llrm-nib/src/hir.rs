@@ -181,7 +181,7 @@ impl ProcedureAbi {
             Abi::C | Abi::Cdecl16 | Abi::Cdecl32 => (!exported).then(|| Self { distance, cleanup: "caller", parameter_bytes: 0, float_return: abi.float_return(), convention: None }),
             Abi::Pascal16 | Abi::Basic(_) => Some(Self { distance, cleanup: "callee", parameter_bytes: argument_bytes, float_return: abi.float_return(), convention: None }),
             Abi::Watcall32 | Abi::Watcall16 => Some(Self { distance, cleanup: "callee", parameter_bytes: 0, float_return: abi.float_return(), convention: abi.convention() }),
-            Abi::Sysv32 | Abi::Ia16 => Some(Self { distance, cleanup: "caller", parameter_bytes: 0, float_return: abi.float_return(), convention: abi.convention() }),
+            Abi::Sysv32 | Abi::Ia16 | Abi::Regparm3 => Some(Self { distance, cleanup: "caller", parameter_bytes: 0, float_return: abi.float_return(), convention: abi.convention() }),
             Abi::Interrupt16 => Some(Self { distance: "interrupt", cleanup: "callee", parameter_bytes: 0, float_return: abi.float_return(), convention: None }),
         }
     }

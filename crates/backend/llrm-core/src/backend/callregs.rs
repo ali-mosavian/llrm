@@ -12,16 +12,20 @@ use crate::support::hash::IndexMap;
 /// The registers a call under `contract` destroys.
 pub fn call_clobbers(contract: &runtime::Contract, segments: &Segments) -> BTreeSet<Register> {
     let names = _names();
-    let disturbed = runtime::disturbs(contract);
-    // A contract is about the 8086 and names no FS or GS; one reaching user
-    // code, or written for the 386, runs code that may use them.
-    let mut out: BTreeSet<Register> = if disturbed == *runtime::EVERY || contract.i386 {
+    let mut out = unnamed_selectors_clobbered(contract, segments);
+    out.extend(_named_clobbers(&names, &runtime::disturbs(contract)));
+    out
+}
+
+/// The selectors a call under `contract` may change though the contract does not name them. A contract is about the 8086 and
+/// names no FS or GS; one reaching user code, or written for the 386, runs code that may use them.
+pub fn unnamed_selectors_clobbered(contract: &runtime::Contract, segments: &Segments) -> BTreeSet<Register> {
+    let names = _names();
+    if runtime::disturbs(contract) == *runtime::EVERY || contract.i386 {
         segments.selectors.iter().copied().filter(|register| !names.contains_key(register)).collect()
     } else {
         BTreeSet::new()
-    };
-    out.extend(_named_clobbers(&names, &disturbed));
-    out
+    }
 }
 
 /// The registers a value may be placed in that a call under `contract` keeps.
