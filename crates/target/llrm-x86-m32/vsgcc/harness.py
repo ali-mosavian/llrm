@@ -5,7 +5,7 @@
 llrm's OMF is linked here (segments by class, fixups resolved); ELF, llrm's (llrmElf*) and gcc/clang's, is linked by ld.
 Both resolve report/memset/memcpy to stub.elf, loaded at STUB. The region counted is bench_PROG
 from its first instruction to the return that pops its own entry frame, callees included
-(tools/bench/icount.py's convention: a rep string instruction counts once per iteration).
+(crates/target/llrm-x86-m16/bench/icount.py's convention: a rep string instruction counts once per iteration).
 """
 import json
 import os

@@ -28,6 +28,8 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dosbatch"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# The real-mode DOS emulator is x86-m16 code: it lives with the target.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "crates/target/llrm-x86-m16/bench"))
 
 import maps  # noqa: E402
 import corpus  # noqa: E402

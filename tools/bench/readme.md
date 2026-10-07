@@ -8,7 +8,7 @@ level, against `bench/NAME/expected.toml`.
     uv run --project tools python tools/bench/bench.py --bless --reason "why the counts moved"
 
 Each variant is built (`-fno-inline-functions`, so the kernel stays a call), run in a real-mode emulator
-(`icount.py`, unicorn) and counted from the kernel's entry to its return, runtime calls included.
+(`crates/target/llrm-x86-m16/bench/icount.py`, unicorn) and counted from the kernel's entry to its return, runtime calls included.
 The kernel is `bench.toml`'s `[region]`: found by name in the linker map (C, BASIC), or for Nib, which
 publishes no function, as the one function `main` calls from its own segment.
 
