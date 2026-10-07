@@ -63,6 +63,11 @@ pub trait Machine {
         self.call_registers()
     }
 
+    /// The convention a function nothing outside the program reaches takes, where the target states one.
+    fn private_convention(&self) -> Option<PrivateConvention> {
+        None
+    }
+
     /// What multiplying by the constant `factor`, above one, costs: a
     /// multiply, or the shifts and adds the target makes it of.
     fn multiply_by(&self, _factor: i64) -> i64 {
@@ -295,6 +300,14 @@ impl AddressForm {
                 <= costs.shift + costs.address + costs.r#move + costs.store;
         !self.secondary || direct || amortized
     }
+}
+
+/// The convention the target gives a private function, and those a function must have for it to take it: a marked function
+/// (Pascal's, an interrupt's) keeps the protocol its marker names.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct PrivateConvention {
+    pub to: u32,
+    pub from: Vec<u32>,
 }
 
 /// A target that states nothing: no foreign memory, unit prices, and no

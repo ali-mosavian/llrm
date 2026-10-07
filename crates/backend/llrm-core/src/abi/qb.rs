@@ -857,6 +857,10 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.two_address()
     }
 
+    fn private_convention(&self) -> Option<llrm_mir::target::PrivateConvention> {
+        self.machine.private_convention()
+    }
+
     fn address_registers(&self) -> i64 {
         self.machine.address_registers()
     }

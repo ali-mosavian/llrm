@@ -40,6 +40,8 @@ pub struct Dos {
     pub address_forms: Vec<AddressForm>,
     /// Registers a far access takes for its selector.
     pub far_access: i64,
+    /// What the description gives a function nothing outside the program reaches.
+    pub private: Option<llrm_mir::target::PrivateConvention>,
 }
 
 /// The segment registers a selector is held in: ES, FS and GS, and DS where
@@ -55,11 +57,15 @@ impl Default for Dos {
     fn default() -> Self {
         let costs = costs("486");
         let address_forms = address_forms(&costs, 0);
-        Self { costs, registers: GENERAL.len() as i64, call_registers: PRESERVED.len() as i64, address_forms, far_access: FAR_ACCESS }
+        Self { costs, registers: GENERAL.len() as i64, call_registers: PRESERVED.len() as i64, address_forms, far_access: FAR_ACCESS, private: None }
     }
 }
 
 impl Dos {
+    pub fn private(self, private: Option<llrm_mir::target::PrivateConvention>) -> Self {
+        Self { private, ..self }
+    }
+
     /// On the CPU whose instruction forms cost `table` clocks, with
     /// `prefix` per operand-size prefix and `address_stall` more for an
     /// address-size one.
@@ -67,11 +73,15 @@ impl Dos {
         let cost = |kind: &str| table.iter().find(|(one, _)| one == kind).unwrap_or_else(|| panic!("no price for {kind}")).1;
         let costs = DESCRIPTION.operations(&cost, prefix);
         let address_forms = address_forms(&costs, address_stall);
-        Self { costs, registers, call_registers, address_forms, far_access: FAR_ACCESS }
+        Self { costs, registers, call_registers, address_forms, far_access: FAR_ACCESS, private: None }
     }
 }
 
 impl Machine for Dos {
+    fn private_convention(&self) -> Option<llrm_mir::target::PrivateConvention> {
+        self.private.clone()
+    }
+
     fn spaces(&self) -> llrm_mir::spaces::Spaces {
         crate::spaces()
     }

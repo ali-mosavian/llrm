@@ -1268,14 +1268,14 @@ mod tests {
         assert_eq!(hex(&code[5..]), "8b44240403442408c3", "mov eax,[esp+4]; add eax,[esp+8]; ret");
     }
 
-    /// A near procedure that pops its own arguments returns `ret 4` (`c2 0400`): the word form,
-    /// `66 c2 0400`, pops a 16-bit return address and sent the flat program into the vector table.
+    /// A near procedure that pops its own arguments returns `ret 8` (`c2 0800`): the word form,
+    /// `66 c2 0800`, pops a 16-bit return address and sent the flat program into the vector table. A
+    /// function of six arguments has two on the stack under Watcom's convention, which its callee pops.
     #[test]
     fn test_m32_returns_popping_arguments_with_a_dword_ret() {
-        // The function that pops is called once: kept as one.
-        let object = flat_object_with("pop", &["-fno-inline-functions-called-once"]);
+        let object = flat_object_with("regs", &[]);
         let code = hex(&object.iter().find(|(kind, _)| *kind == 0xA1).expect("code").1);
-        assert!(code.contains("c20400") && !code.contains("66c2"), "{code}");
+        assert!(code.contains("c20800") && !code.contains("66c2"), "{code}");
     }
 
     /// A flat string operation takes its operands in ESI, EDI and ECX with no segment operand: it was

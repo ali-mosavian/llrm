@@ -1,6 +1,9 @@
 # The ABI a program has without -mabi=, and, for each ABI, the convention an unmarked function has under it.
 default = "watcom"
 
+# The convention a function nothing outside the program reaches takes under every ABI: no one else sees it, so the register one.
+private = "watcall32"
+
 [abi.watcom]
 convention = "watcall32"
 

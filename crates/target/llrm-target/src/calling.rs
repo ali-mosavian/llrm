@@ -105,6 +105,9 @@ pub struct Calling {
     pub abis: BTreeMap<String, String>,
     /// The family a program gets without the switch.
     pub default: String,
+    /// The convention a function nothing outside the program reaches takes, whatever ABI the program has: no one else sees it,
+    /// so the target's best serves. None where its default is that.
+    pub private: Option<String>,
 }
 
 const KEYS: &[&str] = &[
@@ -156,7 +159,7 @@ impl Calling {
             let convention = one.as_table().and_then(|one| one.get("convention")).and_then(toml::Value::as_str).ok_or_else(|| format!("calling.toml: abi.{family}.convention is not a name"))?;
             abis.insert(family.clone(), convention.to_owned());
         }
-        for (name, value) in table.iter().filter(|(name, _)| !matches!(name.as_str(), "default" | "abi")) {
+        for (name, value) in table.iter().filter(|(name, _)| !matches!(name.as_str(), "default" | "abi" | "private")) {
             let mut one = value.as_table().ok_or_else(|| format!("calling.toml: {name} is not a table"))?.clone();
             // `like = "other"`: everything `other` states that this does not.
             if let Some(like) = one.remove("like") {
@@ -173,12 +176,27 @@ impl Calling {
         if conventions.is_empty() {
             return Err("calling.toml: no convention".to_owned());
         }
-        let calling = Self { conventions, abis, default };
+        let private = table.get("private").map(|one| one.as_str().map(str::to_owned).ok_or("calling.toml: `private` names a convention")).transpose()?;
+        let calling = Self { conventions, abis, default, private };
+        if let Some(name) = &calling.private {
+            calling.named(name).ok_or_else(|| format!("calling.toml: private is the convention {name}, which is not given"))?;
+        }
         for (family, convention) in &calling.abis {
             calling.named(convention).ok_or_else(|| format!("calling.toml: abi.{family} is the convention {convention}, which is not given"))?;
         }
         calling.chosen(None)?;
         Ok(calling)
+    }
+
+    /// The convention a private function takes, where the target states one.
+    pub fn private(&self) -> Option<&Convention> {
+        self.private.as_deref().and_then(|name| self.named(name))
+    }
+
+    /// Whether a function with `convention` may take the private one instead: the ABIs' own conventions are the ones a program's
+    /// functions have unless marked, and a marked one (Pascal's, an interrupt's) is a protocol its marker names.
+    pub fn replaceable(&self, convention: &Convention) -> bool {
+        self.abis.values().any(|name| *name == convention.name)
     }
 
     /// The convention an unmarked function has: the default ABI's.
@@ -571,6 +589,19 @@ mod tests {
         assert_eq!((calling.native().name.as_str(), calling.chosen(Some("reg")).unwrap().name.as_str()), ("c", "w"));
         assert_eq!(calling.chosen(Some("gcc")).unwrap_err(), "no ABI \"gcc\": this target has reg, stack");
         assert!(Calling::parse(&text.replace("default = \"stack\"", "default = \"nowhere\"")).unwrap_err().contains("no ABI \"nowhere\""));
+    }
+
+    /// A private function takes the convention `private` names under any ABI; only the ABIs' own conventions may be replaced, and a
+    /// name the file does not give is refused.
+    #[test]
+    fn a_private_function_has_the_convention_the_description_names() {
+        let stack = format!("{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\n[p]\nlike = \"c\"\ncc = \"pascal\"\n").replace("default = \"w\"\n[abi.w]\nconvention = \"w\"\n", "default = \"stack\"\nprivate = \"w\"\n[abi.reg]\nconvention = \"w\"\n[abi.stack]\nconvention = \"c\"\n");
+        let calling = Calling::parse(&stack).unwrap();
+        assert_eq!(calling.private().map(|one| one.name.as_str()), Some("w"));
+        let named = |name: &str| calling.named(name).unwrap();
+        assert!(calling.replaceable(named("c")) && calling.replaceable(named("w")) && !calling.replaceable(named("p")));
+        assert!(Calling::parse(&stack.replace("private = \"w\"", "private = \"nowhere\"")).unwrap_err().contains("private is the convention nowhere"));
+        assert!(Calling::parse(&stack.replace("private = \"w\"\n", "")).unwrap().private().is_none());
     }
 
     #[test]

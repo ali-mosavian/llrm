@@ -97,6 +97,20 @@ fn c_listing(flags: &[&str], source: &str) -> String {
     std::fs::read_to_string(out).unwrap()
 }
 
+/// Under `-mabi=sysv` a `static` function took the stack too, though no one outside sees it (gcc passes it in registers,
+/// `regparm` for a `local` one): its arguments were read from [esp+4..], each call pushed them and popped them after. It takes
+/// the description's `private` convention; the exported function keeps sysv's.
+#[test]
+fn a_private_function_takes_registers_under_sysv_and_an_exported_one_keeps_the_stack() {
+    let text = c_listing(&["-m32", "-mabi=sysv"], "static int add3(int a, int b, int c) { return a * 3 + b * 5 + c; }\nint twice(int a, int b, int c) { return a * 2 + b + c; }\nint use(int x) { return add3(x, 2, 3) + add3(3, x, 1); }\n");
+    let private = procedure(&text, "_add3");
+    assert!(!private.iter().any(|line| line.contains("[esp+")), "{private:?}");
+    let exported = procedure(&text, "_twice");
+    assert!(exported.iter().any(|line| line.contains("[esp+4]")), "{exported:?}");
+    let caller = procedure(&text, "_use");
+    assert!(!caller.iter().any(|line| line.starts_with("push") && line.contains("2")) && !pops_after(&caller), "{caller:?}");
+}
+
 /// A callee keeps ECX under Watcom's convention unless its arguments arrive there; `g_` (two arguments, in EAX and EDX) called a
 /// cdecl routine, which clobbers ECX, and did not save it: a caller holding a value in ECX across `call g_` lost it (found as
 /// a crash at the end of tests/run/nib/flat_containers.nib under `-mabi=sysv`, whose private functions took the register convention).
