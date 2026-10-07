@@ -5,13 +5,13 @@ blessed = "2026-10-07"
 code_bytes = 1008
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3887.2013
+kernel_ms = 3887.2019
 
 [bas.Os]
 code_bytes = 976
 data_bytes = 113
 bss_bytes = 0
-kernel_ms = 3886.6757
+kernel_ms = 3886.6766
 
 [c.O2]
 code_bytes = 564
@@ -23,19 +23,19 @@ kernel_ms = 3415.7936
 code_bytes = 534
 data_bytes = 81
 bss_bytes = 3056
-kernel_ms = 3415.6631
+kernel_ms = 3415.6629
 
 [nib.O2]
-code_bytes = 1587
+code_bytes = 1588
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4239.5802
+kernel_ms = 4239.5804
 
 [nib.Os]
-code_bytes = 1491
+code_bytes = 1492
 data_bytes = 3157
 bss_bytes = 0
-kernel_ms = 4239.6047
+kernel_ms = 4239.6052
 
 [ow.O2]
 code_bytes = 544
