@@ -18,43 +18,66 @@ pub fn removed(module: &mut Module) -> Vec<GlobalId> {
     let mut changed = BTreeSet::new();
     for &id in only.iter().filter(|id| !refused.contains(id)) {
         let Some(calls) = sites.get(&id) else { continue };
-        let count = module.global(id).function().map_or(0, |one| one.parameters().len());
-        for parameter in (0..count).rev() {
-            if !dead(module, id, parameter) {
-                continue;
-            }
-            let own: Vec<InstId> = calls.iter().filter(|&&(caller, _)| caller == id).map(|&(_, inst)| inst).collect();
-            let ty = {
-                let Module { context, globals, .. } = &mut *module;
-                let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else { unreachable!("a function") };
-                for &call in &own {
+        let gone = dead(module, id);
+        if gone.is_empty() {
+            continue;
+        }
+        let own: Vec<InstId> = calls.iter().filter(|&&(caller, _)| caller == id).map(|&(_, inst)| inst).collect();
+        let ty = {
+            let Module { context, globals, .. } = &mut *module;
+            let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else { unreachable!("a function") };
+            // Every argument at a removed position goes first: each use of a removed parameter is one of them.
+            for &call in &own {
+                for &parameter in gone.iter().rev() {
                     function.replace_argument(call, parameter, &[], function.ty);
                 }
-                function.remove_parameter(context, parameter);
-                for &call in &own {
-                    function.set_call_type(call, function.ty);
-                }
-                function.ty
-            };
-            for &(caller, call) in calls.iter().filter(|&&(caller, _)| caller != id) {
-                let GlobalKind::Function(function) = &mut module.globals[caller.0 as usize].kind else { unreachable!("a caller") };
-                function.replace_argument(call, parameter, &[], ty);
-                changed.insert(caller);
             }
-            changed.insert(id);
+            for &parameter in gone.iter().rev() {
+                function.remove_parameter(context, parameter);
+            }
+            for &call in &own {
+                function.set_call_type(call, function.ty);
+            }
+            function.ty
+        };
+        for &(caller, call) in calls.iter().filter(|&&(caller, _)| caller != id) {
+            let GlobalKind::Function(function) = &mut module.globals[caller.0 as usize].kind else { unreachable!("a caller") };
+            for &parameter in gone.iter().rev() {
+                function.replace_argument(call, parameter, &[], ty);
+            }
+            changed.insert(caller);
         }
+        changed.insert(id);
     }
     changed.into_iter().collect()
 }
 
-/// Whether nothing reads parameter `at` of `id` but the calls it makes to itself with it in place.
-fn dead(module: &Module, id: GlobalId, at: usize) -> bool {
-    let Some(function) = module.global(id).function() else { return false };
-    let Some(&value) = function.parameters().get(at) else { return false };
-    function.users(value).iter().all(|one| {
-        matches!(function.instruction(one.user).opcode, Opcode::Call(_))
-            && one.index as usize == at
-            && memory::callee(&module.context, function, one.user) == Some(id)
-            && function.instruction(one.user).operands.iter().filter(|&&operand| operand == Operand::Value(value)).count() == 1
-    })
+/// The parameters of `id` nothing reads but its own calls to itself, each as the argument of a parameter
+/// that nothing reads either: LLVM's DeadArgumentElimination (`MarkValue`/`SurveyUse`: a use as an argument of
+/// the function's own call is live only if that parameter is), taken to its fixed point. `hanoi(n - 1, a, c, b)`
+/// permutes three parameters among themselves and reads none.
+fn dead(module: &Module, id: GlobalId) -> BTreeSet<usize> {
+    let Some(function) = module.global(id).function() else { return BTreeSet::new() };
+    let count = function.parameters().len();
+    // Where each parameter is passed; none when something else reads it.
+    let passed: Vec<Option<Vec<usize>>> = function
+        .parameters()
+        .iter()
+        .map(|&value| {
+            function
+                .users(value)
+                .iter()
+                .map(|one| {
+                    let call = function.instruction(one.user);
+                    let reads = matches!(call.opcode, Opcode::Call(_)) && memory::callee(&module.context, function, one.user) == Some(id) && (one.index as usize) < count;
+                    reads.then_some(one.index as usize)
+                })
+                .collect()
+        })
+        .collect();
+    let mut live: BTreeSet<usize> = (0..count).filter(|&at| passed[at].is_none()).collect();
+    while let Some(at) = (0..count).find(|at| !live.contains(at) && passed[*at].iter().flatten().any(|to| live.contains(to))) {
+        live.insert(at);
+    }
+    (0..count).filter(|at| !live.contains(at)).collect()
 }
