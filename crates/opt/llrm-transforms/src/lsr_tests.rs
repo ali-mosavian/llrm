@@ -1997,7 +1997,7 @@ fn test_a_difference_is_one_sub_from_a_copy_of_the_minuend() {
     // Only the word form: `[bx+si]` is no `lea` of any register.
     let mut machine = Tuned { two_address: true, ..target() };
     machine.address_forms.truncate(1);
-    let room = crate::spill::Room { registers: 6, across_call: 2, far_access: 0, segments: 0, addresses: 0, two_address: true, spaces: llrm_x86_m16::spaces() };
+    let room = crate::spill::Room { registers: 6, across_call: 2, two_address: true, spaces: llrm_x86_m16::spaces(), ..Default::default() };
     let target = super::Target { machine: &machine, costs: machine.costs.clone(), room, forms: machine.address_forms.clone() };
     let costs = &machine.costs;
     assert_eq!(super::_scaled(&target, &BigInt::from(-1), true), (0, true), "`rest - r`: a sub from a copy of rest");
