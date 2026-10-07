@@ -55,6 +55,37 @@ impl FunctionPass for Algebraic {
     }
 }
 
+/// What a counter rebased by a use leaves behind: `x - (x + y)` is `-y`. LLVM's LSR cleans with InstSimplify, not InstCombine's
+/// whole set, which would fold the scales LSR just chose back into one another.
+pub struct Differences;
+
+impl FunctionPass for Differences {
+    fn name(&self) -> &'static str {
+        "differences"
+    }
+
+    fn run(&mut self, unit: &mut passes::Unit, _analyses: &mut Analyses) -> PreservedAnalyses {
+        let mut changed = false;
+        loop {
+            let mut round = false;
+            for (_, inst) in unit.function.walk().collect::<Vec<_>>() {
+                if !unit.function.is_erased(inst) {
+                    round |= _difference_from_sum(unit.context, unit.function, inst) || _negated_difference(unit.context, unit.function, inst);
+                }
+            }
+            if !round {
+                break;
+            }
+            changed = true;
+        }
+        if changed {
+            PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+        } else {
+            PreservedAnalyses::all()
+        }
+    }
+}
+
 /// Every rule, to a fixed point; whether anything changed.
 pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses) -> bool {
     // A number proved before stays proved: every rewrite keeps each

@@ -1,15 +1,15 @@
-reason = "lsr counts a loop with another way out to zero at its own exit (queens, quicksort, tile). queens bas -O2/-Os instructions +4.7%/+3.5% and queens c/nib code +2..3 bytes: the setup is ~9 instructions a call and saves one a trip; the model assumes 10 trips where Safe's early exits give about 3 (filed as a trip estimate from exit probabilities)."
-blessed = "2026-10-07"
+reason = "tile: (y+dy)&63 and (x+dx)&63 are no-ops under the loops' ranges; algebraic drops the mask (7156 -> 4156 instructions on c, 9156 -> 4181 on bas and nib)"
+blessed = "2026-10-06"
 
 [bas.O2]
-instructions = 4156
+instructions = 4181
 memory_operands = 1000
 code_bytes = 167
 data_bytes = 8205
 bss_bytes = 0
 
 [bas.Os]
-instructions = 4156
+instructions = 4181
 memory_operands = 1000
 code_bytes = 167
 data_bytes = 8205
@@ -30,14 +30,14 @@ data_bytes = 0
 bss_bytes = 8192
 
 [nib.O2]
-instructions = 4156
+instructions = 4181
 memory_operands = 1000
 code_bytes = 111
 data_bytes = 8192
 bss_bytes = 0
 
 [nib.Os]
-instructions = 4156
+instructions = 4181
 memory_operands = 1000
 code_bytes = 110
 data_bytes = 8192
