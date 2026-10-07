@@ -540,12 +540,12 @@ fn _fixed(
 ) -> BTreeMap<i64, Vec<spill::Site>> {
     let function = view.function;
     let symbols = _symbols(users, exit);
-    let counted = |value: ValueId| spill::integer(view.context, function, value) && !web.contains(&value) && !(symbols.contains(&value) && !live.contains(&value));
+    let counted = |value: ValueId| spill::integer_in(view.context, function, value, room.index_scales) && !web.contains(&value) && !(symbols.contains(&value) && !live.contains(&value));
     let found = liveness::live(function);
     let across = |inst: InstId| spill::kept_across(outer, view.context, function, inst);
     let transient = |inst: InstId, live: &BTreeSet<ValueId>| spill::transient(view.context, view.layout, function, inst, room, live);
     let segment = |value: ValueId| spill::segment_view(view.context, view.layout, room.spaces, function, value);
-    let addressed = spill::addressed(function);
+    let addressed = spill::addressed_in(view.context, function, room.index_scales);
     let routed = |value: ValueId| addressed.contains(&value);
     loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted, &segment, &routed))).collect()
 }
@@ -804,6 +804,15 @@ fn _scaling(target: &Target, k: &BigInt) -> i64 {
     }
 }
 
+/// What `k * r` costs where a use adds `rest`, and whether the use is `rest - r`: one `sub` from a copy of
+/// `rest` (the copy is the use's, as `made` charges it), with no negation of `r` and no product to hold.
+/// Priced as a negation, a copy and an add, it made a counter that rebuilds `c - r` look dearer than it is
+/// (#721: Nib -Os queens, 34% in the model, tied in the code).
+fn _scaled(target: &Target, k: &BigInt, added: bool) -> (i64, bool) {
+    let subtracted = added && *k == BigInt::from(-1);
+    (if subtracted { 0 } else { _scaling(target, k) }, subtracted)
+}
+
 /// Whether one `lea` makes `k * r + rest + constant`: where any register may be a base and an index
 /// (`[bx+si]` is no `lea` of `ax`), and its scales hold `k`.
 fn _leas(target: &Target, k: &BigInt) -> bool {
@@ -951,18 +960,19 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             if let Some((shift, _, inverse)) = &fit.trip {
                 price.cost += costs.add + if *shift != 0 { costs.shift } else { 0 } + if *inverse != BigInt::from(1) { costs.multiply + costs.add } else { 0 };
             }
-            price.cost += _scaling(target, &fit.k);
-            if fit.trip.is_none() && _scaling(target, &fit.k) != 0 {
-                price.product = Some((small(&fit.k), _scaling(target, &fit.k), block));
-            }
             let pointer = candidate.of.pointer.is_some();
             let symbolic = !fit.rest.is_zero() || matches!(fit.base, Some(Operand::Value(_)));
+            let (scaling, subtracted) = _scaled(target, &fit.k, fit.trip.is_none() && (symbolic || fit.constant != BigInt::from(0)));
+            price.cost += scaling;
+            if fit.trip.is_none() && scaling != 0 {
+                price.product = Some((small(&fit.k), scaling, block));
+            }
             // A pointer made from an integer, in a carrying space, carries into its selector.
             // A two-address target makes a result in its first operand's register: the candidate stays
             // live, as a counter does, so a form no address takes (a negation, a general scale) is
             // copied first. `lea` makes `cand * k + rest + constant` in one, where its scales hold `k`.
             // (A scaled one is made in a copy already, which the add then makes its result in.)
-            let copy = if target.room.two_address && fit.k == BigInt::from(1) && !_leas(target, &fit.k) { costs.r#move } else { 0 };
+            let copy = if target.room.two_address && (subtracted || fit.k == BigInt::from(1) && !_leas(target, &fit.k)) { costs.r#move } else { 0 };
             let made = |constant| {
                 let ty = view.function.value(site.one.value).ty;
                 copy + if pointer { costs.add } else { profit::advance(view.context, view.layout, ty, costs.add, constant, costs) }

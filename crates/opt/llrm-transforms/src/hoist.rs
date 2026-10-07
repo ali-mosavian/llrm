@@ -130,6 +130,12 @@ fn _affordable(unit: &passes::Unit, outer: &Outer, mut run: Vec<InstId>, before:
         let free = |value: ValueId| _displacement(&hoisted, value) || traffic.get(&value).is_some_and(|one| one.rebuild.is_some());
         let crossing = _crossed_values(&hoisted, &run).intersection(&forecast.spilled).copied().collect::<BTreeSet<_>>();
         let uncounted: i64 = crossing.iter().filter(|&&value| free(value)).filter_map(|value| traffic.get(value)).map(|one| one.price(costs)).sum();
+        for &value in &forecast.spilled {
+            if let ValueDef::Instruction(def) = hoisted.value(value).def {
+                llrm_support::debug!("hoist", "  spilled {value:?} = {:?} {:?}", hoisted.instruction(def).opcode, hoisted.instruction(def).operands);
+            }
+        }
+        llrm_support::debug!("hoist", "kept {kept}, moved {moved}, uncounted {uncounted}, floats {}, crossing {:?}, spilled {:?}", floats.len(), crossing, forecast.spilled);
         if moved - uncounted <= kept {
             return run;
         }

@@ -494,3 +494,18 @@ fn test_loads_of_one_address_are_compared_with_a_missing_one_once() {
     assert_eq!(found.len(), 39, "every load but the first is served");
     assert!(same_runs() - before <= 20, "{} comparisons for 20 loads of one address", same_runs() - before);
 }
+
+/// 200 stores to 200 different cells of one array asked every cell held of each write: 19,900 clobber questions
+/// where the bytes a write meets hold one cell.
+#[test]
+fn test_a_store_asks_only_the_cells_it_can_reach() {
+    let stores: String = (0..200).map(|at| format!("  store i16 %v, ptr getelementptr (i8, ptr @big, i16 {})\n", at * 2)).collect();
+    let parsed = Parsed::new(&format!("@big = global [400 x i8] zeroinitializer\n\ndefine void @f(i16 %v) {{\nb0:\n{stores}  ret void\n}}\n"));
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &Calls::default());
+    let before = clobber_asks();
+    let held = holders(&unit, &accesses);
+    let asked = clobber_asks() - before;
+    assert_eq!(held.outof.values().map(|cells| cells.len()).max(), Some(200));
+    assert!(asked <= 1_000, "{asked} clobber questions for 200 stores to disjoint cells");
+}

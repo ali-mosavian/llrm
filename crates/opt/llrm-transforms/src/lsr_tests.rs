@@ -1987,3 +1987,21 @@ fn test_a_value_made_from_the_counter_is_priced_with_its_copy() {
     assert_eq!(ivs(true, false), 2, "`mov; add` is dearer than the step of a counter of its own");
     assert_eq!(ivs(true, true), 1, "`lea` makes it in one");
 }
+
+/// `c - r` was priced as a negation, a copy and an add (3) with a product temp beside the value it made;
+/// the code is `mov x,c; sub x,r` (2, the copy the use's own). Queens' Nib -Os loop read 34% in the model
+/// where the code was a tie (#721). A negation alone, and a scale, are as they were.
+#[test]
+fn test_a_difference_is_one_sub_from_a_copy_of_the_minuend() {
+    use num_bigint::BigInt;
+    // Only the word form: `[bx+si]` is no `lea` of any register.
+    let mut machine = Tuned { two_address: true, ..target() };
+    machine.address_forms.truncate(1);
+    let room = crate::spill::Room { registers: 6, across_call: 2, two_address: true, spaces: llrm_x86_m16::spaces(), ..Default::default() };
+    let target = super::Target { machine: &machine, costs: machine.costs.clone(), room, forms: machine.address_forms.clone() };
+    let costs = &machine.costs;
+    assert_eq!(super::_scaled(&target, &BigInt::from(-1), true), (0, true), "`rest - r`: a sub from a copy of rest");
+    assert_eq!(super::_scaled(&target, &BigInt::from(-1), false), (costs.add + costs.r#move, false), "`-r`: a negation of a copy");
+    assert_eq!(super::_scaled(&target, &BigInt::from(2), true), (costs.shift + costs.r#move, false), "`2r + rest`: a shift of a copy");
+    assert_eq!(super::_scaled(&target, &BigInt::from(1), true), (0, false));
+}

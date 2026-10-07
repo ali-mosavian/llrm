@@ -21,6 +21,8 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::ops::Deref;
+use std::rc::Rc;
 
 use crate::graph::loops;
 use llrm_mir::module::{InstId, Operand, ValueId};
@@ -34,10 +36,53 @@ use crate::cfg;
 use crate::memory::{MemRef, Unit};
 use crate::memoryssa::{self, Accesses, changes, covered, covers, may_clobber, placed, same_bytes};
 use crate::ranges::{self, Interval};
-use crate::regions::{OverlapBucket, OverlapBuckets, overlap_bucket, overlap_buckets};
+use crate::regions::{OverlapBucket, OverlapBuckets, displaced_buckets, overlap_bucket, overlap_buckets, overlap_span};
 
-/// What each cell holds.
-pub type Holders = IndexMap<MemRef, Operand>;
+/// What each cell holds, indexed by the object and the bytes each cell names: a write asks only the cells it can
+/// reach, not every cell held, as `consts`' cell lattice does.
+#[derive(Clone)]
+pub struct Holders {
+    cells: CellMap<MemRef, Operand, OverlapBucket>,
+    buckets: Rc<RefCell<OverlapBuckets>>,
+}
+
+impl Default for Holders {
+    fn default() -> Self {
+        Self::of(IndexMap::default(), Rc::default())
+    }
+}
+
+impl Holders {
+    fn of(items: IndexMap<MemRef, Operand>, buckets: Rc<RefCell<OverlapBuckets>>) -> Self {
+        let cells = CellMap::new(items, |cell| (overlap_bucket(&mut buckets.borrow_mut(), cell), overlap_span(cell)));
+        Self { cells, buckets }
+    }
+
+    fn insert(&mut self, cell: MemRef, value: Operand) {
+        let buckets = Rc::clone(&self.buckets);
+        self.cells.insert(cell, value, |cell| (overlap_bucket(&mut buckets.borrow_mut(), cell), overlap_span(cell)));
+    }
+}
+
+impl Deref for Holders {
+    type Target = IndexMap<MemRef, Operand>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.cells
+    }
+}
+
+impl PartialEq for Holders {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl std::fmt::Debug for Holders {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_map().entries(self.iter()).finish()
+    }
+}
 
 /// The map on entry to and exit from each block.
 #[derive(Clone, Debug)]
@@ -82,7 +127,33 @@ fn serves(unit: &Unit, holder: Operand, value: ValueId) -> bool {
 /// The map across one instruction.
 fn after(unit: &Unit, accesses: &Accesses, inst: InstId, mut holders: Holders, known: Option<&BTreeMap<ValueId, Interval>>) -> Holders {
     let writes = accesses.writes(inst);
-    holders.retain(|one, _| !changes(one, false, writes, |store| may_clobber(unit, known, one, store)));
+    // What every cell is asked of every write, for the check below.
+    let expected = std::env::var_os("LLRM_CHECK_HOLDERS").is_some().then(|| {
+        let mut every: IndexMap<MemRef, Operand> = (*holders).clone();
+        every.retain(|one, _| !changes(one, false, writes, |store| may_clobber(unit, known, one, store)));
+        every
+    });
+    match writes {
+        // A write nothing is known of reaches every cell that can be written.
+        None => holders.cells.kill(None, |one| !one.unwritable(), None),
+        Some(stores) => {
+            for store in stores {
+                let reached = overlap_buckets(store, &holders.cells.parts);
+                let displaced = displaced_buckets(store, &holders.cells.parts);
+                holders.cells.kill(
+                    reached,
+                    |one| {
+                        CLOBBER_ASKS.with(|asks| asks.set(asks.get() + 1));
+                        !one.unwritable() && may_clobber(unit, known, one, store)
+                    },
+                    displaced,
+                );
+            }
+        }
+    }
+    if let Some(expected) = expected {
+        assert!(holders.iter().eq(expected.iter()), "the cells a write reaches, found through the index, are not those it reaches among all");
+    }
     if writes.is_none() {
         return holders;
     }
@@ -100,9 +171,22 @@ fn meet(maps: &[&Holders]) -> Holders {
     };
     let mut out = (*first).clone();
     for other in &maps[1..] {
-        out.retain(|one, who| other.get(one) == Some(who));
+        let kept: IndexMap<MemRef, Operand> = out.iter().filter(|(one, who)| other.get(*one) == Some(*who)).map(|(one, who)| (one.clone(), *who)).collect();
+        if kept.len() != out.len() {
+            out = Holders::of(kept, Rc::clone(&out.buckets));
+        }
     }
     out
+}
+
+thread_local! {
+    static CLOBBER_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has asked whether a write clobbers a held cell, for a test that a store does not ask of
+/// every cell held.
+pub fn clobber_asks() -> usize {
+    CLOBBER_ASKS.with(std::cell::Cell::get)
 }
 
 /// Which value each cell holds, at every block's entry and exit.
