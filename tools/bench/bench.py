@@ -194,7 +194,7 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     if got != want:
         return {"error": f"prints {got}, want {want}"}
     data, bss = sizes.data_bytes(obj)
-    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
+    return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
 
 
 def references_available() -> bool:

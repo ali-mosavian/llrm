@@ -236,7 +236,9 @@ const EXPANDED: [&str; 6] = ["usub.sat", "uadd.sat", "smin", "smax", "umin", "um
 /// select it means.
 fn expanded(line: &str) -> Option<Vec<String>> {
     let (result, call) = line.trim().split_once(" = call ")?;
-    let (ty, rest) = call.split_once(" @llvm.")?;
+    let (before, rest) = call.split_once(" @llvm.")?;
+    // The type is the last word before the callee; return attributes (`range(i16 8, -3)`, `noundef`) come ahead of it.
+    let ty = before.rsplit(' ').next()?;
     let kind = EXPANDED.iter().find(|name| rest.starts_with(&format!("{name}.")))?;
     let (_, arguments) = rest.split_once('(')?;
     let arguments = arguments.strip_suffix(')')?;
@@ -292,7 +294,7 @@ mod tests {
     /// stopped at "@main: @llvm.umax.i16" after the import.
     #[test]
     fn a_min_or_max_is_read_as_the_compare_and_select_it_means() {
-        let text = format!("{HEAD}declare i16 @llvm.umax.i16(i16, i16)\n\ndefine i16 @f(i16 %a, i16 %b) {{\nb0:\n  %r = tail call i16 @llvm.umax.i16(i16 %a, i16 %b)\n  ret i16 %r\n}}\n");
+        let text = format!("{HEAD}declare i16 @llvm.umax.i16(i16, i16)\n\ndefine i16 @f(i16 %a, i16 %b) {{\nb0:\n  %r = tail call range(i16 8, -3) i16 @llvm.umax.i16(i16 %a, i16 %b)\n  ret i16 %r\n}}\n");
         let printed = llrm_mir::print::module(&imported(&text).unwrap_or_else(|error| panic!("{error}")));
         assert!(printed.contains("icmp ugt") && printed.contains("select") && !printed.contains("llvm.umax"), "{printed}");
     }

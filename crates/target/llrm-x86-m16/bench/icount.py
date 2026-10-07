@@ -28,12 +28,16 @@ PSP = 0x1000
 LOAD = PSP + 0x10  # the image's first paragraph
 MEMORY_KINDS = {OpKind.MEMORY, OpKind.MEMORY_SEG_SI, OpKind.MEMORY_SEG_ESI, OpKind.MEMORY_SEG_RSI, OpKind.MEMORY_ESDI, OpKind.MEMORY_ESEDI, OpKind.MEMORY_ESRDI}
 RETURNS = {Mnemonic.RET, Mnemonic.RETF}
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "llrm-x86-m32" / "vsgcc"))
+from harness import cost as _cost  # noqa: E402  (spike: the 486 clock table of the m32 harness, multiplies at their least)
 
 
 @dataclass
 class Counts:
     instructions: int = 0
     memory_operands: int = 0
+    clocks: int = 0
 
 
 @dataclass
@@ -49,7 +53,7 @@ def _decode(raw: bytes) -> tuple[int, bool, bool]:
     """(memory operands, is a return, is repeated) of the instruction at the start of `raw`."""
     one = Decoder(16, raw).decode()
     memory = 0 if one.mnemonic == Mnemonic.LEA else sum(1 for at in range(one.op_count) if one.op_kind(at) in MEMORY_KINDS)
-    return memory, one.mnemonic in RETURNS, one.has_rep_prefix or one.has_repe_prefix or one.has_repne_prefix
+    return (memory, one), one.mnemonic in RETURNS, one.has_rep_prefix or one.has_repe_prefix or one.has_repne_prefix
 
 
 def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch: set | None = None) -> Run:
@@ -90,7 +94,11 @@ def run(exe: Path, entry: int | None, cwd: Path, limit: int = 400_000_000, watch
         info = decoded.get(address)
         if info is None:
             info = decoded[address] = _decode(bytes(uc.mem_read(address, min(size, 15))))
-        memory, returns, repeated = info
+        (memory, ins), returns, repeated = info
+        prev = state.get("prev")
+        if prev is not None:
+            counts.clocks += _cost(prev[0], address != prev[1] + prev[0].len, True, 0)
+        state["prev"] = (ins, address)
         # A repeated string instruction fires the hook once per iteration, and once more with CX at 0, when it does nothing.
         if repeated and uc.reg_read(UC_X86_REG_CX) == 0:
             return
