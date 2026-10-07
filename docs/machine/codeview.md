@@ -308,10 +308,16 @@ Watcom's `cv4f.h`; each shape was also read from objects ML 6.11 wrote under `/Z
 - `LINK /CO` runs CVPACK, which rewrites the table (`NB08` trailer, CVPACK 4.02); CodeView then breaks at a function
   by name and its locals window shows `short a = 1`.
 
-What ML cannot tell, from the OW headers alone and unverified against a producer: `LF_UNION` (ML writes a union as
-`LF_STRUCTURE`), `LF_ENUM`, `LF_BITFIELD`, `LF_MODIFIER`, `LF_ARRAY`'s index type, `S_REGISTER`, `S_BLOCK`, and the
-32-bit records (no 32-bit CodeView or CVPACK on tinytim; only ML's own 32-bit object's shapes). A register that holds a
-value for part of a scope, and one the optimiser removed, are left out: CodeView 4 names one place per scope.
+Read by real CodeView (`tests/cv4.rs`, driven; the second test links a program the model describes and no frontend does):
+`LF_ENUM` (`color e = 5`), `LF_MODIFIER` (`const short k`), `S_REGISTER` (`SI reg short r = 42`) and `S_BLOCK16` (`k`
+is listed only while the program is in its block); a struct local reads `bits s = {...}`. Each was red when its record
+was changed (a register number one off shows `DI`; the block as another kind loses `k`).
+
+Still from the OW headers alone: `LF_UNION` (ML writes a union as `LF_STRUCTURE`) and `LF_BITFIELD` (CodeView accepts
+them, and the members are not shown here: its locals window expands only with keys the debug socket cannot type),
+`LF_ARRAY`'s index type, and the 32-bit records (no 32-bit CodeView or CVPACK on tinytim; only ML's own 32-bit object's
+shapes, read through `cv4info`). A register that holds a value for part of a scope, and one the optimiser removed, are
+left out: CodeView 4 names one place per scope.
 
 CodeView stopped in `f` of `tests/fixtures/codeview/m.c`, its locals window from the object's records:
 

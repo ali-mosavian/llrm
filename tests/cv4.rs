@@ -80,3 +80,95 @@ fn microsoft_link_and_cvpack_take_the_object_and_codeview_reads_its_variables() 
         assert!(screen.contains(expected), "no {expected:?} in CodeView's screen:\n{screen}");
     }
 }
+
+/// A small-model program the model describes and no frontend does: an enum, a `const`, a variable in a register, a
+/// block with a variable of its own. `main` is 28 bytes: `e = GREEN; si = 42; { k = 7 }; return 0`.
+fn synthetic() -> (llrm_object::Object, String) {
+    use llrm_object::debug::{Block, Enumerator, File, Function, Info, Kind, Language, Line, Location, Range, Register, Scalar, Type, Variable};
+    use llrm_object::{Arch, Binding, Definition, Object, Role, Section, Symbol};
+    let code = vec![0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x06, 0xC7, 0x46, 0xFE, 0x05, 0x00, 0xBE, 0x2A, 0x00, 0xC7, 0x46, 0xFC, 0x07, 0x00, 0x8B, 0x46, 0xFC, 0x33, 0xC0, 0x8B, 0xE5, 0x5D, 0xCB];
+    let length = code.len();
+    // `_isatty`, which the library's start-up wants: returns 0.
+    let mut code = code;
+    code.extend([0x33, 0xC0, 0xCB]);
+    let total = code.len();
+    let text = Section { name: "_TEXT".into(), role: Role::Text, near: false, align: 1, image: code, spans: vec![[0, total]], relocs: Vec::new() };
+    let variable = |name: &str, r#type, location| Variable { name: name.into(), r#type, kind: Kind::Local, location };
+    let whole = Range { section: 0, offset: 0, length };
+    let enumerators = [("RED", 0), ("GREEN", 5), ("BLUE", 6)].map(|(name, value)| Enumerator { name: name.into(), value }).to_vec();
+    let function = Function {
+        name: "main".into(),
+        symbol: 0,
+        r#type: 3,
+        ranges: vec![whole],
+        body: Some((6, 24)),
+        far: true,
+        module: false,
+        variables: vec![variable("e", 1, Location::Frame { disp: -2 }), variable("r", 0, Location::Register("si".into()))],
+        blocks: vec![Block { ranges: vec![Range { section: 0, offset: 14, length: 8 }], variables: vec![variable("k", 2, Location::Frame { disp: -4 })], blocks: Vec::new() }],
+        frame: Vec::new(),
+    };
+    let info = Info {
+        language: Language::C,
+        frame_register: "bp".into(),
+        registers: vec![Register { name: "si".into(), bits: 16, dwarf: None, codeview: Some(15) }],
+        code: vec![whole],
+        types: vec![
+            Type::Scalar(Scalar::Int { bytes: 2, signed: true }),
+            Type::Enum { name: "color".into(), underlying: 0, enumerators },
+            Type::Qualified { target: 0, constant: true, volatile: false },
+            Type::Procedure { result: Some(0), parameters: Vec::new(), convention: None },
+        ],
+        functions: vec![function],
+        files: vec![File { name: "syn.c".into(), checksum: None }],
+        lines: [(1, 0), (3, 6), (4, 11), (5, 14), (6, 19), (7, 22)].map(|(line, offset)| Line { section: 0, offset, file: 0, line, column: 0 }).to_vec(),
+        ..Info::default()
+    };
+    let object = Object {
+        name: "syn.c".into(),
+        arch: Arch::I8086,
+        sections: vec![text],
+        symbols: vec![
+            Symbol { name: "_main".into(), binding: Binding::Public, definition: Definition::Defined { section: 0, offset: 0 }, group: None },
+            Symbol { name: "_isatty".into(), binding: Binding::Public, definition: Definition::Defined { section: 0, offset: length }, group: None },
+        ],
+        omf_groups: Vec::new(),
+        debug: Some(info),
+    };
+    (object, "int main(void)\n{\n    enum color e = GREEN;\n    register int r = 42;\n    { const int k = 7;\n      r = k; }\n    return 0;\n}\n".to_owned())
+}
+
+/// CodeView, driven, on the program above: LINK /CO and CVPACK take it, and the locals window at the first line of the
+/// block shows each record as CodeView 4 means it: `e` an enum by its name, `r` in register SI, and `k`, a
+/// `const short` that is listed only inside its block. `LF_ENUM`, `LF_MODIFIER`, `S_REGISTER` and `S_BLOCK16` were
+/// written from Open Watcom's headers alone before this ran.
+#[test]
+fn codeview_reads_an_enum_a_const_a_register_variable_and_a_block_scope() {
+    let (Some(microsoft), Some(borland)) = (directory("VBDOS_DIR", "work/other/d32x/toolchains/vbdos", "BIN/CV.EXE"), directory("TCPP30_DIR", "scratch/toolchains/tcpp30", "lib/C0M.OBJ")) else {
+        skipped("needs VB/DOS's LINK, CVPACK and CV (VBDOS_DIR) and Turbo C++'s C0M and CM (TCPP30_DIR)");
+        return;
+    };
+    if !dosbox::binary().exists() {
+        skipped("needs the DOSBox-X this crate builds");
+        return;
+    }
+    let scratch = tempfile::tempdir().unwrap();
+    let (object, source) = synthetic();
+    std::fs::write(scratch.path().join("syn.c"), source).unwrap();
+    std::fs::write(scratch.path().join("syn.obj"), llrm_core::objectfile::write::write(&object).unwrap()).unwrap();
+    dosbox::run(&[('c', &borland), ('v', &microsoft), ('w', scratch.path())], "v:\\bin", &["link /CO /NOI c:\\lib\\c0m.obj syn.obj,syn.exe,nul,c:\\lib\\cm.lib; > link.txt".into()]);
+    let exe = std::fs::read(scratch.path().join("SYN.EXE")).unwrap_or_else(|error| panic!("LINK made no SYN.EXE: {error}: {}", std::fs::read_to_string(scratch.path().join("LINK.TXT")).unwrap_or_default()));
+    assert_eq!(&exe[exe.len() - 8..exe.len() - 4], b"NB08", "CVPACK packed the table");
+    let session = Session::start(&[('c', &borland), ('v', &microsoft), ('w', scratch.path())], "v:\\bin");
+    session.dos("cv syn.exe");
+    let started = Instant::now();
+    while !session.video_text().iter().any(|row| row.contains("source1")) {
+        assert!(started.elapsed() < Duration::from_secs(60), "CodeView did not come up");
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    // Stopped at `main`, then a line at a time to the first line of the block.
+    let screen = locals(&session, &["bp main", "g", "p", "p", "p"]).join("\n");
+    for expected in ["const short k", "color e = 5", "SI reg short r = 42"] {
+        assert!(screen.contains(expected), "no {expected:?} in CodeView's screen:\n{screen}");
+    }
+}

@@ -173,6 +173,7 @@ dependencies = [
  "llrm-driver",
  "llrm-mir",
  "llrm-nib",
+ "llrm-object",
  "llrm-qb",
  "llrm-target",
  "llrm-x86",
