@@ -739,3 +739,15 @@ fn test_the_only_call_of_a_body_past_the_allocation_knee_stays_a_call() {
     let mut within = parsed(&text(200));
     assert!(inline_with(&mut within, "main", 8, Threshold::default()));
 }
+
+/// A caller already past the knee does not grow: sb_build's callee of 175 went into a caller of 465 and its backend time
+/// went from 0.36 s to 2.4 s (compile-time, #791). The same callee goes into a caller within the knee.
+#[test]
+fn test_a_caller_past_the_allocation_knee_takes_no_more_calls() {
+    let chain = |count: usize| -> String { (0..count).map(|at| format!("  %t{at} = add i16 {}, {at}\n", if at == 0 { "%x".to_owned() } else { format!("%t{}", at - 1) })).collect() };
+    let text = |own: usize| format!("define internal i16 @small(i16 %x) {{\nb0:\n{}  ret i16 %t3\n}}\n\ndefine i16 @main(i16 %x) {{\nb0:\n{}  %a = call i16 @small(i16 %t{})\n  %b = call i16 @small(i16 %a)\n  ret i16 %b\n}}\n", chain(4), chain(own), own - 1);
+    let mut past = parsed(&text(400));
+    assert!(!inline_with(&mut past, "main", 8, Threshold::new(225)));
+    let mut within = parsed(&text(100));
+    assert!(inline_with(&mut within, "main", 8, Threshold::new(225)));
+}

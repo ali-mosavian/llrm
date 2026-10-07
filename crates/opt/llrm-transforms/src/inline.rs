@@ -441,6 +441,10 @@ fn grows_within_limits(function: &Function, caller: &Caller, callee: &Function) 
     let base = if caller.base > 0 { caller.base } else { own };
     let limit = base.max(callee_size) * (100 + LARGE_GROWTH) / 100;
     let after = own + callee_size;
+    // A caller past the knee does not grow: merging into it is what the allocator's superlinear cost charges most.
+    if after >= callee_size && after > ALLOCATION_KNEE && own > ALLOCATION_KNEE {
+        return false;
+    }
     !(after >= callee_size && after > LARGE_FUNCTION && after > limit)
 }
 
