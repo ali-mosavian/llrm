@@ -250,8 +250,15 @@ def cost(ins, taken, first_rep, mem, multiplier=None):
     return 1
 
 
+def fresh_stub():
+    """The stub the harness links is built from stub.s: one built from an older stub.s lacks its symbols (`report_` after #743)."""
+    built, source = OUT / "stub.elf", Path(__file__).with_name("stub.s")
+    assert built.stat().st_mtime >= source.stat().st_mtime, f"{built} is older than {source}: run.sh builds it"
+    return built
+
+
 def run(prog, variant, hot=False, limit=300_000_000):
-    stub = nm(OUT / "stub.elf")
+    stub = nm(fresh_stub())
     if variant in OMF_VARIANTS:
         segs, syms = omf_link(OUT / "o" / f"{prog}.{variant}.obj", stub)
         main = syms["_main"]

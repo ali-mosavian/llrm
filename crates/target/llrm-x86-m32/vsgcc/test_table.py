@@ -1,4 +1,6 @@
 """The vsgcc report's summary: the geomean hid hanoi's 2.6x behind twenty programs near 1.0."""
+from pathlib import Path
+
 import pytest
 
 import table
@@ -24,3 +26,15 @@ def test_a_program_without_a_variant_is_refused_not_averaged():
     del P['b']['clangOs']
     with pytest.raises(AssertionError, match="clangOs"):
         table.complete(P)
+
+
+def test_a_stub_older_than_its_source_is_refused(tmp_path, monkeypatch):
+    """A work directory kept from before stub.s grew `report_` linked nothing: unresolved report_, and a stale table."""
+    import os
+    import harness
+    (tmp_path / "stub.elf").write_bytes(b"")
+    old = Path(harness.__file__).with_name("stub.s").stat().st_mtime - 100
+    os.utime(tmp_path / "stub.elf", (old, old))
+    monkeypatch.setattr(harness, "OUT", tmp_path)
+    with pytest.raises(AssertionError, match="older than"):
+        harness.fresh_stub()
