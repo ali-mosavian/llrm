@@ -482,7 +482,8 @@ impl Analysis for Bounded {
         let bounds = previous.as_ref().ok()?;
         let reach = reached_by(function, changes)?;
         let shape = analyses.get::<Shape>(context, layout, function);
-        let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions);
+        let edges = analyses.get::<DominatedEdges>(context, layout, function);
+        let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, bounds, edges.as_ref().as_ref().ok()?);
         Some(Self::solved(context, layout, function, analyses, Some((bounds, &dirty))))
     }
 }

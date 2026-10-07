@@ -466,3 +466,32 @@ fn a_change_to_a_loop_reworks_the_loop_that_starts_from_it() {
     assert_ne!(before, after, "the value the change reached");
     assert_eq!(after, facts(&mut Analyses::new(outer), &module), "what was brought up to date is what working every loop gives");
 }
+
+/// A loop carries what is known of the values made above it, whether it reads them or not: an instruction erased there,
+/// which no loop's blocks held, was still in the loop's facts. Seven bench programs and four pipeline tests found it.
+#[test]
+fn an_instruction_erased_above_a_loop_leaves_the_loops_facts() {
+    let mut module = parsed(&format!("{DOS}{LIMITED}"));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
+        let function = function(module, "f");
+        analyses.get::<super::Bounded>(&module.context, &layout, function).as_ref().as_ref().map(ranges::Bounds::facts).map_err(String::clone).unwrap()
+    };
+    let seven = {
+        let function = function(&module, "f");
+        value(function, "seven")
+    };
+    let before = facts(&mut analyses, &module);
+    assert!(before.values().any(|known| known.contains_key(&seven)), "a loop carries it");
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let made = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(seven)).unwrap();
+        function.erase(made).unwrap();
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    let after = facts(&mut analyses, &module);
+    assert!(after.values().all(|known| !known.contains_key(&seven)), "gone from every loop");
+    assert_eq!(after, facts(&mut Analyses::new(outer), &module), "what was brought up to date is what working every loop gives");
+}

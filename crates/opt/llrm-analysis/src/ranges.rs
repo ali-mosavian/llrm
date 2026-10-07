@@ -638,6 +638,8 @@ pub fn bounded_with(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Result<Fac
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bounds {
     headers: Vec<i64>,
+    /// The edges' facts it was worked out under: a loop reads them where it starts from.
+    edges: IndexMap<i64, Scope>,
     within: IndexMap<i64, Scope>,
     blocks: IndexMap<i64, Scope>,
 }
@@ -655,25 +657,42 @@ impl Bounds {
 }
 
 /// The headers of the loops whose bounds a change can alter: the loops holding a block it reached, the loops under a
-/// branch (or an assume, or any call) whose condition it reached, and then every loop in the same nest, and every loop
+/// branch (or an assume, or any call) whose condition it reached, the loops that start from a block whose edges' facts
+/// changed (those `bounds` was worked under against `held`, now), and then every loop in the same nest, and every loop
 /// that starts from what one of those leaves: the block its header's dominator is in, or a block that enters it.
-pub fn loops_reached(function: &llrm_mir::module::Function, shape: &cfg::Shape, blocks: &BTreeSet<BlockId>, conditions: &BTreeSet<BlockId>) -> BTreeSet<i64> {
+pub fn loops_reached(
+    function: &llrm_mir::module::Function,
+    shape: &cfg::Shape,
+    blocks: &BTreeSet<BlockId>,
+    conditions: &BTreeSet<BlockId>,
+    bounds: &Bounds,
+    held: &EdgeStates,
+) -> BTreeSet<i64> {
     let loops = &shape.loops;
     let reached: BTreeSet<i64> = blocks.iter().map(|block| cfg::id(*block)).collect();
     let judged: Vec<i64> = conditions.iter().map(|block| cfg::id(*block)).collect();
-    let mut dirty: BTreeSet<i64> = loops
-        .iter()
-        .filter(|one| one.body.iter().any(|at| reached.contains(at)) || judged.iter().any(|above| shape.dominance.dominates(*above, one.header)))
-        .map(|one| one.header)
-        .collect();
     let graph = cfg::graph(function);
     let entering = loops::predecessors(&graph);
+    let now = held.shared(function);
+    // Where each loop starts from: the block its header's dominator is, and the blocks that enter it.
+    let starts = |one: &loops::Loop| -> Vec<i64> {
+        shape.dominance.immediate(one.header).into_iter().chain(entering.get(&one.header).into_iter().flatten().copied().filter(|at| !one.body.contains(at))).collect()
+    };
+    let moved = |at: &i64| match (bounds.edges.get(at), now.get(at)) {
+        (Some(was), Some(is)) => !Rc::ptr_eq(was, is) && was != is,
+        (None, None) => false,
+        _ => true,
+    };
+    let mut dirty: BTreeSet<i64> = loops
+        .iter()
+        .filter(|one| one.body.iter().any(|at| reached.contains(at)) || judged.iter().any(|above| shape.dominance.dominates(*above, one.header)) || starts(one).iter().any(moved))
+        .map(|one| one.header)
+        .collect();
     // What each loop starts from, held by other loops.
     let hosts: Vec<(i64, Vec<i64>)> = loops
         .iter()
         .map(|one| {
-            let from = shape.dominance.immediate(one.header).into_iter().chain(entering.get(&one.header).into_iter().flatten().copied().filter(|at| !one.body.contains(at)));
-            let held: BTreeSet<i64> = from.flat_map(|at| loops.iter().filter(move |other| other.body.contains(&at)).map(|other| other.header)).filter(|header| *header != one.header).collect();
+            let held: BTreeSet<i64> = starts(one).into_iter().flat_map(|at| loops.iter().filter(move |other| other.body.contains(&at)).map(|other| other.header)).filter(|header| *header != one.header).collect();
             (one.header, held.into_iter().collect())
         })
         .collect();
@@ -907,10 +926,10 @@ pub fn bounded_solved(unit: &Unit, facts: &IndexMap<ValueId, Known>, prior: Opti
         }
     }
     let within = result.clone();
-    for (at, known) in edges_above {
-        result.entry(at).or_insert(known);
+    for (at, known) in &edges_above {
+        result.entry(*at).or_insert_with(|| Rc::clone(known));
     }
-    Ok(Bounds { headers, within, blocks: result })
+    Ok(Bounds { headers, edges: edges_above, within, blocks: result })
 }
 
 #[cfg(test)]
