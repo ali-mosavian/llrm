@@ -312,3 +312,7 @@ What ML cannot tell, from the OW headers alone and unverified against a producer
 `LF_STRUCTURE`), `LF_ENUM`, `LF_BITFIELD`, `LF_MODIFIER`, `LF_ARRAY`'s index type, `S_REGISTER`, `S_BLOCK`, and the
 32-bit records (no 32-bit CodeView or CVPACK on tinytim; only ML's own 32-bit object's shapes). A register that holds a
 value for part of a scope, and one the optimiser removed, are left out: CodeView 4 names one place per scope.
+
+CodeView stopped in `f` of `tests/fixtures/codeview/m.c`, its locals window from the object's records:
+
+![C as CodeView 4](codeview/c-cv4-c7.png)
