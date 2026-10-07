@@ -1419,7 +1419,7 @@ impl<'a, 't> Body<'a, 't> {
                     // has the value the C standard leaves undefined, and the front end types its call as an int either way.
                     Got::Returned(None) if self.types.aggregate(&call.type_).is_none() && self.ty(&call.type_).is_ok() => {
                         let ty = self.ty(&call.type_)?;
-                        Got::Value(self.constant(ty, Number::Int(0)))
+                        Got::Returned(Some(self.constant(ty, Number::Int(0))))
                     }
                     got => got,
                 }

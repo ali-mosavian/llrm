@@ -6,13 +6,18 @@ extern void report(long value);
 
 int nothing(int i) { (void)i; }
 
+long long nothing_wide(long long i) { (void)i; }
+
 int through(int i) { return nothing(i); }
+
+long long through_wide(long long i) { return nothing_wide(i); }
 
 int main(void)
 {
     int taken = nothing(3);
     (void)taken;
     (void)through(4);
+    (void)through_wide(5LL);
     report(42);
     return 0;
 }
