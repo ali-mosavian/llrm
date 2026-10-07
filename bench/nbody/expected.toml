@@ -2,52 +2,52 @@ reason = "x87: a constant nothing reads is not loaded and popped (nbody c -48 B,
 blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 63828
+instructions = 61428
 memory_operands = 30238
-code_bytes = 1098
+code_bytes = 1094
 data_bytes = 35
 bss_bytes = 0
-kernel_ms = 0.8677
+kernel_ms = 0.8357
 
 [bas.Os]
-instructions = 69281
+instructions = 66881
 memory_operands = 26085
-code_bytes = 865
+code_bytes = 861
 data_bytes = 31
 bss_bytes = 0
-kernel_ms = 0.9406
+kernel_ms = 0.9086
 
 [c.O2]
-instructions = 54261
+instructions = 51861
 memory_operands = 20845
-code_bytes = 547
+code_bytes = 543
 data_bytes = 20
 bss_bytes = 0
-kernel_ms = 0.7251
+kernel_ms = 0.6931
 
 [c.Os]
-instructions = 58459
+instructions = 56059
 memory_operands = 21645
-code_bytes = 505
+code_bytes = 501
 data_bytes = 16
 bss_bytes = 0
-kernel_ms = 0.7811
+kernel_ms = 0.7491
 
 [nib.O2]
-instructions = 54271
+instructions = 51871
 memory_operands = 20846
-code_bytes = 576
+code_bytes = 572
 data_bytes = 32
 bss_bytes = 0
-kernel_ms = 0.7261
+kernel_ms = 0.6941
 
 [nib.Os]
-instructions = 57669
+instructions = 55269
 memory_operands = 20846
-code_bytes = 528
+code_bytes = 524
 data_bytes = 28
 bss_bytes = 0
-kernel_ms = 0.7715
+kernel_ms = 0.7395
 
 [ow.O2]
 instructions = 53725

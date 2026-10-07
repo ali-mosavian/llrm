@@ -15,7 +15,7 @@ fn forms(text: &llrm_analysis::generated::Case) -> Vec<(usize, Scev, Scev)> {
     let module = text.module();
     let layout = layout(&module);
     let function = llrm_analysis::testing::function(&module, "f");
-    let unit = Unit::of(&module, &layout, function);
+    let unit = llrm_analysis::testing::with_registers(Unit::of(&module, &layout, function));
     let loop_ = unit.shape().loops[0].clone();
     let counters = induction::basics(&unit, &loop_);
     let users = induction::recurrences(&unit, &loop_, &counters);

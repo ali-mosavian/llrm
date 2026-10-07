@@ -31,7 +31,7 @@ impl Parsed {
     }
 
     fn unit(&self) -> Unit<'_> {
-        Unit::of(&self.module, &self.layout, function(&self.module, "f"))
+        crate::testing::with_registers(Unit::of(&self.module, &self.layout, function(&self.module, "f")))
     }
 
     fn value(&self, name: &str) -> ValueId {
@@ -842,7 +842,7 @@ fn an_assume_a_frontend_states_bounds_a_value_below_it() {
     let module = emitted.module;
     let layout = llrm_mir::datalayout::DataLayout::default();
     let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("F%")).expect("F%").2;
-    let unit = Unit::of(&module, &layout, function);
+    let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
     let below = &super::scoped(&unit).unwrap()[&cfg::id(function.layout()[1])];
     let parameter = function.parameters()[0];
     assert_eq!(below.get(&parameter), Some(&Interval { low: (-32768).into(), high: 9.into(), width: 16 }), "{below:?}");
@@ -907,7 +907,7 @@ fn a_range_a_frontend_states_of_an_instruction_bounds_its_result() {
     let module = emitted.module;
     let layout = llrm_mir::datalayout::DataLayout::default();
     let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("F%")).expect("F%").2;
-    let unit = Unit::of(&module, &layout, function);
+    let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
     let below = &super::scoped(&unit).unwrap()[&cfg::id(function.layout()[1])];
     let result = function.instruction(function.block(function.layout()[0]).instructions()[0]).result.expect("a sum");
     assert_eq!(below.get(&result), Some(&interval(0, 7, 16)), "{below:?}");

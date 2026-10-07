@@ -144,8 +144,10 @@ pub fn stamp(program: &mut Program, eligible: &BTreeSet<Defined>) -> BTreeSet<De
                     continue;
                 }
                 let unit = Unit::of(module, &program.layout, function);
+                // Found once, for the body as it is: its ranges and the arguments' proofs ask the same.
+                let registers = crate::consts::known(&unit, None, None, None);
+                let unit = unit.with_registers(&registers);
                 let scoped = ranges::bounded(&unit).unwrap_or_default();
-                let registers = unit.registers();
                 for (block, inst, target) in calls {
                     let scope = scoped.get(&cfg::id(block)).cloned().unwrap_or_default();
                     let parameters = program.modules[target.0].global(target.1).function().expect("a procedure").parameters().len();

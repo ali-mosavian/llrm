@@ -31,9 +31,6 @@ use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap, IndexSet};
 
-/// The flat registers: x87's stack depth.
-const REGISTERS: usize = 8;
-
 /// x87 reads integers from memory, for named values and physical stack slots.
 fn _integer_loads(body: &LirBody, mut frame: Option<&mut Frame>, mut pool: Option<&mut Pool>) -> Result<LirBody, Raised> {
     let mut blocks = Vec::new();
@@ -1019,38 +1016,13 @@ fn _aliased(body: &LirBody) -> LirBody {
     out
 }
 
-/// The phis' values the optimizer proved are a cell's (`!llrm.home`) where nothing writes the cell while they are
-/// live, as the body now stands: each is read back from the cell, and a store of its own is never made. The proof
-/// is the optimizer's, the check here that no instruction moved since into a live range of the cell's.
+/// The phis' values the optimizer proved are a cell's (`!llrm.home`) where the body still holds it
+/// (`storedhomes`): each is read back from the cell, and a store of its own is never made.
 fn _stored_homes(body: &LirBody, floating: &HashSet<u32>) -> IndexMap<u32, Arc<Insn>> {
-    let mut found: IndexMap<u32, Arc<Insn>> = body.homes.iter().filter(|(value, cell)| floating.contains(*value) && cell.width == 8 || cell.width == 4 && floating.contains(*value)).map(|(value, cell)| (*value, _spill_home(*value, cell.clone()))).collect();
-    if found.is_empty() {
-        return found;
-    }
-    let (_, live_out) = live(body);
-    for block in &body.blocks {
-        let mut alive: BTreeSet<u32> = live_out[&block.at].iter().copied().filter(|value| found.contains_key(value)).collect();
-        for one in block.insns.iter().rev() {
-            let writes: Vec<u32> = alive.iter().copied().filter(|value| {
-                let cell = cell_of(&found[value]);
-                crate::backend::spiller::_may_write(one, cell, body.sealed_arguments) && !_stores_itself(one, *value, cell)
-            }).collect();
-            for value in writes {
-                found.shift_remove(&value);
-                alive.remove(&value);
-            }
-            for value in &one.defines {
-                alive.remove(value);
-            }
-            alive.extend(one.uses.iter().copied().filter(|value| found.contains_key(value)));
-        }
-    }
-    found
-}
-
-/// Whether `one` stores `value` to `cell`: it leaves in the cell what it holds.
-fn _stores_itself(one: &Insn, value: u32, cell: &Mem) -> bool {
-    one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && matches!(what.dests.as_slice(), [Loc::Mem(dest)] if dest == cell) && _held_floats(&what.sources) == [value])
+    crate::backend::storedhomes::held(body, &|value, cell| floating.contains(&value) && (cell.width == 8 || cell.width == 4))
+        .into_iter()
+        .map(|(value, cell)| (value, _spill_home(value, cell)))
+        .collect()
 }
 
 /// `body` without the constant loads nothing reads: a value whose copies were vacated (read back from its home
@@ -1361,6 +1333,7 @@ impl Plan<'_> {
 /// The first instruction before which more floating values hold registers
 /// than there are, counting what each bundle's borders hold.
 fn _crowded(body: &LirBody, floating: &HashSet<u32>) -> Option<(i64, usize)> {
+    let registers = body.float_stack;
     let (live_in, live_out) = live(body);
     let bundles = spillplacement::bundles(body);
     let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> { set.iter().copied().filter(|value| floating.contains(value)).collect() };
@@ -1373,10 +1346,10 @@ fn _crowded(body: &LirBody, floating: &HashSet<u32>) -> Option<(i64, usize)> {
     for block in &body.blocks {
         let (entry, exit) = bundles.of[&block.at];
         let cut = _terminators(block);
-        if held[&exit].len() > REGISTERS {
+        if held[&exit].len() > registers {
             return Some((block.at, cut));
         }
-        if held[&entry].len() > REGISTERS {
+        if held[&entry].len() > registers {
             return Some((block.at, 0));
         }
         let steps = _steps(block, cut);
@@ -1401,7 +1374,7 @@ fn _crowded(body: &LirBody, floating: &HashSet<u32>) -> Option<(i64, usize)> {
             // duplicating one operand still holds the other, which it pops.
             let read = group.iter().filter_map(|one| one.what.as_ref()).flat_map(|what| _held_floats(&what.sources));
             let before: BTreeSet<u32> = after[index].difference(&made).copied().chain(read).collect();
-            if after[index].union(&made).count().max(before.len() + duplicated) > REGISTERS {
+            if after[index].union(&made).count().max(before.len() + duplicated) > registers {
                 return Some((block.at, first));
             }
         }

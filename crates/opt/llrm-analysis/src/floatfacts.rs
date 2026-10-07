@@ -691,8 +691,13 @@ fn _with_stored(unit: &Unit, integers: &IndexMap<ValueId, Known>, facts: &IndexM
 
 /// `known` and `cells` in one solve, and the integers under them.
 pub fn solved_with(unit: &Unit, calls: &Calls, initial: Option<&Cells>) -> Solved {
+    solved_over(unit, calls, initial, &consts::known(unit, Some(calls), None, initial))
+}
+
+/// `solved_with`, given the integers under it: `consts::known(unit, Some(calls), None, initial)`, which a caller that
+/// asks it of the same body for itself (the manager's `ThroughMemory`, for `initial` none) need not derive again.
+pub fn solved_over(unit: &Unit, calls: &Calls, initial: Option<&Cells>, integers: &IndexMap<ValueId, Known>) -> Solved {
     let function = unit.function;
-    let integers = consts::known(unit, Some(calls), None, initial);
     let rules = function.walk().filter_map(|(_, inst)| rule(unit, inst).map(|rule| (inst, rule))).collect::<Vec<_>>();
     let phis = function
         .walk()
@@ -752,7 +757,7 @@ pub fn solved_with(unit: &Unit, calls: &Calls, initial: Option<&Cells>) -> Solve
             }
         }
     }
-    Solved { integers, facts, cells: memory }
+    Solved { integers: integers.clone(), facts, cells: memory }
 }
 
 #[cfg(test)]

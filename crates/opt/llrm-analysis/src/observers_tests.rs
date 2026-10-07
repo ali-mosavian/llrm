@@ -21,7 +21,7 @@ type Sites = Vec<(String, usize)>;
 fn dead(body: &str) -> (Sites, Sites) {
     let module = parsed(&format!("{DOS}@g = global i16 0\ndeclare void @h(ptr)\ndeclare void @anything()\n\n{body}"));
     let layout = layout(&module);
-    let unit = Unit::of(&module, &layout, function(&module, "f"));
+    let unit = crate::testing::with_registers(Unit::of(&module, &layout, function(&module, "f")));
     let accesses = Accesses::resolved(&unit, &IndexMap::default()).unwrap();
     let pointers = alias::points_to(&unit, None, None).unwrap();
     let placed = |found: Vec<_>| {

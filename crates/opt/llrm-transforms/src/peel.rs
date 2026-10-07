@@ -80,7 +80,7 @@ fn _candidate(context: &Context, layout: &DataLayout, function: &Function, analy
         if skip.contains(&latch) {
             continue;
         }
-        let unit = memory::Unit::within(context, layout, &closed, analyses.outer());
+        let unit = memory::Unit::within(context, layout, &closed, analyses.outer()).with_registers(&facts);
         let Some(count) = induction::trip_count(&unit, &loop_, &facts) else {
             continue;
         };
