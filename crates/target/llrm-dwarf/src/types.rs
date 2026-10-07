@@ -316,7 +316,11 @@ impl Tree<'_> {
         }
         die.attrs.push((AT_LOW_PC, self.address(range.section, range.offset)?));
         die.attrs.push((AT_HIGH_PC, Value::Len(range.length as u32)));
-        let framed = one.variables.iter().chain(one.blocks.iter().flat_map(|block| &block.variables)).any(|variable| matches!(variable.location, Location::Frame { .. }));
+        let framed = one.variables.iter().chain(one.blocks.iter().flat_map(|block| &block.variables)).any(|variable| match &variable.location {
+            Location::Frame { .. } => true,
+            Location::List(entries) => entries.iter().any(|(_, place)| matches!(place, Location::Frame { .. })),
+            _ => false,
+        });
         if framed {
             let base = self.info.registers.iter().find(|register| register.name == self.info.frame_register).map(|register| register.name.clone()).ok_or_else(|| Unsupported("DWARF: no frame register".into()))?;
             die.attrs.push((AT_FRAME_BASE, Value::Expr(self.register(&base)?)));

@@ -344,3 +344,14 @@ fn arrays_of_scalars_of_two_spellings_are_one_record() {
     let bprels: Vec<&[u8]> = symbols.iter().filter(|(code, _)| *code == 0x0100).map(|(_, data)| &data[2..4]).collect();
     assert_eq!(bprels[0], bprels[1], "both locals name it");
 }
+
+/// A parameter in its register until the function stores it and in its frame cell for the rest has one place for the
+/// scope as CodeView 4 names it, the cell: written as a frame variable. Left out, as any list was, a debugger lost every
+/// parameter of a C function.
+#[test]
+fn a_parameter_in_a_register_and_then_its_cell_is_written_as_the_cell() {
+    let list = Location::List(vec![(Range { section: 0, offset: 0, length: 9 }, Location::Register("ax".into())), (Range { section: 0, offset: 9, length: 0x16 - 9 }, Location::Frame { disp: 4 })]);
+    let made = object(Arch::I8086, vec![int(), procedure()], vec![variable("a", 0, Kind::Parameter, list)]);
+    let (symbols, ..) = written(&made);
+    assert_eq!(symbols[3..], [(0x0100, vec![4, 0, 0x21, 0, 1, b'a']), (0x0006, vec![])]);
+}

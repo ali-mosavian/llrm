@@ -219,6 +219,18 @@ struct Builder<'a> {
     types: Types<'a>,
 }
 
+/// `variables` with a frame cell it settles in where it was over ranges: these records name one place for a scope,
+/// and a parameter in its register only until the function stored it is in that cell for the rest.
+fn settled(variables: &[model::Variable], scope: &[model::Range]) -> Vec<model::Variable> {
+    variables
+        .iter()
+        .map(|one| match one.location.settled(scope) {
+            Some(cell @ Location::Frame { .. }) if matches!(one.location, Location::List(_)) => model::Variable { location: cell.clone(), ..one.clone() },
+            _ => one.clone(),
+        })
+        .collect()
+}
+
 impl Builder<'_> {
     /// One local's entry in an E6 record.
     fn entry(&mut self, variable: &model::Variable) -> Result<Vec<u8>, Error> {
@@ -266,7 +278,8 @@ impl Builder<'_> {
     fn block(&mut self, out: &mut Vec<Rc<Record>>, block: &model::Block) -> Result<(), Error> {
         let [range] = block.ranges[..] else { return refused("a block of several ranges is not written yet") };
         out.push(self.scope(range.section, range.offset)?);
-        let variables: Vec<&model::Variable> = block.variables.iter().collect();
+        let own = settled(&block.variables, &block.ranges);
+        let variables: Vec<&model::Variable> = own.iter().collect();
         out.extend(self.locals(&variables)?);
         for inner in &block.blocks {
             self.block(out, inner)?;
@@ -278,6 +291,7 @@ impl Builder<'_> {
     /// A function's scopes: its own, with the parameters as passed in, and its body's, with the
     /// locals.
     fn function(&mut self, out: &mut Vec<Rc<Record>>, function: &Function) -> Result<(), Error> {
+        let function = &Function { variables: settled(&function.variables, &function.ranges), ..function.clone() };
         let [range] = function.ranges[..] else { return refused(format!("{} has {} ranges: one is written", function.name, function.ranges.len())) };
         out.push(self.scope(range.section, range.offset)?);
         let parameters: Vec<&model::Variable> = function.variables.iter().filter(|one| one.kind == Kind::Parameter).collect();
@@ -589,5 +603,17 @@ mod tests {
         let definitions = comments(&made).into_iter().filter(|(class, _)| *class == TYPE_DEFINITION).count();
         // The pointer, and the function's own type.
         assert_eq!(definitions, 2);
+    }
+
+    /// A parameter in its register until the function stores it into its cell is, for Turbo Debugger, the cell: a
+    /// parameter of the function's own scope, not the body's register parameter.
+    #[test]
+    fn a_parameter_in_a_register_and_then_its_cell_is_the_functions_parameter_in_the_cell() {
+        let list = Location::List(vec![(Range { section: 0, offset: 0, length: 9 }, Location::Register("ax".into())), (Range { section: 0, offset: 9, length: 0x20 - 9 }, Location::Frame { disp: 6 })]);
+        let made = object(vec![int()], vec![variable("a", 0, Kind::Parameter, list)], |_| {});
+        let scopes: Vec<(u8, Vec<u8>)> = comments(&made).into_iter().filter(|(class, _)| matches!(*class, BEGIN_SCOPE | LOCALS | END_SCOPE)).collect();
+        // The function's scope holds it, as a frame parameter; the body's holds nothing of it.
+        assert_eq!(scopes[1], (LOCALS, vec![1, b'a', 0x04, 0x0A, 0x06, 0x00]));
+        assert!(!scopes.iter().any(|(class, data)| *class == LOCALS && data.windows(2).any(|pair| pair == [0x04, 0x0C])), "{scopes:?}");
     }
 }
