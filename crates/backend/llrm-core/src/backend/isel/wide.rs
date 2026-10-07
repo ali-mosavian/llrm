@@ -84,6 +84,29 @@ impl Selector<'_, '_, '_> {
             self.float_loaded(into, "fild", cell, 8, false, at, out);
             return Ok(());
         }
+        // fild reads a signed qword, so an unsigned one is its two halves each read as a qword of its own, the high one scaled by
+        // 2^32 (a qword of (0, 1) read the same way), and added: every step exact in the x87's 64-bit mantissa, one rounding when the
+        // sum is stored as a float or a double.
+        if op == CastOp::UIToFP && self.is_float(to) {
+            let (low, high) = self.wide(operand, at, out)?;
+            let loaded = |this: &mut Self, below: Loc, above: Loc, out: &mut Vec<Arc<Insn>>| -> Held {
+                let cell = this.temporary(8);
+                for (part, by) in [(below, 0), (above, 4)] {
+                    this.put(semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell.moved(by), 4))], vec![part]), at, out);
+                }
+                let value = this.fresh_held(super::FLOAT);
+                this.float_loaded(value, "fild", cell, 8, false, at, out);
+                value
+            };
+            let (zero, one) = (Self::dword(0), Self::dword(1));
+            let (lower, upper) = (loaded(self, Loc::Held(low), zero.clone(), out), loaded(self, Loc::Held(high), zero.clone(), out));
+            let scale = loaded(self, zero, one, out);
+            let scaled = self.fresh_held(super::FLOAT);
+            self.put(semantics(Operation::FloatArith, "fmul", vec![Loc::Held(scaled)], vec![Loc::Held(upper), Loc::Held(scale)]), at, out);
+            let into = Held { value: self.value(result), width: super::FLOAT };
+            self.put(semantics(Operation::FloatArith, "fadd", vec![Loc::Held(into)], vec![Loc::Held(lower), Loc::Held(scaled)]), at, out);
+            return Ok(());
+        }
         if !self.is_wide(to) {
             let (low, _) = self.wide(operand, at, out)?;
             let into = Held { value: self.value(result), width: self.width(to)? };
