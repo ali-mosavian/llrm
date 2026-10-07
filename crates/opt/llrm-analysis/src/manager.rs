@@ -21,6 +21,7 @@ use crate::alias::{self, Effect, PointsTo, Procedure, Summary};
 use crate::consts::{self, Calls, Known};
 use crate::globalsaa::{self, Globals, ProgramGlobals};
 use crate::floatfacts;
+use crate::induction;
 use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, Slice, Unit};
 use crate::ranges::{self, Interval};
 
@@ -29,7 +30,7 @@ impl<'a> Unit<'a> {
     /// as `outer` holds them.
     pub fn within(context: &'a Context, layout: &'a DataLayout, function: &'a Function, outer: &'a Outer) -> Self {
         let globals_aa = outer.cached_ref::<GlobalsAA>().and_then(|one| one.as_ref().ok());
-        Self { program: Some(outer.program()), spaces: outer.target().spaces(), context, layout, metadata: &outer.metadata, tbaa: Some(outer.tbaa()), globals: &outer.globals, function, globals_aa, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, exposed: None }
+        Self { program: Some(outer.program()), spaces: outer.target().spaces(), context, layout, metadata: &outer.metadata, tbaa: Some(outer.tbaa()), globals: &outer.globals, function, globals_aa, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, counted: None, exposed: None }
     }
 }
 
@@ -230,7 +231,8 @@ impl Analysis for Annotated {
         let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
         let shape = analyses.get::<Shape>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_pointers(pointers).with_exposed(&exposed);
+        let counted = analyses.get::<Counted>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_pointers(pointers).with_exposed(&exposed).with_counted(&counted);
         alias::annotated_with(&unit, pointers, &registers)
     }
 }
@@ -275,6 +277,20 @@ impl Analysis for Registers {
         let shape = analyses.get::<Shape>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         consts::known(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed), None, None, None)
+    }
+}
+
+/// Each loop's counted proofs, under `Registers`: `induction::counted_all`.
+pub struct Counted;
+
+impl Analysis for Counted {
+    type Result = induction::Counted;
+    const NAME: &'static str = "counted";
+    fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
+        let shape = analyses.get::<Shape>(context, layout, function);
+        let registers = analyses.get::<Registers>(context, layout, function);
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        induction::counted_all(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_exposed(&exposed))
     }
 }
 
@@ -368,6 +384,7 @@ pub struct Held {
     registers: Rc<IndexMap<ValueId, Known>>,
     pointers: Option<Rc<<Pointers as Analysis>::Result>>,
     annotated: Option<Rc<<Annotated as Analysis>::Result>>,
+    counted: Option<Rc<<Counted as Analysis>::Result>>,
 }
 
 impl Held {
@@ -378,6 +395,8 @@ impl Held {
             registers: analyses.get::<Registers>(context, layout, function),
             pointers: alias.then(|| analyses.get::<Pointers>(context, layout, function)),
             annotated: alias.then(|| analyses.get::<Annotated>(context, layout, function)),
+            // Annotated has proved them already.
+            counted: alias.then(|| analyses.get::<Counted>(context, layout, function)),
         }
     }
 
@@ -389,6 +408,9 @@ impl Held {
         }
         if let Some(annotated) = self.annotated.as_deref() {
             unit = unit.with_annotated(annotated);
+        }
+        if let Some(counted) = self.counted.as_deref() {
+            unit = unit.with_counted(counted);
         }
         unit
     }
