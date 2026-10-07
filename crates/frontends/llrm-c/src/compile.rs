@@ -148,7 +148,7 @@ struct Args {
 pub struct Profile {
     /// The front end's tree: its CPU, `i86` or `386`.
     pub cpu: String,
-    /// The convention whose contract a call to a routine that states none has, by its name in `calling.toml`.
+    /// The convention whose contract a call to a routine that states none has under this ABI, by its name in `calling.toml`.
     pub convention: String,
     /// The routine the runtime's start calls, and the convention it calls it in by its name in `calling.toml`.
     pub entry: String,
@@ -190,7 +190,7 @@ impl Profile {
             None => Vec::new(),
             Some(list) => list.as_array().ok_or("frontend.interrupt_parameters is not a list")?.iter().map(|one| one.as_str().map(str::to_owned).ok_or("an interrupt parameter is not a string")).collect::<Result<_, _>>()?,
         };
-        Ok(Self { cpu: text(frontend, "watcom_cpu")?, convention: text(frontend, "convention")?, entry: text(frontend, "entry")?, entry_convention: text(frontend, "entry_convention")?, default_registers: text(frontend, "default_registers")?, flags, cdecl: text(abi, "cdecl")?, registers: text(abi, "registers")?, header: text(frontend, "header")?, interrupt_parameters })
+        Ok(Self { cpu: text(frontend, "watcom_cpu")?, convention: text(abi, "convention")?, entry: text(frontend, "entry")?, entry_convention: text(frontend, "entry_convention")?, default_registers: text(frontend, "default_registers")?, flags, cdecl: text(abi, "cdecl")?, registers: text(abi, "registers")?, header: text(frontend, "header")?, interrupt_parameters })
     }
 }
 
@@ -613,6 +613,36 @@ mod tests {
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find(&format!("{function} proc")).expect("the function");
         asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).map(str::to_owned).collect()
+    }
+
+    /// `function` of tests/fixtures/c/ia16.cgs under `-mabi=ia16`: gcc-ia16's convention.
+    fn ia16(function: &str) -> Vec<String> {
+        let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/ia16.cgs")).unwrap();
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let options = llrm_core::driver::Options { abi: Some("ia16".to_owned()), ..llrm_driver::m16_options(machine) };
+        let built = super::selected(&text, "ia16", None, &options).unwrap();
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find(&format!("{function} proc")).expect("the function");
+        asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
+    }
+
+    /// `ia16-elf-gcc` writes a struct result larger than 4 bytes through a near pointer that is the first argument and returns it in
+    /// AX, the caller removing all it pushed (6 bytes, the pointer too); Borland's was a far pointer (4 bytes) returned in DX:AX.
+    #[test]
+    fn test_m16_ia16_a_struct_result_is_a_near_first_argument_the_caller_removes() {
+        let body = ia16("_fs");
+        assert!(body.contains(&"mov bx, word ptr [bp+6]".to_owned()) && body.contains(&"mov ax, bx".to_owned()), "{body:?}");
+        assert_eq!(body.last().map(String::as_str), Some("retf"));
+        let body = ia16("_callsr");
+        assert!(body.contains(&"lea ax, [bp-6]".to_owned()) && body.contains(&"add sp, 6".to_owned()), "{body:?}");
+    }
+
+    /// A struct of 4 bytes is returned in DX:AX as a long is.
+    #[test]
+    fn test_m16_ia16_a_small_struct_result_is_in_registers() {
+        let body = ia16("_fw");
+        assert!(body.contains(&"shld edx, eax, 16".to_owned()), "{body:?}");
+        assert!(!body.iter().any(|line| line.contains("[bp+10]")), "{body:?}");
     }
 
     /// `function` of tests/fixtures/c/watcall16.cgs under `-mabi=watcom`: Open Watcom's 16-bit register convention.

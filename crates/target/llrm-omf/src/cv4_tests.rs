@@ -18,7 +18,7 @@ fn variable(name: &str, r#type: usize, kind: Kind, location: Location) -> Variab
 fn object(arch: Arch, types: Vec<T>, variables: Vec<Variable>) -> Object {
     let text = Section { name: "_TEXT".into(), role: Role::Text, near: true, align: 1, image: vec![0x90; 0x16], spans: vec![[0, 0x16]], relocs: Vec::new() };
     let range = Range { section: 0, offset: 0, length: 0x16 };
-    let function = Function { name: "f".into(), symbol: 0, r#type: types.len() - 1, ranges: vec![range], body: Some((6, 0x16)), far: false, module: false, variables, blocks: Vec::new() };
+    let function = Function { name: "f".into(), symbol: 0, r#type: types.len() - 1, ranges: vec![range], body: Some((6, 0x16)), far: false, module: false, variables, blocks: Vec::new(), frame: Vec::new() };
     let info = Info { language: Language::C, frame_register: if arch == Arch::I8086 { "bp" } else { "ebp" }.into(), code: vec![range], types, functions: vec![function], ..Info::default() };
     Object {
         name: "t.obj".into(),

@@ -216,6 +216,8 @@ pub enum Abi {
     Watcall32,
     /// Open Watcom's 16-bit register convention (calling.toml's `watcall16`): `-mabi=watcom` on the real-mode target.
     Watcall16,
+    /// gcc-ia16's convention (calling.toml's `ia16`): `-mabi=ia16` on the real-mode target.
+    Ia16,
     /// The i386 System V ABI, gcc's on Linux (calling.toml's `sysv32`): the stack convention of `-mabi=sysv`.
     Sysv32,
     /// Arguments pushed first to last; the callee removes them.
@@ -300,6 +302,7 @@ impl Abi {
             "watcall32" => Some(Self::Watcall32),
             "sysv32" => Some(Self::Sysv32),
             "watcall16" => Some(Self::Watcall16),
+            "ia16" => Some(Self::Ia16),
             "pascal16" => Some(Self::Pascal16),
             "interrupt16" => Some(Self::Interrupt16),
             _ => Basic::ALL.into_iter().find(|one| one.name() == name).map(Self::Basic),
@@ -314,6 +317,7 @@ impl Abi {
             Self::Watcall32 => "watcall32",
             Self::Sysv32 => "sysv32",
             Self::Watcall16 => "watcall16",
+            Self::Ia16 => "ia16",
             Self::Pascal16 => "pascal16",
             Self::Basic(basic) => basic.name(),
             Self::Interrupt16 => "interrupt16",
@@ -323,14 +327,14 @@ impl Abi {
     /// The object symbol of `name`: C's `_name`, Pascal's and BASIC's `NAME`.
     pub fn symbol(self, name: &str) -> String {
         match self {
-            Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Sysv32 | Self::Interrupt16 => format!("_{name}"),
+            Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Sysv32 | Self::Ia16 | Self::Interrupt16 => format!("_{name}"),
             Self::Watcall32 | Self::Watcall16 => format!("{name}_"),
             Self::Pascal16 | Self::Basic(_) => name.to_ascii_uppercase(),
         }
     }
 
     pub fn callee_cleans(self) -> bool {
-        !matches!(self, Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Sysv32)
+        !matches!(self, Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Sysv32 | Self::Ia16)
     }
 
     /// The `cc` of the description's convention this is, where it is not the C one: what HIR names it by.
@@ -338,6 +342,7 @@ impl Abi {
         match self {
             Self::Watcall32 | Self::Watcall16 => Some("watcall"),
             Self::Sysv32 => Some("sysv"),
+            Self::Ia16 => Some("ia16"),
             _ => None,
         }
     }

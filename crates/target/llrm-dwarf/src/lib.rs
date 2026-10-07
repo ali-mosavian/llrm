@@ -8,6 +8,7 @@
 
 mod buffer;
 mod die;
+mod frame;
 mod line;
 mod types;
 
@@ -58,6 +59,10 @@ pub fn expanded(object: &Object, info: &Info) -> Result<Object, Unsupported> {
     if lists {
         names.push(if version >= 5 { ".debug_loclists" } else { ".debug_loc" });
     }
+    let frame = frame::section(object, info, address as usize)?;
+    if frame.is_some() {
+        names.push(".debug_frame");
+    }
     let at = |name: &str| base + names.iter().position(|one| *one == name).expect("a section of this version");
     let places = die::Places { abbrev: at(".debug_abbrev"), strings: at(".debug_str"), line: at(".debug_line"), info: at(".debug_info"), line_strings: (version >= 5).then(|| at(".debug_line_str")), locations: lists.then(|| at(if version >= 5 { ".debug_loclists" } else { ".debug_loc" })) };
     let mut out = die::Out::new(version, address as u8, places);
@@ -73,6 +78,7 @@ pub fn expanded(object: &Object, info: &Info) -> Result<Object, Unsupported> {
             ".debug_line" => line.clone(),
             ".debug_info" => info_part.clone(),
             ".debug_loclists" | ".debug_loc" => locations.clone(),
+            ".debug_frame" => frame.clone().expect("named only where there is one"),
             _ => aranges.clone(),
         };
         sections.push(section(name, part));

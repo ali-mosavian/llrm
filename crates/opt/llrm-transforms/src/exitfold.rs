@@ -385,7 +385,7 @@ fn _predicated(unit: &memory::Unit, outer: &Outer, loop_: &Loop, exits: &[ExitCo
         }
         chosen.push((exit.branch, exit.exit, count));
     }
-    if chosen.is_empty() {
+    if chosen.is_empty() || _values_out(function, loop_) {
         return None;
     }
     // Only plain stores, and only where every chosen exit crashes quietly.
@@ -408,6 +408,22 @@ fn _predicated(unit: &memory::Unit, outer: &Outer, loop_: &Loop, exits: &[ExitCo
         chosen.truncate(quiet);
     }
     (!chosen.is_empty()).then_some(Predicated { preheader, header, loop_count, exits: chosen })
+}
+
+/// Whether something outside `loop_` reads a value made inside it, where the loop's values stand: an exit tested before the
+/// loop is reached without them (the program need not keep to LCSSA, whose phis would say so).
+fn _values_out(function: &Function, loop_: &Loop) -> bool {
+    loop_.body.iter().flat_map(|&at| function.block(cfg::block(at)).instructions().iter().copied()).filter_map(|inst| function.instruction(inst).result).any(|value| {
+        function.users(value).iter().any(|one| {
+            let user = function.instruction(one.user);
+            // A phi reads it where the edge comes from: from the loop, the loop's value is there.
+            let at = match (user.opcode == Opcode::Phi).then(|| user.operands[one.index as usize + 1]) {
+                Some(Operand::Block(from)) => Some(from),
+                _ => function.parent(one.user),
+            };
+            at.is_some_and(|block| !loop_.body.contains(&cfg::id(block)))
+        })
+    })
 }
 
 /// Whether one way out of `branch` crashes at once, touching no memory the
@@ -455,7 +471,7 @@ fn _early(unit: &memory::Unit, outer: &Outer, loop_: &Loop, exits: &[ExitCount],
     let function = unit.function;
     let header = loop_.header;
     let innermost = |at: i64| unit.shape().loops.iter().filter(|one| one.body.contains(&at)).all(|one| one.body.len() >= loop_.body.len());
-    if !innermost(exit.block) || function.block(cfg::block(exit.exit)).instructions().iter().any(|&inst| function.instruction(inst).opcode == Opcode::Phi) {
+    if !innermost(exit.block) || function.block(cfg::block(exit.exit)).instructions().iter().any(|&inst| function.instruction(inst).opcode == Opcode::Phi) || _values_out(function, loop_) {
         return false;
     }
     if !_silent(unit, outer, header) || !_quiet(unit, outer, loop_, header, exit.block) {

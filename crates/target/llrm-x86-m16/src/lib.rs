@@ -181,7 +181,7 @@ mod tests {
     /// The conventions a program may name are `calling.toml`'s, the language's own first; BASIC's are Pascal's.
     #[test]
     fn test_calling_toml_gives_the_conventions_their_names() {
-        assert_eq!(M16.conventions(), ["cdecl16", "pascal16", "qb45", "pds71", "vbdos", "interrupt16", "watcall16"]);
+        assert_eq!(M16.conventions(), ["cdecl16", "pascal16", "qb45", "pds71", "vbdos", "interrupt16", "watcall16", "ia16"]);
         let pascal = CALLING.named("pascal16").unwrap();
         for name in ["qb45", "pds71", "vbdos"] {
             assert_eq!(CALLING.named(name).unwrap().cleanup, llrm_target::calling::Cleanup::Callee);
@@ -219,5 +219,14 @@ mod tests {
         assert!(file.iter().all(|one| one.dwarf.is_none()));
         let cv = |name: &str| file.iter().find(|one| one.name == name).unwrap().codeview;
         assert_eq!((cv("bp"), cv("ax"), cv("st0")), (Some(14), Some(9), Some(128)));
+    }
+
+    /// gcc-ia16 keeps ES, which it uses as a register and saves; Borland's convention clobbers it: a call that kept a value in ES
+    /// across a cdecl16 routine lost it.
+    #[test]
+    fn test_ia16_keeps_es_and_cdecl16_clobbers_it() {
+        let kept = |name: &str| CALLING.named(name).unwrap().preserved.iter().any(|one| one.full == "es");
+        assert!(kept("ia16") && !kept("cdecl16"));
+        assert!(CALLING.named("cdecl16").unwrap().clobbered.iter().any(|one| one == "es") && !CALLING.named("ia16").unwrap().clobbered.iter().any(|one| one == "es"));
     }
 }
