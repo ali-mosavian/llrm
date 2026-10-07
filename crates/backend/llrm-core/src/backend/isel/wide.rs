@@ -85,6 +85,17 @@ impl Selector<'_, '_, '_> {
             self.float_loaded(into, "fild", cell, 8, false, at, out);
             return Ok(());
         }
+        // fistp stores a qword, truncating as the control word is set: read back as the halves.
+        if op == CastOp::FPToSI && self.is_float(from) {
+            let held = self.float(operand, at, out)?;
+            let cell = self.float_stored(held, "fisttp", 8, at, out);
+            let (low, high) = (self.half(), self.half());
+            for (half, by) in [(low, 0), (high, 4)] {
+                self.put(semantics(Operation::Move, "mov", vec![Loc::Held(half)], vec![Loc::Mem(Self::memory(cell.moved(by), 4))]), at, out);
+            }
+            self.wides.insert(result, (low, high));
+            return Ok(());
+        }
         if !self.is_wide(to) {
             let (low, _) = self.wide(operand, at, out)?;
             let into = Held { value: self.value(result), width: self.width(to)? };
