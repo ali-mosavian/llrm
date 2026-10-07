@@ -56,3 +56,54 @@ b0:
 {CALLER}"));
     assert!(after.contains("call i16 @f(i16 %x, i16 12)"), "{after}");
 }
+
+/// hanoi's three pegs only trade places in its calls and are never read: gcc's IPA-SRA and LLVM's DAE drop them
+/// (`hanoi.isra.0(n)`), where a parameter passed only in its own place was all this knew: llrm pushed and held
+/// four values where gcc holds one, hanoi 2.2 times gcc's clocks.
+#[test]
+fn parameters_passed_only_among_themselves_to_the_recursive_calls_are_not_passed() {
+    let after = run("define internal i16 @f(i16 %n, i16 %a, i16 %b, i16 %c) {
+b0:
+  %done = icmp eq i16 %n, 0
+  br i1 %done, label %out, label %again
+again:
+  %m = sub i16 %n, 1
+  %x = call i16 @f(i16 %m, i16 %a, i16 %c, i16 %b)
+  %y = add i16 %x, 1
+  %w = call i16 @f(i16 %m, i16 %c, i16 %b, i16 %a)
+  %s = add i16 %y, %w
+  ret i16 %s
+out:
+  ret i16 0
+}
+define i16 @top(i16 %x) {
+b0:
+  %r = call i16 @f(i16 %x, i16 1, i16 3, i16 2)
+  ret i16 %r
+}
+");
+    assert!(after.contains("call i16 @f(i16 %m)") && after.contains("call i16 @f(i16 %x)") && !after.contains("i16 %a"), "{after}");
+}
+
+/// One parameter that is read keeps those it is passed to alive: `%a` is the loop's bound.
+#[test]
+fn a_parameter_the_body_reads_keeps_the_parameters_it_trades_with() {
+    let after = run("define internal i16 @f(i16 %n, i16 %a, i16 %b) {
+b0:
+  %done = icmp eq i16 %n, %a
+  br i1 %done, label %out, label %again
+again:
+  %m = sub i16 %n, 1
+  %x = call i16 @f(i16 %m, i16 %b, i16 %a)
+  ret i16 %x
+out:
+  ret i16 0
+}
+define i16 @top(i16 %x) {
+b0:
+  %r = call i16 @f(i16 %x, i16 1, i16 3)
+  ret i16 %r
+}
+");
+    assert!(after.contains("call i16 @f(i16 %m, i16 %b, i16 %a)"), "{after}");
+}
