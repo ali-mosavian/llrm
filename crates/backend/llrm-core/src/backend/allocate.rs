@@ -1479,9 +1479,9 @@ fn _clobbered_from(one: &Interval, register: Register, masks: &Masks, width: u32
     // The first slot after `start` is the best candidate: any later one reaches no further.
     let after = |slots: &[i64], start: i64| slots.get(slots.partition_point(|slot| *slot <= start)).copied();
     one.segments.iter().any(|seg| {
-        after(&places.read, seg.start).is_some_and(|slot| seg.end >= slot + ranges::DEF)
-            || after(&places.during, seg.start).is_some_and(|slot| seg.end > slot + ranges::DEF)
-            || (width > 2 && after(&places.high, seg.start).is_some_and(|slot| seg.end > slot + ranges::DEF))
+        after(&places.read, seg.start).is_some_and(|slot| seg.end >= ranges::def_point(slot))
+            || after(&places.during, seg.start).is_some_and(|slot| seg.end > ranges::def_point(slot))
+            || (width > 2 && after(&places.high, seg.start).is_some_and(|slot| seg.end > ranges::def_point(slot)))
     })
 }
 
@@ -1495,7 +1495,7 @@ pub fn _clobbered_reference(one: &Interval, register: Register, masks: &Masks, w
             continue;
         }
         // A use keeps its value alive to `slot + DEF`.
-        let reaches = |end: i64| if read { end >= slot + ranges::DEF } else { end > slot + ranges::DEF };
+        let reaches = |end: i64| if read { end >= ranges::def_point(slot) } else { end > ranges::def_point(slot) };
         if one.segments.iter().any(|seg| seg.start < slot && reaches(seg.end)) {
             return true;
         }
@@ -2083,7 +2083,7 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>, busy: &Frequen
     let mut live = live;
     for (value, found) in &free {
         if let Some(one) = live.get_mut(value) {
-            one.weight = _max(0.0, one.weight - found / (one.size() + ranges::GRACE) as f64);
+            one.weight = _max(0.0, one.weight - found / one.spill_size() as f64);
         }
     }
     live
@@ -2283,7 +2283,7 @@ pub(crate) fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profil
     let mut live = live;
     for (value, found) in &free {
         if let Some(one) = live.get_mut(value).filter(|one| one.weight != INF) {
-            one.weight = _max(0.0, one.weight - found / (one.size() + ranges::GRACE) as f64);
+            one.weight = _max(0.0, one.weight - found / one.spill_size() as f64);
         }
     }
     live

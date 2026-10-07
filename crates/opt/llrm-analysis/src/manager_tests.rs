@@ -166,7 +166,7 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
             assert_eq!(*analyses.get::<Pointers>(&module.context, &layout, function), alias::points_to(&unit, None, None), "{at}");
             assert_eq!(*analyses.get::<Annotated>(&module.context, &layout, function), alias::annotated(&unit), "{at}");
             assert_eq!(*analyses.get::<Registers>(&module.context, &layout, function), consts::known(&unit, None, None, None), "{at}");
-            assert_eq!(*analyses.get::<DominatedEdges>(&module.context, &layout, function), ranges::dominated_edges(&unit), "{at}");
+            assert_eq!(analyses.get::<DominatedEdges>(&module.context, &layout, function).as_ref().as_ref().map(|states| states.blocks(function)).map_err(String::clone), ranges::dominated_edges(&unit), "{at}");
             let effects = alias::calls_annotated(&Procedure::of(unit), summaries);
             assert_eq!(*analyses.get::<CallEffects>(&module.context, &layout, function), effects, "{at}");
             let calls: Calls = effects.unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect::<IndexMap<_, _>>();
@@ -373,4 +373,125 @@ fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
     }
     assert_eq!(trips(&after, "h1", function), Some(num_bigint::BigInt::from(7)), "the loop that reads the changed bound");
     assert_eq!(*after, *Analyses::new(outer).get::<super::Counted>(context, &layout, function), "what was brought up to date is what deriving it afresh gives");
+}
+
+/// A branch's bound changed outside the blocks it narrows: the edge facts of the blocks past it were kept stale. Only
+/// the blocks the change reaches are worked again, and what comes out is what working them all gives.
+#[test]
+fn a_change_to_a_branch_bound_reworks_the_blocks_past_it() {
+    let mut module = parsed(&format!("{DOS}{LIMITED}"));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let states = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
+        let function = function(module, "f");
+        analyses.get::<DominatedEdges>(&module.context, &layout, function).as_ref().as_ref().map(|states| states.blocks(function)).map_err(String::clone).unwrap()
+    };
+    let before = states(&mut analyses, &module);
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let lim = value(function, "lim");
+        let lim = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(lim)).unwrap();
+        let seven = Operand::Value(value(function, "seven"));
+        function.set_operand(lim, 0, seven);
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    let solved = ranges::blocks_solved();
+    let after = states(&mut analyses, &module);
+    // The check works them all again to compare, and is counted.
+    if std::env::var_os("LLRM_CHECK_REPLAY").is_none() {
+        assert!(ranges::blocks_solved() - solved < function(&module, "f").layout().len(), "{} blocks worked of {}", ranges::blocks_solved() - solved, function(&module, "f").layout().len());
+    }
+    assert_ne!(before, after, "the bound the change reached");
+    let fresh = Analyses::new(outer);
+    let mut fresh = fresh;
+    assert_eq!(after, states(&mut fresh, &module), "what was brought up to date is what working every block gives");
+}
+
+/// The second loop starts straight from the first's header, below no block of its own, and carries what the first
+/// knows of values it never reads.
+const DIRECT: &str = "define i16 @f() {
+b0:
+  %nine = add i16 4, 5
+  %three = add i16 1, 2
+  %four = add i16 2, 2
+  br label %h0
+
+h0:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %l0 ]
+  %t = mul i16 %i, %three
+  br label %l0
+
+l0:
+  %i.next = add i16 %i, 1
+  %c = icmp slt i16 %i.next, %nine
+  br i1 %c, label %h0, label %h1
+
+h1:
+  %j = phi i16 [ 0, %h0 ], [ %j.next, %l1 ]
+  %d = icmp slt i16 %j, 5
+  br i1 %d, label %l1, label %end
+
+l1:
+  %j.next = add i16 %j, 1
+  br label %h1
+
+end:
+  ret i16 %j
+}
+";
+
+/// What a loop knows is read from the loop its header's dominator is in, as well as from the blocks above: a change in
+/// the first of two such loops to a value the second never reads left the second's facts, which carry it, stale.
+#[test]
+fn a_change_to_a_loop_reworks_the_loop_that_starts_from_it() {
+    let mut module = parsed(&format!("{DOS}{DIRECT}"));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
+        let function = function(module, "f");
+        analyses.get::<super::Bounded>(&module.context, &layout, function).as_ref().as_ref().map(ranges::Bounds::facts).map_err(String::clone).unwrap()
+    };
+    let before = facts(&mut analyses, &module);
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let t = value(function, "t");
+        let t = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(t)).unwrap();
+        let four = Operand::Value(value(function, "four"));
+        function.set_operand(t, 1, four);
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    let after = facts(&mut analyses, &module);
+    assert_ne!(before, after, "the value the change reached");
+    assert_eq!(after, facts(&mut Analyses::new(outer), &module), "what was brought up to date is what working every loop gives");
+}
+
+/// A loop carries what is known of the values made above it, whether it reads them or not: an instruction erased there,
+/// which no loop's blocks held, was still in the loop's facts. Seven bench programs and four pipeline tests found it.
+#[test]
+fn an_instruction_erased_above_a_loop_leaves_the_loops_facts() {
+    let mut module = parsed(&format!("{DOS}{LIMITED}"));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
+        let function = function(module, "f");
+        analyses.get::<super::Bounded>(&module.context, &layout, function).as_ref().as_ref().map(ranges::Bounds::facts).map_err(String::clone).unwrap()
+    };
+    let seven = {
+        let function = function(&module, "f");
+        value(function, "seven")
+    };
+    let before = facts(&mut analyses, &module);
+    assert!(before.values().any(|known| known.contains_key(&seven)), "a loop carries it");
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let made = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(seven)).unwrap();
+        function.erase(made).unwrap();
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    let after = facts(&mut analyses, &module);
+    assert!(after.values().all(|known| !known.contains_key(&seven)), "gone from every loop");
+    assert_eq!(after, facts(&mut Analyses::new(outer), &module), "what was brought up to date is what working every loop gives");
 }
