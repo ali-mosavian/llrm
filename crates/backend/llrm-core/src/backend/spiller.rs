@@ -1281,7 +1281,7 @@ pub(crate) fn _keeps(one: &Arc<Insn>, define: &Insn, cell: &Mem, holds: bool, bo
             }
         }
     };
-    holds && !(!apart && _may_write(one, cell, sealed)) && !written.iter().any(meets)
+    holds && !(!apart && _may_write(one, cell, sealed)) && !written.clone().any(meets)
 }
 
 /// Whether allocated LIR names one fixed BP-relative frame range.
@@ -1303,13 +1303,13 @@ pub(crate) fn _may_write(one: &Insn, cell: &Mem, sealed: bool) -> bool {
     let call = one.call.as_deref();
     let written = _written(one, cell);
     if sealed && _incoming_frame(cell) {
-        return written.iter().any(|dest| _in_frame(dest) && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width));
+        return written.clone().any(|dest| _in_frame(dest) && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width));
     }
-    if _exact_frame(cell) && !written.is_empty() && written.iter().all(|dest| _exact_frame(dest)) {
-        if written.iter().any(|dest| crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)) {
+    if _exact_frame(cell) && written.clone().next().is_some() && written.clone().all(|dest| _exact_frame(dest)) {
+        if written.clone().any(|dest| crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)) {
             return true;
         }
-        if call.is_none_or(|call| written.len() >= usize::from(call.writes())) {
+        if call.is_none_or(|call| written.count() >= usize::from(call.writes())) {
             return false;
         }
     }
@@ -1329,20 +1329,19 @@ fn _in_frame(cell: &Mem) -> bool {
 }
 
 /// The memory this instruction names as written that could be `cell`.
-fn _written(one: &Insn, cell: &Mem) -> Vec<Mem> {
+fn _written<'a>(one: &'a Insn, cell: &Mem) -> impl Iterator<Item = &'a Mem> + Clone {
     let spared = _in_frame(cell) && one.call.as_ref().is_some_and(|call| call.writes() && call.spares_the_frame());
     one.what
         .iter()
         .flat_map(|what| &what.dests)
-        .filter_map(|dest| match dest {
+        .filter_map(move |dest| match dest {
             Loc::Mem(dest)
                 if !(spared && dest.addr.is_some_and(|addr| addr.space != Space::Frame)) =>
             {
-                Some(dest.clone())
+                Some(dest)
             }
             _ => None,
         })
-        .collect()
 }
 
 /// The predecessors of every block, `at`s outside the body ignored.
