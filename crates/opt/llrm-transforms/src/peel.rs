@@ -55,6 +55,7 @@ impl FunctionPass for Peel {
 /// each; whether any was.
 pub fn optimized(unit: &mut passes::Unit, analyses: &Analyses, limits: &Limits) -> Result<bool, String> {
     let costs = &profit::costs(analyses.outer());
+    let limits = &limits.on(costs.unroll_budget);
     if !profit::priced(unit.context, unit.layout, unit.function, analyses.outer().callees(), costs) {
         return Ok(false);
     }

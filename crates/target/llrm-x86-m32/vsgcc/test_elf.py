@@ -27,6 +27,7 @@ def work(tmp_path, monkeypatch):
     (tmp_path / "b").mkdir()
     sh("gcc", "-m32", "-c", STUB, "-o", tmp_path / "stub.o")
     sh("ld", "-m", EMULATION, "-static", "-e", "0", "-Ttext=0x8000", "-o", tmp_path / "stub.elf", tmp_path / "stub.o")
+    harness.record_stub(tmp_path)
     monkeypatch.setattr(harness, "OUT", tmp_path)
     return tmp_path
 

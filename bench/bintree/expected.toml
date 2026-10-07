@@ -1,4 +1,4 @@
-reason = "bintree c: insert's self call is a loop (tail recursion): 99758 -> 68757 instructions at -O2, 21104 -> 14226 memory operands; code bytes 357 -> 349"
+reason = "the last call of a function nothing else reaches inlines at any size (LLVM's last-call-to-static bonus, gcc's -finline-functions-called-once): C kernels' static helpers go with their one call; every row better"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -18,16 +18,16 @@ bss_bytes = 0
 kernel_ms = 1.9135
 
 [c.O2]
-instructions = 68757
-memory_operands = 14226
-code_bytes = 349
+instructions = 63575
+memory_operands = 13930
+code_bytes = 325
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 62516
-memory_operands = 15580
-code_bytes = 292
+instructions = 57035
+memory_operands = 14384
+code_bytes = 270
 data_bytes = 0
 bss_bytes = 0
 

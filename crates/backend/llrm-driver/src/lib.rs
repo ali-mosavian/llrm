@@ -62,6 +62,7 @@ pub fn target(flags: &Flags, supported: Option<&[&str]>) -> Result<Bound, String
         return Err(format!("this compiler builds for {} only, not -m{}", modes.join(", "), found.layout().mode));
     }
     flags.format(&**found)?;
+    flags.convention(&**found)?;
     let selection = isel::selector(name).ok_or_else(|| format!("no instruction selector is built for {name}"))?;
     Ok(Bound { target: Rc::clone(found), selection })
 }

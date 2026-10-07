@@ -1,3 +1,12 @@
+# The ABI a program has without -mabi=, and, for each ABI, the convention an unmarked function has under it.
+default = "watcom"
+
+[abi.watcom]
+convention = "watcall32"
+
+[abi.sysv]
+convention = "sysv32"
+
 # watcall32, m32's default: Open Watcom's register convention (`__watcall`), as `wcc386 -3r` emits
 # it, read from its disassembly. Arguments take EAX, EDX, EBX, ECX in order; an i64 takes EAX:EDX
 # or EBX:ECX (low first), the first pair with both free, and a register passed over stays free for
@@ -106,3 +115,21 @@ macho = "_*"
 8 = ["eax", "edx"]
 pointer = ["eax"]
 float = ["st0"]
+
+# sysv32: the i386 System V ABI, gcc's default on Linux, as `gcc -m32` emits it (read from its disassembly, not from the
+# psABI's text): every argument on the stack, pushed right to left in dword slots, which the caller removes; EBX, ESI, EDI and
+# EBP kept; results in EAX, EDX:EAX and ST0. Every struct result, whatever its size, is written through a pointer that is the
+# first argument (pushed last, so the lowest slot), which the callee returns in EAX and pops, `ret 4`: gcc's default on Linux
+# is memory for 1, 2, 4 and 8 byte structs too (`-freg-struct-return`, which Darwin and the BSDs default to, returns them in
+# EAX and EDX; this is not that). Symbols are `_name` in OMF and undecorated in ELF.
+[sysv32]
+like = "cdecl32"
+cc = "sysv"
+aggregate_in_register_bytes = []
+aggregate_pointer_popped_by = "callee"
+
+[sysv32.symbol]
+omf = "_*"
+coff = "_*"
+elf = "*"
+macho = "_*"

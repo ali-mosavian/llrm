@@ -177,6 +177,9 @@ struct Table<'m> {
     bytes: Vec<u8>,
     indices: IndexMap<Vec<u8>, u16>,
     of: IndexMap<TypeId, u16>,
+    /// The structures whose records are being made: one reached again from its own members (a pointer
+    /// to itself) is named, with no fields, since CodeView 4's records name only earlier ones.
+    building: Vec<TypeId>,
 }
 
 impl Table<'_> {
@@ -229,6 +232,30 @@ impl Table<'_> {
         bytes.checked_mul(8).ok_or_else(|| format!("{bytes} bytes do not fit a size in bits"))
     }
 
+    /// A structure's record, its fields' types made first.
+    fn structure(&mut self, name: &str, bytes: u32, fields: &[Field]) -> Made<u16> {
+        let types = fields.iter().map(|field| self.field_type(field)).collect::<Made<Vec<u16>>>()?;
+        let types = self.list(&types)?;
+        let mut names = vec![Tag::List as u8];
+        for field in fields {
+            names.push(Tag::Name as u8);
+            names.extend(pascal(&field.name)?);
+            names.push(Tag::Offset as u8);
+            names.extend(field.offset.to_le_bytes());
+        }
+        let names = self.record(names)?;
+        let mut leaf = vec![Tag::Struct as u8, cvinfo::U32];
+        leaf.extend(Self::bits(bytes)?.to_le_bytes());
+        leaf.push(Tag::Offset as u8);
+        leaf.extend(narrow::<u16>(fields.len(), "a field count")?.to_le_bytes());
+        leaf.extend(reference(types));
+        leaf.extend(reference(names));
+        leaf.push(Tag::Name as u8);
+        leaf.extend(pascal(name)?);
+        leaf.push(cvinfo::UNPACKED);
+        self.record(leaf)
+    }
+
     /// `id`'s index: a scalar's code, or its record's, dependencies first.
     fn index(&mut self, id: TypeId) -> Made<u16> {
         if let Some(&index) = self.of.get(&id) {
@@ -250,27 +277,15 @@ impl Table<'_> {
                 let element = self.index(element)?;
                 self.sized(element, Self::bits(bytes)?)?
             }
+            Type::Struct { name, bytes, .. } if self.building.contains(&id) => {
+                // The structure named by one of its own members: its name and size, no fields.
+                self.structure(name, *bytes, &[])?
+            }
             Type::Struct { name, bytes, fields } => {
-                let types = fields.iter().map(|field| self.field_type(field)).collect::<Made<Vec<u16>>>()?;
-                let types = self.list(&types)?;
-                let mut names = vec![Tag::List as u8];
-                for field in fields {
-                    names.push(Tag::Name as u8);
-                    names.extend(pascal(&field.name)?);
-                    names.push(Tag::Offset as u8);
-                    names.extend(field.offset.to_le_bytes());
-                }
-                let names = self.record(names)?;
-                let mut leaf = vec![Tag::Struct as u8, cvinfo::U32];
-                leaf.extend(Self::bits(*bytes)?.to_le_bytes());
-                leaf.push(Tag::Offset as u8);
-                leaf.extend(narrow::<u16>(fields.len(), "a field count")?.to_le_bytes());
-                leaf.extend(reference(types));
-                leaf.extend(reference(names));
-                leaf.push(Tag::Name as u8);
-                leaf.extend(pascal(name)?);
-                leaf.push(cvinfo::UNPACKED);
-                self.record(leaf)?
+                self.building.push(id);
+                let made = self.structure(name, *bytes, fields);
+                self.building.pop();
+                made?
             }
             &Type::Pointer { target, reach } => {
                 let target = self.index(target)?;
@@ -337,7 +352,7 @@ impl Symbols {
 
 /// `module`'s $$SYMBOLS and $$TYPES.
 pub fn written(module: &Module, flavor: Flavor) -> Made<Written> {
-    let mut table = Table { module, flavor, bytes: Vec::new(), indices: IndexMap::default(), of: IndexMap::default() };
+    let mut table = Table { module, flavor, bytes: Vec::new(), indices: IndexMap::default(), of: IndexMap::default(), building: Vec::new() };
     table.record(vec![cvinfo::NIL])?;
     let mut symbols = Symbols::default();
     let mut head = vec![0, 0];

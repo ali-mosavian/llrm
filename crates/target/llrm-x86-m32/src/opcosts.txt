@@ -34,6 +34,12 @@ fill_cell = rep_stos_cell
 copy = rep_movs + 3*mov_ri
 copy_cell = rep_movs_cell
 direction = 2*alu_rr
+# The operations a completely unrolled loop may total, before the work its copy no longer does boosts it up to
+# fourfold (peelsize). From LLVM's `-unroll-threshold-default` (150; -O3's 300 is twice it), whose 400% boost the
+# pass takes. Calibrated on the vsgcc matmul: at 150 its code is 1728 B (clang -O2 1789) and 7.6% slower than at
+# GCC's 200 (2633 B), still faster than gcc (17734 clocks) and clang (13144) against 11307; no other program's
+# clocks move. Change it by measuring the same two columns again.
+unroll_budget = 150
 
 # What each operation comes to in code bytes, by the convention x86-m16's table states: the instruction's bytes,
 # twice where an operation becomes more than the instruction; a call, return, branch and stack operation is the

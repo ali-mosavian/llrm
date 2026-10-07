@@ -1,0 +1,16 @@
+reason = "baselines of the held-out recursion kernels (#777) predate main's later changes, not #785's (the same rows come out with main's own binary): called-once inlining (#769) puts each kernel's static function into the kernel, so recfloat's 100.0 is a 4-byte pooled constant loaded in place of a pushed 64-bit argument (code 136 -> 108 B, data 8 -> 12 B, net -24 B, instructions -10), recsum and recmany lose the call and its argument handling (one memory operand and 13 B fewer)"
+blessed = "2026-10-07"
+
+[c.O2]
+instructions = 46525
+memory_operands = 18005
+code_bytes = 207
+data_bytes = 0
+bss_bytes = 0
+
+[c.Os]
+instructions = 46524
+memory_operands = 18005
+code_bytes = 198
+data_bytes = 0
+bss_bytes = 0

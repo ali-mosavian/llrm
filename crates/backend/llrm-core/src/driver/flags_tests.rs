@@ -30,13 +30,23 @@ fn each_level_selects_its_pipeline() {
     assert_eq!(pipeline(&["-O"]), o1);
     assert_eq!(pipeline(&["-Og"]), o1);
     let o3 = pipeline(&["-O3"]);
-    assert_eq!(o3.limits, Limits { max_unrolled_operations: 400, ..Limits::default() });
+    assert_eq!(o3.limits, Limits { target_percent: 200, ..Limits::default() });
     assert_eq!((o3.inline, o3.unroll, o3.peel), (Threshold::new(250), true, true));
     let os = pipeline(&["-Os"]);
     assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default().for_size(), true));
     let oz = pipeline(&["-Oz"]);
     assert_eq!((oz.limits.grows, oz.inline, oz.unroll, oz.peel), (false, Threshold::default().for_size(), false, false));
     assert!(parsed(&["-O4"]).is_err());
+}
+
+/// `-fno-inline-functions` was no inlining at all, the last call of a function included; gcc's leaves
+/// `-finline-functions-called-once` on and so does this, which is the spelling for none.
+#[test]
+fn test_no_inline_functions_leaves_called_once_on_as_gcc_does() {
+    assert!(pipeline(&["-O2", "-fno-inline-functions"]).inline.last);
+    assert!(!pipeline(&["-O2", "-fno-inline-functions-called-once"]).inline.last);
+    assert!(!pipeline(&["-O2", "-fno-inline-functions-called-once", "-fno-inline-functions"]).inline.last);
+    assert_eq!(pipeline(&["-O2", "-fno-inline-functions-called-once", "-fno-inline-functions"]).inline, llrm_transforms::inline::Threshold::none());
 }
 
 #[test]

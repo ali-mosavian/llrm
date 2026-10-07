@@ -1,0 +1,9 @@
+description = "Powers mod 30011: an accumulating multiply and a squaring call"
+repetitions = 1
+
+[region]
+c = "bench_recpow"
+
+[gaps]
+bas = "#784 only the C version is written"
+nib = "#784 only the C version is written"

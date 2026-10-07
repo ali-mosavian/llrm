@@ -1,6 +1,6 @@
 //! The DIE tree of `Info`: the compile unit, its types, globals and functions.
 
-use llrm_object::debug::{Block, Function, Info, Kind, Language, Location, Reach, Scalar, Type, Variable};
+use llrm_object::debug::{self as model, Block, Function, Info, Kind, Language, Location, Reach, Scalar, Type, Variable};
 use llrm_object::{Binding, Object, Unsupported};
 
 use crate::die::*;
@@ -14,6 +14,7 @@ const TAG_MEMBER: u16 = 0x0d;
 const TAG_POINTER: u16 = 0x0f;
 const TAG_REFERENCE: u16 = 0x10;
 const TAG_STRUCTURE: u16 = 0x13;
+const TAG_UNION: u16 = 0x17;
 const TAG_SUBROUTINE_TYPE: u16 = 0x15;
 const TAG_TYPEDEF: u16 = 0x16;
 const TAG_SUBRANGE: u16 = 0x21;
@@ -44,6 +45,10 @@ struct Tree<'a> {
     dies: Vec<Die>,
     /// Why each type cannot be written, if it cannot: a type is refused where something uses it.
     bad: Vec<Option<String>>,
+    version: u16,
+    address: usize,
+    /// The location lists, in `.debug_loclists` (a header first) or `.debug_loc`.
+    locations: crate::buffer::Buf,
 }
 
 impl Tree<'_> {
@@ -93,8 +98,8 @@ impl Tree<'_> {
                 die
             }
             Type::Array { bytes: None, .. } => return refused("a BASIC array is its descriptor's: it has no DWARF type"),
-            Type::Struct { name, bytes, fields } => {
-                let mut die = Die::new(TAG_STRUCTURE);
+            Type::Struct { name, bytes, fields, union } => {
+                let mut die = Die::new(if *union { TAG_UNION } else { TAG_STRUCTURE });
                 if !name.is_empty() {
                     die.attrs.push((AT_NAME, Value::Str(name.clone())));
                 }
@@ -192,18 +197,64 @@ impl Tree<'_> {
         Ok(())
     }
 
+    /// The expression of where a frame cell or a register is.
+    fn expression(&self, location: &Location) -> Result<Vec<u8>, Unsupported> {
+        match location {
+            Location::Frame { disp } => Ok([vec![0x91], crate::sleb(*disp)].concat()),
+            Location::Register(name) => self.register(name),
+            _ => refused("a location list holds frame cells and registers"),
+        }
+    }
+
     /// The expression of where `location` is.
-    fn location(&self, location: &Location) -> Result<Value, Unsupported> {
+    fn location(&mut self, location: &Location) -> Result<Value, Unsupported> {
         Ok(match location {
-            Location::Frame { disp } => {
-                let mut bytes = vec![0x91];
-                bytes.extend(crate::sleb(*disp));
-                Value::Expr(bytes)
-            }
-            Location::Register(name) => Value::Expr(self.register(name)?),
+            Location::Frame { .. } | Location::Register(_) => Value::Expr(self.expression(location)?),
             Location::Static { symbol, disp } => Value::ExprAddr { symbol: *symbol, delta: *disp },
-            Location::List(_) => return refused("a location list is not written yet"),
+            Location::List(entries) => Value::LocList(self.list(entries)?),
         })
+    }
+
+    /// A list of where a value is over each range of the code, at its place in the section of lists.
+    fn list(&mut self, entries: &[(model::Range, Location)]) -> Result<u32, Unsupported> {
+        let (version, address) = (self.version, self.address);
+        if version >= 5 && self.locations.at() == 0 {
+            // unit_length, version, address size, segment selector size, offset entry count.
+            self.locations.u32(0);
+            self.locations.u16(5);
+            self.locations.u8(address as u8);
+            self.locations.u8(0);
+            self.locations.u32(0);
+        }
+        let start = self.locations.at();
+        // Before 5 a range is an offset from the unit's base address: its low_pc.
+        let base = match self.info.code[..] {
+            [one] => Some(one),
+            _ => None,
+        };
+        for (range, location) in entries {
+            let expression = self.expression(location)?;
+            if version >= 5 {
+                let (symbol, at) = crate::anchor(self.object, range.section)?;
+                self.locations.u8(0x08); // DW_LLE_start_length
+                self.locations.address(address, symbol, range.offset as i64 - at as i64);
+                self.locations.uleb(range.length as u64);
+                self.locations.uleb(expression.len() as u64);
+            } else {
+                let Some(base) = base.filter(|one| one.section == range.section) else { return refused("a location list of a unit with no one code range") };
+                let (begin, end) = ((range.offset - base.offset) as u64, (range.offset - base.offset + range.length) as u64);
+                self.locations.bytes.extend(&begin.to_le_bytes()[..address]);
+                self.locations.bytes.extend(&end.to_le_bytes()[..address]);
+                self.locations.u16(u16::try_from(expression.len()).or_else(|_| refused("a location expression of 64K"))?);
+            }
+            self.locations.bytes.extend(expression);
+        }
+        if version >= 5 {
+            self.locations.u8(0); // DW_LLE_end_of_list
+        } else {
+            self.locations.bytes.extend(std::iter::repeat_n(0, 2 * address));
+        }
+        Ok(start as u32)
     }
 
     /// `DW_OP_reg`, of the register `name`.
@@ -225,7 +276,10 @@ impl Tree<'_> {
                 die.attrs.push((AT_EXTERNAL, Value::Flag));
             }
         }
-        die.attrs.push((AT_LOCATION, self.location(&one.location)?));
+        // A list with no entry is a variable the optimiser removed: no location says "optimized out".
+        if !matches!(&one.location, Location::List(entries) if entries.is_empty()) {
+            die.attrs.push((AT_LOCATION, self.location(&one.location)?));
+        }
         Ok(self.push(die))
     }
 
@@ -288,9 +342,21 @@ fn base(scalar: Scalar) -> Result<Die, Unsupported> {
     Ok(die)
 }
 
+/// The types `one` names.
+fn references(one: &Type) -> Vec<usize> {
+    match one {
+        Type::Scalar(_) | Type::FixedString(_) => Vec::new(),
+        Type::Array { element, .. } => vec![*element],
+        Type::Struct { fields, .. } => fields.iter().map(|field| field.r#type).collect(),
+        Type::Enum { underlying, .. } => vec![*underlying],
+        Type::Pointer { target, .. } | Type::Reference(target) | Type::Typedef { target, .. } | Type::Qualified { target, .. } => vec![*target],
+        Type::Procedure { result, parameters, .. } => result.iter().chain(parameters).copied().collect(),
+    }
+}
+
 /// The tree: the compile unit is DIE 0 and type `i` is DIE `1 + i`.
-pub fn tree(object: &Object, info: &Info) -> Result<Vec<Die>, Unsupported> {
-    let mut tree = Tree { object, info, dies: Vec::new(), bad: vec![None; info.types.len()] };
+pub fn tree(object: &Object, info: &Info, version: u16, address: usize) -> Result<(Vec<Die>, crate::buffer::Done), Unsupported> {
+    let mut tree = Tree { object, info, dies: Vec::new(), bad: vec![None; info.types.len()], version, address, locations: crate::buffer::Buf::default() };
     let mut unit = Die::new(TAG_COMPILE_UNIT);
     unit.attrs.push((AT_PRODUCER, Value::Str("llrm".into())));
     unit.attrs.push((AT_LANGUAGE, Value::U16(language(info.language))));
@@ -307,14 +373,30 @@ pub fn tree(object: &Object, info: &Info) -> Result<Vec<Die>, Unsupported> {
     tree.dies.push(unit);
     tree.dies.extend((0..info.types.len()).map(|_| Die::new(0)));
     let mut children = Vec::new();
+    // A type may name one that comes after it (a struct with a pointer to itself): find every type that
+    // cannot be written, and those that name one, before any is described.
     for index in 0..info.types.len() {
-        match tree.describe(index) {
-            Ok(()) => {
-                if tree.ty(index)?.is_some() {
-                    children.push(1 + index);
+        if let Err(Unsupported(why)) = tree.describe(index) {
+            tree.bad[index] = Some(why.trim_start_matches("DWARF: ").to_owned());
+        }
+    }
+    loop {
+        let mut changed = false;
+        for index in 0..info.types.len() {
+            if tree.bad[index].is_none() {
+                if let Some(why) = references(&info.types[index]).into_iter().find_map(|target| tree.bad.get(target).cloned().flatten()) {
+                    tree.bad[index] = Some(why);
+                    changed = true;
                 }
             }
-            Err(Unsupported(why)) => tree.bad[index] = Some(why.trim_start_matches("DWARF: ").to_owned()),
+        }
+        if !changed {
+            break;
+        }
+    }
+    for index in 0..info.types.len() {
+        if tree.bad[index].is_none() && tree.ty(index)?.is_some() {
+            children.push(1 + index);
         }
     }
     for global in &info.globals {
@@ -326,5 +408,9 @@ pub fn tree(object: &Object, info: &Info) -> Result<Vec<Die>, Unsupported> {
         children.push(at);
     }
     tree.dies[0].children = children;
-    Ok(tree.dies)
+    if version >= 5 && tree.locations.at() > 0 {
+        let length = tree.locations.at() as u32 - 4;
+        tree.locations.patch32(0, length);
+    }
+    Ok((tree.dies, tree.locations.done()))
 }

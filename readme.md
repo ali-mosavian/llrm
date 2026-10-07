@@ -232,7 +232,7 @@ A Nib slice is a far pointer to its length and data pointer. `zip` pairs the
 elements until the shorter slice ends, so there is no `n`, and no index to check.
 Indexing, `a[i]`, checks every access and calls `N$EBND` on a bad one.
 
-BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 -march=i486 -O3 --whole-program -S`:
+BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 -march=i486 -O3 --whole-program -fno-inline-functions-called-once -S` (DOT is called once, and would go into its caller):
 
 ```basic
 DECLARE FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
