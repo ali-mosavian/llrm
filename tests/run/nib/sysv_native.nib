@@ -1,0 +1,16 @@
+# flags: -O2 -march=i486 -m32 -mabi=sysv
+# link: @c-runtime
+# -mabi=sysv makes the stack convention Nib's own, and "c" means it: a call into the C test glue (`report`) and the compiler's
+# own calls into the runtime (`print`) cross it.
+@extern("c")
+fn report(value: i32) -> void
+
+fn add3(a: i32, b: i32, c: i32) -> i32:
+    return a * 3 + b * 5 + c
+
+fn main() -> i32:
+    print("sysv")
+    unsafe:
+        report(add3(1, 2, 3))
+        report(add3(10, 20, 30))
+    return 0

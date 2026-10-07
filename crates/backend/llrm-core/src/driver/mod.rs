@@ -42,6 +42,8 @@ pub struct Options {
     pub arch: std::rc::Rc<dyn llrm_target::Target>,
     /// The object format the symbols are spelled for: `omf`, `elf` or `macho`, which the target's conventions decorate.
     pub object_format: &'static str,
+    /// `-mabi=`: the ABI family an unmarked function has (calling.toml's `[abi.*]`), the target's default without.
+    pub abi: Option<String>,
     /// `-gcodeview`, `-gdwarf`...: the debug format asked for, where `-g` writes any.
     pub debug_format: llrm_object::debug::Format,
 }
@@ -50,7 +52,7 @@ impl Options {
     /// For `machine` on the target `arch` with its selector, at -O2, the stages
     /// written where `LLRM_MIR_STAGES` names.
     pub fn new(machine: Machine, arch: std::rc::Rc<dyn llrm_target::Target>, selection: &'static crate::backend::isel::Compiled) -> Self {
-        Self { machine, pipeline: Default::default(), dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), stack_usage: false, stack_limit: None, selection, arch, object_format: "omf", debug_format: Default::default() }
+        Self { machine, pipeline: Default::default(), dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), stack_usage: false, stack_limit: None, selection, arch, object_format: "omf", debug_format: Default::default(), abi: None }
     }
 
     /// For 16-bit x86, which the tests of this crate are written for.

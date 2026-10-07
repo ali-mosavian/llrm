@@ -128,7 +128,9 @@ pub enum Type {
     /// `bytes` of its elements in place, as C lays one out; None: BASIC's, whose bounds are its
     /// descriptor's.
     Array { element: TypeId, bytes: Option<u32> },
-    Struct { name: String, bytes: u32, fields: Vec<Field> },
+    /// A struct or, with `union`, a union: a type a member may reach again (a pointer to itself), by its
+    /// index, which may be a later one.
+    Struct { name: String, bytes: u32, fields: Vec<Field>, union: bool },
     Enum { name: String, underlying: TypeId, enumerators: Vec<Enumerator> },
     /// A pointer of `bytes` (the offset's width, a far one's too).
     Pointer { target: TypeId, bytes: u8, reach: Reach },

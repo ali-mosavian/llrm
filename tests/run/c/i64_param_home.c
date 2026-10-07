@@ -1,4 +1,4 @@
-// flags: -O2 -march=i486 -m32
+// flags: -O2 -march=i486 -m32 | -O2 -march=i486 -m32 -mabi=sysv
 /* An i64 parameter whose address is taken has a home that is written on entry, whatever register or stack cell the value arrived in:
    its high dword read through an `int` pointer was read from a cell nothing wrote (the store went as dead on the types' say-so, and the
    selector had no i64 store at all: a union of it was refused, "a i64 value"). */

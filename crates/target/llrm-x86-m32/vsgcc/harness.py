@@ -250,8 +250,33 @@ def cost(ins, taken, first_rep, mem, multiplier=None):
     return 1
 
 
+def built_abi():
+    """The convention build.sh compiled llrm's side in, as it recorded it: a work directory of an earlier build says so too."""
+    record = OUT / "abi"
+    return record.read_text().strip() if record.exists() else "watcom"
+
+
+def stub_digest():
+    """What stub.s says now: a stub is current when the one it was built from said the same."""
+    import hashlib
+    return hashlib.sha256(Path(__file__).with_name("stub.s").read_bytes()).hexdigest()
+
+
+def record_stub(work):
+    """Say in `work` which stub.s its stub.elf was built from; run.sh and the tests that build one do."""
+    (Path(work) / "stub.elf.src").write_text(stub_digest())
+
+
+def fresh_stub():
+    """The stub the harness links is built from stub.s: one built from an older stub.s lacks its symbols (`report_` after #743).
+    A file's age says nothing of it (a checkout makes stub.s newer than any build): the digest it was built from does."""
+    built, record = OUT / "stub.elf", OUT / "stub.elf.src"
+    assert record.exists() and record.read_text() == stub_digest(), f"{built} was not built from this stub.s: run.sh builds it"
+    return built
+
+
 def run(prog, variant, hot=False, limit=300_000_000):
-    stub = nm(OUT / "stub.elf")
+    stub = nm(fresh_stub())
     if variant in OMF_VARIANTS:
         segs, syms = omf_link(OUT / "o" / f"{prog}.{variant}.obj", stub)
         main = syms["_main"]
@@ -273,8 +298,8 @@ def run(prog, variant, hot=False, limit=300_000_000):
     code_end = max(va + len(b) for va, b, _ in segs)
     # OMF's default-convention name is `report_`, ELF's is `report`: both are the stub's, and the caller says where the value is.
     report_at = {stub["report"], stub.get("report_", stub["report"])}
-    # llrm's default convention takes the value in EAX; gcc and clang push it.
-    in_eax = variant.startswith("llrm")
+    # llrm's watcom convention takes the value in EAX; gcc and clang, and llrm under -mabi=sysv, push it.
+    in_eax = variant.startswith("llrm") and built_abi() == "watcom"
     st = dict(active=False, sp=0, prev=None, prev_ins=None, cnt=0)
     total = Counter()   # instructions, mem, clocks
     hits = Counter()

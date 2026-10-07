@@ -1,4 +1,4 @@
-reason = "pressuresink: a load is made just before its reader where no register class gains; fewer memory operands overall, matmul +1 and parity/loop +2 from the order sensitivity of lea fusion and coalescing (#729)"
+reason = "the last call of a function nothing else reaches inlines at any size (LLVM's last-call-to-static bonus, gcc's -finline-functions-called-once): C kernels' static helpers go with their one call; every row better"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -18,20 +18,18 @@ bss_bytes = 0
 kernel_ms = 0.0085
 
 [c.O2]
-instructions = 130
-memory_operands = 63
-code_bytes = 508
+instructions = 110
+memory_operands = 58
+code_bytes = 499
 data_bytes = 0
 bss_bytes = 78
-kernel_ms = 0.0032
 
 [c.Os]
-instructions = 163
-memory_operands = 72
-code_bytes = 419
+instructions = 131
+memory_operands = 56
+code_bytes = 363
 data_bytes = 0
 bss_bytes = 78
-kernel_ms = 0.0036
 
 [nib.O2]
 instructions = 149

@@ -1,6 +1,7 @@
 //! `-g` as DWARF in an ELF object: llvm-dwarfdump accepts every bench C program's, and gdb, driven
 //! by a script, stops where it is told in a linked and running program and reads its values.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -130,6 +131,13 @@ fn the_flavor_asked_for_is_the_formats_or_an_error() {
     assert!(refused(&["-m32", "-gcodeview", "-fobject-format=elf"]).contains("cannot carry CodeView"));
     assert!(refused(&["-m32", "-gtd", "-fobject-format=elf"]).contains("Turbo Debugger"));
     assert!(refused(&["-m32", "-gdwarf-3", "-fobject-format=elf"]).contains("unrecognized"));
+    // Borland's records are 16-bit.
+    assert!(refused(&["-m32", "-gtd"]).contains("16-bit"));
+    let made = compile(&source, &["-m16", "-gtd"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let records = llrm_core::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
+    let classes: BTreeSet<u8> = records.iter().filter(|one| one.r#type == llrm_core::objectfile::omf::COMENT).filter_map(|one| one.body.get(1).copied()).collect();
+    assert!(classes.contains(&0xE3) && classes.contains(&0xE5) && !classes.contains(&0xA1), "-gtd on OMF is Borland's: {classes:x?}");
     let made = compile(&source, &["-m32", "-g", "-fobject-format=elf"], &object);
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     assert!(std::fs::read(&object).unwrap().windows(11).any(|one| one == b".debug_info"), "-g on ELF is DWARF");
@@ -197,6 +205,48 @@ fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     assert!(same >= 20, "only {same} lines were compared");
+}
+
+/// `struct node { struct node *next; int v; }`: a struct that holds a pointer to itself kept only `v`
+/// in the debug information, whichever format wrote it: asked for while it was being built, it
+/// answered "none" and the member naming it was dropped. gdb follows the list; CodeView keeps the field.
+#[test]
+fn a_struct_that_names_itself_keeps_the_member_that_does_in_both_formats() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
+    let scratch = tempfile::tempdir().unwrap();
+    // CodeView, in an OMF object.
+    let object = scratch.path().join("list.obj");
+    let made = compile(&fixtures.join("list.c"), &["-m16", "-g"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let records = llrm_core::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
+    let shape = llrm_core::objectfile::cvinfo::parse(&records).shape();
+    let head = shape.iter().find(|one| one.starts_with("DATA head")).unwrap_or_else(|| panic!("{shape:#?}"));
+    assert!(head.contains("next +0") && head.contains("v +2"), "{head}");
+    // DWARF, in an ELF object, and read by gdb.
+    let (Some(gdb), Some(ld), Some(assembler)) = (tool("gdb"), tool("ld"), tool("as")) else {
+        skipped("needs gdb, GNU ld and as");
+        return;
+    };
+    let (start, object, program) = (scratch.path().join("start.o"), scratch.path().join("list.o"), scratch.path().join("list"));
+    let made = Command::new(assembler).arg("--32").arg("-o").arg(&start).arg(fixtures.join("start.s")).output().unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let made = compile(&fixtures.join("list.c"), &["-m32", "-O0", "-fobject-format=elf", "-g"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let linked = Command::new(ld).args(["-m", "elf_i386", "-o"]).arg(&program).arg(&start).arg(&object).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    if Command::new(&program).output().ok().and_then(|ran| ran.status.code()) != Some(10) {
+        skipped("this host does not run i386 programs");
+        return;
+    }
+    let said = Command::new(gdb)
+        .args(["-batch", "-nx", "-ex", "break sum", "-ex", "run", "-ex", "print *n", "-ex", "print n->next->v", "-ex", "print *n->next"])
+        .arg(&program)
+        .current_dir(&fixtures)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    assert!(text.contains("$1 = {next = 0x") && text.contains(", v = 3}"), "{text}");
+    assert!(text.contains("$2 = 7") && text.contains("$3 = {next = 0x0, v = 7}"), "{text}");
 }
 
 /// A 64-bit integer was no type of the debug model (CodeView 4 had none) and every variable of one was dropped

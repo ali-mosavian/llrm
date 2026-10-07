@@ -1809,8 +1809,8 @@ compiler-provided foreign descriptor views.
 Native `vec`, `dict`, `string`, closures, generators, protocols, and generic
 functions never cross an ABI boundary implicitly.
 
-`"c"` is the convention of an unmarked C function on the target: its default (the first
-entry of its `calling.toml`), cdecl16 on m16 and watcall32 on m32. A profile named
+`"c"` is the convention of an unmarked C function on the target: its default (the ABI `calling.toml` names
+by `default`), cdecl16 on m16 and watcall32 on m32; `-mabi=sysv` on m32 makes it sysv32. A profile named
 `cdecl32` is the stack convention there, and `watcall32` the default by name.
 
 The initial ABI profiles are:
@@ -1819,6 +1819,7 @@ The initial ABI profiles are:
 cdecl16
 cdecl32
 watcall32
+sysv32
 pascal16
 interrupt16
 qb45

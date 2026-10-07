@@ -34,13 +34,14 @@ fn object() -> Object {
     let types = vec![
         int,                                                                                                  // 0
         Type::Scalar(Scalar::Char),                                                                            // 1
-        Type::Struct { name: "S".into(), bytes: 8, fields: vec![Field { name: "a".into(), r#type: 0, offset: 0, bits: None }, Field { name: "b".into(), r#type: 1, offset: 4, bits: None }] }, // 2
+        Type::Struct { name: "S".into(), bytes: 8, fields: vec![Field { name: "a".into(), r#type: 0, offset: 0, bits: None }, Field { name: "b".into(), r#type: 1, offset: 4, bits: None }], union: false }, // 2
         Type::Pointer { target: 2, bytes: 4, reach: Reach::Near },                                             // 3
         Type::Procedure { result: Some(0), parameters: vec![0, 3], convention: None },                         // 4
         Type::Array { element: 0, bytes: Some(40) },                                                           // 5
         Type::Enum { name: "E".into(), underlying: 0, enumerators: vec![Enumerator { name: "A".into(), value: 0 }, Enumerator { name: "B".into(), value: -3 }] }, // 6
-        Type::Struct { name: "N".into(), bytes: 4, fields: vec![Field { name: "next".into(), r#type: 8, offset: 0, bits: None }] }, // 7
+        Type::Struct { name: "N".into(), bytes: 4, fields: vec![Field { name: "next".into(), r#type: 8, offset: 0, bits: None }], union: false }, // 7
         Type::Pointer { target: 7, bytes: 4, reach: Reach::Near },                                             // 8
+        Type::Struct { name: "U".into(), bytes: 4, fields: vec![Field { name: "i".into(), r#type: 0, offset: 0, bits: None }, Field { name: "c".into(), r#type: 1, offset: 0, bits: None }], union: true }, // 9
     ];
     let function = Function {
         name: "f".into(),
@@ -109,6 +110,7 @@ fn llvm_reads_the_functions_variables_types_and_lines() {
         "SizeOf: 40",
         "EnumValue: -3",
         "ForwardReference (0x80)",
+        "TypeLeafKind: LF_UNION (0x1506)",
         "DataOffset: _g+0x0",
         "LineNumberStart: 5",
         "+0xC [",
@@ -215,7 +217,7 @@ fn a_variable_over_a_long_function_is_written_in_pieces() {
 fn what_overflows_a_field_is_refused_not_wrapped() {
     let huge = |made: &mut Object| {
         let fields = (0..5000).map(|at| Field { name: format!("field_number_{at}"), r#type: 0, offset: at * 4, bits: None }).collect();
-        made.debug.as_mut().unwrap().types[2] = Type::Struct { name: "S".into(), bytes: 20_000, fields };
+        made.debug.as_mut().unwrap().types[2] = Type::Struct { name: "S".into(), bytes: 20_000, fields, union: false };
     };
     assert!(refusal(huge).contains("16-bit length"));
     assert!(refusal(|made| made.debug.as_mut().unwrap().lines[0].column = 70_000).contains("does not fit a line entry"));

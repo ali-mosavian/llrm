@@ -52,7 +52,8 @@ fn typed(one: &model::Type) -> Result<Option<Type>, Error> {
         M::FixedString(length) => Type::FixedString(narrow(i64::from(*length), "a STRING's length")?),
         M::Array { element, bytes: None } => Type::Array(*element),
         M::Array { element, bytes: Some(bytes) } => Type::Sized { element: *element, bytes: *bytes },
-        M::Struct { name, bytes, fields } => {
+        // CodeView 4's record is the same for a union: its fields all start at 0.
+        M::Struct { name, bytes, fields, .. } => {
             let fields = fields
                 .iter()
                 .map(|field| Ok(cvwrite::Field { name: field.name.clone(), r#type: field.r#type, offset: narrow(i64::from(field.offset), "a field's offset")?, bits: field.bits }))
@@ -126,6 +127,10 @@ fn module(object: &Object, info: &Info) -> Result<cvwrite::Module, Error> {
                 Location::Frame { disp } => locals.push(cvwrite::Local { name: variable.name.clone(), r#type: variable.r#type, bp: narrow(*disp, "a frame offset")? }),
                 Location::Static { .. } => statics.extend(data(object, variable)?),
                 Location::Register(register) => return refused(format!("{} is in register {register}, which is not written yet", variable.name)),
+                // A parameter that arrives in a register and is there until the body starts, or one the optimiser
+                // removed: CodeView 4 as written has no register symbol (S_REGISTER) and no "optimized out", so it is
+                // left out, as it was before the model said it.
+                Location::List(entries) if entries.iter().all(|(_, location)| matches!(location, Location::Register(_))) => {}
                 Location::List(_) => return refused(format!("{} has a location list, which is not written yet", variable.name)),
             }
         }
@@ -275,5 +280,17 @@ mod tests {
         let shape = cvinfo::parse(&omf::parse(&write::write(&made).unwrap()).unwrap()).shape();
         // `void` reads as STRING in CodeView's raw return code, as it does for any void function.
         assert_eq!(shape, ["PARAM f.x: INTEGER", "PROC f flags 0 () -> STRING"], "{shape:#?}");
+    }
+
+    /// A parameter that arrives in a register (there until the body starts) and one the optimiser removed have
+    /// no frame cell CodeView 4 could name: they are left out, and the frame variables beside them are not.
+    #[test]
+    fn a_register_parameter_and_a_removed_one_are_left_out_of_codeview_not_refused() {
+        let entry = Range { section: 0, offset: 0, length: 5 };
+        let in_register = Variable { name: "r".into(), r#type: 0, kind: model::Kind::Parameter, location: Location::List(vec![(entry, Location::Register("ax".into()))]) };
+        let removed = Variable { name: "g".into(), r#type: 0, kind: model::Kind::Parameter, location: Location::List(Vec::new()) };
+        let made = object(vec![local("x", model::Kind::Parameter, 4), in_register, removed], vec![int(), procedure()]);
+        let shape = cvinfo::parse(&omf::parse(&write::write(&made).unwrap()).unwrap()).shape();
+        assert_eq!(shape, ["PARAM f.x: INTEGER", "PROC f flags 0 (INTEGER) -> INTEGER"], "{shape:#?}");
     }
 }

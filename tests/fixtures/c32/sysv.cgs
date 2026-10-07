@@ -1,0 +1,225 @@
+INIT sw=0x808000 target=0x458 size=50 rev=0x23 flat=1
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=4
+SEG 3 attr=0xc name="CONST2" align=4
+SEG 4 attr=0x6 name="_DATA" align=4
+START
+TYPE T25 size=28 align=1
+f1 DBSrcFile "/home/alim/scratch/abi32/tests/fixtures/c32/sysv.c" main=1
+- DBSrcCue f1 3 1
+TYPE T26 size=1 align=1
+SYM y1 name="r1" base="r1" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x602 parms=[] ret=0:0
+- CGProcDecl y1 T26
+SYM y2 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_INTEGER
+l2 CGLastParm
+t3 CGTemp T26
+SYM y3 name="s" base="s" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y3 T26
+n4 CGFEName y3 T26
+n5 CGInteger 0 TY_UNSIGNED
+n6 CGBinary O_PLUS n4 n5 TY_POINTER
+n7 CGFEName y2 TY_INTEGER
+n8 CGUnary O_POINTS n7 TY_INTEGER
+n9 CGAssign n6 n8 TY_INT_1
+- CGDone n9
+n10 CGFEName y3 T26
+n11 CGUnary O_POINTS n10 T26
+n12 CGTempName t3 T26
+n13 CGAssign n12 n11 T26
+- CGDone n13
+n14 CGTempName t3 T26
+n15 CGUnary O_POINTS n14 T26
+- CGReturn n15 T26
+- DBSrcCue f1 4 1
+TYPE T27 size=12 align=4
+SYM y4 name="r12" base="r12" pattern="_*" attr=0x7 seg=1
+CALLCONV y4 class=0x80 target=0x602 parms=[] ret=0:0
+- CGProcDecl y4 T27
+SYM y5 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y5 TY_INTEGER
+SYM y6 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y6 TY_INTEGER
+l16 CGLastParm
+t17 CGTemp T27
+SYM y7 name="s" base="s" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y7 T27
+n18 CGFEName y7 T27
+n19 CGInteger 0 TY_UNSIGNED
+n20 CGBinary O_PLUS n18 n19 TY_POINTER
+n21 CGFEName y5 TY_INTEGER
+n22 CGUnary O_POINTS n21 TY_INTEGER
+n23 CGAssign n20 n22 TY_INTEGER
+- CGDone n23
+n24 CGFEName y7 T27
+n25 CGInteger 4 TY_UNSIGNED
+n26 CGBinary O_PLUS n24 n25 TY_POINTER
+n27 CGFEName y6 TY_INTEGER
+n28 CGUnary O_POINTS n27 TY_INTEGER
+n29 CGAssign n26 n28 TY_INTEGER
+- CGDone n29
+n30 CGFEName y7 T27
+n31 CGInteger 8 TY_UNSIGNED
+n32 CGBinary O_PLUS n30 n31 TY_POINTER
+n33 CGFEName y5 TY_INTEGER
+n34 CGUnary O_POINTS n33 TY_INTEGER
+n35 CGFEName y6 TY_INTEGER
+n36 CGUnary O_POINTS n35 TY_INTEGER
+n37 CGBinary O_PLUS n34 n36 TY_INTEGER
+n38 CGAssign n32 n37 TY_INTEGER
+- CGDone n38
+n39 CGFEName y7 T27
+n40 CGUnary O_POINTS n39 T27
+n41 CGTempName t17 T27
+n42 CGAssign n41 n40 T27
+- CGDone n42
+n43 CGTempName t17 T27
+n44 CGUnary O_POINTS n43 T27
+- CGReturn n44 T27
+- DBSrcCue f1 5 1
+SYM y8 name="by_val" base="by_val" pattern="_*" attr=0x7 seg=1
+CALLCONV y8 class=0x80 target=0x602 parms=[] ret=0:0
+- CGProcDecl y8 TY_INTEGER
+SYM y9 name="s" base="s" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y9 T27
+SYM y10 name="t" base="t" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y10 T26
+SYM y11 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y11 TY_INTEGER
+l45 CGLastParm
+t46 CGTemp TY_INTEGER
+n47 CGFEName y9 T27
+n48 CGInteger 0 TY_UNSIGNED
+n49 CGBinary O_PLUS n47 n48 TY_POINTER
+n50 CGUnary O_POINTS n49 TY_INTEGER
+n51 CGFEName y9 T27
+n52 CGInteger 8 TY_UNSIGNED
+n53 CGBinary O_PLUS n51 n52 TY_POINTER
+n54 CGUnary O_POINTS n53 TY_INTEGER
+n55 CGBinary O_PLUS n50 n54 TY_INTEGER
+n56 CGFEName y10 T26
+n57 CGInteger 0 TY_UNSIGNED
+n58 CGBinary O_PLUS n56 n57 TY_POINTER
+n59 CGUnary O_POINTS n58 TY_INT_1
+n60 CGBinary O_PLUS n55 n59 TY_INTEGER
+n61 CGFEName y11 TY_INTEGER
+n62 CGUnary O_POINTS n61 TY_INTEGER
+n63 CGBinary O_PLUS n60 n62 TY_INTEGER
+n64 CGUnary O_CONVERT n63 TY_INTEGER
+n65 CGTempName t46 TY_INTEGER
+n66 CGAssign n65 n64 TY_INTEGER
+- CGDone n66
+n67 CGTempName t46 TY_INTEGER
+n68 CGUnary O_POINTS n67 TY_INTEGER
+- CGReturn n68 TY_INTEGER
+- DBSrcCue f1 6 1
+SYM y12 name="sc" base="sc" pattern="_*" attr=0x7 seg=1
+CALLCONV y12 class=0x80 target=0x602 parms=[] ret=0:0
+- CGProcDecl y12 TY_INTEGER
+SYM y13 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y13 TY_INT_1
+SYM y14 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y14 TY_INT_2
+SYM y15 name="c" base="c" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y15 TY_UINT_1
+l69 CGLastParm
+t70 CGTemp TY_INTEGER
+n71 CGFEName y13 TY_INT_1
+n72 CGUnary O_POINTS n71 TY_INT_1
+n73 CGFEName y14 TY_INT_2
+n74 CGUnary O_POINTS n73 TY_INT_2
+n75 CGBinary O_PLUS n72 n74 TY_INTEGER
+n76 CGFEName y15 TY_UINT_1
+n77 CGUnary O_POINTS n76 TY_UINT_1
+n78 CGBinary O_PLUS n75 n77 TY_INTEGER
+n79 CGUnary O_CONVERT n78 TY_INTEGER
+n80 CGTempName t70 TY_INTEGER
+n81 CGAssign n80 n79 TY_INTEGER
+- CGDone n81
+n82 CGTempName t70 TY_INTEGER
+n83 CGUnary O_POINTS n82 TY_INTEGER
+- CGReturn n83 TY_INTEGER
+- DBSrcCue f1 7 1
+SYM y16 name="callsr" base="callsr" pattern="_*" attr=0x7 seg=1
+CALLCONV y16 class=0x80 target=0x602 parms=[] ret=0:0
+- CGProcDecl y16 TY_INTEGER
+l84 CGLastParm
+t85 CGTemp TY_INTEGER
+SYM y17 name="s" base="s" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y17 T27
+SYM y18 name="t" base="t" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y18 T26
+n86 CGFEName y17 T27
+n87 CGFEName y4 TY_CODE_PTR
+c88 CGInitCall n87 T27 y4
+n89 CGInteger 2 TY_INTEGER
+- CGAddParm c88 n89 TY_INTEGER
+n90 CGInteger 1 TY_INTEGER
+- CGAddParm c88 n90 TY_INTEGER
+n91 CGCall c88
+n92 CGUnary O_POINTS n91 T27
+n93 CGLVAssign n86 n92 T27
+- CGDone n93
+n94 CGFEName y18 T26
+n95 CGFEName y1 TY_CODE_PTR
+c96 CGInitCall n95 T26 y1
+n97 CGInteger 3 TY_INTEGER
+- CGAddParm c96 n97 TY_INTEGER
+n98 CGCall c96
+n99 CGUnary O_POINTS n98 T26
+n100 CGLVAssign n94 n99 T26
+- CGDone n100
+n101 CGFEName y17 T27
+n102 CGInteger 8 TY_UNSIGNED
+n103 CGBinary O_PLUS n101 n102 TY_POINTER
+n104 CGUnary O_POINTS n103 TY_INTEGER
+n105 CGFEName y18 T26
+n106 CGInteger 0 TY_UNSIGNED
+n107 CGBinary O_PLUS n105 n106 TY_POINTER
+n108 CGUnary O_POINTS n107 TY_INT_1
+n109 CGBinary O_PLUS n104 n108 TY_INTEGER
+n110 CGUnary O_CONVERT n109 TY_INTEGER
+n111 CGTempName t85 TY_INTEGER
+n112 CGAssign n111 n110 TY_INTEGER
+- CGDone n112
+n113 CGTempName t85 TY_INTEGER
+n114 CGUnary O_POINTS n113 TY_INTEGER
+- CGReturn n114 TY_INTEGER
+- DBSrcCue f1 9 1
+SYM y19 name="calls" base="calls" pattern="_*" attr=0x7 seg=1
+CALLCONV y19 class=0x80 target=0x602 parms=[] ret=0:0
+- CGProcDecl y19 TY_INTEGER
+SYM y20 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y20 TY_INTEGER
+l115 CGLastParm
+t116 CGTemp TY_INTEGER
+SYM y21 name="s" base="s" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y21 T27
+n117 CGFEName y21 T27
+SYM y22 name="away" base="away" pattern="_*" attr=0xf seg=1
+CALLCONV y22 class=0x80 target=0x602 parms=[] ret=0:0
+n118 CGFEName y22 TY_CODE_PTR
+c119 CGInitCall n118 T27 y22
+n120 CGInteger 2 TY_INTEGER
+- CGAddParm c119 n120 TY_INTEGER
+n121 CGFEName y20 TY_INTEGER
+n122 CGUnary O_POINTS n121 TY_INTEGER
+- CGAddParm c119 n122 TY_INTEGER
+n123 CGCall c119
+n124 CGUnary O_POINTS n123 T27
+n125 CGLVAssign n117 n124 T27
+- CGDone n125
+n126 CGFEName y21 T27
+n127 CGInteger 8 TY_UNSIGNED
+n128 CGBinary O_PLUS n126 n127 TY_POINTER
+n129 CGUnary O_POINTS n128 TY_INTEGER
+n130 CGUnary O_CONVERT n129 TY_INTEGER
+n131 CGTempName t116 TY_INTEGER
+n132 CGAssign n131 n130 TY_INTEGER
+- CGDone n132
+n133 CGTempName t116 TY_INTEGER
+n134 CGUnary O_POINTS n133 TY_INTEGER
+- CGReturn n134 TY_INTEGER
+STOP
+FINI
