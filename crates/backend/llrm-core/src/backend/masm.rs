@@ -252,6 +252,9 @@ pub enum Mark {
     /// The procedure's own code ends, its epilogue next: after the last
     /// code of a source line but a return.
     BodyEnd,
+    /// The call before it popped this many bytes of its arguments as it returned: the stack is that much higher
+    /// from here.
+    Pops(i64),
 }
 
 fn reg(register: Register) -> Loc {
@@ -326,10 +329,14 @@ fn sp_reg() -> Loc {
     reg(STACK)
 }
 
-/// The registers `procedure` keeps for its caller: each one it names that the convention leaves to the
-/// callee, by its low half.
+/// The registers `procedure` keeps for its caller: each one it names, or a call it makes disturbs by its
+/// convention, that this convention leaves to the callee, by its low half. A call to a routine whose
+/// convention disturbs more than this one's (cdecl's ECX and EDX under Watcom's) takes the caller's value.
 fn saved_of(procedure: &Procedure) -> Vec<Register> {
-    let roots = _roots(&procedure.body);
+    let mut roots = _roots(&procedure.body);
+    for one in procedure.body.insns() {
+        roots.extend(one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(ir::root)));
+    }
     // An interrupt handler has saved everything before its frame, and a runtime-built one has saved
     // SI and DI (B$ENRA/B$ENRD, restored by B$EXSA).
     let owned = procedure.interrupt.is_some() || procedure.entry != 0;
@@ -557,6 +564,10 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
                             return Err(Unprintable(format!("{} at {}: a call with no callee", procedure.name, one.at)));
                         };
                         out.push(Item::Callee(callee.clone()));
+                        // Said for call frame information, which `-g` writes: no code of its own.
+                        if callee.pops != 0 && callee.code.is_empty() && first.is_some() {
+                            out.push(Item::Mark(Mark::Pops(callee.pops)));
+                        }
                     }
                 }
                 Operation::Return => {
@@ -877,6 +888,8 @@ pub fn _falls_to(block: &lir::LirBlock, name: &str) -> Result<Option<i64>, Unpri
     if rest.is_empty() {
         rest = block.succ.clone();
     }
+    // Both edges of a branch may meet at one block (two cases of a switch emptied to the same place): it falls there.
+    rest.dedup();
     if rest.len() > 1 {
         return Err(Unprintable(format!(
             "{name}: block {} leaves for {} with no instruction choosing",

@@ -123,6 +123,21 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
     timed("stack checks", || crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names), &*arch));
+    // A function this module declares and names only in data (a table of function pointers) is an external too: no call says so.
+    let declared: BTreeSet<&str> = module
+        .globals
+        .iter()
+        .enumerate()
+        .filter(|(_, global)| matches!(&global.kind, GlobalKind::Function(function) if function.is_declaration()))
+        .filter_map(|(at, _)| names.get(&(globals::space(module, GlobalId(at as u32)), at as i64)).map(String::as_str))
+        .collect();
+    for datum in &data {
+        if let masm::Datum::Pointer(pointer) = datum
+            && declared.contains(pointer.name.as_str())
+        {
+            referenced.entry(pointer.name.clone()).or_insert(pointer.far);
+        }
+    }
     let defined: BTreeSet<&str> = procedures.iter().map(|one| one.name.as_str()).collect();
     let mut externs: Vec<(String, String)> = referenced
         .iter()
@@ -196,6 +211,8 @@ pub struct Machined {
 /// slots fill, and whichever has fewer two-byte displacements is kept.
 pub fn machined(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>) -> Result<Machined, String> {
     let kept = machined_once(module, name, abi, pool, target)?;
+    // What the function's cost in `timefunc` is measured against.
+    llrm_support::debug!("size", "{name} {}", kept.body.insns().len());
     // Reported once the choice is made: a rejected candidate is no function's cost.
     if crate::support::debug::enabled("cost") {
         llrm_support::debug!("cost", "{}", executed::summary(&kept.body, target.cpu));

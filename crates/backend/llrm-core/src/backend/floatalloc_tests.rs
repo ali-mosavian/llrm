@@ -371,6 +371,7 @@ fn _sparing_the_frame(body: LirBody) -> LirBody {
     let call = Arc::new(crate::model::lir::CallMemory {
         effects: llrm_mir::memory::Effects { reads: false, writes: true },
         private: vec![crate::model::lir::WHOLE_FRAME],
+        disturbs: Default::default(),
     });
     let blocks = body
         .blocks

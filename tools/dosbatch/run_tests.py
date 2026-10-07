@@ -196,7 +196,8 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
     level = program.flags[0] if program.flags else "-O2"
     include = work / f"{stem}_inc"
     include.mkdir(exist_ok=True)
-    declared = subprocess.run([str(BIN / "llrm-nib"), str(program.source), "--declare", "h", dosbatch.m_flag(target)], capture_output=True, text=True)
+    abi = [one for one in program.flags if one.startswith("-mabi=")]
+    declared = subprocess.run([str(BIN / "llrm-nib"), str(program.source), "--declare", "h", dosbatch.m_flag(target), *abi], capture_output=True, text=True)
     if declared.returncode != 0:
         raise dosbatch.BuildError("declare: " + declared.stderr.strip())
     (include / f"{program.source.stem}.h").write_text(declared.stdout)
@@ -206,7 +207,7 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
         if source.suffix == ".asm":
             dosbatch.assemble(source, obj, *dosbatch.os_defines(target, "c"))
         else:
-            dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(include), dosbatch.m_flag(target), level, "-o", str(obj)])
+            dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(include), dosbatch.m_flag(target), *abi, level, "-o", str(obj)])
         objects.append(obj)
     return tuple(objects)
 

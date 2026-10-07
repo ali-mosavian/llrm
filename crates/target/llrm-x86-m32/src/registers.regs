@@ -27,6 +27,8 @@ esi     32   esi  0    gpr,base,index  6  23
 edi     32   edi  0    gpr,base,index  7  24
 ebp     32   ebp  0    reserved,frame,base,index  5  22
 esp     32   esp  0    reserved,stack,base  4  21
+# The return address call frame information names (DWARF column 8); no code reaches it as a register.
+eip     32   eip  0    pc  8  -
 ax      16   eax  0    -  0  9
 cx      16   ecx  0    -  1  10
 dx      16   edx  0    -  2  11

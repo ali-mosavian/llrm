@@ -5,7 +5,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::module::{InstId, Operand, ValueDef};
+use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::sign_bits;
 use llrm_mir::{BinaryOp, CastOp, IntPredicate};
 
@@ -84,6 +85,17 @@ impl Selector<'_, '_, '_> {
             self.float_loaded(into, "fild", cell, 8, false, at, out);
             return Ok(());
         }
+        // fistp stores a qword, truncating as the control word is set: read back as the halves.
+        if op == CastOp::FPToSI && self.is_float(from) {
+            let held = self.float(operand, at, out)?;
+            let cell = self.float_stored(held, "fisttp", 8, at, out);
+            let (low, high) = (self.half(), self.half());
+            for (half, by) in [(low, 0), (high, 4)] {
+                self.put(semantics(Operation::Move, "mov", vec![Loc::Held(half)], vec![Loc::Mem(Self::memory(cell.moved(by), 4))]), at, out);
+            }
+            self.wides.insert(result, (low, high));
+            return Ok(());
+        }
         if !self.is_wide(to) {
             let (low, _) = self.wide(operand, at, out)?;
             let into = Held { value: self.value(result), width: self.width(to)? };
@@ -138,9 +150,11 @@ impl Selector<'_, '_, '_> {
                 (low, high)
             }
             BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => {
-                let Some(count) = self.constant(right, 1).map(|count| count & 63) else { return refuse("an i64 shifted by a variable") };
                 let (low, high) = self.wide(left, at, out)?;
-                self.shifted(op, low, high, count, at, out)
+                match self.constant_through_casts(right, 0).map(|count| count & 63) {
+                    Some(count) => self.shifted(op, low, high, count, at, out),
+                    None => self.shifted_by_variable(op, right, low, high, at, out)?,
+                }
             }
             BinaryOp::Mul if self.narrow(left) && self.narrow(right) => {
                 // Both are i32s: one signed widening multiply.
@@ -203,6 +217,72 @@ impl Selector<'_, '_, '_> {
                 return blocks;
             }
         }
+    }
+
+    /// An integer operand's value where it is a constant, or a cast of one: at -O0 a shift's count is `zext i32 30 to i64`.
+    fn constant_through_casts(&self, operand: Operand, depth: u32) -> Option<i64> {
+        if let Some(value) = self.constant(operand, 8) {
+            return Some(value);
+        }
+        let Operand::Value(value) = operand else { return None };
+        let ValueDef::Instruction(inst) = self.function.value(value).def else { return None };
+        let instruction = self.function.instruction(inst);
+        let Opcode::Cast(cast) = instruction.opcode else { return None };
+        if depth > 4 {
+            return None;
+        }
+        let inner = self.constant_through_casts(instruction.operands[0], depth + 1)?;
+        let from = self.function.operand_type(&self.module.context, instruction.operands[0]).and_then(|ty| self.types().int_bits(ty))?;
+        let to = self.types().int_bits(instruction.ty)?;
+        let narrow = |value: i64, bits: u32| if bits >= 64 { value } else { value & ((1_i64 << bits) - 1) };
+        let signed = |value: i64, bits: u32| if bits >= 64 { value } else { (value << (64 - bits)) >> (64 - bits) };
+        Some(match cast {
+            CastOp::ZExt => narrow(inner, from),
+            CastOp::SExt => signed(inner, from),
+            CastOp::Trunc => narrow(inner, to),
+            _ => return None,
+        })
+    }
+
+    /// A shift by a count the program computes: the shift of each half by the count's low five bits (the machine's own
+    /// reading of cl), and its sixth bit, spread over a register as a mask, choosing between the halves and the
+    /// fill, for the counts 32 to 63 (LLVM's ExpandShiftWithUnknownAmountBit, without a select the 486 has none of).
+    fn shifted_by_variable(&mut self, op: BinaryOp, right: Operand, low: Held, high: Held, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Pair, Unselected> {
+        let count = self.wide(right, at, out)?.0;
+        let cl = Loc::Held(Held { width: 1, ..count });
+        let by = |count: i64| Self::count(count);
+        let all = |this: &mut Self, name: &str, a: Held, b: Held, out: &mut Vec<Arc<Insn>>| this.made(Operation::Binary, name, vec![Loc::Held(a), Loc::Held(b)], at, out);
+        // Bit five of the count as a register of ones or zeros.
+        let moved = self.made(Operation::Binary, "shl", vec![Loc::Held(count), by(26)], at, out);
+        let mask = self.made(Operation::Binary, "sar", vec![Loc::Held(moved), by(31)], at, out);
+        let keep = self.made(Operation::Binary, "xor", vec![Loc::Held(mask), Self::dword(-1)], at, out);
+        let (low_part, high_part) = match op {
+            BinaryOp::Shl => {
+                let lower = self.made(Operation::Binary, "shl", vec![Loc::Held(low), cl.clone()], at, out);
+                let upper = self.made(Operation::Funnel, "shld", vec![Loc::Held(high), Loc::Held(low), cl], at, out);
+                // From 32: the high half is the low half shifted, the low half is zero.
+                let (kept_upper, from_lower) = (all(self, "and", upper, keep, out), all(self, "and", lower, mask, out));
+                let new_high = all(self, "or", kept_upper, from_lower, out);
+                (all(self, "and", lower, keep, out), new_high)
+            }
+            _ => {
+                let name = if op == BinaryOp::AShr { "sar" } else { "shr" };
+                let upper = self.made(Operation::Binary, name, vec![Loc::Held(high), cl.clone()], at, out);
+                let lower = self.made(Operation::Funnel, "shrd", vec![Loc::Held(low), Loc::Held(high), cl], at, out);
+                // From 32: the low half is the high half shifted, the high half is the fill.
+                let (kept_lower, from_upper) = (all(self, "and", lower, keep, out), all(self, "and", upper, mask, out));
+                let new_low = all(self, "or", kept_lower, from_upper, out);
+                let new_high = if op == BinaryOp::AShr {
+                    let fill = self.made(Operation::Binary, "sar", vec![Loc::Held(high), by(31)], at, out);
+                    let (kept_upper, filled) = (all(self, "and", upper, keep, out), all(self, "and", fill, mask, out));
+                    all(self, "or", kept_upper, filled, out)
+                } else {
+                    all(self, "and", upper, keep, out)
+                };
+                (new_low, new_high)
+            }
+        };
+        Ok((low_part, high_part))
     }
 
     fn shifted(&mut self, op: BinaryOp, low: Held, high: Held, count: i64, at: i64, out: &mut Vec<Arc<Insn>>) -> Pair {
@@ -330,11 +410,13 @@ impl Selector<'_, '_, '_> {
             requires,
             defines: delivers.iter().map(|(held, _)| held.value).collect(),
             delivers,
-            call: Some(self.listed(llrm_mir::memory::Effects::NONE)),
+            call: Some(self.listed(llrm_mir::memory::Effects::NONE, Default::default())),
             ..Insn::new(at, Some((at, at)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![], vec![])
         }));
         self.calls.insert(at, name.to_owned());
-        self.inline.insert(at, code.to_vec());
+        // The bytes are 386 code for a 16-bit segment.
+        let code = if self.arch.object().bitness == 32 { crate::backend::lower_int64::flat(code) } else { code.to_vec() };
+        self.inline.insert(at, code);
         Ok((quotient, remainder))
     }
 
