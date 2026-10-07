@@ -2318,7 +2318,7 @@ fn test_a_body_that_falls_into_its_handler_compiles_on_the_rich_route() {
     let directory = tempfile::tempdir().expect("creates a directory");
     let source = "10 ON ERROR GOTO 100\n20 ERROR 5\n30 PRINT \"body\"; ERL\n100 PRINT \"h\"; ERR; ERL\n110 IF ERR = 0 THEN RESUME NEXT\n";
     let path = written(&directory, "fall.bas", source.as_bytes());
-    let text = listing(&parsed_as(&path, "vbdos", "vbdos"));
+    let text = listing_calls_kept(&parsed_as(&path, "vbdos", "vbdos"));
     let body = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
     let handler = between(&text, "__main$handler proc", "__main$handler endp");
     assert!(body.contains("pushw 20\n    call far ptr B$SERR"), "{body}");

@@ -135,12 +135,15 @@ def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path
     # LLRM_BENCH_FLAGS: more compiler flags for a measurement, `-fsanitize=stack`'s overhead; the gate fails on it.
     more = os.environ.get("LLRM_BENCH_FLAGS", "").split()
     flags = [f"-{opt}", "-fno-inline-functions", *more]
+    # A BASIC kernel is a private SUB called once from main: it stays a call only where called-once inlining is off (a C one is public).
+    if variant.language in BASIC_LANGUAGES:
+        flags.append("-fno-inline-functions-called-once")
     try:
         if variant.language == "nib":
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
             done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], capture_output=True, text=True, timeout=300,
-                                  env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", *more])})
+                                  env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", "-fno-inline-functions-called-once", *more])})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         tool = "llrm-qb" if variant.language in BASIC_LANGUAGES else "llrm-c"
         arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []

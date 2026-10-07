@@ -1,4 +1,4 @@
-reason = "integer spiller reads a phi's value from the cell the program stores it to: frames bas -0.6%, nbody_fixed -7% bytes, queens bas -2.7%"
+reason = "the last call of a function nothing else reaches inlines at any size (LLVM's last-call-to-static bonus, gcc's -finline-functions-called-once): C kernels' static helpers go with their one call; every row better"
 blessed = "2026-10-07"
 
 [bas.O2]
@@ -18,20 +18,18 @@ bss_bytes = 0
 kernel_ms = 4.373
 
 [c.O2]
-instructions = 230917
-memory_operands = 39902
-code_bytes = 215
+instructions = 177154
+memory_operands = 30723
+code_bytes = 210
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.0804
 
 [c.Os]
-instructions = 233900
-memory_operands = 39902
-code_bytes = 199
+instructions = 183170
+memory_operands = 30723
+code_bytes = 190
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 3.12
 
 [nib.O2]
 instructions = 231273

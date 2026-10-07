@@ -123,7 +123,7 @@ mod tests {
         std::fs::write(&source, "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    bump(a, b, 4)\n    return a.x\n").expect("writes");
         let output = directory.path().join("dump");
         // Unrolled, the 4-trip loop is gone and there is nothing to count.
-        let argv = [source.display().to_string(), "-O2".into(), "-fno-inline-functions".into(), "-fno-unroll-loops".into(), "-fno-peel-loops".into(), "--dump".into(), output.display().to_string()];
+        let argv = [source.display().to_string(), "-O2".into(), "-fno-inline-functions".into(), "-fno-inline-functions-called-once".into(), "-fno-unroll-loops".into(), "-fno-peel-loops".into(), "--dump".into(), output.display().to_string()];
         assert_eq!(crate::cli::main(&argv), 0);
         let listing = dumped_listing(&output);
         let body = listing.split("_bump proc near\n").nth(1).and_then(|one| one.split("_bump endp").next()).expect("bump");

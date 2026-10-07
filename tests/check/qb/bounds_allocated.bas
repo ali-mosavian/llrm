@@ -1,4 +1,4 @@
-' RUN: llrm-qb %s -O2 -march=i486 --whole-program -fno-inline-functions -fsanitize=bounds -S -o /dev/stdout
+' RUN: llrm-qb %s -O2 -march=i486 --whole-program -fno-inline-functions -fno-inline-functions-called-once -fsanitize=bounds -S -o /dev/stdout
 ' Every caller DIMs what it passes, so under -fsanitize=bounds UBOUND of the
 ' parameter needs no allocated test and no B$UBND; after an ERASE it keeps both.
 ' CHECK-LABEL: ALLOC proc
