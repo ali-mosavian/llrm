@@ -477,9 +477,9 @@ fn test_a_raise_under_an_error_handler_resumes_after_its_statement() {
     );
     let source = parsed_as(&basic, "qb45", "qb45");
     let assembly = listing(&source);
-    // The raise names its statement, and RESUME NEXT from that statement
+    // The raise names its statement (in whichever frame slot: the frame also holds the conversions' scratch cells), and RESUME NEXT from that statement
     // continues at the PRINT.
-    let raised = regex::Regex::new(r"mov word ptr \$QB\$FRAME\+4, (\d+)\n    pushw 5\n    call far ptr B\$SERR").unwrap();
+    let raised = regex::Regex::new(r"mov word ptr \$QB\$FRAME\+\d+, (\d+)\n    pushw 5\n    call far ptr B\$SERR").unwrap();
     let statement = &raised.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"))[1];
     let resumed = regex::Regex::new(&format!(r"cmp ax, {statement}\n    jne \w+\n\w+:\n")).unwrap();
     let next = &assembly[resumed.find(&assembly).unwrap_or_else(|| panic!("{assembly}")).end()..];

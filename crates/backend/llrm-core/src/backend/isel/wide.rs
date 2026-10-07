@@ -81,8 +81,7 @@ impl Selector<'_, '_, '_> {
             for (half, by) in [(low, 0), (high, 4)] {
                 self.put(semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell.moved(by), 4))], vec![Loc::Held(half)]), at, out);
             }
-            let into = Held { value: self.value(result), width: super::FLOAT };
-            self.float_loaded(into, "fild", cell, 8, false, at, out);
+            self.integer_made_float(8, result, to, cell, 8, at, out)?;
             return Ok(());
         }
         // fistp stores a qword, truncating as the control word is set: read back as the halves.
