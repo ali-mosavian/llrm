@@ -113,6 +113,13 @@ fn stated(body: &Function) -> Option<Inlining> {
 /// function they add up per level.  LLVM bounds the same way.
 const FRAME_LIMIT: u64 = 256;
 
+/// gcc's `large-function-insns` and `large-function-growth` (ipa-inline.cc `caller_growth_limits`): an inline that
+/// leaves its caller over `LARGE_FUNCTION` operations and over the larger of the caller's and the callee's own size
+/// grown by `LARGE_GROWTH` percent is refused, the last call of a function included. LLVM bounds the same case
+/// by price: the last-call bonus is 15000 against a threshold of 225, the cost five a instruction, so about 3000.
+const LARGE_FUNCTION: i64 = 2700;
+const LARGE_GROWTH: i64 = 100;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Candidate {
     pub body: Rc<Function>,
@@ -124,6 +131,9 @@ pub struct Candidate {
 pub struct Caller<'a> {
     pub layout: &'a DataLayout,
     pub recursive: bool,
+    /// The caller's operations before anything was inlined into it, 0 where that is not known: the growth
+    /// its inlines may come to is measured against it (`LARGE_FUNCTION`).
+    pub base: i64,
 }
 
 /// Whether `inst` does semantic work: not a phi, a jump or a return.
@@ -134,6 +144,11 @@ fn semantic(function: &Function, inst: InstId) -> bool {
         Opcode::Br => instruction.operands.len() != 1,
         _ => true,
     }
+}
+
+/// How many operations `body` does: gcc's size in insns, which its growth limits count.
+pub fn operations(body: &Function) -> i64 {
+    semantic_count(body)
 }
 
 fn semantic_count(body: &Function) -> i64 {
@@ -399,7 +414,18 @@ fn fits(context: &Context, function: &Function, caller: &Caller, call: InstId, c
     info.function_type == callee.ty
         && !matches!(context.types.get(callee.ty), Type::Function { variadic: true, .. })
         && (candidate.frame == 0 || (!caller.recursive && frame(context, caller.layout, function) + candidate.frame <= FRAME_LIMIT))
+        && grows_within_limits(function, caller, callee)
         && callee.parameters().iter().enumerate().all(|(at, _)| !Facts::of(&callee.parameter_attrs[at]).releases() || owned(context, function, function.instruction(call).operands[at], 0))
+}
+
+/// gcc's `caller_growth_limits`: the size after the inline, against the function limits. A caller whose size
+/// before is not known is its own base.
+fn grows_within_limits(function: &Function, caller: &Caller, callee: &Function) -> bool {
+    let (own, callee_size) = (semantic_count(function), semantic_count(callee));
+    let base = if caller.base > 0 { caller.base } else { own };
+    let limit = base.max(callee_size) * (100 + LARGE_GROWTH) / 100;
+    let after = own + callee_size;
+    !(after >= callee_size && after > LARGE_FUNCTION && after > limit)
 }
 
 /// Whether `operand` is an object the program owns: a variable, a frame object, or a parameter, which

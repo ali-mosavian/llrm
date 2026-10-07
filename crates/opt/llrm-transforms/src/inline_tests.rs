@@ -37,7 +37,7 @@ fn inline_into(module: &mut Module, caller: &str, call: i64) -> bool {
 fn inline_with(module: &mut Module, caller: &str, call: i64, threshold: Threshold) -> bool {
     let layout = DataLayout::default();
     let available = candidates(module, &layout, &call_counts(module), &private(module), &costs(call), call, threshold);
-    let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)) };
+    let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)), base: 0 };
     let (context, function) = module.function_mut(caller).unwrap();
     let mut changed = false;
     while expanded(context, function, &by, &available, None).unwrap() {
@@ -699,8 +699,31 @@ fn a_routine_that_frees_a_temporary_is_not_inlined_at_a_call_of_one() {
     let available = candidates(&module, &layout, &call_counts(&module), &private(&module), &costs(5), 5, Threshold::default());
     assert!(available.contains_key(&id(&module, "first")), "the premise: the body is a candidate");
     for (caller, inlined) in [("temporary", false), ("owned", true)] {
-        let by = Caller { layout: &layout, recursive: false };
+        let by = Caller { layout: &layout, recursive: false, base: 0 };
         let (context, function) = module.function_mut(caller).unwrap();
         assert_eq!(expanded(context, function, &by, &available, None).unwrap(), inlined, "{caller}\n{}", printed(&module));
     }
+}
+
+/// A caller of 2800 operations with forty callees of 100, each called once: the last call of each inlines, at any size,
+/// until the caller is over gcc's `large-function-insns` and has doubled (`large-function-growth` 100%), and no
+/// further. Called-once inlining had no limit and QCport's d_alias took 29% more compile time (102.5e9 -> 132.4e9
+/// instructions), every inline sending the larger body back through the pipeline.
+#[test]
+fn test_the_last_calls_into_a_large_caller_stop_where_it_has_doubled() {
+    let chain = |count: usize, from: &str| -> String { (0..count).map(|at| format!("  %t{at} = add i16 {}, {at}\n", if at == 0 { from.to_owned() } else { format!("%t{}", at - 1) })).collect() };
+    let callees: String = (0..40).map(|at| format!("define internal i16 @c{at}(i16 %x) {{\nb0:\n{}  ret i16 %t99\n}}\n\n", chain(100, "%x"))).collect();
+    let calls: String = (0..40).map(|at| format!("  %r{at} = call i16 @c{at}(i16 %y)\n")).collect();
+    let text = format!("{callees}define i16 @main(i16 %x) {{\nb0:\n{}  %y = add i16 %t2799, 1\n{calls}  ret i16 %r0\n}}\n", chain(2800, "%x"));
+    let mut module = parsed(&text);
+    let layout = DataLayout::default();
+    let original = operations(module.global(id(&module, "main")).function().unwrap());
+    let available = candidates(&module, &layout, &call_counts(&module), &private(&module), &costs(8), 8, Threshold::default());
+    let by = Caller { layout: &layout, recursive: false, base: original };
+    let (context, function) = module.function_mut("main").unwrap();
+    while expanded(context, function, &by, &available, None).unwrap() {}
+    let after = operations(module.global(id(&module, "main")).function().unwrap());
+    let calls_left = module.global(id(&module, "main")).function().unwrap().walk().filter(|&(_, inst)| matches!(module.global(id(&module, "main")).function().unwrap().instruction(inst).opcode, llrm_mir::opcode::Opcode::Call(_))).count();
+    assert!(calls_left > 0, "all forty were inlined: {after} operations");
+    assert!(after <= original * 2 + 100, "{after} operations after, from {original}");
 }
