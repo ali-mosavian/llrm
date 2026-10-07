@@ -29,16 +29,16 @@ impl Language {
 /// The declarations of `module`'s exports and the represented structs they
 /// name, for callers written in `language`.
 pub fn declarations(module: &Module, name: &str, language: Language) -> Result<String, Diagnostic> {
-    declarations_on(module, name, language, crate::Sizes { near: 2, far: 4, segmented: true, slot: 2, max_object: 65535 })
+    declarations_on(module, name, language, crate::Sizes { near: 2, far: 4, segmented: true, slot: 2, max_object: 65535 }, Abi::Cdecl16)
 }
 
-/// `declarations`, for a target whose pointers, slot and far code are `sizes`.
-pub fn declarations_on(module: &Module, name: &str, language: Language, sizes: crate::Sizes) -> Result<String, Diagnostic> {
+/// `declarations`, for a target whose pointers, slot and far code are `sizes`, and whose own convention is `native`.
+pub fn declarations_on(module: &Module, name: &str, language: Language, sizes: crate::Sizes, native: Abi) -> Result<String, Diagnostic> {
     let (segmented, slot) = (sizes.segmented, sizes.slot);
     let exports: Vec<(&Function, Abi)> = module
         .functions
         .iter()
-        .filter_map(|function| module.exports.get(&function.name).and_then(|export| Some((function, export.abi?))))
+        .filter_map(|function| module.exports.get(&function.name).and_then(|export| Some((function, export.abi?.resolved(native)))))
         .collect();
     // The compiler's own modules declare theirs for the compiler.
     let structs: Vec<&Struct> = module.structs.iter().filter(|one| one.pack.is_some() && !standard::supplied(&one.name)).collect();

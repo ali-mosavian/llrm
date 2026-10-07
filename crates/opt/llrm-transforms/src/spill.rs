@@ -596,6 +596,96 @@ impl Site {
     }
 }
 
+/// What the model knows of one function whatever room asks: liveness, the cell each value is spilled to,
+/// which values take a register where they are live (`integer_in`, asked once of each), and which are
+/// addressed. A manager analysis, so each version of a function has it once.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pressure {
+    found: Liveness,
+    cells: BTreeMap<ValueId, ValueId>,
+    counted: BTreeSet<ValueId>,
+    addressed: BTreeSet<ValueId>,
+}
+
+impl Pressure {
+    /// `function`'s, for an address that takes `scales` (`Room::index_scales`).
+    pub fn of(context: &Context, function: &Function, scales: u8) -> Self {
+        Self {
+            found: liveness::live(function),
+            cells: cells(function),
+            counted: (0..function.value_count() as u32).map(ValueId).filter(|&value| integer_in(context, function, value, scales)).collect(),
+            addressed: addressed_in(context, function, scales),
+        }
+    }
+}
+
+impl Pressure {
+    /// What is live where.
+    pub fn found(&self) -> &Liveness {
+        &self.found
+    }
+
+    /// The cell each value is spilled to: itself, or the one it shares a cell with.
+    pub fn cells(&self) -> &BTreeMap<ValueId, ValueId> {
+        &self.cells
+    }
+}
+
+impl llrm_mir::passes::Analysis for Pressure {
+    type Result = Pressure;
+    const NAME: &'static str = "pressure";
+    fn run(context: &Context, _: &DataLayout, function: &Function, analyses: &mut llrm_mir::passes::Analyses) -> Self::Result {
+        Pressure::of(context, function, Room::of(analyses.outer()).index_scales)
+    }
+}
+
+/// `Pressure` under a room and the registers a call keeps: what every pass that asks the model gets, a pass
+/// that is deciding between candidates `hide`ing the values its candidates replace.
+pub struct View<'a> {
+    context: &'a Context,
+    layout: &'a DataLayout,
+    function: &'a Function,
+    room: Room,
+    across: &'a dyn Fn(InstId) -> i64,
+    pressure: std::borrow::Cow<'a, Pressure>,
+}
+
+impl<'a> View<'a> {
+    /// Over a function the manager has `pressure` of.
+    pub fn over(pressure: &'a Pressure, context: &'a Context, layout: &'a DataLayout, function: &'a Function, room: Room, across: &'a dyn Fn(InstId) -> i64) -> Self {
+        Self { context, layout, function, room, across, pressure: std::borrow::Cow::Borrowed(pressure) }
+    }
+
+    /// Over a function made to be asked about once, a candidate's.
+    pub fn of(context: &'a Context, layout: &'a DataLayout, function: &'a Function, room: Room, across: &'a dyn Fn(InstId) -> i64) -> Self {
+        Self { context, layout, function, room, across, pressure: std::borrow::Cow::Owned(Pressure::of(context, function, room.index_scales)) }
+    }
+
+    /// Each instruction's site in `block`, without the values `hide` names.
+    pub fn sites(&self, block: BlockId, hide: &dyn Fn(ValueId) -> bool) -> Vec<Site> {
+        let (context, layout, function, room) = (self.context, self.layout, self.function, self.room);
+        sites(
+            function,
+            &self.pressure.found,
+            block,
+            room,
+            self.across,
+            &|inst, live| transient(context, layout, function, inst, room, live),
+            &self.pressure.cells,
+            &|value| self.pressure.counted.contains(&value) && !hide(value),
+            &|value| segment_view(context, layout, room.spaces, function, value),
+            &|value| self.pressure.addressed.contains(&value),
+        )
+    }
+
+    /// What fitting the function spills, each cell priced by its traffic.
+    pub fn forecast(&self, costs: &OperationCosts, frequency: &BTreeMap<i64, i64>) -> Forecast<ValueId> {
+        let traffic = traffic(self.function, frequency, &self.pressure.cells, costs, &|_| true, &|value| words(self.context, self.layout, self.function, value));
+        let points = self.function.layout().iter().flat_map(|&block| self.sites(block, &|_| false)).flat_map(Site::points);
+        forecast(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs)))
+    }
+}
+
 #[cfg(test)]
 #[path = "spill_tests.rs"]
 mod tests;

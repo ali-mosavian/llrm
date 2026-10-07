@@ -22,6 +22,8 @@ fn test_the_pressure_channel_reports_a_forecast_beside_the_allocators_spills() {
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).env("LLRM_DEBUG", "pressure").args(["-m32", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"]).output().unwrap();
     let errors = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{errors}");
-    let row = errors.lines().find(|line| line.starts_with("[pressure] _g forecast")).unwrap_or_else(|| panic!("no row for _g: {errors}"));
+    // The name the target's default convention gives `g` in OMF, which the report prints.
+    let name = llrm_target::Target::calling(&llrm_x86_m32::M32).native().decorated("omf", "g").expect("the default convention decorates for OMF");
+    let row = errors.lines().find(|line| line.starts_with(&format!("[pressure] {name} forecast"))).unwrap_or_else(|| panic!("no row for {name}: {errors}"));
     assert!(row.contains("allocator") && row.contains("reloads"), "{row}");
 }

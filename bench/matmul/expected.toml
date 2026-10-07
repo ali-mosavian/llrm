@@ -1,10 +1,10 @@
-reason = "lsr prices the copy a two-address target makes before a negation or a shift of a live counter (#705): matmul nib -O2 2463 -> 2439 instructions, shellsort nib 11434 -> 11370 (-Os 11856 -> 11792)"
+reason = "pressuresink: a load is made just before its reader where no register class gains; fewer memory operands overall, matmul +1 and parity/loop +2 from the order sensitivity of lea fusion and coalescing (#729)"
 blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 3587
+instructions = 3588
 memory_operands = 2136
-code_bytes = 2792
+code_bytes = 2793
 data_bytes = 15
 bss_bytes = 0
 kernel_ms = 0.063
@@ -15,15 +15,15 @@ memory_operands = 5042
 code_bytes = 475
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 0.138
+kernel_ms = 0.1379
 
 [c.O2]
-instructions = 2428
+instructions = 2429
 memory_operands = 1281
-code_bytes = 2261
+code_bytes = 2262
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0335
+kernel_ms = 0.0334
 
 [c.Os]
 instructions = 5892
@@ -31,14 +31,15 @@ memory_operands = 1562
 code_bytes = 242
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0797
+kernel_ms = 0.0796
 
 [nib.O2]
-instructions = 2439
+instructions = 2440
 memory_operands = 1344
-code_bytes = 2284
+code_bytes = 2285
 data_bytes = 0
 bss_bytes = 0
+kernel_ms = 0.0347
 
 [nib.Os]
 instructions = 6408
@@ -46,7 +47,7 @@ memory_operands = 2073
 code_bytes = 279
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0892
+kernel_ms = 0.0891
 
 [ow.O2]
 instructions = 22524

@@ -566,6 +566,10 @@ pub struct CallAbi {
     pub float_return: FloatReturn,
     /// The `cc` of the target's convention it follows (its `calling.toml`), where `cleanup` does not say.
     pub convention: Option<String>,
+    /// The arguments, by position, that travel in memory whatever the convention has free: a struct's words.
+    pub memory: Vec<i64>,
+    /// The argument that is the address a struct result is written to.
+    pub result_pointer: Option<i64>,
 }
 
 /// One resolved language procedure symbol; calls refer to its stable id.
@@ -596,6 +600,10 @@ pub struct ProcedureAbi {
     pub variadic: bool,
     /// The `cc` of the target's convention it follows (its `calling.toml`), where `cleanup` does not say.
     pub convention: Option<String>,
+    /// The parameters, by position, that travel in memory whatever the convention has free: a struct's words.
+    pub memory: Vec<i64>,
+    /// The parameter that is the address a struct result is written to.
+    pub result_pointer: Option<i64>,
 }
 
 impl ProcedureAbi {

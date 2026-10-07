@@ -267,6 +267,12 @@ impl _Plain for model::CallAbi {
         if self.convention.is_some() {
             out.insert("convention".to_owned(), self.convention._plain());
         }
+        if !self.memory.is_empty() {
+            out.insert("memory".to_owned(), self.memory._plain());
+        }
+        if self.result_pointer.is_some() {
+            out.insert("result_pointer".to_owned(), self.result_pointer._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -302,6 +308,12 @@ impl _Plain for model::ProcedureAbi {
         }
         if self.convention.is_some() {
             out.insert("convention".to_owned(), self.convention._plain());
+        }
+        if !self.memory.is_empty() {
+            out.insert("memory".to_owned(), self.memory._plain());
+        }
+        if self.result_pointer.is_some() {
+            out.insert("result_pointer".to_owned(), self.result_pointer._plain());
         }
         Json::Dict(out)
     }
@@ -1163,6 +1175,8 @@ static CALL_ABI: _Record = _Record {
         ("callee", OPTIONAL_INT, false),
         ("float_return", enum_hint!(FloatReturn), false),
         ("convention", OPTIONAL_STR, false),
+        ("memory", INTS, false),
+        ("result_pointer", OPTIONAL_INT, false),
     ],
     build: |args| {
         _object(model::CallAbi {
@@ -1173,6 +1187,8 @@ static CALL_ABI: _Record = _Record {
             callee: _default(args, "callee", None)?,
             float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
             convention: _default(args, "convention", None)?,
+            memory: _default(args, "memory", Vec::new())?,
+            result_pointer: _default(args, "result_pointer", None)?,
         })
     },
 };
@@ -1216,6 +1232,8 @@ static PROCEDURE_ABI: _Record = _Record {
         ("float_return", enum_hint!(FloatReturn), false),
         ("variadic", _Hint::Bool, false),
         ("convention", OPTIONAL_STR, false),
+        ("memory", INTS, false),
+        ("result_pointer", OPTIONAL_INT, false),
     ],
     build: |args| {
         _object(model::ProcedureAbi {
@@ -1225,6 +1243,8 @@ static PROCEDURE_ABI: _Record = _Record {
             float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
             variadic: _default(args, "variadic", false)?,
             convention: _default(args, "convention", None)?,
+            memory: _default(args, "memory", Vec::new())?,
+            result_pointer: _default(args, "result_pointer", None)?,
         })
     },
 };
