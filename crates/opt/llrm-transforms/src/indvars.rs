@@ -41,10 +41,22 @@ impl FunctionPass for IndVars {
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        let evaluated = crate::loopexit::evaluated(unit.context, unit.layout, unit.function, &outer).unwrap_or_else(|error| panic!("indvars: {error}"));
-        let folded = crate::exitfold::folded(unit.context, unit.layout, unit.function, &outer);
+        // What is known without memory is the manager's until a step changes the body.
+        let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
+        let mut standing = llrm_analysis::memory::Standing::held(&held);
+        let evaluated = crate::loopexit::evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing).unwrap_or_else(|error| panic!("indvars: {error}"));
+        if evaluated {
+            standing.changed();
+        }
+        let folded = crate::exitfold::folded_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        if folded {
+            standing.changed();
+        }
         let sunk = crate::exitsink::sunk(unit.function);
-        let widened = widened(unit.context, unit.layout, unit.function, &outer);
+        if sunk {
+            standing.changed();
+        }
+        let widened = widened_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
         let rewound = rewound(unit.context, unit.layout, unit.function, analyses, crate::profit::registers(&outer).registers, &crate::profit::costs(&outer));
         let dead = (sunk || rewound || widened) && dead::dead(unit.context, outer.callees(), unit.function);
         if evaluated || folded {
@@ -288,11 +300,23 @@ mod tests;
 /// what else reads the narrow one reads its low part. Every counter widened;
 /// whether any was.
 pub fn widened(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &passes::Outer) -> bool {
+    widened_with(context, layout, function, outer, &mut llrm_analysis::memory::Standing::underived())
+}
+
+/// `widened`, what is known of the body without memory given as `standing` says: derived once for each state of the
+/// body, not once for each loop.
+pub fn widened_with(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &passes::Outer, standing: &mut llrm_analysis::memory::Standing) -> bool {
     let mut changed = false;
     'again: loop {
         for loop_ in cfg::Shape::of(function).loops {
-            if let Some(found) = _find(&llrm_analysis::memory::Unit::within(context, layout, function, outer), &loop_) {
+            let found = {
+                let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer);
+                let facts = standing.of(&unit);
+                _find(&unit.with_registers(facts), &loop_)
+            };
+            if let Some(found) = found {
                 _widen(context, function, &found);
+                standing.changed();
                 changed = true;
                 continue 'again;
             }
@@ -307,7 +331,8 @@ struct _Found {
     compare: InstId,
     preheader: BlockId,
     latch: BlockId,
-    start: u128,
+    /// Where the counter starts: a number, or a value the loop does not define.
+    start: AffineOperand,
     bound: Operand,
     wide: u32,
     extensions: Vec<InstId>,
@@ -325,7 +350,6 @@ fn _find(unit: &llrm_analysis::memory::Unit, loop_: &Loop) -> Option<_Found> {
     let still = induction::invariant(function, &loop_.body);
     let facts = unit.registers();
     for proof in induction::counted(unit, loop_, Some(&facts), false) {
-        let AffineOperand::Const(start) = &proof.start else { continue };
         let width = proof.width();
         if !proof.rises_unsigned() || width > 64 {
             continue;
@@ -373,28 +397,33 @@ fn _find(unit: &llrm_analysis::memory::Unit, loop_: &Loop) -> Option<_Found> {
                 rest.push((one.user, one.index));
             }
         }
-        return Some(_Found { phi: proof.phi, next: next_inst, compare: proof.compare, preheader, latch, start: u128::try_from(&start.n).ok()?, bound, wide, extensions, rest });
+        return Some(_Found { phi: proof.phi, next: next_inst, compare: proof.compare, preheader, latch, start: proof.start.clone(), bound, wide, extensions, rest });
     }
     None
+}
+
+/// `operand` zero-extended to `ty` at the end of `preheader`: a number is its own extension.
+fn _extended(context: &mut Context, function: &mut Function, preheader: BlockId, operand: Operand, ty: llrm_mir::types::TypeId) -> Operand {
+    match operand {
+        Operand::Constant(constant) => match context.get(constant).kind {
+            llrm_mir::context::ConstantKind::Int(bits) => Operand::Constant(context.int(ty, bits as i128)),
+            _ => unreachable!("an integer operand"),
+        },
+        value => {
+            let cast = function.create_instruction(Opcode::Cast(CastOp::ZExt), ty, vec![value], Flags::default(), None);
+            let end = function.terminator(preheader).expect("a terminated preheader");
+            function.insert(cast, Position::Before(end)).expect("a preheader");
+            Operand::Value(function.instruction(cast).result.expect("a value"))
+        }
+    }
 }
 
 fn _widen(context: &mut Context, function: &mut Function, found: &_Found) {
     let ty = context.types.int(found.wide);
     let counter = function.instruction(found.phi).result.expect("a phi's value");
     let header = function.parent(found.phi).expect("a placed phi");
-    // The bound, extended once before the loop.
-    let bound = match found.bound {
-        Operand::Constant(constant) => match context.get(constant).kind {
-            llrm_mir::context::ConstantKind::Int(bits) => Operand::Constant(context.int(ty, bits as i128)),
-            _ => unreachable!("an integer bound"),
-        },
-        value => {
-            let cast = function.create_instruction(Opcode::Cast(CastOp::ZExt), ty, vec![value], Flags::default(), None);
-            let end = function.terminator(found.preheader).expect("a terminated preheader");
-            function.insert(cast, Position::Before(end)).expect("a preheader");
-            Operand::Value(function.instruction(cast).result.expect("a value"))
-        }
-    };
+    // The bound and the start, extended once before the loop.
+    let bound = _extended(context, function, found.preheader, found.bound, ty);
     let first = function.block(header).instructions()[0];
     let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), Some("widen.iv"));
     function.insert(phi, Position::Before(first)).expect("a header");
@@ -403,7 +432,10 @@ fn _widen(context: &mut Context, function: &mut Function, found: &_Found) {
     let next = function.create_instruction(Opcode::Binary(BinaryOp::Add), ty, vec![value, one], Flags::default(), Some("widen.iv.next"));
     function.insert(next, Position::Before(found.next)).expect("a latch");
     let next = Operand::Value(function.instruction(next).result.expect("a value"));
-    let start = Operand::Constant(context.int(ty, found.start as i128));
+    let start = match &found.start {
+        AffineOperand::Const(start) => counting::constant(context, &start.n, found.wide),
+        AffineOperand::Value(value, _) => _extended(context, function, found.preheader, Operand::Value(*value), ty),
+    };
     function.set_operands(phi, vec![start, Operand::Block(found.preheader), next, Operand::Block(found.latch)]);
     let bit = context.types.int(1);
     let test = function.create_instruction(Opcode::ICmp(IntPredicate::Ult), bit, vec![value, bound], Flags::default(), None);

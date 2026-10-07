@@ -75,11 +75,17 @@ pub struct Frontend {
     pub reported: std::rc::Rc<std::cell::RefCell<Vec<(std::path::PathBuf, Diagnostic)>>>,
 }
 
-impl Default for Frontend {
-    /// For real mode, where the language began: a caller that knows its target sets `layout`.
-    fn default() -> Self {
-        Self { layout: llrm_x86_m16::layout(), slot: 2, bits: 16, registers: llrm_target::registers::parse(&llrm_target::Target::registers_text(&llrm_x86_m16::M16)).expect("registers.regs parses"), physical: llrm_target::Target::physical_addresses(&llrm_x86_m16::M16), conventions: llrm_target::Target::conventions(&llrm_x86_m16::M16).iter().map(|one| (*one).to_owned()).collect(), symbols: Default::default(), os: Os::of(llrm_target::Target::runtime(&llrm_x86_m16::M16, "nib").expect("real mode has a Nib runtime"), llrm_target::Target::os_layer(&llrm_x86_m16::M16).expect("real mode has an OS layer")).expect("its description reads"), unchecked_bounds: false, debug: false, checked_stack: false, warn_target_width: true, warnings: Default::default(), reported: Default::default() }
-    }
+/// The frontend for real mode, which the tests of the language compile against.
+#[cfg(test)]
+pub(crate) fn real_mode() -> Frontend {
+    Frontend::for_target(&llrm_x86_m16::M16).expect("real mode has a Nib runtime")
+}
+
+/// `source` compiled for real mode.
+#[cfg(test)]
+pub fn compile(source: &str, module_name: &str) -> Result<String, Diagnostic> {
+    let tokens = lex(source)?;
+    compile_module(parse(tokens)?, module_name, &real_mode())
 }
 
 /// What a target's OS layer and Nib's runtime description (`runtime/nib/<target>/nib.toml`) say.
@@ -92,6 +98,8 @@ pub struct Os {
     pub stack: llrm_core::hir::model::StackCheck,
     /// The stack the start-up reserves; the object's own adds to it.
     pub stack_base: i64,
+    /// What the runtime's routines, DOS and an interrupt use below the deepest chain of frames: the OS layer's.
+    pub stack_reserve: i64,
     /// Whether the start-up zeroes the far uninitialised data.
     pub far_bss: bool,
     /// What the assembler is told of the description (`assembler_defines`): each symbol and the
@@ -120,7 +128,12 @@ impl Frontend {
             conventions: target.conventions().iter().map(|one| (*one).to_owned()).collect(),
             symbols: Default::default(),
             os: Os::for_target(target)?,
-            ..Self::default()
+            unchecked_bounds: false,
+            debug: false,
+            checked_stack: false,
+            warn_target_width: true,
+            warnings: Default::default(),
+            reported: Default::default(),
         })
     }
 }
@@ -145,6 +158,7 @@ impl Os {
             module: layer.nib_module()?,
             stack: llrm_core::hir::model::StackCheck::from_toml(&stack)?,
             stack_base: table.get("stack_base").and_then(|one| one.as_integer()).ok_or("stack_base is not an integer")?,
+            stack_reserve: layer.integer("stack_reserve")?,
             far_bss: layer_table.get("far_bss").and_then(|one| one.as_bool()).ok_or("far_bss is not a boolean")?,
             defines,
             directory: std::fs::canonicalize(layer.directory).map_or_else(|_| layer.directory.to_owned(), |path| path.to_string_lossy().into_owned()),
@@ -189,11 +203,6 @@ impl Frontend {
     }
 }
 
-pub fn compile(source: &str, module_name: &str) -> Result<String, Diagnostic> {
-    let tokens = lex(source)?;
-    compile_module(parse(tokens)?, module_name, &Frontend::default())
-}
-
 /// `source`'s tokens, one `line:column kind` per line.
 pub fn tokens_text(source: &str) -> Result<String, Diagnostic> {
     Ok(lex(source)?.iter().map(|token| format!("{}:{} {:?}\n", token.span.line, token.span.column, token.kind)).collect())
@@ -227,7 +236,7 @@ pub fn declare_file(
     frontend: &Frontend,
 ) -> Result<String, (std::path::PathBuf, Diagnostic)> {
     let module = load_file(path, &frontend.os, frontend.sizes().near, &frontend.physical_constants())?;
-    declarations::declarations_on(&module, module_name(path), language, frontend.sizes().segmented, frontend.slot, frontend.native()).map_err(|error| located(path, &module.sources, error))
+    declarations::declarations_on(&module, module_name(path), language, frontend.sizes(), frontend.native()).map_err(|error| located(path, &module.sources, error))
 }
 
 fn module_name(path: &std::path::Path) -> &str {

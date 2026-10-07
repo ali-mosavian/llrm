@@ -151,6 +151,10 @@ impl llrm_target::Target for M16 {
         llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml")).expect("real mode's object.toml parses")
     }
 
+    fn return_address_bytes(&self, far: bool) -> i64 {
+        llrm_x86::calling::return_address_bytes(CALLING.native(), far)
+    }
+
     fn stack_pointer(&self) -> iced_x86::Register {
         llrm_x86::calling::stack(CALLING.native())
     }
@@ -191,6 +195,7 @@ mod tests {
         assert_eq!((M16.stack_slot_bytes(), M16.frame_register()), (2, iced_x86::Register::BP));
         assert_eq!((M16.first_argument_offset(false), M16.first_argument_offset(true)), (4, 6));
         assert_eq!((M16.object().bitness, M16.object().header), (16, vec![".model medium".to_owned(), ".386".to_owned()]));
+        assert_eq!((M16.return_address_bytes(false), M16.return_address_bytes(true)), (2, 4));
         assert_eq!(M16.stack_pointer(), iced_x86::Register::SP);
         assert_eq!(M16.callee_saved(), PRESERVED.to_vec());
         assert_eq!([1, 2, 4, 8].map(|width| M16.results(width)), [vec![EAX], vec![EAX], vec![EAX, EDX], vec![EAX, EDX]]);

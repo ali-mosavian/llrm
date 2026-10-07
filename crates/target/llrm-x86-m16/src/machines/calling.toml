@@ -62,3 +62,8 @@ return_address_bytes = 6
 first_argument_offset = 0
 first_argument_offset_far = 0
 clobbered = []
+# What its frame pointer addresses, lowest address first, each slot's register and bytes: the segments it saved,
+# PUSHAD's image (EDI lowest), then what the interrupt pushed. A handler writing a slot writes what POPAD, a pop
+# or `iret` restores. The one statement of the layout: the backend pushes in this order and frontends name
+# registers through it.
+interrupt_frame = [["gs", 2], ["fs", 2], ["es", 2], ["ds", 2], ["edi", 4], ["esi", 4], ["ebp", 4], ["esp", 4], ["ebx", 4], ["edx", 4], ["ecx", 4], ["eax", 4], ["ip", 2], ["cs", 2], ["flags", 2]]

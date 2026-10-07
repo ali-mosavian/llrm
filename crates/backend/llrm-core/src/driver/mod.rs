@@ -86,7 +86,7 @@ pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm:
         out.push(assembled);
     }
     if options.stack_usage || options.stack_limit.is_some() {
-        let usage = crate::backend::stackusage::Usage::of(&out);
+        let usage = crate::backend::stackusage::Usage::of(&out, &*options.arch);
         if options.stack_usage {
             eprint!("{}", usage.report());
         }
@@ -218,7 +218,7 @@ pub fn statement_table(rows: &[(i64, i64, String, i64)], registers: llrm_target:
         far: false,
         body,
         reserve: 0,
-        callees: crate::support::hash::IndexMap::from_iter([(1, masm::Callee { name: "$statement-table".into(), far: false, code })]),
+        callees: crate::support::hash::IndexMap::from_iter([(1, masm::Callee { name: "$statement-table".into(), far: false, pops: 0, code })]),
         interrupt: None,
         size: false,
         entry: 0,

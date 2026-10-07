@@ -418,3 +418,43 @@ fn test_each_pointer_is_asked_whether_it_is_folded_once_however_many_accesses_us
     super::addressed(function);
     assert!(super::folded_runs() - before <= 2, "{} asks for 80 accesses of one slot", super::folded_runs() - before);
 }
+
+/// nbody's `x[i]`, made in the outer loop and read in the inner one: on a target whose address takes a scale
+/// of 8 beside any registers it is `[ebp+esi*8+disp]` at each read, and holds no register of its own; the
+/// model counted four of them live across the inner loop, and hoisted the floats those pointers read so as
+/// to free them (#698: -Os m32 +4 B and two `fstp st(0)`). Where the address takes no such scale it is a value.
+#[test]
+fn test_a_frame_object_indexed_by_a_scaled_integer_is_folded_wherever_it_is_read() {
+    let module = module("define double @f(i32 %n) {
+entry:
+  %buf = alloca [32 x double]
+  br label %outer
+outer:
+  %i = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %scaled = mul i32 %i, 8
+  %p = getelementptr inbounds i8, ptr %buf, i32 %scaled
+  %q = getelementptr inbounds i8, ptr %p, i32 32
+  br label %inner
+inner:
+  %j = phi i32 [ 0, %outer ], [ %j2, %inner ]
+  %v = load double, ptr %q
+  %j2 = add i32 %j, 1
+  %more = icmp slt i32 %j2, %n
+  br i1 %more, label %inner, label %latch
+latch:
+  %next = add i32 %i, 1
+  %again = icmp slt i32 %next, %n
+  br i1 %again, label %outer, label %done
+done:
+  ret double 0.0
+}
+");
+    let function = self::function(&module);
+    let (p, q) = (named(function, "p"), named(function, "q"));
+    // The scale of 8 is bit 3.
+    use crate::spill::folded_in;
+    assert!(folded_in(&module.context, function, p, 0b1000) && folded_in(&module.context, function, q, 0b1000));
+    assert!(!folded_in(&module.context, function, p, 0) && !folded_in(&module.context, function, q, 0));
+    // A scale the address does not take is no fold.
+    assert!(!folded_in(&module.context, function, q, 0b0011));
+}

@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::rc::Rc;
 
-use llrm_core::backend::omfwrite;
+use llrm_core::backend::objbuild;
 use llrm_core::objectfile::{cvinfo, omf};
 
 /// tests/fixtures/c/debug.cgs, recorded from debug.c (and its debug.h)
@@ -15,12 +15,12 @@ fn object() -> Vec<Rc<omf::Record>> {
 /// tests/fixtures/c/`name`.cgs compiled as the CLI compiles it.
 fn object_of(name: &str) -> Vec<Rc<omf::Record>> {
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).expect("reads");
-    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
     // Not inlined: `twice` is a symbol to read.
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::new(0), ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(machine) };
     let built = super::compile::selected(&text, name, None, &options).expect("compiles");
-    omf::parse(&omfwrite::written(&built, &format!("{name}.c")).expect("writes")).expect("parses")
+    omf::parse(&objbuild::written(&built, &format!("{name}.c")).expect("writes")).expect("parses")
 }
 
 /// Every parameter, local, static and global with its C type; `(void)`
@@ -64,7 +64,7 @@ fn c_lines_are_the_main_files() {
 fn bit_field_members_round_trip_through_the_codec_and_others_are_unchanged() {
     let hir = |name: &str| {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{name}.cgs"))).expect("reads");
-        super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), name).unwrap()
+        super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), name, llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap()
     };
     let plain = llrm_core::hir::codec::encode(&hir("debug"), None).unwrap();
     assert!(!plain.contains("bit_start") && plain.contains("\"members\""), "premise: debug members, none a bit field");
@@ -91,7 +91,7 @@ fn c_bit_fields_read_with_their_width_and_first_bit() {
 #[test]
 fn a_debug_member_with_half_a_bit_field_is_refused() {
     let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/debugbf.cgs")).expect("reads");
-    let mut program = super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), "debugbf").unwrap();
+    let mut program = super::translate::program(&super::hir::unit(&super::stream::parse(&text)).unwrap(), "debugbf", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap();
     assert!(llrm_core::hir::verify::verify(&program).is_ok(), "premise: valid as raised");
     let member = program.modules[0].debug.as_mut().unwrap().types.iter_mut().flat_map(|one| &mut one.members).find(|one| one.bit_width.is_some()).expect("premise: a bit field");
     member.bit_width = None;

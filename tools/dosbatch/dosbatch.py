@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import json
 import threading
 import shutil
@@ -23,7 +24,11 @@ from pathlib import Path
 from dataclasses import dataclass
 
 ROOT = Path(__file__).resolve().parents[2]
-BIN = Path(os.environ.get("LLRM_BIN", ROOT / "target" / "release"))
+sys.path.insert(0, str(ROOT / "tools"))
+import linkrecipe  # noqa: E402
+import llrmbin  # noqa: E402
+
+BIN = llrmbin.bin_dir()
 QB45 = Path(os.environ.get("QB45_DIR", Path.home() / "work/42-labs/mini-qb/dosbox/qb45"))
 PDS71 = Path(os.environ.get("PDS71_DIR", Path.home() / "work/other/d32x/toolchains/pds71"))
 VBDOS = Path(os.environ.get("VBDOS_DIR", Path.home() / "work/other/d32x/toolchains/vbdos"))
@@ -97,7 +102,7 @@ def _host(command: list[str]) -> None:
 
 
 def assemble(source: Path, obj: Path, *defines: str) -> None:
-    _host([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", "-omf", *(f"-D{one}" for one in defines), f"-Fo{obj}", str(source)])
+    _host([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", linkrecipe.assembler(REAL_MODE), *(f"-D{one}" for one in defines), f"-Fo{obj}", str(source)])
 
 
 def ow_root() -> Path:
@@ -119,12 +124,8 @@ def watcom_compile(source: Path, obj: Path) -> None:
 
 
 def target_modes() -> dict[str, int]:
-    """Each target's gcc `-m` number, from its `datalayout.toml` (`mode`): the one place that says."""
-    modes = {}
-    for crate in sorted((ROOT / "crates" / "target").glob("llrm-x86-m*")):
-        with open(crate / "src" / "machines" / "datalayout.toml", "rb") as text:
-            modes[crate.name.removeprefix("llrm-")] = tomllib.load(text)["mode"]
-    return modes
+    """Each target's gcc `-m` number (tools/linkrecipe.py)."""
+    return linkrecipe.modes()
 
 
 def m_flag(target: str) -> str:
@@ -142,10 +143,8 @@ def target_of(flags: list[str], default: str) -> str:
 
 
 def target_link(target: str) -> dict:
-    """How `target` links a C program: the `[link]` of its `object.toml` (crates/target/llrm-<target>)."""
-    crate = ROOT / "crates" / "target" / ("llrm-" + target)
-    with open(crate / "src" / "machines" / "object.toml", "rb") as text:
-        return tomllib.load(text)["link"]
+    """How `target` links a C program: the `[link]` of its `object.toml` (tools/linkrecipe.py)."""
+    return linkrecipe.recipe(target)["link"]
 
 
 _ASSEMBLED: set[tuple[Path, tuple[str, ...]]] = set()
@@ -200,7 +199,7 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
 
 
 # The 16-bit target the loop corpus and the C helpers build for.
-REAL_MODE = "x86-m16"
+REAL_MODE = linkrecipe.named(16)
 
 _COMPILERS = {"c": "llrm-c", "nib": "llrm-nib"}
 

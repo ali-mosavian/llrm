@@ -20,7 +20,7 @@ use super::compile as nib;
 use super::driver;
 use super::nibstages;
 use llrm_core::backend::masm;
-use llrm_core::backend::omfwrite::CodeLayout;
+use llrm_core::backend::objbuild::CodeLayout;
 use llrm_core::driver::{self as codegen, flags::{self, Flags}};
 
 fn usage() -> String {
@@ -50,7 +50,7 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut used_by = Vec::new();
     let mut os_layer = None;
     let mut declare = None;
-    let mut frontend = super::Frontend::default();
+    let (mut warn_target_width, mut unchecked_bounds) = (true, false);
     let mut at = 0;
     while at < argv.len() {
         if flags.take(argv, &mut at)? {
@@ -75,9 +75,9 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--procedure-segments" => layout = CodeLayout::PerProcedure,
             "--declare" => declare = Some(super::declarations::Language::named(&value("--declare")?).ok_or("--declare takes h, bi or inc")?),
             "--os-layer" => os_layer = Some(value("--os-layer")?),
-            "-Wno-target-width" => frontend.warn_target_width = false,
+            "-Wno-target-width" => warn_target_width = false,
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
-            "--unchecked-bounds" => frontend.unchecked_bounds = true,
+            "--unchecked-bounds" => unchecked_bounds = true,
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
             _ if source.is_none() => source = Some(PathBuf::from(argument)),
             _ => return Err(format!("unrecognized arguments: {argument}")),
@@ -90,10 +90,8 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         (None, Some(_)) => PathBuf::new(),
         (None, None) => return Err("the following arguments are required: source".to_owned()),
     };
-    frontend.debug = flags.debug;
-    frontend.checked_stack = flags.sanitize.stack;
     let bound = llrm_driver::target(&flags, None)?;
-    frontend = super::Frontend { debug: frontend.debug, checked_stack: frontend.checked_stack, unchecked_bounds: frontend.unchecked_bounds, warn_target_width: frontend.warn_target_width, ..super::Frontend::for_target(&*bound.target)? };
+    let frontend = super::Frontend { debug: flags.debug, checked_stack: flags.sanitize.stack, unchecked_bounds, warn_target_width, ..super::Frontend::for_target(&*bound.target)? };
     let codegen = bound.options(&flags, flags.machine(&*bound.target, nib::machine(&*bound.target, &frontend.os))?);
     let os_layer = field.map(|field| bound.target.os_layer().ok_or_else(|| "this target has no OS layer".to_owned()).and_then(|layer| layer.report(&bound.target.runtime("nib").ok_or("this target has no Nib runtime")?, &field)));
     Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen, os_layer, declare })
@@ -184,7 +182,7 @@ pub fn main(argv: &[String]) -> i32 {
         let bytes = if args.flags.assembly {
             masm::text(&module).map_err(|error| error.to_string())?.into_bytes()
         } else {
-            nib::object(&module, &args.source, args.layout)?
+            nib::object(&module, &args.source, args.layout, args.flags.format(&*args.codegen.arch)?)?
         };
         llrm_core::support::debug::timed("write output", || std::fs::write(&output, &bytes)).map_err(|error| error.to_string())?;
         println!("{} ({} bytes)", output.display(), bytes.len());
@@ -216,6 +214,7 @@ mod tests {
         fn stack_slot_bytes(&self) -> i64 { self.0.stack_slot_bytes() }
         fn frame_register(&self) -> iced_x86::Register { self.0.frame_register() }
         fn first_argument_offset(&self, far: bool) -> i64 { self.0.first_argument_offset(far) }
+        fn return_address_bytes(&self, far: bool) -> i64 { self.0.return_address_bytes(far) }
         fn results(&self, width: u32) -> Vec<iced_x86::Register> { self.0.results(width) }
         fn stack_pointer(&self) -> iced_x86::Register { self.0.stack_pointer() }
         fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)> { self.0.callee_saved() }
@@ -226,10 +225,11 @@ mod tests {
         fn default_cpu(&self) -> &'static str { self.0.default_cpu() }
         fn operation_costs(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> llrm_mir::target::OperationCosts { self.0.operation_costs(price, prefix) }
         fn register_capacity(&self) -> i64 { self.0.register_capacity() }
+        fn float_stack(&self) -> usize { self.0.float_stack() }
         fn address_forms(&self, costs: &llrm_mir::target::OperationCosts, address_stall: i64) -> Vec<llrm_mir::target::AddressForm> { self.0.address_forms(costs, address_stall) }
         fn cost_model(&self) -> llrm_target::CostModel { self.0.cost_model() }
-        fn conventions(&self) -> &'static [&'static str] { self.0.conventions() }
         fn calling(&self) -> &'static llrm_target::calling::Calling { self.0.calling() }
+        fn conventions(&self) -> &'static [&'static str] { self.0.conventions() }
         fn object(&self) -> llrm_target::object::ObjectFormat { self.0.object() }
     }
 

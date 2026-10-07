@@ -29,7 +29,7 @@ b0:
     let layout = layout(&module);
     let outer = Outer::of(&module, None);
     let f = function(&module, "f");
-    let unit = Unit::within(&module.context, &layout, f, &outer);
+    let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
     let calls: Calls = call_effects(&unit, &outer).unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect();
     known(&unit, Some(&calls), None, None).get(&value(f, "r")).cloned()
 }

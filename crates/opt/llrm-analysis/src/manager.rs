@@ -310,8 +310,18 @@ impl Analysis for FloatFacts {
         let registers = analyses.get::<Registers>(context, layout, function);
         let references = analyses.get::<Annotated>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        // The integers under it are `ThroughMemory`'s, which others ask too.
+        let through = analyses.get::<ThroughMemory>(context, layout, function);
         let unit = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_registers(&registers).with_annotated(&references).with_exposed(&exposed);
-        floatfacts::solved_with(&unit, &calls, None)
+        match &*through {
+            Ok(integers) => {
+                if std::env::var_os("LLRM_CHECK_FACTS").is_some() {
+                    assert!(*integers == consts::known(&unit, Some(&calls), None, None), "ThroughMemory's integers are not those the float solve derives for itself");
+                }
+                floatfacts::solved_over(&unit, &calls, None, integers)
+            }
+            Err(_) => floatfacts::solved_with(&unit, &calls, None),
+        }
     }
 }
 

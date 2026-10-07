@@ -73,16 +73,22 @@ struct Hoisted {
 /// Every loop's exits their counts decide, folded, and those tested once
 /// hoisted; whether any was.
 pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
+    folded_with(context, layout, function, outer, &mut memory::Standing::underived())
+}
+
+/// `folded`, what is known of the body without memory given as `standing` says.
+pub fn folded_with(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, standing: &mut memory::Standing) -> bool {
     let (decided, hoisted, predicated, merged) = {
         let unit = memory::Unit::within(context, layout, function, outer);
-        let facts = unit.registers();
+        let facts = standing.of(&unit);
+        let unit = unit.with_registers(facts);
         let loops = unit.shape().loops.clone();
         let mut decided = Vec::new();
         let mut hoisted = Vec::new();
         let mut predicated = Vec::new();
         let mut merged = Vec::new();
         for loop_ in &loops {
-            let exits = induction::exits(&unit, loop_, Some(&facts), false);
+            let exits = induction::exits(&unit, loop_, Some(facts), false);
             let folding = _decided(&unit, loop_, &exits);
             let lifting = _hoisted(&unit, outer, loop_, &exits, &folding);
             // One rewrite of a loop's exits a round: each reads them as they were.

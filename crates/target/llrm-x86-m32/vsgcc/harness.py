@@ -1,11 +1,11 @@
 """One emulator for every compiler's m32 object: link, run main, count the kernel's work.
 
-    harness.py PROG VARIANT      VARIANT: llrm llrmOs gccO2 gccOs clangO2 clangOs
+    harness.py PROG VARIANT      VARIANT: llrm llrmOs llrmElfO2 llrmElfOs gccO2 gccOs clangO2 clangOs
 
-llrm's OMF is linked here (segments by class, fixups resolved); gcc/clang's ELF is linked by ld.
+llrm's OMF is linked here (segments by class, fixups resolved); ELF, llrm's (llrmElf*) and gcc/clang's, is linked by ld.
 Both resolve report/memset/memcpy to stub.elf, loaded at STUB. The region counted is bench_PROG
 from its first instruction to the return that pops its own entry frame, callees included
-(tools/bench/icount.py's convention: a rep string instruction counts once per iteration).
+(crates/target/llrm-x86-m16/bench/icount.py's convention: a rep string instruction counts once per iteration).
 """
 import json
 import os
@@ -15,15 +15,20 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from iced_x86 import Decoder, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl
+from iced_x86 import Decoder, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc
-from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_ESP, UC_X86_REG_EIP
+from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBP, UC_X86_REG_ESI, UC_X86_REG_EDI, UC_X86_REG_ESP, UC_X86_REG_EIP
 
 REPO = Path(__file__).resolve().parents[4]
 OUT = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))   # build products and results, never in the tree
 BENCH = REPO / "bench"
+sys.path.insert(0, str(REPO / "tools"))
+import llrmbin  # noqa: E402
+
+LLRM = llrmbin.bin_dir() / "llrm-c"   # where cargo put it; build.sh and ctime.py use the same
 STUB, SENT, STACK_TOP, MEM = 0x8000, 0x7000, 0x7F0000, 0x800000
 BASE = 0x10000
+OMF_VARIANTS = ("llrm", "llrmOs")
 MEMORY = {OpKind.MEMORY, OpKind.MEMORY_SEG_SI, OpKind.MEMORY_SEG_ESI, OpKind.MEMORY_ESDI, OpKind.MEMORY_ESEDI}
 
 
@@ -128,7 +133,41 @@ def omf_link(path, stub):
     return segs, syms
 
 
-def cost(ins, taken, first_rep, mem):
+UNICORN = {Register.EAX: UC_X86_REG_EAX, Register.EBX: UC_X86_REG_EBX, Register.ECX: UC_X86_REG_ECX, Register.EDX: UC_X86_REG_EDX,
+           Register.EBP: UC_X86_REG_EBP, Register.ESI: UC_X86_REG_ESI, Register.EDI: UC_X86_REG_EDI, Register.ESP: UC_X86_REG_ESP}
+
+
+def multiply_clocks(m, signed):
+    """The i486's MUL and IMUL clocks for multiplier `m` (Intel 240440-002, Table 10.1 note 3): 10 + max(log2|m|, n),
+    n = 3 for +m and 5 for -m, 13 for m = 0. The bits of |m| stand for log2|m|, rounded up."""
+    if signed and m >= 1 << 31:
+        m -= 1 << 32
+    return 10 + max(abs(m).bit_length(), 5 if m < 0 else 3)
+
+
+def multiplier_of(uc, ins):
+    """The operand the 486's early-out reads: the immediate of the three-operand form, else the source (`MUL r/m`,
+    `IMUL r, r/m`). The data sheet names it 'Multiplier' beside the register or memory operand, not the accumulator."""
+    last = ins.op_count - 1
+    kind = ins.op_kind(last)
+    if kind in (OpKind.IMMEDIATE8, OpKind.IMMEDIATE8TO32, OpKind.IMMEDIATE32, OpKind.IMMEDIATE16, OpKind.IMMEDIATE8TO16):
+        return ins.immediate(last) & 0xFFFFFFFF
+    if kind == OpKind.REGISTER:
+        reg = ins.op_register(last)
+        value = uc.reg_read(UNICORN[RegisterExt.full_register32(reg)])
+        return value & (0xFFFFFFFF if RegisterExt.is_gpr32(reg) else 0xFFFF if RegisterExt.is_gpr16(reg) else 0xFF)
+    if kind in MEMORY:
+        base = ins.memory_base
+        address = ins.memory_displacement
+        if base != Register.NONE:
+            address += uc.reg_read(UNICORN[base])
+        if ins.memory_index != Register.NONE:
+            address += uc.reg_read(UNICORN[ins.memory_index]) * ins.memory_index_scale
+        return int.from_bytes(bytes(uc.mem_read(address & 0xFFFFFFFF, 4)), "little")
+    return 0
+
+
+def cost(ins, taken, first_rep, mem, multiplier=None):
     m = ins.mnemonic
     n = ins.op_count
     k0 = ins.op_kind(0) if n else None
@@ -153,10 +192,9 @@ def cost(ins, taken, first_rep, mem):
         return 6 if dst_mem else 1
     if m in (Mnemonic.SHL, Mnemonic.SHR, Mnemonic.SAR, Mnemonic.ROL, Mnemonic.ROR):
         return (4 if dst_mem else 2) if k1 != OpKind.REGISTER else (5 if dst_mem else 3)
-    if m == Mnemonic.IMUL:
-        return 13 if (n == 2 or n == 3 or ins.op0_register) else 13
-    if m == Mnemonic.MUL:
-        return 13
+    if m in (Mnemonic.IMUL, Mnemonic.MUL):
+        # Data dependent: 13 to 42 by the multiplier; 13 was the least, which made every product cheap.
+        return multiply_clocks(multiplier if multiplier is not None else 0, m == Mnemonic.IMUL)
     if m == Mnemonic.DIV:
         return 40
     if m == Mnemonic.IDIV:
@@ -214,7 +252,7 @@ def cost(ins, taken, first_rep, mem):
 
 def run(prog, variant, hot=False, limit=300_000_000):
     stub = nm(OUT / "stub.elf")
-    if variant.startswith("llrm"):
+    if variant in OMF_VARIANTS:
         segs, syms = omf_link(OUT / "o" / f"{prog}.{variant}.obj", stub)
         main = syms["_main"]
         # The default convention's name is `bench_x_`, cdecl's `_bench_x`.
@@ -222,7 +260,8 @@ def run(prog, variant, hot=False, limit=300_000_000):
     else:
         elf = OUT / "b" / f"{prog}.{variant}.elf"
         segs, syms = elf_segments(elf), nm(elf)
-        main, kern = syms["main"], syms[f"bench_{prog}"]
+        # llrm's ELF symbols are decorated with a leading underscore until the ABI says otherwise
+        main, kern = syms.get("main", syms.get("_main")), syms.get(f"bench_{prog}", syms.get(f"_bench_{prog}"))
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
     uc.mem_map(0, MEM)
     for va, blob, msz in segs + elf_segments(OUT / "stub.elf"):
@@ -281,7 +320,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
             taken = False
         # clocks of the previous instruction need to know taken; charge it now
         if prev is not None and pins[0].mnemonic != Mnemonic.NOP:
-            total["clocks"] += cost(pins[0], taken, st.get("firstrep", True), pins[1])
+            total["clocks"] += cost(pins[0], taken, st.get("firstrep", True), pins[1], st.get("multiplier"))
         st["firstrep"] = not (rep and prev == address)
         if ins.mnemonic == Mnemonic.NOP:   # alignment padding (clang): counted apart, not work
             total["nops"] += 1
@@ -292,6 +331,8 @@ def run(prog, variant, hot=False, limit=300_000_000):
         total["mem"] += mem
         hits[address] += 1
         st["prev"] = address
+        # Read before it runs: the 486's multiply costs what its multiplier is.
+        st["multiplier"] = multiplier_of(uc, ins) if ins.mnemonic in (Mnemonic.MUL, Mnemonic.IMUL) else None
         if ret and uc.reg_read(UC_X86_REG_ESP) == st["sp"]:
             total["clocks"] += cost(ins, True, True, mem)
             st["active"] = False
@@ -307,7 +348,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
 
 def code_bytes(prog, variant):
     """Size of the kernel's object code: the CODE-class segments (OMF) or .text (ELF), like tools/sizes.py."""
-    if variant.startswith("llrm"):
+    if variant in OMF_VARIANTS:
         data = (OUT / "o" / f"{prog}.{variant}.obj").read_bytes()
         lnames, classes, sizes = [""], [], []
         at = 0

@@ -7,7 +7,7 @@
 # missing means the run crashed or hung; see run.events.
 set -eu
 D=$1; W=$2
-R="$(cd "$(dirname "$0")/../.." && pwd)"; B="${LLRM_BIN:-$R/target/release}"; SRC=$R/tests/fixtures/callconv/bas
+R="$(cd "$(dirname "$0")/../.." && pwd)"; B="$(python3 "$R/tools/llrmbin.py" bin)"; SRC=$R/tests/fixtures/callconv/bas
 TC=~/work/other/d32x/toolchains
 DOSRUN=${DOSRUN:-$HOME/scratch/pr-dosbox/src/dosbox-x}
 case $D in
@@ -20,8 +20,9 @@ rm -rf $W; mkdir -p $W; cp $SRC/*.BAS $SRC/*.BI $SRC/PROBE.ASM $W/
 [[ $D == qb45 ]] && cp $SRC/qb45/*.BI $W/ && rm $W/CUE.BAS $W/CVE.BAS
 cd $W
 sed -i 's/$/\r/' *.BAS *.BI   # BC reads CRLF lines only
-$B/jwasm -q -c -Zg -omf -FoPROBE.OBJ PROBE.ASM >/dev/null
-$B/jwasm -q -c -Zg -omf -DNOARM -FoPROBEN.OBJ PROBE.ASM >/dev/null
+OMF=$(python3 "$R/tools/linkrecipe.py" x86-m16 assembler)
+$B/jwasm -q -c -Zg $OMF -FoPROBE.OBJ PROBE.ASM >/dev/null
+$B/jwasm -q -c -Zg $OMF -DNOARM -FoPROBEN.OBJ PROBE.ASM >/dev/null
 CALLEES="CE CES $CUR"; CALLERS="CR CRS"
 llrm() { # MODULE DIR: object and -S text into WORK
   $B/llrm-qb $2/$1.BAS --dialect $D --runtime $D ${QBFLAGS:-} -o $W/${1}L.OBJ 2> $W/${1}L.ERR || { rm -f $W/${1}L.OBJ; return 1; }

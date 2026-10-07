@@ -69,10 +69,10 @@ fn test_qb_cli_exposes_pds_alternate_math_option() {
 fn test_qb_cli_reads_the_machine_it_is_given() {
     let directory = tempfile::tempdir().expect("tempdir");
     let path = directory.path().join("far.toml");
-    std::fs::write(&path, llrm_core::abi::machine::DOS.replace("far_bss = false", "far_bss = true")).expect("writes");
+    std::fs::write(&path, llrm_x86_m16::machine::DOS.replace("far_bss = false", "far_bss = true")).expect("writes");
     let args = parse_args(&argv(&["probe.bas", "--machine", path.to_str().expect("utf-8")])).expect("parses");
     assert!(args.codegen.machine.far_bss);
-    assert_eq!(parse_args(&argv(&["probe.bas"])).expect("parses").codegen.machine, *llrm_core::abi::machine::BASIC);
+    assert_eq!(parse_args(&argv(&["probe.bas"])).expect("parses").codegen.machine, *llrm_x86_m16::machine::BASIC);
 }
 
 /// BASIC's runtime runs compiled code on the program's stack, in the data

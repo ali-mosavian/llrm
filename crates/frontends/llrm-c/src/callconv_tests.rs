@@ -181,7 +181,7 @@ fn agrees(reference: &[String], llrm: &[String]) -> bool {
 
 fn llrm(file: &str) -> Result<BTreeMap<String, Procedure>, String> {
     let stream = crate::compile::recorded(&fixtures().join(format!("{file}.c")), &[], false, &[]).map_err(|error| error.0)?;
-    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
     let built = crate::compile::selected(&stream, file, None, &llrm_driver::m16_options(machine)).map_err(|error| format!("{error:?}"))?;
     Ok(boundary::procedures(&llrm_core::backend::masm::text(&built).map_err(|error| format!("{error:?}"))?))
 }
@@ -275,7 +275,7 @@ fn llrm_text(text: &str) -> BTreeMap<String, Procedure> {
     let source = directory.path().join("probe.c");
     std::fs::write(&source, text).unwrap();
     let stream = crate::compile::recorded(&source, &[], false, &[]).unwrap();
-    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
     let built = crate::compile::selected(&stream, "probe", None, &llrm_driver::m16_options(machine)).unwrap();
     boundary::procedures(&llrm_core::backend::masm::text(&built).unwrap())
 }
@@ -303,7 +303,7 @@ fn test_a_variadic_struct_parameter_address_is_refused() {
     let source = directory.path().join("probe.c");
     std::fs::write(&source, "typedef struct { char b[3]; } S3;\nint g;\nvoid far v(S3 s, ...) { char *p = (char *)&s; g = p[4]; }\n").unwrap();
     let stream = crate::compile::recorded(&source, &[], false, &[]).unwrap();
-    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_core::abi::machine::BUILT_IN.clone() };
+    let machine = llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
     let built = crate::compile::selected(&stream, "probe", None, &llrm_driver::m16_options(machine));
     assert!(format!("{:?}", built.err()).contains("the address of a struct parameter"));
 }

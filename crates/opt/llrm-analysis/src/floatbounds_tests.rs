@@ -20,7 +20,7 @@ impl Parsed {
     }
 
     fn unit(&self) -> Unit<'_> {
-        Unit::of(&self.module, &self.layout, function(&self.module, "f"))
+        crate::testing::with_registers(Unit::of(&self.module, &self.layout, function(&self.module, "f")))
     }
 
     /// The instruction defining `%name`.

@@ -40,7 +40,7 @@ fn assembled_on(cpu: &str, text: &str) -> String {
 /// The module's text under `abi` and `segments`, as `cpu` prices it.
 fn assembled_by(abi: &HirAbi, segments: &crate::backend::target::Segments, cpu: &str, text: &str) -> String {
     let module = assemble::assembled(&parsed(text), abi, "T_TEXT", ProfileOrName::Name(cpu), segments).expect("assembles");
-    crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+    crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
     masm::text(&module).expect("prints")
 }
 
@@ -568,7 +568,7 @@ fn test_initializers_are_bytes_and_relocations() {
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
     let names = crate::backend::globals::names(&module, &|name| qb().linked(name)).expect("names");
     let rec = module.named("rec").expect("@rec");
-    let pointer = |name: &str, offset, far| Datum::Pointer(Pointer { name: name.to_owned(), offset, far });
+    let pointer = |name: &str, offset, far| Datum::Pointer(Pointer { name: name.to_owned(), offset, far, bytes: if far { 4 } else { 2 } });
     assert_eq!(
         crate::backend::globals::datums(&module, rec, &names).expect("data"),
         [
@@ -1794,14 +1794,18 @@ fn test_a_dword_divided_by_a_constant_is_multiplied_where_cheaper() {
     assert_eq!((divides("P5"), divides("386")), (0, 1));
 }
 
-/// A word, and an unsigned dword, divided by a constant stay divisions:
-/// the reciprocal is the old route's for signed dwords only.
+/// A word divided by a constant stays a division: the reciprocal is for dwords. An unsigned dword is a multiply
+/// where the CPU prices it cheaper (a Pentium's `mul` is 10 clocks against `div`'s 41) and a division where not
+/// (the 386's and 486's multiply by a magic number is 13 to 42).
 #[test]
-fn test_a_word_or_unsigned_division_by_a_constant_divides() {
+fn test_a_word_divides_and_an_unsigned_dword_is_multiplied_where_cheaper() {
     let word = "define i16 @f(i16 %x) addrspace(1) {\n  %q = sdiv i16 %x, 10\n  ret i16 %q\n}\n";
     let unsigned = "define i32 @f(i32 %x) addrspace(1) {\n  %q = udiv i32 %x, 10\n  ret i32 %q\n}\n";
     assert!(inner_on("P5", word).contains(&"idiv bx".to_owned()), "{:?}", inner_on("P5", word));
-    assert!(inner_on("P5", unsigned).contains(&"div ebx".to_owned()), "{:?}", inner_on("P5", unsigned));
+    assert!(inner_on("P5", unsigned).iter().any(|one| one.starts_with("mul ")) && !inner_on("P5", unsigned).iter().any(|one| one.starts_with("div ")), "{:?}", inner_on("P5", unsigned));
+    for cpu in ["386", "486"] {
+        assert!(inner_on(cpu, unsigned).contains(&"div ebx".to_owned()), "{cpu}: {:?}", inner_on(cpu, unsigned));
+    }
 }
 
 /// A multiply by a constant is shifts and adds where the target prices
@@ -3248,7 +3252,7 @@ fn test_dbg_lines_become_linnum() {
     assert_eq!(attached, 3, "the fixture carries its lines");
     let mut assembled = assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
     let records = |assembled: &crate::backend::masm::Module| {
-        let object = crate::backend::omfwrite::written_as(assembled, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+        let object = crate::backend::objbuild::written_as(assembled, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
         llrm_omf::omf::parse(&object).expect("parses")
     };
     // Lines alone are a BASIC statement table's, not -g.
@@ -3797,7 +3801,7 @@ fn sized_with(candidates: assemble::Candidates, text: &str) -> usize {
     assemble::trying(candidates, || {
         let profile = crate::backend::cpu::tuned("486", true).expect("the 486 profile");
         let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
-        crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes").len()
+        crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes").len()
     })
 }
 
@@ -3894,7 +3898,7 @@ fn far_branch_body() -> String {
 fn decoded_object(text: &str) -> (Vec<iced_x86::Instruction>, Vec<usize>, Vec<usize>) {
     use llrm_omf::omf;
     let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
-    let bytes = crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+    let bytes = crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
     let records = omf::parse(&bytes).expect("parses");
     let (code, _, size) = omf::code_segment(&records).expect("a code segment");
     let image = omf::segment_image(&records, code, size);

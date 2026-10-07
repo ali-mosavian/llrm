@@ -710,7 +710,9 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         let promised = norecurse && unobserved && states(Fact::WillReturn) && llrm_mir::loops::ends_by_promise(&module.metadata, function, Facts::of(&function.attrs).must_progress());
         let counted = || {
             let shape = Shape::of(function);
-            let proofs = |one| llrm_analysis::induction::counted(&unit_of(module, layout, function).with_spaces(program.target.spaces()), one, None, false);
+            // Found once for the function, not for each loop: the proofs of every loop ask the same.
+            let registers = llrm_analysis::consts::known(&unit_of(module, layout, function).with_spaces(program.target.spaces()), None, None, None);
+            let proofs = |one| llrm_analysis::induction::counted(&unit_of(module, layout, function).with_spaces(program.target.spaces()).with_registers(&registers), one, Some(&registers), false);
             shape.loops.iter().all(|one| proofs(one).iter().any(|proof| !proof.stops && (proof.count.is_some() || proof.step.magnitude() == &num_bigint::BigUint::from(1_u8))))
         };
         let returns = ((facts::returns_without_looping(function) || counted()) && states(Fact::WillReturn)) || promised;

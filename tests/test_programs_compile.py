@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from tools import sizes
+from tools import llrmbin, sizes
 
 ROOT = Path(__file__).resolve().parents[1]
-BINS = ROOT / "target" / "release"
+BINS = llrmbin.bin_dir()
 KNOWN = ROOT / "tools" / "sizes-known.txt"
 NAMES = ("llrm-qb", "llrm-c", "llrm-nib")
 SOURCES = (".rs", ".toml", ".prs", ".lock", ".txt", ".isel", ".nib")

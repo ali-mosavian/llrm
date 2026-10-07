@@ -151,7 +151,7 @@ fn _integer_chain(
             {
                 if *loaded == old
                     && load.defines == [old.value]
-                    && *loaded_cell == cell
+                    && loaded_cell.same_place(&cell)
                     && loaded_cell.width == old.width
                     && old.width == cell.width
                 {

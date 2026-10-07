@@ -3,13 +3,15 @@
 
 use std::path::PathBuf;
 
+use llrm_target::object::Format;
+
 use llrm_transforms::inline::Threshold;
 use llrm_transforms::pipeline;
 
 use crate::abi::machine::Machine;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [-m[no-]far-bss] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-m[no-]stack-is-data] [-m[no-]far-bss] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,7 +54,7 @@ impl Level {
 }
 
 /// gcc's `-f` pass names, each with the options it sets.
-const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 11] = [
+const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 12] = [
     ("unroll-loops", |options, on| options.unroll = on),
     ("peel-loops", |options, on| options.peel = on),
     ("inline-functions", |options, on| options.inline = if !on { Threshold::new(0) } else if options.inline.limit == 0 { Threshold { limit: Threshold::default().limit, ..options.inline } } else { options.inline }),
@@ -64,6 +66,7 @@ const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 11] = [
     ("tree-sra", |options, on| options.promote = on),
     ("move-loop-invariants", |options, on| options.hoist = on),
     ("tree-loop-distribute-patterns", |options, on| options.fill = on),
+    ("optimize-sibling-calls", |options, on| options.sibcalls = on),
 ];
 
 /// The run-time checks `-fsanitize` names, gcc's: what BC's /D checks.
@@ -124,6 +127,8 @@ pub struct Flags {
     pub sanitize: Sanitize,
     /// `-g`: CodeView debug information.
     pub debug: bool,
+    /// `-fobject-format=`: the object format to write, where the target has more than its default.
+    pub object_format: Option<Format>,
     /// `-fstack-usage`.
     pub stack_usage: bool,
     /// `-Wstack-usage=N`.
@@ -132,7 +137,7 @@ pub struct Flags {
 
 impl Default for Flags {
     fn default() -> Self {
-        Self { level: Level::O2, passes: Vec::new(), march: None, mtune: None, machine: None, mode: None, stack_is_data: None, far_bss: None, milliclocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, stack_usage: false, stack_limit: None }
+        Self { level: Level::O2, passes: Vec::new(), march: None, mtune: None, machine: None, mode: None, stack_is_data: None, far_bss: None, milliclocks_per_byte: None, output: None, assembly: false, sanitize: Sanitize::default(), debug: false, object_format: None, stack_usage: false, stack_limit: None }
     }
 }
 
@@ -177,6 +182,7 @@ impl Flags {
                 let limit = &flag["-Wstack-usage=".len()..];
                 self.stack_limit = Some(limit.parse().map_err(|_| format!("-Wstack-usage={limit}: expected a number of bytes"))?);
             }
+            _ if flag.starts_with("-fobject-format=") => self.object_format = Some(Format::parse(&flag["-fobject-format=".len()..]).map_err(|error| format!("{flag}: {error}"))?),
             "-ftrapv" | "-fno-trapv" => self.sanitize.signed_integer_overflow = flag == "-ftrapv",
             _ if flag.starts_with("-fsanitize=") => self.sanitize.set(&flag["-fsanitize=".len()..], true)?,
             _ if flag.starts_with("-fno-sanitize=") => self.sanitize.set(&flag["-fno-sanitize=".len()..], false)?,
@@ -193,6 +199,11 @@ impl Flags {
             _ => return Ok(false),
         }
         Ok(true)
+    }
+
+    /// The object format to write for `target`: `-fobject-format=`, else the target's default.
+    pub fn format(&self, target: &dyn llrm_target::Target) -> Result<Format, String> {
+        target.object().choose(target.name(), self.object_format)
     }
 
     /// The number `-m16`, `-m32`, `-m64` give: the one parser of the flag.
@@ -237,7 +248,7 @@ impl Flags {
     /// `default`, or the `--machine` description, on the CPU `-march` or `-mtune` names for `target`.
     pub fn machine(&self, target: &dyn llrm_target::Target, default: Machine) -> Result<Machine, String> {
         let mut machine = match &self.machine {
-            Some(path) => Machine::load(path, &default.cpu)?,
+            Some(path) => Machine { layout: default.layout.clone(), ..Machine::load(path, &default.cpu)? },
             None => default,
         };
         if let Some(cpu) = self.cpu(target)? {

@@ -26,8 +26,13 @@ llrm-target = { path = "crates/target/llrm-target" }
 llrm-x86 = { path = "crates/target/llrm-x86" }
 llrm-x86-m32 = { path = "crates/target/llrm-x86-m32" }
 llrm-omf = { path = "crates/target/llrm-omf" }
-llrm-bcmachine = { path = "crates/bc/llrm-bcmachine" }
-llrm-bc = { path = "crates/bc/llrm-bc" }
+llrm-object = { path = "crates/target/llrm-object" }
+llrm-elf = { path = "crates/target/llrm-elf" }
+llrm-elf32 = { path = "crates/target/llrm-elf32" }
+llrm-elf64 = { path = "crates/target/llrm-elf64" }
+llrm-macho = { path = "crates/target/llrm-macho" }
+llrm-x86-bcmachine = { path = "crates/target/llrm-x86-bcmachine" }
+llrm-x86-bc = { path = "crates/target/llrm-x86-bc" }
 llrm-bcdriver = { path = "crates/bc/llrm-bcdriver" }
 llrm-hir = { path = "crates/ir/llrm-hir" }
 llrm-mir = { path = "crates/ir/llrm-mir" }
@@ -57,7 +62,6 @@ llrm-bcdriver = { workspace = true }
 llrm-nib = { workspace = true }
 llrm-qb = { workspace = true }
 llrm-c = { workspace = true }
-iced-x86 = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 

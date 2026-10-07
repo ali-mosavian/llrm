@@ -70,6 +70,7 @@ pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Fun
         let mut round = _whole_fixed(context, layout, function, &outer);
         round |= _unsigned_divisions(context, layout, function, &outer, &facts);
         round |= _divisions(context, layout, function, &outer, &facts);
+        round |= _redundant_masks(context, layout, function, &outer);
         let recurrences = _recurrences(context, layout, function, &outer);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
@@ -435,6 +436,9 @@ fn _recurrences(context: &Context, layout: &DataLayout, function: &Function, out
         return BTreeSet::new();
     }
     let analysed = Unit::within(context, layout, function, outer);
+    // Found once, for the body as the rounds before left it, not for each loop's recurrences.
+    let registers = consts::known(&analysed, None, None, None);
+    let analysed = analysed.with_registers(&registers);
     analysed.shape().loops.iter().flat_map(|one| induction::advances(&analysed, one).into_keys()).collect()
 }
 
@@ -960,6 +964,47 @@ fn _unsigned_power_of_two(context: &mut Context, function: &mut Function, inst: 
     true
 }
 
+/// `and x, C` where every bit `x` may have set is in `C` is `x`: LLVM's CorrelatedValuePropagation
+/// `processAnd`, over `computeKnownBits`. The bits `x` may set are those a non-negative range's top
+/// reaches, less the ones structure clears (`valuetracking::known_zero`: a scale's low bits). A loop
+/// counter's range makes tile's `(x + 7) & 63` of `x < 40` a plain `x + 7`.
+fn _redundant_masks(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
+    let candidates: Vec<(llrm_mir::module::BlockId, InstId, Operand, u128, u32)> = function
+        .walk()
+        .filter_map(|(block, inst)| {
+            let (BinaryOp::And, left, right, width) = _binary(context, function, inst)? else { return None };
+            let (value, mask) = _value_and_constant(context, BinaryOp::And, left, right)?;
+            (width <= 128).then_some((block, inst, value, mask, width))
+        })
+        .collect();
+    if candidates.is_empty() {
+        return false;
+    }
+    let unit = Unit::within(context, layout, function, outer);
+    // The body is as the rounds before left it: found once, for its ranges and for the proofs beside them.
+    let registers = consts::known(&unit, None, None, None);
+    let unit = unit.with_registers(&registers);
+    let scoped = ranges::scoped(&unit).unwrap_or_default();
+    let made: Vec<(InstId, Operand)> = candidates
+        .into_iter()
+        .filter_map(|(block, inst, value, mask, width)| {
+            let scope = scoped.get(&cfg::id(block)).cloned().unwrap_or_default();
+            let interval = ranges::_operand(&unit, value, &scope, &registers).filter(|interval| interval.width == width && interval.low.sign() != num_bigint::Sign::Minus)?;
+            let top = u128::try_from(interval.high).ok()?;
+            let reach = if top == 0 { 0 } else { u128::MAX >> (top.leading_zeros()) };
+            let all = if width == 128 { u128::MAX } else { (1u128 << width) - 1 };
+            let possible = reach & !llrm_mir::valuetracking::known_zero(context, function, value) & all;
+            (possible & !mask == 0).then_some((inst, value))
+        })
+        .collect();
+    for &(inst, value) in &made {
+        if !function.is_erased(inst) {
+            _forward(function, inst, value);
+        }
+    }
+    !made.is_empty()
+}
+
 /// `sdiv` and `srem` of a dividend proved non-negative, by a power of two, are `udiv` and `urem` (a shift and a
 /// mask): the same value without the bias a negative dividend needs. Another divisor stays signed: its unsigned
 /// division is a `div` for an `idiv` (three clocks on a 486) and a byte more (`xor edx,edx` for `cdq`), which is
@@ -975,8 +1020,10 @@ fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mu
         return false;
     }
     let unit = Unit::within(context, layout, function, outer);
+    // The body is as the rounds before left it: found once, for its ranges and for the proofs beside them.
+    let registers = consts::known(&unit, None, None, None);
+    let unit = unit.with_registers(&registers);
     let scoped = ranges::scoped(&unit).unwrap_or_default();
-    let registers = unit.registers().into_owned();
     let made: Vec<(InstId, BinaryOp)> = candidates
         .into_iter()
         .filter_map(|(block, inst, width)| {

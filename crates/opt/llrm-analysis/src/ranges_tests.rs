@@ -9,7 +9,7 @@ use llrm_mir::module::{InstId, Module, ValueId};
 use llrm_support::hash::IndexMap;
 use num_bigint::BigInt;
 
-use super::{_computed, _recurrence_span, Interval, bounded, covering, dominated_edges, exact_offsets, on_edge, singletons};
+use super::{_computed, _recurrence_span, Interval, bounded, covering, edge_deltas, dominated_edges, exact_offsets, on_edge, singletons};
 use crate::cfg;
 use crate::memory::{MemRef, Unit};
 use crate::testing::{DOS, block, function, layout, parsed, value};
@@ -31,7 +31,7 @@ impl Parsed {
     }
 
     fn unit(&self) -> Unit<'_> {
-        Unit::of(&self.module, &self.layout, function(&self.module, "f"))
+        crate::testing::with_registers(Unit::of(&self.module, &self.layout, function(&self.module, "f")))
     }
 
     fn value(&self, name: &str) -> ValueId {
@@ -242,6 +242,15 @@ fn test_unit_steps_require_nonwrapping_intervals() {
 fn test_signed_widening_keeps_the_numeric_range() {
     for (low, high) in [(1, 20), (-32768, -1), (-10, 10)] {
         assert_eq!(computed(&unary("sext i16 %x to i32", 32), "y", &[("x", interval(low, high, 16))]), Some(interval(low, high, 32)));
+    }
+}
+
+/// nbody's `x[i]` index was `zext i16 %i to i32` with `%i` in 0..3: no interval came out, `covering` refused the
+/// access, and the hoist left x[i] and y[i] loaded on every trip of the inner loop.
+#[test]
+fn test_zero_extending_a_non_negative_interval_keeps_the_numeric_range() {
+    for (low, high) in [(0, 3), (1, 20), (0, 32767)] {
+        assert_eq!(computed(&unary("zext i16 %x to i32", 32), "y", &[("x", interval(low, high, 16))]), Some(interval(low, high, 32)));
     }
 }
 
@@ -833,7 +842,7 @@ fn an_assume_a_frontend_states_bounds_a_value_below_it() {
     let module = emitted.module;
     let layout = llrm_mir::datalayout::DataLayout::default();
     let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("F%")).expect("F%").2;
-    let unit = Unit::of(&module, &layout, function);
+    let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
     let below = &super::scoped(&unit).unwrap()[&cfg::id(function.layout()[1])];
     let parameter = function.parameters()[0];
     assert_eq!(below.get(&parameter), Some(&Interval { low: (-32768).into(), high: 9.into(), width: 16 }), "{below:?}");
@@ -898,7 +907,7 @@ fn a_range_a_frontend_states_of_an_instruction_bounds_its_result() {
     let module = emitted.module;
     let layout = llrm_mir::datalayout::DataLayout::default();
     let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("F%")).expect("F%").2;
-    let unit = Unit::of(&module, &layout, function);
+    let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
     let below = &super::scoped(&unit).unwrap()[&cfg::id(function.layout()[1])];
     let result = function.instruction(function.block(function.layout()[0]).instructions()[0]).result.expect("a sum");
     assert_eq!(below.get(&result), Some(&interval(0, 7, 16)), "{below:?}");
@@ -1101,4 +1110,33 @@ fn test_an_edge_sets_the_intervals_it_narrows_and_copies_none_of_the_rest() {
     let whole = on_edge(&unit, parsed.block("b0"), parsed.block("yes"), &known, None).unwrap().unwrap();
     assert_eq!(whole.len(), known.len());
     assert_eq!(whole[&x], delta[&x]);
+}
+
+/// 60 loops one after another narrowed by every edge above each of them again at each growth of its boxes: 14,760 edges
+/// worked out, cubic in the loops. The edges above a loop are narrowed once.
+#[test]
+fn test_the_edges_above_a_loop_are_narrowed_once_not_per_block_scoped() {
+    // The check works the edges out again to compare, and is counted.
+    if std::env::var_os("LLRM_CHECK_SCOPES").is_some() {
+        return;
+    }
+    let loops = 60;
+    // Each loop is entered through a block of its own: only a block with one way in carries its edge's test.
+    let mut text = String::from("define i32 @f(i32 %x) {\nb0:\n  br label %h0\n\n");
+    for at in 0..loops {
+        let from = if at == 0 { "b0".to_owned() } else { format!("p{at}") };
+        let exit = if at + 1 == loops { "end".to_owned() } else { format!("p{}", at + 1) };
+        text += &format!(
+            "h{at}:\n  %i{at} = phi i32 [ 0, %{from} ], [ %n{at}, %l{at} ]\n  %c{at} = icmp slt i32 %i{at}, %x\n  br i1 %c{at}, label %l{at}, label %{exit}\n\nl{at}:\n  %n{at} = add nsw i32 %i{at}, 1\n  br label %h{at}\n\n"
+        );
+        if at + 1 < loops {
+            text += &format!("p{}:\n  br label %h{}\n\n", at + 1, at + 1);
+        }
+    }
+    text += "end:\n  ret i32 %x\n}\n";
+    let parsed = Parsed::new(&text);
+    let before = edge_deltas();
+    bounded(&parsed.unit()).unwrap();
+    let narrowed = edge_deltas() - before;
+    assert!(narrowed <= 5_000, "{narrowed} edges narrowed for {loops} sequential loops");
 }

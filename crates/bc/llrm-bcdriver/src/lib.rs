@@ -1,5 +1,5 @@
 //! The rich route for BC objects, as `llc` takes a module to an object:
-//! the object raised onto MIR by llrm-bc, optimized by the MIR pipeline,
+//! the object raised onto MIR by llrm-x86-bc, optimized by the MIR pipeline,
 //! each function selected by isel and run through the machine phases, and
 //! a fresh BASIC object written around the code.
 //!
@@ -47,7 +47,7 @@ pub fn program(program: &Program) -> Result<Vec<Vec<u8>>, String> {
         let found = found_module::of(&records).ok_or_else(|| format!("{name}: the module has no code segment"))?;
         parsed.push((name, records, found));
     }
-    let segments = llrm_bc::segments(parsed.iter().map(|(_, _, found)| found));
+    let segments = llrm_x86_bc::segments(program.machine, parsed.iter().map(|(_, _, found)| found));
     parsed.iter().map(|(name, records, found)| recompiled(records, found, &segments, program.machine, name).map_err(|why| format!("{name}: {why}"))).collect()
 }
 
@@ -58,16 +58,16 @@ pub fn compiled(data: &[u8], cpu: &str, name: &str) -> Result<Vec<u8>, String> {
     Ok(written.remove(0))
 }
 
-/// BASIC's machine with its code priced for `cpu`.
+/// BASIC's machine (real mode's, its stack in the data group) with its code priced for `cpu`.
 fn on(cpu: &str) -> Machine {
-    Machine { cpu: cpu.to_owned(), ..machine::BASIC.clone() }
+    Machine { cpu: cpu.to_owned(), ..llrm_driver::m16_machine() }
 }
 
 /// One module of a program whose segments `layout` lays out, compiled again.
 fn recompiled(records: &[Rc<Record>], found: &found_module::Module, layout: &SegmentLayout, machine: &Machine, name: &str) -> Result<Vec<u8>, String> {
     let segments = omf::segments(records);
     let records = records.to_vec();
-    let llrm_bc::Raised { module, runtime, placement, .. } = llrm_bc::raise_in(found, machine, layout).map_err(|refusal| refusal.to_string())?;
+    let llrm_x86_bc::Raised { module, runtime, placement, .. } = llrm_x86_bc::raise_in(found, machine, layout).map_err(|refusal| refusal.to_string())?;
     let (code_segment, code, _) = omf::code_segment(&records).ok_or("the module has no code segment")?;
     let named = |id: GlobalId| module.global(id).name.clone().ok_or("an unnamed global");
     let mut symbols = BTreeMap::new();
@@ -105,7 +105,7 @@ fn recompiled(records: &[Rc<Record>], found: &found_module::Module, layout: &Seg
 /// Each data segment the object had, in its order, holding its objects in
 /// their order, each where the object put it.
 fn data_segments(
-    placement: &llrm_bc::Placement,
+    placement: &llrm_x86_bc::Placement,
     segments: &[Option<(String, i64)>],
     code_segment: i64,
     named: &dyn Fn(GlobalId) -> Result<String, &'static str>,
@@ -191,7 +191,7 @@ pub fn main(argv: &[String]) -> i32 {
         eprintln!("llrm-omf --rich: OBJ... [LIB...] -o OUT [--manifest M] [-march=CPU]");
         return 2;
     };
-    let machine = llrm_driver::target(&flags, Some(&["x86-m16"])).and_then(|bound| flags.machine(&*bound.target, machine::BASIC.clone()));
+    let machine = llrm_driver::target(&flags, Some(&["x86-m16"])).and_then(|bound| flags.machine(&*bound.target, bound.target.machine().with_stack_in_data()));
     let machine = match machine {
         Ok(machine) => machine,
         Err(why) => {

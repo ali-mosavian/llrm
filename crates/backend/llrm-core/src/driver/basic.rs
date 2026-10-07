@@ -3,6 +3,7 @@
 //! BASIC's segments and classes, and the final spelling of the x87 pseudos
 //! isel leaves.
 
+use llrm_object::Role;
 use llrm_support::debug::timed;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,7 +20,7 @@ use crate::abi::qb::HirAbi;
 use crate::backend::assemble::{self, Abi, Target};
 use crate::backend::constpool::Pool;
 use crate::backend::target::Segments;
-use crate::backend::{addressvalues, codeview, globals, isel, masm, omfwrite};
+use crate::backend::{addressvalues, codeview, globals, isel, masm, objbuild};
 use crate::hir::model;
 use crate::model::ir::{self, Loc, Operation, Semantics};
 use crate::model::lir;
@@ -361,10 +362,10 @@ pub fn written_basic(module: &masm::Module, header: Vec<u8>, name: &str) -> Resu
 }
 
 fn written_basic_inner(module: &masm::Module, header: Vec<u8>, name: &str) -> Result<Vec<u8>, String> {
-    // Build the same semantic segments as backend.omfwrite.written, then add
+    // Build the same semantic segments as backend.objbuild.written, then add
     // the BASIC-owned MODULE_CODE envelope before asking its canonical record
     // serializer to write OMF.
-    let mut segments = vec![omfwrite::Segment::new(&module.code, "CODE", false)];
+    let mut segments = vec![objbuild::Segment::new(&module.code, Role::Text, true)];
     // A BASIC object does not own C's `_DATA` segment.  Even a zero-length
     // declaration is observable: when this is the first link object it makes
     // LINK establish the DATA class before BC_DATA, unlike BC/PDS/VBDOS, and
@@ -374,22 +375,21 @@ fn written_basic_inner(module: &masm::Module, header: Vec<u8>, name: &str) -> Re
     for (name, _items) in &module.data {
         if named.insert(name.clone()) {
             let private = module.private.contains(name);
-            segments.push(omfwrite::Segment::new(name, if private { "FAR_DATA" } else { "DATA" }, !private));
+            segments.push(objbuild::Segment::new(name, Role::Data, !private));
         }
     }
     let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
     for (name, items) in &module.data {
         let index = segments.iter().position(|one| &one.name == name).expect("every data segment was made");
-        omfwrite::_data(&mut segments[index], index, items, &mut symbols);
+        objbuild::_data(&mut segments[index], index, items, &mut symbols, module.object.bitness);
     }
     if module.stack > 0 {
-        let mut stack = omfwrite::Segment::new("STACK", "STACK", true);
+        let mut stack = objbuild::Segment::new("STACK", Role::Stack, true);
         stack.image = vec![0; module.stack as usize];
-        stack.stack = true;
         segments.push(stack);
     }
     let every: Vec<usize> = (0..module.procedures.len()).collect();
-    omfwrite::_code_by(&mut segments[0], 0, module, &every, &mut symbols, _basic_listing).map_err(|error| error.to_string())?;
+    objbuild::_code_by(&mut segments[0], 0, module, &every, &mut symbols, _basic_listing).map_err(|error| error.to_string())?;
 
     let code = &mut segments[0];
     code.image = [header, std::mem::take(&mut code.image)].concat();
@@ -404,13 +404,13 @@ fn written_basic_inner(module: &masm::Module, header: Vec<u8>, name: &str) -> Re
     // assembly model conservatively emits a private BP prologue before such
     // an item, so OF_STA must name its first block label after that
     // prologue, not the procedure symbol.
-    let shifted: Vec<omfwrite::Fixup> =
-        code.fixups.iter().map(|one| omfwrite::Fixup { at: one.at + 48, ..one.clone() }).collect();
+    let shifted: Vec<objbuild::Fixup> =
+        code.fixups.iter().map(|one| objbuild::Fixup { at: one.at + 48, ..one.clone() }).collect();
     code.fixups = [
-        omfwrite::Fixup::new(10, omfwrite::OFFSET, statement_data),
+        objbuild::Fixup::new(10, objbuild::OFFSET, statement_data),
     ]
     .into_iter()
-    .chain(NAMED.iter().map(|&(word, _, label)| omfwrite::Fixup::new(word, omfwrite::OFFSET, label)))
+    .chain(NAMED.iter().map(|&(word, _, label)| objbuild::Fixup::new(word, objbuild::OFFSET, label)))
     .chain(shifted)
     .collect();
     let mut symbols: IndexMap<String, (usize, usize)> = symbols
@@ -427,7 +427,7 @@ fn written_basic_inner(module: &masm::Module, header: Vec<u8>, name: &str) -> Re
     let read_segment = &mut segments[read_index];
     for fixup in read_segment.fixups.clone() {
         let (segment, offset) = symbols[&fixup.name];
-        if fixup.loc != omfwrite::OFFSET || segment != 0 {
+        if fixup.kind != objbuild::OFFSET || segment != 0 {
             return Err("BC_DS DATA key must resolve to a near code offset".into());
         }
         pack_into(&mut read_segment.image, fixup.at, offset as i64);
@@ -438,9 +438,8 @@ fn written_basic_inner(module: &masm::Module, header: Vec<u8>, name: &str) -> Re
         segments.extend(described);
     }
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
-    let records = omfwrite::_records(module, name, &mut segments, &symbols, &externs)
-        .map_err(|error| error.to_string())?;
-    let emitted: Vec<u8> = records.iter().flat_map(|record| record.emit()).collect();
+    let object = objbuild::object_of(module, name, segments, &symbols, &externs).map_err(|error| error.to_string())?;
+    let emitted = llrm_omf::write::write(&object).map_err(|error| error.to_string())?;
     _basic_segment_classes(&emitted, &module.code)
 }
 
@@ -488,7 +487,7 @@ pub fn finalized(body: &lir::LirBody, parameter_bytes: i64) -> Result<Finalized,
             }
             sites.insert(
                 instruction.at,
-                masm::Callee { name: format!("$inline_{name}"), far: false, code: vec![masm::InlinePart::Bytes(code)] },
+                masm::Callee { name: format!("$inline_{name}"), far: false, pops: 0, code: vec![masm::InlinePart::Bytes(code)] },
             );
             let mut replaced = (**instruction).clone();
             replaced.what = Some(Semantics { name: Some(name), ..Semantics::new(Operation::Call) });
@@ -703,7 +702,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
             None => data.push((object.constants.clone(), pooled)),
         }
     }
-    timed("stack checks", || crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names)));
+    timed("stack checks", || crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names), &*options.arch));
     let defined: BTreeSet<&str> = procedures.iter().map(|one| one.name.as_str()).collect();
     let mut externs: Vec<(String, String)> = referenced
         .iter()
@@ -733,8 +732,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         far_bss: BTreeSet::new(),
         debug,
         stack: 0,
-        // BASIC is m16's.
-        object: llrm_target::Target::object(&llrm_x86_m16::M16),
+        object: options.arch.object(),
     })
 }
 
@@ -793,7 +791,7 @@ fn procedure(
     }
     for (at, callee) in &machined.calls {
         if let Some(code) = machined.inline.get(at) {
-            callees.insert(*at, masm::Callee { name: callee.clone(), far: false, code: vec![masm::InlinePart::Bytes(code.clone())] });
+            callees.insert(*at, masm::Callee { name: callee.clone(), far: false, pops: 0, code: vec![masm::InlinePart::Bytes(code.clone())] });
             continue;
         }
         let linked = match module.named(callee) {
@@ -877,7 +875,7 @@ fn laid_out(module: &Module, segment: &Segment, names: &IndexMap<(Space, i64), S
 fn size_of(datum: &masm::Datum) -> i64 {
     match datum {
         masm::Datum::Bytes(bytes) => bytes.len() as i64,
-        masm::Datum::Pointer(pointer) => if pointer.far { 4 } else { 2 },
+        masm::Datum::Pointer(pointer) => i64::from(pointer.bytes),
         masm::Datum::SegmentWord(_) => 2,
         masm::Datum::Fill(fill) => fill.size,
         _ => 0,

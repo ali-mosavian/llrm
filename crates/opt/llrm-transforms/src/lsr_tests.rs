@@ -57,7 +57,7 @@ fn counters(printed: &str) -> usize {
     let mut module = parsed(printed);
     let (layout, outer) = (llrm_analysis::testing::layout(&module), llrm_mir::passes::Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    let unit = llrm_analysis::memory::Unit::within(context, &layout, function, &outer);
+    let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(context, &layout, function, &outer));
     let filling = |loop_: &llrm_analysis::graph::loops::Loop| function.block(llrm_analysis::cfg::block(loop_.header)).name.as_deref().is_some_and(|name| name.starts_with("fill_"));
     unit.shape()
         .loops
@@ -1927,4 +1927,81 @@ b20:
     let (_, after) = reduced(text);
     let wide = |text: &str| text.lines().filter(|line| line.contains("phi i32")).count();
     assert_eq!(wide(&after), wide(text), "{after}");
+}
+
+/// A counted loop that reads `i + k` on the side of a branch only: a value the counter makes in one add.
+fn offset_read() -> String {
+    "define i16 @f(i16 %n, i16 %k, i16 %m) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %inext, %b5 ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %b5 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b6
+
+b2:
+  %odd = and i16 %acc, 1
+  %c = icmp ne i16 %odd, 0
+  br i1 %c, label %b3, label %b4
+
+b3:
+  %v = add i16 %i, %k
+  %t = xor i16 %v, %acc
+  br label %b5
+
+b4:
+  %u = shl i16 %acc, 1
+  br label %b5
+
+b5:
+  %sum = phi i16 [ %t, %b3 ], [ %u, %b4 ]
+  %inext = add i16 %i, 1
+  br label %b1
+
+b6:
+  ret i16 %acc
+}
+"
+    .to_owned()
+}
+
+
+/// A value made from the counter in one arm, `i + k`, costs an add where an add makes it in place
+/// and `mov; add` on a two-address target whose forms have no `lea` of any register (`[bx+si]`
+/// only): the price omitted the copy (#705), so the arm's use and its half of a trip never paid for
+/// a counter of its own. A target whose forms take any register makes it in one `lea`.
+#[test]
+fn test_a_value_made_from_the_counter_is_priced_with_its_copy() {
+    let ivs = |two_address: bool, flat: bool| {
+        let mut machine = target();
+        machine.two_address = two_address;
+        if !flat {
+            machine.address_forms.truncate(1);
+        }
+        let (_, printed) = reduced_for(&offset_read(), machine);
+        printed.lines().filter(|line| line.contains("= phi") && line.contains("%lsr.iv")).count()
+    };
+    assert_eq!(ivs(false, false), 1, "a one-address target adds in place");
+    assert_eq!(ivs(true, false), 2, "`mov; add` is dearer than the step of a counter of its own");
+    assert_eq!(ivs(true, true), 1, "`lea` makes it in one");
+}
+
+/// `c - r` was priced as a negation, a copy and an add (3) with a product temp beside the value it made;
+/// the code is `mov x,c; sub x,r` (2, the copy the use's own). Queens' Nib -Os loop read 34% in the model
+/// where the code was a tie (#721). A negation alone, and a scale, are as they were.
+#[test]
+fn test_a_difference_is_one_sub_from_a_copy_of_the_minuend() {
+    use num_bigint::BigInt;
+    // Only the word form: `[bx+si]` is no `lea` of any register.
+    let mut machine = Tuned { two_address: true, ..target() };
+    machine.address_forms.truncate(1);
+    let room = crate::spill::Room { registers: 6, across_call: 2, two_address: true, spaces: llrm_x86_m16::spaces(), ..Default::default() };
+    let target = super::Target { machine: &machine, costs: machine.costs.clone(), room, forms: machine.address_forms.clone() };
+    let costs = &machine.costs;
+    assert_eq!(super::_scaled(&target, &BigInt::from(-1), true), (0, true), "`rest - r`: a sub from a copy of rest");
+    assert_eq!(super::_scaled(&target, &BigInt::from(-1), false), (costs.add + costs.r#move, false), "`-r`: a negation of a copy");
+    assert_eq!(super::_scaled(&target, &BigInt::from(2), true), (costs.shift + costs.r#move, false), "`2r + rest`: a shift of a copy");
+    assert_eq!(super::_scaled(&target, &BigInt::from(1), true), (0, false));
 }

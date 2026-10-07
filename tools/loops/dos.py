@@ -68,7 +68,7 @@ def link_nib(obj: Path, exe: Path, work: Path, opt: str) -> None:
     runtime = obj.with_name(obj.stem + "_RT.OBJ")
     used = [arg for one in (obj, *first, *last, *final) for arg in ("--used-by", str(one))]
     _run([str(BIN / "llrm-nib"), str(NIB_RUNTIME / "runtime.nib"), "-o", str(runtime), opt, "--procedure-segments", *used])
-    _run([str(BIN / "jwlink"), "option", "quiet", "option", "eliminate", "format", "dos", "name", str(exe),
+    _run([str(BIN / "jwlink"), "option", "quiet", "option", "eliminate", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe),
           *[word for one in (*first, obj, runtime, *last, *final) for word in ("file", str(one))]])
 
 

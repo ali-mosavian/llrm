@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import corpus  # noqa: E402
 import dosbatch  # noqa: E402
+llrmbin = dosbatch.llrmbin
 from dosbatch import BIN, ROOT, Job  # noqa: E402
 
 RUN = ROOT / "tests" / "run"
@@ -41,7 +42,7 @@ EXAMPLES = ROOT / "examples"
 BENCH = ROOT / "bench"
 DEFAULT_FLAGS = ["-O2"]
 KEYS = ("flags", "known", "bc", "diverges", "dialect", "link", "data", "stdin", "mask", "targets")
-FLAT = "x86-m32"
+FLAT = dosbatch.linkrecipe.named(32)
 HEADER = re.compile(rf"^\s*(?:'|//|#)\s*({'|'.join(KEYS)}):\s*(.*?)\s*$")
 COMPILERS = {".bas": ["llrm-qb"], ".nib": [], ".c": ["llrm-c"]}
 TOOLS = {"qb45": dosbatch.QB45_TOOLS, "pds71": dosbatch.PDS71_TOOLS, "vbdos": dosbatch.VBDOS_TOOLS}
@@ -211,8 +212,8 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
 
 def build(program: Program, work: Path, stem: str) -> Job | str:
     """The job that runs `program`, or why it did not build."""
-    target = dosbatch.target_of(program.flags, "x86-m16")
-    if program.source.suffix == ".nib" and target != "x86-m16":
+    target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
+    if program.source.suffix == ".nib" and target != dosbatch.REAL_MODE:
         exe, obj = work / f"{stem}.exe", work / f"{stem}.obj"
         done = subprocess.run([str(BIN / "llrm-nib"), str(program.source), *program.flags, "-o", str(obj), "--procedure-segments"], capture_output=True, text=True, timeout=300)
         if done.returncode != 0 or not obj.exists():
@@ -242,7 +243,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
         return problem
     if program.source.suffix == ".c":
         exe = work / f"{stem}.exe"
-        target = dosbatch.target_of(program.flags, "x86-m16")
+        target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
         level = program.flags[0] if program.flags else "-O2"
         try:
             # Its own files, as Nib's: a C file by llrm-c, a `.wc` by Open Watcom's wcc386, an assembly file by jwasm.
@@ -274,7 +275,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
-    parser.add_argument("--work", type=Path, default=ROOT / "target" / "tests-run")
+    parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "tests-run")
     parser.add_argument("--retarget", help="build each Nib program for this target instead, against its own .out")
     args = parser.parse_args()
     programs = discover(args.select)

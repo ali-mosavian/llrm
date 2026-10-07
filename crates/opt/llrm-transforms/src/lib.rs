@@ -22,6 +22,7 @@ pub mod floatfold;
 pub mod floatloop;
 pub mod argpromotion;
 pub mod calleepop;
+pub mod homes;
 pub mod spares;
 pub mod deadargs;
 pub mod inferspace;
@@ -71,6 +72,7 @@ pub mod rotate;
 pub mod spill;
 #[cfg(test)]
 pub mod testing;
+pub mod tailrec;
 pub mod transform;
 pub mod unroll;
 pub mod unswitch;

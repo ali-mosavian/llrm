@@ -52,7 +52,7 @@ impl llrm_target::Target for M32 {
     }
 
     fn machine(&self) -> Machine {
-        Machine::parse(DOS32, TIMINGS.default_cpu().expect("timings.times states a default CPU")).expect("the flat DOS description parses")
+        Machine::parse(DOS32, TIMINGS.default_cpu().expect("timings.times states a default CPU")).expect("the flat DOS description parses").with_layout(layout())
     }
 
     fn cpus(&self) -> &'static [&'static str] {
@@ -104,6 +104,10 @@ impl llrm_target::Target for M32 {
         llrm_x86::calling::frame(CALLING.native())
     }
 
+    fn frame_optional(&self) -> bool {
+        CALLING.native().frame_optional
+    }
+
     /// Past EBP and the return address; there is no far call.
     fn first_argument_offset(&self, far: bool) -> i64 {
         llrm_x86::calling::first_argument_offset(CALLING.native(), far)
@@ -112,6 +116,10 @@ impl llrm_target::Target for M32 {
     /// Flat: no segments, one model.
     fn object(&self) -> llrm_target::object::ObjectFormat {
         llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml")).expect("flat object.toml parses")
+    }
+
+    fn return_address_bytes(&self, far: bool) -> i64 {
+        llrm_x86::calling::return_address_bytes(CALLING.native(), far)
     }
 
     fn stack_pointer(&self) -> Register {
@@ -164,7 +172,7 @@ impl llrm_target::Target for M32 {
     }
 
     fn cost_model(&self) -> CostModel {
-        llrm_target::described
+        |prices| llrm_target::described_by_size(prices, Some(OPCOSTS.size_costs()))
     }
 
     fn results(&self, width: u32) -> Vec<Register> {
@@ -178,6 +186,18 @@ mod tests {
     use llrm_target::Target;
 
     use super::*;
+
+    /// -Os on m32 priced in clocks: the description had no byte table, so `size_costs` was the clock costs and a
+    /// pass asked what a hoisted float costs in bytes was told 3, a load's clocks, not the 2 bytes of its release.
+    #[test]
+    fn test_m32_prices_code_size_in_bytes() {
+        use llrm_mir::target::Machine;
+        let prices = llrm_target::CpuPrices { costs: vec![("mov_rm".into(), 1)], prefix: 1, address_stall: 0, registers: 6, call_registers: 3, address_forms: Vec::new(), operations: OperationCosts { load: 1, ..Default::default() }, spaces: layout().spaces.roles };
+        let model = (M32.cost_model())(&prices);
+        let sizes = model.size_costs();
+        assert_eq!((sizes.load, sizes.float_release, sizes.call, sizes.r#move), (6, 2, 5, 4));
+        assert_eq!(model.costs().load, 1, "the clock prices are the CPU's");
+    }
 
     /// Flat code indexes by dwords natively: one form, no prefix, any scale.
     #[test]
@@ -236,6 +256,8 @@ mod tests {
         assert_eq!((frame.pointer, frame.stack), (EBP, ESP));
         assert_eq!(frame.saved, [(EBX, EBX), (ECX, ECX), (EDX, EDX), (ESI, ESI), (EDI, EDI)]);
         assert_eq!((M32.stack_slot_bytes(), M32.first_argument_offset(false)), (4, 8));
+        // No far call: the return address is a dword either way.
+        assert_eq!((M32.return_address_bytes(false), M32.return_address_bytes(true)), (4, 4));
         assert_eq!([4, 8].map(|width| M32.results(width)), [vec![EAX], vec![EAX, EDX]]);
         assert_eq!(llrm_x86::calling::callee_saved(CALLING.named("cdecl32").unwrap()), [(EBX, EBX), (ESI, ESI), (EDI, EDI)]);
     }

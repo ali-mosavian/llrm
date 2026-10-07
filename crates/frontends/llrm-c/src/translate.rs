@@ -27,7 +27,8 @@ fn refuse<T>(what: impl Into<String>) -> R<T> {
 }
 
 /// The unit as a HIR program of one module.
-pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
+pub fn program(unit: &hir::Unit, name: &str, calling: &llrm_target::calling::Calling, profile: &crate::compile::Profile) -> R<h::Program> {
+    let convention = calling.named(&profile.convention).ok_or_else(|| Unsupported(format!("calling.toml has no {}", profile.convention)))?;
     let mut types = Types::new(unit);
     let objects = objects(unit)?;
     let mut keys: HashMap<Key, i64> = HashMap::new();
@@ -68,7 +69,7 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
     for (at, proc) in unit.procs.iter().enumerate() {
-        functions.push(Body::function(&module, &mut types, &mut callables, &mut described, &mut facts, proc, at as i64 + 1)?);
+        functions.push(Body::function(&module, &mut types, &mut callables, &mut described, &mut facts, (calling, profile), proc, at as i64 + 1)?);
     }
     let debug = described.map(|one| one.finish(|symbol| keys.get(&Key::Symbol(symbol)).copied()));
     let defined: HashSet<&str> = functions.iter().map(|one: &h::Function| one.name.as_str()).collect();
@@ -88,9 +89,8 @@ pub fn program(unit: &hir::Unit, name: &str) -> R<h::Program> {
     }
     let (types, alias_classes) = types.finished();
     let module = h::Module { data, callables, alias_classes, debug, facts: facts.finish(), ..h::Module::new(1, name, types, functions) };
-    // Borland's medium model: a call keeps what its contract does not clobber;
-    // the compiler's constants go in CONST.
-    let contract = if unit.flat { crate::raise_hir::cdecl32(String::new(), true, 0) } else { crate::raise_hir::medium_model(String::new(), true, 0) };
+    // A call keeps what its target's C convention does not clobber; the compiler's constants go in CONST.
+    let contract = crate::raise_hir::contract(convention, String::new(), true, 0);
     let preserved = llrm_core::abi::runtime::preserves(&contract);
     Ok(h::Program {
         zeroed_locals: false,
@@ -192,9 +192,10 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
             // 64K of it, and the rest in the last.
             let found = if continues && out.len() == first { out.last_mut() } else { out[first..].last_mut() };
             let Some(object) = found else { return refuse(format!("{} data before any label", segment.name)) };
+            let near = widths_for(unit.flat, "TY_NEAR_POINTER").unwrap_or(2) as usize;
             let pointer = |object: &mut Object, target: Key, offset: &str, far: bool| -> R<()> {
                 object.relocations.push(Relocation { at: object.bytes.len(), target, offset: number(offset)?, far });
-                object.bytes.extend(std::iter::repeat_n(0, if far { 4 } else { 2 }));
+                object.bytes.extend(std::iter::repeat_n(0, if far { 4 } else { near }));
                 Ok(())
             };
             match (call.as_str(), &args[..]) {
@@ -533,7 +534,7 @@ fn cleanup(symbol: &hir::Symbol) -> R<(StackCleanup, Option<String>)> {
 /// An interrupt handler's parameters are the registers it saved, named in
 /// Borland's order, each at its slot of the frame (`x86_intr_slot`); what it
 /// writes to them is what it returns to.
-fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64], struct_homes: &[i64]) -> R<()> {
+fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64], struct_homes: &[i64], (calling, profile): (&llrm_target::calling::Calling, &crate::compile::Profile)) -> R<()> {
     let Some(abi) = function.abi.as_ref() else { return Ok(()) };
     let (interrupt, variadic) = (abi.distance == CallDistance::Interrupt, abi.variadic);
     if !interrupt && !variadic {
@@ -548,7 +549,7 @@ fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64
     let rounded = |sizes: &[i64]| sizes.iter().map(|size| (size + 1) & !1).sum::<i64>();
     for &(home, parameter) in homes.iter().filter(|(home, _)| interrupt || exposed.contains(home)) {
         let at = function.parameters.iter().position(|&one| one == parameter).expect("a parameter");
-        let offset = if interrupt { interrupt_slot(&function.name, at, sizes[at])? } else { -rounded(&sizes[at..]) };
+        let offset = if interrupt { interrupt_slot(&function.name, at, sizes[at], calling, profile)? } else { -rounded(&sizes[at..]) };
         let place = function.places.iter_mut().find(|one| one.id == home).expect("a home");
         (place.storage, place.symbol, place.offset) = (Storage::Parameter, parameter, offset);
         let copy = |one: &h::Instruction| one.op == Op::Store && one.operands == [Operand::place_ref(home), value_ref(parameter)];
@@ -559,17 +560,15 @@ fn in_their_slots(function: &mut h::Function, homes: &[(i64, i64)], sizes: &[i64
     Ok(())
 }
 
-/// Borland C's interrupt parameters, in order: the registers its handler saved.
-const BORLAND_INTERRUPT_PARAMETERS: [&str; 12] = ["bp", "di", "si", "ds", "es", "dx", "cx", "bx", "ax", "ip", "cs", "flags"];
-
 /// Where parameter `at` of handler `name`, `size` bytes, is in its frame: a
 /// register is one word, the low word of its slot.
-fn interrupt_slot(name: &str, at: usize, size: i64) -> R<i64> {
-    let Some(register) = BORLAND_INTERRUPT_PARAMETERS.get(at) else { return refuse(format!("{name}: an interrupt handler's parameter {at}: Borland's has {}", BORLAND_INTERRUPT_PARAMETERS.len())) };
+fn interrupt_slot(name: &str, at: usize, size: i64, calling: &llrm_target::calling::Calling, profile: &crate::compile::Profile) -> R<i64> {
+    let Some(register) = profile.interrupt_parameters.get(at) else { return refuse(format!("{name}: an interrupt handler's parameter {at}: Borland's has {}", profile.interrupt_parameters.len())) };
     if size != 2 {
         return refuse(format!("{name}: an interrupt handler's parameter {register} is {size} bytes, not a register"));
     }
-    Ok(llrm_mir::opcode::x86_intr_slot(register).expect("every Borland register is in the frame"))
+    let Some(frame) = calling.interrupt() else { return refuse(format!("{name}: this target has no interrupt handlers")) };
+    Ok(llrm_x86::calling::interrupt_slot(frame, register).expect("every Borland register is in the frame"))
 }
 
 fn distance(symbol: &hir::Symbol) -> CallDistance {
@@ -618,6 +617,7 @@ impl<'a, 't> Body<'a, 't> {
         callables: &'t mut IndexMap<String, h::Callable>,
         described: &'t mut Option<crate::debug::Described<'a>>,
         facts: &mut Facts,
+        (calling, profile): (&llrm_target::calling::Calling, &crate::compile::Profile),
         proc: &'a hir::Proc,
         id: i64,
     ) -> R<h::Function> {
@@ -692,7 +692,7 @@ impl<'a, 't> Body<'a, 't> {
             facts.state(Subject::Param { function: id, index }, fact);
         }
         let sizes: Vec<i64> = function.parameters.iter().map(|&one| body_widths[&one]).collect();
-        in_their_slots(&mut function, &homes, &sizes, &struct_homes)?;
+        in_their_slots(&mut function, &homes, &sizes, &struct_homes, (calling, profile))?;
         // Every address C computes through a pointer stays inside the object it points into.
         for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
             for (index, operand) in instruction.operands.iter().enumerate() {
@@ -2134,7 +2134,7 @@ mod tests {
 
     fn raised(fixture: &str) -> Module {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
-        let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test").unwrap();
+        let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap();
         let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         emitted.module
@@ -2231,7 +2231,7 @@ mod tests {
     /// `fixture`'s HIR program.
     fn program_of(fixture: &str) -> llrm_core::hir::model::Program {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
-        super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test").unwrap()
+        super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).unwrap()
     }
 
     /// llrm-c's HIR had never met the verifier, and failed it on 22 of the
@@ -2256,7 +2256,7 @@ mod tests {
             .iter()
             .filter_map(|fixture| {
                 let text = std::fs::read_to_string(root.join(fixture)).unwrap();
-                let program = super::program(&hir::unit(&stream::parse(&text)).ok()?, "test").ok()?;
+                let program = super::program(&hir::unit(&stream::parse(&text)).ok()?, "test", llrm_target::Target::calling(&llrm_x86_m16::M16), &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap()).ok()?;
                 llrm_core::hir::verify::verify(&program).err().map(|why| format!("{fixture}: {why:?}"))
             })
             .collect();
@@ -2268,7 +2268,7 @@ mod tests {
     #[test]
     fn test_the_driver_refuses_what_the_verifier_refuses() {
         let mut program = program_of("bytes.cgs");
-        let machine = llrm_core::abi::machine::BUILT_IN.clone();
+        let machine = llrm_x86_m16::machine::BUILT_IN.clone();
         let options = llrm_driver::m16_options(machine);
         assert!(llrm_core::driver::emitted(&program, &options).is_ok(), "premise: valid as raised");
         let module = &mut program.modules[0];

@@ -105,7 +105,7 @@ fn a_loop_induction_counts_is_weighted_by_its_count() {
     let layout = llrm_mir::datalayout::DataLayout::default();
     let trips = |text: &str| {
         let module = module(text);
-        let unit = llrm_analysis::memory::Unit::of(&module, &layout, function(&module));
+        let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::of(&module, &layout, function(&module)));
         let trips = proven_trips(&unit, &llrm_analysis::consts::known(&unit, None, None, None));
         let callees = llrm_mir::memory::callees(&module);
         (trips.len(), weighted(&module.context, &layout, function(&module), &callees, &OperationCosts::default(), &_frequencies(&module.context, &module.metadata, &module.globals, function(&module), Some(&trips)).unwrap()).map(|total| total / super::UNIT))

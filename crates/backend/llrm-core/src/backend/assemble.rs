@@ -75,12 +75,12 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
             GlobalKind::Variable(variable) if variable.initializer.is_some() => data.extend(globals::datums(module, id, &names)?),
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
-                let Machined { body, reserve, calls, inline, far, popped, registers, .. } = llrm_support::debug::in_function(name, || machined(module, name, abi, &pool, &target))?;
+                let Machined { body, reserve, calls, inline, far, pops, popped, registers, .. } = llrm_support::debug::in_function(name, || machined(module, name, abi, &pool, &target))?;
                 let body = timed("masm cleaned returns", || masm::cleaned_returns(&addressvalues::converted(&body), popped))?;
                 let mut callees = IndexMap::default();
                 for (at, callee) in &calls {
                     if let Some(code) = inline.get(at) {
-                        callees.insert(*at, masm::Callee { name: callee.clone(), far: false, code: vec![masm::InlinePart::Bytes(code.clone())] });
+                        callees.insert(*at, masm::Callee { name: callee.clone(), far: false, pops: 0, code: vec![masm::InlinePart::Bytes(code.clone())] });
                         continue;
                     }
                     // A global of this module is called by the name it is defined or declared as.
@@ -89,7 +89,7 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
                         None => abi.linked(callee),
                     };
                     referenced.insert(linked.clone(), far.contains(at));
-                    callees.insert(*at, masm::Callee::new(linked, far.contains(at)));
+                    callees.insert(*at, masm::Callee { pops: pops.get(at).copied().unwrap_or(0), ..masm::Callee::new(linked, far.contains(at)) });
                 }
                 // An interrupt handler loads DGROUP into DS itself.
                 let interrupt = (function.calling_convention == llrm_mir::opcode::X86_INTR).then(|| {
@@ -122,7 +122,7 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
         names.insert((Space::Segment, id), name.clone());
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
-    timed("stack checks", || crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names)));
+    timed("stack checks", || crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names), &*arch));
     let defined: BTreeSet<&str> = procedures.iter().map(|one| one.name.as_str()).collect();
     let mut externs: Vec<(String, String)> = referenced
         .iter()
@@ -178,6 +178,8 @@ pub struct Machined {
     /// The code laid down in place of each call to an inline helper.
     pub inline: IndexMap<i64, Vec<u8>>,
     pub far: BTreeSet<i64>,
+    /// The argument bytes each direct call's callee pops.
+    pub pops: IndexMap<i64, i64>,
     pub popped: i64,
     /// The frame's registers, the saved ones those this function's convention keeps.
     pub registers: llrm_target::FrameRegisters,
@@ -301,7 +303,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let run = ssaspill::Run::new(admission);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let selected = timed("isel", || isel::selected(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole));
-    let Selected { body, convention, calls, inline, far, depth, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
+    let Selected { body, convention, calls, inline, far, pops, depth, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     let mut body = timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)?;
     let mut frame = timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
@@ -335,7 +337,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
         }
         None => (body, None),
     };
-    Ok(((Machined { body, reserve, calls, inline, far, popped: convention.popped, registers, landing }, frame), run))
+    Ok(((Machined { body, reserve, calls, inline, far, pops, popped: convention.popped, registers, landing }, frame), run))
 }
 
 /// `body` with its landing pad, the block `marker` starts, laid out last:

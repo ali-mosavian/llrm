@@ -270,3 +270,9 @@ to 137 on P6, 145 to 141 on K5, 136 to 134 on K6, 111 to 109 on K7, and 135 to
 the older standalone cycle scorer has no memory dependency model and may place
 the old `fnstcw [slot]` and following `or [slot]` in parallel; that result is an
 instrument limitation, not evidence that the dependency is absent.
+
+## x87 stack release
+
+`fstp st(i)`, the instruction that drops a float held across a loop, is 3 clocks on the 486 (i486 data sheet 240440-002,
+Table 10.3, `FSTP STi`) and 1 on the P5 (Pentium Family Developer's Manual 241430-004, Instruction Set, FST/FSTP, PDF page 755;
+Appendix F, PDF page 1023). Both are in x86-m32's `timings.times` as `x87_release`; its bytes (2) are in `opcosts.txt`.

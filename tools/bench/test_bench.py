@@ -142,7 +142,7 @@ class BccTests(unittest.TestCase):
         import tempfile
 
         variant = next(one for one in bench.variants(bench.BENCH / "floats") if one.language == "c")
-        with tempfile.TemporaryDirectory(dir=bench.ROOT / "target") as where:
+        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
             built = bench.build_borland("bcc", [(variant, "B000")], "O2", Path(where))["B000"]
             self.assertNotIsInstance(built, str, built)
             got = bench.measure(("B000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / "floats"), built[0].with_suffix(".OBJ")))
@@ -155,7 +155,7 @@ class ReferenceFloatTests(unittest.TestCase):
         import tempfile
 
         variant = next(one for one in bench.variants(bench.BENCH / name) if one.language == "c")
-        with tempfile.TemporaryDirectory(dir=bench.ROOT / "target") as where:
+        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
             built = build(variant, Path(where))
             self.assertNotIsInstance(built, str, built)
             return bench.measure(("F000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / name), next(built[0].parent.glob(built[0].stem + ".[oO][bB][jJ]"))))

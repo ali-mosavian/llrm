@@ -24,7 +24,7 @@ Known departures today, each to be removed:
 |---|---|---|
 | `llrm-core`: the `target.rs` statics, `select.rs` bases, `masm`/`sharedstores` register lists | m16's registers read directly | PR 19 (a register-class description the allocator receives) |
 | `llrm-hir`, `llrm-mir`: the datalayout string, address-space numbers, `TargetProfile` variants | a target's layout in an IR crate | PR 14a, and the m32 session's HIR change (data layout and address spaces from the `Target`) |
-| `llrm-core` `select.rs`, `omfwrite.rs`: x86 instruction encoding and the OMF writer, in `llrm-core` and keyed by a described bitness (`At{ip,bits}`) | the encoder belongs in the x86 family layer | PR 5's encoder half (m32-prep, D) |
+| `llrm-core` `select.rs`, `objbuild.rs`: x86 instruction encoding and the layout of an object, in `llrm-core` and keyed by a described bitness (`At{ip,bits}`) | the encoder belongs in the x86 family layer | PR 5's encoder half (m32-prep, D) |
 | `llrm-core` `select.rs` encoder and `peephole::_register_effects`: x86 encoding, and register effects read by decoding the emitted bytes, in `llrm-core` | the encoder and the effects belong in the x86 family layer; the mode they run in is the body's (`LirBody::bits`, set by isel from the target's `object.bitness`) | the encoder PR (m32-prep, D); #581 |
 
 ## Principle: a target is description
@@ -166,7 +166,7 @@ now; `watcall32` returns a struct through ESI as `wcc386` does.
   translates them to HIR. A 32-bit front end is a second `wccq` from `bld/cc/386`
   (the tree is cached); it gates the skeleton.
 - No `-m` flag and no writer interface: `compile.rs:220-222` calls
-  `omfwrite::written` or `masm::text`.
+  `objbuild::written` or `masm::text`.
 
 ## Classes
 
@@ -185,7 +185,7 @@ Out of scope and pinned to m16: the BASIC runtime, BC raise, Nib (~25k lines).
 
 | Assumption | Anchor | Class | Becomes |
 |---|---|---|---|
-| LIR's operand model (`Reg`, `Mem`, `Loc`, `Operation`, `Semantics`, `Effects`) is defined in the BC lifter and typed with `iced_x86::Register` (722 non-test `Register::` in `llrm-core`, 110 in `llrm-bcmachine`) | `llrm-bcmachine/src/model/ir`, `llrm-core/src/model/mod.rs:3` | S | its own crate, `llrm-lir` |
+| LIR's operand model (`Reg`, `Mem`, `Loc`, `Operation`, `Semantics`, `Effects`) is defined in the BC lifter and typed with `iced_x86::Register` (722 non-test `Register::` in `llrm-core`, 110 in `llrm-x86-bcmachine`) | `llrm-x86-bcmachine/src/model/ir`, `llrm-core/src/model/mod.rs:3` | S | its own crate, `llrm-lir` |
 | `llrm-core` depends on `llrm-x86-m16`; the generators pull `parse.rs` in by `#[path]` | `llrm-core/Cargo.toml`, `build.rs`, `generator/mod.rs:17` | T | target crates depend on `llrm-core`, not the reverse |
 | `iced_x86` in `llrm-support` (`pyrepr.rs`, `pyset.rs`) and `llrm-omf` | | S | out of support |
 | `Profile::target()` builds `Dos`; CPU and target are one axis | `cpu.rs:51` | T | target x CPU (LLVM's subtarget) |
@@ -274,10 +274,10 @@ and not a flag. A target without it has no rows, so its passes find nothing.
 | Assumption | Anchor | Becomes |
 |---|---|---|
 | OMF 16 writer called directly | `compile.rs:220`, `nib/compile.rs:78`, `driver/basic.rs:362` | `ObjectWriter` |
-| OMF constants, DGROUP/STACK/`_TEXT` names, USE16 attributes | `omfwrite.rs:27-62,462` | inside the OMF writer |
+| OMF constants, DGROUP/STACK/`_TEXT` names, USE16 attributes | `llrm-omf/src/write.rs` | inside the OMF writer |
 | MASM header `.model medium`, `dd/dw` pointers, `proc far` | `masm.rs:166-217,535` | `Listing` syntax per target |
 | CodeView 16-bit records | `codeview.rs`, `cvwrite.rs` | debug writer per format; m32 refuses `-g` first |
-| Jump relaxation with rel8/rel16 reach | `omfwrite.rs:673`, `jumps.rs:21` | `branch_forms()` |
+| Jump relaxation with rel8/rel16 reach | `objbuild.rs`, `jumps.rs:21` | `branch_forms()` |
 | `Space::{Group,Segment,Far}` in the model the backend shares | `datagroup.rs`, `globals.rs`, `masm.rs` | relocation kinds the format interprets |
 
 ### Drivers and frontends
@@ -288,7 +288,7 @@ and not a flag. A target without it has no rows, so its passes find nothing.
 | `int`/pointer sizes, `medium_model()` clobbers | `raise_hir.rs:14-122` | target's type widths and ABI |
 | `far`, `huge`, `__based`, call distance in `llrm-c` | `hir.rs`, `translate.rs` (~90) | collapse; refuse `__based/__segment/__huge` |
 | Flags pick the machine: `-march`, `--machine` | `driver/flags.rs:163-230` | `-m16`/`-m32` select the `Target` by the number its `datalayout.toml` declares |
-| QB, BC | `llrm-qb`, `llrm-bc*` | pinned to m16 |
+| QB, BC | `llrm-qb`, `llrm-x86-bc*` | pinned to m16 |
 | Nib | `llrm-nib` | m16 and m32: layout, conventions and OS layer come from the target (`runtime/shared/`, `runtime/nib/`) |
 
 ## Interface
@@ -300,7 +300,7 @@ the PR that touches each.
 ```
 llrm-mir        MIR, DataLayout, CostModel, address-space kinds    generic
 llrm-lir        LIR operand model: Reg, Mem, Loc, Operation,       x86 family for now
-                Semantics, Effects (out of llrm-bcmachine)
+                Semantics, Effects (out of llrm-x86-bcmachine)
 llrm-core       backend over LIR: allocator, spiller, frame, peephole runtime,
                 SelectCx, trait Target, generic call/ret and address-form lowering
 llrm-iselgen    shared generators (isel, peephole): run by each target's build.rs
@@ -362,7 +362,7 @@ of a value's uses). `select.rs` is the encoder after selection, not a selector.
 | post-passes in order: `unread_halves_dropped`, `combined` (`farload`, `comparefold`, `rmw`, peephole arguments, `dword_pairs`), `widen` (`exact_sums`, `addressforms::promote`, which allocates ids after `next`), `rooted` | after selection | stay x86 family; far parts m16 |
 | `farcall.rs` | first machine phase | m16 |
 | `selects.rs`, `ehprepare.rs`, `nearcode.rs` | MIR pre-passes | stay MIR |
-| `unwind.rs`, `masm`, `frame`, `prologue`, `omfwrite` | other | unchanged |
+| `unwind.rs`, `masm`, `frame`, `prologue`, `objbuild` | other | unchanged |
 | `lower_int64.rs` | data (helper blobs), name is stale | per-target helper table |
 | `pointers.rs` | dead (only its own tests use it) | left as is: nothing is dropped from m16 |
 
@@ -536,10 +536,10 @@ m16-pinned frontends (production / total; 20 / 65 today), and the metric.
 | guard | #502 `test_m16_emits_386_forms` | none |
 | 0 | this document and the reviews | none |
 | 1 | withdrawn: the MIR crates already take m16 as a dev-dependency (manifests checked) | none |
-| 2 | `llrm-lir`: the operand model out of `llrm-bcmachine`, moved unchanged, with `Addr` (via `llrm-omf` for now), `Flag`, `root()` and the `Repr` impls | no m16 or iced in the BC lifter's model crate |
+| 2 | `llrm-lir`: the operand model out of `llrm-x86-bcmachine`, moved unchanged, with `Addr` (via `llrm-omf` for now), `Flag`, `root()` and the `Repr` impls | no m16 or iced in the BC lifter's model crate |
 | 3a | `llrm-target`: the platform description (`Machine`, its parser) out of m16, which keeps `dos.toml`, `BUILT_IN`, `BASIC`, `CPUS`; the BC crates stop depending on m16 | production uses 20 to 17 |
 | 3b | the platform is flat-capable (`addressing = "flat"`, optional `[segments]`), `dos.toml` parses to an identical value; the PC ports in one shared file | `llrm-target` |
-| 3c | `llrm-driver`, `trait Target` (in `llrm-target`: `llrm-core` cannot be below m16 while `llrm-bcmachine` was above it), `-m16`/`-m32` (default m16), the target in `Options`; `llrm-core` stays on m16 for the statics that `allocate`, `regclass`, `constrain` and `ssaspill` read (until PR 19) and for the profile tables (until PR 5); metric baseline | about 12 uses in `llrm-core` left |
+| 3c | `llrm-driver`, `trait Target` (in `llrm-target`: `llrm-core` cannot be below m16 while `llrm-x86-bcmachine` was above it), `-m16`/`-m32` (default m16), the target in `Options`; `llrm-core` stays on m16 for the statics that `allocate`, `regclass`, `constrain` and `ssaspill` read (until PR 19) and for the profile tables (until PR 5); metric baseline | about 12 uses in `llrm-core` left |
 | 4 | one selector per target definition directory: `build.rs` generates a `Compiled` for each `crates/target/<name>/src/isel/` (`patterns.isel`, forms in `src/instructions/x86.instr`), found by the directory's name; `llrm-driver` binds a target to its selector and hands it in through `Options`; m16's `patterns.isel` moved there. The generated code and its hooks stay in `llrm-core` until the inversion (after 19) | `build.rs`, `matcher.rs`, `isel.rs`, `assemble.rs` |
 | 4b | the same for the peephole rules (`peephole.peep`) | `build.rs`, `peep/` |
 | 4c | no default names a target in shared code: `Options`, `assemble`, `flow`, `Peephole`, `Profile` take the selector, rules and model from the driver; tests use a helper | `llrm-core`, `llrm-driver` |

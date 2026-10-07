@@ -367,6 +367,16 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         after
     );
     if llrm_support::debug::enabled("lsr") {
+        for (label, set) in [("standing", Some(current.clone())), ("chosen", chosen.clone())] {
+            let Some(set) = set else { continue };
+            for index in 0..problem.sites.len() {
+                if let Some((Some((one, fit, price)), _)) = problem.choice(&set, index) {
+                    llrm_support::debug!("lsr", "  {label} site {index}: from {one}, cost {} x{}, k {}, held {:?}, product {:?}", price.cost, problem.sites[index].frequency, fit.k, price.held, price.product);
+                } else {
+                    llrm_support::debug!("lsr", "  {label} site {index}: exit-tested");
+                }
+            }
+        }
         for (at, site) in problem.sites.iter().enumerate() {
             let op = function.instruction(site.one.user);
             llrm_support::debug!("lsr", "  site {at}: {:?} operand {} of {:?} {:?}, {:?} + {:?}*t, x{}", site.one.kind, site.one.index, op.opcode, op.result, site.one.of.start, site.one.of.step.known(), site.frequency);
@@ -530,12 +540,12 @@ fn _fixed(
 ) -> BTreeMap<i64, Vec<spill::Site>> {
     let function = view.function;
     let symbols = _symbols(users, exit);
-    let counted = |value: ValueId| spill::integer(view.context, function, value) && !web.contains(&value) && !(symbols.contains(&value) && !live.contains(&value));
+    let counted = |value: ValueId| spill::integer_in(view.context, function, value, room.index_scales) && !web.contains(&value) && !(symbols.contains(&value) && !live.contains(&value));
     let found = liveness::live(function);
     let across = |inst: InstId| spill::kept_across(outer, view.context, function, inst);
     let transient = |inst: InstId, live: &BTreeSet<ValueId>| spill::transient(view.context, view.layout, function, inst, room, live);
     let segment = |value: ValueId| spill::segment_view(view.context, view.layout, room.spaces, function, value);
-    let addressed = spill::addressed(function);
+    let addressed = spill::addressed_in(view.context, function, room.index_scales);
     let routed = |value: ValueId| addressed.contains(&value);
     loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted, &segment, &routed))).collect()
 }
@@ -776,20 +786,37 @@ fn _latch_arm(function: &Function, phi: ValueId, latch: BlockId) -> Option<Opera
     function.instruction(inst).operands.chunks(2).find(|pair| pair[1] == Operand::Block(latch)).map(|pair| pair[0])
 }
 
-/// What `k * r` costs a trip: nothing, a negation, a shift or a multiply.
+/// What `k * r` costs a trip: nothing, a negation, a shift or a multiply. On a two-address target the
+/// candidate stays live, so a negation or a shift is made in a copy of it, unless `lea` scales it.
 fn _scaling(target: &Target, k: &BigInt) -> i64 {
     let costs = &target.costs;
     let magnitude = BigInt::from(k.magnitude().clone());
+    let copy = if target.room.two_address && !_leas(target, k) { costs.r#move } else { 0 };
     if *k == BigInt::from(1) || *k == BigInt::from(0) {
         0
     } else if *k == BigInt::from(-1) {
-        costs.add
+        costs.add + copy
     } else if (&magnitude & (&magnitude - 1)) == BigInt::from(0) {
-        costs.shift + if *k < BigInt::from(0) { costs.add } else { 0 }
+        costs.shift + copy + if *k < BigInt::from(0) { costs.add } else { 0 }
     } else {
         let multiply = magnitude.to_i64().map_or(costs.multiply, |factor| target.machine.multiply_by(factor));
         multiply + if *k < BigInt::from(0) { costs.add } else { 0 }
     }
+}
+
+/// What `k * r` costs where a use adds `rest`, and whether the use is `rest - r`: one `sub` from a copy of
+/// `rest` (the copy is the use's, as `made` charges it), with no negation of `r` and no product to hold.
+/// Priced as a negation, a copy and an add, it made a counter that rebuilds `c - r` look dearer than it is
+/// (#721: Nib -Os queens, 34% in the model, tied in the code).
+fn _scaled(target: &Target, k: &BigInt, added: bool) -> (i64, bool) {
+    let subtracted = added && *k == BigInt::from(-1);
+    (if subtracted { 0 } else { _scaling(target, k) }, subtracted)
+}
+
+/// Whether one `lea` makes `k * r + rest + constant`: where any register may be a base and an index
+/// (`[bx+si]` is no `lea` of `ax`), and its scales hold `k`.
+fn _leas(target: &Target, k: &BigInt) -> bool {
+    target.forms.iter().any(|form| form.bases.is_none() && form.indices.is_none() && (*k == BigInt::from(1) || k.to_i64().is_some_and(|scale| scale > 1 && form.scales.contains(&scale))))
 }
 
 /// `site`'s price from `candidate`.
@@ -933,16 +960,22 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             if let Some((shift, _, inverse)) = &fit.trip {
                 price.cost += costs.add + if *shift != 0 { costs.shift } else { 0 } + if *inverse != BigInt::from(1) { costs.multiply + costs.add } else { 0 };
             }
-            price.cost += _scaling(target, &fit.k);
-            if fit.trip.is_none() && _scaling(target, &fit.k) != 0 {
-                price.product = Some((small(&fit.k), _scaling(target, &fit.k), block));
-            }
             let pointer = candidate.of.pointer.is_some();
             let symbolic = !fit.rest.is_zero() || matches!(fit.base, Some(Operand::Value(_)));
+            let (scaling, subtracted) = _scaled(target, &fit.k, fit.trip.is_none() && (symbolic || fit.constant != BigInt::from(0)));
+            price.cost += scaling;
+            if fit.trip.is_none() && scaling != 0 {
+                price.product = Some((small(&fit.k), scaling, block));
+            }
             // A pointer made from an integer, in a carrying space, carries into its selector.
+            // A two-address target makes a result in its first operand's register: the candidate stays
+            // live, as a counter does, so a form no address takes (a negation, a general scale) is
+            // copied first. `lea` makes `cand * k + rest + constant` in one, where its scales hold `k`.
+            // (A scaled one is made in a copy already, which the add then makes its result in.)
+            let copy = if target.room.two_address && (subtracted || fit.k == BigInt::from(1) && !_leas(target, &fit.k)) { costs.r#move } else { 0 };
             let made = |constant| {
                 let ty = view.function.value(site.one.value).ty;
-                if pointer { costs.add } else { profit::advance(view.context, view.layout, ty, costs.add, constant, costs) }
+                copy + if pointer { costs.add } else { profit::advance(view.context, view.layout, ty, costs.add, constant, costs) }
             };
             if symbolic {
                 let whole = fit.rest.plus(&Scev::constant(fit.constant.clone(), fit.rest.width));

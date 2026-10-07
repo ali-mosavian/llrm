@@ -97,7 +97,8 @@ pub fn sunk_stores(context: &mut Context, layout: &DataLayout, callees: &Callees
         }
         let current = fresh.as_mut().unwrap_or(&mut *analyses);
         let accesses = Accesses::managed(context, layout, function, current)?;
-        let unit = Unit::within(context, layout, function, current.outer());
+        let registers = current.get::<llrm_analysis::manager::Registers>(context, layout, function);
+        let unit = Unit::within(context, layout, function, current.outer()).with_registers(&registers);
         let moved = _moved(&unit, &accesses, &loop_, &inside, &predecessors, &successors, &dominators, source)?;
         if moved.is_empty() {
             continue;

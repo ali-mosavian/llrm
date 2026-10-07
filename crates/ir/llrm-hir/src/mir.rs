@@ -500,7 +500,7 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
     let mut defined = Vec::new();
     let mut data = HashMap::new();
     for object in &hir.data {
-        let layout = data_type(&mut module.context.types, &tables.spaces, object, sizes[&object.id], &objects);
+        let layout = data_type(&mut module.context.types, &tables.spaces, &Widths::of(&tables.layout, &tables.spaces), object, sizes[&object.id], &objects);
         let global = declare_data(&mut module, &tables.spaces, object, layout.as_ref().ok().copied());
         data.insert(object.id, global);
         match layout {
@@ -580,7 +580,7 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
             refused.push((object.name.clone(), "an address of undeclared code".to_owned()));
             continue;
         }
-        let initializer = data_initializer(&mut module, &tables.spaces, object, sizes[&object.id], &objects, &tables.data, &code);
+        let initializer = data_initializer(&mut module, &tables.spaces, &Widths::of(&tables.layout, &tables.spaces), object, sizes[&object.id], &objects, &tables.data, &code);
         let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { unreachable!("a variable") };
         variable.initializer = Some(initializer);
     }
@@ -691,11 +691,11 @@ fn sizes(hir: &model::Module, types: &HashMap<i64, &model::Type>) -> HashMap<i64
     sizes
 }
 
-fn data_type(types: &mut Types, spaces: &AddressSpaces, object: &model::DataObject, size: i64, objects: &HashMap<i64, &model::DataObject>) -> Emit<TypeId> {
+fn data_type(types: &mut Types, spaces: &AddressSpaces, widths: &Widths, object: &model::DataObject, size: i64, objects: &HashMap<i64, &model::DataObject>) -> Emit<TypeId> {
     let byte = types.int(8);
     let mut fields = Vec::new();
     let mut at = 0;
-    for relocation in relocations(object)? {
+    for relocation in relocations(object, widths)? {
         if relocation.at > at {
             fields.push(types.intern(Type::Array { element: byte, count: (relocation.at - at) as u64 }));
         }
@@ -712,7 +712,7 @@ fn data_type(types: &mut Types, spaces: &AddressSpaces, object: &model::DataObje
             (AddressKind::Segment, _) => types.ptr(spaces.segment_space()?),
             (other, _) => return Err(format!("a {other} relocation in its data")),
         });
-        at = relocation.at + relocation_width(relocation.address);
+        at = relocation.at + widths.of_relocation(relocation.address);
     }
     if fields.is_empty() || size > at {
         fields.push(types.intern(Type::Array { element: byte, count: (size - at) as u64 }));
@@ -720,18 +720,36 @@ fn data_type(types: &mut Types, spaces: &AddressSpaces, object: &model::DataObje
     Ok(if fields.len() == 1 { fields[0] } else { types.intern(Type::Struct { fields, packed: true }) })
 }
 
-fn relocation_width(address: AddressKind) -> i64 {
-    if address == AddressKind::Far { 4 } else { 2 }
+/// The bytes of the cells a data object's relocations fill, by what they hold: the target's pointers'.
+struct Widths {
+    near: i64,
+    far: i64,
+    segment: i64,
+}
+
+impl Widths {
+    fn of(layout: &DataLayout, spaces: &AddressSpaces) -> Self {
+        let bytes = |space: u32| i64::from(layout.pointer(space).bits / 8);
+        Self { near: bytes(spaces.near), far: bytes(spaces.far), segment: spaces.segment.map_or(bytes(spaces.near), bytes) }
+    }
+
+    fn of_relocation(&self, address: AddressKind) -> i64 {
+        match address {
+            AddressKind::Far => self.far,
+            AddressKind::Segment => self.segment,
+            _ => self.near,
+        }
+    }
 }
 
 /// A data object's relocations in order, each over zero bytes: its addend
 /// is the whole offset.
-fn relocations(object: &model::DataObject) -> Emit<Vec<&model::DataRelocation>> {
+fn relocations<'o>(object: &'o model::DataObject, widths: &Widths) -> Emit<Vec<&'o model::DataRelocation>> {
     let mut out: Vec<&model::DataRelocation> = object.relocations.iter().collect();
     out.sort_by_key(|one| one.at);
     let mut end = 0;
     for relocation in &out {
-        let width = relocation_width(relocation.address);
+        let width = widths.of_relocation(relocation.address);
         let site = object.bytes.get(relocation.at as usize..(relocation.at + width) as usize).ok_or("a relocation past its data")?;
         if relocation.at < end || site.iter().any(|&one| one != 0) {
             return Err("overlapping or pre-added relocations".to_owned());
@@ -764,7 +782,7 @@ fn declare_data(module: &mut Module, spaces: &AddressSpaces, object: &model::Dat
     global
 }
 
-fn data_initializer(module: &mut Module, spaces: &AddressSpaces, object: &model::DataObject, size: i64, objects: &HashMap<i64, &model::DataObject>, data: &HashMap<i64, ConstantId>, code: &HashMap<i64, ConstantId>) -> ConstantId {
+fn data_initializer(module: &mut Module, spaces: &AddressSpaces, widths: &Widths, object: &model::DataObject, size: i64, objects: &HashMap<i64, &model::DataObject>, data: &HashMap<i64, ConstantId>, code: &HashMap<i64, ConstantId>) -> ConstantId {
     let context = &mut module.context;
     let (byte, i16) = (context.types.int(8), context.types.int(16));
     let bytes = |context: &mut llrm_mir::Context, from: i64, to: i64| {
@@ -775,7 +793,7 @@ fn data_initializer(module: &mut Module, spaces: &AddressSpaces, object: &model:
     };
     let mut members = Vec::new();
     let mut at = 0;
-    for relocation in relocations(object).expect("its type was laid out") {
+    for relocation in relocations(object, widths).expect("its type was laid out") {
         if relocation.at > at {
             members.push(bytes(context, at, relocation.at));
         }
@@ -804,14 +822,15 @@ fn data_initializer(module: &mut Module, spaces: &AddressSpaces, object: &model:
         };
         members.push(match (relocation.address, space) {
             (AddressKind::Near, far) if far == spaces.far && far != spaces.near => cast(context, CastOp::PtrToInt, i16),
-            (AddressKind::Near, _) if relocation.code => cast(context, CastOp::PtrToInt, i16),
+            // Where code is apart from near data (segments), a near address of it is its offset; flat code is near.
+            (AddressKind::Near, _) if relocation.code && spaces.far != spaces.near => cast(context, CastOp::PtrToInt, i16),
             _ if wanted != space => {
                 let ty = context.types.ptr(wanted);
                 cast(context, CastOp::AddrSpaceCast, ty)
             }
             _ => address,
         });
-        at = relocation.at + relocation_width(relocation.address);
+        at = relocation.at + widths.of_relocation(relocation.address);
     }
     if members.is_empty() || size > at {
         members.push(bytes(context, at, size));

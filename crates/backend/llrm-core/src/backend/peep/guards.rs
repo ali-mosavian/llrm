@@ -320,16 +320,16 @@ pub fn segment_of(_: &Cx, cell: &Mem, g: Reg) -> bool {
 
 /// Two operands address the same bytes. The registers and displacement
 /// carry the address; the values they name may differ when allocation
-/// copied the same address into a register again as a new value. `Mem`'s
-/// equality compares those values and leaves the registers out, so it
-/// cannot say.
+/// copied the same address into a register again as a new value. `same_place`
+/// compares the address and the values the operand names, not the registers,
+/// so the registers are compared beside it.
 pub fn same_cell(_: &Cx, one: &Mem, other: &Mem) -> bool {
     let logical = |cell: &Mem| Mem { base: None, index: None, ..cell.clone() };
     let physical = |cell: &Mem| (cell.through, cell.index_through, cell.offset);
     let placed = |cell: &Mem| {
         (cell.base.is_none() || cell.through != Register::None) && (cell.index.is_none() || cell.index_through != Register::None)
     };
-    logical(one) == logical(other) && physical(one) == physical(other) && placed(one) && placed(other)
+    logical(one).same_place(&logical(other)) && physical(one) == physical(other) && placed(one) && placed(other)
 }
 
 /// `high` is the word right after `low`, reached the same way. The
@@ -381,7 +381,7 @@ pub fn unchanged(cx: &Cx, definition: &Arc<Insn>, at: &Arc<Insn>) -> bool {
 
 /// `high` is the word above `low`.
 pub fn above(_: &Cx, high: &Mem, low: &Mem) -> bool {
-    *high == Mem { addr: low.addr.map(|addr| addr.plus(2)), offset: if low.addr.is_some() { low.offset } else { low.offset + 2 }, ..low.clone() }
+    high.word_above(low)
 }
 
 /// Both cells are reached through the same registers.

@@ -47,10 +47,11 @@ pub mod machinedce;
 pub mod masm;
 pub mod nativeframe;
 pub mod nearcode;
-pub mod omfwrite;
+pub mod objbuild;
 pub mod overlap;
 pub mod parcopy;
 pub mod peep;
+pub mod postings;
 pub mod peephole;
 pub mod phielim;
 pub mod pointers;
@@ -71,6 +72,7 @@ pub mod select {
     }
 }
 pub mod spiller;
+pub mod storedhomes;
 pub mod ssarepair;
 pub mod regclass;
 pub mod ssaspill;

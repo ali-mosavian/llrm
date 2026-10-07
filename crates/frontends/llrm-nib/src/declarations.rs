@@ -29,11 +29,12 @@ impl Language {
 /// The declarations of `module`'s exports and the represented structs they
 /// name, for callers written in `language`.
 pub fn declarations(module: &Module, name: &str, language: Language) -> Result<String, Diagnostic> {
-    declarations_on(module, name, language, true, 2, Abi::Cdecl16)
+    declarations_on(module, name, language, crate::Sizes { near: 2, far: 4, segmented: true, slot: 2, max_object: 65535 }, Abi::Cdecl16)
 }
 
-/// `declarations`, for a target whose far code is far (`segmented`) or near.
-pub fn declarations_on(module: &Module, name: &str, language: Language, segmented: bool, slot: u32, native: Abi) -> Result<String, Diagnostic> {
+/// `declarations`, for a target whose pointers, slot and far code are `sizes`, and whose own convention is `native`.
+pub fn declarations_on(module: &Module, name: &str, language: Language, sizes: crate::Sizes, native: Abi) -> Result<String, Diagnostic> {
+    let (segmented, slot) = (sizes.segmented, sizes.slot);
     let exports: Vec<(&Function, Abi)> = module
         .functions
         .iter()
@@ -55,7 +56,7 @@ pub fn declarations_on(module: &Module, name: &str, language: Language, segmente
     }
     for one in &structs {
         out.push('\n');
-        out.push_str(&structure(one, language, slot)?);
+        out.push_str(&structure(one, language, sizes)?);
     }
     if !exports.is_empty() {
         out.push('\n');
@@ -69,7 +70,8 @@ pub fn declarations_on(module: &Module, name: &str, language: Language, segmente
     Ok(out)
 }
 
-fn structure(one: &Struct, language: Language, slot: u32) -> Result<String, Diagnostic> {
+fn structure(one: &Struct, language: Language, sizes: crate::Sizes) -> Result<String, Diagnostic> {
+    let slot = sizes.slot;
     let name = symbol(&one.name);
     let mut out = String::new();
     match language {
@@ -102,7 +104,7 @@ fn structure(one: &Struct, language: Language, slot: u32) -> Result<String, Diag
             for field in &one.fields {
                 let (type_, initial) = match &field.type_spec {
                     TypeSpec::Named(inner) => (symbol(inner), "<>"),
-                    spec => (data_directive(width(spec).ok_or_else(|| unsupported(&field.name, "assembler", field.span))?).to_owned(), "?"),
+                    spec => (data_directive(field_width(spec, sizes).ok_or_else(|| unsupported(&field.name, "assembler", field.span))?).to_owned(), "?"),
                 };
                 let count: u32 = field.dims.iter().product();
                 let directive = if field.dims.is_empty() { format!("{type_} {initial}") } else { format!("{type_} {count} dup ({initial})") };
@@ -232,6 +234,14 @@ fn pointer(spec: &TypeSpec) -> Option<(bool, bool, &TypeSpec)> {
     };
     let far = name.starts_with("*far");
     (far || name.starts_with("*near")).then_some((far, name.ends_with(" mut"), target))
+}
+
+/// The bytes a field of `spec` takes in a struct on the target: a pointer is its pointers' width.
+fn field_width(spec: &TypeSpec, sizes: crate::Sizes) -> Option<u32> {
+    match pointer(spec) {
+        Some((far, _, _)) => Some(if far { sizes.far } else { sizes.near }),
+        None => width(spec),
+    }
 }
 
 fn width(spec: &TypeSpec) -> Option<u32> {

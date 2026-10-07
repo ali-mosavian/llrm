@@ -51,7 +51,7 @@ start:
     ; The stack is the last of DGROUP before the heap, so it starts where the near bss ends.
     ; Nothing below the limit but the panic's frames, DOS and an interrupt.
     mov ax, offset DGROUP:BSS_LAST
-    add ax, 512
+    add ax, STACK_RESERVE
     mov _llrm_os_stack_low, ax
     mov bp, bx                     ; the PSP, past the loops' registers
     ; Statics without an initializer are in _BSS, which the EXE does not

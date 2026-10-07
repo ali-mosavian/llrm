@@ -143,12 +143,14 @@ struct _Stack {
     one: Option<Arc<Insn>>,
     absorbed: HashSet<i64>, // later copies of a group already taken
     fresh: u32,             // the next value no instruction names
+    depth: usize,           // how many values the stack holds
 }
 
 impl _Stack {
-    fn new(floating: HashSet<u32>) -> Self {
+    fn new(floating: HashSet<u32>, depth: usize) -> Self {
         Self {
             floating,
+            depth,
             values: Vec::new(),
             sequence: Vec::new(),
             reads: IndexMap::default(),
@@ -334,7 +336,7 @@ impl _Stack {
     }
 
     fn room(&mut self, count: usize) -> Result<(), Raised> {
-        if self.values.len() + count > 8 {
+        if self.values.len() + count > self.depth {
             return Err(unlowered("floating instruction requires too many stack operands"));
         }
         Ok(())
@@ -582,6 +584,14 @@ impl _Stack {
         }
         let (mut dies_left, dies_right) = (!self.survives(left), !self.survives(right));
         if left == right {
+            // A value that stays is copied from where it is, and the product replaces the copy: no exchange.
+            let depth = index_of(&self.values, left);
+            if !dies_left && depth > 0 {
+                self.duplicate(left)?;
+                self.emit(semantics(Operation::FloatArith, name, vec![st(0)], vec![st(0), st(depth + 1)]));
+                self.values[0] = result;
+                return Ok(());
+            }
             self.exchange(index_of(&self.values, left));
             let mut slot = 0;
             if !dies_left {
@@ -686,7 +696,7 @@ fn _converted(body: &LirBody) -> Result<LirBody, Raised> {
     }
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut settled: IndexMap<usize, Vec<u32>> = IndexMap::default();
-    let mut stack = _Stack::new(floating.clone());
+    let mut stack = _Stack::new(floating.clone(), body.float_stack);
     stack.fresh = body
         .blocks
         .iter()

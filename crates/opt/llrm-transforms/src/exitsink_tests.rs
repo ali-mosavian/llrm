@@ -65,3 +65,45 @@ fn test_only_adds_and_subtracts_move() {
     let (_, changed) = run(&looped("mul i16 %i, 40", "%i.next"));
     assert!(!changed);
 }
+
+/// bench/mandel: a `short` counter's `sext`, read after the loop by two exits (the break and the
+/// bound), was computed every trip. Each exit takes a copy.
+#[test]
+fn test_an_extension_two_exits_read_moves_to_both() {
+    let text = "define i32 @f(i16 %n, i16 %x) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b3 ]
+  %w = sext i16 %i to i32
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b4
+
+b2:
+  %d = icmp sgt i16 %i, %x
+  br i1 %d, label %b5, label %b3
+
+b3:
+  %next = add i16 %i, 1
+  br label %b1
+
+b4:
+  %e = phi i32 [ %w, %b1 ]
+  ret i32 %e
+
+b5:
+  %g = phi i32 [ %w, %b2 ]
+  ret i32 %g
+}
+";
+    let before = parsed(text);
+    let mut after = before.clone();
+    assert!(sunk(f(&mut after)));
+    let shown = printed(&after);
+    let inputs: &[&[i128]] = &[&[0, 3], &[5, 3], &[5, 100], &[9, -1]];
+    assert_eq!(results(&after, inputs), results(&before, inputs), "{shown}");
+    let (body, rest) = shown.split_once("b2:").expect("b2");
+    assert!(!body.contains("sext"), "{shown}");
+    assert_eq!(rest.matches("sext").count(), 2, "{shown}");
+}

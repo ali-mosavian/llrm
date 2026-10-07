@@ -3,3 +3,5 @@ docs/examples/basic/*.bas text eol=crlf
 docs/examples/basic/*.BI text eol=crlf
 # GitHub has no Nib grammar; Python's fits its comments and blocks.
 *.nib linguist-language=Python linguist-detectable=false
+# Two branches that lower the same file's count merge as both lines; the guard asks for a re-bless.
+tests/target_facts.baseline merge=union

@@ -71,6 +71,9 @@ pub struct Convention {
     pub first_argument_offset_far: Option<i64>,
     /// The register a frame's cells are addressed through, and the stack pointer.
     pub frame: String,
+    /// A function that needs no frame register may leave it out: its cells are addressed through the
+    /// stack pointer, and the frame register is not set. gcc's `-fomit-frame-pointer`.
+    pub frame_optional: bool,
     pub stack: String,
     /// The registers a callee keeps, the frame register among them.
     pub preserved: Vec<Kept>,
@@ -84,6 +87,9 @@ pub struct Convention {
     /// How many slots an i64 or a double takes.
     pub wide_slots: i64,
     pub variadic_float: String,
+    /// For an interrupt handler: what its frame pointer addresses, lowest address first, each slot's register and
+    /// bytes. Empty for the rest.
+    pub interrupt_frame: Vec<(String, i64)>,
 }
 
 /// A target's conventions, in file order.
@@ -92,7 +98,7 @@ pub struct Calling {
     pub conventions: Vec<Convention>,
 }
 
-const KEYS: [&str; 30] = [
+const KEYS: &[&str] = &[
     "cc",
     "wide_pairs",
     "backfill",
@@ -109,6 +115,7 @@ const KEYS: [&str; 30] = [
     "first_argument_offset",
     "first_argument_offset_far",
     "frame",
+    "frame_optional",
     "stack",
     "preserved",
     "clobbered",
@@ -123,6 +130,7 @@ const KEYS: [&str; 30] = [
     "wide_slots",
     "variadic_float",
     "like",
+    "interrupt_frame",
 ];
 
 impl Calling {
@@ -159,6 +167,11 @@ impl Calling {
     /// The names, in file order.
     pub fn names(&self) -> Vec<&str> {
         self.conventions.iter().map(|one| one.name.as_str()).collect()
+    }
+
+    /// The convention an interrupt handler is entered under: the one whose frame the file lays out.
+    pub fn interrupt(&self) -> Option<&Convention> {
+        self.conventions.iter().find(|one| !one.interrupt_frame.is_empty())
     }
 
     pub fn named(&self, name: &str) -> Option<&Convention> {
@@ -297,6 +310,7 @@ impl Convention {
             first_argument_offset: integer("first_argument_offset")?,
             first_argument_offset_far: table.contains_key("first_argument_offset_far").then(|| integer("first_argument_offset_far")).transpose()?,
             frame: text("frame")?,
+            frame_optional: flag("frame_optional")?,
             stack: text("stack")?,
             preserved,
             clobbered: names(table.get("clobbered"), "clobbered")?,
@@ -306,6 +320,18 @@ impl Convention {
             promotion: text("promotion")?,
             wide_slots: integer("wide_slots")?,
             variadic_float: text("variadic_float")?,
+            interrupt_frame: match table.get("interrupt_frame") {
+                None => Vec::new(),
+                Some(rows) => rows
+                    .as_array()
+                    .ok_or_else(|| format!("{} is not a list", at("interrupt_frame")))?
+                    .iter()
+                    .map(|row| match row.as_array().map(|pair| (pair.first().and_then(toml::Value::as_str), pair.get(1).and_then(toml::Value::as_integer))) {
+                        Some((Some(register), Some(bytes))) => Ok((register.to_owned(), bytes)),
+                        _ => Err(format!("{}: a slot is [register, bytes]", at("interrupt_frame"))),
+                    })
+                    .collect::<Result<_, _>>()?,
+            },
         })
     }
 
@@ -504,5 +530,24 @@ mod tests {
         let calling = Calling::parse(&format!("{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\n")).unwrap();
         assert_eq!(calling.by_cc("cdecl").map(|one| one.name.as_str()), Some("c"));
         assert!(calling.by_cc("pascal").is_none());
+    }
+}
+
+#[cfg(test)]
+mod interrupt_frame_tests {
+    use super::*;
+
+    /// The interrupt frame was a constant in llrm-mir beside the description; a convention states it now. A slot that is
+    /// not `[register, bytes]` was nobody's error before and is refused.
+    #[test]
+    fn test_an_interrupt_frame_is_read_from_the_description() {
+        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../llrm-x86-m16/src/machines/calling.toml")).unwrap();
+        let calling = Calling::parse(&text).unwrap();
+        let frame = &calling.interrupt().expect("m16 has an interrupt handler").interrupt_frame;
+        assert_eq!(frame.len(), 15);
+        assert_eq!(frame[0], ("gs".to_owned(), 2));
+        assert_eq!(frame.iter().map(|slot| slot.1).sum::<i64>(), 46);
+        let bad = text.replace("[\"gs\", 2]", "[\"gs\"]");
+        assert!(Calling::parse(&bad).is_err());
     }
 }

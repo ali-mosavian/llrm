@@ -28,3 +28,13 @@ ah      8    eax  8    -
 bh      8    ebx  8    -
 ch      8    ecx  8    -
 dh      8    edx  8    -
+
+# The x87 stack, as llrm-x86-m32 states it: its depth is the floating values held at once.
+st0     80   st0 0    x87
+st1     80   st1 0    x87
+st2     80   st2 0    x87
+st3     80   st3 0    x87
+st4     80   st4 0    x87
+st5     80   st5 0    x87
+st6     80   st6 0    x87
+st7     80   st7 0    x87
