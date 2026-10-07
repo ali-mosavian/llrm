@@ -49,7 +49,7 @@ reason = "`x[0] |= foo ()` where foo changes x[0]: the order of the read of x[0]
 
 [[differs]]
 program = "bf-sign-2"
-reason = "Open Watcom types a bit-field by its declared type, so `unsigned :15` and `unsigned long :31` stay unsigned in arithmetic; ISO C11 6.3.1.1p2 promotes any bit-field whose values fit an int to int (checked on both targets: the unsigned u15 and u31 give the unsigned answer)."
+reason = "wccq non-conforming (front-end route): it types a bit-field by its declared type, so `unsigned :15` and `unsigned long :31` stay unsigned in arithmetic, where ISO C11 6.3.1.1p2 promotes any bit-field whose values fit an int to int (checked on both targets: u15 and u31 give the unsigned answer)."
 
 [[differs]]
 program = "memcpy-1"

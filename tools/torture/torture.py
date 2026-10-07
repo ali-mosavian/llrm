@@ -115,6 +115,7 @@ def main() -> int:
     parser.add_argument("--levels", default="O0,O2,Os")
     parser.add_argument("--stage", choices=["compile", "run"], default="run")
     parser.add_argument("--sample", type=int, default=0, help="the first N programs only")
+    parser.add_argument("--gate", action="store_true", help="the fixed sample of sample.txt, all levels; exits 1 on any build, link or wrong result that is not named")
     parser.add_argument("--work", type=Path, default=Path.home() / "scratch/torture-work")
     parser.add_argument("--out", type=Path, help="write each program's result here as JSON")
     args = parser.parse_args()
@@ -122,7 +123,10 @@ def main() -> int:
     work = args.work
     work.mkdir(parents=True, exist_ok=True)
     rules = expected()
-    chosen = programs(args.names)[: args.sample or None]
+    names_wanted = args.names
+    if args.gate:
+        names_wanted = [line.strip() for line in (HERE / "sample.txt").read_text().splitlines() if line.strip() and not line.startswith("#")]
+    chosen = programs(names_wanted)[: args.sample or None]
     support_obj = work / "libc.obj"
     done = subprocess.run([str(BIN / "llrm-c"), str(HERE / "libc.c"), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), "-O2", "-o", str(support_obj)], capture_output=True, text=True)
     if done.returncode != 0:
@@ -166,6 +170,11 @@ def main() -> int:
         if kind == "wrong" and case[0].stem in by_design:
             result[case] = ("differs", f"{why}: {by_design[case[0].stem]}")
     summary(result, args)
+    if args.gate:
+        failed = sorted(f"{case[0].stem}@{case[1]}" for case, (kind, _) in result.items() if kind in ("compile", "link", "wrong"))
+        print("GATE: " + ("ok" if not failed else "FAILED: " + ", ".join(failed)))
+        if failed:
+            return 1
     if args.out:
         args.out.write_text(json.dumps({f"{case[0].stem}@{case[1]}": list(value) for case, value in result.items()}, indent=1))
     return 0
