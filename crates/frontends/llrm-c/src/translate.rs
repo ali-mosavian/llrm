@@ -212,6 +212,11 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
                     let width = widths_for(unit.flat, type_).unwrap_or(2) as usize;
                     object.bytes.extend(&number(value)?.to_le_bytes()[..width]);
                 }
+                // A 64-bit datum: its eight bytes, whatever the sign the front end spells the value in.
+                ("DGInteger64", [value, _]) => {
+                    let value = value.trim().parse::<i128>().map_err(|_| Unsupported(format!("not a number: {value}")))?;
+                    object.bytes.extend(&value.to_le_bytes()[..8]);
+                }
                 ("DGFEPtr", [symbol, type_, offset]) => {
                     let far = far_pointers(type_) || *type_ == "TY_LONG_CODE_PTR" || (*type_ == "TY_CODE_PTR" && unit.target & hir::BIG_CODE != 0);
                     pointer(object, Key::Symbol(hir::handle(symbol)), offset, far)?;
@@ -1275,6 +1280,25 @@ impl<'a, 't> Body<'a, 't> {
         }
     }
 
+    /// The type `target op= source` computes in where it is not the target's: the integer promotions of the target for a shift, the
+    /// usual arithmetic conversions of both otherwise. None where the target's own type is it (or an operand is no integer).
+    fn compound_type(&self, cg_op: &str, target: &str, source: &str) -> Option<String> {
+        let (target, source) = (self.unit.canonical_type(target), self.unit.canonical_type(&self.type_of_node(source)));
+        let int = i64::from(widths_for(self.unit.flat, "TY_INTEGER")?);
+        let integer = |name: &str| (matches!(name, "TY_INT_1" | "TY_UINT_1" | "TY_INT_2" | "TY_UINT_2" | "TY_INT_4" | "TY_UINT_4" | "TY_INT_8" | "TY_UINT_8" | "TY_INTEGER" | "TY_UNSIGNED")).then(|| (i64::from(widths_for(self.unit.flat, name).unwrap_or(0)), signed(name)));
+        let promoted = |(width, signed): (i64, bool)| if width < int { (int, true) } else { (width, signed) };
+        let (target_class, source_class) = (integer(&target)?, integer(&source)?);
+        let (left, right) = (promoted(target_class), promoted(source_class));
+        let common = if matches!(cg_op, "O_LSHIFT" | "O_RSHIFT") {
+            left
+        } else if left.0 != right.0 {
+            if left.0 > right.0 { left } else { right }
+        } else {
+            (left.0, left.1 && right.1)
+        };
+        (common != target_class).then(|| format!("TY_{}INT_{}", if common.1 { "" } else { "U" }, common.0))
+    }
+
     /// `node`'s scalar value as `type_`.
     fn value_as(&mut self, node: &str, type_: &str) -> R<i64> {
         let got = self.eval(node)?;
@@ -1431,6 +1455,13 @@ impl<'a, 't> Body<'a, 't> {
                     let got = self.eval(source)?;
                     let by = self.scalar(got)?;
                     self.moved(old, by, &from, *cg_op == "O_MINUS")?
+                } else if let Some(common) = self.compound_type(cg_op, type_, source) {
+                    // `x op= y` is `x = (T)(x op y)` in the usual arithmetic conversions of both, not in T: `unsigned char x /= short y`
+                    // divided in 8 bits, the front end having typed the operation by the target's.
+                    let old = self.converted(old, type_, &common)?;
+                    let by = self.value_as(source, &common)?;
+                    let made = self.arithmetic(cg_op, old, by, &common)?;
+                    self.converted(made, &common, type_)?
                 } else {
                     let by = self.value_as(source, type_)?;
                     self.arithmetic(cg_op, old, by, type_)?
@@ -1440,7 +1471,15 @@ impl<'a, 't> Body<'a, 't> {
             }
             ("CGCall", [call]) => {
                 let call = &self.unit.calls[&hir::handle(call)];
-                self.call(call)?
+                match self.call(call)? {
+                    // A function whose body returns no value is a MIR void function; `int f(int i) { }` called as `return f(i)`
+                    // has the value the C standard leaves undefined, and the front end types its call as an int either way.
+                    Got::Returned(None) if self.types.aggregate(&call.type_).is_none() && self.ty(&call.type_).is_ok() => {
+                        let ty = self.ty(&call.type_)?;
+                        Got::Returned(Some(self.constant(ty, Number::Int(0))))
+                    }
+                    got => got,
+                }
             }
             ("CGChoose", [test, yes, no, type_]) => {
                 // A local both arms store, which promotion makes a phi.
@@ -1463,7 +1502,7 @@ impl<'a, 't> Body<'a, 't> {
             ("CGCompare", _) => Got::Value(self.compare(&tree.args)?),
             ("CGFlow", _) => {
                 let truth = self.types.of(Shape::Bool, None);
-                let flowed = self.local(&format!("n{}", hir::handle(node)), truth, 2);
+                let flowed = self.local(&format!("n{}", hir::handle(node)), truth, self.types.get(truth).width);
                 let no = self.block();
                 let join = self.block();
                 self.branch(node, no, false)?;
@@ -1478,10 +1517,11 @@ impl<'a, 't> Body<'a, 't> {
                 Got::Value(self.op(Op::Load, truth, vec![Operand::place_ref(flowed)]))
             }
             ("CGEval", [inner]) | ("CGAttr", [inner, _]) | ("CGFact", [_, inner, _]) => self.eval(inner)?,
-            ("CGVolatile", [inner]) => {
-                let got = self.eval(inner)?;
-                Got::Volatile(self.address(got)?.0)
-            }
+            ("CGVolatile", [inner]) => match self.eval(inner)? {
+                // A bit field of a volatile object is read through its unit, volatile: it has no address of its own.
+                Got::Bits { pointer, start, width, unit, signed, .. } => Got::Bits { pointer, volatile: true, start, width, unit, signed },
+                got => Got::Volatile(self.address(got)?.0),
+            },
             ("CGBitMask", [inner, start, width, type_]) => {
                 let got = self.eval(inner)?;
                 let (pointer, volatile) = self.address(got)?;
