@@ -1,6 +1,7 @@
 //! `-g` as DWARF in an ELF object: llvm-dwarfdump accepts every bench C program's, and gdb, driven
 //! by a script, stops where it is told in a linked and running program and reads its values.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -130,6 +131,13 @@ fn the_flavor_asked_for_is_the_formats_or_an_error() {
     assert!(refused(&["-m32", "-gcodeview", "-fobject-format=elf"]).contains("cannot carry CodeView"));
     assert!(refused(&["-m32", "-gtd", "-fobject-format=elf"]).contains("Turbo Debugger"));
     assert!(refused(&["-m32", "-gdwarf-3", "-fobject-format=elf"]).contains("unrecognized"));
+    // Borland's records are 16-bit.
+    assert!(refused(&["-m32", "-gtd"]).contains("16-bit"));
+    let made = compile(&source, &["-m16", "-gtd"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let records = llrm_core::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
+    let classes: BTreeSet<u8> = records.iter().filter(|one| one.r#type == llrm_core::objectfile::omf::COMENT).filter_map(|one| one.body.get(1).copied()).collect();
+    assert!(classes.contains(&0xE3) && classes.contains(&0xE5) && !classes.contains(&0xA1), "-gtd on OMF is Borland's: {classes:x?}");
     let made = compile(&source, &["-m32", "-g", "-fobject-format=elf"], &object);
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     assert!(std::fs::read(&object).unwrap().windows(11).any(|one| one == b".debug_info"), "-g on ELF is DWARF");
