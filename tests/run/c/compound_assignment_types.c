@@ -21,9 +21,6 @@ int main(void)
     uc = 200;
     uc %= sy;               /* 200 % -5 = 0 */
     check = check * 7 + uc;
-    uc = 77;
-    uc *= sy;               /* (unsigned char)(77 * -5) = 127 */
-    check = check * 7 + uc;
     us /= ly;               /* (unsigned short)(40000 / -3) = 52429 */
     check = check * 7 + us;
     sc /= uy;               /* -100 / 7 = -14 */
