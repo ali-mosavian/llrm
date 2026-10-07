@@ -334,7 +334,9 @@ impl Selector<'_, '_, '_> {
             ..Insn::new(at, Some((at, at)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![], vec![])
         }));
         self.calls.insert(at, name.to_owned());
-        self.inline.insert(at, code.to_vec());
+        // The bytes are 386 code for a 16-bit segment.
+        let code = if self.arch.object().bitness == 32 { crate::backend::lower_int64::flat(code) } else { code.to_vec() };
+        self.inline.insert(at, code);
         Ok((quotient, remainder))
     }
 
