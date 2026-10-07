@@ -90,6 +90,18 @@ def build(source: Path, level: str, target: str, work: Path, support: Path, stem
     return "built", "", exe
 
 
+def launched(jobs: list, work: Path) -> dict:
+    """Every job's result. A launch that lost a job (a program that took the emulator with it) is run again in halves until the
+    one is alone, and that one is a wrong result of its own kind: the emulator did not come back."""
+    try:
+        return dosbatch.run(jobs, work, budget_ms=BUDGET_MS)
+    except RuntimeError as error:
+        if len(jobs) == 1:
+            return {jobs[0].stem: dosbatch.Result("lost", detail="the emulator did not report the program's end")}
+        middle = len(jobs) // 2
+        return {**launched(jobs[:middle], work), **launched(jobs[middle:], work)}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("names", nargs="*")
@@ -133,7 +145,7 @@ def main() -> int:
             loader = dosbatch.target_link(target).get("loader")
             files = (Path(loader.replace("{ow}", str(dosbatch.ow_root()))),) if loader else ()
             jobs = [dosbatch.Job(names[case], "exe", exes[case], files=files) for case in group]
-            ran = dosbatch.run(jobs, work / "run", budget_ms=BUDGET_MS)
+            ran = launched(jobs, work / "run")
             for case in group:
                 outcome = ran[names[case]]
                 if outcome.status != "ok":

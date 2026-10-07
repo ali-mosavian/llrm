@@ -1,0 +1,69 @@
+DOSBox-X crash report
+timestamp_unix: 1791377858
+fatal: No byte handler for write to ffffffd6
+
+
+[guest]
+mode: pmode=1 vm86=0 cpl=0 mpl=3 paging=0 wp=0 code_big=1 stack_big=1
+control: CR0=00000011 CR2=00000000 CR3=00000000 CR4=00000000
+tables: GDTR base=00014E90 limit=0000084F IDTR base=00012500 limit=000007FF LDTR=0000 TR=0000
+
+Guest registers:
+EAX=FFFFFFD6 EBX=00000000 ECX=00000000 EDX=000000FF
+ESI=00000000 EDI=0FFF357F EBP=00000000 ESP=00170244
+CS=0838 DS=0830 ES=0830 SS=0830 FS=0840 GS=0000 EIP=0017027D FLAGS=00000A97
+
+Guest segment caches:
+CS sel=0838 base=00000000 limit=FFFFFFFF expanddown=0
+DS sel=0830 base=00000000 limit=FFFFFFFF expanddown=0
+ES sel=0830 base=00000000 limit=FFFFFFFF expanddown=0
+SS sel=0830 base=00000000 limit=FFFFFFFF expanddown=0
+FS sel=0840 base=00000000 limit=FFFFFFFF expanddown=0
+GS sel=0000 base=00000000 limit=FFFFFFFF expanddown=0
+
+Guest stack near SS:ESP (linear 00170244):
+00170244  0C C3 83 EC DD 01 00 00 17 00 89 44 24 04 81 7C 
+00170254  3B 02 17 00 DD 01 00 00 C0 0F B6 C0 0B C0 75 0E 
+00170264  69 02 17 00 FF 2B 44 24 DC 01 00 00 EB 0C B8 D6 
+00170274  FF FF FF 2B 3B 02 17 00 DC 01 00 00 24 08 83 C4 
+00170284  10 C3 00 00 69 02 17 00 E8 65 FF FF DB 01 00 00 
+00170294  EB FE B0 86 0F B6 C0 50 3B 02 17 00 DB 01 00 00 
+001702A4  EB FE 51 56 57 8B F8 8B 69 02 17 00 D6 8D 0C 30 
+001702B4  DA 01 00 00 8A 04 1A 88 04 19 43 75 3B 02 17 00 
+
+[host]
+core=normal cycles=625 cycle_left=221 cycle_max=32795
+
+Host registers:
+RAX=0000000000000011 RBX=00000000001702C4 RCX=0000000000000011 RDX=00006517F9A173F0
+RSI=00006517F9A173F0 RDI=00006517F9A3FBBC RBP=00006517CAE8D55D RSP=00007FFFC48297E0
+R8 =00000000001702C4 R9 =0000000000000011 R10=0000000000000001 R11=0000000000000000
+R12=00007FFFC48297E0 R13=00006517CAE8D55D R14=00006517CAE8D55D R15=00006517F9A17310
+RFLAGS=0000000000000202 return=0x6517cae182ac
+note: captured inside E_Exit crash-report generation, not from a host signal context.
+
+Host stack trace:
+00  /home/alim/scratch/code32/target/release/dosbox-x(+0x9c5db5) [0x6517cae16db5]
+01  /home/alim/scratch/code32/target/release/dosbox-x(+0x9c72ac) [0x6517cae182ac]
+02  /home/alim/scratch/code32/target/release/dosbox-x(+0x869cd8) [0x6517cacbacd8]
+03  /home/alim/scratch/code32/target/release/dosbox-x(+0x869b89) [0x6517cacbab89]
+04  /home/alim/scratch/code32/target/release/dosbox-x(+0x89e09c) [0x6517cacef09c]
+05  /home/alim/scratch/code32/target/release/dosbox-x(+0x201dd6) [0x6517ca652dd6]
+06  /home/alim/scratch/code32/target/release/dosbox-x(+0x20207e) [0x6517ca65307e]
+07  /home/alim/scratch/code32/target/release/dosbox-x(+0x8560c1) [0x6517caca70c1]
+08  /home/alim/scratch/code32/target/release/dosbox-x(+0x4e762d) [0x6517ca93862d]
+09  /home/alim/scratch/code32/target/release/dosbox-x(+0x4c2e88) [0x6517ca913e88]
+10  /home/alim/scratch/code32/target/release/dosbox-x(+0x4c53d6) [0x6517ca9163d6]
+11  /home/alim/scratch/code32/target/release/dosbox-x(+0x4c2347) [0x6517ca913347]
+12  /home/alim/scratch/code32/target/release/dosbox-x(+0x4c2880) [0x6517ca913880]
+13  /home/alim/scratch/code32/target/release/dosbox-x(+0x4ac41e) [0x6517ca8fd41e]
+14  /home/alim/scratch/code32/target/release/dosbox-x(+0x4ad55e) [0x6517ca8fe55e]
+15  /home/alim/scratch/code32/target/release/dosbox-x(+0x4b655c) [0x6517ca90755c]
+16  /home/alim/scratch/code32/target/release/dosbox-x(+0x576231) [0x6517ca9c7231]
+17  /home/alim/scratch/code32/target/release/dosbox-x(+0x52ba09) [0x6517ca97ca09]
+18  /home/alim/scratch/code32/target/release/dosbox-x(+0x201e04) [0x6517ca652e04]
+19  /home/alim/scratch/code32/target/release/dosbox-x(+0x20207e) [0x6517ca65307e]
+20  /home/alim/scratch/code32/target/release/dosbox-x(+0x198f8b) [0x6517ca5e9f8b]
+21  /lib/x86_64-linux-gnu/libc.so.6(+0x2a575) [0x70efe4c2a575]
+22  /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x88) [0x70efe4c2a628]
+23  /home/alim/scratch/code32/target/release/dosbox-x(+0x2009b5) [0x6517ca6519b5]
