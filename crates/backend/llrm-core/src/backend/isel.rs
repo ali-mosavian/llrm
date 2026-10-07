@@ -17,6 +17,7 @@ use llrm_mir::{BinaryOp, CastOp, ConstantKind, FloatKind, FloatPredicate, Global
 use llrm_mir::types::Types;
 
 use crate::backend::assemble::Abi;
+use crate::backend::calleefacts::CalleeFacts;
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
 use crate::backend::peep;
@@ -477,6 +478,11 @@ enum Pointer {
 
 /// `hole` bytes below BP are left free, above the allocas, for spill slots.
 pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, compiled: &'static Compiled, arch: &'c dyn llrm_target::Target, zeroed: bool, hole: i64) -> Result<Selected, Unselected> {
+    selected_with(module, name, abi, pool, cpu, segments, compiled, arch, zeroed, hole, &CalleeFacts::none())
+}
+
+/// `selected`, a function that takes part in `facts` saving nothing and its calls of one that does clobbering what it wrote.
+pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, compiled: &'static Compiled, arch: &'c dyn llrm_target::Target, zeroed: bool, hole: i64, callee_facts: &'c CalleeFacts) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -505,6 +511,7 @@ pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Po
         module,
         function,
         arch,
+        callee_facts,
         spaces: arch.layout().spaces.roles,
         layout,
         values: IndexMap::default(),
@@ -681,6 +688,8 @@ struct Selector<'m, 'c, 'p> {
     module: &'m Module,
     function: &'m Function,
     arch: &'c dyn llrm_target::Target,
+    /// What the functions that take part leave different.
+    callee_facts: &'c CalleeFacts,
     layout: DataLayout,
     values: IndexMap<ValueId, u32>,
     next: u32,
@@ -3311,6 +3320,14 @@ impl Selector<'_, '_, '_> {
             let named = self::entry(self.arch, convention, variadic).map(|entry| entry.clobbers(&[], None)).unwrap_or_default();
             named.iter().filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st")).map(|name| llrm_x86::calling::register(name)).map(|register| if register.is_gpr() { register.full_register32() } else { register }).collect()
         });
+        // A callee that takes part clobbers what it wrote, and no more.
+        let (changed, disturbs, known) = match &callee {
+            Callee::Direct(name, _) => match self.callee_facts.written(name) {
+                Some(written) => (Some(written.whole.clone()), written.whole.clone(), Some(written.high)),
+                None => (changed, disturbs, None),
+            },
+            _ => (changed, disturbs, None),
+        };
         let mut delivers = Vec::new();
         let mut result = None;
         let mut float = None;
@@ -3381,6 +3398,7 @@ impl Selector<'_, '_, '_> {
             call: Some(self.listed(effects, disturbs)),
             clobbers: changed.clone().unwrap_or_else(|| call_clobbers(&contract, self.segments)),
             clobbers_high: match &placed {
+                _ if known.is_some() => known.clone().unwrap_or_default(),
                 // What the convention keeps only the pushed part of (a 16-bit push of a 32-bit register) loses its upper half.
                 Some((entry, _)) => llrm_x86::calling::callee_saved(entry).into_iter().filter(|(full, pushed)| full != pushed).map(|(full, _)| full).collect(),
                 None => call_clobbered_high_keeping(&contract, self.segments, &whole),
