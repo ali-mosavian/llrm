@@ -77,7 +77,7 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
         if global.function().is_some_and(|one| !one.is_declaration()) {
             let name = global.name.as_deref().unwrap_or_default();
             let made = llrm_support::debug::in_function(name, || machined(module, name, abi, &pool, &target))?;
-            facts.record(name, &made.body, &made.registers.saved);
+            facts.record(name, &made.body, &made.registers);
             done.insert(id, made);
         }
     }

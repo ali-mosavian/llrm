@@ -61,12 +61,16 @@ impl CalleeFacts {
     }
 
     /// Records what the finished `body` of `name` leaves different: what it writes, but for the registers its prologue saves
-    /// and its epilogue restores (`saved`, the convention's, by whole register).
-    pub fn record(&self, name: &str, body: &LirBody, saved: &[(Register, Register)]) {
+    /// and its epilogue restores (the frame's `saved`, by whole register).
+    pub fn record(&self, name: &str, body: &LirBody, frame: &llrm_target::FrameRegisters) {
         if self.takes_part(name) {
             let mut whole = written_by(body);
+            // The frame's own registers are its prologue's and epilogue's.
+            for own in [frame.pointer, frame.stack] {
+                whole.remove(&ir::root(own));
+            }
             let mut high = BTreeSet::new();
-            for (kept, pushed) in saved {
+            for (kept, pushed) in &frame.saved {
                 if whole.remove(&ir::root(*kept)) && kept != pushed {
                     high.insert(*kept);
                 }
@@ -78,7 +82,7 @@ impl CalleeFacts {
 }
 
 /// The registers `body` writes, by their roots (a write of AX is a write of EAX): its destinations, the registers it
-/// pins values in and takes results from, and what its calls disturb. The frame and stack registers are the frame's.
+/// pins values in and takes results from, and what its calls disturb.
 pub fn written_by(body: &LirBody) -> BTreeSet<Register> {
     let mut found = BTreeSet::new();
     for one in body.insns() {
@@ -96,9 +100,6 @@ pub fn written_by(body: &LirBody) -> BTreeSet<Register> {
             None => found.extend(one.clobbers.iter().copied().map(ir::root)),
         }
         found.extend(one.requires.iter().chain(&one.delivers).map(|(_, register)| ir::root(*register)));
-    }
-    for frame in [Register::EBP, Register::ESP] {
-        found.remove(&frame);
     }
     found
 }
