@@ -192,6 +192,8 @@ struct Exit {
     most: BigInt,
     /// A symbolic count needs a guard, and the loop entered at its body.
     guarded: bool,
+    /// The test is, or is made, the loop's last block: a loop with other exits is entered at its body only by a guard here.
+    fused: bool,
 }
 
 /// One loop's choice, before anything changes.
@@ -469,7 +471,8 @@ fn _exit(view: &memory::Unit, loop_: &Loop, users: &Users) -> Option<Exit> {
     if guarded && (proof.posttested || rotate::_shape(function, loop_).is_none()) {
         return None;
     }
-    Some(Exit { proof: proof.clone(), trips, most, guarded })
+    let fused = proof.posttested || guarded || !proof.stops;
+    Some(Exit { proof: proof.clone(), trips, most, guarded, fused })
 }
 
 /// Whether `candidate`'s step is made before `proof`'s test where the test
@@ -1027,7 +1030,9 @@ fn _exit_price(target: &Target, exit: &Exit, candidate: &Candidate, keys: &mut V
         return None;
     }
     let end = _end(exit, candidate);
-    if end.is_zero() && candidate.of.pointer.is_none() {
+    // Free only where the step's flags are the test's: the backend fuses a zero test with the step that precedes it
+    // along a single path: a test at the latch, not one at the head of a loop that has other exits and no guard to enter at its body.
+    if end.is_zero() && candidate.of.pointer.is_none() && exit.fused {
         return Some((0, None));
     }
     let key = (!end.terms.is_empty() || candidate.of.pointer.is_some()).then(|| _interned(keys, (candidate.of.pointer, end)));
