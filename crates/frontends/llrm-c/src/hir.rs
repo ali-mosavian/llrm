@@ -23,6 +23,10 @@ pub const FE_GLOBAL: i64 = 0x4;
 pub const FE_IMPORT: i64 = 0x8;
 pub const PRIVATE: i64 = 0x40; // a segment of its own, outside DGROUP
 // call_class and call_class_target (cgauxcc.h, x86auxcc.h)
+/// What the flat front end records of a function it passes in its default registers (`wcc386 -3r`'s own list): any other
+/// list is a `#pragma aux` or `__fastcall`.
+pub const DEFAULT_REGISTERS: &str = "[f0000ff:0]";
+
 pub const REVERSE_PARMS: i64 = 0x1;
 pub const HAS_VARARGS: i64 = 0x20;
 pub const CALLER_POPS: i64 = 0x80;
@@ -133,6 +137,8 @@ pub struct Symbol {
     pub call_class: i64,
     pub call_target: i64,
     pub register_parms: bool, // any argument passed in a register
+    /// The registers are the front end's default list (Open Watcom's own, not an `aux` pragma's or `__fastcall`'s).
+    pub default_registers: bool,
     pub code: Option<Code>,
     pub segment: i64,
 }
@@ -179,10 +185,16 @@ impl Symbol {
         self.call_class & REVERSE_PARMS != 0
     }
 
+    /// The program's entry, `entry` (the routine the runtime's start calls, its C runtime description's).
+    pub fn is_entry(&self, entry: &str) -> bool {
+        self.base == entry && self.exported()
+    }
+
     pub fn object_name(&self) -> String {
         if self.pattern == "^" {
             return self.base.to_uppercase();
         }
+
         let base = intrinsic_runtime(&self.base).unwrap_or(&self.base);
         if self.pattern.is_empty() {
             base.to_owned()
@@ -297,6 +309,9 @@ pub struct Unit {
     pub procs: Vec<Proc>,
     /// Compiled with -d2.
     pub debug: Option<Debug>,
+    /// The routine the runtime's start calls, and the `cc` of the convention it calls it in (the C runtime description's).
+    pub entry: String,
+    pub entry_cc: String,
     /// INIT's code-generator switches (`CGSW_GEN_*`).
     pub switches: i64,
     /// Recorded by the 386 front end: flat, `int` and every pointer 4 bytes.
@@ -306,6 +321,22 @@ pub struct Unit {
 }
 
 impl Unit {
+    /// Each symbol's decoration as `calling` states it for `format`: what the front end recorded is OMF's, and a
+    /// symbol whose pattern a convention states takes that convention's for `format`. The entry is called by
+    /// the runtime's start in the convention the description names, whatever the front end made of it.
+    pub fn decorate(&mut self, calling: &llrm_target::calling::Calling, format: &str) {
+        let entry = calling.by_cc(&self.entry_cc).and_then(|one| one.symbol.get(format)).cloned();
+        for symbol in self.symbols.values_mut() {
+            if symbol.is_entry(&self.entry) {
+                if let Some(pattern) = &entry {
+                    symbol.pattern = pattern.clone();
+                }
+            } else if let Some(pattern) = calling.redecorated(&symbol.pattern, format) {
+                symbol.pattern = pattern;
+            }
+        }
+    }
+
     /// Warns that far and huge pointers are near on a target with one address space (the front end
     /// gives both the same type, so it cannot say which was written).
     pub fn warn_near(&self) {
@@ -472,6 +503,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                         call_class: 0,
                         call_target: 0,
                         register_parms: false,
+                        default_registers: false,
                         code: None,
                         segment: int(one.fields.get("seg").map_or("0", String::as_str)),
                     },
@@ -484,8 +516,9 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     .expect("KeyError: symbol");
                 symbol.call_class = hex(field(one, "class"));
                 symbol.call_target = hex(field(one, "target"));
-                symbol.register_parms =
-                    one.fields.get("parms").map_or("[]", String::as_str) != "[]";
+                let parms = one.fields.get("parms").map_or("[]", String::as_str);
+                symbol.register_parms = parms != "[]";
+                symbol.default_registers = parms == DEFAULT_REGISTERS;
             }
             "CODE" => {
                 let fixups = field(one, "fix")

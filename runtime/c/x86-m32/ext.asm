@@ -1,5 +1,7 @@
-; The externals the C run tests call, in cdecl32: `report` prints a signed decimal and a
-; newline on standard output, as m16's runtime does.
+; The externals the C run tests call, in watcall32, the default convention, so that the tests declare them as
+; they would any function: arguments in EAX and EDX, a callee that keeps every register but EAX and its
+; argument registers. `report` prints a signed decimal and a newline on standard output, as m16's runtime does.
+; The OS layer's `_llrm_os_*` stay in cdecl32, which these call.
 .386
 .model flat
 
@@ -28,14 +30,13 @@ __STKOVERFLOW proc
     call _llrm_os_exit
 __STKOVERFLOW endp
 
-; void report(long v)
-public _report
-_report proc
-    push ebp
-    mov ebp, esp
+; void report(long v): v in EAX.
+public report_
+report_ proc
     push ebx
+    push ecx
+    push edx
     push edi
-    mov eax, dword ptr [ebp+8]
     mov edi, offset digits + 12
     mov byte ptr [edi-1], 10
     mov byte ptr [edi-2], 13
@@ -68,17 +69,22 @@ unsigned:
     call _llrm_os_write_file
     add esp, 12
     pop edi
+    pop edx
+    pop ecx
     pop ebx
-    pop ebp
     ret
-_report endp
+report_ endp
 
-; int input_read(char *buffer, int count): up to count bytes of DICKENS (opened on the first call, in
-; the current directory), 0 at its end or on an error. bench/grep reads its input through this.
-public _input_read
-_input_read proc
-    push ebp
-    mov ebp, esp
+; int input_read(char *buffer, int count): buffer in EAX, count in EDX. Up to count bytes of DICKENS (opened on
+; the first call, in the current directory), 0 at its end or on an error. bench/grep reads its input through this.
+public input_read_
+input_read_ proc
+    push ebx
+    push ecx
+    push esi
+    push edi
+    mov esi, eax
+    mov edi, edx
     cmp inhandle, 0FFFFFFFFh
     jne opened
     push 0
@@ -90,8 +96,8 @@ _input_read proc
     js failed
     mov inhandle, eax
 opened:
-    push dword ptr [ebp+12]
-    push dword ptr [ebp+8]
+    push edi
+    push esi
     push inhandle
     call _llrm_os_read
     add esp, 12
@@ -100,21 +106,23 @@ opened:
 failed:
     xor eax, eax
 done:
-    pop ebp
+    pop edi
+    pop esi
+    pop ecx
+    pop ebx
     ret
-_input_read endp
+input_read_ endp
 
-; int keep(int x), long keep32(long x): opaque to the optimizer, which cannot see through a call.
-public _keep
-_keep proc
-    mov eax, dword ptr [esp+4]
+; int keep(int x), long keep32(long x): opaque to the optimizer, which cannot see through a call. x is in EAX,
+; where the answer goes.
+public keep_
+keep_ proc
     ret
-_keep endp
+keep_ endp
 
-public _keep32
-_keep32 proc
-    mov eax, dword ptr [esp+4]
+public keep32_
+keep32_ proc
     ret
-_keep32 endp
+keep32_ endp
 
 end

@@ -40,13 +40,15 @@ pub struct Options {
     pub selection: &'static crate::backend::isel::Compiled,
     /// The target `selection` is for.
     pub arch: std::rc::Rc<dyn llrm_target::Target>,
+    /// The object format the symbols are spelled for: `omf`, `elf` or `macho`, which the target's conventions decorate.
+    pub object_format: &'static str,
 }
 
 impl Options {
     /// For `machine` on the target `arch` with its selector, at -O2, the stages
     /// written where `LLRM_MIR_STAGES` names.
     pub fn new(machine: Machine, arch: std::rc::Rc<dyn llrm_target::Target>, selection: &'static crate::backend::isel::Compiled) -> Self {
-        Self { machine, pipeline: Default::default(), dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), stack_usage: false, stack_limit: None, selection, arch }
+        Self { machine, pipeline: Default::default(), dump: std::env::var_os("LLRM_MIR_STAGES").map(Into::into), stack_usage: false, stack_limit: None, selection, arch, object_format: "omf" }
     }
 
     /// For 16-bit x86, which the tests of this crate are written for.
@@ -110,12 +112,12 @@ fn spill_model(program: &Program) {
             let Some(function) = global.function().filter(|one| !one.is_declaration()) else { continue };
             let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer.clone()));
             let registers = analyses.get::<llrm_analysis::manager::Registers>(&module.context, &layout, function);
-            let unit = llrm_analysis::memory::Unit::of(module, &layout, function).with_spaces(program.target.spaces()).with_registers(&registers);
+            let shape = analyses.get::<llrm_analysis::cfg::Shape>(&module.context, &layout, function);
+            let unit = llrm_analysis::memory::Unit::of(module, &layout, function).with_spaces(program.target.spaces()).with_registers(&registers).with_shape(&shape);
             let trips = profit::proven_trips(&unit, &registers);
             let Some(frequency) = profit::_frequencies(&module.context, &module.metadata, &module.globals, function, Some(&trips)) else { continue };
-            let found = llrm_analysis::liveness::live(function);
             let across = |inst| spill::kept_across(&outer, &module.context, function, inst);
-            if let Some(forecast) = profit::spill_forecast(&module.context, &layout, function, &costs, room, &across, &frequency, &found) {
+            if let Some(forecast) = profit::spill_forecast(&module.context, &layout, function, &costs, room, &across, &frequency) {
                 llrm_support::debug!("spillmodel", "{} peak {} spilled {} price {}", global.name.as_deref().unwrap_or("?"), forecast.peak, forecast.spilled.len(), forecast.cost);
                 if let Some(name) = global.name.as_deref() {
                     let per_entry = forecast.cost as f64 / profit::UNIT as f64;

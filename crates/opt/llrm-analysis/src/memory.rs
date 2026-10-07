@@ -525,8 +525,13 @@ impl<'a> Unit<'a> {
 
     pub fn shape(&self) -> Cow<'a, Shape> {
         match self.shape {
-            Some(shape) => Cow::Borrowed(shape),
-            None => Cow::Owned(Shape::of(self.function)),
+            Some(shape) => {
+                if std::env::var_os("LLRM_CHECK_SHAPE").is_some() {
+                    assert!(*shape == Shape::of(self.function), "the shape a unit carries is not that of the body it stands over: stale");
+                }
+                Cow::Borrowed(shape)
+            }
+            None => panic!("a unit with no shape was asked for it: take it from the analysis manager"),
         }
     }
 

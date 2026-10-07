@@ -166,7 +166,6 @@ impl Parser {
                 if exported {
                     public.insert(function.name.clone());
                 }
-                let symbol = symbol.unwrap_or_else(|| abi.map_or_else(|| function.name.clone(), |abi| abi.symbol(&function.name)));
                 if let (true, Some(abi)) = (imported, abi) {
                     externs.push(Extern { abi, symbol, function });
                 } else {

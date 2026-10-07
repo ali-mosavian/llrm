@@ -1,21 +1,21 @@
-reason = "narrow compares and sums of extended u16 counters (algebraic), header zext recurrences (induction): frames bas -O2 5091082 -> 4952188, shellsort c -O2 9102 -> 9038 and 198 -> 181 bytes, grep nib 1603 -> 1576 bytes"
-blessed = "2026-10-06"
+reason = "pressuresink: a load is made just before its reader where no register class gains; fewer memory operands overall, matmul +1 and parity/loop +2 from the order sensitivity of lea fusion and coalescing (#729)"
+blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 133
+instructions = 125
 memory_operands = 28
-code_bytes = 333
-data_bytes = 13
-bss_bytes = 0
-kernel_ms = 0.0201
-
-[bas.Os]
-instructions = 119
-memory_operands = 28
-code_bytes = 289
+code_bytes = 331
 data_bytes = 13
 bss_bytes = 0
 kernel_ms = 0.0199
+
+[bas.Os]
+instructions = 111
+memory_operands = 28
+code_bytes = 287
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 0.0198
 
 [c.O2]
 instructions = 106
@@ -39,7 +39,7 @@ memory_operands = 12
 code_bytes = 237
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0049
+kernel_ms = 0.0048
 
 [nib.Os]
 instructions = 120
@@ -47,7 +47,7 @@ memory_operands = 12
 code_bytes = 188
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0048
+kernel_ms = 0.0047
 
 [ow.O2]
 instructions = 325
