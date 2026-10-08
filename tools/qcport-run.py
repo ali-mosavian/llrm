@@ -12,7 +12,9 @@ used as they are and nothing is compiled, which saves the 40 s of compiling.
 
 Both builds link the same objects but QCport's 65 C modules, which the second compiles with llrm-c -O2, and run headless
 (`start.qmp -ticks 300`) in a work directory of their own. They must draw the same: the frames, the polygons and the
-md5 of BENCH.BMP. Any difference, a run that does not finish in QCPORT_RUN_SECONDS (30), or a build that fails exits 1.
+md5 of BENCH.BMP. Any difference, a build that fails, or a run that stops making progress for QCPORT_STALL_SECONDS (90) or
+runs past QCPORT_RUN_SECONDS (900) exits 1. Progress is the emulator's output growing: the emulated work is pinned
+(`cycles=75000`, 300 ticks), so how long it takes on the wall is the host's load, not a property of the build.
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -92,16 +95,35 @@ def verdict(reference: dict[str, str], built: dict[str, str]) -> list[str]:
     return [f"{key}: Borland {reference.get(key)}, llrm {built.get(key)}" for key in ("frames", "polys", "md5") if reference.get(key) != built.get(key)]
 
 
-def run(directory: Path, qcport: Path, seconds: int) -> None:
-    environment = {**os.environ, "DOSBOX_BIN": os.environ.get("DOSBOX_BIN", str(dosbatch.DOSBOX))}
-    subprocess.run([str(qcport.parent / "tools" / "run.sh"), str(directory), ARGUMENTS], env=environment, capture_output=True, timeout=seconds, check=False)
+def progress(directory: Path) -> int:
+    """How much the run has written: the emulator's log grows as the program steps, so a stalled run's does not."""
+    return sum(one.stat().st_size for one in directory.iterdir() if one.is_file())
+
+
+def run(directory: Path, qcport: Path, stall: float, cap: float, tick: float = 1.0) -> str | None:
+    """Run QCport in `directory`; None when it finished, else why it was stopped: no progress for `stall` s, or `cap` s in all."""
+    environment = {**os.environ, "DOSBOX_BIN": os.environ.get("DOSBOX_BIN", str(dosbatch.DOSBOX)), "TIMEOUT": str(int(cap))}
+    child = subprocess.Popen([str(qcport.parent / "tools" / "run.sh"), str(directory), ARGUMENTS], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    start = moved = time.monotonic()
+    seen = -1
+    while child.poll() is None:
+        time.sleep(tick)
+        now = time.monotonic()
+        if (size := progress(directory)) != seen:
+            seen, moved = size, now
+        why = f"no progress for {stall:g}s" if now - moved > stall else f"still running after {cap:g}s" if now - start > cap else None
+        if why:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+            return why
+    return None
 
 
 def main() -> int:
     qcport, include, borland = required("QCPORT"), required("QCPORT_INC"), required("QCPORT_BORLAND")
     compiler = Path(sys.argv[1]) if len(sys.argv) > 1 else llrmbin.bin_dir() / "llrm-c"
     linker = os.environ.get("JWLINK", "jwlink")
-    seconds = int(os.environ.get("QCPORT_RUN_SECONDS", "30"))
+    cap, stall = float(os.environ.get("QCPORT_RUN_SECONDS", "900")), float(os.environ.get("QCPORT_STALL_SECONDS", "90"))
     work = dosbatch.private_work("qcport-run")
     sides = {"borland": work / "borland", "llrm": work / "llrm"}
     for side in sides.values():
@@ -139,11 +161,10 @@ def main() -> int:
             print(f"{name}: link failed\n" + (done.stdout + done.stderr)[-600:])
             return 1
     with ThreadPoolExecutor() as pool:
-        try:
-            list(pool.map(lambda side: run(side, qcport, seconds), sides.values()))
-        except subprocess.TimeoutExpired:
-            print(f"a run did not finish in {seconds}s ({work})")
-            return 1
+        stopped = [why for why in pool.map(lambda side: run(side, qcport, stall, cap), sides.values()) if why]
+    if stopped:
+        print(f"a run did not finish: {', '.join(stopped)} ({work})")
+        return 1
     reference, built = measured(sides["borland"]), measured(sides["llrm"])
     differences = verdict(reference, built)
     if differences:

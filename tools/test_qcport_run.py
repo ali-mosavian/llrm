@@ -70,3 +70,37 @@ def test_a_compiler_that_succeeds_is_no_failure(tmp_path):
     fine.write_text("#!/bin/sh\nexit 0\n")
     fine.chmod(0o755)
     assert qcport_run.compile_failure(fine, [], Path("a.c"), tmp_path / "a.obj") is None
+
+
+def fake_qcport(tmp_path, body):
+    """A QCport whose tools/run.sh is `body`, run in the directory it is given."""
+    script = tmp_path / "tools" / "run.sh"
+    script.parent.mkdir()
+    script.write_text("#!/bin/bash\ncd \"$1\"\n" + body)
+    script.chmod(0o755)
+    (tmp_path / "src").mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+    return tmp_path / "src", work
+
+
+def test_a_run_slow_on_the_wall_that_keeps_drawing_finishes():
+    """'a run did not finish in 30s' failed a gate at load 90 and passed on the rerun: the limit measured the host."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as raw:
+        src, work = fake_qcport(Path(raw), "for i in 1 2 3 4 5 6 7 8; do echo step >> dosbox.log; sleep 0.4; done\n")
+        assert qcport_run.run(work, src, stall=1.0, cap=60, tick=0.1) is None
+
+
+def test_a_run_that_stops_stepping_is_stopped_however_the_host_is_loaded():
+    import tempfile
+    with tempfile.TemporaryDirectory() as raw:
+        src, work = fake_qcport(Path(raw), "echo step >> dosbox.log\nsleep 600\n")
+        assert "no progress" in qcport_run.run(work, src, stall=1.0, cap=60, tick=0.1)
+
+
+def test_a_run_that_steps_forever_is_stopped_by_the_cap():
+    import tempfile
+    with tempfile.TemporaryDirectory() as raw:
+        src, work = fake_qcport(Path(raw), "while true; do echo step >> dosbox.log; sleep 0.05; done\n")
+        assert "after 2s" in qcport_run.run(work, src, stall=30, cap=2, tick=0.1)
