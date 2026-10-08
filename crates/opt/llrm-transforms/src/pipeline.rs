@@ -346,7 +346,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
 fn rerun(module: &mut Module, analyses: &mut ModuleAnalyses, id: GlobalId, fixed: &mut Fixed) -> Result<(), String> {
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
-    let mut declared = Declared::of(module);
+    let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
     let Module { context, globals, metadata, .. } = &mut *module;
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
         return Err(format!("@{}: not a function", id.0));
@@ -354,7 +354,10 @@ fn rerun(module: &mut Module, analyses: &mut ModuleAnalyses, id: GlobalId, fixed
     let mut unit = Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared };
     let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
     analyses.invalidate(&preserved);
-    declared.place(module)
+    if declared.place(module)? > 0 {
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    Ok(())
 }
 
 /// The pipeline over one body, the old `_Transaction`: the structural

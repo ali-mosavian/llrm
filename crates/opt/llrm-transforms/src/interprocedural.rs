@@ -44,12 +44,34 @@ use crate::profit::OperationCosts;
 /// What each function does to memory, from the module's analyses: worked out again only after a body changed, not for
 /// every query. `LLRM_CHECK_CALLEES=1` compares it with a fresh scan each time.
 fn callees(modules: &mut ModuleAnalyses, module: &Module) -> std::rc::Rc<llrm_mir::memory::Callees> {
-    static CHECKING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let held = modules.get::<CalleeEffects>(module);
-    if *CHECKING.get_or_init(|| std::env::var_os("LLRM_CHECK_CALLEES").is_some()) {
+    if checking() {
         assert!(*held == llrm_mir::memory::callees(module), "the callees' effects held by the module's analyses differ from a fresh scan");
     }
     held
+}
+
+/// `module`'s declarations to declare into: the module's own `Declarations`, nothing scanned unless a pass declares.
+/// `LLRM_CHECK_CALLEES=1` compares them with a fresh listing.
+fn declared(modules: &mut ModuleAnalyses, module: &Module) -> Declared {
+    let held = modules.get::<Declarations>(module);
+    if checking() {
+        assert!(*held == module.declarations(), "the declarations held by the module's analyses differ from a fresh listing");
+    }
+    Declared::over(held, module.metadata.len())
+}
+
+/// Places what `declared` made. The module has more functions than its `Declarations` say now.
+fn placed(declared: &mut Declared, modules: &mut ModuleAnalyses, module: &mut Module) -> Result<(), String> {
+    if declared.place(module)? > 0 {
+        modules.invalidate(&PreservedAnalyses::none());
+    }
+    Ok(())
+}
+
+fn checking() -> bool {
+    static CHECKING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CHECKING.get_or_init(|| std::env::var_os("LLRM_CHECK_CALLEES").is_some())
 }
 
 /// What the step proved about the program.
@@ -229,12 +251,12 @@ fn tried_sites<E: From<String>>(
         let kept = module.global(caller).function().expect("a procedure").clone();
         let before = inline::size(module, &callees(modules, module), caller, costs);
         let bought = llrm_mir::memory::callee(&module.context, &kept, site).map_or(0, |callee| allowance(module, callee, 1, credit.0, credit.1));
-        let mut declared = Declared::of(module);
+        let mut declared = declared(modules, module);
         let (context, function) = function_mut(module, caller);
         let by = inline::Caller { layout, recursive: recursive.contains(&caller), base: bases.get(&caller).copied().unwrap_or(0) };
         let one = llrm_support::hash::IndexMap::from_iter([(site, candidate.clone())]);
         let spliced = inline::expanded(context, function, &by, &Default::default(), Some(&one), &mut declared).map_err(E::from)?;
-        declared.place(module).map_err(E::from)?;
+        placed(&mut declared, modules, module).map_err(E::from)?;
         if !spliced {
             refused.insert((caller, site));
             continue;
@@ -342,10 +364,10 @@ fn trial<E: From<String>>(
         // One site a time, as the rounds do, the body through the pipeline after each.
         let mut spliced = false;
         loop {
-            let mut declared = Declared::of(module);
+            let mut declared = declared(modules, module);
             let (context, function) = function_mut(module, id);
             let more = inline::expanded(context, function, &by, &available, None, &mut declared).map_err(E::from)?;
-            declared.place(module).map_err(E::from)?;
+            placed(&mut declared, modules, module).map_err(E::from)?;
             if !more {
                 break;
             }
@@ -454,11 +476,11 @@ pub fn optimized<E: From<String>>(
                 let caller = module.global(id).function().expect("a procedure");
                 let constants = facts::current_call_constants(&module.context, caller);
                 let (constant, constant_more) = constant_sites(module, &callees(&mut modules[at], module), &program.layout, &recursive, caller, &constants, costs, loose, reach, threshold);
-                let mut declared = Declared::of(module);
+                let mut declared = declared(&mut modules[at], module);
                 let (context, function) = function_mut(module, id);
                 let by = inline::Caller { layout: &program.layout, recursive: recursive.contains(&id), base: bases[at].get(&id).copied().unwrap_or(0) };
                 let spliced_now = inline::expanded(context, function, &by, &available, Some(&constant), &mut declared)?;
-                declared.place(module)?;
+                placed(&mut declared, &mut modules[at], module)?;
                 if spliced_now {
                     edited(&mut modules[at], &[id]);
                     let stage = format!("inline{inline_round}");
@@ -593,11 +615,11 @@ pub fn optimized<E: From<String>>(
                 let caller = module.global(id).function().expect("a procedure");
                 let current = facts::current_call_constants(&module.context, caller);
                 let (constant, constant_more) = constant_sites(module, &callees(&mut modules[at], module), &program.layout, &recursive, caller, &current, costs, loose, reach, threshold);
-                let mut declared = Declared::of(module);
+                let mut declared = declared(&mut modules[at], module);
                 let (context, function) = function_mut(module, id);
                 let by = inline::Caller { layout: &program.layout, recursive: recursive.contains(&id), base: bases[at].get(&id).copied().unwrap_or(0) };
                 let spliced_now = inline::expanded(context, function, &by, &available, Some(&constant), &mut declared)?;
-                declared.place(module)?;
+                placed(&mut declared, &mut modules[at], module)?;
                 if spliced_now {
                     edited(&mut modules[at], &[id]);
                     reoptimised(module, &mut modules[at], id, &format!("ipa-inline{argument_round}."))?;
