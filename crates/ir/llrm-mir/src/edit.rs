@@ -201,7 +201,12 @@ impl Function {
         }
         self.blocks[block.0 as usize].instructions.insert(at, inst);
         self.parent[inst.0 as usize] = Some(block);
-        Ok((block, self.next_of(block, inst)))
+        // What follows is what the position named: scanning the block for it made each append linear (#992).
+        let next = match position {
+            Position::End(_) => None,
+            Position::Before(next) => Some(next),
+        };
+        Ok((block, next))
     }
 
     /// Places an instruction placed nowhere yet.

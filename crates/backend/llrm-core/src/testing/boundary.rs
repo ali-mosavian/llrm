@@ -4,7 +4,8 @@
 //! callee restores. It reads BCC's `-S`, BC's `/A` and llrm's own listings
 //! alike, so a reference and llrm's lowering are measured by one instrument.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap};
+use crate::support::hash::HashMap;
 use std::fmt;
 
 /// One byte of a value, by where it came from.
@@ -232,7 +233,7 @@ fn bc_procedures(listing: &str) -> BTreeMap<String, Procedure> {
         lines.push(line);
         if returns {
             let (name, line, lines) = open.take().expect("an open procedure");
-            found.insert(name.clone(), Procedure { line, ..run(&name, true, &lines, &HashMap::new()) });
+            found.insert(name.clone(), Procedure { line, ..run(&name, true, &lines, &HashMap::default()) });
         }
     }
     found
@@ -292,7 +293,7 @@ fn escape(opcode: u8, operand: &[String]) -> Option<String> {
 
 /// Each `name label byte` the listing follows with `db` bytes.
 fn data(listing: &str) -> HashMap<String, Vec<u8>> {
-    let mut found: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut found: HashMap<String, Vec<u8>> = HashMap::default();
     let mut open: Option<String> = None;
     for line in listing.lines().map(|one| one.trim().to_lowercase()) {
         let words: Vec<&str> = line.split_whitespace().collect();
@@ -587,7 +588,7 @@ struct Machine<'a> {
 }
 
 fn run(name: &str, far: bool, lines: &[Line], constants: &HashMap<String, Vec<u8>>) -> Procedure {
-    let mut registers = HashMap::new();
+    let mut registers = HashMap::default();
     for one in GENERAL {
         registers.insert(one, (0..4).map(|at| Byte::Entry(one, at)).collect());
     }
@@ -598,7 +599,7 @@ fn run(name: &str, far: bool, lines: &[Line], constants: &HashMap<String, Vec<u8
         name,
         constants,
         registers,
-        memory: HashMap::new(),
+        memory: HashMap::default(),
         written: BTreeMap::new(),
         through: BTreeMap::new(),
         floats: Vec::new(),

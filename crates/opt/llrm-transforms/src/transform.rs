@@ -144,7 +144,7 @@ pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
 fn _duplicate_phis(function: &mut Function) -> Result<bool, String> {
     let mut changed = false;
     for block in function.layout().to_vec() {
-        let mut seen = std::collections::HashMap::<(TypeId, Vec<(BlockId, Operand)>), ValueId>::new();
+        let mut seen = llrm_support::hash::HashMap::<(TypeId, Vec<(BlockId, Operand)>), ValueId>::default();
         for phi in edges::phis(function, block) {
             let op = function.instruction(phi);
             let (ty, result) = (op.ty, op.result.expect("a phi's value"));

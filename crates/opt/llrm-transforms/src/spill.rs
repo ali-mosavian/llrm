@@ -180,7 +180,7 @@ fn addressed_by(function: &Function, is_folded: &mut dyn FnMut(ValueId) -> bool)
     let mut found = BTreeSet::new();
     // Whether a pointer is folded depends on all its users, and a frame slot has one user for each access
     // to it: asked once for each pointer, not once for each access.
-    let mut memo: std::collections::HashMap<ValueId, bool> = std::collections::HashMap::new();
+    let mut memo: llrm_support::hash::HashMap<ValueId, bool> = llrm_support::hash::HashMap::default();
     for &block in function.layout() {
         for &inst in function.block(block).instructions() {
             let op = function.instruction(inst);

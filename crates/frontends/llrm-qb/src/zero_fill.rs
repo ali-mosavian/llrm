@@ -53,7 +53,7 @@ pub(super) fn laid_out(
     }
     let originals: Vec<model::Module> = program.modules.clone();
     for (module, original) in program.modules.iter_mut().zip(&originals) {
-        let types: std::collections::HashMap<i64, &model::Type> = original.types.iter().map(|one| (one.id, one)).collect();
+        let types: llrm_support::hash::HashMap<i64, &model::Type> = original.types.iter().map(|one| (one.id, one)).collect();
         for (function, source) in module.functions.iter_mut().zip(&original.functions) {
             let (count, zeroed) = entry_zeroing(function);
             if count == 0 {
@@ -90,7 +90,7 @@ impl Span {
 /// Groups of local places that share bytes move together: zeroed
 /// aggregates first, just below BP, then zeroed scalars, then the rest,
 /// each group word-aligned. The zeroed aggregates' span, where two or more.
-fn relayout(places: &mut [model::Place], zeroed: &BTreeSet<i64>, types: &std::collections::HashMap<i64, &model::Type>) -> Option<Span> {
+fn relayout(places: &mut [model::Place], zeroed: &BTreeSet<i64>, types: &llrm_support::hash::HashMap<i64, &model::Type>) -> Option<Span> {
     let extent = |one: &model::Place| one.extent.unwrap_or(types[&one.r#type].width);
     let mut locals: Vec<usize> = (0..places.len()).filter(|&index| places[index].storage == Storage::Local).collect();
     locals.sort_by_key(|&index| (places[index].offset, places[index].id));

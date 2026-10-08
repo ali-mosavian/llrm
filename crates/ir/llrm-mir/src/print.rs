@@ -1,7 +1,7 @@
 //! Writes MIR as LLVM's assembly language, following LLVM's `AsmWriter`
 //! except that function attributes are written inline, not as `#N` groups.
 
-use std::collections::HashMap;
+use crate::hash::HashMap;
 use std::fmt::Write;
 
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, signed};
@@ -188,8 +188,8 @@ impl Slots {
                 (next - 1).to_string()
             }
         };
-        let mut values = HashMap::new();
-        let mut blocks = HashMap::new();
+        let mut values = HashMap::default();
+        let mut blocks = HashMap::default();
         for &parameter in &function.parameters {
             values.insert(parameter, name(&function.value(parameter).name));
         }

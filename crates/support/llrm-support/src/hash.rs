@@ -11,5 +11,7 @@ use rustc_hash::FxHasher;
 pub type FxBuild = BuildHasherDefault<FxHasher>;
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, FxBuild>;
 pub type IndexSet<T> = indexmap::IndexSet<T, FxBuild>;
+#[allow(clippy::disallowed_types)]
 pub type HashMap<K, V> = std::collections::HashMap<K, V, FxBuild>;
+#[allow(clippy::disallowed_types)]
 pub type HashSet<T> = std::collections::HashSet<T, FxBuild>;

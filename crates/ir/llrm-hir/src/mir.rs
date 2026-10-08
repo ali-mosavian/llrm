@@ -3,7 +3,7 @@
 //! hold yet is refused whole with the reason: a function is left declared,
 //! a data object an external global, so what refers to them still verifies.
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 
 use llrm_mir::build::Builder;
@@ -94,7 +94,7 @@ pub fn promised(modules: &[(&Module, HashMap<&str, GlobalId>)], promises: &model
         out.metadata.push(MetadataNode { distinct: false, operands });
         MetadataId(out.metadata.len() as u32 - 1)
     };
-    let mut declared = HashMap::new();
+    let mut declared = HashMap::default();
     for (module, named) in modules {
         let mut cells = named.iter().map(|(&name, &cell)| (cell, name)).collect::<Vec<_>>();
         cells.sort();
@@ -230,7 +230,7 @@ impl Tags {
             let ty = node(vec![MetadataOperand::String(name.to_owned()), MetadataOperand::Node(root), zero.clone()]);
             node(vec![MetadataOperand::Node(ty), MetadataOperand::Node(ty), zero.clone()])
         };
-        Tags { place: tag("place"), allocation: tag("allocation"), arrays: HashMap::new() }
+        Tags { place: tag("place"), allocation: tag("allocation"), arrays: HashMap::default() }
     }
 
     /// A tag for each array a function of `hir` reaches through a descriptor
@@ -245,7 +245,7 @@ impl Tags {
             MetadataOperand::Node(node) => *node,
             _ => return,
         };
-        let mut identities: HashMap<(i64, i64), MetadataId> = HashMap::new();
+        let mut identities: HashMap<(i64, i64), MetadataId> = HashMap::default();
         for function in &hir.functions {
             let places: HashMap<i64, &model::Place> = function.places.iter().map(|one| (one.id, one)).collect();
             let described = function.blocks.iter().flat_map(|block| &block.instructions).flat_map(|one| &one.operands).filter_map(|operand| match operand {
@@ -276,7 +276,7 @@ impl Tags {
 
 /// How many distinct array tags `arrays` holds, for naming the next.
 fn identities_len(arrays: &HashMap<(i64, i64), MetadataId>) -> usize {
-    arrays.values().collect::<std::collections::HashSet<_>>().len()
+    arrays.values().collect::<llrm_support::hash::HashSet<_>>().len()
 }
 
 /// The `!tbaa` access tag of each type the language's aliasing classes
@@ -285,8 +285,8 @@ fn identities_len(arrays: &HashMap<(i64, i64), MetadataId>) -> usize {
 fn class_tags(module: &mut Module, classes: &[model::AliasClass]) -> Emit<HashMap<i64, MetadataId>> {
     let zero = module.context.types.int(64);
     let zero = MetadataOperand::Constant(module.context.int(zero, 0));
-    let mut nodes: HashMap<&str, MetadataId> = HashMap::new();
-    let mut tags = HashMap::new();
+    let mut nodes: HashMap<&str, MetadataId> = HashMap::default();
+    let mut tags = HashMap::default();
     for class in classes {
         let mut operands = vec![MetadataOperand::String(class.name.clone())];
         if let Some(parent) = &class.parent {
@@ -332,7 +332,7 @@ struct Tables<'h> {
     /// Each data object's global, by its id: a place's symbol.
     data: HashMap<i64, ConstantId>,
     /// The huge data objects, by id: their places are reached through huge pointers.
-    huge: std::collections::HashSet<i64>,
+    huge: llrm_support::hash::HashSet<i64>,
     /// Each callee's function and its declared type, by HIR name.
     callees: HashMap<String, ConstantId>,
     /// Each callee's calling convention, which its calls repeat.
@@ -366,7 +366,7 @@ pub(crate) const PROVISIONAL_VARIABLES: u32 = 0x4000_0000;
 /// A `!{i32 line}` node for each line `hir`'s instructions name.
 fn line_nodes(module: &mut Module, hir: &model::Module) -> HashMap<i64, MetadataId> {
     let i32 = module.context.types.int(32);
-    let mut nodes = HashMap::new();
+    let mut nodes = HashMap::default();
     for line in hir.functions.iter().flat_map(|one| &one.blocks).flat_map(|one| &one.instructions).filter_map(|one| one.line) {
         nodes.entry(line).or_insert_with(|| {
             let operand = MetadataOperand::Constant(module.context.int(i32, i128::from(line)));
@@ -380,7 +380,7 @@ fn line_nodes(module: &mut Module, hir: &model::Module) -> HashMap<i64, Metadata
 /// The metadata `!range` and the like the language's facts give instructions,
 /// and the alignments they state of accesses.
 fn fact_nodes(module: &mut Module, spaces: &AddressSpaces, hir: &model::Module, types: &HashMap<i64, &model::Type>) -> Emit<FactNodes> {
-    let (mut nodes, mut accesses, mut terminators) = (HashMap::new(), HashMap::new(), HashMap::new());
+    let (mut nodes, mut accesses, mut terminators) = (HashMap::default(), HashMap::default(), HashMap::default());
     let index = crate::facts::Index::of(hir);
     for stated in &hir.facts {
         if let (Subject::Terminator { function, block }, Fact::Unroll(copies)) = (stated.subject, stated.fact) {
@@ -440,15 +440,15 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
     let nounwind = promises.nounwind.as_slice();
     let mut module = Module { datalayout: Some(layout.datalayout.clone()), ..Module::default() };
     let mut refused = Vec::new();
-    let mut instruction_flags: HashMap<(i64, i64), Flags> = HashMap::new();
+    let mut instruction_flags: HashMap<(i64, i64), Flags> = HashMap::default();
     for one in &hir.facts {
         if let Subject::Instruction { function, id } = one.subject {
             let flags = instruction_flags.entry((function, id)).or_default();
             flags.insert(one.fact.flags());
         }
     }
-    let mut argument_facts: HashMap<(i64, i64), Vec<(i64, Fact)>> = HashMap::new();
-    let mut operand_flags: HashMap<(i64, i64, i64), Flags> = HashMap::new();
+    let mut argument_facts: HashMap<(i64, i64), Vec<(i64, Fact)>> = HashMap::default();
+    let mut operand_flags: HashMap<(i64, i64, i64), Flags> = HashMap::default();
     for one in &hir.facts {
         if let Subject::Operand { function, instruction, operand } = one.subject {
             match one.fact.attribute() {
@@ -457,7 +457,7 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
             }
         }
     }
-    let (mut place_facts, mut field_facts): (HashMap<(i64, i64), Vec<Fact>>, HashMap<(i64, i64), Vec<Fact>>) = (HashMap::new(), HashMap::new());
+    let (mut place_facts, mut field_facts): (HashMap<(i64, i64), Vec<Fact>>, HashMap<(i64, i64), Vec<Fact>>) = (HashMap::default(), HashMap::default());
     for one in &hir.facts {
         match one.subject {
             Subject::Place { function, place } => place_facts.entry((function, place)).or_default().push(one.fact),
@@ -477,20 +477,20 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
         spaces: layout.spaces.clone(),
         types: hir.types.iter().map(|one| (one.id, one)).collect(),
         callables: hir.callables.iter().map(|one| (one.name.as_str(), one)).collect(),
-        data: HashMap::new(),
+        data: HashMap::default(),
         huge: hir.data.iter().filter(|one| one.address == AddressKind::Huge).map(|one| one.id).collect(),
-        callees: HashMap::new(),
-        conventions: HashMap::new(),
+        callees: HashMap::default(),
+        conventions: HashMap::default(),
         tags: Tags::new(&mut module),
-        classes: HashMap::new(),
+        classes: HashMap::default(),
         nounwind,
-        lines: HashMap::new(),
-        fact_nodes: HashMap::new(),
-        accesses: HashMap::new(),
-        terminator_nodes: HashMap::new(),
+        lines: HashMap::default(),
+        fact_nodes: HashMap::default(),
+        accesses: HashMap::default(),
+        terminator_nodes: HashMap::default(),
         place_facts,
         field_facts,
-        variables: HashMap::new(),
+        variables: HashMap::default(),
         observed: None,
     };
     tables.tags.arrays(&mut module, hir);
@@ -505,7 +505,7 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
     let objects: HashMap<i64, &model::DataObject> = hir.data.iter().map(|one| (one.id, one)).collect();
     let sizes = sizes(hir, &tables.types);
     let mut defined = Vec::new();
-    let mut data = HashMap::new();
+    let mut data = HashMap::default();
     for object in &hir.data {
         let layout = data_type(&mut module.context.types, &tables.spaces, &Widths::of(&tables.layout, &tables.spaces), object, sizes[&object.id], &objects);
         let global = declare_data(&mut module, &tables.spaces, object, layout.as_ref().ok().copied());
@@ -558,7 +558,7 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
         }
     }
     // Initialized once every function its data addresses is declared: one only addressed, far and C's.
-    let mut code = HashMap::new();
+    let mut code = HashMap::default();
     for callable in hir.data.iter().flat_map(|one| &one.relocations).filter(|one| one.code).filter_map(|one| hir.callables.iter().find(|callable| callable.id == one.target)) {
         let reference = match tables.callees.get(&callable.name) {
             Some(&reference) => reference,
@@ -661,7 +661,7 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
     }
     meaning::defined(&mut module, &layout.spaces, promises);
     // The nodes the lowering named by chosen numbers.
-    let mut real: HashMap<MetadataId, MetadataId> = HashMap::new();
+    let mut real: HashMap<MetadataId, MetadataId> = HashMap::default();
     match debug::emitted(&mut module, &tables, hir, &data, &declared) {
         Ok(variables) => real.extend(variables.into_iter().filter_map(|(key, node)| tables.variables.get(&key).map(|chosen| (*chosen, node)))),
         Err(why) => refused.push((hir.name.clone(), why)),
@@ -1480,7 +1480,7 @@ fn emission_order(function: &model::Function) -> Vec<&model::Block> {
         let terminator = &block.terminator;
         terminator.targets.iter().chain(terminator.cases.iter().map(|(_, target)| target)).copied().collect::<Vec<_>>()
     };
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = llrm_support::hash::HashSet::default();
     let mut postorder = Vec::new();
     // The entry walked last comes first.
     let roots = function.external_entries.iter().rev().chain(std::iter::once(&function.entry));
@@ -1570,7 +1570,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     fn new(b: &'b mut Builder<'m>, tables: &'b Tables<'h>, function: &'h model::Function) -> Emit<Self> {
         let values = match interrupted(function) {
             // Its parameters are only ever its saved registers' memory.
-            true => HashMap::new(),
+            true => HashMap::default(),
             false => function.parameters.iter().enumerate().map(|(at, &one)| (one, b.parameter(at))).collect(),
         };
         let destination = result_destination(tables, function).map(|at| b.parameter(at));
@@ -1580,21 +1580,21 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             function,
             value_types: function.values.iter().map(|one| (one.id, one.r#type)).collect(),
             places: function.places.iter().map(|one| (one.id, one)).collect(),
-            blocks: HashMap::new(),
+            blocks: HashMap::default(),
             values,
-            truths: HashMap::new(),
-            frame: HashMap::new(),
+            truths: HashMap::default(),
+            frame: HashMap::default(),
             passed: None,
             objects: Vec::new(),
-            addresses: HashMap::new(),
-            declared_addresses: HashSet::new(),
-            declared_offsets: HashMap::new(),
+            addresses: HashMap::default(),
+            declared_addresses: HashSet::default(),
+            declared_offsets: HashMap::default(),
             handling: None,
             outlined: None,
             destination,
             at_instruction: 0,
             operands_at: Vec::new(),
-            range_nodes: HashMap::new(),
+            range_nodes: HashMap::default(),
         })
     }
 
