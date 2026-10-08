@@ -53,3 +53,11 @@ convention = "ia16"
 flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq"]
 cdecl = "ia16"
 registers = "watcall16"
+
+# gcc's -mregparm=3: no -ecc, so an unmarked function takes the front end's default registers, which this ABI states as `regparm3`
+# (the Borland runtime's declarations and every function that names a convention stay cdecl).
+[frontend.abi.regparm3]
+convention = "regparm3"
+flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-s", "-zl", "-zq"]
+cdecl = "cdecl16"
+registers = "regparm3"

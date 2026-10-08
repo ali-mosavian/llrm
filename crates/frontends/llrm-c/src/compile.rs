@@ -653,6 +653,132 @@ mod tests {
         asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).map(str::to_owned).collect()
     }
 
+    /// `function` of tests/fixtures/c/regparm3.c under `-mabi=regparm3`: gcc's `-mregparm=3` by the size of the argument.
+    fn regparm3(function: &str) -> Vec<String> {
+        regparm3_at(function, llrm_core::driver::flags::Level::O2)
+    }
+
+    fn regparm3_at(function: &str, level: llrm_core::driver::flags::Level) -> Vec<String> {
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("regparm3")).unwrap();
+        let source = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/regparm3.c");
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records regparm3.c");
+        let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
+        let options = llrm_core::driver::Options { abi: Some("regparm3".to_owned()), pipeline: level.options(), ..llrm_driver::m16_options(machine) };
+        let built = super::selected(&text, "regparm3", None, &options).unwrap();
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let from = asm.find(&format!("{function}@3 proc")).expect("the function");
+        asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
+    }
+
+    /// The first three integer arguments arrive in AL, DX and ECX, each the width of its value (a long in one register); the fourth
+    /// is the stack's first word.
+    #[test]
+    fn test_m16_regparm3_the_first_three_arguments_arrive_by_their_size_and_the_fourth_on_the_stack() {
+        let body = regparm3("_sized");
+        assert!(body.contains(&"movsx ax, al".to_owned()) && body.contains(&"add ax, dx".to_owned()) && body.contains(&"add eax, ecx".to_owned()) && body.contains(&"add eax, dword ptr [bp+6]".to_owned()), "{body:?}");
+    }
+
+    /// A float and a double are on the stack and leave the registers to the integers after them: `skip(float, int b, double, int d, int e)`
+    /// has b, d, e in AX, DX, CX. Open Watcom's convention stops at the first that fits none.
+    #[test]
+    fn test_m16_regparm3_a_float_and_a_double_do_not_stop_the_later_integers_taking_registers() {
+        let body = regparm3("_skip");
+        assert!(body.contains(&"fld dword ptr [bp+6]".to_owned()) && body.contains(&"fld qword ptr [bp+10]".to_owned()), "{body:?}");
+        assert!(!body.iter().any(|line| line.contains("[bp+18]") || line.contains("[bp+20]")), "{body:?}");
+    }
+
+    /// A call in a register convention changes FS and GS, as any call into code that may use them does: the description names no
+    /// selector, and a far pointer's segment held in FS across `ext` was read again after it, whatever `ext` had put there
+    /// (QCport drew 37697 polygons for Borland's 37637, its pool's self-test failing).
+    #[test]
+    fn test_m16_regparm3_a_call_does_not_keep_a_segment_in_fs_or_gs() {
+        let body = regparm3("_keep_far");
+        let mut loaded: Vec<&str> = Vec::new();
+        for line in &body {
+            if line.starts_with("call") {
+                loaded.clear();
+            }
+            for register in ["fs", "gs"] {
+                if line.starts_with(&format!("l{register} ")) || line.starts_with(&format!("mov {register},")) {
+                    loaded.push(register);
+                } else if line.contains(&format!("{register}:[")) && !loaded.contains(&register) {
+                    panic!("{register} is read after a call without being loaded: {body:?}");
+                }
+            }
+        }
+    }
+
+    /// A struct of 4 bytes passed by value is on the stack, whatever its size; Open Watcom's convention passes it as a long
+    /// in registers. `take4(struct S4 s, int a)` reads s at [bp+6] and [bp+8], a is in AX.
+    #[test]
+    fn test_m16_regparm3_a_small_struct_argument_is_on_the_stack() {
+        let body = regparm3("_take4");
+        assert!(body.contains(&"mov ax, word ptr [bp+6]".to_owned()) && body.contains(&"mov ax, word ptr [bp+8]".to_owned()), "{body:?}");
+    }
+
+    /// A long on the stack is two words: `stack_long`'s fourth, fifth and sixth arguments (a byte, a long, a long) are at [bp+6], [bp+8]
+    /// and [bp+12]. The long was a word's worth to the stack's layout, so the sixth was read at [bp+10], from the middle of the fifth.
+    #[test]
+    fn test_m16_regparm3_a_long_on_the_stack_takes_two_words() {
+        let body = regparm3("_stack_long");
+        assert!(body.iter().any(|line| line.ends_with("byte ptr [bp+6]")) && body.iter().any(|line| line.ends_with("dword ptr [bp+8]")) && body.iter().any(|line| line.ends_with("dword ptr [bp+12]")), "{body:?}");
+    }
+
+    /// An i64 is four stack words, low half first, and the int after it takes AX.
+    #[test]
+    fn test_m16_regparm3_an_i64_is_on_the_stack_and_the_next_integer_takes_ax() {
+        let body = regparm3("_wide");
+        assert!(body.contains(&"mov eax, dword ptr [bp+6]".to_owned()) || body.iter().any(|line| line.contains("dword ptr [bp+6]")), "{body:?}");
+        assert!(!body.iter().any(|line| line.contains("[bp+14]")), "{body:?}");
+    }
+
+    /// A long is returned in EAX: `long_result` ends with the product in EAX, the `shld edx, eax, 16` that made DX:AX gone.
+    #[test]
+    fn test_m16_regparm3_a_long_result_is_in_eax_with_no_dx_ax_repack() {
+        let body = regparm3("_long_result");
+        assert!(body.contains(&"imul eax, edx".to_owned()), "{body:?}");
+        assert!(!body.iter().any(|line| line.starts_with("shld")), "{body:?}");
+    }
+
+    /// A far pointer comes back in EAX, the segment in the high word. Taken apart with the segment a dword's high half used as a word,
+    /// the allocator did not see it as the one value and loaded ES again on every iteration of the loop: 10007 more instructions in
+    /// bench textfill/nib.
+    #[test]
+    fn test_m16_regparm3_a_far_pointer_returned_in_eax_loads_es_once_before_the_loop() {
+        let body = regparm3("_fill");
+        assert_eq!(body.iter().filter(|line| line.starts_with("mov es,")).count(), 1, "{body:?}");
+        let loop_start = body.iter().position(|line| line.starts_with("L") && line.ends_with(':') && body.iter().skip_while(|one| *one != line).any(|one| one.starts_with("jne") && one.ends_with(line.trim_end_matches(':')))).expect("the loop");
+        assert!(body[loop_start..].iter().all(|line| !line.starts_with("mov es,")), "{body:?}");
+    }
+
+    /// A constant far pointer is returned as the one dword it is: it was split to words and joined again (six instructions) in
+    /// bench textfill's `os.text_screen`.
+    #[test]
+    fn test_m16_regparm3_a_constant_far_pointer_is_returned_as_one_move() {
+        let body = regparm3("_const_far");
+        assert_eq!(body.iter().filter(|line| !line.ends_with(':')).collect::<Vec<_>>(), ["mov eax, -1207959552", "retf"], "{body:?}");
+    }
+
+    /// An argument register stored to its slot at entry is still the value: a later read of the slot is a read of the register. They
+    /// were `mov [bp-2], dx` then `mov bx, [bp-2]`, and `add di, [bp-2]`: a memory operand more each (bench recchop/c -Os: +185).
+    #[test]
+    fn test_m16_regparm3_a_slot_a_register_still_holds_is_read_from_the_register() {
+        let body = regparm3_at("_chop", llrm_core::driver::flags::Level::Os);
+        let stored = body.iter().position(|line| line.starts_with("mov word ptr [bp-") && line.ends_with(", dx")).expect("dx is stored at entry");
+        let slot = body[stored].split(']').next().unwrap().rsplit(' ').next().unwrap().to_owned();
+        let until_dx_changes = body[stored + 1..].iter().take_while(|line| !line.contains(" dx,") && !line.contains(" edx,") && !line.contains("call"));
+        assert!(until_dx_changes.clone().all(|line| !line.contains(&slot)), "{body:?}");
+    }
+
+    /// A far pointer is returned as one dword, offset low: the callee joins the words and the caller splits them.
+    #[test]
+    fn test_m16_regparm3_a_far_pointer_result_is_one_dword_joined_and_split() {
+        let body = regparm3("_far_result");
+        assert!(body.iter().any(|line| line.starts_with("shl") || line.starts_with("shld")) && !body.iter().any(|line| line.contains("edx")), "{body:?}");
+        let body = regparm3("_caller");
+        assert!(body.contains(&"shr eax, 16".to_owned()) && body.iter().any(|line| line.starts_with("mov es,")), "{body:?}");
+    }
+
     /// `function` of tests/fixtures/c/ia16.cgs under `-mabi=ia16`: gcc-ia16's convention.
     fn ia16(function: &str) -> Vec<String> {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/ia16.cgs")).unwrap();

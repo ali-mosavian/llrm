@@ -1,4 +1,4 @@
-reason = "a far pointer made from a long loads its segment once, before the loop: -10000 instructions, -4 bytes"
+reason = "a read of a frame slot a register still holds reads the register (spillforward), and a far pointer made from a long loads its segment once: memory operands and bytes only fall"
 blessed = "2026-10-07"
 
 [bas.O2]

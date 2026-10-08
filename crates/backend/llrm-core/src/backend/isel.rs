@@ -198,24 +198,29 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
             .zip(&sizes)
             .zip(&classes)
             .filter(|(_, class)| **class != Some(llrm_mir::opcode::RESULT_POINTER))
-            .map(|((&one, &size), class)| kind_of(types, function.value(one).ty, size, arch.stack_slot_bytes(), *class))
+            .map(|((&one, &size), class)| kind_of(types, function.value(one).ty, size, (arch.stack_slot_bytes(), entry.register_bytes.unwrap_or(arch.stack_slot_bytes())), *class))
             .collect();
         let placed = entry.place(&kinds);
         let mut places = placed.places.iter();
         let mut used = placed.used.clone();
+        // A struct result's address the convention does not hold in a register is pushed after every argument: the stack's first.
+        let hidden = if classes.contains(&Some(llrm_mir::opcode::RESULT_POINTER)) && entry.aggregate.as_ref().is_some_and(|one| one.pointer_register.is_none()) { hidden_bytes(arch, entry) } else { 0 };
         for class in &classes {
             if *class == Some(llrm_mir::opcode::RESULT_POINTER) {
-                let Some(register) = entry.aggregate.as_ref().and_then(|one| one.pointer_register.as_deref()) else { return refuse(format!("{}'s struct result has no register for its address", entry.name)) };
+                let Some(register) = entry.aggregate.as_ref().and_then(|one| one.pointer_register.as_deref()) else {
+                    parameters.push(Parameter::Cell(first));
+                    continue;
+                };
                 used.push(register.to_owned());
                 parameters.push(Parameter::Registers(vec![llrm_x86::calling::register(register)]));
                 continue;
             }
             parameters.push(match places.next().expect("a place for each parameter") {
                 llrm_target::calling::Place::Registers(names) => Parameter::Registers(names.iter().map(|name| llrm_x86::calling::register(name)).collect()),
-                llrm_target::calling::Place::Stack(offset) => Parameter::Cell(first + offset),
+                llrm_target::calling::Place::Stack(offset) => Parameter::Cell(first + hidden + offset),
             });
         }
-        cursor = first + placed.stack_bytes;
+        cursor = first + hidden + placed.stack_bytes;
     } else {
         for width in widths {
             parameters.push(Parameter::Cell(cursor));
@@ -230,8 +235,8 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
         return refuse("an interrupt handler that returns a value");
     }
     // A float leaves in st(0), which no register names.
-    let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) { Vec::new() } else { arch.results(size_of(module, layout, result)?) };
     let described = entry(arch, function.calling_convention, variadic);
+    let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) { Vec::new() } else { results(arch, described, size_of(module, layout, result)?) };
     // A struct result's address, a stack argument the callee pops though the caller removes the rest.
     let result_slot = described.is_some_and(|one| hidden_slot_popped_by_callee(one, (0..function.parameters().len()).map(|index| llrm_mir::opcode::argument_class(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice)))));
     let popped = if pops { cursor - first } else if result_slot { arch.stack_slot_bytes() } else { 0 };
@@ -239,15 +244,29 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
     Ok(Convention { parameters, returns, popped, saved })
 }
 
+/// The stack bytes the address of a struct result takes where `entry` passes it on the stack: a far pointer's two slots, or a near one's.
+fn hidden_bytes(arch: &dyn llrm_target::Target, entry: &llrm_target::calling::Convention) -> i64 {
+    let bytes = if entry.aggregate.as_ref().is_some_and(|one| one.pointer_far) { 2 * arch.stack_slot_bytes() } else { arch.stack_slot_bytes() };
+    bytes.max(entry.slot_bytes)
+}
+
+/// The registers a result `width` bytes wide leaves in under `entry`, low part first: its description's, the target's where the
+/// convention is no entry of it (BASIC's).
+fn results(arch: &dyn llrm_target::Target, entry: Option<&llrm_target::calling::Convention>, width: u32) -> Vec<Register> {
+    entry.map_or_else(|| arch.results(width), |one| llrm_x86::calling::results(one, width))
+}
+
 /// How a convention's registers take a value of `ty`, `size` bytes: a word that fits a slot, a pair of registers for an integer
-/// or a pointer of two slots (an i64 in 32 bits, a long or a far pointer in 16), and memory for the rest.
-fn kind_of(types: &llrm_mir::types::Types, ty: TypeId, size: u32, slot: i64, class: Option<&str>) -> llrm_target::calling::Kind {
+/// or a pointer of two slots (an i64 in 32 bits, a long or a far pointer in 16), and memory for the rest. `slot` and `register` are the
+/// bytes a stack slot and one argument register hold: where a register is wider than a slot, an integer of that width is a word.
+fn kind_of(types: &llrm_mir::types::Types, ty: TypeId, size: u32, (slot, register): (i64, i64), class: Option<&str>) -> llrm_target::calling::Kind {
     use llrm_target::calling::Kind;
     let bytes = i64::from(size);
     let two_slots_of_integer = types.int_bits(ty).is_some() || matches!(types.get(ty), Type::Pointer(_));
     match () {
         _ if class == Some(llrm_mir::opcode::MEMORY) || matches!(types.get(ty), Type::Float(_)) => Kind::Memory(bytes),
         _ if bytes <= slot => Kind::Word,
+        _ if bytes <= register && types.int_bits(ty).is_some() => Kind::Sized(bytes),
         _ if bytes == 2 * slot && two_slots_of_integer => Kind::Wide,
         _ => Kind::Memory(bytes),
     }
@@ -518,6 +537,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
         next: 0,
         pointers: IndexMap::default(),
         fars: IndexMap::default(),
+        far_dwords: IndexMap::default(),
         fields: IndexMap::default(),
         wides: IndexMap::default(),
         halves: BTreeSet::new(),
@@ -698,6 +718,8 @@ struct Selector<'m, 'c, 'p> {
     /// legalizer expands a value no register holds into two; no offset
     /// register is offset 0.
     fars: IndexMap<ValueId, (Option<Held>, Held)>,
+    /// A far pointer made from, or returned as, one dword: the dword, which a return in one register is.
+    far_dwords: IndexMap<ValueId, Held>,
     /// The target's address spaces by role.
     spaces: llrm_mir::spaces::Spaces,
     /// Each aggregate a call answers in registers: a register per field.
@@ -2727,6 +2749,7 @@ impl Selector<'_, '_, '_> {
                 }
                 (CastOp::IntToPtr, Type::Int(32)) => {
                     let dword = self.held(operand, from, at, out)?;
+                    self.far_dwords.insert(result, dword);
                     let (offset, selector) = self.far_of(dword, at, out);
                     (Some(offset), selector)
                 }
@@ -2935,10 +2958,32 @@ impl Selector<'_, '_, '_> {
             one.requires = vec![(low, Register::EAX), (high, Register::EDX)];
             one.uses = vec![low.value, high.value];
         } else if let Some(&value) = operands.first().filter(|&&one| self.is_far(type_of(one))) {
+            // One register holds both, offset low and selector high: the dword the pointer was made from, if it was.
+            let made_of = match value {
+                Operand::Value(id) => self.far_dwords.get(&id).copied(),
+                _ => None,
+            };
+            if let ([whole], Some(dword)) = (&convention.returns[..], made_of) {
+                one.requires = vec![(dword, *whole)];
+                one.uses = vec![dword.value];
+                out.push(Arc::new(one));
+                return Ok(());
+            }
             let (offset, selector) = self.far(value, at, out)?;
-            let [low, high] = convention.returns[..] else { return refuse("a far result the convention has no pair for") };
-            one.requires = vec![(offset, low), (selector, high)];
-            one.uses = vec![offset.value, selector.value];
+            match convention.returns[..] {
+                [low, high] => {
+                    one.requires = vec![(offset, low), (selector, high)];
+                    one.uses = vec![offset.value, selector.value];
+                }
+                // One register holds both: the offset low, the selector high.
+                [whole] => {
+                    let dword = self.fresh_held(4);
+                    self.joined(dword, offset, selector, at, out);
+                    one.requires = vec![(dword, whole)];
+                    one.uses = vec![dword.value];
+                }
+                _ => return refuse("a far result the convention has no registers for"),
+            }
         } else if let Some(&value) = operands.first() {
             let held = self.held(value, type_of(value), at, out)?;
             one.requires = match convention.returns[..] {
@@ -3182,7 +3227,7 @@ impl Selector<'_, '_, '_> {
                     continue;
                 }
                 let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
-                kinds.push(kind_of(self.types(), ty, self.size(ty)?, self.arch.stack_slot_bytes(), class(index)));
+                kinds.push(kind_of(self.types(), ty, self.size(ty)?, (self.arch.stack_slot_bytes(), entry.register_bytes.unwrap_or(self.arch.stack_slot_bytes())), class(index)));
             }
             let mut placement = entry.place(&kinds);
             let mut next = placement.places.clone().into_iter();
@@ -3191,9 +3236,14 @@ impl Selector<'_, '_, '_> {
                 if index >= described {
                     places.push(llrm_target::calling::Place::Stack(0));
                 } else if class(index) == Some(llrm_mir::opcode::RESULT_POINTER) {
-                    let Some(register) = entry.aggregate.as_ref().and_then(|one| one.pointer_register.clone()) else { return refuse(format!("@{name}'s struct result has no register for its address")) };
-                    placement.used.push(register.clone());
-                    places.push(llrm_target::calling::Place::Registers(vec![register]));
+                    // In its register, else pushed with the stack arguments.
+                    match entry.aggregate.as_ref().and_then(|one| one.pointer_register.clone()) {
+                        Some(register) => {
+                            placement.used.push(register.clone());
+                            places.push(llrm_target::calling::Place::Registers(vec![register]));
+                        }
+                        None => places.push(llrm_target::calling::Place::Stack(0)),
+                    }
                 } else {
                     places.push(next.next().expect("a place for each argument"));
                 }
@@ -3218,8 +3268,13 @@ impl Selector<'_, '_, '_> {
                 } else {
                     let held = self.held(argument, ty, at, out)?;
                     let signed = matches!(&instruction.opcode, Opcode::Call(info) if info.argument_attrs.get(index).is_some_and(|attrs| llrm_mir::memory::has(attrs, "signext")));
-                    let held = self.extended(held, registers[0].size() as u32, signed, at, out);
-                    requires.push((held, registers[0]));
+                    if entry.sized_arguments {
+                        // The register is the value's own width: AL, AX or EAX.
+                        requires.push((held, crate::backend::target::named(registers[0], i64::from(held.width))));
+                    } else {
+                        let held = self.extended(held, registers[0].size() as u32, signed, at, out);
+                        requires.push((held, registers[0]));
+                    }
                 }
             }
             stack_only.retain(|&index| matches!(placement.places[index], llrm_target::calling::Place::Stack(_)));
@@ -3340,6 +3395,7 @@ impl Selector<'_, '_, '_> {
         };
         let mut delivers = Vec::new();
         let mut result = None;
+        let mut far_result = None;
         let mut float = None;
         if contract.flags_result {
             if let Some(value) = instruction.result {
@@ -3374,13 +3430,24 @@ impl Selector<'_, '_, '_> {
             delivers = vec![(low, Register::EAX), (high, Register::EDX)];
             self.wides.insert(value, (low, high));
         } else if let Some(value) = instruction.result.filter(|_| self.is_far(instruction.ty)) {
-            let (offset, selector) = (self.fresh_held(2), self.fresh_held(2));
-            delivers = vec![(offset, Register::EAX), (selector, Register::EDX)];
-            self.fars.insert(value, (Some(offset), selector));
+            match results(self.arch, self::entry(self.arch, convention, variadic), 4)[..] {
+                [low_register, high_register] => {
+                    let (offset, selector) = (self.fresh_held(2), self.fresh_held(2));
+                    delivers = vec![(offset, low_register.full_register32()), (selector, high_register.full_register32())];
+                    self.fars.insert(value, (Some(offset), selector));
+                }
+                // One register holds both: the offset low, the selector high, taken apart after the call.
+                [whole] => {
+                    let dword = self.fresh_held(4);
+                    delivers = vec![(dword, whole)];
+                    far_result = Some((value, dword));
+                }
+                _ => return refuse(format!("@{name}'s far result")),
+            }
         } else if let Some(value) = instruction.result {
             let width = self.width(instruction.ty)?;
             let held = Held { value: self.value(value), width };
-            match self.arch.results(width)[..] {
+            match results(self.arch, self::entry(self.arch, convention, variadic), width)[..] {
                 // dx:ax, joined into the dword register the value lives in.
                 // Delivered as dwords: `shrd` reads each whole register, and
                 // neither upper word reaches the joined value.
@@ -3444,6 +3511,11 @@ impl Selector<'_, '_, '_> {
             let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
             let count = Loc::Imm(Imm { value: contract.caller_cleanup, width: 2, address: None });
             out.push(insn(at, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, count])));
+        }
+        if let Some((value, dword)) = far_result {
+            let (offset, selector) = self.far_of(dword, at, out);
+            self.fars.insert(value, (Some(offset), selector));
+            self.far_dwords.insert(value, dword);
         }
         if let Some((into, low, high)) = result {
             let shifted = self.half();

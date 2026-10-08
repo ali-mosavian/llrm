@@ -147,6 +147,8 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
                 Abi::C | Abi::Cdecl16 | Abi::Cdecl32 | Abi::Sysv32 | Abi::Ia16 => "__cdecl",
                 Abi::Watcall32 | Abi::Watcall16 => "__watcall",
                 Abi::Interrupt16 => "__interrupt",
+                // What an unmarked declaration is under -mabi=regparm3.
+                Abi::Regparm3 => "",
                 Abi::Pascal16 | Abi::Basic(_) => "__pascal",
             };
             let arguments = parameters
@@ -155,7 +157,7 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
                 .collect::<Result<Vec<_>, _>>()?;
             let arguments = if arguments.is_empty() { "void".to_owned() } else { arguments.join(", ") };
             let far = if segmented { "__far " } else { "" };
-            Ok(format!("extern {} {far}{convention} {}({arguments});", c_type(result, span)?, name))
+            Ok(format!("extern {} {far}{convention}{}{}({arguments});", c_type(result, span)?, if convention.is_empty() { "" } else { " " }, name))
         }
         // BASIC cannot name a handler's address: there is nothing to declare.
         Language::Basic if abi.interrupt() => Ok(format!("' {name}: an interrupt16 handler")),
@@ -164,7 +166,7 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
                 .iter()
                 .map(|(name, spec)| basic_parameter(name, spec).ok_or_else(|| unsupported(name, "BASIC", span)))
                 .collect::<Result<Vec<_>, _>>()?;
-            if matches!(abi, Abi::Watcall32 | Abi::Watcall16) {
+            if matches!(abi, Abi::Watcall32 | Abi::Watcall16 | Abi::Regparm3) {
                 return Err(unsupported(name, "BASIC", span));
             }
             let convention = if matches!(abi, Abi::C | Abi::Cdecl16 | Abi::Cdecl32) { " CDECL" } else { "" };
@@ -192,7 +194,7 @@ fn declaration(function: &Function, abi: Abi, language: Language, segmented: boo
                 .collect::<Vec<_>>()
                 .join(", ");
             let cleanup = match abi {
-                Abi::C | Abi::Cdecl16 | Abi::Cdecl32 | Abi::Sysv32 | Abi::Ia16 => "caller removes the arguments".to_owned(),
+                Abi::C | Abi::Cdecl16 | Abi::Cdecl32 | Abi::Sysv32 | Abi::Ia16 | Abi::Regparm3 => "caller removes the arguments".to_owned(),
                 Abi::Interrupt16 => "iret".to_owned(),
                 Abi::Watcall32 | Abi::Watcall16 => "the callee removes the stack arguments".to_owned(),
                 _ => format!("retf {words}"),
