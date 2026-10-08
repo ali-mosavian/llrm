@@ -95,40 +95,6 @@ impl Selector<'_, '_, '_> {
             self.wides.insert(result, (low, high));
             return Ok(());
         }
-        // An unsigned qword out of a float: fisttp stores a signed one, and a value of 2^63 or more is its "integer indefinite"
-        // (0x8000000000000000). So x is stored, and x - 2^63 too; where the first is valid it is the answer, else the second with its
-        // top bit set. Branchless, as the target has no cmov: a mask is all ones where the first store is not the indefinite.
-        if op == CastOp::FPToUI && self.is_float(from) {
-            let x = self.float(operand, at, out)?;
-            let limit = self.fresh_held(super::FLOAT);
-            let pool = Loc::Mem(self.pool.cell(super::constpool::narrowest(9_223_372_036_854_775_808.0)));
-            self.put(semantics(Operation::FloatLoad, "fld", vec![Loc::Held(limit)], vec![pool]), at, out);
-            let rest = self.fresh_held(super::FLOAT);
-            self.put(semantics(Operation::FloatArith, "fsub", vec![Loc::Held(rest)], vec![Loc::Held(x), Loc::Held(limit)]), at, out);
-            let mut halves = Vec::new();
-            for value in [x, rest] {
-                let cell = self.float_stored(value, "fisttp", 8, at, out);
-                for by in [0, 4] {
-                    halves.push(self.made(Operation::Move, "mov", vec![Loc::Mem(Self::memory(cell.moved(by), 4))], at, out));
-                }
-            }
-            let [a_low, a_high, b_low, b_high] = halves[..] else { unreachable!("two stored qwords") };
-            let top = Self::dword(0x8000_0000);
-            let flipped = self.made(Operation::Binary, "xor", vec![Loc::Held(b_high), top.clone()], at, out);
-            let marked = self.made(Operation::Binary, "xor", vec![Loc::Held(a_high), top], at, out);
-            let any = self.made(Operation::Binary, "or", vec![Loc::Held(marked), Loc::Held(a_low)], at, out);
-            let negated = self.made(Operation::Unary, "neg", vec![Loc::Held(any)], at, out);
-            let sign = self.made(Operation::Binary, "or", vec![Loc::Held(any), Loc::Held(negated)], at, out);
-            let mask = self.made(Operation::Binary, "sar", vec![Loc::Held(sign), Self::count(31)], at, out);
-            let mut chosen = Vec::new();
-            for (first, second) in [(a_low, b_low), (a_high, flipped)] {
-                let different = self.made(Operation::Binary, "xor", vec![Loc::Held(first), Loc::Held(second)], at, out);
-                let kept = self.made(Operation::Binary, "and", vec![Loc::Held(different), Loc::Held(mask)], at, out);
-                chosen.push(self.made(Operation::Binary, "xor", vec![Loc::Held(second), Loc::Held(kept)], at, out));
-            }
-            self.wides.insert(result, (chosen[0], chosen[1]));
-            return Ok(());
-        }
         // fild reads a signed qword, so an unsigned one is its two halves each read as a qword of its own, the high one scaled by
         // 2^32 (a qword of (0, 1) read the same way), and added: every step exact in the x87's 64-bit mantissa, one rounding when the
         // sum is stored as a float or a double.
