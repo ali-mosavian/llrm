@@ -324,9 +324,9 @@ fn test_module_exit_rewrite_preserves_conditional_false_edges() {
 
     assert!(main.contains("cmp eax, 42\n    je L"), "{main}");
     assert_eq!(main.matches("call far ptr B$PESD").count(), 2, "{main}");
-    // Each arm ends in the exit, shared or (jump to a return copied into the arm, gcc's `copy_bb_p`) its own: what matters is that the
-    // arm which prints CALL BAD reaches it too.
-    assert!(main.matches("call far ptr B$CENP").count() >= 1, "{main}");
+    // Each arm ends in its own exit: the jump to the shared `ret` is replaced by a copy of it (gcc's `copy_bb_p`, `jumps::duplicated`),
+    // and `driver::basic::ends_program` then spells every `ret` of the module as a call of B$CENP. Both arms must reach it.
+    assert_eq!(main.matches("call far ptr B$CENP").count(), 2, "{main}");
 }
 
 /// SUBTRACTPAIR read 8-50: calls pushed left-to-right but formals used ascending offsets.

@@ -90,8 +90,19 @@ pub fn optimized(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintabl
 /// gcc's `max-grow-copy-bb-insns`: a block is copied while it is at most this many unconditional jumps long.
 const COPY_BB_INSNS: usize = 8;
 
+/// gcc's `get_uncond_jump_length`: what the target prices one unconditional jump at, in its long form.
+pub(crate) fn uncond_jump_bytes(bits: u32) -> usize {
+    let jump = Semantics { name: Some("jmp".into()), target: Some(2), ..Semantics::new(Operation::Jump) };
+    select::priced_in(bits, &jump, 0, None, false, false, None).map_or(2, |made| made.code.len())
+}
+
+/// The bytes a block may be and still be copied (`copy_bb_p`): `COPY_BB_INSNS` jumps of code.
+fn copy_limit(bits: u32) -> usize {
+    COPY_BB_INSNS * uncond_jump_bytes(bits)
+}
+
 /// A block that only returns: plain operations then a `ret`, no way on, within `limit` bytes and none of it source-owned.
-fn _return_tail(bits: u32, block: &LirBlock, limit: usize) -> bool {
+fn _return_tail(bits: u32, block: &LirBlock) -> bool {
     if !block.phis.is_empty() || !block.succ.is_empty() || block.insns.iter().any(|one| one.call.is_some() || one.group.is_some() || one.symbol == Some(true) || !one.spread.is_empty()) {
         return false;
     }
@@ -103,7 +114,7 @@ fn _return_tail(bits: u32, block: &LirBlock, limit: usize) -> bool {
     {
         return false;
     }
-    real.iter().try_fold(0usize, |bytes, one| select::priced_in(bits, one.what.as_ref()?, 0, None, false, false, None).map(|made| bytes + made.code.len())).is_some_and(|bytes| bytes <= limit)
+    real.iter().try_fold(0usize, |bytes, one| select::priced_in(bits, one.what.as_ref()?, 0, None, false, false, None).map(|made| bytes + made.code.len())).is_some_and(|bytes| bytes <= copy_limit(bits))
 }
 
 /// LLVM's `TailDupSize` at -O2: the instructions a tail may hold besides its jumps.
@@ -138,7 +149,7 @@ fn duplicated(body: &LirBody, returns: bool) -> LirBody {
             let Some(tail) = last.target.filter(|at| *at != parent.at && *at != body.entry).and_then(|at| by_at.get(&at)) else {
                 return None;
             };
-            let Some((copied, falls)) = _duplicable(body.bits, tail, after.get(&tail.at).copied()).filter(|(_, falls)| !returns || falls.is_none()).filter(|_| !returns || _return_tail(body.bits, tail, COPY_BB_INSNS * if body.bits == 32 { 5 } else { 3 })) else {
+            let Some((copied, falls)) = _duplicable(body.bits, tail, after.get(&tail.at).copied()).filter(|(_, falls)| !returns || falls.is_none()).filter(|_| !returns || _return_tail(body.bits, tail)) else {
                 return None;
             };
             // Per run of the jump: the fall-through's jump runs as often as the tail falls through.
@@ -188,7 +199,7 @@ fn _duplicable(bits: u32, tail: &LirBlock, next: Option<i64>) -> Option<(Vec<Arc
         return None;
     }
     // gcc's bb-reorder `copy_bb_p` for a block that only returns: copied up to `max-grow-copy-bb-insns` jumps of code.
-    if _return_tail(bits, tail, COPY_BB_INSNS * if bits == 32 { 5 } else { 3 }) {
+    if _return_tail(bits, tail) {
         return Some((_real(tail), None));
     }
     let real = _real(tail);
