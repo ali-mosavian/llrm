@@ -144,8 +144,10 @@ pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<Valu
         return false;
     };
     let boost = _boost(&unrolled);
+    // GCC's `estimated_unrolled_size` takes two thirds of the copies' size, for what later passes still remove from them.
+    let estimate = (unrolled.size * 2 / 3).max(1);
     // GCC's reasons, in its order.
-    let refusal = if asked || unrolled.size <= size {
+    let refusal = if asked || estimate <= size {
         None
     } else if !limits.grows {
         Some("size would grow")
@@ -155,7 +157,7 @@ pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<Valu
         Some("a call that touches memory")
     } else if unrolled.branches > MAX_PEEL_BRANCHES {
         Some("max-peel-branches")
-    } else if unrolled.size > budget.saturating_mul(boost) / 100 {
+    } else if estimate > budget.saturating_mul(boost) / 100 {
         Some("max-completely-peeled-insns")
     } else {
         None

@@ -57,6 +57,7 @@ Sources read:
 | called-once body | knee `inline.rs:144` | `max-inline-functions-called-once-insns` 4000 (541) | last-call bonus `TargetTransformInfoImpl.h:98` | stays: allocator knee |
 | full unroll iterations | 10 `peelsize.rs:90` | `max-completely-peel-times` 16 (465) | `unroll-max-iteration-count-to-analyze` 10 `LoopUnrollPass.cpp:106` | 16 (gcc's), done |
 | full unroll operations | 200 `peelsize.rs:90`, replaced by the target's `unroll_budget` (150 on m32, `opcosts.txt:42`) x `target_percent` | `max-completely-peeled-insns` 200 (469) | `unroll-threshold-default` 150 / `-aggressive` 300 `LoopUnrollPass.cpp:168-176` | unchanged: the target's 150 (m32) x `target_percent` |
+| full unroll, growth test | copies x 2/3 <= loop `peelsize.rs:147` | `estimated_unrolled_size` takes `unr_insns * 2 / 3` before every comparison (tree-ssa-loop-ivcanon.cc:411) | none | gcc's |
 | unroll boost | 400 `peelsize.rs:62` | none | `unroll-max-percent-threshold-boost` 400 `LoopUnrollPass.cpp:97` | stays |
 | pragma unroll | 16384 `peelsize.rs:59` | none | `pragma-unroll-threshold` 16384 `LoopUnrollPass.cpp:145` | stays |
 | peel branches | 16 `peelsize.rs:33` | `max-peel-branches` 32 (617) | none | 32 (gcc's), done |
