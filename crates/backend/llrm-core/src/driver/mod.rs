@@ -86,7 +86,7 @@ impl Options {
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
-        cpu::tuned_for(&*self.arch, &self.machine.cpu, self.pipeline.prefers_size())
+        cpu::tuned_searching(&*self.arch, &self.machine.cpu, self.pipeline.prefers_size(), self.pipeline.searches())
     }
 }
 
