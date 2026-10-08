@@ -54,3 +54,19 @@ def test_measured_reads_the_bench_files(tmp_path):
     got = qcport_run.measured(tmp_path)
     assert (got["frames"], got["polys"]) == ("62", "37637") and len(got["md5"]) == 32
     assert qcport_run.measured(tmp_path / "missing").get("polys") is None
+
+
+def test_a_compiler_that_dies_silently_is_reported_with_its_exit_status_and_signal(tmp_path):
+    """Two gates failed 'd_faces: ' and 'sc: ' with nothing after the colon: no exit status, so no telling a crash from a kill."""
+    killed = tmp_path / "killed"
+    killed.write_text("#!/bin/sh\nkill -9 $$\n")
+    killed.chmod(0o755)
+    message = qcport_run.compile_failure(killed, ["-O2"], Path("d_faces.c"), tmp_path / "d_faces.obj")
+    assert message.startswith("d_faces: ") and "exit -9" in message and "SIGKILL" in message, message
+
+
+def test_a_compiler_that_succeeds_is_no_failure(tmp_path):
+    fine = tmp_path / "fine"
+    fine.write_text("#!/bin/sh\nexit 0\n")
+    fine.chmod(0o755)
+    assert qcport_run.compile_failure(fine, [], Path("a.c"), tmp_path / "a.obj") is None
