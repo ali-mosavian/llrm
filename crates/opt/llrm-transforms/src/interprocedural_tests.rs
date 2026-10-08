@@ -545,7 +545,7 @@ b:
   ret i16 %y
 }
 
-define i16 @h(i16 %x) {
+define i16 @f(i16 %x) {
 b:
   %y = call i16 @returns(i16 %x)
   ret i16 %y
@@ -1073,4 +1073,48 @@ fn test_another_caller_leaves_the_parameter_unbounded() {
     stepped(&mut module, &["f"], 40, Threshold::none());
     let text = printed(&module);
     assert!(text.contains("icmp ult i16 %row, 12"), "{text}");
+}
+
+/// A function called with a constant is copied for it at -O3 (gcc's `-fipa-cp-clone`): `g`'s loop runs `%k` trips, which the
+/// copies for 4 and for 5 know. gcc's -O3 queens is eight such copies of its recursive `place`, one a row.
+const TWO_CONTEXTS: &str = "define i16 @g(i16 %k, i16 %x) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %body ]
+  %acc = phi i16 [ 0, %b0 ], [ %acc1, %body ]
+  %go = icmp slt i16 %i, %k
+  br i1 %go, label %body, label %done
+
+body:
+  %m = mul i16 %x, %i
+  %acc1 = add i16 %acc, %m
+  %i1 = add nsw i16 %i, 1
+  br label %head
+
+done:
+  ret i16 %acc
+}
+
+define i16 @f(i16 %x) {
+b0:
+  %a = call i16 @g(i16 4, i16 %x)
+  %b = call i16 @g(i16 5, i16 %x)
+  %s = add i16 %a, %b
+  ret i16 %s
+}
+";
+
+#[test]
+fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
+    let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[-3]];
+    let cloned = |clone: bool| {
+        let mut module = parsed(TWO_CONTEXTS);
+        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: clone, ..Threshold::none() });
+        assert_eq!(results(&module, inputs), results(&parsed(TWO_CONTEXTS), inputs), "{}", printed(&module));
+        (module.named("g.constprop.1").is_some(), module.named("g.constprop.2").is_some())
+    };
+    assert_eq!(cloned(false), (false, false));
+    assert_eq!(cloned(true), (true, true));
 }
