@@ -17,3 +17,7 @@ move.
 `kernels/x_*` are 37 more kernels (`bench/` has no copy of them), each with its `.out` self-check from gcc -O0 on the host; every variant
 must report the same values or `table.py` refuses. The table prints the bench programs and the kernels as separate summaries, the
 worst program beside each geomean.
+
+The kernel is called from `main` through a volatile pointer to it (`wrap.py`, in the copy every compiler builds), so none of them can inline
+it into `main`, and none can clone it for `main`'s constants (`-fipa-cp-clone`'s doing in gcc -O3); everything else inlines as the level
+says. `-fno-inline-functions` was on for all three before, which the table never showed was turning inlining off.
