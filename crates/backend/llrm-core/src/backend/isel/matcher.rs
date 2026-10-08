@@ -382,7 +382,7 @@ impl Selector<'_, '_, '_> {
     fn is_scalable(&self, m: &Match, factor: Operand) -> bool {
         self.chain(m, factor).is_some_and(|(chain, _)| {
             let width = self.width(self.function.instruction(m.inst).ty).expect("a held width");
-            chain.iter().all(|&(name, count)| name != "shl" || count < i64::from(width) * 8)
+            chain.iter().all(|&(name, count)| !["shl", "fadd", "fsub"].contains(&name) || count < i64::from(width) * 8)
         })
     }
 
@@ -393,7 +393,7 @@ impl Selector<'_, '_, '_> {
 
     fn chain(&self, m: &Match, factor: Operand) -> Option<(Vec<(&'static str, i64)>, i64)> {
         let width = self.width(self.function.instruction(m.inst).ty).ok()?;
-        let n = self.constant(factor, width).filter(|&n| matches!(width, 2 | 4) && 1 < n)?;
+        let n = self.constant(factor, width).filter(|&n| matches!(width, 2 | 4) && (1 < n || n < -1))?;
         if width == 4 { arithmetic::cheapest_chain(n, self.cpu) } else { arithmetic::cheapest_narrow_chain(n, self.cpu) }.ok().flatten()
     }
 
@@ -406,7 +406,8 @@ impl Selector<'_, '_, '_> {
         // A `lea r,[a+cur*s]` is the opcode, the ModRM and the SIB.
         chain.iter().map(|&(name, count)| match name {
             "shl" => shift_bytes(count, width, operand),
-            "lea" => 3 + i64::from(width != operand),
+            "lea" | "flea" => 3 + i64::from(width != operand),
+            "fadd" | "fsub" => shift_bytes(count, width, operand) + register_bytes(width, operand) + register_bytes(width, operand),
             _ => register_bytes(width, operand),
         }).sum()
     }
@@ -442,11 +443,28 @@ impl Selector<'_, '_, '_> {
         let mut current = a.clone();
         for (index, &(name, count)) in chain.iter().enumerate() {
             let into = if index == chain.len() - 1 { result } else { self.fresh_held(result.width) };
-            if name == "lea" {
+            if name == "flea" {
+                // `into = current + current*count`.
+                let Loc::Held(base) = current.clone() else { unreachable!("a chain works on registers") };
+                let cell = crate::model::ir::Mem { base: Some(base), index: Some(base), scale: count, ..crate::model::ir::Mem::new(None, result.width) };
+                out.push(insn(m.at, semantics(Operation::Address, "lea", vec![Loc::Held(into)], vec![Loc::Mem(cell)])));
+            } else if name == "lea" {
                 // `into = a + current*count`: the shift and add of one digit, made by the address unit.
                 let (Loc::Held(base), Loc::Held(scaled)) = (a.clone(), current.clone()) else { unreachable!("a chain works on registers") };
                 let cell = crate::model::ir::Mem { base: Some(base), index: Some(scaled), scale: count, ..crate::model::ir::Mem::new(None, result.width) };
                 out.push(insn(m.at, semantics(Operation::Address, "lea", vec![Loc::Held(into)], vec![Loc::Mem(cell)])));
+            } else if name == "neg" {
+                out.push(insn(m.at, semantics(Operation::Unary, "neg", vec![Loc::Held(into)], vec![current])));
+            } else if name == "rsub" {
+                // `into = source - current`.
+                out.push(insn(m.at, semantics(Operation::Binary, "sub", vec![Loc::Held(into)], vec![a.clone(), current])));
+            } else if name == "fadd" || name == "fsub" {
+                // `current*(2^count +- 1)`: the shifted copy, then the sum or difference with `current`.
+                let Loc::Held(width_of) = current.clone() else { unreachable!("a chain works on registers") };
+                let shifted = self.fresh_held(width_of.width);
+                out.push(insn(m.at, semantics(Operation::Binary, "shl", vec![Loc::Held(shifted)], vec![current.clone(), Loc::Imm(Imm { value: count, width: 1, address: None })])));
+                let (add, left, right) = if name == "fadd" { ("add", Loc::Held(shifted), current) } else { ("sub", Loc::Held(shifted), current) };
+                out.push(insn(m.at, semantics(Operation::Binary, add, vec![Loc::Held(into)], vec![left, right])));
             } else {
                 let other = if name == "shl" { Loc::Imm(Imm { value: count, width: 1, address: None }) } else { a.clone() };
                 out.push(insn(m.at, semantics(Operation::Binary, name, vec![Loc::Held(into)], vec![current, other])));
