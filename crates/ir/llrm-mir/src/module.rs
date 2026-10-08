@@ -110,6 +110,25 @@ pub enum Change {
     BlockErased(BlockId),
 }
 
+/// A function's log of changes. A copy is another function (`Lineage`), whose edits from then on are its own: it starts with an
+/// empty log, as a copy that carried the original's (up to 64k changes, cloned for each numbering of a body) cost 16% of
+/// compiling a program with a hundred inlines. The log is no part of what a function is, so two functions are equal whatever
+/// they logged.
+#[derive(Debug, Default)]
+pub(crate) struct ChangeLog(pub(crate) Vec<Change>);
+
+impl Clone for ChangeLog {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for ChangeLog {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
 static NEXT_LINEAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Which function a log of changes belongs to, and how many changes it has held: `take_changes` drains the log
@@ -172,7 +191,7 @@ pub struct Function {
     pub(crate) layout: Vec<BlockId>,
     pub(crate) value_uses: Vec<Vec<Use>>,
     pub(crate) block_uses: Vec<Vec<Use>>,
-    pub(crate) changes: Vec<Change>,
+    pub(crate) changes: ChangeLog,
     /// How many changes `take_changes` has handed out: the log keeps them, so an analysis computed before can still be
     /// brought up to date.
     pub(crate) taken: usize,
@@ -204,7 +223,7 @@ impl Function {
             layout: Vec::new(),
             value_uses: Vec::new(),
             block_uses: Vec::new(),
-            changes: Vec::new(),
+            changes: ChangeLog::default(),
             taken: 0,
             debug_records: Vec::new(),
             debug_dropped: Vec::new(),
@@ -352,18 +371,19 @@ impl Function {
     /// than `LOG` of them.
     pub fn take_changes(&mut self) -> Vec<Change> {
         const LOG: usize = 1 << 16;
-        let kept_from = self.lineage.logged - self.changes.len();
-        let out = self.changes[self.taken.max(kept_from) - kept_from..].to_vec();
+        let kept_from = self.lineage.logged - self.changes.0.len();
+        let out = self.changes.0[self.taken.max(kept_from) - kept_from..].to_vec();
         self.taken = self.lineage.logged;
-        if self.changes.len() > LOG {
-            self.changes.drain(..self.changes.len() - LOG / 2);
+        if self.changes.0.len() > LOG {
+            let from = self.changes.0.len() - LOG / 2;
+            self.changes.0.drain(..from);
         }
         out
     }
 
     pub(crate) fn log(&mut self, change: Change) {
         self.lineage.logged += 1;
-        self.changes.push(change);
+        self.changes.0.push(change);
     }
 
     /// Where the function stands now.
@@ -374,8 +394,8 @@ impl Function {
     /// What changed since `mark`, in order; none where `mark` is of another function or what followed it has been
     /// taken.
     pub fn changes_since(&self, mark: Mark) -> Option<&[Change]> {
-        let kept_from = self.lineage.logged - self.changes.len();
-        (mark.uid == self.lineage.uid && (kept_from..=self.lineage.logged).contains(&mark.at)).then(|| &self.changes[mark.at - kept_from..])
+        let kept_from = self.lineage.logged - self.changes.0.len();
+        (mark.uid == self.lineage.uid && (kept_from..=self.lineage.logged).contains(&mark.at)).then(|| &self.changes.0[mark.at - kept_from..])
     }
 }
 
