@@ -568,6 +568,10 @@ pub struct CallAbi {
     pub convention: Option<String>,
     /// The arguments, by position, that travel in memory whatever the convention has free: a struct's words.
     pub memory: Vec<i64>,
+    /// The arguments, by position, that are a large aggregate passed by value (`byval`): a pointer to the aggregate.
+    pub byval: Vec<i64>,
+    /// The bytes of each of `byval`'s aggregates, in the same order.
+    pub byval_bytes: Vec<i64>,
     /// The argument that is the address a struct result is written to.
     pub result_pointer: Option<i64>,
 }
@@ -602,6 +606,11 @@ pub struct ProcedureAbi {
     pub convention: Option<String>,
     /// The parameters, by position, that travel in memory whatever the convention has free: a struct's words.
     pub memory: Vec<i64>,
+    /// The parameters, by position, that are a large aggregate passed by value (`byval`): a pointer to the aggregate, whose bytes
+    /// the caller copies onto the stack where the same number of words would lie.
+    pub byval: Vec<i64>,
+    /// The bytes of each of `byval`'s aggregates, in the same order.
+    pub byval_bytes: Vec<i64>,
     /// The parameter that is the address a struct result is written to.
     pub result_pointer: Option<i64>,
 }

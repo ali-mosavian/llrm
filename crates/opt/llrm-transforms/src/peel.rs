@@ -83,7 +83,7 @@ fn _candidate(context: &Context, layout: &DataLayout, function: &Function, analy
             continue;
         }
         let unit = memory::Unit::within(context, layout, &closed, analyses.outer()).with_registers(&facts).with_shape(&shape);
-        let Some(count) = induction::trip_count(&unit, &loop_, &facts) else {
+        let Some(count) = induction::trip_count(&unit, &loop_, &facts).or_else(|| induction::trip_bound(&unit, &loop_, &facts)) else {
             continue;
         };
         if count < BigInt::from(2) || !peelsize::admitted(&unit, &loop_, &count, &facts, limits, profit::site(&unit, analyses.outer(), &loop_)) {

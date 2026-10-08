@@ -89,7 +89,7 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
                 let Machined { body, reserve, calls, inline, far, pops, popped, registers, .. } = done.shift_remove(&id).expect("every function with a body was machined");
-                let body = timed("masm cleaned returns", || masm::cleaned_returns(&addressvalues::converted(&body), popped))?;
+                let body = timed("masm cleaned returns", || masm::cleaned_returns(&addressvalues::converted(&body), popped, arch.return_address_bytes(isel::far(global).map_err(unselected)?)))?;
                 let mut callees = IndexMap::default();
                 for (at, callee) in &calls {
                     if let Some(code) = inline.get(at) {
