@@ -358,7 +358,7 @@ fn complaints(done: &LirBody) -> Vec<String> {
 /// What a body does, run: the generator's body in values, and the allocator's
 /// in registers and frame cells, must store the same things.
 mod run {
-    use std::collections::HashMap;
+    use crate::support::hash::HashMap;
 
     use iced_x86::Register;
 
@@ -385,7 +385,7 @@ mod run {
 
     impl Machine {
         pub fn new(virtual_: bool) -> Self {
-            Self { virtual_, vals: HashMap::new(), regs: HashMap::new(), mem: HashMap::new(), stack: Vec::new(), poison: 0, log: Vec::new(), taken: 0 }
+            Self { virtual_, vals: HashMap::default(), regs: HashMap::default(), mem: HashMap::default(), stack: Vec::new(), poison: 0, log: Vec::new(), taken: 0 }
         }
 
         /// Nothing a body computes: the low word is hashed, so arithmetic that

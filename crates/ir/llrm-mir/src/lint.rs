@@ -7,7 +7,7 @@
 use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
 use crate::intrinsics::Intrinsic;
-use std::collections::{HashMap, HashSet};
+use crate::hash::{HashMap, HashSet};
 
 use crate::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, Use};
 use crate::opcode::Opcode;
@@ -160,7 +160,7 @@ fn stored_on_every_path(function: &Function, stores: &[InstId]) -> HashMap<Block
 /// The blocks a block holding one of `stores` can reach, itself only round a loop:
 /// where something may have been stored before.
 fn may_follow(function: &Function, stores: &[InstId]) -> HashSet<BlockId> {
-    let mut reached = HashSet::new();
+    let mut reached = HashSet::default();
     let mut work: Vec<_> = function.layout().iter().copied().filter(|&block| function.block(block).instructions().iter().any(|one| stores.contains(one))).flat_map(|block| function.successors(block)).collect();
     while let Some(block) = work.pop() {
         if reached.insert(block) {

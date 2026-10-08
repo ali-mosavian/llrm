@@ -1238,7 +1238,7 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
         let held = if _exact_frame(cell) {
             // Only what may write the cell is asked of, and the blocks between the load and its uses are gone over.
             let writers = writers.get_or_init(|| Writers::of(body));
-            let mut events: std::collections::HashMap<usize, Vec<(usize, bool)>> = std::collections::HashMap::new();
+            let mut events: crate::support::hash::HashMap<usize, Vec<(usize, bool)>> = crate::support::hash::HashMap::default();
             for (block, position) in writers.near(cell) {
                 if !_keeps(&body.blocks[block].insns[position], define, cell, true, body) {
                     events.entry(block).or_default().push((position, false));
@@ -1341,12 +1341,12 @@ impl Writers {
 /// Whether the cell holds at every one of `uses` (block, position), given where it is made to hold and where it is written:
 /// `events` per block are (position, true for the load, false for a write) in order. The same answer as `_unchanged`, found over
 /// the blocks that lie between the load and the uses and not over the whole body.
-fn _holds_at(flow: &Flow, events: &std::collections::HashMap<usize, Vec<(usize, bool)>>, uses: &[(usize, usize)]) -> bool {
-    use std::collections::{HashMap, HashSet};
+fn _holds_at(flow: &Flow, events: &crate::support::hash::HashMap<usize, Vec<(usize, bool)>>, uses: &[(usize, usize)]) -> bool {
+    use crate::support::hash::{HashMap, HashSet};
     // Whether the cell holds out of a block that has an event: after its last.
     let decided = |block: usize| events.get(&block).and_then(|list| list.last()).map(|(_, load)| *load);
     let mut needed: Vec<usize> = Vec::new();
-    let mut seen: HashSet<usize> = HashSet::new();
+    let mut seen: HashSet<usize> = HashSet::default();
     for &(block, position) in uses {
         let before = events.get(&block).and_then(|list| list.iter().rev().find(|(at, _)| *at < position));
         if before.is_none() && seen.insert(block) {

@@ -2,7 +2,7 @@
 //! front end described under -d2, mapped onto `llrm_hir::debug`, which
 //! builds the rest.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_core::hir::debug::Builder;
 use llrm_core::hir::model::{Debug, DebugKind, DebugReach, DebugScalar};
@@ -21,7 +21,7 @@ pub struct Described<'u> {
 impl<'u> Described<'u> {
     /// None unless the unit was compiled with -d2.
     pub fn of(unit: &'u hir::Unit) -> Option<Self> {
-        Some(Self { unit, debug: unit.debug.as_ref()?, builder: Builder::for_language(llrm_core::hir::model::DebugLanguage::C, llrm_core::hir::model::DebugDialect::Cv4), made: HashMap::new() })
+        Some(Self { unit, debug: unit.debug.as_ref()?, builder: Builder::for_language(llrm_core::hir::model::DebugLanguage::C, llrm_core::hir::model::DebugDialect::Cv4), made: HashMap::default() })
     }
 
     /// A pointer's reach, as the memory model makes a default one.

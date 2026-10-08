@@ -6,7 +6,7 @@
 //! arithmetic, `inbounds` on pointer arithmetic. The last two hold for
 //! objects of at most PTRDIFF_MAX bytes, as clang assumes of every object.
 
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 
 use llrm_core::hir::facts::{Builder as Facts, Subject};
 use llrm_mir::facts::Fact;
@@ -30,7 +30,7 @@ fn refuse<T>(what: impl Into<String>) -> R<T> {
 fn unreferenced_externs_dropped(data: Vec<h::DataObject>, functions: &[h::Function]) -> Vec<h::DataObject> {
     let mut used: HashSet<i64> = data.iter().flat_map(|one| one.relocations.iter().map(|relocation| relocation.target)).collect();
     for function in functions {
-        let mut places: HashSet<i64> = HashSet::new();
+        let mut places: HashSet<i64> = HashSet::default();
         for operand in function.blocks.iter().flat_map(|block| &block.instructions).flat_map(|instruction| &instruction.operands) {
             match operand {
                 h::Operand::PlaceRef(one) => places.insert(one.place),
@@ -49,7 +49,7 @@ pub fn program(unit: &hir::Unit, name: &str, calling: &llrm_target::calling::Cal
     let convention = calling.named(&profile.convention).ok_or_else(|| Unsupported(format!("calling.toml has no {}", profile.convention)))?;
     let mut types = Types::new(unit);
     let objects = objects(unit)?;
-    let mut keys: HashMap<Key, i64> = HashMap::new();
+    let mut keys: HashMap<Key, i64> = HashMap::default();
     for (at, object) in objects.iter().enumerate() {
         keys.insert(object.key, at as i64 + 1);
     }
@@ -322,7 +322,7 @@ struct Types<'u> {
 
 impl<'u> Types<'u> {
     fn new(unit: &'u hir::Unit) -> Self {
-        Types { unit, flat: unit.flat, list: Vec::new(), made: HashMap::new(), members: HashMap::new() }
+        Types { unit, flat: unit.flat, list: Vec::new(), made: HashMap::default(), members: HashMap::default() }
     }
 
     fn get(&self, id: i64) -> &h::Type {
@@ -710,10 +710,10 @@ impl<'a, 't> Body<'a, 't> {
             frame: 0,
             blocks: Vec::new(),
             current: 0,
-            labels: HashMap::new(),
-            slots: HashMap::new(),
-            globals: HashMap::new(),
-            done: HashMap::new(),
+            labels: HashMap::default(),
+            slots: HashMap::default(),
+            globals: HashMap::default(),
+            done: HashMap::default(),
             selects: IndexMap::default(),
             stated_instructions: Vec::new(),
             calls: Vec::new(),
