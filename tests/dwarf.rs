@@ -375,3 +375,21 @@ fn gdb_reads_a_parameter_at_the_first_instruction_from_the_register_it_arrived_i
     assert!(text.contains("$1 = 1") && text.contains("$2 = {x = 3, y = 4}"), "at the entry:\n{text}");
     assert!(text.contains("$3 = 1"), "after the store, from the cell:\n{text}");
 }
+
+/// `-g` kept the frame register for every function with a variable: `push ebp; mov ebp, esp` and every cell through `ebp`, where
+/// the same build without `-g` addressed them through `esp`. DWARF finds a cell from the canonical frame address, so the code
+/// is the code.
+#[test]
+fn an_elf_function_with_variables_has_the_code_it_has_without_g() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
+    let scratch = tempfile::tempdir().unwrap();
+    let assembly = |flags: &[&str]| {
+        let out = scratch.path().join("x.s");
+        let made = compile(&fixtures.join("gdb.c"), &[&["-m32", "-O0", "-fobject-format=elf", "-S"], flags].concat(), &out);
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        std::fs::read_to_string(&out).unwrap()
+    };
+    let (plain, debug) = (assembly(&[]), assembly(&["-g"]));
+    assert!(!plain.contains("ebp"), "the instrument: without -g the function keeps no frame register\n{plain}");
+    assert_eq!(plain, debug);
+}

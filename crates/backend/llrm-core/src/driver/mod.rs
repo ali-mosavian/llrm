@@ -73,6 +73,18 @@ impl Options {
         }
     }
 
+    /// Whether that writer places a frame cell from the canonical frame address, so `-g` need not keep a frame register.
+    pub fn cfa_locations(&self) -> bool {
+        use llrm_object::debug::Format;
+        match (self.object_format, self.debug_format) {
+            (_, Format::TurboDebugger) => llrm_omf::CFA_LOCATIONS,
+            (_, Format::Dwarf { .. }) => llrm_dwarf::CFA_LOCATIONS,
+            ("omf", _) => llrm_omf::CFA_LOCATIONS,
+            ("coff", _) => llrm_coff::CFA_LOCATIONS,
+            _ => llrm_dwarf::CFA_LOCATIONS,
+        }
+    }
+
     pub fn cpu(&self) -> Result<&'static Profile, String> {
         cpu::tuned_for(&*self.arch, &self.machine.cpu, self.pipeline.prefers_size())
     }
@@ -90,7 +102,7 @@ pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm:
     let segments = Segments::of(&options.machine);
     let mut out = Vec::new();
     for ((module, hir), placed) in mir.modules.iter().zip(&program.modules).zip(&placed) {
-        let mut assembled = timed("assemble", || assemble::assembled_by(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments, options.selection, &*options.arch, options.location_ranges()))?;
+        let mut assembled = timed("assemble", || assemble::assembled_by(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments, options.selection, &*options.arch, options.location_ranges(), options.cfa_locations()))?;
         if let Some(debug) = assembled.debug.as_mut() {
             debug.format = options.debug_format;
         }

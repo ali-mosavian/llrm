@@ -352,6 +352,9 @@ pub struct LirBody {
     /// Every frame cell names the slot it lies in (`Addr::slot_home`): set once instruction selection has tagged them, and
     /// then a rule of the verifier.
     pub slotted: bool,
+    /// `-g`'s variables are found from the canonical frame address, so they need no frame register: the debug format says
+    /// where a cell is by its distance from the caller's frame (`FrameBase::Cfa`), whichever register the code addresses it by.
+    pub cfa_variables: bool,
 }
 
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
@@ -454,6 +457,7 @@ impl LirBody {
             homes: Arc::default(),
             bits: crate::frontends::bc::declen::BITNESS,
             slotted: false,
+            cfa_variables: false,
         }
     }
 
@@ -480,6 +484,7 @@ impl LirBody {
             homes: Arc::clone(&self.homes),
             bits: self.bits,
             slotted: self.slotted,
+            cfa_variables: self.cfa_variables,
         }
     }
 
