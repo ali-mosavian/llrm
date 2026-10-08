@@ -629,7 +629,9 @@ mod tests {
     fn selected_loop(fixture: &str, function: &str, marker: &str) -> Vec<String> {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &llrm_driver::m16_options(machine)).unwrap();
+        // At -O2: a loop is copied out only where the code does not grow, so the loop the test reads stays a loop.
+        let options = llrm_core::driver::Options { pipeline: llrm_transforms::pipeline::Options::standard(), ..llrm_driver::m16_options(machine) };
+        let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &options).unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let from = asm.find(&format!("{function} proc")).expect("the function");
         let lines: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
