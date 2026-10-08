@@ -147,3 +147,9 @@ def test_a_step_that_runs_the_binaries_builds_them_first_even_when_no_rust_chang
         p = gate.plan([path])
         assert p.steps[0] == "build", (path, p.steps)
     assert "build" not in gate.plan(["tools/msp430.py"]).steps
+
+
+def test_the_qcport_step_has_no_wall_clock_limit_of_its_own():
+    """`timeout 400` around qcport-run killed a run that was still drawing at load: qcport-run stops a stall and caps a hang itself."""
+    p = gate.plan(["tools/qcport-run.py"])
+    assert "timeout" not in gate.commands(p, gate.load(), gate.packages())["qcport"]
