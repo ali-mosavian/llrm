@@ -69,11 +69,13 @@ pub struct Threshold {
     /// copied: LLVM's last-call-to-static bonus and GCC's `-finline-functions-called-once`, which
     /// `-fno-inline-functions` leaves on as GCC's does; `-fno-inline-functions-called-once` turns it off.
     pub last: bool,
+    /// `-fipa-cp-clone` (-O3): a function is copied for the constants its callers pass though the unit grows (`ipacp`).
+    pub cp_clone: bool,
 }
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, hint: (325, 225), hot: (525, 225), single: false, last: true }
+        Self { limit, hint: (325, 225), hot: (525, 225), single: false, last: true, cp_clone: false }
     }
 
     /// Nothing inlines, the last call of a function included.
@@ -202,11 +204,16 @@ pub fn recursive(module: &Module) -> BTreeSet<GlobalId> {
 
 /// Whether `body` may be cloned into another function: it returns, `splice`
 /// carries it, and it is not recursive, never to be inlined or `setjmp`-like.
-fn cloneable(module: &Module, recursive: &BTreeSet<GlobalId>, id: GlobalId, body: &Function) -> bool {
+pub(crate) fn cloneable(module: &Module, recursive: &BTreeSet<GlobalId>, id: GlobalId, body: &Function) -> bool {
+    !recursive.contains(&id) && copyable(module, body)
+}
+
+/// Whether `body` may be copied as a function of its own (a recursive one included): it returns, `splice` carries it,
+/// and it is not to be inlined or `setjmp`-like.
+pub(crate) fn copyable(module: &Module, body: &Function) -> bool {
     !body.is_declaration()
         && carries(body)
         && stated(body) != Some(Inlining::Never)
-        && !recursive.contains(&id)
         && body.walk().any(|(_, inst)| body.instruction(inst).opcode == Opcode::Ret)
         && !llrm_mir::memory::calls_returns_twice(module, body)
 }
@@ -241,7 +248,7 @@ pub fn size(module: &Module, function: GlobalId, costs: &OperationCosts) -> Opti
 /// such a site no longer does. Instructions whose inputs are all known, and
 /// branches they decide; a lower bound, as control flow past a decided branch
 /// is not followed.
-fn folded(module: &Module, layout: &DataLayout, body: &Function, known: &[Option<ConstantId>], callees: &Callees, costs: &OperationCosts) -> i64 {
+pub(crate) fn folded(module: &Module, layout: &DataLayout, body: &Function, known: &[Option<ConstantId>], callees: &Callees, costs: &OperationCosts) -> i64 {
     let unit = Unit::of(module, layout, body);
     let mut values = IndexMap::default();
     for (&parameter, constant) in body.parameters().iter().zip(known) {
