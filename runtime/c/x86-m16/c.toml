@@ -1,0 +1,63 @@
+# C's runtime on real-mode DOS: what the language asks of the target's OS layer
+# (runtime/shared/dos/m16). Each field naming a file names one in this directory.
+
+# What `-fsanitize=stack` compares and calls.
+stack = "stack.toml"
+# The stack the OS layer's start-up reserves.
+stack_base = 16384
+# The start-up hook the layer calls before `main`, and the file that defines it.
+init = "_llrm_c_init"
+init_file = "init.asm"
+# Fields the assembler is told as `-DSYMBOL=value`; the OS layer's own come from its description.
+assembler_defines = ["stack_base:STACK_BYTES", "init:LANG_INIT"]
+
+# How Open Watcom's front end is asked to record a C program for this target (llrm-c).
+[frontend]
+# Which of its trees: i86 (16-bit) or 386 (flat 32-bit). The build makes one front end for each
+# CPU the targets name.
+watcom_cpu = "i86"
+# What the front end calls `int`, in bytes: the C ABI's, which the data layout does not state.
+int_bytes = 2
+# The routine the start-up calls, and the convention it calls it in.
+entry = "main"
+entry_convention = "cdecl16"
+# What the front end records of a function it passes in its default registers (its own list, which differs by tree).
+default_registers = "[ff:0]"
+# The header it includes first, from the repository root.
+header = "crates/frontends/llrm-c/src/borland.h"
+# Borland C's interrupt handler parameters, in order: the registers its handler saved, each at its slot of the frame
+# (`calling.toml`'s `interrupt_frame`); what it writes to them is what it returns to.
+interrupt_parameters = ["bp", "di", "si", "ds", "es", "dx", "cx", "bx", "ax", "ip", "cs", "flags"]
+
+# Borland's medium model: far code, near data, cdecl, signed char, 80-bit long double,
+# byte-packed structs, 16-bit enums, x87 inline, no stack probes, no default library. -fp3 is for
+# inline assembly: qcport's own uses 387 instructions. Borland's ABI is the only one here: wccq
+# also lays bit fields out as BCC 3.1 does, with no switch.
+[frontend.abi.cdecl]
+convention = "cdecl16"
+flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq"]
+cdecl = "cdecl16"
+registers = "watcall16"
+
+# Open Watcom's own: no -ecc, so an unmarked function takes its registers; `__watcall` keeps Open Watcom's meaning, which Borland's
+# runtime does not have (borland.h moves its declarations to cdecl).
+[frontend.abi.watcom]
+convention = "cdecl16"
+flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-s", "-zl", "-zq", "-dLLRM_WATCOM_ABI"]
+cdecl = "cdecl16"
+registers = "watcall16"
+
+# gcc-ia16's: -ecc makes every function cdecl, which is its stack convention.
+[frontend.abi.ia16]
+convention = "ia16"
+flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq"]
+cdecl = "ia16"
+registers = "watcall16"
+
+# gcc's -mregparm=3: no -ecc, so an unmarked function takes the front end's default registers, which this ABI states as `regparm3`
+# (the Borland runtime's declarations and every function that names a convention stay cdecl).
+[frontend.abi.regparm3]
+convention = "regparm3"
+flags = ["-mm", "-3", "-fpi87", "-fp3", "-fld", "-j", "-zp1", "-ei", "-s", "-zl", "-zq"]
+cdecl = "cdecl16"
+registers = "regparm3"

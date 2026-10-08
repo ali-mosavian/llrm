@@ -93,7 +93,8 @@ struct _Plan {
 #[allow(clippy::too_many_arguments)]
 pub fn specialized(context: &mut Context, layout: &DataLayout, callees: &Callees, function: &mut Function, outer: &Outer, calls: &Calls, solved: &Solved) -> bool {
     let plan = {
-        let unit = Unit::within(context, layout, function, outer);
+        let shape = llrm_analysis::cfg::Shape::of(function);
+        let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
         let alive = live(context, callees, function);
         floatfacts::exits(&unit, calls, solved).into_iter().filter(|proof| proof.count > BigInt::from(1)).find_map(|proof| _planned(&unit, calls, solved, &alive, &proof))
     };

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use iced_x86::Register;
 
-use llrm_x86_code16::cycles::*;
+use llrm_x86_m16::cycles::*;
 use crate::backend::{cpu, schedule};
 use crate::model::{ir, lir};
 
@@ -39,7 +39,7 @@ fn test_scalar_double_shifts_use_the_integer_shift_price() {
         };
         let one = lir::Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]);
         assert_eq!(schedule::_form(&one), "shift_ri");
-        assert_eq!(schedule::_pair_class(&one), "np");
+        assert_eq!(schedule::_pair_class(16, &one), "np");
     }
 }
 

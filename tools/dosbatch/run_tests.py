@@ -6,18 +6,21 @@ diff stdout with NAME.out.
 
 A header comment holds a program's settings:
 
-    ' flags: -Os --cpu P5      extra compiler flags (default: -O2 --cpu 486); `a | b` builds and runs the program once for each
+    ' flags: -Os -march=pentium      extra compiler flags (default: -O2); `a | b` builds and runs the program once for each
     ' dialect: pds71           qb45 (default), pds71 or vbdos: its compiler dialect and runtime; several, blank apart, run once each
-    ' link: sortlib.nib        more sources built with it, beside the program (a .nib for BASIC; a .c or .asm for Nib)
+    ' link: sortlib.nib        more sources built with it, beside the program (a .nib for BASIC; a .c or .asm for Nib); `@c-runtime` is the target's own file of the routines a program calls and does not define
+    ' stdin: input.dat        a file the program reads as standard input (`< INPUT.DAT`), its output redirected too, copied beside it
     ' data: values.dat         a file the program reads, copied beside it; @dickens: a cached corpus, verified (skipped if unavailable)
     ' mask: \d+(?= spins)       text of the output that varies: each match reads as N
     ' known: #123              fails today, tracked by issue 123
+    # targets: x86-m16     a Nib or C program runs on m16 and, unless it says so, on x86-m32 too (same .out, a -m32 configuration)
 
 A known program that passes fails the run: remove its mark.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import sys
@@ -31,13 +34,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import corpus  # noqa: E402
 import dosbatch  # noqa: E402
+llrmbin = dosbatch.llrmbin
 from dosbatch import BIN, ROOT, Job  # noqa: E402
 
 RUN = ROOT / "tests" / "run"
 EXAMPLES = ROOT / "examples"
 BENCH = ROOT / "bench"
-DEFAULT_FLAGS = ["-O2", "--cpu", "486"]
-KEYS = ("flags", "known", "bc", "diverges", "dialect", "link", "data", "mask")
+DEFAULT_FLAGS = ["-O2"]
+KEYS = ("flags", "known", "bc", "diverges", "dialect", "link", "data", "stdin", "mask", "targets")
+FLAT = dosbatch.linkrecipe.named(32)
 HEADER = re.compile(rf"^\s*(?:'|//|#)\s*({'|'.join(KEYS)}):\s*(.*?)\s*$")
 COMPILERS = {".bas": ["llrm-qb"], ".nib": [], ".c": ["llrm-c"]}
 TOOLS = {"qb45": dosbatch.QB45_TOOLS, "pds71": dosbatch.PDS71_TOOLS, "vbdos": dosbatch.VBDOS_TOOLS}
@@ -53,6 +58,7 @@ class Program:
     data: tuple[str, ...] = ()
     mask: str = ""
     label: str = ""
+    stdin: str = ""
 
     @property
     def name(self) -> str:
@@ -84,7 +90,7 @@ def header(source: Path) -> dict[str, str]:
 def configurations(settings: dict[str, str]) -> list[tuple[str, list[str], str]]:
     """Each way a header asks for a program to be built: its label, its `flags:` and its `dialect:`.
 
-    `flags: -O2 | -Os --cpu P5` is two, `dialect: qb45 pds71 vbdos` three, and both make their product; the
+    `flags: -O2 | -Os -march=pentium` is two, `dialect: qb45 pds71 vbdos` three, and both make their product; the
     label names what differs. One of each is one configuration with no label."""
     alternatives = [one.split() for one in settings["flags"].split("|")] if "flags" in settings else [DEFAULT_FLAGS]
     dialects = settings.get("dialect", "qb45").split()
@@ -98,7 +104,7 @@ def configurations(settings: dict[str, str]) -> list[tuple[str, list[str], str]]
 
 def kept_flags(flags: list[str]) -> list[str]:
     """`flags` less the optimization level and cpu, which the caller sets."""
-    return [one for at, one in enumerate(flags) if not one.startswith("-O") and one != "--cpu" and flags[at - 1 : at] != ["--cpu"]]
+    return [one for one in flags if not one.startswith("-O") and not one.startswith(("-march=", "-mtune="))]
 
 
 def compiler_arguments(source: Path, flags: list[str] | None = None, dialect: str | None = None) -> list[str]:
@@ -115,8 +121,12 @@ def discover(selected: list[str]) -> list[Program]:
     for source in [*sorted(RUN.glob("*/*")), *sorted(EXAMPLES.glob("*.nib")), *sorted(EXAMPLES.glob("*/*")), *sorted(BENCH.glob("*/*")), *sorted(BENCH.glob("parity/*/*"))]:
         if source.suffix in COMPILERS:
             settings = header(source)
-            for label, flags, dialect in configurations(settings):
-                program = Program(source, flags, settings.get("known"), dialect, tuple(settings.get("link", "").split()), tuple(settings.get("data", "").split()), settings.get("mask", ""), label)
+            configured = configurations(settings)
+            if source.suffix in (".nib", ".c") and "targets" not in settings and set(settings.get("link", "").split()) <= {dosbatch.C_RUNTIME} and not any(dosbatch.target_of(flags, "") for _, flags, _ in configured):
+                # Where a Nib program runs on m32 too, with the same output.
+                configured += [(f"{label}{' ' if label else ''}[{FLAT}]", [*flags, dosbatch.m_flag(FLAT)], dialect) for label, flags, dialect in configured]
+            for label, flags, dialect in configured:
+                program = Program(source, flags, settings.get("known"), dialect, tuple(settings.get("link", "").split()), tuple(settings.get("data", "").split()) + tuple(settings.get("stdin", "").split()), settings.get("mask", ""), label, settings.get("stdin", ""))
                 if program.out.exists():
                     programs.append(program)
     if selected:
@@ -145,6 +155,9 @@ def first_difference(want: list[str], got: list[str]) -> str:
 def compile_one(program: Program, obj: Path) -> str | None:
     tool, *rest = COMPILERS[program.source.suffix]
     dialect = ["--dialect", program.dialect, "--runtime", program.dialect] if program.source.suffix == ".bas" else []
+    if program.source.suffix == ".c":
+        target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
+        dialect = ["-I", str(dosbatch.c_include(target, obj.parent))]
     done = subprocess.run([str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, "-o", str(obj)],
                           capture_output=True, text=True, timeout=300)
     if done.returncode != 0 or not obj.exists():
@@ -158,7 +171,10 @@ def data_files(program: Program) -> tuple[Path, ...]:
 
 
 def unavailable(program: Program) -> str | None:
-    """Why a program's corpus cannot be had, or None."""
+    """Why a program's corpus or Open Watcom's compiler cannot be had, or None."""
+    target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
+    if any(one.endswith(".wc") for one in program.link) and not dosbatch.watcom_cc(target).exists():
+        return f"{dosbatch.watcom_cc(target)} is not built (toolchain/owshim/build.sh builds the tree)"
     for one in program.data:
         if one.startswith("@"):
             try:
@@ -168,11 +184,52 @@ def unavailable(program: Program) -> str | None:
     return None
 
 
+def linked(program: Program, target: str) -> list[Path]:
+    """The files a program's `link:` names for `target` (`dosbatch.link_files`)."""
+    return dosbatch.link_files(program.source, program.link, target)
+
+
+def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple[Path, ...]:
+    """The C and assembly files a Nib program links, built for `target`; C sees the declarations of the program's exports as NAME.h."""
+    if not program.link:
+        return ()
+    level = program.flags[0] if program.flags else "-O2"
+    include = work / f"{stem}_inc"
+    include.mkdir(exist_ok=True)
+    abi = [one for one in program.flags if one.startswith("-mabi=")]
+    declared = subprocess.run([str(BIN / "llrm-nib"), str(program.source), "--declare", "h", dosbatch.m_flag(target), *abi], capture_output=True, text=True)
+    if declared.returncode != 0:
+        raise dosbatch.BuildError("declare: " + declared.stderr.strip())
+    (include / f"{program.source.stem}.h").write_text(declared.stdout)
+    objects = []
+    for at, source in enumerate(linked(program, target)):
+        obj = work / f"{stem}F{at}.obj"
+        if source.suffix == ".asm":
+            dosbatch.assemble(source, obj, *dosbatch.os_defines(target, "c"))
+        else:
+            dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(include), dosbatch.m_flag(target), *abi, level, "-o", str(obj)])
+        objects.append(obj)
+    return tuple(objects)
+
+
 def build(program: Program, work: Path, stem: str) -> Job | str:
     """The job that runs `program`, or why it did not build."""
+    target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
+    if program.source.suffix == ".nib" and target != dosbatch.REAL_MODE:
+        exe, obj = work / f"{stem}.exe", work / f"{stem}.obj"
+        done = subprocess.run([str(BIN / "llrm-nib"), str(program.source), *program.flags, "-o", str(obj), "--procedure-segments"], capture_output=True, text=True, timeout=300)
+        if done.returncode != 0 or not obj.exists():
+            return "compile: " + (done.stderr or done.stdout).strip()[-600:]
+        try:
+            foreign = build_foreign(program, target, work, stem)
+            loaders = dosbatch.link_nib(target, program.source, obj, exe, work, program.flags[0] if program.flags else "-O2", foreign, tuple(one for one in program.flags if one.startswith("-mabi=")))
+            dosbatch.check_loads(exe)
+        except (dosbatch.BuildError, dosbatch.TooBig) as error:
+            return f"link: {error}"
+        return Job(stem, "exe", exe, files=(*data_files(program), *loaders))
     if program.source.suffix == ".nib":
         exe = work / f"{stem}.exe"
-        extras = [str(program.source.parent / one) for one in program.link]
+        extras = [str(one) for one in linked(program, target)]
         nib_flags = " ".join(compiler_arguments(program.source, program.flags))
         done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(program.source), str(exe), *program.flags[:1], *extras],
                               capture_output=True, text=True, timeout=300, env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_FLAGS": nib_flags})
@@ -188,12 +245,25 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
         return problem
     if program.source.suffix == ".c":
         exe = work / f"{stem}.exe"
+        target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
+        level = program.flags[0] if program.flags else "-O2"
         try:
-            dosbatch.link_c(obj, exe, work)
+            # Its own files, as Nib's: a C file by llrm-c, a `.wc` by Open Watcom's wcc386, an assembly file by jwasm.
+            others = []
+            for at, source in enumerate(one for one in linked(program, target) if one.name != Path(dosbatch.target_link(target)["last"][0]).name):
+                extra = work / f"{stem}F{at}.obj"
+                if source.suffix == ".wc":
+                    dosbatch.watcom_compile(source, extra, target)
+                elif source.suffix == ".asm":
+                    dosbatch.assemble(source, extra, *dosbatch.os_defines(target, "c"))
+                else:
+                    dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), *(one for one in program.flags if one.startswith("-mabi=")), level, "-o", str(extra)])
+                others.append(extra)
+            loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others))
             dosbatch.check_loads(exe)
         except (dosbatch.BuildError, dosbatch.TooBig) as error:
             return f"link: {error}"
-        return Job(stem, "exe", exe, files=data_files(program))
+        return Job(stem, "exe", exe, files=(*data_files(program), *loaders))
     extras = []
     for at, one in enumerate(program.link):
         extra = work / f"{stem}L{at}.obj"
@@ -207,16 +277,28 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
-    parser.add_argument("--work", type=Path, default=ROOT / "target" / "tests-run")
+    parser.add_argument("--work", type=Path, help="where to build and run; one private to this run by default")
+    parser.add_argument("--retarget", help="build each Nib program for this target instead, against its own .out")
+    parser.add_argument("--abi", help="build each C and Nib program with -mabi=ABI, against its own .out: the same programs, another convention")
     args = parser.parse_args()
     programs = discover(args.select)
+    if args.retarget:
+        programs = [dataclasses.replace(p, flags=[*p.flags, dosbatch.m_flag(args.retarget)]) for p in programs if p.source.suffix == ".nib" and dosbatch.target_of(p.flags, "") == ""]
+    if args.abi:
+        # Only the programs whose target has that ABI: the compilers refuse the others.
+        has = {}
+        for target in dosbatch.target_modes():
+            done = subprocess.run([str(BIN / "llrm-c"), dosbatch.m_flag(target), f"-mabi={args.abi}", "--os-layer", "directory"], capture_output=True, text=True)
+            has[target] = done.returncode == 0
+        programs = [dataclasses.replace(p, flags=[*p.flags, f"-mabi={args.abi}"]) for p in programs if p.source.suffix in (".c", ".nib") and not any(one.startswith("-mabi=") for one in p.flags) and has[dosbatch.target_of(p.flags, dosbatch.REAL_MODE)] and not any(one.endswith(".wc") for one in p.link)]
     for program in [one for one in programs if unavailable(one)]:
         print(f"SKIP  {program.name}: {unavailable(program)}")
         programs.remove(program)
     if not programs:
         print("no programs selected")
         return 1
-    work = args.work
+    own = args.work is None
+    work = dosbatch.private_work("tests-run") if own else args.work
     objs = work.with_name(work.name + "-obj")
     objs.mkdir(parents=True, exist_ok=True)
     stems = {p.name: f"T{at:03d}" for at, p in enumerate(programs)}
@@ -224,7 +306,7 @@ def main() -> int:
         built = dict(zip((p.name for p in programs), pool.map(lambda p: build(p, objs, stems[p.name]), programs)))
     ran = {}
     for dialect, tools in TOOLS.items():
-        jobs = [built[p.name] for p in programs if p.dialect == dialect and isinstance(built[p.name], Job)]
+        jobs = [dataclasses.replace(built[p.name], args=f"< {p.stdin.upper()}") if p.stdin else built[p.name] for p in programs if p.dialect == dialect and isinstance(built[p.name], Job)]
         if jobs:
             ran |= dosbatch.run(jobs, work / dialect, tools=tools)
     bad = passed = known = 0
@@ -249,6 +331,8 @@ def main() -> int:
         else:
             passed += 1
     print(f"{len(programs)} programs: {passed} pass, {known} known, {bad} fail")
+    if own and not bad:
+        dosbatch.discard(work)
     return 1 if bad else 0
 
 

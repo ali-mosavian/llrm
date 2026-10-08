@@ -1,3 +1,4 @@
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 extern void report(long value);
 
 /* Small enough for every DOS memory model, large enough to expose three loops. */

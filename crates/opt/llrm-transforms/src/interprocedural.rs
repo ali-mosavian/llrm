@@ -200,6 +200,7 @@ fn tried_sites<E: From<String>>(
     layout: &llrm_mir::datalayout::DataLayout,
     private: &BTreeSet<GlobalId>,
     recursive: &BTreeSet<GlobalId>,
+    bases: &llrm_support::hash::IndexMap<GlobalId, i64>,
     caller: GlobalId,
     sites: &llrm_support::hash::IndexMap<llrm_mir::module::InstId, inline::Candidate>,
     refused: &mut BTreeSet<(GlobalId, llrm_mir::module::InstId)>,
@@ -218,7 +219,7 @@ fn tried_sites<E: From<String>>(
         let before = inline::size(module, caller, costs);
         let bought = llrm_mir::memory::callee(&module.context, &kept, site).map_or(0, |callee| allowance(module, callee, 1, credit.0, credit.1));
         let (context, function) = function_mut(module, caller);
-        let by = inline::Caller { layout, recursive: recursive.contains(&caller) };
+        let by = inline::Caller { layout, recursive: recursive.contains(&caller), base: bases.get(&caller).copied().unwrap_or(0) };
         let one = llrm_support::hash::IndexMap::from_iter([(site, candidate.clone())]);
         if !inline::expanded(context, function, &by, &Default::default(), Some(&one)).map_err(E::from)? {
             refused.insert((caller, site));
@@ -246,6 +247,7 @@ fn tried_callees<E: From<String>>(
     layout: &llrm_mir::datalayout::DataLayout,
     private: &BTreeSet<GlobalId>,
     recursive: &BTreeSet<GlobalId>,
+    bases: &llrm_support::hash::IndexMap<GlobalId, i64>,
     more: &llrm_support::hash::IndexMap<GlobalId, inline::Candidate>,
     costs: &OperationCosts,
     credit: (&OperationCosts, i64),
@@ -254,7 +256,7 @@ fn tried_callees<E: From<String>>(
     let mut stayed = false;
     let mut refused = llrm_support::hash::IndexMap::default();
     for (callee, candidate) in more {
-        if trial(module, modules, layout, private, recursive, &[(*callee, candidate)], None, costs, credit, reoptimised)? {
+        if trial(module, modules, layout, private, recursive, bases, &[(*callee, candidate)], None, costs, credit, reoptimised)? {
             stayed = true;
         } else {
             refused.insert(*callee, candidate);
@@ -264,7 +266,7 @@ fn tried_callees<E: From<String>>(
     // alone: each alone leaves the other's call holding what the pair would fold.
     if refused.len() > 1 {
         let together: Vec<_> = refused.iter().map(|(callee, candidate)| (*callee, *candidate)).collect();
-        stayed |= trial(module, modules, layout, private, recursive, &together, None, costs, credit, reoptimised)?;
+        stayed |= trial(module, modules, layout, private, recursive, bases, &together, None, costs, credit, reoptimised)?;
     }
     Ok(stayed)
 }
@@ -278,6 +280,7 @@ fn trial<E: From<String>>(
     layout: &llrm_mir::datalayout::DataLayout,
     private: &BTreeSet<GlobalId>,
     recursive: &BTreeSet<GlobalId>,
+    bases: &llrm_support::hash::IndexMap<GlobalId, i64>,
     callees: &[(GlobalId, &inline::Candidate)],
     only: Option<GlobalId>,
     costs: &OperationCosts,
@@ -306,7 +309,7 @@ fn trial<E: From<String>>(
     if held && only.is_none() {
         let mut stayed = false;
         for &caller in &callers {
-            stayed |= trial(module, modules, layout, private, recursive, callees, Some(caller), costs, credit, reoptimised)?;
+            stayed |= trial(module, modules, layout, private, recursive, bases, callees, Some(caller), costs, credit, reoptimised)?;
         }
         return Ok(stayed);
     }
@@ -318,7 +321,7 @@ fn trial<E: From<String>>(
     let mut done = false;
     for &id in &callers {
         let (mut context, mut function) = function_mut(module, id);
-        let by = inline::Caller { layout, recursive: recursive.contains(&id) };
+        let by = inline::Caller { layout, recursive: recursive.contains(&id), base: bases.get(&id).copied().unwrap_or(0) };
         // One site a time, as the rounds do, the body through the pipeline after each.
         let mut spliced = false;
         while inline::expanded(context, function, &by, &available, None).map_err(E::from)? {
@@ -415,6 +418,8 @@ pub fn optimized<E: From<String>>(
     // What each body does, stated on it, is what inlining and the dead-call
     // removal below read.
     stamped_all(program, modules).map_err(E::from)?;
+    // How large each body is before anything is inlined into it: what its growth is measured against.
+    let bases: Vec<llrm_support::hash::IndexMap<GlobalId, i64>> = (0..count).map(|at| procedures[at].iter().filter_map(|&id| Some((id, inline::operations(program.modules[at].global(id).function()?)))).collect()).collect();
     let mut refused: BTreeSet<(GlobalId, llrm_mir::module::InstId)> = BTreeSet::new();
     let mut inline_round = 0;
     loop {
@@ -429,7 +434,7 @@ pub fn optimized<E: From<String>>(
                 let constants = facts::current_call_constants(&module.context, caller);
                 let (constant, constant_more) = constant_sites(module, &program.layout, &recursive, caller, &constants, costs, loose, reach, threshold);
                 let (context, function) = function_mut(module, id);
-                let by = inline::Caller { layout: &program.layout, recursive: recursive.contains(&id) };
+                let by = inline::Caller { layout: &program.layout, recursive: recursive.contains(&id), base: bases[at].get(&id).copied().unwrap_or(0) };
                 if inline::expanded(context, function, &by, &available, Some(&constant))? {
                     edited(&mut modules[at], &[id]);
                     let stage = format!("inline{inline_round}");
@@ -439,11 +444,11 @@ pub fn optimized<E: From<String>>(
                     inline_round += 1;
                 }
                 // What only the clocks admit stays only where it comes to no more.
-                if loose.is_some() && tried_sites(module, &mut modules[at], &program.layout, &private[at], &recursive, id, &constant_more, &mut refused, costs, (loose.unwrap_or(costs), rate), "inline-trial.", reoptimised)? {
+                if loose.is_some() && tried_sites(module, &mut modules[at], &program.layout, &private[at], &recursive, &bases[at], id, &constant_more, &mut refused, costs, (loose.unwrap_or(costs), rate), "inline-trial.", reoptimised)? {
                     changed = true;
                 }
             }
-            if loose.is_some() && tried_callees(module, &mut modules[at], &program.layout, &private[at], &recursive, &more, costs, (loose.unwrap_or(costs), rate), reoptimised)? {
+            if loose.is_some() && tried_callees(module, &mut modules[at], &program.layout, &private[at], &recursive, &bases[at], &more, costs, (loose.unwrap_or(costs), rate), reoptimised)? {
                 changed = true;
             }
         }
@@ -467,7 +472,7 @@ pub fn optimized<E: From<String>>(
 
     // A far pointer every call fills from DGROUP is passed as its offset.
     for at in 0..count {
-        for id in crate::narrowspace::narrowed(&mut program.modules[at], &program.layout) {
+        for id in crate::narrowspace::narrowed(&mut program.modules[at], &program.layout, program.target.spaces()) {
             edited(&mut modules[at], &[id]);
             reoptimised(&mut program.modules[at], &mut modules[at], id, "narrow.")?;
         }
@@ -542,18 +547,18 @@ pub fn optimized<E: From<String>>(
                 let current = facts::current_call_constants(&module.context, caller);
                 let (constant, constant_more) = constant_sites(module, &program.layout, &recursive, caller, &current, costs, loose, reach, threshold);
                 let (context, function) = function_mut(module, id);
-                let by = inline::Caller { layout: &program.layout, recursive: recursive.contains(&id) };
+                let by = inline::Caller { layout: &program.layout, recursive: recursive.contains(&id), base: bases[at].get(&id).copied().unwrap_or(0) };
                 if inline::expanded(context, function, &by, &available, Some(&constant))? {
                     edited(&mut modules[at], &[id]);
                     reoptimised(module, &mut modules[at], id, &format!("ipa-inline{argument_round}."))?;
                     inlined = true;
                 }
                 // What only the clocks admit stays only where it comes to no more.
-                if loose.is_some() && tried_sites(module, &mut modules[at], &program.layout, &private[at], &recursive, id, &constant_more, &mut refused, costs, (loose.unwrap_or(costs), rate), "ipa-inline-trial.", reoptimised)? {
+                if loose.is_some() && tried_sites(module, &mut modules[at], &program.layout, &private[at], &recursive, &bases[at], id, &constant_more, &mut refused, costs, (loose.unwrap_or(costs), rate), "ipa-inline-trial.", reoptimised)? {
                     inlined = true;
                 }
             }
-            if loose.is_some() && tried_callees(module, &mut modules[at], &program.layout, &private[at], &recursive, &more, costs, (loose.unwrap_or(costs), rate), reoptimised)? {
+            if loose.is_some() && tried_callees(module, &mut modules[at], &program.layout, &private[at], &recursive, &bases[at], &more, costs, (loose.unwrap_or(costs), rate), reoptimised)? {
                 inlined = true;
             }
         }
@@ -580,6 +585,8 @@ pub fn optimized<E: From<String>>(
     for at in 0..count {
         for id in crate::deadargs::removed(&mut program.modules[at]) {
             edited(&mut modules[at], &[id]);
+            // A body with fewer values to carry is another body to the loop passes and the recursion's.
+            reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-deadargs.")?;
         }
     }
     // Propagation may have left a body doing less than it states.
@@ -698,7 +705,8 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         let (Some(name), Some(function), true) = (global.name.as_ref(), global.function(), exact) else { continue };
         let Some(summary) = known.get(name) else { continue };
         let shape = analyses.function::<Shape>(module, id);
-        let procedure = Procedure::of(Unit { program: Some(&program), ..Unit::of(module, layout, function) }.with_globals_aa(globals).with_shape(&shape));
+        let exposed = llrm_analysis::memory::exposed_frames(&Unit::of(module, layout, function).with_spaces(program.target.spaces()));
+        let procedure = Procedure::of(Unit { program: Some(&program), ..Unit::of(module, layout, function) }.with_globals_aa(globals).with_shape(&shape).with_exposed(&exposed));
         let initialized = alias::initialized(&procedure, known)?;
         let calls = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))).collect::<Vec<_>>();
         let states = |fact: Fact| calls.iter().all(|&inst| effects::states(&module.context, &declarations, function, inst, fact));
@@ -709,11 +717,13 @@ pub fn stamped(module: &mut Module, analyses: &mut ModuleAnalyses) -> Result<Vec
         let promised = norecurse && unobserved && states(Fact::WillReturn) && llrm_mir::loops::ends_by_promise(&module.metadata, function, Facts::of(&function.attrs).must_progress());
         let counted = || {
             let shape = Shape::of(function);
-            let proofs = |one| llrm_analysis::induction::counted(&unit_of(module, layout, function), one, None, false);
+            // Found once for the function, not for each loop: the proofs of every loop ask the same.
+            let registers = llrm_analysis::consts::known(&unit_of(module, layout, function).with_spaces(program.target.spaces()), None, None, None);
+            let proofs = |one| llrm_analysis::induction::counted(&unit_of(module, layout, function).with_spaces(program.target.spaces()).with_registers(&registers).with_shape(&shape), one, Some(&registers), false);
             shape.loops.iter().all(|one| proofs(one).iter().any(|proof| !proof.stops && (proof.count.is_some() || proof.step.magnitude() == &num_bigint::BigUint::from(1_u8))))
         };
         let returns = ((facts::returns_without_looping(function) || counted()) && states(Fact::WillReturn)) || promised;
-        let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, function);
+        let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, program.target.spaces(), function);
         let mut hidden = if volatile { Effects::ANY } else { Effects::NONE };
         for &inst in &calls {
             let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { continue };

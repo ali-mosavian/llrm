@@ -28,8 +28,10 @@ impl FunctionPass for Ports {
 }
 
 /// The port calls, not yet narrowed, whose ports the target says reach no memory.
-fn silent(unit: &passes::Unit, analyses: &Analyses) -> Vec<InstId> {
-    let memory = Unit::within(unit.context, unit.layout, unit.function, analyses.outer());
+fn silent(unit: &passes::Unit, analyses: &mut Analyses) -> Vec<InstId> {
+    let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
+    let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+    let memory = Unit::within(unit.context, unit.layout, unit.function, analyses.outer()).with_registers(&held).with_shape(&shape);
     let calls: Vec<_> = unit
         .function
         .walk()
@@ -48,7 +50,7 @@ fn silent(unit: &passes::Unit, analyses: &Analyses) -> Vec<InstId> {
             let ports = match memory.int_constant(port) {
                 Some(bits) => Some(((bits & 0xFFFF) as i64, (bits & 0xFFFF) as i64)),
                 None => {
-                    let (facts, registers) = bounded.get_or_insert_with(|| (ranges::bounded(&memory).unwrap_or_default(), memory.registers().into_owned()));
+                    let (facts, registers) = bounded.get_or_insert_with(|| (ranges::bounded(&memory).unwrap_or_default(), &*held));
                     let scope = facts.get(&cfg::id(block)).cloned().unwrap_or_default();
                     ranges::_operand(&memory, port, &scope, registers).and_then(|interval| unsigned(&interval.low, &interval.high))
                 }

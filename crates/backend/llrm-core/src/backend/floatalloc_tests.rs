@@ -69,7 +69,7 @@ fn _body(operations: Vec<Semantics>) -> LirBody {
             Arc::new(Insn::new(at, Some((at, at + 8)), Some(what), defines, uses))
         })
         .collect();
-    LirBody::new("floating", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default())
+    LirBody { float_stack: llrm_target::Target::float_stack(&llrm_x86_m16::M16), ..LirBody::new("floating", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default()) }
 }
 
 fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
@@ -371,6 +371,7 @@ fn _sparing_the_frame(body: LirBody) -> LirBody {
     let call = Arc::new(crate::model::lir::CallMemory {
         effects: llrm_mir::memory::Effects { reads: false, writes: true },
         private: vec![crate::model::lir::WHOLE_FRAME],
+        disturbs: Default::default(),
     });
     let blocks = body
         .blocks

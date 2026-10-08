@@ -1592,7 +1592,7 @@ to its descriptor:
 | V view | `N$VCPY` copy, `N$VCMP` compare | `&string` views, and owned strings compared through views of them |
 | D dict | `N$DRES` room for one more entry | dicts |
 | E error | `N$EBND` bounds, `N$ESHF` shift, `N$ECNV` conversion, `N$EKEY` key, `N$EDIV` divide fault | panics |
-| O system | `N$OOPN` open, `N$OCRE` create, `N$OREA` read, `N$OWRI` write, `N$OCLO` close, `N$OEXT` exit, `N$OMEM` more memory, `N$OGIV` get and `N$OSIV` set an interrupt vector, `N$OVEC` put them back, `N$OCHN` enter a handler | DOS, in assembly |
+| O system | `_llrm_os_<op>`: the OS layer's interface, one symbol per operation (`runtime/shared/interface.toml`) | the target's OS, in assembly |
 
 The heap is DGROUP after the stack, taken from DOS (`INT 21h` function
 `4Ah`) a kilobyte or more at a time, up to DGROUP's 64 KB. Free blocks wait
@@ -1809,10 +1809,17 @@ compiler-provided foreign descriptor views.
 Native `vec`, `dict`, `string`, closures, generators, protocols, and generic
 functions never cross an ABI boundary implicitly.
 
+`"c"` is the convention of an unmarked C function on the target: its default (the ABI `calling.toml` names
+by `default`), cdecl16 on m16 and watcall32 on m32; `-mabi=sysv` on m32 makes it sysv32. A profile named
+`cdecl32` is the stack convention there, and `watcall32` the default by name.
+
 The initial ABI profiles are:
 
 ```text
 cdecl16
+cdecl32
+watcall32
+sysv32
 pascal16
 interrupt16
 qb45

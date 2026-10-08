@@ -20,7 +20,7 @@ use crate::support::pyrepr::Repr;
 
 /// The 16-bit x86 rules, as the phase takes them by default.
 fn rules() -> &'static crate::backend::peep::Rules {
-    &crate::backend::peep::targets::x86_code16::RULES
+    &crate::backend::peep::targets::x86_m16::RULES
 }
 
 fn r(register: Register, width: u32) -> Reg {
@@ -1138,7 +1138,7 @@ fn test_affine_address_word_lea_keeps_a_flag_still_read() {
 
 /// What the epilogue saves: the convention's preserved registers.
 fn saved() -> Vec<Register> {
-    crate::backend::masm::SAVED.keys().copied().collect()
+    llrm_x86_m16::PRESERVED.iter().map(|(whole, _)| *whole).collect()
 }
 
 /// A store of a literal into a cell: `mov dword ptr [bp-N],0` is 8 bytes; `mov [bp-N],eax` is 4.
@@ -1189,14 +1189,14 @@ fn test_stores_of_one_literal_share_a_dead_register_when_that_is_fewer_bytes() {
         let next = after_stores(flags_read, &live);
         let input = body("stores", 0, vec![block(0, std::mem::take(&mut insns), vec![1]), block(1, next, vec![])]);
 
-        let result = sharedstores::shared(&input, size, &saved());
+        let result = sharedstores::shared(&input, size, &saved(), &crate::backend::classes::RegisterClasses::m16());
 
         let got = names(&result.blocks[0].insns);
         assert_eq!(got, expected, "{label}");
     }
 }
 
-/// Which scratch register a run may take is the convention's fact (`masm::SAVED`): where it
+/// Which scratch register a run may take is the convention's fact (`Target::callee_saved`): where it
 /// preserves BX, a run takes BX only if the body already names it (so its epilogue saves it),
 /// else it would push and pop a register to save a byte.
 #[test]
@@ -1220,9 +1220,9 @@ fn test_a_shared_store_takes_no_register_the_convention_preserves_unless_the_bod
     };
     let preserving_bx = [Register::ESI, Register::EDI, Register::EBX];
 
-    assert_eq!(names(&sharedstores::shared(&input(false), size, &preserving_bx).blocks[0].insns), ["mov", "mov"]);
-    assert_eq!(names(&sharedstores::shared(&input(false), size, &saved()).blocks[0].insns), ["xor", "mov", "mov"]);
-    assert_eq!(names(&sharedstores::shared(&input(true), size, &preserving_bx).blocks[0].insns), ["mov", "xor", "mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(false), size, &preserving_bx, &crate::backend::classes::RegisterClasses::m16()).blocks[0].insns), ["mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(false), size, &saved(), &crate::backend::classes::RegisterClasses::m16()).blocks[0].insns), ["xor", "mov", "mov"]);
+    assert_eq!(names(&sharedstores::shared(&input(true), size, &preserving_bx, &crate::backend::classes::RegisterClasses::m16()).blocks[0].insns), ["mov", "xor", "mov", "mov"]);
 }
 
 /// Two pushes of a clock are not a size choice: -O2 keeps the stores.
@@ -1231,7 +1231,7 @@ fn test_stores_of_one_literal_are_not_shared_at_o2() {
     let o2 = crate::backend::cpu::tuned("486", false).unwrap();
     let input = body("stores", 0, vec![block(0, vec![literal_store(0, 4, -4, 0), literal_store(1, 4, -8, 0)], vec![1]), block(1, after_stores(false, &[]), vec![])]);
 
-    assert_eq!(sharedstores::shared(&input, o2, &saved()), input);
+    assert_eq!(sharedstores::shared(&input, o2, &saved(), &crate::backend::classes::RegisterClasses::m16()), input);
 }
 
 #[test]
@@ -1241,7 +1241,7 @@ fn test_lea_of_a_frame_cell_is_decoded() {
     let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-18), 2) });
     let lea = insn(0, Some((0, 0)), Some(sem(Operation::Address, "lea", vec![rl(Register::AX, 2)], vec![cell])), vec![], vec![]);
 
-    let (reads, writes) = _register_effects(&lea, false, true).expect("decoded");
+    let (reads, writes) = _register_effects(16, &lea, false, true).expect("decoded");
 
     assert!(reads.is_subset(&_lanes(Register::EBP)));
     assert!(_lanes(Register::AX).is_subset(&writes) && writes.and(&_lanes(Register::EBX)).is_empty());
@@ -2620,7 +2620,7 @@ fn test_frame_copy_uses_a_dead_register_before_the_stack() {
     let scheduled =
         parcopy::scheduled(&one_block(vec![group_move(destination.clone(), source.clone(), Some(1), 0x100), reset()])).unwrap();
 
-    let instructions = frame_copies(&scheduled, "386").unwrap().blocks[0].insns.clone();
+    let instructions = frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0].insns.clone();
 
     assert_eq!(names(&instructions), ["mov", "mov", "mov"]);
     assert_eq!(instructions[0].what, Some(sem(Operation::Move, "mov", vec![rl(Register::EAX, 4)], vec![source])));
@@ -2633,7 +2633,7 @@ fn test_frame_copy_keeps_the_stack_when_no_register_is_dead() {
     let (source, destination) = frame_slots(2);
     let scheduled = parcopy::scheduled(&one_block(vec![group_move(destination, source, Some(1), 0x100)])).unwrap();
 
-    let instructions = frame_copies(&scheduled, "386").unwrap().blocks[0].insns.clone();
+    let instructions = frame_copies(&scheduled, "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0].insns.clone();
 
     assert_eq!(names(&instructions), ["push", "pop"]);
 }
@@ -2648,7 +2648,7 @@ fn test_source_push_pop_is_not_treated_as_a_parallel_copy() {
     pair[1] = Arc::new(Insn { at: 0x101, covers: Some((0x101, 0x102)), ..(*pair[1]).clone() });
     pair.push(reset());
 
-    let instructions = frame_copies(&one_block(pair), "386").unwrap().blocks[0].insns.clone();
+    let instructions = frame_copies(&one_block(pair), "386", &crate::backend::classes::RegisterClasses::m16()).unwrap().blocks[0].insns.clone();
 
     assert_eq!(names(&instructions[..2]), ["push", "pop"]);
 }
@@ -2934,7 +2934,7 @@ fn _high_extract_body(tail: Vec<Arc<Insn>>) -> LirBody {
     let cell = Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-4), 4) });
     // A reload carries the call memory of what it stands beside: here a call
     // that touches none.
-    let beside = crate::model::lir::CallMemory { effects: llrm_mir::memory::Effects::NONE, private: vec![] };
+    let beside = crate::model::lir::CallMemory { effects: llrm_mir::memory::Effects::NONE, private: vec![], disturbs: Default::default() };
     let load = Insn {
         symbol: Some(false),
         call: Some(Arc::new(beside)),
@@ -2966,7 +2966,7 @@ fn test_synthetic_high_extract_loads_only_the_high_word() {
             Operation::Move,
             "mov",
             vec![rl(Register::DX, 2)],
-            vec![Loc::Mem(Mem { through: Register::BP, ..Mem::new(frame(-2), 2) })],
+            vec![Loc::Mem(Mem { through: Register::BP, offset: 2, ..Mem::new(frame(-2), 2) })],
         ))
     );
     assert_eq!(anchor.what.as_ref().unwrap().op, Operation::Nothing);
@@ -3159,4 +3159,220 @@ fn test_a_dword_copy_and_add_are_priced_with_their_operand_size_prefixes() {
     let input = body("dword-offset", 0, vec![block(0, vec![Arc::new(copy), Arc::new(add), Arc::new(compare)], vec![])]);
     let result = addresses(&input, "486").unwrap().insns();
     assert_eq!(names(&result), ["lea", "cmp"]);
+}
+
+// ------------------------------------------------------------ flat zero extensions
+
+fn flat() -> &'static crate::backend::peep::Rules {
+    &crate::backend::peep::targets::x86_m32::RULES
+}
+
+fn word_load(into: Register) -> Arc<Insn> {
+    let cell = Loc::Mem(mem(frame(8), 2, Register::EBP, 0, 4));
+    Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Extend, "movzx", vec![rl(into, 4)], vec![cell])), vec![], vec![]))
+}
+
+fn partial_load(into: Register) -> Arc<Insn> {
+    let cell = Loc::Mem(mem(frame(8), 2, Register::EBP, 0, 4));
+    Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![rl(into, 2)], vec![cell])), vec![], vec![]))
+}
+
+fn extension(into: Register, from: Register) -> Arc<Insn> {
+    Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Extend, "movzx", vec![rl(into, 4)], vec![rl(from, 2)])), vec![], vec![]))
+}
+
+fn flat_body(insns: Vec<Arc<Insn>>) -> LirBody {
+    body("flat", 0, vec![block(0, insns, vec![])])
+}
+
+/// A word whose register is zero above it, extended to another register: the register's own copy.
+/// The extension was a three clock `movzx` where a one clock `mov` does, and kept the copy from joining its source.
+#[test]
+fn test_flat_extension_of_a_zero_extended_word_is_a_copy() {
+    let made = zero_extensions(flat(), &flat_body(vec![word_load(Register::EAX), extension(Register::ESI, Register::AX)]));
+    let kept: Vec<Semantics> = whats(&made.insns());
+    assert_eq!(kept[1].name.as_deref(), Some("mov"), "{kept:?}");
+    assert_eq!((kept[1].dests.clone(), kept[1].sources.clone()), (vec![rl(Register::ESI, 4)], vec![rl(Register::EAX, 4)]));
+}
+
+/// The same extension in place is nothing.
+#[test]
+fn test_flat_extension_in_place_of_a_zero_extended_word_is_dropped() {
+    let made = zero_extensions(flat(), &flat_body(vec![word_load(Register::EAX), extension(Register::EAX, Register::AX)]));
+    assert_eq!(names(&whats(&made.insns()).into_iter().map(|what| Arc::new(insn(0, None, Some(what), vec![], vec![]))).collect::<Vec<_>>()), ["movzx"]);
+}
+
+/// Where the register's upper half is not known zero the extension stays: a word load leaves it as it was.
+/// Taking it for a copy read the old upper half.
+#[test]
+fn test_flat_extension_of_a_partial_load_stays() {
+    let made = zero_extensions(flat(), &flat_body(vec![partial_load(Register::EAX), extension(Register::ESI, Register::AX)]));
+    assert_eq!(whats(&made.insns())[1].name.as_deref(), Some("movzx"));
+}
+
+/// A word copy of a zero-extended register is the dword one when nothing reads the upper half it was leaving.
+#[test]
+fn test_flat_word_copy_of_a_zero_extended_register_is_a_dword_copy() {
+    let copy = Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![rl(Register::CX, 2)], vec![rl(Register::AX, 2)])), vec![], vec![]));
+    // Overwritten whole after, so nothing reads the upper half the word copy was leaving.
+    let cleared = Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Binary, "xor", vec![rl(Register::ECX, 4)], vec![rl(Register::ECX, 4), rl(Register::ECX, 4)])), vec![], vec![]));
+    let made = widened_moves(flat(), &flat_body(vec![word_load(Register::EAX), copy, cleared]));
+    let kept = whats(&made.insns());
+    assert_eq!((kept[1].dests.clone(), kept[1].sources.clone()), (vec![rl(Register::ECX, 4)], vec![rl(Register::EAX, 4)]));
+}
+
+fn compared() -> Arc<Insn> {
+    Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Compare, "cmp", vec![], vec![rl(Register::EAX, 4), rl(Register::ECX, 4)])), vec![], vec![]))
+}
+
+fn dword_sum() -> Arc<Insn> {
+    Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, "add", vec![rl(Register::EAX, 4)], vec![rl(Register::EAX, 4), rl(Register::ECX, 4)])), vec![], vec![]))
+}
+
+/// A dword sum and the extension of its low word, where the sum's register is zero above: the word sum.
+#[test]
+fn test_flat_dword_sum_and_its_extension_is_the_word_sum() {
+    // A compare after overwrites the flags the word sum would set differently.
+    let made = narrowed_arithmetic(flat(), &flat_body(vec![word_load(Register::EAX), dword_sum(), extension(Register::EAX, Register::AX), compared()]));
+    let kept = whats(&made.insns());
+    assert_eq!(kept.len(), 3, "{kept:?}");
+    assert_eq!((kept[1].dests.clone(), kept[1].sources.clone()), (vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::CX, 2)]));
+}
+
+/// Not where it is not: the word sum leaves the upper half as it was, which the extension would have cleared.
+/// Taking the word sum there left the old upper half in a register read as a dword.
+#[test]
+fn test_flat_dword_sum_stays_where_the_upper_half_may_not_be_zero() {
+    let made = narrowed_arithmetic(flat(), &flat_body(vec![partial_load(Register::EAX), dword_sum(), extension(Register::EAX, Register::AX), compared()]));
+    let kept = whats(&made.insns());
+    assert_eq!((kept[1].name.as_deref(), kept[2].name.as_deref()), (Some("add"), Some("movzx")), "{kept:?}");
+}
+
+// ------------------------------------------------------- copies forwarded into addresses
+
+/// `mov esi, ecx` then a store through `[ebp+esi-8]`: the store reads ECX. Only the register operands were
+/// forwarded, so an address kept the copy's register and the copy stayed (`Mem` equality leaves registers
+/// out, so a rewritten cell also read as unchanged and was dropped).
+#[test]
+fn test_a_copy_is_forwarded_into_the_address_that_reads_it() {
+    let copy = Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![rl(Register::ESI, 4)], vec![rl(Register::ECX, 4)])), vec![], vec![]));
+    let cell = Mem { index_through: Register::ESI, index: Some(Held { value: 32, width: 4 }), ..mem(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, -1032) }), 1, Register::EBP, 0, 2) };
+    let store = Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![im(1, 1)])), vec![], vec![]));
+    let made = copyprop::forwarded(&flat_body(vec![copy, store]));
+    let Some(Loc::Mem(cell)) = made.insns()[1].what.as_ref().map(|what| what.dests[0].clone()) else { panic!("a store") };
+    assert_eq!(cell.index_through, Register::ECX);
+}
+
+/// Not where the older register changes between the copy and the read.
+#[test]
+fn test_a_copy_is_not_forwarded_past_a_write_of_its_source() {
+    let copy = Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![rl(Register::ESI, 4)], vec![rl(Register::ECX, 4)])), vec![], vec![]));
+    let bump = Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Binary, "add", vec![rl(Register::ECX, 4)], vec![rl(Register::ECX, 4), im(1, 4)])), vec![], vec![]));
+    let cell = Mem { index_through: Register::ESI, index: Some(Held { value: 32, width: 4 }), ..mem(Some(Addr { segment: Register::SS, ..Addr::new(Space::Literal, -1032) }), 1, Register::EBP, 0, 2) };
+    let store = Arc::new(insn(2, Some((2, 2)), Some(sem(Operation::Move, "mov", vec![Loc::Mem(cell)], vec![im(1, 1)])), vec![], vec![]));
+    let made = copyprop::forwarded(&flat_body(vec![copy, bump, store]));
+    let Some(Loc::Mem(cell)) = made.insns()[2].what.as_ref().map(|what| what.dests[0].clone()) else { panic!("a store") };
+    assert_eq!(cell.index_through, Register::ESI);
+}
+
+// ------------------------------------------------------------- the mode is the body's
+
+/// `mov ebx, ecx` then a byte read through `[ebx]`. A 32-bit base encodes only in 32-bit mode.
+fn read_through_a_copy(bits: u32) -> LirBody {
+    let copy = Arc::new(insn(0, Some((0, 0)), Some(sem(Operation::Move, "mov", vec![rl(Register::EBX, 4)], vec![rl(Register::ECX, 4)])), vec![], vec![]));
+    let read = Arc::new(insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![rl(Register::AL, 1)], vec![Loc::Mem(mem(None, 1, Register::EBX, 0, 0))])), vec![], vec![]));
+    LirBody { bits, ..flat_body(vec![copy, read]) }
+}
+
+fn through_of_the_read(body: &LirBody) -> Register {
+    match &body.insns()[1].what.as_ref().expect("a read").sources[0] {
+        Loc::Mem(cell) => cell.through,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// What a body encodes and touches depends on the mode it is for, which it carries: a flat body forwards a
+/// copy into a 32-bit base, a real-mode one does not (it has no such operand). The mode was a thread-local
+/// set around a compile, so a pass run on a body outside one read real mode whatever the body was for.
+#[test]
+fn test_a_body_is_encoded_in_its_own_mode() {
+    assert_eq!(through_of_the_read(&copyprop::forwarded(&read_through_a_copy(32))), Register::ECX);
+    assert_eq!(through_of_the_read(&copyprop::forwarded(&read_through_a_copy(16))), Register::EBX);
+}
+
+// ----------------------------------------------------------------- what a jump reads
+
+/// The flags a conditional jump reads are the condition's: what m16's rows say of each jump, iced states
+/// of the mnemonic, so a target whose jump rows are its own needs no copy of them.
+#[test]
+fn test_what_a_conditional_jump_reads_is_the_conditions_for_every_condition() {
+    let rows: Vec<_> = instructions::FORMS.iter().filter(|form| form.operation == "branch").collect();
+    assert_eq!(rows.len(), 16);
+    for form in rows {
+        let branch = Semantics { name: Some(form.name.clone()), ..Semantics::new(Operation::Branch) };
+        let wanted = _flag_lanes(instructions::flags(form).expect("a jump reads flags").0);
+        assert_eq!(_branch_reads(&branch), wanted, "{}", form.name);
+    }
+}
+
+// ------------------------------------------------------------------ the count of a `rep`
+
+fn repeated_fill(name: &str, width: u32, di: Register, cx: Register, ax: Register) -> Insn {
+    let what = sem(Operation::Fill, name, vec![Loc::Mem(Mem::new(None, 0)), rl(di, width), rl(cx, width)], vec![rl(ax, width), rl(cx, width), rl(di, width)]);
+    insn(0, Some((0, 0)), Some(what), vec![], vec![])
+}
+
+/// `rep stosw` in 16-bit code counts CX down and leaves the upper half of ECX alone. `rep` was taken to write
+/// ECX whole, so a value live in ECX's upper half across it read as overwritten.
+#[test]
+fn test_a_rep_in_real_mode_writes_cx_and_not_the_upper_half_of_ecx() {
+    let (_, writes) = _register_effects(16, &repeated_fill("stosw", 2, Register::DI, Register::CX, Register::AX), true, false).expect("encodes");
+    assert!(writes.contains(&(Register::ECX, 0)) && writes.contains(&(Register::ECX, 1)), "{writes:?}");
+    assert!(!writes.contains(&(Register::ECX, 2)) && !writes.contains(&(Register::ECX, 3)), "{writes:?}");
+}
+
+/// In 32-bit code it counts ECX.
+#[test]
+fn test_a_rep_in_flat_mode_writes_ecx_whole() {
+    let (_, writes) = _register_effects(32, &repeated_fill("stosd", 4, Register::EDI, Register::ECX, Register::EAX), true, false).expect("encodes");
+    assert!((0..4).all(|lane| writes.contains(&(Register::ECX, lane))), "{writes:?}");
+}
+
+/// Each pass of the peephole assembled the text of an instruction and decoded it, for every instruction of the body, again:
+/// `_decoded` was 8% of compiling matmul (#560). An instruction is decoded once however many passes ask of it, and another
+/// at the same place is not taken for it.
+#[test]
+fn test_an_instruction_the_passes_ask_of_again_is_decoded_once() {
+    let what = sem(Operation::Binary, "add", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::BX, 2)]);
+    let before = decodes();
+    let first = _decoded(16, &what).expect("encodes");
+    for _ in 0..5 {
+        assert_eq!(_decoded(16, &what).expect("encodes"), first);
+    }
+    assert_eq!(decodes() - before, 1, "decoded again for each ask");
+    // The same instruction in 32-bit code is asked of again, not answered with the 16-bit code's.
+    let before = decodes();
+    _decoded(32, &what).expect("encodes");
+    assert_eq!(decodes() - before, 1, "a 32-bit ask was answered from the 16-bit one");
+    // Another instruction, even if it came to stand where this one was, is its own.
+    let other = sem(Operation::Binary, "sub", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::BX, 2)]);
+    assert_ne!(_decoded(16, &other).expect("encodes"), first);
+}
+
+/// A cache of decoded instructions was given a memory operand equal, when `Mem`'s equality left out its encoding
+/// fields, to one spelled through another register (queens -Os: `mov es,[bx+2]` for `mov es,[si+2]`).
+#[test]
+fn test_two_cells_equal_but_spelled_through_other_registers_are_decoded_apart() {
+    let through = |register| {
+        let cell = Mem { through: register, offset: 2, base: Some(Held { value: 1, width: 2 }), ..Mem::new(None, 2) };
+        sem(Operation::Move, "mov", vec![rl(Register::ES, 2)], vec![Loc::Mem(cell)])
+    };
+    // One place in memory, the second instruction put where the first was (as a body's rewrite does).
+    let mut place = through(Register::BX);
+    assert!(place.same_meaning(&through(Register::SI)) && place != through(Register::SI), "the same cell, spelled another way, is not equal to it");
+    let first = _decoded(16, &place).expect("encodes");
+    place = through(Register::SI);
+    let second = _decoded(16, &place).expect("encodes");
+    assert_ne!(first, second, "[si+2] decoded as [bx+2]");
+    assert_eq!(second[0].memory_base(), Register::SI);
 }

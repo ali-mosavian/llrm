@@ -42,11 +42,25 @@ pub const VIEW_COMPARE: &str = "N$VCMP";
 
 pub const DICT_RESERVE: &str = "N$DRES";
 
-pub const FILE_OPEN: &str = "N$OOPN";
-pub const FILE_CREATE: &str = "N$OCRE";
-pub const FILE_READ: &str = "N$OREA";
-pub const FILE_WRITE: &str = "N$OWRI";
-pub const FILE_CLOSE: &str = "N$OCLO";
+/// The OS layer's operation a runtime symbol implements, by its name in the interface, when it is a
+/// file call (`open`, `create`, `read`, `write_file`, `close`) or a console one.
+pub fn os_operation(symbol: &str) -> Option<&'static str> {
+    static INTERFACE: std::sync::LazyLock<llrm_target::os::Interface> = std::sync::LazyLock::new(llrm_target::os::Interface::shipped);
+    let files = ["open", "create", "read", "write_file", "close"];
+    INTERFACE.ops.iter().find(|op| INTERFACE.symbol(op) == symbol && (op.group == "console" || files.contains(&op.name.as_str()))).map(|op| op.name.as_str())
+}
+
+/// The number of the standard handle `name` (`stdin`, `stdout`, `stderr`): the operating system's fact.
+pub fn standard_handle(name: &str) -> usize {
+    let facts: toml::Table = llrm_x86::DOS_FACTS.parse().expect("the OS facts parse");
+    usize::try_from(facts[name].as_integer().expect("a standard handle is a number")).expect("a handle is not negative")
+}
+
+/// The interface's code of the error condition `name`.
+pub fn error_code(name: &str) -> i16 {
+    static INTERFACE: std::sync::LazyLock<llrm_target::os::Interface> = std::sync::LazyLock::new(llrm_target::os::Interface::shipped);
+    i16::try_from(INTERFACE.errors[name]).expect("an error code is an i16")
+}
 
 pub const ERROR_BOUNDS: &str = "N$EBND";
 pub const ERROR_SHIFT: &str = "N$ESHF";

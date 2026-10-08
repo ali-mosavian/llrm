@@ -79,6 +79,7 @@ fn listed(body: LirBody, name: &str) -> Vec<String> {
         size: false,
         entry: 0,
         stack_check: None,
+        registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
     };
     masm::_procedure(&procedure, &IndexMap::default(), 0)
         .unwrap()
@@ -690,7 +691,7 @@ fn test_for_size_a_diamonds_likelier_arm_goes_second_where_size_allows() {
     let order = |body: LirBody| _placed(&body, true).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
     // The premise: both arms are a few bytes, so either order uses short jumps.
     let small = weighted_diamond(0.7);
-    assert!(small.blocks.iter().filter(|one| [10, 20].contains(&one.at)).all(|one| _arm_bytes(one).is_some_and(|bytes| bytes < 16)));
+    assert!(small.blocks.iter().filter(|one| [10, 20].contains(&one.at)).all(|one| _arm_bytes(16, one).is_some_and(|bytes| bytes < 16)));
     assert_eq!(order(small), vec![1, 20, 10, 30]);
     // Arm 10 past a short jump's reach: the order stays the source's.
     let mut large = weighted_diamond(0.7);
@@ -698,7 +699,7 @@ fn test_for_size_a_diamonds_likelier_arm_goes_second_where_size_allows() {
     let mut insns: Vec<Arc<Insn>> = (0..60).map(|_| _move(10, imm(4660))).collect();
     insns.push(_jump(11, 30));
     arm.insns = insns;
-    assert!(_arm_bytes(large.blocks.iter().find(|one| one.at == 10).unwrap()).is_some_and(|bytes| bytes > 127));
+    assert!(_arm_bytes(16, large.blocks.iter().find(|one| one.at == 10).unwrap()).is_some_and(|bytes| bytes > 127));
     assert_eq!(order(large), vec![1, 10, 20, 30]);
 }
 
@@ -856,4 +857,16 @@ fn test_a_loops_proven_test_is_not_copied_into_a_loop_inside_it() {
     let before = work(&body);
     let after = work(&phases[0].transform(body).expect("places"));
     assert!(after >= 0.75 * before, "{before} before ControlFlow, {after} after");
+}
+
+/// Each change threading made copied every block, twice, and went back to the first: a body of n jumps to
+/// the next block was n copies of n blocks, 2.1 s of compiling 800 blocks (#560). A change edits in place.
+#[test]
+fn test_threading_a_long_run_of_jumps_does_not_copy_the_body_for_each() {
+    let n = 3000;
+    let blocks: Vec<LirBlock> = (0..n).map(|at| block(at, vec![_move(at * 2, imm(at)), _jump(at * 2 + 1, at + 1)], vec![at + 1])).chain([block(n, vec![_return(n * 2)], vec![])]).collect();
+    let started = std::time::Instant::now();
+    let threaded = threaded(&body("f", 0, blocks));
+    assert!(threaded.blocks.iter().take(n as usize).all(|one| _real(one).iter().all(|insn| insn.what.as_ref().is_none_or(|what| what.op != Operation::Jump))), "a fall-through jump is left");
+    assert!(started.elapsed().as_secs_f64() < 0.5, "{:?} for 3,000 blocks", started.elapsed());
 }

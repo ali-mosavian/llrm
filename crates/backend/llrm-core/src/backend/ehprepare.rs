@@ -19,7 +19,6 @@ use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalVariable, InstId, Li
 use llrm_mir::opcode::{Attribute, CallInfo, CastOp, Flags, Opcode, BASIC};
 use llrm_mir::{GlobalId, Module, TypeId};
 
-use llrm_hir::mir::FAR;
 use llrm_hir::onerror::ERR;
 pub use llrm_hir::onerror::{ONERROR, ONLOCALERROR, PERSONALITY};
 /// The module's registered handler: keeps ERR, then resumes at the pad.
@@ -105,6 +104,11 @@ pub fn prepared(module: &mut Module) -> Result<(), String> {
 
 /// Whether trapping may be on where each block starts: off at entry, on
 /// where the runtime lands, and as each ON ERROR leaves it.
+/// The far address space of real mode, which BASIC's runtime is in.
+fn far() -> u32 {
+    llrm_x86_m16::layout().spaces.far
+}
+
 fn trapping(context: &Context, function: &Function, registrations: &[GlobalId]) -> BTreeMap<BlockId, bool> {
     let mut on: BTreeMap<BlockId, bool> = function.layout().iter().map(|&block| (block, false)).collect();
     let mut pending: Vec<BlockId> = function.layout().to_vec();
@@ -196,7 +200,7 @@ struct Routines {
 /// landing itself and the ERR it keeps.
 fn declare(module: &mut Module) -> Result<Routines, String> {
     let types = &mut module.context.types;
-    let (void, i16, far) = (types.void(), types.int(16), types.ptr(FAR));
+    let (void, i16, far) = (types.void(), types.int(16), types.ptr(far()));
     let register = types.intern(llrm_mir::Type::Function { returns: void, parameters: vec![far], variadic: false });
     let local = types.intern(llrm_mir::Type::Function { returns: void, parameters: vec![i16], variadic: false });
     let asked = types.intern(llrm_mir::Type::Function { returns: i16, parameters: Vec::new(), variadic: false });
@@ -239,7 +243,7 @@ fn declare(module: &mut Module) -> Result<Routines, String> {
 /// A far function by BASIC's convention, as the runtime's are.
 fn runtime(module: &mut Module, id: GlobalId, attrs: &[&str]) {
     let global = &mut module.globals[id.0 as usize];
-    global.address_space = FAR;
+    global.address_space = far();
     let GlobalKind::Function(function) = &mut global.kind else { unreachable!("a function") };
     function.calling_convention = BASIC;
     function.attrs.extend(attrs.iter().map(|one| Attribute::Flag((*one).to_owned())));

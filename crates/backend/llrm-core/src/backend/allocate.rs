@@ -136,7 +136,230 @@ pub fn _group_start(block: &LirBlock, index: usize) -> usize {
 pub type Live = IndexMap<i64, BTreeSet<u32>>;
 
 /// What is live at each block's entry and exit, to a fixed point.
+///
+/// Dense: the values numbered by their order, each block's sets one row of bits in one array, the
+/// fixed point a worklist over the rows. No set is built but the answer.
 pub fn live(body: &LirBody) -> (Live, Live) {
+    let dense = live_rows(body);
+    (dense.sets(&dense.into), dense.sets(&dense.out))
+}
+
+/// What is live at each block's entry and exit as the fixed point leaves it: rows of bits, which a
+/// reader that only walks the values need not turn into sets.
+pub struct LiveRows {
+    numbered: Vec<u32>,
+    words: usize,
+    position: IndexMap<i64, usize>,
+    blocks: Vec<i64>,
+    into: Vec<u64>,
+    out: Vec<u64>,
+}
+
+impl LiveRows {
+    /// The values live at the entry of the block at `at`, in order.
+    pub fn entering(&self, at: i64) -> impl Iterator<Item = u32> + '_ {
+        self.values(&self.into, self.position[&at])
+    }
+
+    /// The values live at the exit of the block at `at`, in order.
+    pub fn leaving(&self, at: i64) -> impl Iterator<Item = u32> + '_ {
+        self.values(&self.out, self.position[&at])
+    }
+
+    fn holds(&self, rows: &[u64], block: i64, value: u32) -> bool {
+        let (Some(&at), Ok(bit)) = (self.position.get(&block), self.numbered.binary_search(&value)) else { return false };
+        rows[at * self.words + bit / 64] >> (bit % 64) & 1 == 1
+    }
+
+    fn values<'a>(&'a self, rows: &'a [u64], block: usize) -> impl Iterator<Item = u32> + 'a {
+        rows[block * self.words..(block + 1) * self.words]
+            .iter()
+            .enumerate()
+            .flat_map(move |(word, bits)| (0..64).filter(move |bit| bits >> bit & 1 == 1).map(move |bit| self.numbered[word * 64 + bit]))
+    }
+
+    fn sets(&self, rows: &[u64]) -> Live {
+        self.blocks.iter().enumerate().map(|(at, block)| (*block, self.values(rows, at).collect())).collect()
+    }
+}
+
+/// Whether a value is live at the entry or exit of a block: what a caller that asks of one value at a time reads,
+/// whether it has the sets of every block (`Live`) or the rows.
+pub trait LiveAt {
+    fn live_in(&self, block: i64, value: u32) -> bool;
+    fn live_out(&self, block: i64, value: u32) -> bool;
+}
+
+impl LiveAt for LiveRows {
+    fn live_in(&self, block: i64, value: u32) -> bool {
+        self.holds(&self.into, block, value)
+    }
+
+    fn live_out(&self, block: i64, value: u32) -> bool {
+        self.holds(&self.out, block, value)
+    }
+}
+
+impl LiveAt for (&Live, &Live) {
+    fn live_in(&self, block: i64, value: u32) -> bool {
+        self.0.get(&block).is_some_and(|live| live.contains(&value))
+    }
+
+    fn live_out(&self, block: i64, value: u32) -> bool {
+        self.1.get(&block).is_some_and(|live| live.contains(&value))
+    }
+}
+
+/// `live`, as rows.
+pub fn live_rows(body: &LirBody) -> LiveRows {
+    live_rows_by(body, |_| true)
+}
+
+/// `live_rows` of the values `keep` says only: each is live where it is as in the whole, the others are
+/// not numbered, so a caller that asks of a few values pays for rows of those.
+pub fn live_rows_by(body: &LirBody, keep: impl Fn(u32) -> bool) -> LiveRows {
+    // Every value the body names, numbered by order. Ids can be far apart, so the number of a value
+    // is found by a table over the ids where they are dense enough, else by search.
+    let mut numbered: Vec<u32> = Vec::new();
+    for block in &body.blocks {
+        numbered.extend(block.phis.iter().flat_map(|phi| std::iter::once(phi.result).chain(phi.incoming.iter().map(|(_, value)| *value))).filter(|value| keep(*value)));
+        for one in &block.insns {
+            numbered.extend(one.defines.iter().chain(&one.uses).copied().filter(|value| keep(*value)));
+        }
+    }
+    numbered.sort_unstable();
+    numbered.dedup();
+    let largest = numbered.last().copied().unwrap_or(0) as usize;
+    let table: Option<Vec<u32>> = (largest <= 8 * numbered.len() + 64).then(|| {
+        let mut table = vec![u32::MAX; largest + 1];
+        for (at, value) in numbered.iter().enumerate() {
+            table[*value as usize] = at as u32;
+        }
+        table
+    });
+    let number = |value: u32| -> Option<usize> {
+        if !keep(value) {
+            return None;
+        }
+        Some(match &table {
+            Some(table) => table[value as usize] as usize,
+            None => numbered.binary_search(&value).expect("every value is numbered"),
+        })
+    };
+    let words = numbered.len() / 64 + 1;
+    let count = body.blocks.len();
+    let set = |row: &mut [u64], value: u32| {
+        if let Some(at) = number(value) {
+            row[at / 64] |= 1 << (at % 64);
+        }
+    };
+    let position: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    // Rows of `words` each, a block's at `block * words`.
+    let mut defined = vec![0u64; count * words];
+    let mut generated = vec![0u64; count * words];
+    // A phi's argument is read at the end of the predecessor it comes from.
+    let mut handed = vec![0u64; count * words];
+    for block in &body.blocks {
+        for phi in &block.phis {
+            for (from, value) in &phi.incoming {
+                if let Some(&at) = position.get(from) {
+                    set(&mut handed[at * words..(at + 1) * words], *value);
+                } else {
+                    // A predecessor the body does not hold: its row is none, as its set was dropped.
+                }
+            }
+        }
+    }
+    for (at, block) in body.blocks.iter().enumerate() {
+        let row = at * words..(at + 1) * words;
+        for phi in &block.phis {
+            set(&mut defined[row.clone()], phi.result);
+        }
+        for one in &block.insns {
+            for value in &one.defines {
+                set(&mut defined[row.clone()], *value);
+            }
+        }
+        let mut alive: Vec<u64> = handed[row.clone()].to_vec();
+        let mut index = block.insns.len() as i64 - 1;
+        while index >= 0 {
+            let first = _group_start(block, index as usize);
+            let group = &block.insns[first..=index as usize];
+            for item in group {
+                for value in &item.defines {
+                    if let Some(at) = number(*value) {
+                        alive[at / 64] &= !(1 << (at % 64));
+                    }
+                }
+            }
+            for item in group {
+                for value in &item.uses {
+                    set(&mut alive, *value);
+                }
+            }
+            index = first as i64 - 1;
+        }
+        for phi in &block.phis {
+            if let Some(at) = number(phi.result) {
+                alive[at / 64] &= !(1 << (at % 64));
+            }
+        }
+        generated[row].copy_from_slice(&alive);
+    }
+    let mut predecessors = vec![Vec::new(); count];
+    let mut successors: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (at, block) in body.blocks.iter().enumerate() {
+        for successor in &block.succ {
+            if let Some(&to) = position.get(successor) {
+                predecessors[to].push(at);
+                successors[at].push(to);
+            }
+        }
+    }
+    // The least fixed point of a backward problem: a worklist over the rows.
+    let mut into = generated.clone();
+    let mut out = vec![0u64; count * words];
+    let mut pending: Vec<usize> = (0..count).collect();
+    let mut queued = vec![true; count];
+    let mut now = vec![0u64; words];
+    while let Some(at) = pending.pop() {
+        queued[at] = false;
+        now.iter_mut().for_each(|word| *word = 0);
+        for &from in &successors[at] {
+            for (word, bits) in now.iter_mut().zip(&into[from * words..(from + 1) * words]) {
+                *word |= bits;
+            }
+        }
+        out[at * words..(at + 1) * words].copy_from_slice(&now);
+        let mut changed = false;
+        for word in 0..words {
+            let entering = generated[at * words + word] | (now[word] & !defined[at * words + word]);
+            if entering != into[at * words + word] {
+                into[at * words + word] = entering;
+                changed = true;
+            }
+        }
+        if changed {
+            for &pred in &predecessors[at] {
+                if !queued[pred] {
+                    queued[pred] = true;
+                    pending.push(pred);
+                }
+            }
+        }
+    }
+    // A phi's argument is read at the end of its predecessor, leaving it.
+    for (at, row) in out.chunks_mut(words).enumerate() {
+        for (word, bits) in row.iter_mut().zip(&handed[at * words..(at + 1) * words]) {
+            *word |= bits;
+        }
+    }
+    LiveRows { numbered, words, position, blocks: body.blocks.iter().map(|block| block.at).collect(), into, out }
+}
+
+/// `live` as it was written over sorted sets, which the tests hold the dense one to.
+#[cfg(test)]
+pub fn live_reference(body: &LirBody) -> (Live, Live) {
     let defines: IndexMap<i64, BTreeSet<u32>> = body
         .blocks
         .iter()
@@ -316,6 +539,7 @@ pub enum Stage {
 }
 
 use crate::backend::regclass::{classes, Classes};
+use crate::backend::classes::RegisterClasses;
 use crate::backend::regclass::_SEGMENT_OPERANDS;
 
 /// A plain move into one value; whether anything reads it is the caller's.
@@ -338,8 +562,8 @@ pub fn _unread_move(one: &Insn) -> bool {
 
 /// Each far cell whose selector is also read as a number, or pinned to a
 /// general register, reached through ES.
-pub fn explicit_selectors(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments: &Segments) -> LirBody {
-    let confined = classes(body, &BTreeSet::new(), segments);
+pub fn explicit_selectors(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments: &Segments, registers: &RegisterClasses) -> LirBody {
+    let confined = classes(body, &BTreeSet::new(), segments, registers);
     let selectors: BTreeSet<Register> = segments.selectors.iter().copied().collect();
     let empty = IndexMap::default();
     let pinned = pinned.unwrap_or(&empty);
@@ -502,8 +726,9 @@ pub fn allocate(
     preferred: Option<&IndexMap<u32, Register>>,
     cpu: ProfileOrName<'_>,
     segments: &Segments,
+    classes: &RegisterClasses,
 ) -> Result<Assignment, Error> {
-    Ok(_allocated(body, pinned, unspillable, protected, preferred, cpu, segments, None)?.0)
+    Ok(_allocated(body, pinned, unspillable, protected, preferred, cpu, segments, classes, None)?.0)
 }
 
 /// `allocate`, splitting and spilling as it goes, as LLVM's greedy allocator
@@ -517,10 +742,11 @@ pub fn rewritten(
     protected: Option<&BTreeSet<u32>>,
     cpu: ProfileOrName<'_>,
     segments: &Segments,
+    classes: &RegisterClasses,
     frame: &mut Frame,
     splitting: bool,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
-    _allocated(body, pinned, unspillable, protected, None, cpu, segments, Some((frame, splitting)))
+    _allocated(body, pinned, unspillable, protected, None, cpu, segments, classes, Some((frame, splitting)))
 }
 
 /// What the allocator knows of a body, recomputed whenever it rewrites it.
@@ -534,9 +760,12 @@ struct Facts {
 }
 
 impl Facts {
-    fn of(body: &LirBody, profile: &Profile, segments: &Segments, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>) -> Self {
-        let index = ranges::indexed(body);
-        let mut live = _fold_priced(body, _sibling_priced(body, ranges::intervals(body, Some(&index))), profile);
+    fn of(body: &LirBody, profile: &Profile, segments: &Segments, registers: &RegisterClasses, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, busy: &Frequency) -> Self {
+        let _span = llrm_support::debug::span("regalloc facts");
+        let index = llrm_support::debug::timed("facts slots", || ranges::indexed(body));
+        let base = llrm_support::debug::timed("facts intervals", || ranges::intervals_over(body, Some(&index), busy));
+        let base = llrm_support::debug::timed("facts sibling prices", || _sibling_priced(body, base, busy));
+        let mut live = llrm_support::debug::timed("facts fold prices", || _fold_priced(body, base, profile, busy));
         // A spiller product lives for one use: a spill gains nothing.
         for one in unspillable {
             if let Some(interval) = live.get_mut(one) {
@@ -548,14 +777,54 @@ impl Facts {
                 interval.weight = INF;
             }
         }
-        let masks = _masks(body, &index, segments);
-        Self { index, live, masks, widths: _widest(body), confined: classes(body, protected, segments), hints: _copy_hints(body) }
+        let masks = llrm_support::debug::timed("facts masks", || _masks(body, &index, segments));
+        let widths = llrm_support::debug::timed("facts widths", || _widest(body));
+        let confined = llrm_support::debug::timed("facts classes", || {
+            let given = crate::backend::regclass::Found { live: &live, masks: &masks };
+            let found = crate::backend::regclass::classes_given(body, protected, segments, registers, &given);
+            if std::env::var_os("LLRM_CHECK_CLASSES").is_some() {
+                assert!(found.iter().eq(classes(body, protected, segments, registers).iter()), "{}: classes from the given intervals differ from working them out", body.name);
+            }
+            found
+        });
+        let hints = llrm_support::debug::timed("facts hints", || _copy_hints(body));
+        Self { index, live, masks, widths, confined, hints }
     }
 }
 
 /// The values whose register a rewrite made them share with another, lose
 /// to a point that destroys it, or leave their class: the later of each pair.
 fn _overlapping(union: &IndexMap<Register, Vec<u32>>, r#where: &IndexMap<u32, Register>, facts: &Facts) -> BTreeSet<u32> {
+    let found = _overlapping_by_start(union, r#where, facts);
+    if std::env::var_os("LLRM_CHECK_OVERLAPPING").is_some() {
+        assert!(found == _overlapping_reference(union, r#where, facts), "values sharing a register found by start differ from the pairwise look");
+    }
+    found
+}
+
+fn _overlapping_by_start(union: &IndexMap<Register, Vec<u32>>, r#where: &IndexMap<u32, Register>, facts: &Facts) -> BTreeSet<u32> {
+    let mut out = BTreeSet::new();
+    for held in union.values() {
+        // The segments of the values kept so far, by start: kept values do not overlap one another, so a segment
+        // meets a kept one only if the last that starts before its end reaches past its start.
+        let mut kept: std::collections::BTreeMap<i64, i64> = std::collections::BTreeMap::new();
+        for value in held {
+            let Some(mine) = facts.live.get(value) else { continue };
+            let width = facts.widths.get(value).copied().unwrap_or(4);
+            let outside = facts.confined.get(value).is_some_and(|class| !class.iter().any(|one| _whole(*one) == _whole(r#where[value])));
+            let meets = |kept: &std::collections::BTreeMap<i64, i64>| mine.segments.iter().any(|seg| kept.range(..seg.end).next_back().is_some_and(|(_, end)| *end > seg.start));
+            if outside || meets(&kept) || _clobbered(mine, r#where[value], &facts.masks, width) {
+                out.insert(*value);
+            } else {
+                kept.extend(mine.segments.iter().map(|seg| (seg.start, seg.end)));
+            }
+        }
+    }
+    out
+}
+
+/// What `_overlapping` was: each value against every one kept before it.
+fn _overlapping_reference(union: &IndexMap<Register, Vec<u32>>, r#where: &IndexMap<u32, Register>, facts: &Facts) -> BTreeSet<u32> {
     let mut out = BTreeSet::new();
     for held in union.values() {
         let mut kept: Vec<u32> = Vec::new();
@@ -582,6 +851,7 @@ fn _allocated(
     preferred: Option<&IndexMap<u32, Register>>,
     cpu: ProfileOrName<'_>,
     segments: &Segments,
+    classes: &RegisterClasses,
     rewrite: Option<(&mut Frame, bool)>,
 ) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
     let splitting = rewrite.as_ref().is_some_and(|(_, splitting)| *splitting);
@@ -592,8 +862,8 @@ fn _allocated(
     let empty = BTreeSet::new();
     let protected = protected.unwrap_or(&empty);
     let mut unspillable: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
-    let mut facts = Facts::of(&body, profile, segments, &unspillable, protected);
-    if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments) {
+    let mut facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body));
+    if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments, classes) {
         return Err(Unplaced(why).into());
     }
     // Every value this allocation has known: a new one is numbered above them.
@@ -601,7 +871,7 @@ fn _allocated(
     let mut fixed: IndexMap<u32, Register> = pinned.cloned().unwrap_or_default();
     // Values a split made or left behind, never split again: LLVM's `RS_Split2` and `RS_Spill`.
     let mut pieces: BTreeSet<u32> = BTreeSet::new();
-    let mut placing: Option<(spillplacement::Bundles, (Live, Live))> = None;
+    let mut placing: Option<(spillplacement::Bundles, LiveRows)> = None;
     let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
 
@@ -643,14 +913,14 @@ fn _allocated(
             continue;
         };
         let mut order: Vec<Register> = match fixed.get(&value) {
-            None => target::order(facts.confined.get(&value), segments),
+            None => target::order(facts.confined.get(&value), segments, classes),
             Some(register) => vec![*register],
         };
         if !data_free {
             order.retain(|one| _whole(*one) != segments.data);
         }
-        if protected.contains(&value) && _reserves_word_base(&body, value, &facts.confined) {
-            let word: BTreeSet<Register> = target::WORD_BASES.iter().map(|one| _whole(*one)).collect();
+        if protected.contains(&value) && _reserves_word_base(&body, value, &facts.confined, classes) {
+            let word: BTreeSet<Register> = classes.word_bases.iter().map(|one| _whole(*one)).collect();
             order = order
                 .iter()
                 .copied()
@@ -708,7 +978,7 @@ fn _allocated(
                 if fixed.contains_key(&other) {
                     return false;
                 }
-                let elsewhere: Vec<Register> = target::order(facts.confined.get(&other), segments)
+                let elsewhere: Vec<Register> = target::order(facts.confined.get(&other), segments, classes)
                     .into_iter()
                     .filter(|one| _whole(*one) != _whole(register))
                     .filter(|one| data_free || _whole(*one) != segments.data)
@@ -716,7 +986,7 @@ fn _allocated(
                 _free(&facts.live[&other], &elsewhere, &union, &facts.live, &facts.masks, facts.widths.get(&other).copied().unwrap_or(4))
                     .is_some()
             };
-            let evicted = _evict(
+            let evicted = llrm_support::debug::timed("regalloc evict", || _evict(
                 &mine,
                 &order,
                 &union,
@@ -727,7 +997,7 @@ fn _allocated(
                 width,
                 Some(cascades.get(&value).copied().unwrap_or(newest)),
                 Some(&cascades),
-            );
+            ));
             if let Some((got, victims)) = evicted {
                 if !cascades.contains_key(&value) {
                     cascades.insert(value, newest);
@@ -760,9 +1030,10 @@ fn _allocated(
         // `trySplit`, carved at once: the pieces and the rest compete again.
         let mut rewritten: Option<Vec<u32>> = None;
         if splitting && at == Stage::Split && !pieces.contains(&value) && !bound {
-            let (bundles, live_sets) = placing.get_or_insert_with(|| (spillplacement::bundles(&body), self::live(&body)));
-            let spread = splitkit::live_blocks(&body, value, (&live_sets.0, &live_sets.1));
-            let occupied = splitkit::Occupied {
+            let _split = llrm_support::debug::span("regalloc split");
+            let (bundles, live_sets) = placing.get_or_insert_with(|| llrm_support::debug::timed("split placing", || (spillplacement::bundles(&body), live_rows(&body))));
+            let spread = llrm_support::debug::timed("split spread", || splitkit::live_blocks(&body, value, &*live_sets));
+            let occupied = llrm_support::debug::timed("split occupied", || splitkit::Occupied {
                 segments: union
                     .iter()
                     .map(|(register, held)| {
@@ -770,24 +1041,25 @@ fn _allocated(
                     })
                     .collect(),
                 masks: &facts.masks,
-            };
-            let sets = (&live_sets.0, &live_sets.1);
+            });
+            let sets: &dyn LiveAt = &*live_sets;
             // A range in one block splits locally; any other by region, and
             // failing that block by block. Only a piece that pays is carved.
-            let regions: Vec<splitkit::Region> = match splitkit::local(&body, value, &facts.index, sets, &order, &occupied, width) {
+            let regions: Vec<splitkit::Region> = match llrm_support::debug::timed("split local", || splitkit::local(&body, value, &facts.index, sets, &order, &occupied, width)) {
                 Some(found) => vec![found],
                 None => {
-                    let placed = splitkit::placed(&body, value, &facts.index, sets, bundles, &order, &occupied, width);
-                    if placed.is_empty() { splitkit::per_block(&body, value, sets) } else { placed }
+                    let placed = llrm_support::debug::timed("split placed", || splitkit::placed(&body, value, &facts.index, sets, bundles, &order, &occupied, width));
+                    if placed.is_empty() { llrm_support::debug::timed("split per block", || splitkit::per_block(&body, value, sets)) } else { placed }
                 }
             };
-            let regions: Vec<splitkit::Region> = regions.into_iter().filter(|region| splitkit::pays(&body, value, region, sets)).collect();
+            let regions: Vec<splitkit::Region> = llrm_support::debug::timed("split pays", || regions.into_iter().filter(|region| splitkit::pays(&body, value, region, sets)).collect());
             for region in &regions {
                 llrm_support::debug!("split", "{}: split {value} at {:?}", body.name, region.spans);
             }
             let mut cut = body.clone();
             let mut moves: Vec<splitkit::Moved> = Vec::new();
             let mut made: Vec<u32> = Vec::new();
+            let _carving = llrm_support::debug::span("split carving");
             for region in regions {
                 let fresh = splitkit::_next_value(&cut).max(floor);
                 floor = fresh + 1;
@@ -801,8 +1073,10 @@ fn _allocated(
             if !made.is_empty() {
                 // As LLVM's RS_Split2: a piece splits again only while its
                 // live blocks strictly shrink, so splitting ends.
-                let after = self::live(&cut);
-                pieces.extend(made.iter().copied().filter(|one| splitkit::live_blocks(&cut, *one, (&after.0, &after.1)) >= spread));
+                drop(_carving);
+                // Only the pieces made are asked of.
+                let after = llrm_support::debug::timed("split after liveness", || live_rows_by(&cut, |one| made.contains(&one)));
+                pieces.extend(made.iter().copied().filter(|one| splitkit::live_blocks(&cut, *one, &after) >= spread));
                 pieces.insert(value);
                 body = cut;
                 for one in &made {
@@ -818,7 +1092,7 @@ fn _allocated(
             // Last chance: move what holds a register rather than spill.
             let choices = |other: u32| -> Vec<Register> {
                 let mut order = match fixed.get(&other) {
-                    None => target::order(facts.confined.get(&other), segments),
+                    None => target::order(facts.confined.get(&other), segments, classes),
                     Some(register) => vec![*register],
                 };
                 order.retain(|one| data_free || _whole(*one) != segments.data);
@@ -837,7 +1111,7 @@ fn _allocated(
                 budget: Coloring::BUDGET,
                 stack: Vec::new(),
             };
-            if coloring.recolor(value, 0, &mut BTreeSet::new()) {
+            if llrm_support::debug::timed("regalloc recolor", || coloring.recolor(value, 0, &mut BTreeSet::new())) {
                 stage.insert(value, Stage::Done);
                 continue;
             }
@@ -882,18 +1156,19 @@ fn _allocated(
                 // InlineSpiller: the value and the siblings worth sharing its
                 // slot go to the stack now; their reloads join the queue.
                 Some(frame) => {
+                    let _spill = llrm_support::debug::span("regalloc spill");
                     // A sibling may already hold a register: it gives it up,
                     // since sharing the slot makes the copies between them free.
                     let mut chosen = BTreeSet::from([value]);
                     let settled: BTreeSet<u32> = fixed.keys().chain(protected.iter()).chain(unspillable.iter()).copied().collect();
-                    chosen.extend(spiller::siblings(&body, &chosen, Some(frame), &settled)?);
+                    chosen.extend(llrm_support::debug::timed("spill siblings", || spiller::siblings(&body, &chosen, Some(frame), &settled))?);
                     llrm_support::debug!("spill", "{}: spill {value} with {:?}", body.name, chosen);
                     for one in &chosen {
                         if let Some(register) = r#where.shift_remove(one) {
                             union.get_mut(&_whole(register)).expect("a placed value is in its register").retain(|other| other != one);
                         }
                     }
-                    let (spilt, mut made) = spiller::spilled_from(&body, &chosen, Some(frame), floor)?;
+                    let (spilt, mut made) = spiller::spilled_from(&body, &chosen, Some(frame), floor, classes)?;
                     body = spilt;
                     // A value the spiller keeps (a load from its own home
                     // cell) is now as short as a reload, and is placed as one.
@@ -916,15 +1191,19 @@ fn _allocated(
         // the change left sharing a register competes again.
         let Some(made) = rewritten else { continue };
         floor = floor.max(splitkit::_next_value(&body));
-        facts = Facts::of(&body, profile, segments, &unspillable, protected);
+        facts = Facts::of(&body, profile, segments, classes, &unspillable, protected, &llrm_support::debug::timed("regalloc frequency", || Frequency::of(&body)));
+        // What is done of the rewrite besides its facts: the pins, the placed values it disturbs, the queue.
+        let _after = llrm_support::debug::span("regalloc after rewrite");
         placing = None;
-        for (one, register) in constrain::required(&body) {
-            fixed.entry(one).or_insert(register);
-        }
-        wanted = _wanted(&facts.hints, &fixed);
+        llrm_support::debug::timed("after required", || {
+            for (one, register) in constrain::required(&body, classes) {
+                fixed.entry(one).or_insert(register);
+            }
+        });
+        wanted = llrm_support::debug::timed("after wanted", || _wanted(&facts.hints, &fixed));
         fenced = fixed.keys().copied().chain(protected.iter().copied()).collect();
         let gone: Vec<u32> = r#where.keys().copied().filter(|one| !facts.live.contains_key(one)).collect();
-        let clashing = _overlapping(&union, &r#where, &facts);
+        let clashing = llrm_support::debug::timed("after overlapping", || _overlapping(&union, &r#where, &facts));
         for one in gone.iter().chain(&clashing) {
             if let Some(register) = r#where.shift_remove(one) {
                 union.get_mut(&_whole(register)).expect("a placed value is in its register").retain(|other| other != one);
@@ -932,12 +1211,14 @@ fn _allocated(
         }
         // What the rewrite made or moved competes again; the rest still waits.
         let changed: BTreeSet<u32> = made.iter().chain(&gone).chain(&clashing).copied().collect();
-        for one in facts.live.keys().copied().filter(|one| !r#where.contains_key(one) && !spilled.contains(one)) {
-            if changed.contains(&one) || waiting.get(&one).copied().unwrap_or(0) == 0 {
-                queue.push(queued(one, &facts.live, &stage, &fixed));
-                *waiting.entry(one).or_insert(0) += 1;
+        llrm_support::debug::timed("after queue", || {
+            for one in facts.live.keys().copied().filter(|one| !r#where.contains_key(one) && !spilled.contains(one)) {
+                if changed.contains(&one) || waiting.get(&one).copied().unwrap_or(0) == 0 {
+                    queue.push(queued(one, &facts.live, &stage, &fixed));
+                    *waiting.entry(one).or_insert(0) += 1;
+                }
             }
-        }
+        });
     }
     if seen >= BUDGET {
         llrm_support::debug!("regalloc", "{}: out of budget with {} queued", body.name, queue.len());
@@ -950,6 +1231,7 @@ fn _allocated(
         confined: &facts.confined,
         data_free,
         segments,
+        classes,
     };
     _recolored_hints(&mut r#where, &mut union, &settled, |value| {
         fixed.contains_key(&value) || protected.contains(&value) || preferred.contains_key(&value)
@@ -966,6 +1248,7 @@ struct Settled<'a> {
     confined: &'a Classes,
     data_free: bool,
     segments: &'a Segments,
+    classes: &'a RegisterClasses,
 }
 
 /// LLVM's `tryHintsRecoloring`. Greedy order decides which end of a copy
@@ -1003,7 +1286,7 @@ fn _recolored_hints(
                     continue;
                 }
                 let order: Vec<Register> =
-                    target::order(settled.confined.get(&value), settled.segments).into_iter().filter(|one| _whole(*one) == theirs).collect();
+                    target::order(settled.confined.get(&value), settled.segments, settled.classes).into_iter().filter(|one| _whole(*one) == theirs).collect();
                 if let Some(register) = _free(mine, &order, union, settled.live, settled.masks, width) {
                     best = Some((gained, register));
                 }
@@ -1040,11 +1323,11 @@ fn _priority(one: Option<&Interval>, at: Stage) -> f64 {
 }
 
 /// Whether an address-class value should leave a 16-bit word base free.
-fn _reserves_word_base(body: &LirBody, value: u32, confined: &Classes) -> bool {
+fn _reserves_word_base(body: &LirBody, value: u32, confined: &Classes, classes: &RegisterClasses) -> bool {
     let Some(choices) = confined.get(&value) else {
         return false;
     };
-    if choices.is_empty() || !choices.is_subset(&target::ADDRESSING) {
+    if choices.is_empty() || !choices.is_subset(&classes.addressing) {
         return false;
     }
     body.blocks.iter().flat_map(|block| &block.insns).any(|one| {
@@ -1065,18 +1348,14 @@ pub fn _widest(body: &LirBody) -> IndexMap<u32, u32> {
     let mut out: IndexMap<u32, u32> = IndexMap::default();
     for block in &body.blocks {
         for one in &block.insns {
-            let mut held: Vec<Held> = match &one.what {
-                Some(what) => what.dests.iter().chain(&what.sources).flat_map(ir::values).collect(),
-                None => Vec::new(),
-            };
-            held.extend(one.requires.iter().chain(&one.delivers).map(|(place, _register)| *place));
-            for place in held {
-                let had = out.get(&place.value).copied().unwrap_or(0);
-                out.insert(place.value, had.max(place.width));
+            let named = one.what.iter().flat_map(|what| what.dests.iter().chain(&what.sources)).flat_map(ir::values).chain(one.requires.iter().chain(&one.delivers).map(|(place, _register)| *place));
+            for place in named {
+                let widest = out.entry(place.value).or_insert(0);
+                *widest = (*widest).max(place.width);
             }
             for (value, width) in &one.widths {
-                let had = out.get(value).copied().unwrap_or(0);
-                out.insert(*value, had.max(*width));
+                let widest = out.entry(*value).or_insert(0);
+                *widest = (*widest).max(*width);
             }
         }
     }
@@ -1092,13 +1371,69 @@ pub struct Mask {
     pub before: BTreeSet<Register>,
 }
 
-pub type Masks = Vec<Mask>;
+/// The points that destroy registers, and, for each register, where, in order: whether a value is live
+/// across one is asked of every value and every register, over and over, and answered from the slots by
+/// bisection, not by a look at every point.
+#[derive(Default)]
+pub struct Masks {
+    list: Vec<Mask>,
+    reaching: std::cell::OnceCell<crate::support::hash::HashMap<Register, Reaching>>,
+}
+
+/// Where one register is destroyed, sorted: before the point's own reads (`read`), during it
+/// (`during`), or only its high half (`high`).
+#[derive(Default)]
+struct Reaching {
+    read: Vec<i64>,
+    during: Vec<i64>,
+    high: Vec<i64>,
+}
+
+impl Masks {
+    pub fn new(list: Vec<Mask>) -> Self {
+        Self { list, reaching: std::cell::OnceCell::new() }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Mask> {
+        self.list.iter()
+    }
+
+    fn reaching(&self, register: Register) -> Option<&Reaching> {
+        self.reaching
+            .get_or_init(|| {
+                let mut found: crate::support::hash::HashMap<Register, Reaching> = crate::support::hash::HashMap::default();
+                for mask in &self.list {
+                    for register in mask.before.iter().chain(&mask.during).chain(&mask.high) {
+                        let one = found.entry(*register).or_default();
+                        if mask.before.contains(register) {
+                            one.read.push(mask.slot);
+                        } else if mask.during.contains(register) {
+                            one.during.push(mask.slot);
+                        } else {
+                            one.high.push(mask.slot);
+                        }
+                    }
+                }
+                for one in found.values_mut() {
+                    one.read.sort_unstable();
+                    one.during.sort_unstable();
+                    one.high.sort_unstable();
+                }
+                found
+            })
+            .get(&register)
+    }
+}
 
 /// Every point a register is destroyed without being named, and which. The
 /// data segment register is reloaded ahead of a point that needs the data
 /// group, so it holds none of that point's operands either.
 pub fn _masks(body: &LirBody, index: &Indexes, segments: &Segments) -> Masks {
-    let mut out = Vec::new();
+    let mut out: Vec<Mask> = Vec::new();
     for block in &body.blocks {
         for one in &block.insns {
             let during: BTreeSet<Register> = one.clobbers.iter().map(|register| _whole(*register)).collect();
@@ -1110,7 +1445,7 @@ pub fn _masks(body: &LirBody, index: &Indexes, segments: &Segments) -> Masks {
             }
         }
     }
-    out
+    Masks::new(out)
 }
 
 /// The 32-bit register this one is part of.
@@ -1121,15 +1456,42 @@ pub fn _whole(register: Register) -> Register {
 /// Whether this range is live across a point that destroys the register, or
 /// into one that destroys it before reading.
 pub fn _clobbered(one: &Interval, register: Register, masks: &Masks, width: u32) -> bool {
+    let answer = _clobbered_from(one, register, masks, width);
+    if check_clobbered() {
+        assert_eq!(answer, _clobbered_reference(one, register, masks, width), "LLRM_CHECK_CLOBBERED: {register:?} over {:?}", one.segments);
+    }
+    answer
+}
+
+fn check_clobbered() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CLOBBERED").is_some())
+}
+
+/// `_clobbered`, from where each register is destroyed: a segment meets a point where the point is after its
+/// start and, by `reaches`, no later than its end.
+fn _clobbered_from(one: &Interval, register: Register, masks: &Masks, width: u32) -> bool {
+    let Some(places) = masks.reaching(_whole(register)) else { return false };
+    // The first slot after `start` is the best candidate: any later one reaches no further.
+    let after = |slots: &[i64], start: i64| slots.get(slots.partition_point(|slot| *slot <= start)).copied();
+    one.segments.iter().any(|seg| {
+        after(&places.read, seg.start).is_some_and(|slot| seg.end >= ranges::def_point(slot))
+            || after(&places.during, seg.start).is_some_and(|slot| seg.end > ranges::def_point(slot))
+            || (width > 2 && after(&places.high, seg.start).is_some_and(|slot| seg.end > ranges::def_point(slot)))
+    })
+}
+
+/// What `_clobbered` was: a look at every point.
+pub fn _clobbered_reference(one: &Interval, register: Register, masks: &Masks, width: u32) -> bool {
     let mine = _whole(register);
-    for mask in masks {
+    for mask in masks.iter() {
         let slot = mask.slot;
         let read = mask.before.contains(&mine);
         if !read && !mask.during.contains(&mine) && (!mask.high.contains(&mine) || width <= 2) {
             continue;
         }
         // A use keeps its value alive to `slot + DEF`.
-        let reaches = |end: i64| if read { end >= slot + ranges::DEF } else { end > slot + ranges::DEF };
+        let reaches = |end: i64| if read { end >= ranges::def_point(slot) } else { end > ranges::def_point(slot) };
         if one.segments.iter().any(|seg| seg.start < slot && reaches(seg.end)) {
             return true;
         }
@@ -1377,8 +1739,8 @@ impl Coloring<'_> {
 /// two values required in one register where both are live, or more values
 /// that cannot be spilled live at one point than there are registers. Checked
 /// once, before allocation, which then has no refusal of its own.
-fn unallocatable(facts: &Facts, fixed: &IndexMap<u32, Register>, unspillable: &BTreeSet<u32>, segments: &Segments) -> Option<String> {
-    if let Some((value, _)) = facts.confined.iter().find(|(_, class)| target::order(Some(*class), segments).is_empty()) {
+fn unallocatable(facts: &Facts, fixed: &IndexMap<u32, Register>, unspillable: &BTreeSet<u32>, segments: &Segments, classes: &RegisterClasses) -> Option<String> {
+    if let Some((value, _)) = facts.confined.iter().find(|(_, class)| target::order(Some(*class), segments, classes).is_empty()) {
         return Some(format!("value#{value} may be in no register"));
     }
     let mut by_register: IndexMap<Register, Vec<u32>> = IndexMap::default();
@@ -1398,7 +1760,7 @@ fn unallocatable(facts: &Facts, fixed: &IndexMap<u32, Register>, unspillable: &B
     }
     // The busiest point among the values that cannot be spilled.
     let mut edges: Vec<(i64, i64)> = Vec::new();
-    let general: BTreeSet<Register> = target::AVAILABLE.iter().map(|one| _whole(*one)).collect();
+    let general: BTreeSet<Register> = classes.available.iter().map(|one| _whole(*one)).collect();
     let in_general = |value: &u32| match (fixed.get(value), facts.confined.get(value)) {
         (Some(register), _) => general.contains(&_whole(*register)),
         (None, Some(class)) => class.iter().any(|one| general.contains(&_whole(*one))),
@@ -1416,8 +1778,8 @@ fn unallocatable(facts: &Facts, fixed: &IndexMap<u32, Register>, unspillable: &B
         now += change;
         busiest = busiest.max(now);
     }
-    if busiest > target::AVAILABLE.len() as i64 {
-        return Some(format!("{busiest} values that cannot be spilled are live at one point, and the machine has {} registers", target::AVAILABLE.len()));
+    if busiest > classes.available.len() as i64 {
+        return Some(format!("{busiest} values that cannot be spilled are live at one point, and the machine has {} registers", classes.available.len()));
     }
     None
 }
@@ -1429,6 +1791,7 @@ pub struct RegAlloc {
     pub frame: Option<Rc<RefCell<Frame>>>,
     pub cpu: Profile,
     pub segments: Segments,
+    pub classes: Rc<RegisterClasses>,
 }
 
 impl RegAlloc {
@@ -1439,12 +1802,14 @@ impl RegAlloc {
         frame: Option<Rc<RefCell<Frame>>>,
         cpu: ProfileOrName<'_>,
         segments: &Segments,
+        classes: &Rc<RegisterClasses>,
     ) -> Result<Self, String> {
-        Ok(Self { pinned: pinned.cloned().unwrap_or_default(), frame, cpu: targets::profile(cpu)?.clone(), segments: segments.clone() })
+        Ok(Self { pinned: pinned.cloned().unwrap_or_default(), frame, cpu: targets::profile(cpu)?.clone(), segments: segments.clone(), classes: Rc::clone(classes) })
     }
 
     /// Assign; where that spills, make the spill real and assign again.
     pub fn transform(&mut self, body: LirBody) -> Result<LirBody, Error> {
+        let prepare = llrm_support::debug::span("regalloc prepare");
         if self.frame.is_none() {
             self.frame = Some(Rc::new(RefCell::new(frames::of(&body, None, "", None)?)));
         }
@@ -1455,17 +1820,17 @@ impl RegAlloc {
         let data_free = !datagroup::names_data_segment(&body, &segments);
         if crate::support::debug::enabled("regclass") {
             let skip = crate::backend::ssaspill::untouchable(&body);
-            let found = crate::backend::regclass::violations(&body, &segments, &skip);
+            let found = crate::backend::regclass::violations(&body, &segments, &self.classes, &skip);
             let crowded = found.iter().filter(|one| matches!(one.why, crate::backend::regclass::Why::Crowded { .. })).count();
             llrm_support::debug!("regclass", "{}: {} points do not fit entering RegAlloc ({} crowded, {} unmatched)", body.name, found.len(), crowded, found.len() - crowded);
         }
         let floor = self.pinned.keys().copied().max().map_or(0, |one| one + 1);
-        let mut body = constrain::distinct_classes(&constrain::distinct_roles(&body, floor), floor, &segments);
-        body = explicit_selectors(&body, Some(&self.pinned), &segments);
+        let mut body = constrain::distinct_classes(&constrain::distinct_roles(&body, floor), floor, &segments, &self.classes);
+        body = explicit_selectors(&body, Some(&self.pinned), &segments, &self.classes);
         let (narrowed_body, narrower) = narrowed(&body, &self.pinned);
         body = narrowed_body;
         self.pinned = narrower;
-        let confined = classes(&body, &BTreeSet::new(), &segments);
+        let confined = classes(&body, &BTreeSet::new(), &segments, &self.classes);
         let incompatible: BTreeSet<u32> = self
             .pinned
             .iter()
@@ -1496,7 +1861,7 @@ impl RegAlloc {
         self.pinned.retain(|value, register| {
             !(target::SEGMENTS.contains(register) && confined.get(value) == Some(&selectors))
         });
-        let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned));
+        let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
         body = constrained_body;
         let clash: BTreeSet<u32> = fixed
             .keys()
@@ -1513,7 +1878,7 @@ impl RegAlloc {
             body.blocks.iter().flat_map(|block| &block.insns).filter(|one| _unread_move(one)).map(ranges::key).collect();
         body = spiller::_remove_abandoned(&body, &abandoned);
         self.pinned = prefer.clone();
-        self.pinned.extend(constrain::required(&body));
+        self.pinned.extend(constrain::required(&body, &self.classes));
         let frame = Rc::clone(self.frame.as_ref().expect("made above"));
         // A value read once, from a cell that holds, by an instruction that takes the cell: never held in a register.
         // Once per body, before the candidates: every trial starts from the body with those reads placed.
@@ -1523,28 +1888,32 @@ impl RegAlloc {
             let read_at_use = spiller::_folded_reads(&body, &wanted);
             if !read_at_use.is_empty() {
                 let floor = splitkit::_next_value(&body);
-                let (moved, made) = spiller::spilled_from(&body, &read_at_use, Some(&mut frame.borrow_mut()), floor)?;
+                let (moved, made) = spiller::spilled_from(&body, &read_at_use, Some(&mut frame.borrow_mut()), floor, &self.classes)?;
                 body = moved;
                 reloads.extend(made);
             }
         }
         let start = frame.borrow().saved();
+        drop(prepare);
         // One allocation per candidate body, each splitting and spilling as
         // it goes; the one whose output costs least is kept.
-        let run = |candidate: &LirBody, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, splitting: bool| -> Result<Outcome, Error> {
+        let run = |name: &'static str, candidate: &LirBody, unspillable: &BTreeSet<u32>, protected: &BTreeSet<u32>, splitting: bool| -> Result<Outcome, Error> {
+            let _run = llrm_support::debug::span(name);
             let mut pins = prefer.clone();
-            pins.extend(constrain::required(candidate));
+            pins.extend(constrain::required(candidate, &self.classes));
             let before = last_resorts();
             let (got, out, spilled) =
-                rewritten(candidate, Some(&pins), Some(unspillable), Some(protected), (&cpu).into(), &segments, &mut frame.borrow_mut(), splitting)?;
-            Ok(Outcome { cost: _emitted(&out), got, out, spilled, slots: frame.borrow().saved(), forced: last_resorts() - before })
+                rewritten(candidate, Some(&pins), Some(unspillable), Some(protected), (&cpu).into(), &segments, &self.classes, &mut frame.borrow_mut(), splitting)?;
+            let cost = llrm_support::debug::timed("regalloc cost", || _emitted(&out));
+            Ok(Outcome { cost, got, out, spilled, slots: frame.borrow().saved(), forced: last_resorts() - before })
         };
-        let mut best = run(&body, &reloads, &BTreeSet::new(), true)?;
+        let mut best = run("regalloc base", &body, &reloads, &BTreeSet::new(), true)?;
         llrm_support::debug!("regalloc", "{}: {} insns, {} spilled, cost {}, {} forced", body.name, best.out.insns().len(), best.spilled.len(), best.cost, best.forced);
         let spilled = best.spilled.clone();
         if !spilled.is_empty() {
             // Other shapes of the same body, which the base allocation's spills
             // suggest: each is kept only if its output is cheaper.
+            let building = llrm_support::debug::span("regalloc candidates");
             let mut candidates: Vec<(LirBody, BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
             let (separated, opened) = constrain::addressed(&body, &spilled);
             if !opened.is_empty() {
@@ -1571,6 +1940,7 @@ impl RegAlloc {
             // pieces may later lose; the whole output without it is the check.
             let whole = candidates.len();
             candidates.push((body.clone(), reloads.clone(), BTreeSet::new(), BTreeSet::new()));
+            drop(building);
             for (at, (candidate, unspillable, protected, kept)) in candidates.into_iter().enumerate() {
                 for splitting in [true, false] {
                     // The base run was this body with splitting.
@@ -1578,7 +1948,7 @@ impl RegAlloc {
                         continue;
                     }
                     frame.borrow_mut().restore(&start);
-                    let trial = match run(&candidate, &unspillable, &protected, splitting) {
+                    let trial = match run("regalloc trial", &candidate, &unspillable, &protected, splitting) {
                         Ok(trial) => trial,
                         Err(other) => return Err(other),
                     };
@@ -1591,7 +1961,8 @@ impl RegAlloc {
             }
         }
         frame.borrow_mut().restore(&best.slots);
-        applied(&best.out, &best.got).map(|placed| datagroup::restored(&placed, data_free, &segments))
+        let _apply = llrm_support::debug::span("regalloc apply");
+        applied(&best.out, &best.got, &self.classes).map(|placed| datagroup::restored(&placed, data_free, &segments))
     }
 }
 
@@ -1658,7 +2029,7 @@ fn _min(first: f64, second: f64) -> f64 {
 }
 
 /// Intervals whose copies to a value they could share a slot with cost nothing.
-fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u32, Interval> {
+fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>, busy: &Frequency) -> IndexMap<u32, Interval> {
     let moves: Vec<(i64, (u32, u32))> = body
         .blocks
         .iter()
@@ -1692,7 +2063,6 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u3
                 .filter(|value| !(in_place && one.defines.contains(value) && one.uses.contains(value))),
         );
     }
-    let busy = Frequency::of(body);
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for (at, (into, out_of)) in moves {
         if impure.contains(&into)
@@ -1706,15 +2076,13 @@ fn _sibling_priced(body: &LirBody, live: IndexMap<u32, Interval>) -> IndexMap<u3
             *free.entry(value).or_insert(0.0) += each;
         }
     }
-    live.into_iter()
-        .map(|(value, one)| match free.get(&value) {
-            Some(found) => {
-                let weight = _max(0.0, one.weight - found / (one.size() + ranges::GRACE) as f64);
-                (value, Interval { weight, ..one })
-            }
-            None => (value, one),
-        })
-        .collect()
+    let mut live = live;
+    for (value, found) in &free {
+        if let Some(one) = live.get_mut(value) {
+            one.weight = _max(0.0, one.weight - found / one.spill_size() as f64);
+        }
+    }
+    live
 }
 
 /// Frame traffic inside loops by cause, weighted by loop depth: the spiller's
@@ -1811,8 +2179,51 @@ fn _scoped_foldable_indexes(body: &LirBody, bases: &BTreeSet<u32>) -> BTreeSet<u
     spiller::foldable_indexes(body, &indexes)
 }
 
-/// How much of a spilled read disappears when it becomes a memory operand.
-fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
+/// How much of a spilled read disappears when it becomes a memory operand, for each form an instruction
+/// can fold in: a profile's prices, looked up once for a rebuild and not once per instruction.
+struct FoldDiscounts {
+    alu: f64,
+    imul32: f64,
+}
+
+impl FoldDiscounts {
+    fn of(profile: &Profile) -> Self {
+        Self { alu: Self::form(profile, "alu_rr", "alu_rm"), imul32: Self::form(profile, "imul_r32", "imul_m32") }
+    }
+
+    fn form(profile: &Profile, register: &str, memory: &str) -> f64 {
+        if ![register, memory, "mov_rm"].iter().all(|form| profile.prices(form)) {
+            return 0.0;
+        }
+        let load = profile.cost("mov_rm").expect("priced above");
+        if load <= 0 {
+            return 0.0;
+        }
+        let remainder = 0.max(profile.cost(memory).expect("priced above") - profile.cost(register).expect("priced above"));
+        _max(0.0, _min(1.0, 1.0 - remainder as f64 / load as f64))
+    }
+
+    /// What `one` folds, by its form: nothing for one that has none.
+    fn of_insn(&self, one: &Insn) -> f64 {
+        let Some(what) = &one.what else {
+            return 0.0;
+        };
+        match (what.op, what.name.as_deref(), what.sources.as_slice()) {
+            (Operation::Binary | Operation::Compare, name, _) => {
+                if matches!(name, Some("add" | "sub" | "and" | "or" | "xor" | "cmp")) {
+                    self.alu
+                } else {
+                    0.0
+                }
+            }
+            (Operation::Multiply, Some("imul"), [Loc::Held(first), Loc::Held(second)]) if first.width == 4 && second.width == 4 => self.imul32,
+            _ => 0.0,
+        }
+    }
+}
+
+/// The old per-instruction form of `FoldDiscounts`, which `LLRM_CHECK_FOLDS=1` holds it to.
+pub(crate) fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
     let Some(what) = &one.what else {
         return 0.0;
     };
@@ -1842,32 +2253,36 @@ fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
 }
 
 /// Discount reads by the target-specific saving from folding them.
-fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile) -> IndexMap<u32, Interval> {
-    let busy = Frequency::of(body);
+pub(crate) fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile, busy: &Frequency) -> IndexMap<u32, Interval> {
+    let discounts = FoldDiscounts::of(profile);
+    let check = std::env::var_os("LLRM_CHECK_FOLDS").is_some();
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = busy.block(block.at);
         for one in &block.insns {
-            let discount = _fold_discount(one, profile);
+            let discount = discounts.of_insn(one);
+            if check {
+                assert!(discount == _fold_discount(one, profile), "{}: a fold discount differs from the per-instruction lookup", body.name);
+            }
             if discount == 0.0 {
                 continue;
             }
+            // Only the second source of the pair can fold, once for each time the instruction reads it.
+            let Some((_, right)) = spiller::folded_pair(one, true) else { continue };
             for value in &one.uses {
-                if spiller::folded_source(one, &BTreeSet::from([*value])).is_some() {
+                if *value == right.value {
                     *free.entry(*value).or_insert(0.0) += each * discount;
                 }
             }
         }
     }
-    live.into_iter()
-        .map(|(value, one)| match free.get(&value) {
-            Some(found) if one.weight != INF => {
-                let weight = _max(0.0, one.weight - found / (one.size() + ranges::GRACE) as f64);
-                (value, Interval { weight, ..one })
-            }
-            _ => (value, one),
-        })
-        .collect()
+    let mut live = live;
+    for (value, found) in &free {
+        if let Some(one) = live.get_mut(value).filter(|one| one.weight != INF) {
+            one.weight = _max(0.0, one.weight - found / one.spill_size() as f64);
+        }
+    }
+    live
 }
 
 /// Python `format(value, "g")`.
@@ -1895,7 +2310,7 @@ fn _g(value: f64) -> String {
 }
 
 /// `body` with every operand naming a value replaced by its register.
-pub fn applied(body: &LirBody, got: &Assignment) -> Result<LirBody, Error> {
+pub fn applied(body: &LirBody, got: &Assignment, classes: &RegisterClasses) -> Result<LirBody, Error> {
     if !got.spilled.is_empty() {
         let worst: Vec<String> = got.spilled.iter().take(4).map(|one| format!("value#{one}")).collect();
         return Err(Spilled(format!(
@@ -1919,7 +2334,7 @@ pub fn applied(body: &LirBody, got: &Assignment) -> Result<LirBody, Error> {
             insns: lir::without(
                 &block.insns,
                 |one| _discardable_identity(one),
-                Some(|one: &Arc<Insn>| match _placed_for_rewrite(one, held) {
+                Some(|one: &Arc<Insn>| match _placed_for_rewrite(one, held, classes) {
                     Ok(placed) => placed,
                     Err(error) => {
                         failed.borrow_mut().get_or_insert(error);
@@ -2015,8 +2430,8 @@ fn _discardable_identity(one: &Insn) -> bool {
 }
 
 /// Place one instruction without discarding an inserted definition.
-fn _placed_for_rewrite(one: &Arc<Insn>, held: &IndexMap<u32, Register>) -> Result<Arc<Insn>, Unplaced> {
-    let placed = _placed(one, held)?;
+fn _placed_for_rewrite(one: &Arc<Insn>, held: &IndexMap<u32, Register>, classes: &RegisterClasses) -> Result<Arc<Insn>, Unplaced> {
+    let placed = _placed(one, held, classes)?;
     if placed.group.is_none() && _pointless(&placed) {
         return Ok(lir::anchor(placed));
     }
@@ -2037,12 +2452,12 @@ fn _pointless(one: &Insn) -> bool {
     matches!((&what.dests[0], &what.sources[0]), (Loc::Reg(into), Loc::Reg(out_of)) if into.register == out_of.register)
 }
 
-fn _placed(one: &Arc<Insn>, held: &IndexMap<u32, Register>) -> Result<Arc<Insn>, Unplaced> {
+fn _placed(one: &Arc<Insn>, held: &IndexMap<u32, Register>, classes: &RegisterClasses) -> Result<Arc<Insn>, Unplaced> {
     let Some(what) = &one.what else {
         return Ok(Arc::clone(one));
     };
-    let dests = what.dests.iter().map(|x| _settled(x, held)).collect::<Result<Vec<_>, _>>()?;
-    let sources = what.sources.iter().map(|x| _settled(x, held)).collect::<Result<Vec<_>, _>>()?;
+    let dests = what.dests.iter().map(|x| _settled(x, held, classes)).collect::<Result<Vec<_>, _>>()?;
+    let sources = what.sources.iter().map(|x| _settled(x, held, classes)).collect::<Result<Vec<_>, _>>()?;
     let mut name = what.name.clone();
     if target::far_load(what) {
         if let Loc::Reg(selector) = &dests[1] {
@@ -2057,7 +2472,7 @@ fn _placed(one: &Arc<Insn>, held: &IndexMap<u32, Register>) -> Result<Arc<Insn>,
 }
 
 /// One operand with its value resolved to the register holding it.
-fn _settled(place: &Loc, held: &IndexMap<u32, Register>) -> Result<Loc, Unplaced> {
+fn _settled(place: &Loc, held: &IndexMap<u32, Register>, classes: &RegisterClasses) -> Result<Loc, Unplaced> {
     let mut place = place.clone();
     if let Loc::Mem(cell) = &place {
         if let Some(selector) = cell.selector {
@@ -2082,8 +2497,8 @@ fn _settled(place: &Loc, held: &IndexMap<u32, Register>) -> Result<Loc, Unplaced
             let mut index_register = target::named(index_register, i64::from(index.width));
             if cell.base.is_some_and(|held_base| held_base.width == 2 && index.width == 2)
                 && cell.scale == 1
-                && target::WORD_INDEXES.contains(&base_register)
-                && target::WORD_BASES.contains(&index_register)
+                && classes.word_indexes.contains(&base_register)
+                && classes.word_bases.contains(&index_register)
             {
                 std::mem::swap(&mut base_register, &mut index_register);
             }
@@ -2093,7 +2508,7 @@ fn _settled(place: &Loc, held: &IndexMap<u32, Register>) -> Result<Loc, Unplaced
             let Some(register) = held.get(&base.value) else {
                 return Ok(place.clone());
             };
-            let placed = target::named(*register, 2);
+            let placed = target::named(*register, i64::from(base.width).max(2));
             if cell.addr.is_some_and(|addr| addr.space == Space::Frame) {
                 return Ok(Loc::Mem(Mem { through: Register::BP, index_through: placed, ..cell.clone() }));
             }
@@ -2254,7 +2669,7 @@ mod tests {
         let body = _one_block(insns);
         let frame = Rc::new(RefCell::new(frames::of(&body, None, "", None).expect("a frame")));
         let mut phase =
-            RegAlloc::new(None, Some(Rc::clone(&frame)), ProfileOrName::Name("386"), &target::BUILT_IN).expect("a cpu");
+            RegAlloc::new(None, Some(Rc::clone(&frame)), ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("a cpu");
         RegAlloc::transform(&mut phase, body).expect("allocates");
         assert!(!frame.borrow().slots.is_empty());
     }
@@ -2262,7 +2677,7 @@ mod tests {
     fn _through_regalloc(body: LirBody, pinned: &[(u32, Register)]) -> LirBody {
         let pinned = pins(pinned);
         let frame = frames::of(&body, None, "", None).expect("a frame");
-        let mut phase = RegAlloc::new(Some(&pinned), Some(Rc::new(RefCell::new(frame))), ProfileOrName::Name("386"), &target::BUILT_IN).expect("a cpu");
+        let mut phase = RegAlloc::new(Some(&pinned), Some(Rc::new(RefCell::new(frame))), ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("a cpu");
         RegAlloc::transform(&mut phase, body).expect("allocates")
     }
 
@@ -2275,7 +2690,7 @@ mod tests {
     }
 
     fn allocated(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>) -> Result<Assignment, Error> {
-        allocate(body, pinned, None, None, None, ProfileOrName::Name("386"), &target::BUILT_IN)
+        allocate(body, pinned, None, None, None, ProfileOrName::Name("386"), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16())
     }
 
     fn registers(places: &[Loc]) -> Vec<Register> {
@@ -2357,7 +2772,7 @@ mod tests {
     #[test]
     fn test_a_soft_preference_changes_free_register_order_without_becoming_a_pin() {
         let preferred = pins(&[(1, Register::EDX)]);
-        let one = allocate(&_one_block(vec![_mov(1, 1, 0x100)]), None, None, None, Some(&preferred), "386".into(), &target::BUILT_IN)
+        let one = allocate(&_one_block(vec![_mov(1, 1, 0x100)]), None, None, None, Some(&preferred), "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16())
             .expect("allocates");
         assert_eq!(one.r#where[&1], Register::EDX);
         let overlap = Insn::new(
@@ -2375,6 +2790,7 @@ mod tests {
             Some(&preferred),
             "386".into(),
             &target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::m16(),
         )
         .expect("allocates");
         assert_ne!(kept.r#where[&1], Register::EDX);
@@ -2405,6 +2821,7 @@ mod tests {
             Some(&pins(&[(1, Register::EDX)])),
             "386".into(),
             &target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::m16(),
         )
         .expect("allocates");
         assert_eq!(got.r#where[&1], Register::EDX, "{:?}", got.r#where);
@@ -2441,8 +2858,8 @@ mod tests {
             vec![2],
             vec![2, 3],
         ));
-        let blind = allocate(&_one_block(insns.clone()), None, None, None, None, "386".into(), &target::BUILT_IN).expect("allocates");
-        let got = allocate(&_one_block(insns), Some(&pins(&[(3, blind.r#where[&1])])), None, None, None, "386".into(), &target::BUILT_IN)
+        let blind = allocate(&_one_block(insns.clone()), None, None, None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("allocates");
+        let got = allocate(&_one_block(insns), Some(&pins(&[(3, blind.r#where[&1])])), None, None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16())
             .expect("allocates");
         assert_eq!(_whole(got.r#where[&1]), _whole(got.r#where[&2]), "{:?}", got.r#where);
     }
@@ -2463,8 +2880,8 @@ mod tests {
         insns.push(last);
         let body = _one_block(insns);
 
-        let on_386 = allocate(&body, None, None, None, None, "386".into(), &target::BUILT_IN).expect("allocates");
-        let on_core = allocate(&body, None, None, None, None, "Core".into(), &target::BUILT_IN).expect("allocates");
+        let on_386 = allocate(&body, None, None, None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("allocates");
+        let on_core = allocate(&body, None, None, None, None, "Core".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("allocates");
 
         assert!(!on_386.spilled.contains(&7), "{on_386:?}");
         assert_eq!(on_core.spilled, values(&[7]), "{on_core:?}");
@@ -2516,7 +2933,7 @@ mod tests {
     fn test_a_placed_cell_reaches_memory_by_the_register_its_value_got() {
         for register in [Register::EBX, Register::ESI] {
             let was = cell_of(&_based_cell());
-            let got = _settled(&Loc::Mem(was.clone()), &pins(&[(21, register)])).expect("placed");
+            let got = _settled(&Loc::Mem(was.clone()), &pins(&[(21, register)]), &crate::backend::classes::RegisterClasses::m16()).expect("placed");
             let Loc::Mem(got) = got else { panic!("not a cell: {got:?}") };
             assert_eq!(got.through, target::named(register, 2), "{register:?}: {:?}", got.through);
             assert_eq!(got.base, Some(Held { value: 21, width: 2 }), "the cell stopped naming its value");
@@ -2542,7 +2959,7 @@ mod tests {
             one.at == 0x100 && matches!(one.what.as_ref().map(|what| &what.sources[0]), Some(Loc::Mem(_)))
         });
         let through = cell_of(&load.expect("the load")).through;
-        assert!(target::ADDRESSING.contains(&through), "{through:?}");
+        assert!(crate::backend::classes::RegisterClasses::m16().addressing.contains(&through), "{through:?}");
     }
 
     #[test]
@@ -2557,7 +2974,7 @@ mod tests {
             vec![],
             vec![17],
         );
-        let got = applied(&_one_block(vec![load]), &assignment(pins(&[(17, Register::BX)]))).expect("applies");
+        let got = applied(&_one_block(vec![load]), &assignment(pins(&[(17, Register::BX)])), &crate::backend::classes::RegisterClasses::m16()).expect("applies");
         let read = cell_of(&got.blocks[0].insns[0]);
         assert_eq!(read.through, Register::BX, "the cell is still reached through {:?}", read.through);
         assert_eq!(read.base, Some(Held { value: 17, width: 2 }), "the cell stopped saying which value reached it");
@@ -2638,7 +3055,7 @@ mod tests {
         let union: IndexMap<Register, Vec<u32>> = IndexMap::from_iter([(_whole(Register::DI), vec![1])]);
         let live: IndexMap<u32, Interval> = IndexMap::from_iter([(1, kept), (2, incoming.clone())]);
         let got =
-            _evict(&incoming, &[Register::DI], &union, &live, &Vec::new(), &|_, _| false, &values(&[1]), 4, None, None);
+            _evict(&incoming, &[Register::DI], &union, &live, &Masks::default(), &|_, _| false, &values(&[1]), 4, None, None);
         assert!(got.is_none(), "{got:?}");
     }
 
@@ -2661,7 +3078,7 @@ mod tests {
             union: &mut union,
             r#where: &mut placed,
             live: &live,
-            masks: &Vec::new(),
+            masks: &Masks::default(),
             order: &choices,
             width: &|_| 2,
             fenced: &BTreeSet::new(),
@@ -2681,7 +3098,7 @@ mod tests {
         let cell = Mem { base: Some(Held { value: 1, width: 2 }), ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
         let body = _one_block(vec![_mov(1, 5, 0), _load(4, 2, cell, vec![1])]);
         let profile = targets::profile(ProfileOrName::from("386")).expect("a profile");
-        let facts = Facts::of(&body, profile, &target::BUILT_IN, &BTreeSet::new(), &BTreeSet::new());
+        let facts = Facts::of(&body, profile, &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16(), &BTreeSet::new(), &BTreeSet::new(), &Frequency::of(&body));
         let union = IndexMap::from_iter([(_whole(Register::AX), vec![1])]);
         let placed = IndexMap::from_iter([(1, Register::AX)]);
         assert_eq!(_overlapping(&union, &placed, &facts), BTreeSet::from([1]));
@@ -2725,7 +3142,7 @@ mod tests {
             union: &mut union,
             r#where: &mut placed,
             live: &live,
-            masks: &Vec::new(),
+            masks: &Masks::default(),
             order: &choices,
             width: &|_| 2,
             fenced: &BTreeSet::new(),
@@ -2749,8 +3166,8 @@ mod tests {
             vec![],
             (1..8).collect(),
         ));
-        let pinned: IndexMap<u32, Register> = (1..7).zip(target::AVAILABLE).collect();
-        let got = allocate(&_one_block(insns), Some(&pinned), Some(&values(&[7])), None, None, "386".into(), &target::BUILT_IN);
+        let pinned: IndexMap<u32, Register> = (1..7).zip(crate::backend::classes::RegisterClasses::m16().available.clone()).collect();
+        let got = allocate(&_one_block(insns), Some(&pinned), Some(&values(&[7])), None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
         let message = unplaced(got);
         assert!(message.contains("7 values that cannot be spilled are live at one point"), "{message}");
     }
@@ -2782,7 +3199,7 @@ mod tests {
     fn test_call_input_is_computed_in_its_available_required_register() {
         let body = call_copy();
         let assignment = allocated(&body, Some(&body.pins)).expect("allocates");
-        let result = applied(&body, &assignment).expect("applies");
+        let result = applied(&body, &assignment, &crate::backend::classes::RegisterClasses::m16()).expect("applies");
         assert!(assignment.spilled.is_empty());
         let mut emitted: Vec<u8> = Vec::new();
         for one in result.insns() {
@@ -2888,7 +3305,7 @@ mod tests {
             Insn::new(6, Some((6, 7)), Some(semantics(Operation::Push, "push", vec![], vec![one])), vec![], vec![1]);
         let body = body_of("call", 0, vec![before.clone(), call.clone(), after.clone()]);
         let si = pins(&[(1, Register::SI)]);
-        let assigned = allocate(&body, Some(&si), Some(&values(&[1])), None, None, "386".into(), &target::BUILT_IN).expect("allocates");
+        let assigned = allocate(&body, Some(&si), Some(&values(&[1])), None, None, "386".into(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("allocates");
         assert!(assigned.spilled.is_empty() && assigned.r#where[&1] == Register::SI);
 
         let surviving = body_of("call", 0, vec![before, Insn { defines: vec![], ..call }, after]);
@@ -2938,7 +3355,7 @@ mod tests {
 
         let assignment = allocated(&body, None).expect("allocates");
         assert!(assignment.spilled.is_empty(), "{assignment:?}");
-        let placed = applied(&body, &assignment).expect("applies");
+        let placed = applied(&body, &assignment, &crate::backend::classes::RegisterClasses::m16()).expect("applies");
         let accesses: Vec<Semantics> =
             placed.insns().iter().filter(|one| [4, 5].contains(&one.at)).filter_map(|one| one.what.clone()).collect();
         assert!(accesses.iter().all(|what| select::emit(what, 0, None, false, false, None).is_some()), "{accesses:?}");
@@ -2966,10 +3383,10 @@ mod tests {
         let read = _load(4, 3, cell, vec![1, 2]);
         let body = body_of("call-crossing-base", 0, vec![_frame_load(1, 1, 4), call, index, read]);
 
-        let found = classes(&body, &BTreeSet::new(), &target::BUILT_IN);
+        let found = classes(&body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
 
-        assert_eq!(found[&1], *target::WORD_INDEXES);
-        assert_eq!(found[&2], *target::WORD_BASES);
+        assert_eq!(found[&1], crate::backend::classes::RegisterClasses::m16().word_indexes);
+        assert_eq!(found[&2], crate::backend::classes::RegisterClasses::m16().word_bases);
     }
 
     #[test]
@@ -2997,10 +3414,10 @@ mod tests {
         let read = _load(3, 3, cell, vec![1, 2]);
         let body = body_of("retained-address-role", 0, vec![_frame_load(1, 1, 6), _frame_load(2, 2, 8), read]);
 
-        let confined = classes(&body, &values(&[1]), &target::BUILT_IN);
+        let confined = classes(&body, &values(&[1]), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
 
-        assert_eq!(confined[&1], *target::WORD_INDEXES);
-        assert_eq!(confined[&2], *target::WORD_BASES);
+        assert_eq!(confined[&1], crate::backend::classes::RegisterClasses::m16().word_indexes);
+        assert_eq!(confined[&2], crate::backend::classes::RegisterClasses::m16().word_bases);
     }
 
     /// The allocator ranked its candidate bodies counting every instruction, anchors that print nothing among them: a
@@ -3017,7 +3434,7 @@ mod tests {
         let cell = Mem { base: Some(Held { value: 1, width: 4 }), ..Mem::new(Some(Addr::new(Space::Far, 0)), 2) };
         let body = body_of("secondary-base-class", 0, vec![_load(2, 2, cell, vec![1])]);
 
-        assert!(!classes(&body, &BTreeSet::new(), &target::BUILT_IN).contains_key(&1));
+        assert!(!classes(&body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).contains_key(&1));
     }
 
     // ------------------------------------------------------ tests/test_lir.py
@@ -3034,14 +3451,14 @@ mod tests {
     #[test]
     fn test_an_address_value_takes_the_class_a_base_register_must_be_in() {
         for through in [Register::BX, Register::SI] {
-            let got = classes(&_celled(Some(Held { value: 21, width: 2 }), through), &BTreeSet::new(), &target::BUILT_IN);
-            assert_eq!(got.get(&21), Some(&*target::ADDRESSING), "through={through:?}: {:?}", got.get(&21));
+            let got = classes(&_celled(Some(Held { value: 21, width: 2 }), through), &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
+            assert_eq!(got.get(&21), Some(&crate::backend::classes::RegisterClasses::m16().addressing), "through={through:?}: {:?}", got.get(&21));
         }
     }
 
     #[test]
     fn test_an_unbased_cell_confines_no_value() {
-        assert!(!classes(&_celled(None, Register::BX), &BTreeSet::new(), &target::BUILT_IN).contains_key(&21));
+        assert!(!classes(&_celled(None, Register::BX), &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).contains_key(&21));
     }
 
     // ------------------------------------- tests/test_dead_call_deliveries.py
@@ -3052,7 +3469,7 @@ mod tests {
             Insn::new(0, Some((0, 3)), Some(semantics(Operation::Call, "call", vec![], vec![])), vec![1], vec![]);
         call.delivers = vec![(Held { value: 1, width: 2 }, Register::AX)];
         let (narrow, pinned) = narrowed(&body_of("dead result", 0, vec![call]), &pins(&[(1, Register::EAX)]));
-        let (lowered, _fixed) = constrain::constrained(&narrow, Some(&pinned));
+        let (lowered, _fixed) = constrain::constrained(&narrow, Some(&pinned), &crate::backend::classes::RegisterClasses::m16());
         let insns = lowered.insns();
         assert_eq!(insns.len(), 1);
         assert!(insns[0].defines.is_empty());
@@ -3078,7 +3495,7 @@ mod tests {
             returning.requires = vec![(Held { value: 2, width: 2 }, Register::AX)];
             let body = LirBody { inputs: values(&[1]), ..body_of("fixed-identity", 1, vec![identity, returning]) };
 
-            let placed = applied(&body, &assignment(pins(&[(1, Register::AX), (2, Register::AX)]))).expect("applies");
+            let placed = applied(&body, &assignment(pins(&[(1, Register::AX), (2, Register::AX)])), &crate::backend::classes::RegisterClasses::m16()).expect("applies");
 
             let wrong = verify::verify(&placed, false);
             assert!(wrong.is_empty(), "{covers:?}: {wrong:?}");
@@ -3106,7 +3523,7 @@ mod tests {
         let body = LirBody { inputs: values(&[1]), ..body_of("parallel-identity", 1, vec![identity, consumed]) };
         let assignment = assignment(pins(&[(1, Register::AX), (2, Register::AX)]));
 
-        let placed = applied(&body, &assignment).expect("applies");
+        let placed = applied(&body, &assignment, &crate::backend::classes::RegisterClasses::m16()).expect("applies");
         let scheduled = parcopy::scheduled(&placed).expect("schedules");
 
         assert!(verify::verify(&placed, false).is_empty(), "{:?}", verify::verify(&placed, false));
@@ -3156,7 +3573,7 @@ mod tests {
         let what = semantics(Operation::Move, "mov", vec![held(1, 1)], vec![imm(12, 1)]);
         let body = body_of("byte", 0, vec![Insn::new(0, Some((0, 0)), Some(what), vec![1], vec![])]);
         assert_eq!(
-            classes(&body, &BTreeSet::new(), &target::BUILT_IN)[&1],
+            classes(&body, &BTreeSet::new(), &target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16())[&1],
             BTreeSet::from([Register::AX, Register::BX, Register::CX, Register::DX])
         );
     }

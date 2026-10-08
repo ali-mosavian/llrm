@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use super::semantic::is_float;
 use super::semantic::is_integer;
 use super::semantic::is_signed;
-use super::semantic::width;
+use super::semantic::scalar_width;
 use super::syntax::TypeName;
 
 pub struct Rules {
@@ -17,7 +17,7 @@ pub const I386_REAL_MODE: Rules = Rules { int: TypeName::I16 };
 
 impl Rules {
     pub fn promoted(&self, type_name: TypeName) -> TypeName {
-        if is_integer(type_name) && width(type_name) < width(self.int) {
+        if is_integer(type_name) && scalar_width(type_name) < scalar_width(self.int) {
             self.int
         } else {
             type_name
@@ -36,6 +36,12 @@ impl Rules {
     /// width, there is none, unless that operand was promoted from an unsigned
     /// type and so cannot be negative.
     pub fn common(&self, left: TypeName, right: TypeName) -> Option<TypeName> {
+        let common = self.common_plain(left, right)?;
+        // Where a word and its plain twin meet, the word is the type: usize stays usize.
+        Some([left, right].into_iter().find(|one| matches!(one, TypeName::Word { .. }) && one.plain() == common.plain()).unwrap_or(common))
+    }
+
+    fn common_plain(&self, left: TypeName, right: TypeName) -> Option<TypeName> {
         if !implicit(left) || !implicit(right) {
             return (left == right).then_some(left);
         }
@@ -44,7 +50,7 @@ impl Rules {
             return Some(if wide { TypeName::F64 } else { TypeName::F32 });
         }
         let (promoted_left, promoted_right) = (self.promoted(left), self.promoted(right));
-        Some(match width(promoted_left).cmp(&width(promoted_right)) {
+        Some(match scalar_width(promoted_left).cmp(&scalar_width(promoted_right)) {
             Ordering::Greater => promoted_left,
             Ordering::Less => promoted_right,
             Ordering::Equal if is_signed(promoted_left) == is_signed(promoted_right) => promoted_left,
@@ -65,7 +71,7 @@ impl Rules {
 
 /// Whether `value` is one of `type_name`'s values.
 pub fn fits(value: i64, type_name: TypeName) -> bool {
-    match type_name {
+    match type_name.plain() {
         TypeName::Char | TypeName::U8 => u8::try_from(value).is_ok(),
         TypeName::I8 => i8::try_from(value).is_ok(),
         TypeName::I16 => i16::try_from(value).is_ok(),

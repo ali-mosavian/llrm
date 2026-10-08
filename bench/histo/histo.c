@@ -1,3 +1,4 @@
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 /* Histogram of a 4096-byte table; result is sum(counts[i] * (i + 1)). */
 extern void report(long value);
 

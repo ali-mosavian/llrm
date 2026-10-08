@@ -84,8 +84,9 @@ fn test_a_dead_builds_lock_is_taken_over() {
 /// checkout.
 #[test]
 fn test_wccq_says_what_it_was_made_from() {
-    let Some(wccq) = option_env!("LLRM_WCCQ") else { return };
-    let stamp = std::fs::read_to_string(Path::new(wccq).with_file_name("stamp")).expect("wccq has a stamp");
+    let Some(dir) = option_env!("LLRM_WCCQ_DIR") else { return };
+    let wccq = Path::new(dir).join("i86").join("wccq");
+    let stamp = std::fs::read_to_string(wccq.with_file_name("stamp")).expect("wccq has a stamp");
     let hash = Command::new("sh").arg(root().join("toolchain/owshim/hash.sh")).output().unwrap();
     assert_eq!(stamp.trim(), String::from_utf8(hash.stdout).unwrap().trim());
 }
@@ -101,4 +102,16 @@ fn test_stamp_names_its_cpu() {
     let (i86, flat) = (stamp("i86"), stamp("386"));
     assert!(i86.ends_with("-i86") && flat.ends_with("-386"), "{i86} {flat}");
     assert_ne!(i86, flat);
+}
+
+/// The front end's sizes (a near pointer, a far one, `int`) were `LLRM_FLAT ? 4 : 2` in cgshim.c, a copy of the data layout
+/// and the C ABI beside the descriptions: build.rs now passes what each target's description says, and the stamp covers it.
+#[test]
+fn test_the_front_ends_sizes_are_the_descriptions_not_cgshims() {
+    let shim = std::fs::read_to_string(root().join("toolchain/owshim/cgshim.c")).unwrap();
+    for width in ["LLRM_FLAT ? 4", "LLRM_FLAT ? 6", ": 2 )", ": 4 )"] {
+        assert!(!shim.contains(width), "cgshim.c states a size of its own: {width}");
+    }
+    let hash = std::fs::read_to_string(root().join("toolchain/owshim/hash.sh")).unwrap();
+    assert!(hash.contains("runtime/c/*/c.toml") && hash.contains("datalayout.toml"), "the stamp does not cover the descriptions");
 }

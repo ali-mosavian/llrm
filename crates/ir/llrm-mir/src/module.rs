@@ -78,11 +78,47 @@ pub struct Use {
 pub enum Change {
     Inserted { inst: InstId, block: BlockId, next: Option<InstId> },
     Cloned { from: InstId, to: InstId },
-    Moved { inst: InstId, block: BlockId, next: Option<InstId> },
+    Moved { inst: InstId, block: BlockId, next: Option<InstId>, from: BlockId },
     Rewritten(InstId),
     Erased { inst: InstId, block: BlockId, next: Option<InstId> },
     BlockCreated(BlockId),
     BlockErased(BlockId),
+}
+
+static NEXT_LINEAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Which function a log of changes belongs to, and how many changes it has held: `take_changes` drains the log
+/// and leaves the count. A copy of a function is another one, as its edits from then on are its own.
+#[derive(Debug)]
+pub(crate) struct Lineage {
+    uid: u64,
+    logged: usize,
+}
+
+impl Default for Lineage {
+    fn default() -> Self {
+        Self { uid: NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed), logged: 0 }
+    }
+}
+
+impl Clone for Lineage {
+    fn clone(&self) -> Self {
+        Self { uid: NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed), logged: self.logged }
+    }
+}
+
+/// Equal whatever the history: two functions with the same body are equal.
+impl PartialEq for Lineage {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+/// A point in one function's history, to ask what changed since.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Mark {
+    uid: u64,
+    at: usize,
 }
 
 /// A function: its values, instructions and blocks in arenas whose ids are
@@ -112,6 +148,7 @@ pub struct Function {
     pub(crate) value_uses: Vec<Vec<Use>>,
     pub(crate) block_uses: Vec<Vec<Use>>,
     pub(crate) changes: Vec<Change>,
+    pub(crate) lineage: Lineage,
 }
 
 impl Function {
@@ -134,6 +171,7 @@ impl Function {
             value_uses: Vec::new(),
             block_uses: Vec::new(),
             changes: Vec::new(),
+            lineage: Lineage::default(),
         }
     }
 
@@ -175,8 +213,24 @@ impl Function {
 
     /// How many instructions were ever made, erased ones too: the next is
     /// `InstId(count)`.
+    /// How many values the function has made, parameters and results, the ids a table of them spans.
+    pub fn value_count(&self) -> usize {
+        self.values.len()
+    }
+
     pub fn instruction_count(&self) -> usize {
         self.instructions.len()
+    }
+
+    /// Each instruction's index in its block, by id; erased and unplaced ones are zero.
+    pub fn positions(&self) -> Vec<u32> {
+        let mut positions = vec![0; self.instructions.len()];
+        for &block in self.layout() {
+            for (index, inst) in self.block(block).instructions().iter().enumerate() {
+                positions[inst.0 as usize] = index as u32;
+            }
+        }
+        positions
     }
 
     pub fn instruction(&self, id: InstId) -> &Instruction {
@@ -253,6 +307,23 @@ impl Function {
     /// The log of changes since the last `take_changes`.
     pub fn take_changes(&mut self) -> Vec<Change> {
         std::mem::take(&mut self.changes)
+    }
+
+    pub(crate) fn log(&mut self, change: Change) {
+        self.lineage.logged += 1;
+        self.changes.push(change);
+    }
+
+    /// Where the function stands now.
+    pub fn mark(&self) -> Mark {
+        Mark { uid: self.lineage.uid, at: self.lineage.logged }
+    }
+
+    /// What changed since `mark`, in order; none where `mark` is of another function or what followed it has been
+    /// taken.
+    pub fn changes_since(&self, mark: Mark) -> Option<&[Change]> {
+        let kept_from = self.lineage.logged - self.changes.len();
+        (mark.uid == self.lineage.uid && (kept_from..=self.lineage.logged).contains(&mark.at)).then(|| &self.changes[mark.at - kept_from..])
     }
 }
 

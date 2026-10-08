@@ -39,7 +39,7 @@ impl FunctionCompiler<'_> {
         let Subject::Sequence { length, .. } = subject else {
             unreachable!("a sequence subject")
         };
-        let named = hir::Operand::Constant(U16, (before.len() + after.len()) as i64);
+        let named = hir::Operand::Constant(self.word_id(), (before.len() + after.len()) as i64);
         self.branch_unless(if rest { "ge" } else { "eq" }, length.clone(), named, fail);
         for (pattern, inner) in self.sequence_parts(before, after, subject)? {
             self.test(pattern, &inner, fail)?;
@@ -62,9 +62,9 @@ impl FunctionCompiler<'_> {
         let Subject::Sequence { data, length, element, .. } = subject else {
             unreachable!("a sequence subject")
         };
-        let first = self.nth_element(*data, *element, hir::Operand::Constant(U16, before.len() as i64))?;
-        let count = self.value(TypeName::U16);
-        let named = hir::Operand::Constant(U16, (before.len() + after.len()) as i64);
+        let first = self.nth_element(*data, *element, hir::Operand::Constant(self.word_id(), before.len() as i64))?;
+        let count = self.value(self.word());
+        let named = hir::Operand::Constant(self.word_id(), (before.len() + after.len()) as i64);
         self.emit("sub", vec![count], vec![length.clone(), named], None);
         let pointer_type = self.types.slice_pointer(*element, 1);
         let count = hir::Operand::Value(count);
@@ -96,12 +96,12 @@ impl FunctionCompiler<'_> {
         };
         let mut parts = Vec::new();
         for (index, pattern) in before.iter().enumerate() {
-            let pointer = self.nth_element(*data, *element, hir::Operand::Constant(U16, index as i64))?;
+            let pointer = self.nth_element(*data, *element, hir::Operand::Constant(self.word_id(), index as i64))?;
             parts.push((pattern, self.element_subject(pointer, *element)));
         }
         for (back, pattern) in after.iter().enumerate() {
-            let index = self.value(TypeName::U16);
-            let from_end = hir::Operand::Constant(U16, (after.len() - back) as i64);
+            let index = self.value(self.word());
+            let from_end = hir::Operand::Constant(self.word_id(), (after.len() - back) as i64);
             self.emit("sub", vec![index], vec![length.clone(), from_end], None);
             let pointer = self.nth_element(*data, *element, hir::Operand::Value(index))?;
             parts.push((pattern, self.element_subject(pointer, *element)));

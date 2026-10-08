@@ -21,9 +21,9 @@ pub struct Wrap {
     pub restored: BTreeSet<i64>,
 }
 
-/// The registers `one` names.
+/// The registers `one` names, and those the call it is disturbs by its convention.
 pub fn named(one: &Insn) -> BTreeSet<Register> {
-    let mut found = BTreeSet::new();
+    let mut found: BTreeSet<Register> = one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(ir::root)).collect();
     let Some(what) = &one.what else { return found };
     for place in what.dests.iter().chain(&what.sources) {
         match place {

@@ -29,6 +29,13 @@ class GateTests(unittest.TestCase):
         self.assertEqual(len(bench.against("x", dict(BASE), None)), 1)
 
 
+class LinkTests(unittest.TestCase):
+    def test_a_nib_benchmark_links_the_files_its_link_header_names_resolved(self):
+        """`link: @c-runtime` went to nib-build.sh as a file name (llrm-c: wccq failed on .../@c-runtime) for parity and scalar."""
+        extras = bench.nib_extras(bench.ROOT / "bench/parity/parity/parity.nib")
+        self.assertEqual(extras, [str(bench.ROOT / "runtime/c/x86-m16/ext.asm")])
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -135,7 +142,7 @@ class BccTests(unittest.TestCase):
         import tempfile
 
         variant = next(one for one in bench.variants(bench.BENCH / "floats") if one.language == "c")
-        with tempfile.TemporaryDirectory(dir=bench.ROOT / "target") as where:
+        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
             built = bench.build_borland("bcc", [(variant, "B000")], "O2", Path(where))["B000"]
             self.assertNotIsInstance(built, str, built)
             got = bench.measure(("B000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / "floats"), built[0].with_suffix(".OBJ")))
@@ -148,7 +155,7 @@ class ReferenceFloatTests(unittest.TestCase):
         import tempfile
 
         variant = next(one for one in bench.variants(bench.BENCH / name) if one.language == "c")
-        with tempfile.TemporaryDirectory(dir=bench.ROOT / "target") as where:
+        with tempfile.TemporaryDirectory(dir=bench.llrmbin.target_dir()) as where:
             built = build(variant, Path(where))
             self.assertNotIsInstance(built, str, built)
             return bench.measure(("F000", built[0], built[1], variant.region, bench.expected_output(bench.BENCH / name), next(built[0].parent.glob(built[0].stem + ".[oO][bB][jJ]"))))

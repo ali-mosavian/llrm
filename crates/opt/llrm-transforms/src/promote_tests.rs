@@ -697,3 +697,44 @@ b0:
 ";
     forwarded(body, &[]);
 }
+
+/// A callee that stores through a pointer built from an integer, as QB writes
+/// an array's data through its descriptor's segment word, wrote "unknown
+/// memory", and no global kept a forwarded value across a call to it (GETPAL
+/// and the palette variables: deedlines reloaded them). Its store's `!tbaa`
+/// type is `allocation`, a variable's `place`: apart, so `@g` keeps its value;
+/// a store of the variable's own type still kills it.
+#[test]
+fn an_unplaced_store_of_another_type_leaves_a_stored_global() {
+    let across = |store_tag: &str| {
+        let text = format!(
+            "@g = internal global i16 0
+
+define internal void @w(i16 %s) {{
+b0:
+  %p = inttoptr i16 %s to ptr addrspace(2)
+  %q = addrspacecast ptr addrspace(2) %p to ptr addrspace(1)
+  store i16 1, ptr addrspace(1) %q, !tbaa {store_tag}
+  ret void
+}}
+
+define i16 @f(i16 %s) {{
+b0:
+  store i16 7, ptr @g, !tbaa !2
+  call void @w(i16 %s)
+  %r = load i16, ptr @g, !tbaa !2
+  ret i16 %r
+}}
+
+!0 = !{{!\"root\"}}
+!1 = !{{!\"place\", !0, i64 0}}
+!2 = !{{!1, !1, i64 0}}
+!3 = !{{!\"allocation\", !0, i64 0}}
+!4 = !{{!3, !3, i64 0}}
+"
+        );
+        crate::testing::summarized(&module(&text), Promote, true, &[])
+    };
+    assert!(across("!4").contains("ret i16 7"), "{}", across("!4"));
+    assert!(across("!2").contains("load i16"), "{}", across("!2"));
+}

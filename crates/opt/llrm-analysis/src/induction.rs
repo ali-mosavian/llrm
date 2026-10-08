@@ -131,6 +131,8 @@ pub struct CountedLoop {
     pub stepped: bool,
     /// Some other exit stops the program; `count` is the trips when it goes on.
     pub stops: bool,
+    /// Another exit goes on, to code that returns (only where `counted_leaving` asked); `count` is then the trips as long as it is not taken.
+    pub leaves: bool,
     /// A loop tested after its trips whose symbolic trips assume the first
     /// would have continued, which the branches over its preheader prove.
     pub entry_guarded: bool,
@@ -153,6 +155,14 @@ impl CountedLoop {
     /// answers, which no other recurrence ends the loop more cheaply on.
     pub fn zero_tested(&self) -> bool {
         self.test == IntPredicate::Ne && self.bound == AffineOperand::constant(0, self.width())
+    }
+
+    /// The header's unsigned values only rise from a constant start to the
+    /// bound, or stay at the start, and never pass the width's largest: a unit
+    /// step tested before each trip by `ult`, from any start: one past it the
+    /// loop has left. Its zero extension is a counter of the wider width.
+    pub fn rises_unsigned(&self) -> bool {
+        !self.posttested && !self.stepped && self.test == IntPredicate::Ult && self.step == BigInt::from(1)
     }
 
     /// The signed values the header's counter takes on a trip, lowest first.
@@ -278,13 +288,14 @@ struct _Control {
     exit: i64,
     posttested: bool,
     stops: bool,
+    leaves: bool,
     /// A header that holds its whole trip, its latch only a jump back: its
     /// test may read the stepped value, as after a trip.
     after: bool,
 }
 
 /// The block whose conditional branch is the loop's only exit that goes on: its header, or its latch.
-fn _control(function: &Function, loop_: &Loop) -> Option<_Control> {
+fn _control(function: &Function, loop_: &Loop, leaving: bool) -> Option<_Control> {
     let graph = cfg::graph(function);
     let blocks = graph.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
     if loop_.latches.len() != 1 || !blocks.contains_key(&loop_.header) {
@@ -331,7 +342,9 @@ fn _control(function: &Function, loop_: &Loop) -> Option<_Control> {
         .filter(|at| **at != control.at)
         .flat_map(|at| blocks[at].succ.iter().copied().filter(|to| !inside.contains(to)))
         .collect::<BTreeSet<_>>();
-    if !elsewhere.is_empty() && !elsewhere.is_subset(&noreturn::stranded(function, header.at)) {
+    // Or, where `leaving`, go on: the count then holds as long as the loop does.
+    let leaves = !elsewhere.is_empty() && !elsewhere.is_subset(&noreturn::stranded(function, header.at));
+    if !leaving && leaves {
         return None;
     }
     let outside =
@@ -347,6 +360,7 @@ fn _control(function: &Function, loop_: &Loop) -> Option<_Control> {
         exit: exits[0],
         posttested: control.at == latch.at || matches!(forwarded, Some(Some(_))),
         stops: !elsewhere.is_empty(),
+        leaves,
         after: header_holds_trip,
     })
 }
@@ -377,9 +391,50 @@ pub fn counted(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap<ValueId, Known
     counted_unless_stopped(unit, loop_, facts, inbounds).into_iter().filter(|proof| !proof.stops).collect()
 }
 
+/// Each loop's `counted_unless_stopped` proofs by header, from what is known without memory.
+pub type Counted = IndexMap<i64, Vec<CountedLoop>>;
+
+thread_local! {
+    static PROVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many loops this thread has proved the counts of, for a test that a body's are proved once.
+pub fn proved() -> usize {
+    PROVED.with(std::cell::Cell::get)
+}
+
+/// `counted_unless_stopped` of every loop of `unit`'s shape, under the registers it carries.
+pub fn counted_all(unit: &Unit) -> Counted {
+    counted_renewed(unit, &Counted::default(), |_| true)
+}
+
+/// `counted_all`, taking `previous`'s proofs of each loop `dirty` does not name.
+pub fn counted_renewed(unit: &Unit, previous: &Counted, dirty: impl Fn(&Loop) -> bool) -> Counted {
+    let registers = unit.registers();
+    let shape = unit.shape();
+    shape
+        .loops
+        .iter()
+        .map(|loop_| match previous.get(&loop_.header) {
+            Some(proofs) if !dirty(loop_) => (loop_.header, proofs.clone()),
+            _ => (loop_.header, _counted_unless_stopped(unit, loop_, &registers, false, false)),
+        })
+        .collect()
+}
+
 /// `counted`, also for a loop that may leave into a block that never returns.
 pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap<ValueId, Known>>, inbounds: bool) -> Vec<CountedLoop> {
-    let function = unit.function;
+    // The manager's, where the facts asked of are the unit's own registers.
+    if let (false, Some(held), Some(registers)) = (inbounds, unit.counted, unit.registers) {
+        if facts.is_none_or(|facts| std::ptr::eq(facts, registers)) {
+            if let Some(found) = held.get(&loop_.header) {
+                if std::env::var_os("LLRM_CHECK_COUNTED").is_some() {
+                    assert!(*found == _counted_unless_stopped(unit, loop_, registers, false, false), "the counted proofs a unit carries are not those of the body it stands over: stale");
+                }
+                return found.clone();
+            }
+        }
+    }
     let computed;
     let facts = match facts {
         Some(facts) => facts,
@@ -388,7 +443,28 @@ pub fn counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap
             &*computed
         }
     };
-    let Some(shape) = _control(function, loop_) else { return Vec::new() };
+    _counted_unless_stopped(unit, loop_, facts, inbounds, false)
+}
+
+/// `counted_unless_stopped`, also for a loop that has other ways out that go on, not only into a block that never returns:
+/// each proof has `stops` set where there is one, and its count is the trips as long as the loop is not left early. What
+/// rewrites the loop's own exit test and the counters it reads (lsr) may use it, where a final value or a deleted loop may not.
+pub fn counted_leaving(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap<ValueId, Known>>, inbounds: bool) -> Vec<CountedLoop> {
+    let computed;
+    let facts = match facts {
+        Some(facts) => facts,
+        None => {
+            computed = unit.registers();
+            &*computed
+        }
+    };
+    _counted_unless_stopped(unit, loop_, facts, inbounds, true)
+}
+
+fn _counted_unless_stopped(unit: &Unit, loop_: &Loop, facts: &IndexMap<ValueId, Known>, inbounds: bool, leaving: bool) -> Vec<CountedLoop> {
+    PROVED.with(|count| count.set(count.get() + 1));
+    let function = unit.function;
+    let Some(shape) = _control(function, loop_, leaving) else { return Vec::new() };
     let branch = function.terminator(cfg::block(shape.block)).expect("_control proved a branch");
     let [condition, Operand::Block(taken), Operand::Block(_)] = function.instruction(branch).operands[..] else { return Vec::new() };
     let Some((compare, icmp)) = unit.defining(condition) else { return Vec::new() };
@@ -547,6 +623,7 @@ fn _proven(
             posttested: shape.posttested,
             stepped,
             stops: shape.stops,
+            leaves: shape.leaves,
             entry_guarded,
             reach,
             count,
@@ -618,7 +695,7 @@ pub fn exits(unit: &Unit, loop_: &Loop, facts: Option<&IndexMap<ValueId, Known>>
             if !shape.dominance.dominates(at, latch) {
                 return found;
             }
-            let shaped = |posttested: bool| _Control { block: at, preheader, entered, exit, posttested, stops: false, after: false };
+            let shaped = |posttested: bool| _Control { block: at, preheader, entered, exit, posttested, stops: false, leaves: false, after: false };
             let stays = inside.contains(&cfg::id(taken));
             let (leaves, first) = _leaves(function, condition, stays);
             let mut counts = Vec::new();
@@ -1907,8 +1984,8 @@ impl Walk<'_> {
                 let from = unit.int_bits(op.operands[0])?;
                 self.rec(found, op.operands[0], from).filter(|_| from > width).map(|of| of.truncated(width))
             }
-            // The header runs once more than the body, on the trip that leaves: past what the count proves.
-            Opcode::Cast(cast @ (CastOp::SExt | CastOp::ZExt)) if at != self.loop_.header => self.extended(found, op, cast),
+            // The header runs once more than the body, on the trip that leaves: `extended` proves that one too.
+            Opcode::Cast(cast @ (CastOp::SExt | CastOp::ZExt)) => self.extended(found, op, cast, at == self.loop_.header),
             Opcode::Binary(BinaryOp::SDiv) if at != self.loop_.header => self.quotient(op),
             _ => None,
         }
@@ -1916,7 +1993,7 @@ impl Walk<'_> {
 
     /// A narrow recurrence extended, as a wide one: only where the counted-loop
     /// proof shows the narrow value cannot wrap on any trip.
-    fn extended(&self, found: &Users, op: &Instruction, cast: CastOp) -> Option<Recurrence> {
+    fn extended(&self, found: &Users, op: &Instruction, cast: CastOp, in_header: bool) -> Option<Recurrence> {
         let unit = self.unit;
         let wide = unit.int_bits(Operand::Value(op.result?))?;
         let width = unit.int_bits(op.operands[0])?;
@@ -1925,7 +2002,9 @@ impl Walk<'_> {
             return None;
         }
         let (raw_start, raw_step) = (of.start.constant.clone(), of.step.constant.clone());
-        let count = trip_count(unit, self.loop_, &self.facts).filter(|count| *count != BigInt::from(0))?;
+        let Some(count) = trip_count(unit, self.loop_, &self.facts).filter(|count| *count != BigInt::from(0)) else {
+            return self.ascending(&raw_start, &raw_step, width, wide).filter(|_| cast == CastOp::ZExt).map(|(start, step)| Recurrence { pointer: None, start, step });
+        };
         let step = _as_signed(&raw_step, width);
         if step == BigInt::from(0) {
             return None;
@@ -1942,11 +2021,20 @@ impl Walk<'_> {
             }
             (raw_start, _as_signed(&raw_step, width), BigInt::from(0), mask + 1)
         };
-        let final_value = &initial + (&count - 1) * &stride;
+        let last = if in_header { count } else { &count - 1 };
+        let final_value = &initial + last * &stride;
         if initial < low || initial >= high || final_value < low || final_value >= high {
             return None;
         }
         Some(Recurrence { pointer: None, start: Scev::constant(initial, wide), step: Scev::constant(stride, wide) })
+    }
+
+    /// A narrow unit-step counter that a symbolic bound ends with `ult`: its
+    /// header values run from the start to the bound, or stay at the start, so
+    /// none passes the width's largest and its zero extension is the wide counter.
+    fn ascending(&self, start: &BigInt, step: &BigInt, width: u32, wide: u32) -> Option<(Scev, Scev)> {
+        let ended = counted(self.unit, self.loop_, Some(&self.facts), false).into_iter().any(|proof| proof.rises_unsigned() && proof.width() == width && proof.start == AffineOperand::constant(start.clone(), width));
+        (ended && *step == BigInt::from(1)).then(|| (Scev::constant(start.clone(), wide), Scev::constant(1, wide)))
     }
 
     /// Exact signed division of a non-wrapping counter is another recurrence.

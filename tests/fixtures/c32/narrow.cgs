@@ -1,0 +1,59 @@
+INIT sw=0x808000 target=0x458 size=50 rev=0x23 flat=1
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=4
+SEG 3 attr=0xc name="CONST2" align=4
+SEG 4 attr=0x6 name="_DATA" align=4
+START
+TYPE T25 size=28 align=1
+f1 DBSrcFile "/home/alim/scratch/m32/tests/fixtures/c32/narrow.c" main=1
+- DBSrcCue f1 1 1
+SYM y1 name="short_sum" base="short_sum" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x602 parms=[] ret=0:0
+- CGProcDecl y1 TY_UNSIGNED
+SYM y2 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_UINT_2
+SYM y3 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_UINT_2
+l2 CGLastParm
+t3 CGTemp TY_UNSIGNED
+n4 CGFEName y2 TY_UINT_2
+n5 CGUnary O_POINTS n4 TY_UINT_2
+n6 CGFEName y3 TY_UINT_2
+n7 CGUnary O_POINTS n6 TY_UINT_2
+n8 CGBinary O_PLUS n5 n7 TY_INTEGER
+n9 CGUnary O_CONVERT n8 TY_UINT_2
+n10 CGUnary O_CONVERT n9 TY_UNSIGNED
+n11 CGTempName t3 TY_UNSIGNED
+n12 CGAssign n11 n10 TY_UNSIGNED
+- CGDone n12
+n13 CGTempName t3 TY_UNSIGNED
+n14 CGUnary O_POINTS n13 TY_UNSIGNED
+- CGReturn n14 TY_UNSIGNED
+- DBSrcCue f1 2 1
+SYM y4 name="int_sum" base="int_sum" pattern="_*" attr=0x7 seg=1
+CALLCONV y4 class=0x80 target=0x602 parms=[] ret=0:0
+- CGProcDecl y4 TY_UNSIGNED
+SYM y5 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y5 TY_UNSIGNED
+SYM y6 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y6 TY_UNSIGNED
+l15 CGLastParm
+t16 CGTemp TY_UNSIGNED
+n17 CGFEName y5 TY_UNSIGNED
+n18 CGUnary O_POINTS n17 TY_UNSIGNED
+n19 CGFEName y6 TY_UNSIGNED
+n20 CGUnary O_POINTS n19 TY_UNSIGNED
+n21 CGBinary O_PLUS n18 n20 TY_UNSIGNED
+n22 CGUnary O_CONVERT n21 TY_UINT_2
+n23 CGFEName y6 TY_UNSIGNED
+n24 CGUnary O_POINTS n23 TY_UNSIGNED
+n25 CGBinary O_XOR n22 n24 TY_UNSIGNED
+n26 CGUnary O_CONVERT n25 TY_UNSIGNED
+n27 CGTempName t16 TY_UNSIGNED
+n28 CGAssign n27 n26 TY_UNSIGNED
+- CGDone n28
+n29 CGTempName t16 TY_UNSIGNED
+n30 CGUnary O_POINTS n29 TY_UNSIGNED
+- CGReturn n30 TY_UNSIGNED
+STOP
+FINI

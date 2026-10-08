@@ -48,7 +48,7 @@ pub(super) fn fixture(name: &str) -> PathBuf {
 }
 
 fn codegen() -> llrm_core::driver::Options {
-    llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone())
+    llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
 }
 
 /// `qb_compile.assembled(program)`.
@@ -61,16 +61,23 @@ pub(super) fn listing(program: &Program) -> String {
     masm::text(&assembled(program).expect("assembles")).expect("prints")
 }
 
+/// `listing` where no function is inlined into its one caller: a test that reads the callee (a handler).
+pub(super) fn listing_calls_kept(program: &Program) -> String {
+    let mut options = codegen();
+    options.pipeline.inline = llrm_transforms::inline::Threshold::none();
+    masm::text(&qb_compile::assembled(program, None, &options).expect("assembles")).expect("prints")
+}
+
 /// The module's MIR as the front end emits it, as text.
 pub(super) fn emitted_mir(program: &Program) -> String {
-    let options = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
+    let options = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
     let (mir, _) = llrm_core::driver::emitted(program, &options).expect("emits");
     llrm_mir::print::module(&mir.modules[0])
 }
 
 /// The module's MIR after the pipeline, as text.
 pub(super) fn optimized_mir(program: &Program) -> String {
-    let options = llrm_core::driver::Options::of(llrm_core::abi::machine::BASIC.clone());
+    let options = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
     let (mut mir, _) = llrm_core::driver::emitted(program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     llrm_mir::print::module(&mir.modules[0])

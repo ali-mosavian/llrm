@@ -30,13 +30,31 @@ fn each_level_selects_its_pipeline() {
     assert_eq!(pipeline(&["-O"]), o1);
     assert_eq!(pipeline(&["-Og"]), o1);
     let o3 = pipeline(&["-O3"]);
-    assert_eq!(o3.limits, Limits { max_unrolled_operations: 400, ..Limits::default() });
+    assert_eq!(o3.limits, Limits { target_percent: 200, ..Limits::default() });
     assert_eq!((o3.inline, o3.unroll, o3.peel), (Threshold::new(250), true, true));
     let os = pipeline(&["-Os"]);
     assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default().for_size(), true));
     let oz = pipeline(&["-Oz"]);
     assert_eq!((oz.limits.grows, oz.inline, oz.unroll, oz.peel), (false, Threshold::default().for_size(), false, false));
     assert!(parsed(&["-O4"]).is_err());
+}
+
+/// `-Omax` was no level: "unknown optimization level", so a build that meant "everything on" had to say `-O3`.
+#[test]
+fn test_omax_is_every_pass_on_with_the_widest_budgets() {
+    assert_eq!(pipeline(&["-Omax"]), Options::aggressive());
+    assert!(pipeline(&["-Omax", "-fno-unroll-loops"]).limits == Options::aggressive().limits);
+    assert!(parsed(&["-Omaximum"]).is_err());
+}
+
+/// `-fno-inline-functions` was no inlining at all, the last call of a function included; gcc's leaves
+/// `-finline-functions-called-once` on and so does this, which is the spelling for none.
+#[test]
+fn test_no_inline_functions_leaves_called_once_on_as_gcc_does() {
+    assert!(pipeline(&["-O2", "-fno-inline-functions"]).inline.last);
+    assert!(!pipeline(&["-O2", "-fno-inline-functions-called-once"]).inline.last);
+    assert!(!pipeline(&["-O2", "-fno-inline-functions-called-once", "-fno-inline-functions"]).inline.last);
+    assert_eq!(pipeline(&["-O2", "-fno-inline-functions-called-once", "-fno-inline-functions"]).inline, llrm_transforms::inline::Threshold::none());
 }
 
 #[test]
@@ -50,15 +68,27 @@ fn a_pass_option_overrides_the_level_wherever_it_stands() {
     assert!(error.contains("-fno-vectorize") && error.contains("-funroll-loops"), "{error}");
 }
 
+/// A target names the CPUs gcc's `-march`/`-mtune` take in its `timings.times`, not the flag parser.
 #[test]
 fn march_and_mtune_name_the_cpu_profiles() {
-    let built_in = crate::abi::machine::BUILT_IN.clone();
-    for (gcc, cpu) in [("i386", "386"), ("i486", "486"), ("pentium", "P5")] {
-        assert_eq!(parsed(&[&format!("-march={gcc}")]).unwrap().machine(built_in.clone()).unwrap().cpu, cpu);
-        assert_eq!(parsed(&[&format!("-mtune={gcc}")]).unwrap().machine(built_in.clone()).unwrap().cpu, cpu);
+    use llrm_target::Target;
+    let on = |arguments: &[&str]| parsed(arguments).unwrap().machine(&llrm_x86_m16::M16, llrm_x86_m16::machine::BUILT_IN.clone());
+    for (gcc, cpu) in [("i386", "386"), ("i486", "486"), ("pentium", "P5"), ("athlon", "K7")] {
+        assert_eq!(on(&[&format!("-march={gcc}")]).unwrap().cpu, cpu);
+        assert_eq!(on(&[&format!("-mtune={gcc}")]).unwrap().cpu, cpu);
     }
-    assert_eq!(parsed(&["--cpu", "K6"]).unwrap().machine(built_in.clone()).unwrap().cpu, "K6");
-    assert!(parsed(&["-march=k8"]).unwrap_err().contains("i386, i486 or pentium"));
+    // -mtune prices for its CPU where -march names another.
+    assert_eq!(on(&["-march=i386", "-mtune=pentium"]).unwrap().cpu, "P5");
+    assert_eq!(on(&["-mtune=pentium", "-march=i386"]).unwrap().cpu, "P5");
+    let error = on(&["-march=k8"]).unwrap_err();
+    assert!(error.contains("-march=k8") && error.contains(&llrm_x86_m16::M16.marches().join(", ")), "{error}");
+}
+
+/// `--cpu` was a spelling of its own beside gcc's `-march`: one spelling.
+#[test]
+fn the_old_cpu_spelling_is_gone() {
+    let argv = vec!["--cpu".to_owned(), "486".to_owned()];
+    assert_eq!(Flags::default().take(&argv, &mut 0), Ok(false));
 }
 
 #[test]
@@ -73,7 +103,7 @@ fn output_and_assembly() {
 /// is not: qcport's sound IRQ calls C on a stack of its own.
 #[test]
 fn stack_is_data_only_when_asked() {
-    let machine = |arguments: &[&str]| parsed(arguments).unwrap().machine(crate::abi::machine::BUILT_IN.clone()).unwrap().segments.unwrap().stack_is_data;
+    let machine = |arguments: &[&str]| parsed(arguments).unwrap().machine(&llrm_x86_m16::M16, llrm_x86_m16::machine::BUILT_IN.clone()).unwrap().segments.unwrap().stack_is_data;
     assert!(!machine(&[]));
     assert!(machine(&["-mstack-is-data"]));
     assert!(!machine(&["-mstack-is-data", "-mno-stack-is-data"]));
@@ -83,7 +113,7 @@ fn stack_is_data_only_when_asked() {
 /// (Borland's, Open Watcom's) would otherwise read whatever DOS left there.
 #[test]
 fn far_zero_data_is_stored_unless_the_startup_zeroes_it() {
-    let machine = |arguments: &[&str]| parsed(arguments).unwrap().machine(crate::abi::machine::BUILT_IN.clone()).unwrap().far_bss;
+    let machine = |arguments: &[&str]| parsed(arguments).unwrap().machine(&llrm_x86_m16::M16, llrm_x86_m16::machine::BUILT_IN.clone()).unwrap().far_bss;
     assert!(!machine(&[]));
     assert!(machine(&["-mfar-bss"]));
     assert!(!machine(&["-mfar-bss", "-mno-far-bss"]));
@@ -115,7 +145,7 @@ fn test_stack_usage_options_reach_the_driver() {
         let argv = vec![argument.to_owned()];
         assert!(flags.take(&argv, &mut 0).unwrap(), "{argument}");
     }
-    let options = flags.driver(crate::abi::machine::BUILT_IN.clone());
+    let options = flags.driver(llrm_x86_m16::machine::BUILT_IN.clone(), std::rc::Rc::new(llrm_x86_m16::M16), crate::backend::isel::m16());
     assert!(options.stack_usage);
     assert_eq!(options.stack_limit, Some(512));
     assert!(Flags::default().take(&["-Wstack-usage=lots".to_owned()], &mut 0).is_err());
@@ -130,11 +160,15 @@ fn clocks_per_byte_limits_the_growth_an_inline_may_buy() {
     assert!(parsed(&["--clocks-per-byte", "lots"]).is_err());
 }
 
-/// `--target` was refused by every frontend ("unrecognized arguments"): a
-/// target could not be named at all.
+/// `-m16`, `-m32` and `-m64` name the target as gcc's do; `--target NAME` was a spelling of its own.
 #[test]
-fn a_target_is_named_by_its_flag() {
-    assert_eq!(parsed(&[]).unwrap().target(), None);
-    assert_eq!(parsed(&["--target", "x86-code16"]).unwrap().target(), Some("x86-code16"));
-    assert!(parsed(&["--target"]).unwrap_err().contains("expected one argument"));
+fn a_target_is_named_by_gccs_m_flag() {
+    assert_eq!(parsed(&[]).unwrap().mode(), None);
+    assert_eq!(parsed(&["-m16"]).unwrap().mode(), Some(16));
+    assert_eq!(parsed(&["-m32"]).unwrap().mode(), Some(32));
+    assert_eq!(parsed(&["-m64"]).unwrap().mode(), Some(64));
+    let argv = vec!["--target".to_owned(), "x86-m32".to_owned()];
+    assert_eq!(Flags::default().take(&argv, &mut 0), Ok(false));
+    // The machine flags that begin with -m stay their own.
+    assert_eq!(parsed(&["-mstack-is-data"]).unwrap().mode(), None);
 }

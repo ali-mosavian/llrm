@@ -1,53 +1,51 @@
-reason = "shared remat of copied loads, a stable load folded into its single use (spiller::_folded_reads) and across writes its cell survives (peephole); queens c and parity/qbsp nib trade an instruction for memory operands at lower executed work (queens c -O2/-Os 271291 -> 270819, qbsp nib -O2 440 -> 438, -Os 441 -> 439), owner-approved"
-blessed = "2026-10-06"
+reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
+blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 63828
+instructions = 56628
 memory_operands = 30238
-code_bytes = 1098
+code_bytes = 1084
 data_bytes = 35
 bss_bytes = 0
-kernel_ms = 0.8677
+kernel_ms = 0.7716
 
 [bas.Os]
-instructions = 69281
+instructions = 56081
 memory_operands = 26085
-code_bytes = 865
+code_bytes = 841
 data_bytes = 31
 bss_bytes = 0
-kernel_ms = 0.9406
+kernel_ms = 0.7645
 
 [c.O2]
-instructions = 56679
-memory_operands = 25450
-code_bytes = 655
+instructions = 47061
+memory_operands = 20845
+code_bytes = 535
 data_bytes = 20
 bss_bytes = 0
-kernel_ms = 0.7574
+kernel_ms = 0.6291
 
 [c.Os]
-instructions = 57659
-memory_operands = 20845
-code_bytes = 498
+instructions = 51261
+memory_operands = 21645
+code_bytes = 496
 data_bytes = 16
 bss_bytes = 0
-kernel_ms = 0.7705
 
 [nib.O2]
-instructions = 56681
-memory_operands = 25448
-code_bytes = 660
+instructions = 47071
+memory_operands = 20846
+code_bytes = 564
 data_bytes = 32
 bss_bytes = 0
-kernel_ms = 0.7584
+kernel_ms = 0.6301
 
 [nib.Os]
-instructions = 57669
+instructions = 50471
 memory_operands = 20846
-code_bytes = 528
+code_bytes = 519
 data_bytes = 28
 bss_bytes = 0
-kernel_ms = 0.7716
 
 [ow.O2]
 instructions = 53725

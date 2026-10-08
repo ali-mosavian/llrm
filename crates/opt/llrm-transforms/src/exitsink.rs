@@ -1,7 +1,9 @@
-//! An add or subtract in a loop that only an exit's phi reads, moved to
-//! that exit: LLVM's LICM sinking an instruction only used outside the
-//! loop. The last trip's update of a pointer strength reduction carried
-//! is computed once, on the way out.
+//! An add, subtract or extension in a loop that only exit phis read, moved to
+//! those exits: LLVM's LICM sinking an instruction only used outside the
+//! loop, a copy to each exit that reads it. The last trip's update of a
+//! pointer strength reduction carried is computed once, on the way out, and
+//! so is the `sext` of a narrow counter whose value `work += i` reads after
+//! the loop (mandel: `inc cx; movsx eax,cx; cmp cx,20h` every trip).
 //!
 //! Adapted from llrm-core's `optimize/exitsink.rs`. Each operand the loop
 //! defines is read through an exit phi, as LCSSA has it; an invariant one
@@ -20,7 +22,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::graph::loops::Loop;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{BinaryOp, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 
 use crate::edges;
 use crate::lcssa::{arms, exit_phi, from_arms, place_phi};
@@ -35,8 +37,8 @@ pub fn sunk(function: &mut Function) -> bool {
     changed
 }
 
-/// An exit's phi of one input from `loop_`, and the add or subtract in
-/// the loop that input is, which nothing else reads.
+/// An exit's phi of one input from `loop_`, and the add, subtract or
+/// extension in the loop that input is, which only exit phis read.
 fn _sinkable(function: &Function) -> Option<(Loop, InstId, InstId)> {
     for loop_ in cfg::Shape::of(function).loops {
         for &block in function.layout().iter().filter(|&&block| !loop_.body.contains(&cfg::id(block))) {
@@ -46,8 +48,8 @@ fn _sinkable(function: &Function) -> Option<(Loop, InstId, InstId)> {
                 let inside = |inst: InstId| function.parent(inst).is_some_and(|at| loop_.body.contains(&cfg::id(at)));
                 if loop_.body.contains(&cfg::id(from))
                     && inside(op)
-                    && matches!(function.instruction(op).opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub))
-                    && function.users(value).iter().all(|one| one.user == phi)
+                    && matches!(function.instruction(op).opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) | Opcode::Cast(CastOp::SExt | CastOp::ZExt | CastOp::Trunc))
+                    && function.users(value).iter().all(|one| function.instruction(one.user).opcode == Opcode::Phi && function.parent(one.user).is_some_and(|at| !loop_.body.contains(&cfg::id(at))))
                 {
                     return Some((loop_, phi, op));
                 }
@@ -95,7 +97,10 @@ fn _sink(function: &mut Function, loop_: &Loop, phi: InstId, op: InstId) {
     function.replace_all_uses_with(result, Operand::Value(function.instruction(moved).result.expect("a value")));
     function.set_operands(phi, Vec::new());
     function.erase(phi).expect("its uses were replaced");
-    function.erase(op).expect("only the exit's phi read it");
+    // Each other exit that reads it takes its own copy, in its turn.
+    if function.users(function.instruction(op).result.expect("a value")).is_empty() {
+        function.erase(op).expect("only exit phis read it");
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,16 @@
+reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
+blessed = "2026-10-07"
+
+[c.O2]
+instructions = 6745
+memory_operands = 1018
+code_bytes = 201
+data_bytes = 0
+bss_bytes = 128
+
+[c.Os]
+instructions = 6746
+memory_operands = 1018
+code_bytes = 196
+data_bytes = 0
+bss_bytes = 128

@@ -79,7 +79,7 @@ impl Described<'_> {
 /// `functions`' debug information: each one's source parameters and
 /// variables, and the module's variables, once.
 pub(super) fn described(functions: &[hir::Function], types: &TypeRegistry) -> Debug {
-    let mut described = Described { types, builder: Builder::default(), made: BTreeMap::new() };
+    let mut described = Described { types, builder: Builder::for_language(llrm_core::hir::model::DebugLanguage::Nib), made: BTreeMap::new() };
     let mut globals = BTreeSet::new();
     for function in functions {
         let value_type = |value: u32| function.values.iter().find(|one| one.id == value).map(|one| one.type_id);
@@ -94,7 +94,7 @@ pub(super) fn described(functions: &[hir::Function], types: &TypeRegistry) -> De
         for place in function.places.iter().filter(|one| !one.name.starts_with('$')) {
             let Some(r#type) = described.r#type(place.type_id) else { continue };
             match place.storage {
-                "local" => described.builder.variable(i64::from(place.id), &place.name, r#type),
+                "local" => described.builder.variable(i64::from(place.id), &place.name, r#type, function.named_parameters.iter().any(|(_, name)| name == &place.name)),
                 // Every function binds the module's variables; described once.
                 "module" if globals.insert((place.symbol, place.offset)) => {
                     described.builder.global(i64::from(place.symbol), i64::from(place.offset), &place.name, r#type);

@@ -1,53 +1,47 @@
-reason = "shared remat of copied loads, a stable load folded into its single use (spiller::_folded_reads) and across writes its cell survives (peephole); queens c and parity/qbsp nib trade an instruction for memory operands at lower executed work (queens c -O2/-Os 271291 -> 270819, qbsp nib -O2 440 -> 438, -Os 441 -> 439), owner-approved"
-blessed = "2026-10-06"
+reason = "a mask compared with zero is test with the mask as its immediate, not a copy and-ed for its flags (isel pattern and_tested takes a constant mask): parity/control, qbsp, recpow and others fewer instructions"
+blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 170
+instructions = 159
 memory_operands = 14
-code_bytes = 265
+code_bytes = 264
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0135
 
 [bas.Os]
-instructions = 167
+instructions = 156
 memory_operands = 14
-code_bytes = 247
+code_bytes = 246
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0135
 
 [c.O2]
-instructions = 181
+instructions = 172
 memory_operands = 23
-code_bytes = 210
+code_bytes = 209
 data_bytes = 0
 bss_bytes = 4
-kernel_ms = 0.0033
 
 [c.Os]
-instructions = 179
+instructions = 170
 memory_operands = 23
-code_bytes = 187
+code_bytes = 188
 data_bytes = 0
 bss_bytes = 4
-kernel_ms = 0.0032
 
 [nib.O2]
-instructions = 163
+instructions = 152
 memory_operands = 6
-code_bytes = 176
+code_bytes = 175
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0037
 
 [nib.Os]
-instructions = 160
+instructions = 151
 memory_operands = 6
-code_bytes = 151
+code_bytes = 152
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0037
 
 [ow.O2]
 instructions = 294

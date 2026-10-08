@@ -2642,7 +2642,7 @@ Not in the parser's vocabulary as named carriers: `!llvm.loop`, `!prof`, `!range
 | `nounwind` | `H/mir.rs:111`; runtime; `T/interprocedural.rs:411` | `A/effects.rs:exposes_memory:83`; `A/interprocedural.rs:339` | invoke may unwind to a handler; dead-call removal |
 | | | `B/backend/ehprepare.rs:40,165` | which calls need a landing pad |
 | `nocallback` | `H/mir.rs:110`; intrinsics | `A/globalsaa.rs:calls_back:98-103` | call cannot reach program code, so tracked globals stay private |
-| `noreturn` | `B/backend/ehprepare.rs:204,222`, `bc/llrm-bc/src/runtime.rs:211`; not by `H/mir.rs` | `A/noreturn.rs:terminal_sites:103` | call ends the path; tail cut (`T/interprocedural.rs:303`), hoist (`T/hoist.rs:67`) |
+| `noreturn` | `B/backend/ehprepare.rs:204,222`, `bc/llrm-x86-bc/src/runtime.rs:211`; not by `H/mir.rs` | `A/noreturn.rs:terminal_sites:103` | call ends the path; tail cut (`T/interprocedural.rs:303`), hoist (`T/hoist.rs:67`) |
 | `cold` (call site) | `H/mir.rs:1018` | `A/noreturn.rs:cold:117` | marks cold blocks. `noreturn::cold` has no non-test caller (grep); `B/backend/isel.rs:cold:793-814` uses only `unreachable` |
 | `naked` | `B/backend/ehprepare.rs:222` | `B/driver/mod.rs:framed:127` | no frame |
 | `signext` | `H/mir.rs:1685` | `B/backend/isel.rs:2288` | movsx vs movzx of a byte argument |

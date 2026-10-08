@@ -1,6 +1,7 @@
 //! Generates one instruction selector per target from its definition
 //! directory (`crates/target/<name>/src/isel/patterns.isel` against
-//! `src/instructions/x86.instr`) and its peephole rules from `src/isel/peephole.peep`.
+//! `src/instructions/x86.instr`) and its peephole rules: the family's (`llrm-x86`) and its own
+//! `src/isel/peephole.peep`.
 
 // The tests read what build.rs does not.
 #[allow(dead_code)]
@@ -9,12 +10,17 @@ mod generator;
 
 fn main() {
     let family_forms = "../../target/llrm-x86/src/instructions/x86.instr";
-    for path in ["src/backend/isel/generator", "../../target", family_forms] {
+    let family_patterns = "../../target/llrm-x86/src/isel/family.isel";
+    let family_peephole = "../../target/llrm-x86/src/isel/peephole.peep";
+    for path in ["src/backend/isel/generator", "../../target", family_forms, family_patterns, family_peephole] {
         println!("cargo:rerun-if-changed={path}");
     }
     let read = |path: &std::path::Path| std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     // A target's forms are the family's, then its own.
     let forms_of = |own: &std::path::Path| format!("{}\n{}", read(std::path::Path::new(family_forms)), read(own));
+    // And its patterns: the family's file with each `own NAME` line replaced by
+    // the target's patterns under `splice NAME`, so where they go is the family's to say.
+    let patterns_of = |own: &std::path::Path| spliced(&read(std::path::Path::new(family_patterns)), &read(own));
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
     let mut targets: Vec<_> = std::fs::read_dir("../../target")
@@ -37,11 +43,11 @@ fn main() {
         for path in [&patterns, &forms] {
             println!("cargo:rerun-if-changed={}", path.display());
         }
-        let generated = generator::generate(&forms_of(&forms), &read(&patterns), name).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let generated = generator::generate(&forms_of(&forms), &patterns_of(&patterns), name).unwrap_or_else(|error| panic!("{name}: {error}"));
         std::fs::write(out.join(format!("isel_{ident}.rs")), generated.code).unwrap();
         index.push_str(&format!("pub mod {ident} {{\n    use super::*;\n    include!(concat!(env!(\"OUT_DIR\"), \"/isel_{ident}.rs\"));\n}}\n\n"));
         all.push(format!("&{ident}::SELECTOR"));
-        peep.push_str(&peephole(dir, &ident, &forms_of(&forms), &out, &read, &groups));
+        peep.push_str(&peephole(dir, &ident, &forms_of(&forms), &out, &read, &groups, &read(std::path::Path::new(family_peephole))));
     }
     std::fs::write(out.join("peep_targets.rs"), peep).unwrap();
     index.push_str(&format!("/// Every target's selector, by its directory's name.\npub static ALL: [&Compiled; {}] = [{}];\n", all.len(), all.join(", ")));
@@ -51,13 +57,16 @@ fn main() {
 
 /// The module `peep::targets::<ident>`: the target's rules, generated from its
 /// `peephole.peep` if it has one, and the `RULES` that name them.
-fn peephole(dir: &std::path::Path, ident: &str, forms: &str, out: &std::path::Path, read: &dyn Fn(&std::path::Path) -> String, groups: &[(String, bool)]) -> String {
+fn peephole(dir: &std::path::Path, ident: &str, forms: &str, out: &std::path::Path, read: &dyn Fn(&std::path::Path) -> String, groups: &[(String, bool)], family: &str) -> String {
     let rules = dir.join("src/isel/peephole.peep");
-    if !rules.is_file() {
-        return format!("pub mod {ident} {{\n    use super::super::Rules;\n\n    pub static RULES: Rules = Rules::NONE;\n}}\n\n");
-    }
-    println!("cargo:rerun-if-changed={}", rules.display());
-    let made = llrm_peepgen::generate(forms, "x86.instr", &read(&rules), "peephole.peep").unwrap_or_else(|error| {
+    // The family's rules, then the target's own where it has any.
+    let own = if rules.is_file() {
+        println!("cargo:rerun-if-changed={}", rules.display());
+        read(&rules)
+    } else {
+        String::new()
+    };
+    let made = llrm_peepgen::generate(forms, "x86.instr", &format!("{family}\n{own}"), "peephole.peep").unwrap_or_else(|error| {
         eprintln!("{error}");
         std::process::exit(1);
     });
@@ -155,4 +164,36 @@ impl Rules {{
 ",
         count = groups.len()
     )
+}
+
+/// `family` with each `own NAME` line replaced by the text under `splice NAME` in
+/// `own`; a splice the family has no line for is an error, not a dropped pattern.
+fn spliced(family: &str, own: &str) -> String {
+    let mut sections: Vec<(&str, String)> = Vec::new();
+    for line in own.lines() {
+        match line.strip_prefix("splice ") {
+            Some(name) => sections.push((name.trim(), String::new())),
+            None => {
+                if let Some((_, text)) = sections.last_mut() {
+                    text.push_str(line);
+                    text.push('\n');
+                }
+            }
+        }
+    }
+    let mut out = String::new();
+    for line in family.lines() {
+        match line.strip_prefix("own ") {
+            Some(name) => {
+                let at = sections.iter().position(|(one, _)| *one == name.trim());
+                out.push_str(&at.map(|at| sections.remove(at).1).unwrap_or_default());
+            }
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    assert!(sections.is_empty(), "patterns spliced where the family has no `own` line: {:?}", sections.iter().map(|(name, _)| *name).collect::<Vec<_>>());
+    out
 }

@@ -52,23 +52,23 @@ fn full32(register: Register) -> Register {
 }
 
 /// The lanes `one` reads and writes, or None when unknown.
-fn effects(one: &Insn) -> Option<(Lanes, Lanes)> {
-    _register_effects(one, true, true).or_else(|| liveness::_declared(one))
+fn effects(bits: u32, one: &Insn) -> Option<(Lanes, Lanes)> {
+    _register_effects(bits, one, true, true).or_else(|| liveness::_declared(one))
 }
 
 /// Whether nothing in `between` writes any lane of `register`.
-fn untouched(between: &[Arc<Insn>], register: Register) -> bool {
+fn untouched(bits: u32, between: &[Arc<Insn>], register: Register) -> bool {
     let lanes = _lanes(register);
-    between.iter().all(|one| effects(one).is_some_and(|(_, writes)| writes.and(&lanes).is_empty()))
+    between.iter().all(|one| effects(bits, one).is_some_and(|(_, writes)| writes.and(&lanes).is_empty()))
 }
 
 /// Whether the last write of `register` before `at` defines `value`.
-fn holds(insns: &[Arc<Insn>], at: usize, register: Register, value: u32) -> bool {
+fn holds(bits: u32, insns: &[Arc<Insn>], at: usize, register: Register, value: u32) -> bool {
     let lanes = _lanes(register);
     insns[..at]
         .iter()
         .rev()
-        .find_map(|one| match effects(one) {
+        .find_map(|one| match effects(bits, one) {
             None => Some(false),
             Some((_, writes)) if !writes.and(&lanes).is_empty() => Some(one.defines.contains(&value)),
             _ => None,
@@ -108,7 +108,7 @@ fn cell_of(one: &Insn) -> Option<&Mem> {
 ///
 /// The allocator may name a 16-bit cell's base and index registers in
 /// either order; the reaching writes say which holds which.
-fn sum_of(insns: &[Arc<Insn>], at: usize, cell: &Mem) -> Option<Sum> {
+fn sum_of(bits: u32, insns: &[Arc<Insn>], at: usize, cell: &Mem) -> Option<Sum> {
     let registers: Vec<(Register, i64)> =
         [(cell.through, 1), (cell.index_through, cell.scale)].into_iter().filter(|(register, _)| *register != Register::None).collect();
     let held: Vec<Held> = [cell.base, cell.index].into_iter().flatten().collect();
@@ -117,8 +117,8 @@ fn sum_of(insns: &[Arc<Insn>], at: usize, cell: &Mem) -> Option<Sum> {
     }
     let values: Vec<u32> = match (registers.as_slice(), held.as_slice()) {
         ([(first, _), (second, _)], [base, index]) if target::width_of(*first) == Some(2) && base.value != index.value => {
-            let direct = holds(insns, at, *first, base.value) || holds(insns, at, *second, index.value);
-            let swapped = holds(insns, at, *first, index.value) || holds(insns, at, *second, base.value);
+            let direct = holds(bits, insns, at, *first, base.value) || holds(bits, insns, at, *second, index.value);
+            let swapped = holds(bits, insns, at, *first, index.value) || holds(bits, insns, at, *second, base.value);
             match (direct, swapped) {
                 (true, false) => vec![base.value, index.value],
                 (false, true) => vec![index.value, base.value],
@@ -148,15 +148,15 @@ fn offsets(cell: &Mem, sum: &Sum) -> Vec<Register> {
 
 /// The readers of `register` from `first` on, where every one addresses an
 /// exact cell through it, up to where it is written or dies.
-fn readers(block: &LirBlock, first: usize, register: Register, dead_after: &DeadAfter) -> Option<Vec<usize>> {
+fn readers(bits: u32, block: &LirBlock, first: usize, register: Register, dead_after: &DeadAfter) -> Option<Vec<usize>> {
     let lanes = _lanes(register);
     let root = full32(register);
     let mut found = Vec::new();
     for (at, one) in block.insns.iter().enumerate().skip(first) {
-        let (reads, writes) = effects(one)?;
+        let (reads, writes) = effects(bits, one)?;
         if !reads.and(&lanes).is_empty() {
             let cell = cell_of(one)?;
-            let sum = sum_of(&block.insns, at, cell)?;
+            let sum = sum_of(bits, &block.insns, at, cell)?;
             if !offsets(cell, &sum).contains(&root) {
                 return None;
             }
@@ -175,7 +175,7 @@ fn readers(block: &LirBlock, first: usize, register: Register, dead_after: &Dead
 
 /// Each cut of the chain that computed `register` for its first reader at
 /// `first`, where it held `value`: one more step removed each time.
-fn stages(insns: &[Arc<Insn>], first: usize, register: Reg, value: u32, dead_after: &DeadAfter, cpu: &Profile) -> Vec<Stage> {
+fn stages(bits: u32, insns: &[Arc<Insn>], first: usize, register: Reg, value: u32, dead_after: &DeadAfter, cpu: &Profile) -> Vec<Stage> {
     let root = full32(register.register);
     let lanes = _lanes(register.register);
     let flags = _flag_lanes(0xFFFF_FFFF);
@@ -186,7 +186,7 @@ fn stages(insns: &[Arc<Insn>], first: usize, register: Reg, value: u32, dead_aft
         // The last writer before the cursor; nothing between reads it.
         let mut writer = None;
         for at in (0..cursor).rev() {
-            let Some((reads, writes)) = effects(&insns[at]) else {
+            let Some((reads, writes)) = effects(bits, &insns[at]) else {
                 return found;
             };
             if !writes.and(&lanes).is_empty() {
@@ -204,7 +204,7 @@ fn stages(insns: &[Arc<Insn>], first: usize, register: Reg, value: u32, dead_aft
         let Some((dest, step, cost)) = affine::step(one, cpu) else {
             return found;
         };
-        let flags_dead = effects(one).is_some_and(|(_, writes)| writes.and(&flags).minus(&dead_after[&id(one)]).is_empty());
+        let flags_dead = effects(bits, one).is_some_and(|(_, writes)| writes.and(&flags).minus(&dead_after[&id(one)]).is_empty());
         if dest != register || one.symbol == Some(true) || !one.requires.is_empty() || !one.delivers.is_empty() || !flags_dead {
             return found;
         }
@@ -215,16 +215,16 @@ fn stages(insns: &[Arc<Insn>], first: usize, register: Reg, value: u32, dead_aft
         let later = &insns[at + 1..first];
         let (before, leaf) = match (step, uses.as_slice()) {
             (Step::Add(_) | Step::Scale(_), [before]) => (Some(*before), None),
-            (Step::Copy(source), [value]) if full32(source.register) != root && untouched(later, source.register) => {
+            (Step::Copy(source), [value]) if full32(source.register) != root && untouched(bits, later, source.register) => {
                 (None, Some((source, *value)))
             }
-            (Step::AddRegister(other), [value]) if full32(other.register) != root && untouched(later, other.register) => {
+            (Step::AddRegister(other), [value]) if full32(other.register) != root && untouched(bits, later, other.register) => {
                 (Some(*value), Some((other, *value)))
             }
-            (Step::AddRegister(other), [one_value, another]) if full32(other.register) != root && untouched(later, other.register) => {
+            (Step::AddRegister(other), [one_value, another]) if full32(other.register) != root && untouched(bits, later, other.register) => {
                 // Which use is the added register's: the reaching writes say.
-                let mine = |value: u32| holds(insns, at, other.register, value) && !holds(insns, at, register.register, value);
-                let theirs = |value: u32| holds(insns, at, register.register, value) && !holds(insns, at, other.register, value);
+                let mine = |value: u32| holds(bits, insns, at, other.register, value) && !holds(bits, insns, at, register.register, value);
+                let theirs = |value: u32| holds(bits, insns, at, register.register, value) && !holds(bits, insns, at, other.register, value);
                 match (mine(*one_value) || theirs(*another), mine(*another) || theirs(*one_value)) {
                     (true, false) => (Some(*another), Some((other, *one_value))),
                     (false, true) => (Some(*one_value), Some((other, *another))),
@@ -262,6 +262,7 @@ fn stages(insns: &[Arc<Insn>], first: usize, register: Reg, value: u32, dead_aft
 /// `one`, whose cell reads `root`, with `stage` in its place, the roots it
 /// then reads 32 bits wide, and what the wider address costs it.
 fn rewritten(
+    bits: u32,
     insns: &[Arc<Insn>],
     at: usize,
     root: Register,
@@ -273,7 +274,7 @@ fn rewritten(
     let one = &insns[at];
     let cell = cell_of(one)?;
     let addr = cell.addr?;
-    let before = sum_of(insns, at, cell)?;
+    let before = sum_of(bits, insns, at, cell)?;
     let multiple = before.iter().find(|term| term.0 == root)?.1;
     let sum = stage
         .sum
@@ -323,18 +324,18 @@ fn rewritten(
 
 /// The chain the cheapest to remove for the readers of `root` from `first`
 /// on, where removing it saves the target cycles.
-fn fold(block: &LirBlock, first: usize, root: Register, dead_after: &DeadAfter, live_out: &BTreeSet<u32>, form: &AddressForm, cpu: &Profile) -> Option<Fold> {
+fn fold(bits: u32, block: &LirBlock, first: usize, root: Register, dead_after: &DeadAfter, live_out: &BTreeSet<u32>, form: &AddressForm, cpu: &Profile) -> Option<Fold> {
     let insns = &block.insns;
     let register = Reg { register: target::named(root, 2), width: 2 };
-    let users = readers(block, first, register.register, dead_after)?;
-    let value = sum_of(insns, first, cell_of(&insns[first])?)?.into_iter().find(|term| term.0 == root)?.2;
+    let users = readers(bits, block, first, register.register, dead_after)?;
+    let value = sum_of(bits, insns, first, cell_of(&insns[first])?)?.into_iter().find(|term| term.0 == root)?.2;
     let mut best: Option<(i64, Fold)> = None;
     let last = *users.last()?;
-    for stage in stages(insns, first, register, value, dead_after, cpu) {
+    for stage in stages(bits, insns, first, register, value, dead_after, cpu) {
         // Every reader sees the leaves the chain read: none is written up to
         // the last of them.
         let span = &insns[stage.removed[0] + 1..last];
-        if stage.sum.iter().any(|term| term.0 != root && !untouched(span, target::named(term.0, 2))) {
+        if stage.sum.iter().any(|term| term.0 != root && !untouched(bits, span, target::named(term.0, 2))) {
             continue;
         }
         let removed: BTreeSet<usize> = stage.removed.iter().copied().collect();
@@ -357,7 +358,7 @@ fn fold(block: &LirBlock, first: usize, root: Register, dead_after: &DeadAfter, 
         };
         let Some(rewrites) = users
             .iter()
-            .map(|at| rewritten(insns, *at, root, &stage, &uses, form, cpu).map(|found| (*at, found)))
+            .map(|at| rewritten(bits, insns, *at, root, &stage, &uses, form, cpu).map(|found| (*at, found)))
             .collect::<Option<Vec<_>>>()
         else {
             continue;
@@ -394,15 +395,15 @@ fn folds(body: &LirBody, form: &AddressForm, cpu: &Profile) -> Vec<Fold> {
     let (_, live_out) = crate::backend::allocate::live(body);
     let mut found = Vec::new();
     for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(block, exits[&block.at].clone());
+        let dead_after = regthrash::_dead_after(body.bits, block, exits[&block.at].clone());
         let outside = live_out.get(&block.at).cloned().unwrap_or_default();
         let mut claimed: HashSet<usize> = HashSet::default();
         for (at, one) in block.insns.iter().enumerate() {
-            let Some(sum) = cell_of(one).and_then(|cell| sum_of(&block.insns, at, cell).map(|sum| offsets(cell, &sum))) else {
+            let Some(sum) = cell_of(one).and_then(|cell| sum_of(body.bits, &block.insns, at, cell).map(|sum| offsets(cell, &sum))) else {
                 continue;
             };
             for root in sum {
-                let Some(candidate) = fold(block, at, root, &dead_after, &outside, form, cpu) else {
+                let Some(candidate) = fold(body.bits, block, at, root, &dead_after, &outside, form, cpu) else {
                     continue;
                 };
                 let touched: Vec<usize> = candidate.removed.iter().copied().chain(candidate.users.iter().map(|user| user.0)).collect();
@@ -421,7 +422,7 @@ fn folds(body: &LirBody, form: &AddressForm, cpu: &Profile) -> Vec<Fold> {
 /// Fold each exact address's chain the cost model prefers, until none is left.
 pub fn exact_addresses<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Result<LirBody, String> {
     let profile = targets::profile(cpu)?;
-    let Some(form) = profile.address_forms.iter().find(|form| form.secondary && form.index_width == 4) else {
+    let Some(form) = profile.dword_address_form() else {
         return Ok(body.clone());
     };
     let mut body = body.clone();

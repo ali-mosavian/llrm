@@ -25,7 +25,7 @@ flowchart LR
     QBFront -->|"common HIR"| Emit
     NibFront -->|"common HIR"| Emit
     CFront -->|"common HIR"| Emit
-    BC["BC.EXE .OBJ"] --> Raise["OMF decode and raise<br/>crates/bc/llrm-bc/"]
+    BC["BC.EXE .OBJ"] --> Raise["OMF decode and raise<br/>crates/target/llrm-x86-bc/"]
 
     Emit["HIR to MIR<br/>crates/ir/llrm-hir/src/mir.rs"] -->|"MIR module"| Opt
     Raise -->|"MIR module"| Opt
@@ -42,7 +42,7 @@ flowchart LR
         Isel["Instruction selection<br/>crates/backend/llrm-core/src/backend/isel.rs"] --> LIR["LirBody<br/>virtual values + constraints"]
         LIR --> Machine["Machine phases<br/>crates/backend/llrm-core/src/flow.rs"]
         Machine --> Physical["Allocated LIR<br/>physical registers + frame slots"]
-        Physical --> Write["Layout, fresh OMF<br/>crates/backend/llrm-core/src/backend/masm.rs, omfwrite.rs"]
+        Physical --> Write["Layout, fresh OMF<br/>crates/backend/llrm-core/src/backend/masm.rs, objbuild.rs"]
     end
 
     Write -->|"OMF .OBJ"| Link["LINK.EXE"]
@@ -59,7 +59,7 @@ flowchart LR
 | `llrm-qb` | `qbfront` parses and resolves each dialect | HIR, emitted by `crates/ir/llrm-hir/src/mir.rs`; `crates/backend/llrm-core/src/driver/basic.rs` writes the BASIC module object |
 | `llrm-nib` | `crates/frontends/llrm-nib/src/` | the same HIR path |
 | `llrm-c` | a patched Open Watcom front end records its code-generator calls | HIR from `crates/frontends/llrm-c/src/translate.rs`, Borland's medium-model ABI |
-| `llrm-omf` | OMF decode of BC's machine code | `crates/bc/llrm-bc/` raises it; `crates/bc/llrm-bcdriver/` writes a fresh object |
+| `llrm-omf` | OMF decode of BC's machine code | `crates/target/llrm-x86-bc/` raises it; `crates/bc/llrm-bcdriver/` writes a fresh object |
 
 `crates/backend/llrm-core/src/driver/mod.rs` runs the route: `emitted`,
 `optimized`, then `backend/assemble.rs` selects and runs the machine phases.
@@ -165,10 +165,10 @@ The main ownership split is:
 | --- | --- |
 | OMF parsing and record fidelity | `crates/target/llrm-omf/src/omf.rs` |
 | Segment, group, symbol, call and object-bound facts | `crates/target/llrm-omf/src/module.rs` |
-| Instruction lengths and BC emulator forms | `crates/bc/llrm-bcmachine/src/frontends/bc/declen.rs` |
-| Reachability, inline tables and basic blocks | `crates/bc/llrm-bcmachine/src/frontends/bc/blocks.rs` |
-| BC calling and runtime contracts | `crates/frontends/llrm-qbruntime/src/lib.rs`, `runtime.toml`; per call site, `crates/bc/llrm-bcmachine/src/abi/callsite.rs` |
-| Idiom recognition | `crates/bc/llrm-bc/src/` (`sites.rs`, `longs.rs`, `floats.rs`, ...) |
+| Instruction lengths and BC emulator forms | `crates/target/llrm-x86-bcmachine/src/frontends/bc/declen.rs` |
+| Reachability, inline tables and basic blocks | `crates/target/llrm-x86-bcmachine/src/frontends/bc/blocks.rs` |
+| BC calling and runtime contracts | `crates/frontends/llrm-qbruntime/src/lib.rs`, `runtime.toml`; per call site, `crates/target/llrm-x86-bcmachine/src/abi/callsite.rs` |
+| Idiom recognition | `crates/target/llrm-x86-bc/src/` (`sites.rs`, `longs.rs`, `floats.rs`, ...) |
 | Pure analyses used by passes | `crates/opt/llrm-analysis/src/` |
 
 Established terminal calls lose their false return edges before body ownership
@@ -408,7 +408,7 @@ the MIR boundary.
 | `allocate.py` | `RegAllocGreedy` + `VirtRegRewriter` | IRA + LRA |
 | `spiller.py` | `InlineSpiller` | LRA spill/reload insertion |
 | `prologue.py` | `PrologEpilogInserter` | prologue/epilogue RTL passes |
-| `asm.py`, `select.py`, `omfwrite.py` | MC assembler, code emitter and object writer | final / assembler output |
+| `asm.py`, `select.py`, `objbuild.py` | MC assembler, code emitter and object writer | final / assembler output |
 
 Machine-specific ideas copied from either compiler belong in lowering, target
 description, allocation or peephole. Their high-level proofs and value
@@ -427,7 +427,7 @@ flowchart TD
     Tables["inline tables and preserved padding"] --> Layout
     Layout --> Image["new code image + movement map"]
 
-    Frontend["BC object declarations,<br/>data, symbols and relocations"] --> Write["omfwrite.py<br/>fresh OMF serialization"]
+    Frontend["BC object declarations,<br/>data, symbols and relocations"] --> Write["objbuild.py<br/>fresh OMF serialization"]
     Image --> Write
     Write --> Fix["emit explicit FIXUPP sites and zero addends"]
     Write --> Symbols["emit moved PUBDEF and LINNUM offsets"]
@@ -447,7 +447,7 @@ Important invariants:
 - LINK adds the encoded addend to a fixup target, so a generated relocated field
   is zero-filled before its fixup is applied.
 - A branch target may not land inside a replaced region.
-- A phi reaching `omfwrite` is a hard bug: phis have no encoding.
+- A phi reaching `objbuild` is a hard bug: phis have no encoding.
 
 Layout and selection consume `LirBody` directly. There is no LIR-to-MIR
 back-conversion or duplicate assignment channel in the production emitter;
@@ -465,7 +465,7 @@ a link unit before it writes any of them.
 
 ```mermaid
 flowchart TD
-    Front["frontends<br/>qbfront, llrm-nib, llrm-c, llrm-bc"] --> Hir["llrm-hir<br/>HIR and its MIR emitter"]
+    Front["frontends<br/>qbfront, llrm-nib, llrm-c, llrm-x86-bc"] --> Hir["llrm-hir<br/>HIR and its MIR emitter"]
     Hir --> Mir["llrm-mir<br/>MIR: types, verifier, text, interpreter"]
     Front --> Mir
     Trans["llrm-transforms<br/>MIR to MIR passes, the pipeline"] --> Mir
@@ -473,7 +473,7 @@ flowchart TD
     Analysis --> Mir
     Core["llrm-core<br/>driver, isel, machine phases, OMF writing"] --> Trans
     Core --> Mir
-    Core --> Target["llrm-x86-code16<br/>target description and costs"]
+    Core --> Target["llrm-x86-m16<br/>target description and costs"]
     Core --> Obj["llrm-omf<br/>OMF records, modules, CodeView"]
     Target --> Mir
 ```

@@ -118,7 +118,12 @@ pub(super) fn _memory_name(name: &str, cell_is_left: bool, load: &Insn) -> Optio
     if name_is(load.what.as_ref().expect("a home load has semantics"), "fild") {
         name = format!("fi{}", &name[1..]);
     }
-    select::float_memory(&name, cell_of(load), 0).is_some().then_some(name)
+    select::float_memory(&name, cell_of(load), select::At::bits16(0)).is_some().then_some(name)
+}
+
+/// The compare of a value against `load`'s cell: `fcomp`, or `ficomp` where the cell holds an integer `fild` reads.
+pub(super) fn _compare_name(load: &Insn) -> &'static str {
+    if name_is(load.what.as_ref().expect("a home load has semantics"), "fild") { "ficomp" } else { "fcomp" }
 }
 
 /// A stack slot whose value is overwritten: popped at once.
@@ -143,12 +148,14 @@ struct _Stack {
     one: Option<Arc<Insn>>,
     absorbed: HashSet<i64>, // later copies of a group already taken
     fresh: u32,             // the next value no instruction names
+    depth: usize,           // how many values the stack holds
 }
 
 impl _Stack {
-    fn new(floating: HashSet<u32>) -> Self {
+    fn new(floating: HashSet<u32>, depth: usize) -> Self {
         Self {
             floating,
+            depth,
             values: Vec::new(),
             sequence: Vec::new(),
             reads: IndexMap::default(),
@@ -334,7 +341,7 @@ impl _Stack {
     }
 
     fn room(&mut self, count: usize) -> Result<(), Raised> {
-        if self.values.len() + count > 8 {
+        if self.values.len() + count > self.depth {
             return Err(unlowered("floating instruction requires too many stack operands"));
         }
         Ok(())
@@ -494,7 +501,9 @@ impl _Stack {
             self.duplicate(left)?;
         }
         let what = self.one().what.clone().expect("a floating instruction has semantics");
-        self.emit(Semantics { name: Some("fcomp".to_owned()), dests: Vec::new(), sources: vec![st(0), cell], ..what });
+        // Fused from a home load, it is already `fcomp` or, over an integer cell, `ficomp`.
+        let name = if name_is(&what, "ficomp") { "ficomp" } else { "fcomp" };
+        self.emit(Semantics { name: Some(name.to_owned()), dests: Vec::new(), sources: vec![st(0), cell], ..what });
         self.values.remove(0);
         self.status()
     }
@@ -564,9 +573,11 @@ impl _Stack {
 
     /// An instruction replacing the top with its result.
     fn consume(&mut self, source: u32, what: Semantics, result: u32) -> Result<(), Raised> {
-        self.top(source)?;
+        // A value that stays is copied from where it is: exchanging it up first moved what lay above it.
         if self.survives(source) {
             self.duplicate(source)?;
+        } else {
+            self.top(source)?;
         }
         self.emit(what);
         self.values[0] = result;
@@ -582,6 +593,14 @@ impl _Stack {
         }
         let (mut dies_left, dies_right) = (!self.survives(left), !self.survives(right));
         if left == right {
+            // A value that stays is copied from where it is, and the product replaces the copy: no exchange.
+            let depth = index_of(&self.values, left);
+            if !dies_left && depth > 0 {
+                self.duplicate(left)?;
+                self.emit(semantics(Operation::FloatArith, name, vec![st(0)], vec![st(0), st(depth + 1)]));
+                self.values[0] = result;
+                return Ok(());
+            }
             self.exchange(index_of(&self.values, left));
             let mut slot = 0;
             if !dies_left {
@@ -686,7 +705,7 @@ fn _converted(body: &LirBody) -> Result<LirBody, Raised> {
     }
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut settled: IndexMap<usize, Vec<u32>> = IndexMap::default();
-    let mut stack = _Stack::new(floating.clone());
+    let mut stack = _Stack::new(floating.clone(), body.float_stack);
     stack.fresh = body
         .blocks
         .iter()
@@ -859,8 +878,10 @@ fn _truncating(body: &LirBody, frame: Option<&mut Frame>) -> Result<LirBody, Rai
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns = Vec::new();
+        let arrivals = if block.at == body.entry { block.insns.iter().take_while(|one| one.arrival()).count() } else { 0 };
         if block.at == body.entry {
             let at = block.insns.first().map_or(block.at, |first| first.at);
+            insns.extend(block.insns[..arrivals].iter().cloned());
             insns.extend([
                 insn(semantics(Operation::Barrier, "fnstcw", vec![Loc::Mem(saved.clone())], Vec::new()), at),
                 insn(semantics(Operation::Move, "mov", vec![Loc::Held(loaded)], vec![Loc::Mem(saved.clone())]), at),
@@ -879,7 +900,7 @@ fn _truncating(body: &LirBody, frame: Option<&mut Frame>) -> Result<LirBody, Rai
         // Chopping, once switched on, stays on across what rounding cannot
         // change, so a run of conversions switches once.
         let mut chopping = false;
-        for one in &block.insns {
+        for one in &block.insns[arrivals..] {
             if fisttp(one) {
                 if !chopping {
                     insns.push(insn(semantics(Operation::Barrier, "fldcw", Vec::new(), vec![Loc::Mem(chop.clone())]), one.at));

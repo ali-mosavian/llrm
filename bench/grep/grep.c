@@ -1,3 +1,4 @@
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 // data: @dickens
 /* Aho-Corasick over the bytes of DICKENS: the automaton is built once from ten patterns, then a table walk
    scans the file in 1K chunks. Prints the lines holding a match and a checksum of the match positions. */

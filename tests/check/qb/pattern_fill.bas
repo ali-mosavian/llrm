@@ -1,4 +1,4 @@
-' RUN: llrm-qb %s --dialect {qb45 | pds71 | vbdos} --runtime {qb45 | pds71 | vbdos} -O2 --cpu 486 -S -o /dev/stdout
+' RUN: llrm-qb %s --dialect {qb45 | pds71 | vbdos} --runtime {qb45 | pds71 | vbdos} -O2 -march=i486 -S -o /dev/stdout
 ' A loop storing one word that no one byte repeats is one rep stosw: the
 ' loop cost a store and a branch a trip.
 ' CHECK-LABEL: FILLW proc

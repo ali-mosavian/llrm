@@ -22,6 +22,7 @@ pub mod floatfold;
 pub mod floatloop;
 pub mod argpromotion;
 pub mod calleepop;
+pub mod homes;
 pub mod spares;
 pub mod deadargs;
 pub mod inferspace;
@@ -53,6 +54,7 @@ pub mod hoist;
 pub mod indvars;
 pub mod inline;
 pub mod interprocedural;
+pub mod jumpthread;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loadjoins;
@@ -71,8 +73,10 @@ pub mod rotate;
 pub mod spill;
 #[cfg(test)]
 pub mod testing;
+pub mod tailrec;
 pub mod transform;
 pub mod unroll;
+pub mod trivialunswitch;
 pub mod unswitch;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called

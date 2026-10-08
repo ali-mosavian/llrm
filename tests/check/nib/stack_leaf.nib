@@ -1,11 +1,11 @@
-# RUN: llrm-nib %s -O2 -fsanitize=stack -fno-inline-functions -S -o /dev/stdout
+# RUN: llrm-nib %s -O2 -fsanitize=stack -fno-inline-functions -fno-inline-functions-called-once -S -o /dev/stdout
 # A leaf with a small frame is covered by its caller's check and the runtime's red zone: it gets
 # none. The recursive caller keeps its own.
 # CHECK-LABEL: _tiny proc
 # CHECK-NOT: cmp sp
 # CHECK: _tiny endp
 # CHECK-LABEL: _deep proc
-# CHECK: cmp sp, word ptr N$OSLO
+# CHECK: cmp sp, word ptr _llrm_os_stack_low
 fn tiny(x: i16) -> i16:
     return x * 3 + 1
 

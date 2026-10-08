@@ -3,9 +3,14 @@ name = "llrm-driver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "The one place that names targets: --target picks one"
+description = "The one place that names targets: -m16 and -m32 pick one"
 
 [dependencies]
 llrm-core = { workspace = true }
 llrm-target = { workspace = true }
-llrm-x86-code16 = { workspace = true }
+llrm-x86 = { workspace = true }
+llrm-x86-m16 = { workspace = true }
+llrm-x86-m32 = { workspace = true }
+
+[dev-dependencies]
+iced-x86 = { workspace = true }

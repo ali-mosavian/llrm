@@ -1,53 +1,51 @@
-reason = "shared remat of copied loads, a stable load folded into its single use (spiller::_folded_reads) and across writes its cell survives (peephole); queens c and parity/qbsp nib trade an instruction for memory operands at lower executed work (queens c -O2/-Os 271291 -> 270819, qbsp nib -O2 440 -> 438, -Os 441 -> 439), owner-approved"
-blessed = "2026-10-06"
+reason = "an integer of 32 bits or more made a float is rounded to a float, as C requires (the x87 register kept the extra bits and a compare against a float read them): a store and a load per conversion"
+blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 978124
-memory_operands = 217092
-code_bytes = 1217
-data_bytes = 189
+instructions = 919099
+memory_operands = 204072
+code_bytes = 1118
+data_bytes = 165
 bss_bytes = 0
-kernel_ms = 13.0589
+kernel_ms = 12.2716
 
 [bas.Os]
-instructions = 1187194
+instructions = 1037188
 memory_operands = 138105
-code_bytes = 397
+code_bytes = 383
 data_bytes = 145
 bss_bytes = 0
-kernel_ms = 15.8477
+kernel_ms = 13.8468
 
 [c.O2]
-instructions = 1116131
-memory_operands = 164102
-code_bytes = 1251
+instructions = 901107
+memory_operands = 146077
+code_bytes = 1069
 data_bytes = 68
 bss_bytes = 96
-kernel_ms = 14.89
+kernel_ms = 12.0218
 
 [c.Os]
-instructions = 1187194
+instructions = 1037190
 memory_operands = 138111
-code_bytes = 358
+code_bytes = 346
 data_bytes = 24
 bss_bytes = 96
-kernel_ms = 15.8379
 
 [nib.O2]
-instructions = 972148
-memory_operands = 199100
-code_bytes = 1203
+instructions = 948123
+memory_operands = 186080
+code_bytes = 1048
 data_bytes = 76
 bss_bytes = 0
-kernel_ms = 12.9686
+kernel_ms = 12.648
 
 [nib.Os]
-instructions = 1350434
-memory_operands = 230138
-code_bytes = 562
+instructions = 1350472
+memory_operands = 230174
+code_bytes = 582
 data_bytes = 32
 bss_bytes = 0
-kernel_ms = 18.0146
 
 [ow.O2]
 instructions = 1088249

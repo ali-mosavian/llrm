@@ -35,11 +35,16 @@ use llrm_mir::context::{ConstantKind, mask};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
+use llrm_mir::types::Type;
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
 
+use crate::profit::{self, OperationCosts};
 use crate::transform::_undisturbed;
 
-pub struct Hoist;
+/// `size`: price a run in bytes, every block once (-Os), not in executed work.
+pub struct Hoist {
+    pub size: bool,
+}
 
 impl FunctionPass for Hoist {
     fn name(&self) -> &'static str {
@@ -48,13 +53,16 @@ impl FunctionPass for Hoist {
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         // Blocks and edges are as they were.
-        if hoisted(unit, analyses) { PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>() } else { PreservedAnalyses::all() }
+        if hoisted(unit, analyses, self.size) { PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>() } else { PreservedAnalyses::all() }
     }
 }
 
 /// Each loop's invariant run moved to its preheader, inner loops first so
-/// what leaves one may leave the next. Whether anything moved.
-pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
+/// what leaves one may leave the next, where the function does not price
+/// higher for it: a run's values live across the loop may be more than
+/// the target's registers hold, and spill (`profit::motion_price`). Whether
+/// anything moved.
+pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses, size: bool) -> bool {
     let graph = cfg::graph(unit.function);
     let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
     let found = &shape.loops;
@@ -65,20 +73,146 @@ pub fn hoisted(unit: &mut passes::Unit, analyses: &mut Analyses) -> bool {
     let Ok(accesses) = Accesses::managed(unit.context, unit.layout, unit.function, analyses) else { return false };
     let outer = std::rc::Rc::clone(analyses.outer());
     let terminal = analyses.get::<noreturn::TerminalSites>(unit.context, unit.layout, unit.function);
+    let room = profit::registers(&outer);
+    let costs = if size { outer.target().size_costs() } else { profit::costs(&outer) };
+    // Moving instructions leaves every block and loop as they are.
+    // The registers are priced where the function is in SSA; before that, with scalar slots still in memory, only
+    // what a held value costs to release is.
+    let pressure = room.priced() && !_slots_remain(unit);
+    let frequency = (pressure || room.priced() && costs.float_release > 0).then(|| _frequency(unit, analyses, &outer, size)).flatten();
+    let room = if pressure { room } else { crate::spill::Room { registers: 0, ..room } };
+    // What is known without memory holds as instructions move: no block, edge or value changes.
+    let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
+    let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
     let mut changed = false;
     for one in found {
         let Some(into) = _preheader(&graph, one) else { continue };
-        let run = _invariant_run(unit, &outer, one, into, &accesses, &terminal);
+        let run = _invariant_run(unit, &outer, one, into, &accesses, &terminal, &registers, &shape);
         if _crossed_values(unit.function, &run).is_empty() {
             continue;
         }
         let before = unit.function.terminator(cfg::block(into)).expect("a terminator");
+        let run = match &frequency {
+            Some(frequency) => _affordable(unit, &outer, run, before, into, &costs, room, frequency),
+            None => run,
+        };
+        if run.is_empty() {
+            continue;
+        }
         for inst in run {
             unit.function.move_to(inst, Position::Before(before)).expect("a placed instruction");
         }
         changed = true;
     }
     changed
+}
+
+/// `run` less what the function prices higher for: while moving it before
+/// `before` costs more than leaving it, the values crossing the loop that the
+/// spill model spills, and the instructions reading them, stay in the loop.
+/// What the model charges for spilling a value that needs no register, a
+/// displacement the accesses fold or a value made again at each read, is not counted.
+fn _affordable(unit: &passes::Unit, outer: &Outer, mut run: Vec<InstId>, before: InstId, into: i64, costs: &OperationCosts, room: crate::spill::Room, frequency: &std::collections::BTreeMap<i64, i64>) -> Vec<InstId> {
+    let price = |function: &Function| profit::motion_price(unit.context, unit.layout, outer, function, costs, room, frequency);
+    let Some(kept) = price(unit.function) else { return run };
+    while !run.is_empty() {
+        let mut hoisted = unit.function.clone();
+        for &inst in &run {
+            hoisted.move_to(inst, Position::Before(before)).expect("a placed instruction");
+        }
+        let Some(moved) = price(&hoisted) else { return run };
+        // A floating value held across the loop is released after it, once for each time the loop is entered.
+        let floats: BTreeSet<ValueId> = _crossed_values(&hoisted, &run).into_iter().filter(|&value| matches!(unit.context.types.get(hoisted.value(value).ty), Type::Float(_))).collect();
+        let moved = moved + floats.len() as i64 * costs.float_release * frequency.get(&into).copied().unwrap_or(1);
+        let Some(forecast) = profit::spill_forecast(unit.context, unit.layout, &hoisted, costs, room, &|inst| crate::spill::kept_across(outer, unit.context, &hoisted, inst), frequency) else { return run };
+        let cells = crate::spill::cells(&hoisted);
+        let traffic = crate::spill::traffic(&hoisted, frequency, &cells, costs, &|_| true, &|value| crate::spill::words(unit.context, unit.layout, &hoisted, value));
+        let free = |value: ValueId| _displacement(&hoisted, value) || traffic.get(&value).is_some_and(|one| one.rebuild.is_some());
+        let crossing = _crossed_values(&hoisted, &run).intersection(&forecast.spilled).copied().collect::<BTreeSet<_>>();
+        let uncounted: i64 = crossing.iter().filter(|&&value| free(value)).filter_map(|value| traffic.get(value)).map(|one| one.price(costs)).sum();
+        for &value in &forecast.spilled {
+            if let ValueDef::Instruction(def) = hoisted.value(value).def {
+                llrm_support::debug!("hoist", "  spilled {value:?} = {:?} {:?}", hoisted.instruction(def).opcode, hoisted.instruction(def).operands);
+            }
+        }
+        llrm_support::debug!("hoist", "kept {kept}, moved {moved}, uncounted {uncounted}, floats {}, crossing {:?}, spilled {:?}", floats.len(), crossing, forecast.spilled);
+        if moved - uncounted <= kept {
+            return run;
+        }
+        let mut stay: BTreeSet<ValueId> = crossing.into_iter().filter(|&value| !free(value)).collect();
+        // What costs its release more than it saves stays, with what reads it.
+        if costs.float_release > 0 {
+            stay.extend(floats);
+        }
+        if stay.is_empty() {
+            return Vec::new();
+        }
+        // What reads a value that stays cannot leave before it.
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for &inst in &run {
+                let instruction = unit.function.instruction(inst);
+                if instruction.operands.iter().any(|operand| matches!(operand, Operand::Value(value) if stay.contains(value))) {
+                    grew |= instruction.result.is_some_and(|result| stay.insert(result));
+                }
+            }
+        }
+        // And what only they read has nothing to do before the loop.
+        let mut grew = true;
+        while grew {
+            grew = false;
+            for &inst in &run {
+                let Some(result) = unit.function.instruction(inst).result else { continue };
+                let users = unit.function.users(result);
+                if !stay.contains(&result) && !users.is_empty() && users.iter().all(|one| unit.function.instruction(one.user).result.is_some_and(|read| stay.contains(&read))) {
+                    grew |= stay.insert(result);
+                }
+            }
+        }
+        run.retain(|&inst| unit.function.instruction(inst).result.is_none_or(|result| !stay.contains(&result)));
+    }
+    run
+}
+
+/// Whether `value` is a `getelementptr` by constants that only memory accesses, or such
+/// `getelementptr`s, read.
+fn _displacement(function: &Function, value: ValueId) -> bool {
+    let ValueDef::Instruction(def) = function.value(value).def else { return false };
+    let op = function.instruction(def);
+    matches!(op.opcode, Opcode::GetElementPtr { .. }) && op.operands[1..].iter().all(|one| matches!(one, Operand::Constant(_))) && crate::spill::address_only(function, value, 3)
+}
+
+/// Whether a scalar local is still held in a slot only loaded and stored:
+/// `promote` will make it a value, and what is priced before that counts
+/// loads that will not be there.
+fn _slots_remain(unit: &passes::Unit) -> bool {
+    let function = &*unit.function;
+    function.walk().any(|(_, inst)| {
+        let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode else { return false };
+        let scalar = matches!(unit.context.types.get(allocated), Type::Int(_) | Type::Float(_) | Type::Pointer(_));
+        scalar
+            && function.instruction(inst).result.is_some_and(|slot| {
+                function.users(slot).iter().all(|one| match function.instruction(one.user).opcode {
+                    Opcode::Load { .. } => one.index == 0,
+                    Opcode::Store { .. } => one.index == 1,
+                    _ => false,
+                })
+            })
+    })
+}
+
+/// Each block's executions per entry: as `_frequencies` finds them from the
+/// loops' proven trips, or once for all where `size` counts bytes.
+fn _frequency(unit: &passes::Unit, analyses: &mut Analyses, outer: &Outer, size: bool) -> Option<std::collections::BTreeMap<i64, i64>> {
+    if size {
+        return Some(unit.function.layout().iter().map(|&block| (cfg::id(block), profit::UNIT)).collect());
+    }
+    let facts = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
+    let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+    let counted = analyses.get::<llrm_analysis::manager::Counted>(unit.context, unit.layout, unit.function);
+    let trips = profit::proven_trips(&Unit::within(unit.context, unit.layout, unit.function, outer).with_shape(&shape).with_registers(&facts).with_counted(&counted), &facts);
+    profit::_frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips))
 }
 
 /// The one block entering `loop_` from outside it.
@@ -93,7 +227,7 @@ pub fn _preheader(graph: &[cfg::Block], loop_: &Loop) -> Option<i64> {
 /// The loop's instructions whose results never change, in an order each
 /// reads only what is outside the loop or earlier in it. Grown, to a fixed
 /// point.
-pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, accesses: &Accesses, terminal: &BTreeSet<InstId>) -> Vec<InstId> {
+pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, accesses: &Accesses, terminal: &BTreeSet<InstId>, registers: &llrm_support::hash::IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &llrm_analysis::cfg::Shape) -> Vec<InstId> {
     let function = &*unit.function;
     let inside = |block: BlockId| loop_.body.contains(&cfg::id(block));
     let insts: Vec<InstId> = function.layout().iter().filter(|&&block| inside(block)).flat_map(|&block| function.block(block).instructions().to_vec()).collect();
@@ -118,8 +252,8 @@ pub fn _invariant_run(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i6
             });
             if !ready
                 || (_may_fault(unit, outer, inst)
-                    && !certain.get_or_insert_with(|| _guaranteed(unit, outer, loop_, into, terminal)).contains(&inst)
-                    && !_bounded_inside(unit, outer, inst, into, loop_.header, &mut bounded))
+                    && !certain.get_or_insert_with(|| _guaranteed(unit, outer, loop_, into, terminal, registers, shape)).contains(&inst)
+                    && !_bounded_inside(unit, outer, inst, into, loop_.header, &mut bounded, registers, shape))
             {
                 continue;
             }
@@ -173,11 +307,11 @@ fn _may_fault(unit: &passes::Unit, outer: &Outer, inst: InstId) -> bool {
 /// Whether `inst` loads only bytes inside its object wherever the
 /// preheader `into` enters the loop at `header`, its index's bounds on
 /// that edge as `ranges` finds them.
-fn _bounded_inside(unit: &passes::Unit, outer: &Outer, inst: InstId, into: i64, header: i64, bounded: &mut Option<ranges::Facts>) -> bool {
+fn _bounded_inside(unit: &passes::Unit, outer: &Outer, inst: InstId, into: i64, header: i64, bounded: &mut Option<ranges::Facts>, registers: &llrm_support::hash::IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &llrm_analysis::cfg::Shape) -> bool {
     if !matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. }) {
         return false;
     }
-    let memory = Unit::within(unit.context, unit.layout, unit.function, outer);
+    let memory = Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(registers).with_shape(shape);
     let Some(reference) = memory.reference(inst) else { return false };
     if bounded.is_none() {
         *bounded = Some(ranges::bounded(&memory).unwrap_or_default());
@@ -203,7 +337,7 @@ pub fn _cannot_fault(unit: &passes::Unit, inst: InstId) -> bool {
 /// `into`: the header's, and once induction proves a trip, those of every
 /// block each path from the header's one successor in the loop reaches
 /// before leaving or coming back. A call that cannot return ends its block.
-pub fn _guaranteed(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, terminal: &BTreeSet<InstId>) -> BTreeSet<InstId> {
+pub fn _guaranteed(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, terminal: &BTreeSet<InstId>, registers: &llrm_support::hash::IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &llrm_analysis::cfg::Shape) -> BTreeSet<InstId> {
     let function = &*unit.function;
     if function.successors(cfg::block(into)) != [cfg::block(loop_.header)] {
         return BTreeSet::new();
@@ -218,7 +352,7 @@ pub fn _guaranteed(unit: &passes::Unit, outer: &Outer, loop_: &Loop, into: i64, 
     let successors = |at: i64| function.successors(cfg::block(at)).into_iter().map(cfg::id).collect::<Vec<_>>();
     let starts: Vec<i64> = successors(loop_.header).into_iter().filter(|at| loop_.body.contains(at) && *at != loop_.header).collect();
     let [start] = starts[..] else { return out };
-    if ends(loop_.header) || !induction::nonempty(&Unit::within(unit.context, unit.layout, function, outer), loop_) {
+    if ends(loop_.header) || !induction::nonempty(&Unit::within(unit.context, unit.layout, function, outer).with_registers(registers).with_shape(shape), loop_) {
         return out;
     }
     for &target in &loop_.body {

@@ -33,7 +33,7 @@ fn reduced_for(text: &str, machine: Tuned) -> (Module, String) {
     let mut after = before.clone();
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut after, Rc::new(machine)).unwrap();
     let text = printed(&after);
     (before, text)
@@ -57,7 +57,7 @@ fn counters(printed: &str) -> usize {
     let mut module = parsed(printed);
     let (layout, outer) = (llrm_analysis::testing::layout(&module), llrm_mir::passes::Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
-    let unit = llrm_analysis::memory::Unit::within(context, &layout, function, &outer);
+    let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(context, &layout, function, &outer));
     let filling = |loop_: &llrm_analysis::graph::loops::Loop| function.block(llrm_analysis::cfg::block(loop_.header)).name.as_deref().is_some_and(|name| name.starts_with("fill_"));
     unit.shape()
         .loops
@@ -688,7 +688,7 @@ fn test_a_pointer_beside_a_stored_counter() {
 fn test_the_pipeline_settles_a_pointer_beside_a_stored_counter() {
     let mut module = parsed(&format!("{DOS}{}", pointer_beside_a_stored_counter()));
     let before = results(&module, &[&[0]]);
-    llrm_mir::program::Program::lend(&mut module, Rc::new(llrm_x86_code16::Dos::default()), |program| crate::pipeline::applied(program, &crate::pipeline::Applied::default())).and_then(|done| done).unwrap();
+    llrm_mir::program::Program::lend(&mut module, Rc::new(llrm_x86_m16::Dos::default()), |program| crate::pipeline::applied(program, &crate::pipeline::Applied::default())).and_then(|done| done).unwrap();
     let after = printed(&module);
     assert_eq!(results(&module, &[&[0]]), before, "{after}");
 }
@@ -1316,8 +1316,8 @@ fn test_frame_arrays_keep_their_own_pointers() {
     let mut after = before.clone();
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
-    manager.run_module(&mut after, Rc::new(llrm_x86_code16::Dos::default())).unwrap();
+    manager.add(Lsr::default());
+    manager.run_module(&mut after, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     let printed = printed(&after);
     let inputs: &[&[i128]] = &[&[-3, 5], &[0, 5], &[1, 5], &[7, 3], &[30, 11]];
     assert_eq!(results(&parsed(&printed), inputs), results(&before, inputs), "{printed}");
@@ -1495,12 +1495,12 @@ fn test_a_far_pointer_is_never_compared_for_the_exit() {
 
 /// `text` through `Lsr` on a Core: an address-size prefix stalls three clocks.
 fn on_core(text: &str) -> String {
-    let costs = llrm_x86_code16::target::costs("Core");
-    let machine = llrm_x86_code16::Dos { address_forms: llrm_x86_code16::target::address_forms(&costs, 3), costs, ..llrm_x86_code16::Dos::default() };
+    let costs = llrm_x86_m16::target::costs("Core");
+    let machine = llrm_x86_m16::Dos { address_forms: llrm_x86_m16::target::address_forms(&costs, 3), costs, ..llrm_x86_m16::Dos::default() };
     let mut module = parsed(&format!("{DOS}{text}"));
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut module, Rc::new(machine)).unwrap();
     printed(&module)
 }
@@ -1606,12 +1606,12 @@ b6:
 
 /// `text` through `Lsr` on a P5, as the rich route prices it.
 fn on_p5(text: &str) -> String {
-    let costs = llrm_x86_code16::target::costs("P5");
-    let machine = llrm_x86_code16::Dos { address_forms: llrm_x86_code16::target::address_forms(&costs, 0), costs, ..llrm_x86_code16::Dos::default() };
+    let costs = llrm_x86_m16::target::costs("P5");
+    let machine = llrm_x86_m16::Dos { address_forms: llrm_x86_m16::target::address_forms(&costs, 0), costs, ..llrm_x86_m16::Dos::default() };
     let mut module = parsed(&format!("{DOS}{text}"));
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut module, Rc::new(machine)).unwrap();
     printed(&module)
 }
@@ -1781,7 +1781,7 @@ fn test_a_huge_pointer_walk_is_not_swapped_for_an_offset_that_carries_too() {
     let mut after = parsed(HUGE_WALK);
     let mut manager = PassManager::default();
     manager.verify_each = true;
-    manager.add(Lsr);
+    manager.add(Lsr::default());
     manager.run_module(&mut after, Rc::new(machine)).unwrap();
     let printed = printed(&after);
     assert!(!printed.contains("lsr.iv"), "{printed}");
@@ -1855,7 +1855,7 @@ fn test_a_pointer_steps_at_the_price_of_an_add_whatever_an_address_costs() {
         let machine = Tuned { costs: OperationCosts { address, ..target().costs }, ..target() };
         let mut after = parsed(&format!("{DOS}{POINTER_WALK}"));
         let mut manager = PassManager::default();
-        manager.add(Lsr);
+        manager.add(Lsr::default());
         manager.run_module(&mut after, Rc::new(machine)).unwrap();
         printed(&after)
     };
@@ -1927,4 +1927,164 @@ b20:
     let (_, after) = reduced(text);
     let wide = |text: &str| text.lines().filter(|line| line.contains("phi i32")).count();
     assert_eq!(wide(&after), wide(text), "{after}");
+}
+
+/// A counted loop that reads `i + k` on the side of a branch only: a value the counter makes in one add.
+fn offset_read() -> String {
+    "define i16 @f(i16 %n, i16 %k, i16 %m) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %inext, %b5 ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %b5 ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b2, label %b6
+
+b2:
+  %odd = and i16 %acc, 1
+  %c = icmp ne i16 %odd, 0
+  br i1 %c, label %b3, label %b4
+
+b3:
+  %v = add i16 %i, %k
+  %t = xor i16 %v, %acc
+  br label %b5
+
+b4:
+  %u = shl i16 %acc, 1
+  br label %b5
+
+b5:
+  %sum = phi i16 [ %t, %b3 ], [ %u, %b4 ]
+  %inext = add i16 %i, 1
+  br label %b1
+
+b6:
+  ret i16 %acc
+}
+"
+    .to_owned()
+}
+
+
+/// A value made from the counter in one arm, `i + k`, costs an add where an add makes it in place
+/// and `mov; add` on a two-address target whose forms have no `lea` of any register (`[bx+si]`
+/// only): the price omitted the copy (#705), so the arm's use and its half of a trip never paid for
+/// a counter of its own. A target whose forms take any register makes it in one `lea`.
+#[test]
+fn test_a_value_made_from_the_counter_is_priced_with_its_copy() {
+    let ivs = |two_address: bool, flat: bool| {
+        let mut machine = target();
+        machine.two_address = two_address;
+        if !flat {
+            machine.address_forms.truncate(1);
+        }
+        let (_, printed) = reduced_for(&offset_read(), machine);
+        printed.lines().filter(|line| line.contains("= phi") && line.contains("%lsr.iv")).count()
+    };
+    assert_eq!(ivs(false, false), 1, "a one-address target adds in place");
+    assert_eq!(ivs(true, false), 2, "`mov; add` is dearer than the step of a counter of its own");
+    assert_eq!(ivs(true, true), 1, "`lea` makes it in one");
+}
+
+/// `c - r` was priced as a negation, a copy and an add (3) with a product temp beside the value it made;
+/// the code is `mov x,c; sub x,r` (2, the copy the use's own). Queens' Nib -Os loop read 34% in the model
+/// where the code was a tie (#721). A negation alone, and a scale, are as they were.
+#[test]
+fn test_a_difference_is_one_sub_from_a_copy_of_the_minuend() {
+    use num_bigint::BigInt;
+    // Only the word form: `[bx+si]` is no `lea` of any register.
+    let mut machine = Tuned { two_address: true, ..target() };
+    machine.address_forms.truncate(1);
+    let room = crate::spill::Room { registers: 6, across_call: 2, two_address: true, spaces: llrm_x86_m16::spaces(), ..Default::default() };
+    let target = super::Target { machine: &machine, costs: machine.costs.clone(), room, forms: machine.address_forms.clone() };
+    let costs = &machine.costs;
+    assert_eq!(super::_scaled(&target, &BigInt::from(-1), true), (0, true), "`rest - r`: a sub from a copy of rest");
+    assert_eq!(super::_scaled(&target, &BigInt::from(-1), false), (costs.add + costs.r#move, false), "`-r`: a negation of a copy");
+    assert_eq!(super::_scaled(&target, &BigInt::from(2), true), (costs.shift + costs.r#move, false), "`2r + rest`: a shift of a copy");
+    assert_eq!(super::_scaled(&target, &BigInt::from(1), true), (0, false));
+}
+
+/// `d += n; while (n--) *--d = 0;`, every backward clear: the counter's step is made in the header before the test, and
+/// lsr's rotation behind its guard made it read its own result. `after lsr: sub in %b4 uses a value whose definition does not
+/// dominate it` at -O1 and -O2 (gcc.c-torture, #811).
+#[test]
+fn test_a_counter_stepped_in_the_header_is_not_rotated_to_read_itself() {
+    let text = "define i32 @f(ptr %d, i32 %n) {
+b0:
+  %e = getelementptr inbounds i8, ptr %d, i32 %n
+  br label %b1
+
+b1:
+  %c = phi i32 [ %n, %b0 ], [ %c1, %b2 ]
+  %p = phi ptr [ %e, %b0 ], [ %q, %b2 ]
+  %c1 = sub nsw i32 %c, 1
+  %go = icmp ne i32 %c, 0
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %q = getelementptr inbounds i8, ptr %p, i32 -1
+  store i8 0, ptr %q
+  br label %b1
+
+b3:
+  ret i32 %c
+}
+";
+    // reduced() verifies each pass's output.
+    reduced(text);
+}
+
+/// A loop with an early way out that returns: `n` trips, or fewer where the sum meets `k`.
+fn leaving(count: &str, start: i64) -> String {
+    format!(
+        "define i16 @f(i16 %n, i16 %k) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %inext, %b3 ]
+  %c = phi i16 [ {start}, %b0 ], [ %cnext, %b3 ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %b3 ]
+  %go = icmp ult i16 %i, {count}
+  br i1 %go, label %b2, label %b4
+
+b2:
+  %off = add i16 %c, 100
+  %twice = shl i16 %acc, 1
+  %sum = xor i16 %twice, %off
+  %hit = icmp eq i16 %sum, %k
+  br i1 %hit, label %b5, label %b3
+
+b3:
+  %inext = add i16 %i, 1
+  %cnext = add i16 %c, 1
+  br label %b1
+
+b4:
+  ret i16 %acc
+
+b5:
+  ret i16 %i
+}}
+"
+    )
+}
+
+/// Queens' inner loop went the whole way round with `inc; add; cmp; jle` where gcc's stops at `inc; je`: a loop with
+/// another way out had no counted exit, so its test was never rewritten. A symbolic count with a way out counts to zero.
+#[test]
+fn test_a_loop_with_another_way_out_counts_to_zero_at_its_own_exit() {
+    let printed = same(&leaving("%n", 5), &[&[0, 9], &[1, 9], &[7, 9], &[7, 0], &[300, 1]]);
+    assert!(printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")), "{printed}");
+}
+
+/// The same with a count of 32 that the other way out leaves early: the head test is not fused with the step by
+/// rotation, so a zero test saves nothing and the counter read at the way out costs an add there. mandel's
+/// `cmp bx, 32` became `or bx, bx` and two fix-ups, 960 more instructions.
+#[test]
+fn test_a_constant_count_with_another_way_out_keeps_its_counter() {
+    let printed = same(&leaving("32", 5), &[&[0, 9], &[0, 0], &[0, 3000]]);
+    assert!(!printed.lines().any(|line| line.contains("icmp ne i16") && line.ends_with(", 0")), "{printed}");
 }

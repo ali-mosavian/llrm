@@ -236,8 +236,13 @@ impl SsaUpdater {
         self.inserted.push(phi);
         let mut operands = Vec::new();
         for predecessor in predecessors {
-            operands.push(self.value_at_end_of_block(context, function, predecessor));
-            operands.push(Operand::Block(predecessor));
+            let value = self.value_at_end_of_block(context, function, predecessor);
+            // One input for each edge: a switch may reach the block by several.
+            let edges = function.terminator(predecessor).map_or(1, |end| function.instruction(end).operands.iter().filter(|&&one| one == Operand::Block(block)).count().max(1));
+            for _ in 0..edges {
+                operands.push(value);
+                operands.push(Operand::Block(predecessor));
+            }
         }
         function.set_operands(phi, operands);
         let mut inputs = function.instruction(phi).operands.iter().step_by(2).copied().filter(|&one| one != result);

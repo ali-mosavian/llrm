@@ -58,6 +58,8 @@ pub struct Frontend {
     pub runtime_frames: bool,
     /// Errors in a module handler report their BASIC line: `--error-lines`.
     pub error_lines: bool,
+    /// The most bytes the target's data segment holds: its description's, set by the CLI that bound the target.
+    pub segment_bytes: Option<usize>,
     pub includes: Vec<PathBuf>,
 }
 
@@ -80,6 +82,7 @@ impl Frontend {
             array_merging: false,
             runtime_frames: false,
             error_lines: false,
+            segment_bytes: None,
             includes: Vec::new(),
         }
     }
@@ -112,6 +115,7 @@ fn _options(source: &Path, frontend: &Frontend) -> Result<qbfront::driver::Args,
             array_merging: frontend.array_merging,
             runtime_frames: frontend.runtime_frames,
             error_lines: frontend.error_lines,
+            segment_bytes: frontend.segment_bytes,
         },
         debug: frontend.debug,
         syntax: false,

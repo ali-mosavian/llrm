@@ -1,53 +1,47 @@
-reason = "shared remat of copied loads, a stable load folded into its single use (spiller::_folded_reads) and across writes its cell survives (peephole); queens c and parity/qbsp nib trade an instruction for memory operands at lower executed work (queens c -O2/-Os 271291 -> 270819, qbsp nib -O2 440 -> 438, -Os 441 -> 439), owner-approved"
-blessed = "2026-10-06"
+reason = "interprocedural register use on top of #854: qbsp's callers keep values in the registers its private callees leave: instructions 320 -> 316, memory operands 118 -> 96, code bytes 462 -> 442 at -O2 (324 -> 320, 123 -> 93, 410 -> 392 at -Os)"
+blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 1064
+instructions = 1056
 memory_operands = 463
-code_bytes = 738
+code_bytes = 734
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0231
 
 [bas.Os]
-instructions = 1157
+instructions = 1149
 memory_operands = 535
-code_bytes = 663
+code_bytes = 662
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0247
 
 [c.O2]
-instructions = 337
+instructions = 329
 memory_operands = 87
-code_bytes = 413
+code_bytes = 407
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0049
 
 [c.Os]
-instructions = 335
+instructions = 326
 memory_operands = 87
-code_bytes = 354
+code_bytes = 355
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0049
 
 [nib.O2]
-instructions = 320
-memory_operands = 118
-code_bytes = 462
+instructions = 316
+memory_operands = 96
+code_bytes = 442
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0051
 
 [nib.Os]
-instructions = 316
-memory_operands = 123
-code_bytes = 406
+instructions = 320
+memory_operands = 93
+code_bytes = 392
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0051
 
 [ow.O2]
 instructions = 387

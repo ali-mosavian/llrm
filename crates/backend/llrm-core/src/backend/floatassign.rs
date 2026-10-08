@@ -19,7 +19,7 @@ use crate::backend::allocate::{Live, live};
 use crate::backend::constpool::{self, Pool};
 use crate::backend::cpu::Profile;
 use crate::backend::floatalloc::{
-    _float_copy, _floating, _loads_memory, _memory_name, _terminators, _two_values, cell_of, inserted, name_is, semantics,
+    _compare_name, _float_copy, _floating, _loads_memory, _memory_name, _terminators, _two_values, cell_of, inserted, name_is, semantics,
     unlowered, width_of,
 };
 use crate::backend::floatregions::{Raised, boundary};
@@ -30,9 +30,6 @@ use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexMap, IndexSet};
-
-/// The flat registers: x87's stack depth.
-const REGISTERS: usize = 8;
 
 /// x87 reads integers from memory, for named values and physical stack slots.
 fn _integer_loads(body: &LirBody, mut frame: Option<&mut Frame>, mut pool: Option<&mut Pool>) -> Result<LirBody, Raised> {
@@ -558,7 +555,7 @@ fn _use_costs(what: &Semantics, value: u32, home: &Insn, survives: &dyn Fn(u32) 
     let kept = if survives(value) { load } else { 0.0 };
     match what.op {
         Operation::Compare if matches!(what.sources.get(1), Some(Loc::Held(held)) if held.value == value) => {
-            let fused = select::float_memory("fcomp", cell_of(home), 0).is_some();
+            let fused = select::float_memory(_compare_name(home), cell_of(home), select::At::bits16(0)).is_some();
             (kept, if fused { 0.0 } else { load }, fused)
         }
         Operation::FloatStore if _keeps_source(what) => (0.0, load, false),
@@ -724,6 +721,9 @@ struct Plan<'b> {
     body: &'b LirBody,
     floating: HashSet<u32>,
     homes: IndexMap<u32, Arc<Insn>>,
+    /// Of `homes`, the values the program stores to their cell: no load makes them, so a definition costs nothing more
+    /// in a register than in memory.
+    stored: HashSet<u32>,
     allocnos: Allocnos,
     /// Root -> register cost minus memory cost, and whether it holds a definition leaving for memory.
     costs: IndexMap<usize, f64>,
@@ -898,7 +898,9 @@ impl Plan<'_> {
             if let Some((at, _)) = segment.restore {
                 cost += load * weight(at);
             }
-            if equivalent {
+            if equivalent && self.stored.contains(&segment.value) {
+                // Its cell holds it wherever it lives: a copy defines it, in a register or not at all.
+            } else if equivalent {
                 cost += segment.defs.iter().map(|(at, _)| load * weight(*at)).sum::<f64>();
             } else {
                 // In memory, each definition is stored once after it; in a
@@ -1012,6 +1014,49 @@ fn _aliased(body: &LirBody) -> LirBody {
             .collect();
     }
     out
+}
+
+/// The phis' values the optimizer proved are a cell's (`!llrm.home`) where the body still holds it
+/// (`storedhomes`): each is read back from the cell, and a store of its own is never made.
+fn _stored_homes(body: &LirBody, floating: &HashSet<u32>) -> IndexMap<u32, Arc<Insn>> {
+    crate::backend::storedhomes::held(body, &|value, cell| floating.contains(&value) && (cell.width == 8 || cell.width == 4))
+        .into_iter()
+        .map(|(value, cell)| (value, _spill_home(value, cell)))
+        .collect()
+}
+
+/// `body` without the constant loads nothing reads: a value whose copies were vacated (read back from its home
+/// instead) leaves `fld1; fstp st(0)` behind in stack form. A fixed-address load is no observable exception in MIR,
+/// as a dead one MIR drops.
+fn _without_dead_loads(body: &LirBody) -> LirBody {
+    let mut read: HashSet<u32> = body.pins.keys().copied().collect();
+    for block in &body.blocks {
+        read.extend(block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)));
+        for one in &block.insns {
+            read.extend(&one.uses);
+            read.extend(one.requires.iter().map(|(held, _)| held.value));
+            if let Some(what) = &one.what {
+                read.extend(_held_floats(&what.sources));
+            }
+        }
+    }
+    let dead = |one: &Insn| {
+        one.what.as_ref().is_some_and(|what| {
+            what.op == Operation::FloatLoad
+                && !one.volatile()
+                && one.group.is_none()
+                && matches!(what.dests.as_slice(), [Loc::Held(result)] if result.width == 10 && !read.contains(&result.value))
+                && match what.sources.as_slice() {
+                    [] => matches!(what.name.as_deref(), Some("fld1" | "fldz")),
+                    [Loc::Mem(cell)] => cell.base.is_none() && cell.index.is_none() && cell.addr.is_some(),
+                    _ => false,
+                }
+        })
+    };
+    if !body.blocks.iter().flat_map(|block| &block.insns).any(|one| dead(one)) {
+        return body.clone();
+    }
+    body.with_blocks(body.blocks.iter().map(|block| block.with_insns(block.insns.iter().filter(|one| !dead(one)).cloned().collect())).collect())
 }
 
 /// Values a block reads from a cell nothing writes before their last
@@ -1267,9 +1312,9 @@ impl Plan<'_> {
             semantics(Operation::FloatArith, &operation, what.dests.clone(), vec![Loc::Held(other), cell])
         } else if what.op == Operation::Compare
             && matches!(what.sources.as_slice(), [Loc::Held(left), Loc::Held(right)] if right.value == value && left.value != value)
-            && select::float_memory("fcomp", cell_of(home), 0).is_some()
+            && select::float_memory(_compare_name(home), cell_of(home), select::At::bits16(0)).is_some()
         {
-            Semantics { name: Some("fcomp".to_owned()), sources: vec![what.sources[0].clone(), cell], ..what.clone() }
+            Semantics { name: Some(_compare_name(home).to_owned()), sources: vec![what.sources[0].clone(), cell], ..what.clone() }
         } else {
             return None;
         };
@@ -1288,6 +1333,7 @@ impl Plan<'_> {
 /// The first instruction before which more floating values hold registers
 /// than there are, counting what each bundle's borders hold.
 fn _crowded(body: &LirBody, floating: &HashSet<u32>) -> Option<(i64, usize)> {
+    let registers = body.float_stack;
     let (live_in, live_out) = live(body);
     let bundles = spillplacement::bundles(body);
     let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> { set.iter().copied().filter(|value| floating.contains(value)).collect() };
@@ -1300,10 +1346,10 @@ fn _crowded(body: &LirBody, floating: &HashSet<u32>) -> Option<(i64, usize)> {
     for block in &body.blocks {
         let (entry, exit) = bundles.of[&block.at];
         let cut = _terminators(block);
-        if held[&exit].len() > REGISTERS {
+        if held[&exit].len() > registers {
             return Some((block.at, cut));
         }
-        if held[&entry].len() > REGISTERS {
+        if held[&entry].len() > registers {
             return Some((block.at, 0));
         }
         let steps = _steps(block, cut);
@@ -1328,7 +1374,7 @@ fn _crowded(body: &LirBody, floating: &HashSet<u32>) -> Option<(i64, usize)> {
             // duplicating one operand still holds the other, which it pops.
             let read = group.iter().filter_map(|one| one.what.as_ref()).flat_map(|what| _held_floats(&what.sources));
             let before: BTreeSet<u32> = after[index].difference(&made).copied().chain(read).collect();
-            if after[index].union(&made).count().max(before.len() + duplicated) > REGISTERS {
+            if after[index].union(&made).count().max(before.len() + duplicated) > registers {
                 return Some((block.at, first));
             }
         }
@@ -1369,9 +1415,12 @@ pub fn assigned(
     }
     let body = _aliased(&body);
     let floating = _floating_values(&body);
-    let homes = _homes(&body, &floating);
+    let mut homes = _homes(&body, &floating);
+    let stored = _stored_homes(&body, &floating);
+    let stored_values: HashSet<u32> = stored.keys().copied().collect();
+    homes.extend(stored);
     let allocnos = _allocnos(&body, &floating, &homes, cpu);
-    let mut plan = Plan { body: &body, floating, homes, allocnos, costs: IndexMap::default() };
+    let mut plan = Plan { body: &body, floating, homes, stored: stored_values, allocnos, costs: IndexMap::default() };
     plan.priced(cpu);
     let mut spilled = plan.in_memory();
     // One `at` can name several instructions: a compare and its branches.
@@ -1384,7 +1433,7 @@ pub fn assigned(
     loop {
         let rewritten = plan.rewritten(&spilled, &mut frame, cpu)?;
         let Some((block, position)) = _crowded(&rewritten, &_floating_values(&rewritten)) else {
-            return Ok(rewritten);
+            return Ok(_without_dead_loads(&rewritten));
         };
         let originals = rewritten
             .blocks

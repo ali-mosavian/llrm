@@ -8,7 +8,7 @@ use llrm_analysis::cfg;
 
 use llrm_support::hash::IndexMap;
 
-use super::{OperationCosts, UNKNOWN_TRIPS, _frequencies, _loop_products, operation, proven_trips, r#static, spill_risk, weighted};
+use super::{OperationCosts, UNKNOWN_TRIPS, _frequencies, _loop_products, operation, proven_trips, r#static, spill_forecast, weighted};
 
 fn risk(text: &str, capacity: i64) -> Option<i64> {
     let module = llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -16,7 +16,7 @@ fn risk(text: &str, capacity: i64) -> Option<i64> {
     let costs = OperationCosts { load: 10, store: 10, ..OperationCosts::default() };
     let room = crate::spill::Room { registers: capacity, across_call: capacity, ..Default::default() };
     let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap_or("")).expect("a layout");
-    spill_risk(&module.context, &layout, function, &costs, room, &|_| capacity, &_frequencies(&module.context, &module.metadata, &module.globals, function, None).expect("frequencies"), &llrm_analysis::liveness::live(function)).map(|price| price / super::UNIT)
+    spill_forecast(&module.context, &layout, function, &costs, room, &|_| capacity, &_frequencies(&module.context, &module.metadata, &module.globals, function, None).expect("frequencies")).map(|forecast| forecast.cost / super::UNIT)
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn a_loop_induction_counts_is_weighted_by_its_count() {
     let layout = llrm_mir::datalayout::DataLayout::default();
     let trips = |text: &str| {
         let module = module(text);
-        let unit = llrm_analysis::memory::Unit::of(&module, &layout, function(&module));
+        let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::of(&module, &layout, function(&module)));
         let trips = proven_trips(&unit, &llrm_analysis::consts::known(&unit, None, None, None));
         let callees = llrm_mir::memory::callees(&module);
         (trips.len(), weighted(&module.context, &layout, function(&module), &callees, &OperationCosts::default(), &_frequencies(&module.context, &module.metadata, &module.globals, function(&module), Some(&trips)).unwrap()).map(|total| total / super::UNIT))
@@ -345,4 +345,17 @@ fn a_select_is_priced() {
     let layout = llrm_mir::datalayout::DataLayout::default();
     let select = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Select).unwrap();
     assert_eq!(operation(&module.context, &layout, function, &Default::default(), select, &costs), Some(5));
+}
+
+/// Each site asked `spill::integer` of every value live at it, and `folded` looks at every user of the value:
+/// 6% of compiling matmul at -O2 (#560). A value is asked about once for the whole forecast.
+#[test]
+fn test_a_forecast_asks_whether_a_value_is_folded_once_however_many_sites_it_is_live_at() {
+    let values: String = (0..12).map(|at| format!("  %a{at} = add i16 {at}, 0\n")).collect();
+    let calls: String = (0..12).map(|_| "  call void @use(i16 %a0, i16 %a1, i16 %a2)\n".to_owned()).collect();
+    let uses: String = (0..12).map(|at| format!("  call void @use(i16 %a{at}, i16 %a{at}, i16 %a{at})\n")).collect();
+    let text = format!("declare void @use(i16, i16, i16)\n\ndefine void @f() {{\nb0:\n{values}{calls}{uses}  ret void\n}}\n");
+    let before = crate::spill::folded_runs();
+    risk(&text, 4);
+    assert!(crate::spill::folded_runs() - before <= 12 + 1, "{} asks for 12 values", crate::spill::folded_runs() - before);
 }

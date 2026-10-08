@@ -37,7 +37,7 @@ impl Placed {
     /// one; the compiler's constants in `constants`, else the default. Each
     /// variable aligned as stated, public where external; each declared one
     /// an extern, near where it is in `data_space`.
-    pub fn lay_out(&self, built: &mut masm::Module, module: &Module, data_space: u32, constants: Option<&str>, far_bss: bool) -> Result<(), String> {
+    pub fn lay_out(&self, built: &mut masm::Module, module: &Module, data_space: u32, constants: Option<&str>, far_bss: bool, segment_bytes: Option<usize>) -> Result<(), String> {
         let (default, items) = built.data.pop().ok_or("an assembled module without its data segment")?;
         // What assembly adds after the globals' data: its constant pool.
         let pool: Vec<masm::Datum> = items.into_iter().skip_while(|one| !matches!(one, masm::Datum::Label(label) if label.name.starts_with("$K"))).collect();
@@ -88,7 +88,7 @@ impl Placed {
             // An object past 64K runs on through further segments, each a full 64K
             // and paragraph aligned, which the linker lays end to end: the segment
             // value of a huge pointer's next 64K is this one's plus 0x1000.
-            let parts = split(items, &segment)?;
+            let parts = split(items, &segment, segment_bytes)?;
             for (at, part) in parts.into_iter().enumerate() {
                 if at == 0 {
                     built.data.push((segment.clone(), part));
@@ -117,7 +117,7 @@ impl Placed {
                     built.publics.push(built.names[&(globals::space(module, global), i64::from(global.0))].clone());
                 }
             }
-            for (at, part) in split(items, &segment)?.into_iter().enumerate() {
+            for (at, part) in split(items, &segment, segment_bytes)?.into_iter().enumerate() {
                 let name = if at == 0 { segment.clone() } else { format!("{segment}_{at}") };
                 built.private.insert(name.clone());
                 built.far_bss.insert(name.clone());
@@ -134,13 +134,12 @@ impl Placed {
 }
 
 /// What one segment can hold: a 16-bit offset's range.
-const SEGMENT_BYTES: usize = 0x1_0000;
-
-/// `items` cut into segments of at most 64K, each but the last full. Only
+/// `items` cut into segments of at most `limit` bytes (64K where segments are), each but the last full. Only
 /// the one object a huge segment holds may be cut: it is alone, so its
 /// bytes start at offset 0.
-fn split(items: Vec<masm::Datum>, segment: &str) -> Result<Vec<Vec<masm::Datum>>, String> {
+fn split(items: Vec<masm::Datum>, segment: &str, limit: Option<usize>) -> Result<Vec<Vec<masm::Datum>>, String> {
     use masm::Datum;
+    let limit = limit.unwrap_or(usize::MAX / 2);
     let mut parts: Vec<Vec<Datum>> = vec![Vec::new()];
     let mut used = 0;
     let mut total = 0;
@@ -160,7 +159,7 @@ fn split(items: Vec<masm::Datum>, segment: &str) -> Result<Vec<Vec<masm::Datum>>
                 let pad = (-(total as i64)).rem_euclid(to) as usize;
                 // Kept as asked where it fits, for the segment to be aligned
                 // as it says; cut into fill only where it straddles a 64K end.
-                if used + pad <= SEGMENT_BYTES {
+                if used + pad <= limit {
                     used += pad;
                     total += pad;
                     parts.last_mut().expect("a part").push(Datum::Align(masm::Align { to }));
@@ -170,15 +169,15 @@ fn split(items: Vec<masm::Datum>, segment: &str) -> Result<Vec<Vec<masm::Datum>>
             }
             other => {
                 let size = match &other {
-                    Datum::Pointer(masm::Pointer { far, .. }) => if *far { 4 } else { 2 },
+                    Datum::Pointer(masm::Pointer { bytes, .. }) => *bytes as usize,
                     Datum::SegmentWord(_) => 2,
                     _ => 0,
                 };
-                if size > 0 && used == SEGMENT_BYTES {
+                if size > 0 && used == limit {
                     parts.push(Vec::new());
                     used = 0;
                 }
-                if used + size > SEGMENT_BYTES {
+                if used + size > limit {
                     return Err(format!("{segment}: an address straddles the end of a 64K segment"));
                 }
                 used += size;
@@ -189,11 +188,11 @@ fn split(items: Vec<masm::Datum>, segment: &str) -> Result<Vec<Vec<masm::Datum>>
         };
         let mut from = 0;
         while rest > 0 {
-            if used == SEGMENT_BYTES {
+            if used == limit {
                 parts.push(Vec::new());
                 used = 0;
             }
-            let room = SEGMENT_BYTES - used;
+            let room = limit - used;
             let take = rest.min(room);
             parts.last_mut().expect("a part").push(make(from, from + take));
             from += take;
@@ -233,7 +232,7 @@ mod tests {
             .map(|one| match one {
                 Datum::Bytes(bytes) => bytes.len(),
                 Datum::Fill(Fill { size, .. }) => *size as usize,
-                Datum::Pointer(Pointer { far, .. }) => if *far { 4 } else { 2 },
+                Datum::Pointer(Pointer { bytes, .. }) => *bytes as usize,
                 _ => 0,
             })
             .sum()
@@ -244,37 +243,45 @@ mod tests {
     }
 
     /// An 80000-byte object was one 80000-byte segment, which no object file holds.
+    /// A flat target has no 64K segment: an 80000-byte object was cut in two (and refused beside
+    /// another), as a huge one is, so a flat program with a large array did not link.
+    #[test]
+    fn a_target_without_segments_does_not_cut_an_object() {
+        let parts = split(vec![label(), Datum::Fill(Fill { size: 80000, byte: None })], "S", None).unwrap();
+        assert_eq!(parts.len(), 1);
+    }
+
     #[test]
     fn test_an_object_past_64k_is_cut_into_full_segments_and_a_rest() {
-        let parts = split(vec![label(), Datum::Fill(Fill { size: 80000, byte: None })], "S").unwrap();
+        let parts = split(vec![label(), Datum::Fill(Fill { size: 80000, byte: None })], "S", Some(0x1_0000)).unwrap();
         assert_eq!(parts.iter().map(|part| size(part)).collect::<Vec<_>>(), [65536, 14464]);
         assert!(matches!(parts[0][0], Datum::Label(_)) && !parts[1].iter().any(|one| matches!(one, Datum::Label(_))));
     }
 
     #[test]
     fn test_an_object_of_exactly_64k_is_one_segment() {
-        let parts = split(vec![label(), Datum::Bytes(vec![1; 65536])], "S").unwrap();
+        let parts = split(vec![label(), Datum::Bytes(vec![1; 65536])], "S", Some(0x1_0000)).unwrap();
         assert_eq!(parts.iter().map(|part| size(part)).collect::<Vec<_>>(), [65536]);
     }
 
     #[test]
     fn test_an_address_after_a_full_segment_starts_the_next() {
-        let pointer = Datum::Pointer(Pointer { name: "_x".into(), offset: 0, far: true });
-        let parts = split(vec![label(), Datum::Bytes(vec![0; 65536]), pointer], "S").unwrap();
+        let pointer = Datum::Pointer(Pointer { name: "_x".into(), offset: 0, far: true, bytes: 4 });
+        let parts = split(vec![label(), Datum::Bytes(vec![0; 65536]), pointer], "S", Some(0x1_0000)).unwrap();
         assert_eq!(parts.iter().map(|part| size(part)).collect::<Vec<_>>(), [65536, 4]);
     }
 
     #[test]
     fn test_a_huge_object_shares_its_segment_with_none() {
         let two = vec![label(), Datum::Bytes(vec![0; 40000]), label(), Datum::Bytes(vec![0; 40000])];
-        assert!(split(two, "S").unwrap_err().contains("shares its segment"));
+        assert!(split(two, "S", Some(0x1_0000)).unwrap_err().contains("shares its segment"));
     }
 
     /// A variable's `align 4` became bytes of fill before the object file
     /// saw it, so the segment never learned its widest request.
     #[test]
     fn test_an_align_request_survives_for_the_segment_to_keep() {
-        let parts = split(vec![label(), Datum::Bytes(vec![1]), Datum::Align(masm::Align { to: 4 }), Datum::Bytes(vec![2])], "S").unwrap();
+        let parts = split(vec![label(), Datum::Bytes(vec![1]), Datum::Align(masm::Align { to: 4 }), Datum::Bytes(vec![2])], "S", Some(0x1_0000)).unwrap();
         assert!(parts[0].iter().any(|one| matches!(one, Datum::Align(masm::Align { to: 4 }))), "{:?}", parts[0]);
     }
 }

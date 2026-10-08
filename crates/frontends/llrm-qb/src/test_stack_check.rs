@@ -28,7 +28,7 @@ fn the_limit_and_handler_come_from_the_runtime_description() {
     for runtime in RUNTIMES {
         let mut checked = program(runtime, true, SOURCE);
         assert_eq!(checked.stack_check, llrm_core::abi::runtime::semantics::stack(runtime), "{runtime}");
-        checked.stack_check = Some(StackCheck { limit: "FOO".into(), handler: "BAR".into(), red_zone: 0, entry: Some("BAZ".into()) });
+        checked.stack_check = Some(StackCheck { limit: "FOO".into(), handler: "BAR".into(), far: true, red_zone: 0, entry: Some("BAZ".into()) });
         let own = procedure(&checked);
         assert!(own.contains("cmp sp, word ptr FOO") && own.contains("call far ptr BAR"), "{runtime}: {own}");
         assert!(!own.contains("pendchk") && !own.contains("ERR_OSS"), "{runtime}: {own}");
@@ -52,10 +52,10 @@ fn the_default_build_checks_nothing() {
             assert_eq!(plain.stack_check, None);
             let text = listing(&plain);
             assert!(!text.contains("pendchk") && !text.contains("ERR_OSS") && !text.contains("B$ENRD"), "{runtime}: {text}");
-            let mir = llrm_core::hir::mir::emit(&plain);
+            let mir = llrm_core::hir::mir::emit(&plain, &llrm_x86_m16::layout());
             assert!(mir.iter().all(|one| !format!("{:?}", one.module.globals).contains("stackcheck")), "{runtime}");
         }
-        let marked = llrm_core::hir::mir::emit(&program(runtime, true, SOURCE));
+        let marked = llrm_core::hir::mir::emit(&program(runtime, true, SOURCE), &llrm_x86_m16::layout());
         assert!(marked.iter().any(|one| format!("{:?}", one.module.globals).contains("stackcheck")), "{runtime}");
     }
 }

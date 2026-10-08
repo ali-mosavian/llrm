@@ -1,0 +1,23 @@
+# flags: -O2 -march=i486 -m32
+# The flat heap past its first arena: the extender is asked again when the arena is full and the heap
+# chains the new one (nib.toml's heap_bytes is 16 MB, so three 7 MB blocks cross it). Each block is
+# written at both ends and read back; a freed block is reused. heap.nib and errors.nib are the runtime's own.
+import heap
+
+fn main() -> i16:
+    unsafe:
+        let first = heap.allocate(7000000)
+        let second = heap.allocate(7000000)
+        let third = heap.allocate(7000000)
+        *first = 1
+        *first.offset(6999999) = 2
+        *second = 3
+        *second.offset(6999999) = 4
+        *third = 5
+        *third.offset(6999999) = 6
+        print(*first + *first.offset(6999999) + *second + *second.offset(6999999) + *third + *third.offset(6999999))
+        print(first != second && second != third && first != third)
+        heap.release(third)
+        let again = heap.allocate(6000000)
+        print(again == third)
+    return 0

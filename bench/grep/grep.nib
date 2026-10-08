@@ -1,3 +1,4 @@
+# targets: x86-m16   (far pointers to locals: std.io reads and writes through *far)
 # data: @dickens
 # Aho-Corasick over the bytes of DICKENS, as grep.c.
 import std.io as io

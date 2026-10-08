@@ -1,0 +1,38 @@
+# C's runtime on flat DOS under DOS/32A: what the language asks of the target's OS layer
+# (runtime/shared/dos/m32). Each field naming a file names one in this directory.
+
+# What `-fsanitize=stack` compares and calls.
+stack = "stack.toml"
+# The stack the OS layer's start-up reserves.
+stack_base = 16384
+# Fields the assembler is told as `-DSYMBOL=value`; the OS layer's own come from its description.
+assembler_defines = ["stack_base:STACK_BYTES"]
+
+# How Open Watcom's front end is asked to record a C program for this target (llrm-c).
+[frontend]
+watcom_cpu = "386"
+# What the front end calls `int`, in bytes: the C ABI's, which the data layout does not state.
+int_bytes = 4
+# The routine the start-up calls, and the convention it calls it in: with no arguments, on the stack.
+entry = "main"
+entry_convention = "cdecl32"
+# What the front end records of a function it passes in its default registers (its own list, which differs by tree).
+default_registers = "[f0000ff:0]"
+# The header it includes first, from the repository root.
+header = "crates/frontends/llrm-c/src/flat.h"
+
+# Per ABI (calling.toml's `[abi.*]`): the switches Open Watcom's front end is asked with, the convention a function it records as
+# cdecl has, and one it records in its default registers. `-ecc` makes every function cdecl, as gcc's i386 default is.
+# `convention`: whose contract a call to a routine that states none has (`calling.toml`): the stack one, whose clobbers a caller must
+# assume. An unmarked function is in registers (no -ecc) and states its own at each call.
+[frontend.abi.watcom]
+convention = "cdecl32"
+flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-s", "-zl", "-zq"]
+cdecl = "cdecl32"
+registers = "watcall32"
+
+[frontend.abi.sysv]
+convention = "sysv32"
+flags = ["-3", "-fpi87", "-fp3", "-j", "-zp4", "-ei", "-ecc", "-s", "-zl", "-zq"]
+cdecl = "sysv32"
+registers = "watcall32"

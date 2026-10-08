@@ -1,0 +1,19 @@
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32
+# The OS layer's memory request: two grants are not null, writable, and do not overlap.
+import os
+
+fn main() -> i16:
+    unsafe:
+        let first = os.more(64)
+        let second = os.more(64)
+        print(!first.is_null())
+        print(!second.is_null())
+        for i in 0..64:
+            first[i] = 1
+        for i in 0..64:
+            second[i] = 2
+        let mut sum: u16 = 0
+        for i in 0..64:
+            sum += u16(first[i])
+        print(sum)
+    return 0

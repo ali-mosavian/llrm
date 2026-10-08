@@ -112,7 +112,7 @@ fn through(text: &str, replacement: Option<&str>, costs: OperationCosts) -> (boo
     let outer = Outer::of(&module, None);
     let (context, function) = module.function_mut("f").unwrap();
     let mut declared = llrm_mir::passes::Declared::default();
-    let mut unit = Unit { context, layout: &layout, function, metadata: &metadata, declared: &mut declared };
+    let mut unit = Unit { context, layout: &layout, function, id: None, metadata: &metadata, declared: &mut declared };
     let kept = optimized(&mut unit, &outer, &costs, &mut |trial: &mut Unit| {
         if let Some(one) = &replacement {
             *trial.function = one.clone();
@@ -223,5 +223,5 @@ fn test_unswitch_reoptimization_preserves_mir_target_costs() {
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { costs: costs.clone(), registers: 5, call_registers: 2, ..Default::default() })).unwrap();
     let seen = seen.borrow();
     assert!(!seen.is_empty());
-    assert!(seen.iter().all(|one| *one == (costs.clone(), crate::spill::Room { registers: 5, across_call: 2, ..Default::default() })), "{seen:?}");
+    assert!(seen.iter().all(|one| *one == (costs.clone(), crate::spill::Room { registers: 5, across_call: 2, spaces: llrm_x86_m16::spaces(), index_scales: 1, ..Default::default() })), "{seen:?}");
 }

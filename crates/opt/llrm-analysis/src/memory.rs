@@ -398,6 +398,8 @@ pub fn classes_may_alias(one: AliasClass, other: AliasClass) -> bool {
 #[derive(Clone, Copy)]
 pub struct Unit<'a> {
     pub program: Option<&'a ProgramProxy>,
+    /// The address spaces where no program names its target.
+    pub spaces: llrm_mir::spaces::Spaces,
     pub context: &'a Context,
     pub layout: &'a DataLayout,
     pub metadata: &'a [MetadataNode],
@@ -421,6 +423,15 @@ pub struct Unit<'a> {
     pub annotated: Option<&'a Result<IndexMap<InstId, MemRef>, String>>,
     /// What each block assumes; without it each ask finds it.
     pub assumptions: Option<&'a Assumptions>,
+    /// Each loop's counted proofs under `registers`, the manager's `Counted`; without them each ask proves them.
+    pub counted: Option<&'a crate::induction::Counted>,
+    /// What the unavoidable branch edges bound at each block, under `registers`: the manager's `DominatedEdges`.
+    pub edges: Option<&'a crate::ranges::EdgeStates>,
+    /// What each counted loop bounds at each block, under `registers`: the manager's `Bounded`.
+    pub bounds: Option<&'a crate::ranges::Bounds>,
+    /// The allocas whose address is exposed, the manager's `ExposedFrames`; without it each ask scans
+    /// the alloca's uses.
+    pub exposed: Option<&'a BTreeSet<ValueId>>,
 }
 
 impl<'a> Unit<'a> {
@@ -437,7 +448,15 @@ impl<'a> Unit<'a> {
     }
 
     pub fn of(module: &'a Module, layout: &'a DataLayout, function: &'a Function) -> Self {
-        Self { program: None, context: &module.context, layout, metadata: &module.metadata, tbaa: None, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None }
+        Self { program: None, spaces: llrm_mir::spaces::Spaces::FLAT, context: &module.context, layout, metadata: &module.metadata, tbaa: None, globals: &module.globals, function, globals_aa: None, references: None, shape: None, registers: None, pointers: None, annotated: None, assumptions: None, counted: None, edges: None, bounds: None, exposed: None }
+    }
+
+    pub fn with_spaces(self, spaces: llrm_mir::spaces::Spaces) -> Self {
+        Self { spaces, ..self }
+    }
+
+    pub fn with_exposed(self, exposed: &'a BTreeSet<ValueId>) -> Self {
+        Self { exposed: Some(exposed), ..self }
     }
 
     pub fn with_globals_aa(self, globals_aa: &'a Globals) -> Self {
@@ -450,6 +469,18 @@ impl<'a> Unit<'a> {
 
     pub fn with_shape(self, shape: &'a Shape) -> Self {
         Self { shape: Some(shape), ..self }
+    }
+
+    pub fn with_bounds(self, bounds: &'a crate::ranges::Bounds) -> Self {
+        Self { bounds: Some(bounds), ..self }
+    }
+
+    pub fn with_edges(self, edges: &'a crate::ranges::EdgeStates) -> Self {
+        Self { edges: Some(edges), ..self }
+    }
+
+    pub fn with_counted(self, counted: &'a crate::induction::Counted) -> Self {
+        Self { counted: Some(counted), ..self }
     }
 
     pub fn with_registers(self, registers: &'a IndexMap<ValueId, Known>) -> Self {
@@ -475,10 +506,20 @@ impl<'a> Unit<'a> {
 
     /// What consts knows without memory: the manager's where the unit
     /// carries it.
+    ///
+    /// A unit that carries none was made without the manager, and deriving them here would be a second derivation of
+    /// a fact the manager holds (or a stale copy of it): asking is a bug. A caller over a body the manager has not
+    /// seen states what it computes with `with_registers`.
     pub fn registers(&self) -> Cow<'a, IndexMap<ValueId, Known>> {
         match self.registers {
-            Some(registers) => Cow::Borrowed(registers),
-            None => Cow::Owned(crate::consts::known(self, None, None, None)),
+            Some(registers) => {
+                if std::env::var_os("LLRM_CHECK_FACTS").is_some() {
+                    let fresh = crate::consts::known(&Unit { registers: None, ..*self }, None, None, None);
+                    assert!(*registers == fresh, "the registers a unit carries are not those of the body it stands over: stale");
+                }
+                Cow::Borrowed(registers)
+            }
+            None => panic!("a unit with no registers was asked for them: take them from the analysis manager"),
         }
     }
 
@@ -502,8 +543,13 @@ impl<'a> Unit<'a> {
 
     pub fn shape(&self) -> Cow<'a, Shape> {
         match self.shape {
-            Some(shape) => Cow::Borrowed(shape),
-            None => Cow::Owned(Shape::of(self.function)),
+            Some(shape) => {
+                if std::env::var_os("LLRM_CHECK_SHAPE").is_some() {
+                    assert!(*shape == Shape::of(self.function), "the shape a unit carries is not that of the body it stands over: stale");
+                }
+                Cow::Borrowed(shape)
+            }
+            None => panic!("a unit with no shape was asked for it: take it from the analysis manager"),
         }
     }
 
@@ -532,6 +578,11 @@ impl<'a> Unit<'a> {
         }
     }
 
+    /// The address spaces by role: the program's target's, or one flat space where none is named.
+    pub fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.program.map_or(self.spaces, |program| program.target.spaces())
+    }
+
     /// A pointer operand's address space.
     pub fn space(&self, operand: Operand) -> Option<u32> {
         match self.context.types.get(self.operand_type(operand)?) {
@@ -550,6 +601,51 @@ impl<'a> Unit<'a> {
     }
 }
 
+/// Whether `inst` marks an object's lifetime, which names it without handing out its address.
+pub fn is_lifetime_marker(unit: &Unit, inst: InstId) -> bool {
+    matches!(unit.intrinsic(inst), Some(llrm_mir::intrinsics::Intrinsic::LifetimeStart | llrm_mir::intrinsics::Intrinsic::LifetimeEnd))
+}
+
+/// What is known of a body without memory (`consts::known`), for a caller that changes the body as it goes: the
+/// manager's where the body is as the manager saw it, derived again, once for each state, once it is not. The one
+/// place a unit's registers are derived outside the manager.
+pub struct Standing<'h> {
+    held: Option<&'h IndexMap<ValueId, Known>>,
+    derived: Option<IndexMap<ValueId, Known>>,
+}
+
+impl<'h> Standing<'h> {
+    /// The body is as `registers` were found of it.
+    pub fn held(registers: &'h IndexMap<ValueId, Known>) -> Self {
+        Self { held: Some(registers), derived: None }
+    }
+
+    /// No one has found them: derived when first asked.
+    pub fn underived() -> Self {
+        Self { held: None, derived: None }
+    }
+
+    /// The body changed: what was found of it no longer holds.
+    pub fn changed(&mut self) {
+        self.held = None;
+        self.derived = None;
+    }
+
+    /// What is known of `unit`'s body as it stands, which it must be the one these were asked of.
+    pub fn of(&mut self, unit: &Unit) -> &IndexMap<ValueId, Known> {
+        if let Some(held) = self.held {
+            return held;
+        }
+        self.derived.get_or_insert_with(|| crate::consts::known(&Unit { registers: None, ..*unit }, None, None, None))
+    }
+}
+
+/// The allocas of `unit`'s function whose address is exposed, in one pass: what `object_of` reads of
+/// `Unit::exposed` instead of asking each alloca's uses.
+pub fn exposed_frames(unit: &Unit) -> BTreeSet<ValueId> {
+    crate::frameescape::exposed_allocas(unit.function, |inst| is_lifetime_marker(unit, inst))
+}
+
 /// The object `root` is the address of, where it is an object's own: an
 /// alloca (`Frame`) or a global variable (`Global`).
 pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
@@ -564,7 +660,10 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
             };
             // Only a reference naming an alloca reaches it until its address
             // is exposed.
-            let exposed = crate::frameescape::exposes(unit.function, value, |inst| matches!(unit.intrinsic(inst), Some(llrm_mir::intrinsics::Intrinsic::LifetimeStart | llrm_mir::intrinsics::Intrinsic::LifetimeEnd)));
+            let exposed = match unit.exposed {
+                Some(found) => found.contains(&value),
+                None => crate::frameescape::exposes(unit.function, value, |inst| is_lifetime_marker(unit, inst)),
+            };
             Some(MemoryObject {
                 identity: Some(Identity::Value(value.0)),
                 extent: count.map(|count| size * count),
@@ -853,7 +952,7 @@ fn step(unit: &Unit, pointer: Operand) -> Option<Step> {
     let types = &unit.context.types;
     let through = |from: Operand| {
         // A segment's cast to a far pointer is `segment:0`, a new root.
-        (unit.space(from).is_some_and(|space| space != 2)).then_some(Step::Through(from))
+        (unit.space(from).is_some() && !unit.spaces().is_segment(unit.space(from))).then_some(Step::Through(from))
     };
     match pointer {
         Operand::Value(_) => {
@@ -957,7 +1056,7 @@ pub fn lineage(unit: &Unit, inst: InstId) -> Vec<String> {
     let Some((_, tag)) = unit.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "tbaa") else { return Vec::new() };
     match unit.tbaa {
         Some(tree) => tree.of_tag(unit.metadata, *tag).to_vec(),
-        None => llrm_mir::tbaa::Tbaa::of(unit.metadata).of_tag(unit.metadata, *tag).to_vec(),
+        None => llrm_mir::tbaa::Tbaa::chain(unit.metadata, *tag),
     }
 }
 
@@ -1007,6 +1106,20 @@ mod tests {
 
     fn object(kind: MemoryKind) -> MemoryObject {
         MemoryObject::new(kind)
+    }
+
+    /// Isel's unit named no program, so the spaces became one flat space: a QB program's
+    /// fixed-address pokes (`DEF SEG`) were no longer apart from every object and demo-qbdemo
+    /// grew 6 bytes. A unit asks the spaces it was given when no program names the target.
+    #[test]
+    fn a_unit_with_no_program_asks_the_spaces_it_was_given() {
+        let module = parsed(&format!("{DOS}define void @f() {{\nb0:\n  ret void\n}}\n"));
+        let layout = layout(&module);
+        let (_, _, f) = module.functions().next().unwrap();
+        let dos = llrm_x86_m16::spaces();
+        assert_eq!(Unit::of(&module, &layout, f).spaces(), llrm_mir::spaces::Spaces::FLAT);
+        assert_eq!(Unit::of(&module, &layout, f).with_spaces(dos).spaces(), dos);
+        assert!(Unit::of(&module, &layout, f).with_spaces(dos).spaces().is_fixed(4));
     }
 
     #[test]
@@ -1142,7 +1255,7 @@ b0:
         ));
         let layout = layout(&module);
         let f = function(&module, "f");
-        let unit = Unit::of(&module, &layout, f);
+        let unit = Unit::of(&module, &layout, f).with_spaces(llrm_x86_m16::spaces());
         let loads = f.walk().map(|(_, inst)| inst).filter_map(|inst| MemRef::of(&unit, inst)).collect::<Vec<_>>();
 
         let far = &loads[0];

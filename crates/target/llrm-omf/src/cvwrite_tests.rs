@@ -166,3 +166,25 @@ fn a_pointer_and_an_array_in_place_read_back() {
         assert_eq!(read, ["DATA p: BYREF INTEGER"], "{reach:?}");
     }
 }
+
+/// `struct node { struct node *next; int v; }`: a structure that holds a pointer to itself. Made as
+/// the pointer's target, it asked for its own record while that record was being made, and the
+/// writer recursed until the stack ended; with the cycle cut, the pointer names the structure by its
+/// name and size, and the member is kept, where the frontend used to drop it.
+#[test]
+fn a_structure_with_a_pointer_to_itself_keeps_that_field() {
+    let field = |name: &str, r#type, offset| Field { name: name.into(), r#type, offset, bits: None };
+    let module = Module {
+        types: vec![
+            Type::Scalar(Scalar::Int16),
+            Type::Struct { name: "node".into(), bytes: 4, fields: vec![field("next", 2, 0), field("v", 0, 2)] },
+            Type::Pointer { target: 1, reach: Reach::Near },
+        ],
+        data: vec![data("head", 1)],
+        ..Module::default()
+    };
+    let (read, _) = shape(&object(&written(&module, Flavor::default()).expect("writes")));
+    assert_eq!(read.len(), 1, "{read:?}");
+    assert!(read[0].starts_with("DATA head: TYPE node {next +0 BYREF"), "{read:?}");
+    assert!(read[0].ends_with("v +2 INTEGER}"), "{read:?}");
+}

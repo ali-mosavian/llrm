@@ -1,10 +1,10 @@
 /* A C library the Nib program links against: it reads the program's
- * arrays through far pointers and calls back the rule the program exports,
+ * arrays through pointers and calls back the rule the program exports,
  * declared with CPoint in the header the compiler generates from main.nib. */
 
 #include "main.h"
 
-unsigned short checksum(const unsigned char far *data, unsigned short count)
+unsigned short checksum(const unsigned char *data, unsigned short count)
 {
     unsigned short sum = 0;
     while (count--)
@@ -12,7 +12,7 @@ unsigned short checksum(const unsigned char far *data, unsigned short count)
     return sum;
 }
 
-long weighted_sum(const short far *values, unsigned short count)
+long weighted_sum(const short *values, unsigned short count)
 {
     long total = 0;
     unsigned short i;
@@ -21,7 +21,7 @@ long weighted_sum(const short far *values, unsigned short count)
     return total;
 }
 
-void centroid(const CPoint far *points, unsigned short count, CPoint far *out)
+void centroid(const CPoint *points, unsigned short count, CPoint *out)
 {
     long x = 0, y = 0;
     unsigned short i;

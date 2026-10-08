@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
+llrmbin = dosbatch.llrmbin
 from dosbatch import BIN, ROOT, Job  # noqa: E402
 from run_tests import first_difference, lines  # noqa: E402
 
@@ -62,8 +63,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("profiles", nargs="*", default=list(PROFILES))
     parser.add_argument("--list-skipped", action="store_true")
-    parser.add_argument("--work", type=Path, default=ROOT / "target" / "tests-conformance")
+    parser.add_argument("--work", type=Path, help="where to build and run; one private to this run by default")
     args = parser.parse_args()
+    own = args.work is None
+    if own:
+        args.work = dosbatch.private_work("tests-conformance")
     known = tomllib.loads((SUITES / "known.toml").read_text()) if (SUITES / "known.toml").exists() else {}
     bad = passed = marked = 0
     for profile in args.profiles:
@@ -104,6 +108,8 @@ def main() -> int:
             else:
                 passed += 1
     print(f"{passed + marked + bad} cases: {passed} pass, {marked} known, {bad} fail")
+    if own and not bad:
+        dosbatch.discard(args.work)
     return 1 if bad else 0
 
 

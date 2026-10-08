@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
+llrmbin = dosbatch.llrmbin
 import run_tests  # noqa: E402
 from dosbatch import ROOT, Job  # noqa: E402
 from run_tests import Program, first_difference, lines  # noqa: E402
@@ -28,14 +29,15 @@ CASES = ROOT / "tests" / "differential" / "qb-bc"
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
-    parser.add_argument("--work", type=Path, default=ROOT / "target" / "tests-differential")
+    parser.add_argument("--work", type=Path, help="where to build and run; one private to this run by default")
     args = parser.parse_args()
     sources = [one for one in sorted(CASES.glob("*.bas")) if one.with_suffix(".out").exists() and (not args.select or one.stem in args.select)]
     if not sources:
         print("no programs selected")
         return 1
     settings = {one.stem: run_tests.header(one) for one in sources}
-    work = args.work
+    own = args.work is None
+    work = dosbatch.private_work("tests-differential") if own else args.work
     objs = work.with_name(work.name + "-obj")
     objs.mkdir(parents=True, exist_ok=True)
     stems = {one.stem: f"T{at:03d}" for at, one in enumerate(sources)}
@@ -72,6 +74,8 @@ def main() -> int:
             bad += 1
             print(f"FAIL  {one.stem}: " + "; ".join(problems))
     print(f"{len(sources)} programs: {len(sources) - bad} pass, {bad} fail")
+    if own and not bad:
+        dosbatch.discard(work)
     return 1 if bad else 0
 
 

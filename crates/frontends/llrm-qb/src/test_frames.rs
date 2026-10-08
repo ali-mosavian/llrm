@@ -139,7 +139,7 @@ fn a_runtime_framed_procedure_still_zeroes_its_frame_in_mir() {
     let source = "SUB kept (n AS INTEGER)\nDIM k AS INTEGER, t AS STRING\nt = \"x\"\nPRINT k + n; t\nEND SUB\n\
         SUB own (n AS INTEGER)\nDIM k AS INTEGER\nPRINT k + n\nEND SUB\n";
     for (dialect, runtime) in DIALECTS {
-        let text = llrm_mir::print::module(&llrm_core::hir::mir::emit(&program(source, dialect, runtime, true)).swap_remove(0).module);
+        let text = llrm_mir::print::module(&llrm_core::hir::mir::emit(&program(source, dialect, runtime, true), &llrm_x86_m16::layout()).swap_remove(0).module);
         let entry = |name: &str| text.split(&format!("@{name}(")).nth(1).and_then(|rest| rest.split("\n}").next()).unwrap_or_else(|| panic!("{name} in {text}")).to_owned();
         // The emitter's own zeroing carries no metadata; the frontend's stores do.
         let zeroes = |name: &str| entry(name).lines().any(|line| line.trim().starts_with("store i16 0, ptr %") && !line.contains('!'));

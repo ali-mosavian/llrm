@@ -88,12 +88,14 @@ fn scaled(interval: &Interval, disp: i64, scale: i64) -> (BigInt, BigInt) {
 /// wholly in memory the machine keeps no program data in.
 fn foreign(reference: &MemRef, known: Option<&BTreeMap<ValueId, Interval>>, program: Option<&ProgramProxy>) -> Option<Slice> {
     let machine = &*program?.target;
+    // A selector or offset is a word of the segment's size: none where the target has no segments.
+    let segment = i64::try_from(machine.spaces().segment_bytes?).ok()?;
     // A selector or offset is an unsigned word; ranges may carry it signed,
     // and an offset wraps within its segment.
     let words = |low: BigInt, high: BigInt| -> Option<(i64, i64)> {
         let (low, high) = (low.to_i64()?, high.to_i64()?);
-        let word = |one: i64| one.rem_euclid(0x1_0000);
-        (high - low < 0x1_0000 && word(low) <= word(high)).then(|| (word(low), word(high)))
+        let word = |one: i64| one.rem_euclid(segment);
+        (high - low < segment && word(low) <= word(high)).then(|| (word(low), word(high)))
     };
     let selectors = match (reference.selector, reference.segment) {
         (Some(selector), _) => words(selector.into(), selector.into())?,
@@ -114,7 +116,7 @@ fn foreign(reference: &MemRef, known: Option<&BTreeMap<ValueId, Interval>>, prog
                 words(low + &disp, high + &disp)
             }),
     }
-    .unwrap_or((0, 0xFFFF));
+    .unwrap_or((0, segment - 1));
     let width = i64::from(reference.width.max(1));
     let (start, end) = machine.foreign_span(selectors, offsets, width)?;
     Some(Slice::new(linear(), start, end - width + 1, 1, width).expect("a foreign span holds one access"))
@@ -152,6 +154,21 @@ fn same_typed_start(one: &MemRef, other: &MemRef) -> bool {
     first.object == second.object && first.low == second.low && first.low != FLOOR
 }
 
+/// Whether the address analysis has the two accesses in one object at bytes that overlap: each names one start in a single object,
+/// and their widths reach one another. Type-based alias analysis only tells accesses apart that the address analysis cannot (as LLVM
+/// asks it of MayAlias alone); it does not unsay an overlap that is known.
+fn provably_overlap(one: &MemRef, other: &MemRef) -> bool {
+    let (Some(one_provenance), Some(other_provenance)) = (&one.provenance, &other.provenance) else {
+        return false;
+    };
+    let (Some(first), Some(second)) = (one_provenance.slices.iter().next().filter(|_| one_provenance.slices.len() == 1), other_provenance.slices.iter().next().filter(|_| other_provenance.slices.len() == 1)) else {
+        return false;
+    };
+    let exact = |slice: &Slice| slice.stride == 1 && slice.high == slice.low + 1 && slice.low != FLOOR;
+    let (one_width, other_width) = (i64::from(one.width.max(1)), i64::from(other.width.max(1)));
+    first.object == second.object && exact(first) && exact(second) && first.low < second.low + other_width && second.low < first.low + one_width
+}
+
 /// Python `typed_apart`: accesses of different `!tbaa` types cannot alias
 /// unless one's type is an ancestor of the other's, or for two views
 /// explicitly computed from the same union start.
@@ -159,6 +176,9 @@ pub fn typed_apart(one: &MemRef, other: &MemRef) -> bool {
     let (Some(one_type), Some(other_type)) = (&one.typed, &other.typed) else {
         return false;
     };
+    if provably_overlap(one, other) {
+        return false;
+    }
     // As LLVM's TypeBasedAA: types of one root, neither covering the other.
     // A type with no root, or of another root, says nothing: may alias.
     let (Some(one_root), Some(other_root)) = (one.lineage.last(), other.lineage.last()) else {
@@ -532,7 +552,7 @@ pub(crate) mod tests {
     use crate::ranges::Interval;
     use crate::testing::{DOS, function, layout, parsed, value};
 
-    pub use llrm_x86_code16::Dos;
+    pub use llrm_x86_m16::Dos;
 
     /// `module` alone, a program for real-mode DOS.
     pub fn dos(module: &Module) -> std::rc::Rc<llrm_mir::program::ProgramProxy> {
@@ -542,7 +562,7 @@ pub(crate) mod tests {
     /// Every access `@f` of `text` makes, in order.
     fn accesses(module: &Module, layout: &DataLayout) -> Vec<MemRef> {
         let f = function(module, "f");
-        let unit = Unit::of(module, layout, f);
+        let unit = crate::testing::with_registers(Unit::of(module, layout, f)).with_spaces(llrm_x86_m16::spaces());
         f.walk().filter_map(|(_, inst)| MemRef::of(&unit, inst)).collect()
     }
 
@@ -597,6 +617,28 @@ b0:
         // Two roots one object starts: the union view by provenance.
         let object = global(1, Some(8));
         assert!(!typed_apart(&with(short, one(&object, 0, 1)), &with(elsewhere, one(&object, 0, 1))));
+    }
+
+    /// Types tell apart what the address analysis cannot place; two accesses it places in one object at overlapping bytes are not
+    /// told apart by their types (`long long` stored, `int` read at 4 of it, #677), and ones whose bytes do not meet still are.
+    #[test]
+    fn a_known_overlap_outranks_the_types() {
+        let module = module(&format!(
+            "define void @f(ptr %p, ptr %q) {{
+b0:
+  store i16 1, ptr %p, !tbaa !3
+  store i32 4, ptr %q, !tbaa !4
+  ret void
+}}
+
+{TAGS}"
+        ));
+        let dl = layout(&module);
+        let [short, wide] = &accesses(&module, &dl)[..] else { panic!() };
+        let object = global(1, Some(8));
+        // The short is bytes 0-1; the wide, at 1, is bytes 1-4 and at 2, bytes 2-5.
+        assert!(!typed_apart(&with(short, one(&object, 0, 1)), &with(wide, one(&object, 1, 2))));
+        assert!(typed_apart(&with(short, one(&object, 0, 1)), &with(wide, one(&object, 2, 3))));
     }
 
     const C_TAGS: &str = "!0 = !{!\"Simple C/C++ TBAA\"}
@@ -975,7 +1017,7 @@ b0:
             ));
             let dl = layout(&module);
             let f = function(&module, "f");
-            let unit = Unit::of(&module, &dl, f);
+            let unit = crate::testing::with_registers(Unit::of(&module, &dl, f)).with_spaces(llrm_x86_m16::spaces());
             let found = crate::alias::annotated(&unit).unwrap();
             let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
             assert_eq!(!may_alias(load, store, None, None, None).unwrap(), apart, "space {space}");
@@ -1006,7 +1048,7 @@ b0:
             let dl = layout(&module);
             let f = function(&module, "f");
             let dos = dos(&module);
-            let mut unit = Unit::of(&module, &dl, f);
+            let mut unit = crate::testing::with_registers(Unit::of(&module, &dl, f)).with_spaces(llrm_x86_m16::spaces());
             unit.program = Some(&dos);
             let found = crate::alias::annotated(&unit).unwrap();
             let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };
@@ -1039,7 +1081,7 @@ b0:
             let dl = layout(&module);
             let f = function(&module, "f");
             let dos = dos(&module);
-            let mut unit = Unit::of(&module, &dl, f);
+            let mut unit = crate::testing::with_registers(Unit::of(&module, &dl, f)).with_spaces(llrm_x86_m16::spaces());
             unit.program = Some(&dos);
             let found = crate::alias::annotated(&unit).unwrap();
             let [load, store] = &found.values().cloned().collect::<Vec<_>>()[..] else { panic!("two accesses") };

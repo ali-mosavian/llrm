@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_analysis::consts::{self, Known};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::memory::Unit;
-use llrm_analysis::{cfg, induction};
+use llrm_analysis::{cfg, induction, ranges};
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -38,7 +38,11 @@ use crate::counting;
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
 
-pub struct Algebraic;
+/// `size`: code size outranks speed, and a division by a constant that is not a power of two stays signed.
+#[derive(Default)]
+pub struct Algebraic {
+    pub size: bool,
+}
 
 impl FunctionPass for Algebraic {
     fn name(&self) -> &'static str {
@@ -47,7 +51,38 @@ impl FunctionPass for Algebraic {
 
     fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         // Blocks and edges are as they were.
-        if simplified(unit.context, unit.layout, unit.function, analyses) {
+        if simplified(unit.context, unit.layout, unit.function, analyses, self.size) {
+            PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
+        } else {
+            PreservedAnalyses::all()
+        }
+    }
+}
+
+/// What a counter rebased by a use leaves behind: `x - (x + y)` is `-y`. LLVM's LSR cleans with InstSimplify, not InstCombine's
+/// whole set, which would fold the scales LSR just chose back into one another.
+pub struct Differences;
+
+impl FunctionPass for Differences {
+    fn name(&self) -> &'static str {
+        "differences"
+    }
+
+    fn run(&mut self, unit: &mut passes::Unit, _analyses: &mut Analyses) -> PreservedAnalyses {
+        let mut changed = false;
+        loop {
+            let mut round = false;
+            for (_, inst) in unit.function.walk().collect::<Vec<_>>() {
+                if !unit.function.is_erased(inst) {
+                    round |= _difference_from_sum(unit.context, unit.function, inst) || _negated_difference(unit.context, unit.function, inst);
+                }
+            }
+            if !round {
+                break;
+            }
+            changed = true;
+        }
+        if changed {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()
@@ -56,7 +91,7 @@ impl FunctionPass for Algebraic {
 }
 
 /// Every rule, to a fixed point; whether anything changed.
-pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses) -> bool {
+pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, size: bool) -> bool {
     // A number proved before stays proved: every rewrite keeps each
     // surviving value's meaning, and none divides by a value.
     let divided_by_values = function.walk().any(|(_, inst)| {
@@ -68,7 +103,9 @@ pub fn simplified(context: &mut Context, layout: &DataLayout, function: &mut Fun
     let mut changed = false;
     loop {
         let mut round = _whole_fixed(context, layout, function, &outer);
+        round |= _unsigned_divisions(context, layout, function, &outer, &facts, size);
         round |= _divisions(context, layout, function, &outer, &facts);
+        round |= _redundant_masks(context, layout, function, &outer);
         let recurrences = _recurrences(context, layout, function, &outer);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
@@ -90,12 +127,15 @@ fn _rewritten(context: &mut Context, layout: &DataLayout, function: &mut Functio
         || _constant_address(context, function, inst)
         || _offset_scaled(context, function, inst)
         || _cast_pair(context, function, inst)
+        || _narrowed_binary(context, function, inst)
         || _nonnegative_sext(context, function, inst)
+        || _unsigned_power_of_two(context, function, inst)
         || _masked_extension(context, layout, function, inst)
         || _casted_logic(context, function, inst)
         || _phi_of_casts(context, function, inst)
         || _duplicate_phi(function, inst)
         || _negated_difference(context, function, inst)
+        || _difference_from_sum(context, function, inst)
         || _shift_chain(context, function, inst)
         || _scaled_chain(context, function, inst)
         || _offset_chain(context, function, inst)
@@ -104,6 +144,7 @@ fn _rewritten(context: &mut Context, layout: &DataLayout, function: &mut Functio
         || _decided(context, function, inst)
         || _selected(context, function, inst)
         || _inverted_compare(context, function, inst)
+        || _narrow_compare(context, function, inst)
         || _extended_boolean_tested(context, function, inst)
         || _extended_boolean_negated(context, function, inst)
 }
@@ -183,6 +224,120 @@ fn _inverted_compare(context: &mut Context, function: &mut Function, inst: InstI
     let operands = function.instruction(made).operands.clone();
     _replace(function, inst, Opcode::ICmp(predicate.inverse()), operands);
     true
+}
+
+/// `icmp P (ext a), (ext b)` or `icmp P (ext a), C` is a compare of the narrow
+/// `a`, as InstCombine's `foldICmpWithZextOrSext`: a `zext` pair orders as
+/// unsigned, a `sext` pair keeps its predicate, and a constant outside `a`'s
+/// range decides the answer. C's `int` promotion makes every `unsigned short`
+/// compare one of these. Where the extension lives on for another reader the
+/// compare narrows only for a loop-carried `a`, whose trip count is proven at
+/// its own width: narrowed elsewhere it moves the value to a byte-addressable
+/// register for nothing (grep grew 24 bytes).
+fn _narrow_compare(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    let Opcode::ICmp(predicate) = instruction.opcode else { return false };
+    let (left, right) = (instruction.operands[0], instruction.operands[1]);
+    let extension = |function: &Function, operand: Operand| {
+        let made = _definition(function, operand)?;
+        let Opcode::Cast(kind @ (CastOp::ZExt | CastOp::SExt)) = function.instruction(made).opcode else { return None };
+        Some((kind, function.instruction(made).operands[0]))
+    };
+    let Some((kind, a)) = extension(function, left) else { return false };
+    let Some(narrow) = function.operand_type(context, a) else { return false };
+    let Some(n) = context.types.int_bits(narrow) else { return false };
+    let wide = context.types.int_bits(function.operand_type(context, left).expect("a typed operand")).expect("an integer");
+    let signed = kind == CastOp::SExt;
+    let unsigned_form = |predicate| match predicate {
+        IntPredicate::Sgt => IntPredicate::Ugt,
+        IntPredicate::Sge => IntPredicate::Uge,
+        IntPredicate::Slt => IntPredicate::Ult,
+        IntPredicate::Sle => IntPredicate::Ule,
+        same => same,
+    };
+    if let Some((other, b)) = extension(function, right)
+        && other == kind
+        && function.operand_type(context, b) == Some(narrow)
+        && (_loop_carried(function, a) || _loop_carried(function, b) || _single_use(function, left) && _single_use(function, right))
+    {
+        let predicate = if signed { predicate } else { unsigned_form(predicate) };
+        _replace(function, inst, Opcode::ICmp(predicate), vec![a, b]);
+        return true;
+    }
+    let Some(bits) = _integer(context, right) else { return false };
+    if wide > 64 {
+        return false;
+    }
+    // `a`'s range and C, as numbers.
+    let (low, high) = if signed { (-(1_i128 << (n - 1)), (1_i128 << (n - 1)) - 1) } else { (0, (1_i128 << n) - 1) };
+    let compared_signed = matches!(predicate, IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle);
+    if signed && !compared_signed && !matches!(predicate, IntPredicate::Eq | IntPredicate::Ne) {
+        return false;
+    }
+    let c = if compared_signed || signed { ((bits as i128) << (128 - wide)) >> (128 - wide) } else { bits as i128 };
+    if (low..=high).contains(&c) {
+        if !_loop_carried(function, a) && !_single_use(function, left) {
+            return false;
+        }
+        let predicate = if signed { predicate } else { unsigned_form(predicate) };
+        let number = Operand::Constant(context.int(narrow, c));
+        _replace(function, inst, Opcode::ICmp(predicate), vec![a, number]);
+        return true;
+    }
+    // Every value of `a` is on one side of C.
+    let side = if c < low { high } else { low };
+    let holds = match predicate {
+        IntPredicate::Eq => side == c,
+        IntPredicate::Ne => side != c,
+        IntPredicate::Ugt | IntPredicate::Sgt => side > c,
+        IntPredicate::Uge | IntPredicate::Sge => side >= c,
+        IntPredicate::Ult | IntPredicate::Slt => side < c,
+        IntPredicate::Ule | IntPredicate::Sle => side <= c,
+    };
+    let decided = _constant(context, function, inst, u128::from(holds));
+    _forward(function, inst, decided);
+    true
+}
+
+/// `trunc (op (ext a), y)` is `op a, (trunc y)` for an operation that commutes
+/// with truncation, as InstCombine's `visitTrunc`: a wrapping `unsigned short`
+/// sum is computed in `int` and cut back, and cut first it is one narrow
+/// operation. `ext a` must be `a` at the result's width, so a conversion
+/// goes; the other operand's cut is loop-invariant where it is.
+fn _narrowed_binary(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let instruction = function.instruction(inst);
+    if instruction.opcode != Opcode::Cast(CastOp::Trunc) || !_single_use(function, instruction.operands[0]) {
+        return false;
+    }
+    let narrow = instruction.ty;
+    let Some(made) = _definition(function, instruction.operands[0]) else { return false };
+    let Some((op, left, right, wide)) = _binary(context, function, made) else { return false };
+    if !matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) || wide > 128 {
+        return false;
+    }
+    let source = |function: &Function, operand: Operand| {
+        let extended = _definition(function, operand)?;
+        let Opcode::Cast(CastOp::ZExt | CastOp::SExt) = function.instruction(extended).opcode else { return None };
+        let from = function.instruction(extended).operands[0];
+        (function.operand_type(context, from) == Some(narrow)).then_some(from)
+    };
+    let (a, b) = (source(function, left), source(function, right));
+    if a.is_none() && b.is_none() {
+        return false;
+    }
+    let mut cut = |function: &mut Function, known: Option<Operand>, operand: Operand| match (known, operand) {
+        (Some(from), _) => from,
+        (None, Operand::Constant(_)) => _integer(context, operand).map_or(operand, |bits| Operand::Constant(context.int(narrow, bits as i128))),
+        _ => _before(function, inst, Opcode::Cast(CastOp::Trunc), vec![operand]),
+    };
+    let (left, right) = (cut(function, a, left), cut(function, b, right));
+    _replace(function, inst, Opcode::Binary(op), vec![left, right]);
+    true
+}
+
+/// `operand` is a phi: carried round a loop, or merged.
+fn _loop_carried(function: &Function, operand: Operand) -> bool {
+    _definition(function, operand).is_some_and(|made| function.instruction(made).opcode == Opcode::Phi)
 }
 
 fn _definition(function: &Function, operand: Operand) -> Option<InstId> {
@@ -316,8 +471,12 @@ fn _recurrences(context: &Context, layout: &DataLayout, function: &Function, out
     if !masked_scale {
         return BTreeSet::new();
     }
-    let analysed = Unit::within(context, layout, function, outer);
-    analysed.shape().loops.iter().flat_map(|one| induction::advances(&analysed, one).into_keys()).collect()
+    let shape = cfg::Shape::of(function);
+    let analysed = Unit::within(context, layout, function, outer).with_shape(&shape);
+    // Found once, for the body as the rounds before left it, not for each loop's recurrences.
+    let registers = consts::known(&analysed, None, None, None);
+    let analysed = analysed.with_registers(&registers);
+    shape.loops.iter().flat_map(|one| induction::advances(&analysed, one).into_keys()).collect()
 }
 
 /// `(x & m) * 2^k` is `(x * 2^k) & (m * 2^k)` at every width, where the
@@ -592,6 +751,25 @@ fn _negated_difference(context: &mut Context, function: &mut Function, inst: Ins
     true
 }
 
+/// `x - (x + y)` and `(x - y) - x` are `-y`, modulo the width: InstCombine's `visitSub`. A counter rebased by what a use
+/// subtracts it from (`row - (c + row)` where `c = r - row`) leaves the sum behind it.
+fn _difference_from_sum(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let Some((BinaryOp::Sub, left, right, _)) = _binary(context, function, inst) else { return false };
+    if _integer(context, left) == Some(0) {
+        return false;
+    }
+    let other = match (_definition(function, right).and_then(|made| _binary(context, function, made)), _definition(function, left).and_then(|made| _binary(context, function, made))) {
+        (Some((BinaryOp::Add, first, second, _)), _) if first == left => Some(second),
+        (Some((BinaryOp::Add, first, second, _)), _) if second == left => Some(first),
+        (_, Some((BinaryOp::Sub, minuend, subtrahend, _))) if minuend == right => Some(subtrahend),
+        _ => None,
+    };
+    let Some(other) = other else { return false };
+    let zero = _constant(context, function, inst, 0);
+    _replace(function, inst, Opcode::Binary(BinaryOp::Sub), vec![zero, other]);
+    true
+}
+
 /// `(x << a) << b` is `x << (a + b)` while that is short of the width.
 fn _shift_chain(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
     let Some((BinaryOp::Shl, middle, Operand::Constant(_), width)) = _binary(context, function, inst) else { return false };
@@ -828,11 +1006,113 @@ fn _whole_fixed(context: &mut Context, layout: &DataLayout, function: &mut Funct
     !whole.is_empty()
 }
 
+/// `udiv` and `urem` by a power of two: a logical shift and a mask, which the division unit has no part in.
+fn _unsigned_power_of_two(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
+    let Some((op @ (BinaryOp::UDiv | BinaryOp::URem), left, right, width)) = _binary(context, function, inst) else { return false };
+    let Some(divisor) = _integer(context, right).filter(|&divisor| divisor.is_power_of_two() && divisor > 1 && width <= 128 && divisor < 1 << (width - 1).min(127)) else { return false };
+    if op == BinaryOp::UDiv {
+        let count = _constant(context, function, inst, u128::from(divisor.trailing_zeros()));
+        _replace(function, inst, Opcode::Binary(BinaryOp::LShr), vec![left, count]);
+    } else {
+        let low = _constant(context, function, inst, divisor - 1);
+        _replace(function, inst, Opcode::Binary(BinaryOp::And), vec![left, low]);
+    }
+    true
+}
+
+/// `and x, C` where every bit `x` may have set is in `C` is `x`: LLVM's CorrelatedValuePropagation
+/// `processAnd`, over `computeKnownBits`. The bits `x` may set are those a non-negative range's top
+/// reaches, less the ones structure clears (`valuetracking::known_zero`: a scale's low bits). A loop
+/// counter's range makes tile's `(x + 7) & 63` of `x < 40` a plain `x + 7`.
+fn _redundant_masks(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
+    let candidates: Vec<(llrm_mir::module::BlockId, InstId, Operand, u128, u32)> = function
+        .walk()
+        .filter_map(|(block, inst)| {
+            let (BinaryOp::And, left, right, width) = _binary(context, function, inst)? else { return None };
+            let (value, mask) = _value_and_constant(context, BinaryOp::And, left, right)?;
+            (width <= 128).then_some((block, inst, value, mask, width))
+        })
+        .collect();
+    if candidates.is_empty() {
+        return false;
+    }
+    let shape = cfg::Shape::of(function);
+    let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
+    // The body is as the rounds before left it: found once, for its ranges and for the proofs beside them.
+    let registers = consts::known(&unit, None, None, None);
+    let unit = unit.with_registers(&registers);
+    let scoped = ranges::scoped(&unit).unwrap_or_default();
+    let made: Vec<(InstId, Operand)> = candidates
+        .into_iter()
+        .filter_map(|(block, inst, value, mask, width)| {
+            let scope = scoped.get(&cfg::id(block)).cloned().unwrap_or_default();
+            let interval = ranges::_operand(&unit, value, &scope, &registers).filter(|interval| interval.width == width && interval.low.sign() != num_bigint::Sign::Minus)?;
+            let top = u128::try_from(interval.high).ok()?;
+            let reach = if top == 0 { 0 } else { u128::MAX >> (top.leading_zeros()) };
+            let all = if width == 128 { u128::MAX } else { (1u128 << width) - 1 };
+            let possible = reach & !llrm_mir::valuetracking::known_zero(context, function, value) & all;
+            (possible & !mask == 0).then_some((inst, value))
+        })
+        .collect();
+    for &(inst, value) in &made {
+        if !function.is_erased(inst) {
+            _forward(function, inst, value);
+        }
+    }
+    !made.is_empty()
+}
+
+/// `sdiv` and `srem` of a dividend proved non-negative, by a power of two, are `udiv` and `urem` (a shift and a
+/// mask): the same value without the bias a negative dividend needs. Another divisor stays signed: its unsigned
+/// division is a `div` for an `idiv` (three clocks on a 486) and a byte more (`xor edx,edx` for `cdq`), which is
+/// selection's to weigh, not a rewrite's. The proof is `ranges`' (a loop's `rest > 0`, a sum of squares) or the
+/// dividend's clear sign bit.
+fn _unsigned_divisions(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, facts: &IndexMap<ValueId, Known>, size: bool) -> bool {
+    let candidates: Vec<(llrm_mir::module::BlockId, InstId, u32)> = function
+        .walk()
+        .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Binary(BinaryOp::SDiv | BinaryOp::SRem)))
+        .filter_map(|(block, inst)| Some((block, inst, _width(context, function, inst).filter(|&width| layout.legal_integer(width))?)))
+        .collect();
+    if candidates.is_empty() {
+        return false;
+    }
+    let shape = cfg::Shape::of(function);
+    let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
+    // The body is as the rounds before left it: found once, for its ranges and for the proofs beside them.
+    let registers = consts::known(&unit, None, None, None);
+    let unit = unit.with_registers(&registers);
+    let scoped = ranges::scoped(&unit).unwrap_or_default();
+    let made: Vec<(InstId, BinaryOp)> = candidates
+        .into_iter()
+        .filter_map(|(block, inst, width)| {
+            let operands = &function.instruction(inst).operands;
+            let fact = consts::_operand(&unit, operands[1], facts, None)?;
+            let divisor = BigInt::from(consts::masked(&fact.n, width));
+            // A power of two is shifts either way. Any other constant is a multiply by its reciprocal, which has no sign to
+            // correct where the dividend is never negative; selection prices it (a dword's, in a 32-bit segment: a 16-bit one runs the dword through prefixes and a longer multiply), and where it declines `div` and
+            // `idiv` are alike but a byte (`xor edx, edx` for `cdq`), which size does not pay.
+            let power = (&divisor & (&divisor - 1u8)) == BigInt::from(0u8);
+            let positive = fact.width >= width && divisor > BigInt::from(1u8) && divisor < BigInt::from(1u8) << (width - 1) && (power || (!size && width == 32 && layout.pointer(0).bits == 32));
+            let scope = scoped.get(&cfg::id(block)).cloned().unwrap_or_default();
+            let proved = ranges::_operand(&unit, operands[0], &scope, &registers).filter(|interval| interval.width == width).is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
+                || llrm_mir::valuetracking::known_zero(context, function, operands[0]) >> (width - 1) & 1 == 1;
+            let op = if function.instruction(inst).opcode == Opcode::Binary(BinaryOp::SDiv) { BinaryOp::UDiv } else { BinaryOp::URem };
+            (positive && proved).then_some((inst, op))
+        })
+        .collect();
+    for &(inst, op) in &made {
+        let operands = function.instruction(inst).operands.clone();
+        _replace(function, inst, Opcode::Binary(op), operands);
+    }
+    !made.is_empty()
+}
+
 /// Divide by a positive power of two, biasing a negative dividend to
 /// truncate toward zero: `sdiv` and `srem` by a divisor consts proves, at
 /// a legal integer width, where the shifts cost less than the division.
 fn _divisions(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, facts: &IndexMap<ValueId, Known>) -> bool {
-    let unit = Unit::within(context, layout, function, outer);
+    let shape = cfg::Shape::of(function);
+    let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
     let divisors: Vec<(InstId, u32)> = function
         .walk()
         .map(|(_, inst)| inst)

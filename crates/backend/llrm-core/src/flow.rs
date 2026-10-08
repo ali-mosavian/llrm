@@ -21,6 +21,9 @@ use crate::model::passes::LIRTransform;
 
 /// Every phase between instruction selection and emission, in order, with the
 /// spiller in front of the allocator or left out.
+#[cfg(test)]
+/// The machine phases for real mode's rules, which the tests of the phases are written for.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn machine<'a>(
     pinned: &IndexMap<u32, Register>,
@@ -32,10 +35,10 @@ pub fn machine<'a>(
     segments: &Segments,
     spilling: bool,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
-    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, spilling, &crate::backend::peep::targets::x86_code16::RULES)
+    machine_with(pinned, frame, pool, calls, basic_semantics, cpu, segments, &crate::backend::classes::RegisterClasses::m16(), spilling.then(Rc::<ssaspill::Run>::default), &crate::backend::peep::targets::x86_m16::RULES, &llrm_target::Target::frame_registers(&llrm_x86_m16::M16))
 }
 
-/// `machine`, its peephole made of the rules `rules` holds.
+/// `machine`, its peephole made of the rules `rules` holds; the spiller, where `spilling` names a run, reports to it.
 #[allow(clippy::too_many_arguments)]
 pub fn machine_with<'a>(
     pinned: &IndexMap<u32, Register>,
@@ -45,8 +48,10 @@ pub fn machine_with<'a>(
     basic_semantics: bool,
     cpu: impl Into<ProfileOrName<'a>>,
     segments: &Segments,
-    spilling: bool,
+    classes: &Rc<crate::backend::classes::RegisterClasses>,
+    spilling: Option<Rc<ssaspill::Run>>,
     rules: &'static crate::backend::peep::Rules,
+    registers: &llrm_target::FrameRegisters,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     let target = targets::profile(cpu)?;
     let mut pinned = pinned.clone();
@@ -59,26 +64,28 @@ pub fn machine_with<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
-        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), prices: ssaspill::Prices::of(target) }),
+        Box::new(ssaspill::SsaSpill { frame: or_empty(), segments: segments.clone(), classes: Rc::clone(classes), prices: ssaspill::Prices::of(target), run: spilling.clone().unwrap_or_default() }),
         Box::new(phielim::PhiElimination),
+        // Before any value is placed: a load made where its reader is.
+        Box::new(crate::backend::pressuresink::PressureSink { segments: segments.clone(), classes: Rc::clone(classes) }),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone() }),
         Box::new(twoaddr::TwoAddress),
-        Box::new(coalesce::Coalescer::new(None, segments)),
-        Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments)?),
+        Box::new(coalesce::Coalescer::new(None, segments, classes)),
+        Box::new(allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?),
         // After allocation: which moves in a phi's copy conflict is a question about locations.
         Box::new(parcopy::ParallelCopy),
         Box::new(prologue::Prologue::new(or_empty(), calls.cloned())),
-        Box::new(peephole::Peephole::with_rules(frame.clone(), target, rules)?),
+        Box::new(peephole::Peephole::with_rules(frame.clone(), target, rules, registers.saved.iter().map(|(whole, _)| *whole).collect(), Rc::clone(classes))?),
         // Once spill traffic is final: which slots a loop still reaches.
-        Box::new(loopslots::LoopSlots::new(frame.clone(), target)?),
+        Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
         // Last: this physical order decides which explicit edge is now fall-through.
         Box::new(jumps::ControlFlow { cpu: target }),
     ];
-    if !spilling {
+    if spilling.is_none() {
         phases.retain(|phase| phase.class_name() != "SsaSpill");
     }
     Ok(phases)
@@ -101,22 +108,22 @@ pub enum Checked {
 }
 
 /// Run one machine phase and verify what it returned.
-pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool) -> Result<LirBody, Checked> {
+pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool, classes: &crate::backend::classes::RegisterClasses) -> Result<LirBody, Checked> {
     let stage = if phase.name().is_empty() { phase.class_name().to_owned() } else { phase.name().to_owned() };
     // The invariance instrument, LLVM's `-g` rule: stripped of meta
     // instructions, every phase must make the same code.
     let body = if std::env::var_os("LLRM_STRIP_META").is_some() { without_meta(body) } else { body };
-    let owned = body.owned_bytes();
+    let owned = crate::support::debug::timed("lir owned bytes", || body.owned_bytes());
     let transformed =
-        crate::support::debug::timed(&format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
-    let body = verified(transformed, &stage, in_ssa).map_err(Checked::Malformed)?;
+        crate::support::debug::timed_by(|| format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
+    let body = crate::support::debug::timed("lir verify", || verified(transformed, &stage, in_ssa)).map_err(Checked::Malformed)?;
     if crate::support::debug::enabled("regclass") && matches!(stage.as_str(), "SsaSpill" | "ssaspill" | "PhiElimination" | "phielim" | "FloatAssign" | "FloatAlloc" | "TwoAddress" | "twoaddr" | "Coalescer" | "coalesce") {
-        let found = crate::backend::regclass::violations(&body, &crate::backend::target::BUILT_IN, &crate::backend::ssaspill::untouchable(&body));
+        let found = crate::backend::regclass::violations(&body, &crate::backend::target::BUILT_IN, classes,  &crate::backend::ssaspill::untouchable(&body));
         let peak = found.iter().filter_map(|one| if let crate::backend::regclass::Why::Crowded { live, registers } = one.why { Some(live - registers) } else { None }).max().unwrap_or(0);
         let blocks: std::collections::BTreeSet<i64> = found.iter().map(|one| one.block).collect();
         llrm_support::debug!("regclass", "{} after {stage}: {} points do not fit, peak {peak} over, {} blocks", body.name, found.len(), blocks.len());
     }
-    let now = body.owned_bytes();
+    let now = crate::support::debug::timed("lir owned bytes", || body.owned_bytes());
     if now != owned {
         let (lost, gained) = (difference(&owned, &now), difference(&now, &owned));
         let listed = |bytes: Vec<i64>| bytes.iter().map(|one| format!("{one:#x}")).collect::<Vec<_>>().join(" ");
@@ -207,7 +214,7 @@ mod tests {
         let returned = ir::Semantics { name: Some("ret".into()), ..ir::Semantics::new(Operation::Return) };
         let block = LirBlock::new(1, vec![Arc::new(Insn::new(1, Some((1, 4)), Some(jump), vec![], vec![])), Arc::new(Insn::new(4, Some((4, 5)), Some(returned), vec![], vec![]))]);
         let body = LirBody::new("bytes", 1, vec![block], IndexMap::default(), IndexMap::default());
-        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut DropsBytes, false) else {
+        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut DropsBytes, false, &crate::backend::classes::RegisterClasses::m16()) else {
             panic!("the gate let three source bytes go");
         };
         assert_eq!(said, "DropsBytes: lost source bytes [0x1 0x2 0x3], gained []");
@@ -225,7 +232,7 @@ mod tests {
         let mut body =
             LirBody::new("phase", 1, vec![LirBlock::new(1, vec![Arc::new(source)])], IndexMap::default(), IndexMap::default());
         body.inputs = BTreeSet::from([1]);
-        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut LosesDefinition, false) else {
+        let Err(Checked::Malformed(Malformed(said))) = checked(body, &mut LosesDefinition, false, &crate::backend::classes::RegisterClasses::m16()) else {
             panic!("the gate let a lost definition through");
         };
         assert!(said.starts_with("loses-definition: value#99 is read"), "{said}");

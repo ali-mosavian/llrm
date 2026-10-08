@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::LazyLock;
 
 pub use llrm_omf::module::{Addr, Space};
@@ -21,7 +21,7 @@ use llrm_support::pyrepr::{self, Repr};
 pub mod flag;
 mod root;
 
-pub use root::{ROOT, root};
+pub use root::root;
 
 /// One physical register operand, at the instruction's width.
 ///
@@ -53,11 +53,11 @@ pub struct Imm {
 
 /// An address used as a value, rather than a memory access.
 ///
-/// Direct port of `qbopt.model.ir:Address`.  Its encoding fields are
-/// deliberately excluded from equality and hashing, just as Python's
-/// `compare=False` fields are, except `offset` of an address with no `addr`,
-/// where it is the only displacement.
-#[derive(Clone, Debug)]
+/// Direct port of `qbopt.model.ir:Address`. Equality and hashing take every field: two addresses spelled
+/// through different registers or displacements are different addresses. (Python left the encoding fields out;
+/// that made `==` mean "the same address modulo how it is encoded", which is no answer to the question a caller
+/// asks of two operands that will be emitted.)
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Address {
     pub addr: Option<Addr>,
     pub through: iced_x86::Register,
@@ -81,38 +81,24 @@ impl Address {
 }
 
 impl Address {
+    /// The same address, not necessarily spelled the same way: `==` less its encoding fields, which are the
+    /// registers it is reached through, its scale, and the displacement of one that has an `addr`.
+    pub fn same_place(&self, other: &Self) -> bool {
+        self.addr == other.addr && (self.addr.is_some() || self.offset == other.offset)
+    }
+
     /// Its displacement is BP's: see `Mem::in_frame`.
     pub fn in_frame(&self) -> bool {
         _in_frame(self.addr, self.through)
     }
 
-    fn displacement(&self) -> Option<i64> {
-        self.addr.is_none().then_some(self.offset)
-    }
-}
-
-impl PartialEq for Address {
-    fn eq(&self, other: &Self) -> bool {
-        self.addr == other.addr && self.displacement() == other.displacement()
-    }
-}
-
-impl Eq for Address {}
-
-impl Hash for Address {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.addr.hash(state);
-        self.displacement().hash(state);
-    }
 }
 
 /// A memory operand.
 ///
-/// Direct port of `qbopt.model.ir:Mem`.  Encoding details (`through`,
-/// `offset`, `disp_width`, and `index_through`) deliberately do not take part
-/// in equality or hashing.  The logical address values do, and so does
-/// `offset` of a cell with no `addr`, where it is the only displacement.
-#[derive(Clone, Debug)]
+/// Direct port of `qbopt.model.ir:Mem`. Equality and hashing take every field, the encoding details
+/// (`through`, `offset`, `disp_width`, `index_through`) included: see `Address`.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Mem {
     pub addr: Option<Addr>,
     pub width: u32,
@@ -132,6 +118,25 @@ pub struct Mem {
 }
 
 impl Mem {
+    /// The same cell, not necessarily spelled the same way: `==` less its encoding fields (`through`, `offset` of
+    /// a cell that has an `addr`, `disp_width`, `index_through`, `exact`). What a caller means by "the same
+    /// operand" when it asks of operands not yet emitted, or of one in two spellings.
+    pub fn same_place(&self, other: &Self) -> bool {
+        self.addr == other.addr
+            && self.width == other.width
+            && self.base == other.base
+            && self.stack_argument == other.stack_argument
+            && self.selector == other.selector
+            && self.index == other.index
+            && self.scale == other.scale
+            && (self.addr.is_some() || self.offset == other.offset)
+    }
+
+    /// `self` is the word above `low`: the cell two bytes on, however either is spelled.
+    pub fn word_above(&self, low: &Self) -> bool {
+        self.same_place(&Self { addr: low.addr.map(|addr| addr.plus(2)), offset: if low.addr.is_some() { low.offset } else { low.offset + 2 }, ..low.clone() })
+    }
+
     pub const fn new(addr: Option<Addr>, width: u32) -> Self {
         Self {
             addr,
@@ -155,41 +160,10 @@ impl Mem {
         _in_frame(self.addr, self.through)
     }
 
-    fn displacement(&self) -> Option<i64> {
-        self.addr.is_none().then_some(self.offset)
-    }
 }
 
 fn _in_frame(addr: Option<Addr>, through: Register) -> bool {
     addr.is_some_and(|addr| addr.space == Space::Frame || (addr.space == Space::Literal && matches!(through, Register::BP | Register::EBP)))
-}
-
-impl PartialEq for Mem {
-    fn eq(&self, other: &Self) -> bool {
-        self.addr == other.addr
-            && self.width == other.width
-            && self.base == other.base
-            && self.stack_argument == other.stack_argument
-            && self.selector == other.selector
-            && self.index == other.index
-            && self.scale == other.scale
-            && self.displacement() == other.displacement()
-    }
-}
-
-impl Eq for Mem {}
-
-impl Hash for Mem {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.addr.hash(state);
-        self.width.hash(state);
-        self.base.hash(state);
-        self.stack_argument.hash(state);
-        self.selector.hash(state);
-        self.index.hash(state);
-        self.scale.hash(state);
-        self.displacement().hash(state);
-    }
 }
 
 /// An x87 stack position relative to the current top.
@@ -387,6 +361,19 @@ pub struct Semantics {
 }
 
 impl Semantics {
+    /// The same instruction, its operands not necessarily spelled the same way (`Mem::same_place`).
+    pub fn same_meaning(&self, other: &Self) -> bool {
+        let same = |left: &[Loc], right: &[Loc]| {
+            left.len() == right.len()
+                && left.iter().zip(right).all(|pair| match pair {
+                    (Loc::Mem(x), Loc::Mem(y)) => x.same_place(y),
+                    (Loc::Address(x), Loc::Address(y)) => x.same_place(y),
+                    (x, y) => x == y,
+                })
+        };
+        self.op == other.op && self.name == other.name && self.target == other.target && self.indirect == other.indirect && same(&self.dests, &other.dests) && same(&self.sources, &other.sources)
+    }
+
     pub fn new(op: Operation) -> Self {
         Self {
             op,
@@ -415,16 +402,55 @@ pub static RESTORE_IDIOM: LazyLock<Semantics> = LazyLock::new(|| Semantics {
 /// Python `TABLE_DATA`.
 pub static TABLE_DATA: LazyLock<Semantics> = LazyLock::new(|| Semantics::new(Operation::Data));
 
-/// Python `values`: every SSA value named by one selected operand.
-pub fn values(where_: &Loc) -> Vec<Held> {
-    match where_ {
-        Loc::Held(held) => vec![*held],
-        Loc::Mem(memory) => [memory.base, memory.index, memory.selector]
-            .into_iter()
-            .flatten()
-            .collect(),
-        Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_) | Loc::St(_) => Vec::new(),
+/// The values one operand names: at most three (a cell's base, index and selector), kept in the value itself, so that
+/// asking for them of every operand of every instruction allocates nothing.
+#[derive(Clone, Copy, Debug)]
+pub struct Values {
+    held: [Held; 3],
+    len: usize,
+}
+
+impl std::ops::Deref for Values {
+    type Target = [Held];
+
+    fn deref(&self) -> &[Held] {
+        &self.held[..self.len]
     }
+}
+
+impl PartialEq<Vec<Held>> for Values {
+    fn eq(&self, other: &Vec<Held>) -> bool {
+        **self == **other
+    }
+}
+
+impl IntoIterator for Values {
+    type Item = Held;
+    type IntoIter = std::iter::Take<std::array::IntoIter<Held, 3>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.held.into_iter().take(self.len)
+    }
+}
+
+/// Python `values`: every SSA value named by one selected operand.
+pub fn values(where_: &Loc) -> Values {
+    let nothing = Held { value: 0, width: 0 };
+    let mut found = Values { held: [nothing; 3], len: 0 };
+    let mut named = |held: &Held| {
+        found.held[found.len] = *held;
+        found.len += 1;
+    };
+    match where_ {
+        Loc::Held(held) => named(held),
+        Loc::Mem(memory) => {
+            for held in [memory.base, memory.index, memory.selector].iter().flatten() {
+                named(held);
+            }
+        }
+        Loc::Reg(_) | Loc::Imm(_) | Loc::Address(_) | Loc::St(_) => {}
+    }
+    found
 }
 
 /// Python `mapped`: replace every SSA value nested in one selected operand.
@@ -510,23 +536,33 @@ mod tests {
         assert_ne!(left, right);
     }
 
+    /// `==` left out how an operand is spelled (`through`, `offset` of a cell with an address, `disp_width`,
+    /// `index_through`), so every caller that asked whether two operands are the same asked whether they are the
+    /// same modulo their encoding: a cache of decoded instructions gave `mov es,[bx+2]` for `mov es,[si+2]`.
     #[test]
-    fn encoding_details_do_not_change_memory_identity() {
+    fn how_a_memory_operand_is_spelled_is_part_of_its_identity() {
         let mut left = Mem::new(Some(Addr::new(Space::Segment, 4)), 2);
         left.base = Some(Held { value: 4, width: 2 });
-        let mut right = left.clone();
-        right.through = iced_x86::Register::BX;
-        right.offset = 6;
-        right.disp_width = 2;
-        right.index_through = iced_x86::Register::DI;
-
-        assert_eq!(left, right);
         let hash = |memory: &Mem| {
+            use std::hash::Hasher;
             let mut state = std::collections::hash_map::DefaultHasher::new();
             memory.hash(&mut state);
             state.finish()
         };
-        assert_eq!(hash(&left), hash(&right));
+        for change in [
+            |cell: &mut Mem| cell.through = iced_x86::Register::BX,
+            |cell: &mut Mem| cell.offset = 6,
+            |cell: &mut Mem| cell.disp_width = 2,
+            |cell: &mut Mem| cell.index_through = iced_x86::Register::DI,
+        ] {
+            let mut right = left.clone();
+            change(&mut right);
+            assert_ne!(left, right);
+            assert_ne!(hash(&left), hash(&right));
+        }
+        let address = |through| Address { through, ..Address::new(Some(Addr::new(Space::Segment, 4))) };
+        assert_ne!(address(iced_x86::Register::BX), address(iced_x86::Register::SI));
+        assert_eq!(left, left.clone());
     }
 
     #[test]
@@ -640,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn address_identity_ignores_encoding_details_but_not_the_address() {
+    fn the_same_place_ignores_encoding_details_but_not_the_address() {
         let left = Address::new(Some(Addr::new(Space::Literal, 12)));
         let mut right = left.clone();
         right.through = iced_x86::Register::BX;
@@ -648,7 +684,9 @@ mod tests {
         right.scale = 4;
         right.offset = -8;
         right.disp_width = 2;
-        assert_eq!(left, right);
+        assert!(left.same_place(&right) && left != right);
+        let moved = Address::new(Some(Addr::new(Space::Literal, 14)));
+        assert!(!left.same_place(&moved));
         assert!(Addr::new(Space::Frame, -2).direct());
         assert_eq!(Addr::new(Space::Frame, -2).plus(4).disp, 2);
     }

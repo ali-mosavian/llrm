@@ -28,14 +28,24 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dosbatch"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# The real-mode DOS emulator is x86-m16 code: it lives with the target.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "crates/target/llrm-x86-m16/bench"))
 
 import maps  # noqa: E402
 import corpus  # noqa: E402
 import sizes  # noqa: E402
 import icount  # noqa: E402
 import dosbatch  # noqa: E402
+llrmbin = dosbatch.llrmbin
 import run_tests  # noqa: E402
 from dosbatch import BIN, ROOT, Job  # noqa: E402
+
+def physical_defines() -> list[str]:
+    """`-DPHYSICAL_<NAME>=0x..UL` for each physical address the platform description names, as llrm-c passes them: the
+    reference compilers build the same program, which reads them (bench/textfill)."""
+    text = (ROOT / "crates/target/llrm-x86/platform.toml").read_text()
+    return [f"-DPHYSICAL_{name.upper()}=0x{address:X}UL" for name, address in tomllib.loads(text)["physical"].items()]
+
 
 OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/build/binbuild"))
 # Open Watcom's own medium-model C library, 8087 maths library and start-up (an OW v2 release; the tree's build of them
@@ -113,19 +123,27 @@ def expected_output(directory: Path) -> list[str]:
     return run_tests.lines((directory / f"{directory.name}.out").read_text())
 
 
+def nib_extras(source: Path) -> list[str]:
+    """The files a Nib benchmark links, as nib-build.sh takes them (m16: the bench measures real mode)."""
+    return [str(one) for one in dosbatch.link_files(source, run_tests.header(source).get("link", "").split(), dosbatch.REAL_MODE)]
+
+
 def build(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Path, Path] | str:
     """(exe, linker map) of the variant at -`opt`, or why it did not build. BASIC is only compiled here: LINK runs in DOSBox."""
     obj, listing = work / f"{stem}.obj", work / f"{stem}.map"
     # The kernel stays a call: inlined into main it has no entry to count from.
     # LLRM_BENCH_FLAGS: more compiler flags for a measurement, `-fsanitize=stack`'s overhead; the gate fails on it.
     more = os.environ.get("LLRM_BENCH_FLAGS", "").split()
-    flags = [f"-{opt}", "--cpu", "486", "-fno-inline-functions", *more]
+    flags = [f"-{opt}", "-fno-inline-functions", *more]
+    # A BASIC kernel is a private SUB called once from main: it stays a call only where called-once inlining is off (a C one is public).
+    if variant.language in BASIC_LANGUAGES:
+        flags.append("-fno-inline-functions-called-once")
     try:
         if variant.language == "nib":
             exe = work / f"{stem}.exe"
-            extras = [str(variant.source.parent / one) for one in run_tests.header(variant.source).get("link", "").split()]
+            extras = nib_extras(variant.source)
             done = subprocess.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], capture_output=True, text=True, timeout=300,
-                                  env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", *more])})
+                                  env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", "-fno-inline-functions-called-once", *more])})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         tool = "llrm-qb" if variant.language in BASIC_LANGUAGES else "llrm-c"
         arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
@@ -189,16 +207,14 @@ def build_watcom(variant: Variant, opt: str, work: Path, stem: str) -> tuple[Pat
     from the corpus's ext.asm."""
     obj, exe, listing = work / f"{stem}.obj", work / f"{stem}.exe", work / f"{stem}.map"
     flags = ["-ox", "-oe=0"] if opt == "O2" else ["-os", "-ol"]  # -oe=0: the kernel stays a call, as llrm-c compiles it
-    done = subprocess.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", *flags, str(variant.source), f"-fo={obj}"], capture_output=True, text=True, timeout=300)
+    done = subprocess.run([str(OW / "bwcc"), "-zq", "-mm", "-ecc", "-s", "-DOWREF", "-4", "-fpi87", *physical_defines(), *flags, str(variant.source), f"-fo={obj}"], capture_output=True, text=True, timeout=300)
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-300:]
-    ext = work / "EXT.OBJ"
     try:
-        if not ext.exists():
-            dosbatch.assemble(dosbatch.C_RUNTIME / "ext.asm", ext)
+        support = dosbatch.c_support(dosbatch.REAL_MODE, work)
         # Watcom names main `main_`; its start-up asks for `_cstart_` and the library calls it
-        dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", "stack=16k", "format", "dos", "name", str(exe),
-                        "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), "file", str(ext),
+        dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "option", "start=_cstart_", "option", "stack=16k", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe),
+                        "libpath", str(OWLIB / "dos"), "libpath", str(OWLIB), "file", str(obj), *[word for one in support for word in ("file", str(one))],
                         "library", "clibm.lib", "library", "math87m.lib", "library", "noemu87.lib"])
     except dosbatch.BuildError as error:
         return f"build: {error}"
@@ -227,10 +243,9 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
         if home.name == "tc201":  # TC 2.01 reads a `#` after a bare LF as an illegal character: every program with a #define failed
             text = text.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
         (folder / f"{stem}.c").write_bytes(text)
-    subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]}".strip() for _, stem in variants_]],
+    subprocess.run([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join(physical_defines())}".strip() for _, stem in variants_]],
                    env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, capture_output=True, timeout=1800)
-    ext = folder / "EXT.OBJ"
-    dosbatch.assemble(dosbatch.C_RUNTIME / "ext.asm", ext)
+    support = [word for one in dosbatch.c_support(dosbatch.REAL_MODE, folder) for word in ("file", str(one))]
     out: dict[str, tuple[Path, Path] | str] = {}
     for _, stem in variants_:
         obj, exe, listing = folder / f"{stem}.OBJ", folder / f"{stem}.exe", folder / f"{stem}.map"
@@ -240,7 +255,7 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
             continue
         lib = home / "lib"
         try:
-            dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", "format", "dos", "name", str(exe), "file", str(lib / "C0M.OBJ"), "file", str(obj), "file", str(ext),
+            dosbatch._host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={listing}", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe), "file", str(lib / "C0M.OBJ"), "file", str(obj), *support,
                             "library", str(lib / "CM.LIB"), "library", str((BCC / "lib" if language == "tcpp" else lib) / "FP87.LIB"), "library", str(lib / "MATHM.LIB")])
         except dosbatch.BuildError as error:
             out[stem] = f"link: {error}"
@@ -573,7 +588,7 @@ def main() -> int:
     parser.add_argument("--bless", action="store_true")
     parser.add_argument("--reason", default="")
     parser.add_argument("--json", type=Path)
-    parser.add_argument("--work", type=Path, default=ROOT / "target" / "bench")
+    parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
     args = parser.parse_args()
     if args.bless and not args.reason:
         parser.error("--bless needs --reason: every change to expected.toml says why")

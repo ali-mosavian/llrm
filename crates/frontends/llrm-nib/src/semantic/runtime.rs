@@ -6,17 +6,19 @@ use super::*;
 
 /// Name, parameter types, and result of each.
 pub(super) fn routines(types: &mut TypeRegistry) -> Vec<(&'static str, Vec<u32>, TypeName)> {
-    use TypeName::{I8, String, U8, U16, Void};
+    use TypeName::{I8, String, U8, Void};
+    // Lengths, capacities and counts are the target's usize.
+    let word = types.word();
     let text = text_view(types);
     vec![
         (rt::BUFFER_DROP, scalars(&[String]), Void),
-        (rt::BUFFER_RESERVE, scalars(&[String, U16, U16]), String),
+        (rt::BUFFER_RESERVE, scalars(&[String, word, word]), String),
         (rt::TEXT_CONCAT, scalars(&[String, String]), String),
         (rt::TEXT_APPEND, scalars(&[String, String]), String),
-        (rt::BUFFER_GROW, scalars(&[String, U16, U16]), String),
-        (rt::BUFFER_SHRINK, scalars(&[String, U16]), U16),
-        (rt::BUFFER_CLONE, scalars(&[String, U16]), String),
-        (rt::DICT_RESERVE, scalars(&[String, U16]), String),
+        (rt::BUFFER_GROW, scalars(&[String, word, word]), String),
+        (rt::BUFFER_SHRINK, scalars(&[String, word]), word),
+        (rt::BUFFER_CLONE, scalars(&[String, word]), String),
+        (rt::DICT_RESERVE, scalars(&[String, word]), String),
         (rt::PRINT_BEGIN, Vec::new(), Void),
         (rt::PRINT_END, Vec::new(), String),
         (rt::PRINT_FIELD, scalars(&[U8, U8, U8, U8]), Void),

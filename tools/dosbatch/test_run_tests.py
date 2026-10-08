@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import dosbatch  # noqa: E402
 import run_tests  # noqa: E402
 
 
@@ -18,7 +19,7 @@ class HeaderTests(unittest.TestCase):
             return run_tests.header(source)
 
     def test_flags_and_known_come_from_the_leading_comment(self):
-        self.assertEqual(self.read("' flags: -Os --cpu P5\n' known: #123\nPRINT 1\n"), {"flags": "-Os --cpu P5", "known": "#123"})
+        self.assertEqual(self.read("' flags: -Os -march=pentium\n' known: #123\nPRINT 1\n"), {"flags": "-Os -march=pentium", "known": "#123"})
 
     def test_dialect_picks_the_compiler_dialect(self):
         """hugerg and hugelp need PDS /Ah: built as QB 4.5 they died in the lowering with a Python repr."""
@@ -32,10 +33,10 @@ class HeaderTests(unittest.TestCase):
 class ConfigurationTests(unittest.TestCase):
     def test_one_header_is_each_configuration_it_names(self):
         """idioms.bas was fifteen copies of a file that differed in its header line."""
-        got = run_tests.configurations({"flags": "-O2 --cpu 486 | -Os", "dialect": "qb45 pds71"})
+        got = run_tests.configurations({"flags": "-O2 -march=i486 | -Os", "dialect": "qb45 pds71"})
         self.assertEqual([(label, flags, dialect) for label, flags, dialect in got], [
-            (" [-O2 --cpu 486, qb45]", ["-O2", "--cpu", "486"], "qb45"),
-            (" [-O2 --cpu 486, pds71]", ["-O2", "--cpu", "486"], "pds71"),
+            (" [-O2 -march=i486, qb45]", ["-O2", "-march=i486"], "qb45"),
+            (" [-O2 -march=i486, pds71]", ["-O2", "-march=i486"], "pds71"),
             (" [-Os, qb45]", ["-Os"], "qb45"),
             (" [-Os, pds71]", ["-Os"], "pds71"),
         ])
@@ -102,3 +103,27 @@ class PlaceTests(unittest.TestCase):
             a2 = Path(where) / "A"
             run_tests.dosbatch.place(Path(where) / "other", a2)  # exists: nothing to do, not even a read of `other`
             self.assertTrue(a2.exists())
+
+
+class PrivateWorkTests(unittest.TestCase):
+    def test_two_runs_do_not_share_a_work_directory(self):
+        """`run` clears its work directory: two runs given tests-run each deleted the other's files, and `cargo test --test run`
+        beside another session's gate waited 18 minutes on a DOSBox whose directory was gone (#736)."""
+        first, second = dosbatch.private_work("tests-run"), dosbatch.private_work("tests-run")
+        self.assertNotEqual(first, second)
+        self.assertEqual(first.parent, second.parent)
+
+    def test_runs_in_two_processes_do_not_share_one(self):
+        import subprocess
+
+        code = "import sys; sys.path.insert(0, %r); import dosbatch; print(dosbatch.private_work('tests-run'))" % str(Path(__file__).parent)
+        one, other = (subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout.strip() for _ in range(2))
+        self.assertNotEqual(one, other)
+
+    def test_a_passing_run_leaves_nothing_behind(self):
+        work = dosbatch.private_work("tests-run-test")
+        objs = work.with_name(work.name + "-obj")
+        for path in (work, objs):
+            path.mkdir(parents=True)
+        dosbatch.discard(work)
+        self.assertFalse(work.exists() or objs.exists())

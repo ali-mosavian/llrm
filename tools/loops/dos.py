@@ -61,19 +61,15 @@ def link_c(obj: Path, exe: Path, work: Path) -> None:
 
 def link_nib(obj: Path, exe: Path, work: Path, opt: str) -> None:
     """As tools/nib-build.sh links, with the corpus's externals beside."""
-    parts = {}
-    for part in ("start", "dos"):
-        parts[part] = work / f"N{part.upper()}.OBJ"
-        if not parts[part].exists():
-            assemble(NIB_RUNTIME / f"{part}.asm", parts[part])
-    ext = work / "EXT.OBJ"
-    if not ext.exists():
-        assemble(HERE / "runtime" / "ext.asm", ext)
+    link = dosbatch.target_link(dosbatch.REAL_MODE)
+    defines = dosbatch.os_defines(dosbatch.REAL_MODE, "nib")
+    made = lambda names: [dosbatch.runtime_object(name, work / (Path(name).stem.upper() + ".OBJ"), defines) for name in names]  # noqa: E731
+    first, last, final = made(dosbatch.os_start(dosbatch.REAL_MODE, "nib")), made(link["last"]), made(link["final"])
     runtime = obj.with_name(obj.stem + "_RT.OBJ")
-    used = [arg for one in (obj, parts["start"], parts["dos"], ext) for arg in ("--used-by", str(one))]
+    used = [arg for one in (obj, *first, *last, *final) for arg in ("--used-by", str(one))]
     _run([str(BIN / "llrm-nib"), str(NIB_RUNTIME / "runtime.nib"), "-o", str(runtime), opt, "--procedure-segments", *used])
-    _run([str(BIN / "jwlink"), "option", "quiet", "option", "eliminate", "format", "dos", "name", str(exe),
-          "file", str(parts["start"]), "file", str(obj), "file", str(runtime), "file", str(ext), "file", str(parts["dos"])])
+    _run([str(BIN / "jwlink"), "option", "quiet", "option", "eliminate", *dosbatch.linkrecipe.link(dosbatch.REAL_MODE, "format"), "name", str(exe),
+          *[word for one in (*first, obj, runtime, *last, *final) for word in ("file", str(one))]])
 
 
 def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_000) -> dict[str, list[int] | str | Stopped]:

@@ -78,23 +78,23 @@ impl Effect {
 }
 
 /// `one`'s effect as it decodes, else as its contract declares; None when unknown.
-pub fn effect(one: &Insn) -> Option<Effect> {
+pub fn effect(bits: u32, one: &Insn) -> Option<Effect> {
     if _terminator(one.what.as_ref()) {
         // A jump or branch writes nothing; a branch reads its flags.
         let what = one.what.as_ref().expect("a terminator has semantics");
         let reads = if what.op == Operation::Branch { _branch_reads(what) } else { Lanes::new() };
         return Some(Effect { reads, writes: Lanes::new(), moved: Vec::new() });
     }
-    let (reads, writes) = _register_effects(one, false, true).or_else(|| _declared(one))?;
-    Some(match _moved_lanes(one) {
+    let (reads, writes) = _register_effects(bits, one, false, true).or_else(|| _declared(one))?;
+    Some(match _moved_lanes(bits, one) {
         Some((moved, operands)) => Effect { reads: reads.minus(&operands), writes, moved },
         None => Effect { reads, writes, moved: Vec::new() },
     })
 }
 
 /// Each instruction's effect in `block`, decoded once for a fixed point to reuse.
-fn _effects(block: &LirBlock) -> Vec<Option<Effect>> {
-    block.insns.iter().map(|one| effect(one)).collect()
+fn _effects(bits: u32, block: &LirBlock) -> Vec<Option<Effect>> {
+    block.insns.iter().map(|one| effect(bits, one)).collect()
 }
 
 /// The lanes live before `effects`, given those live after them. An unknown
@@ -104,8 +104,8 @@ fn _before(effects: &[Option<Effect>], live: Lanes, universe: &Lanes) -> Lanes {
 }
 
 /// The lanes live before `block`, given those live after it.
-pub fn _backwards(block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
-    _before(&_effects(block), live, universe)
+pub fn _backwards(bits: u32, block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
+    _before(&_effects(bits, block), live, universe)
 }
 
 /// What a call says it reads and writes, for an instruction no decoder covers.
@@ -168,6 +168,16 @@ pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
     Some((reads, writes))
 }
 
+thread_local! {
+    static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out a block's lanes, for a test that a chain of blocks does not
+/// take a round of the body for each.
+pub fn visits() -> usize {
+    VISITS.with(std::cell::Cell::get)
+}
+
 /// Per block, the lanes live on entry -- with its successors and the universe.
 pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64>>, Lanes) {
     let universe = _universe();
@@ -179,20 +189,33 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
         .collect();
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut into: IndexMap<i64, Lanes> = blocks.keys().map(|at| (*at, Lanes::new())).collect();
-    let effects: IndexMap<i64, Vec<Option<Effect>>> = blocks.iter().map(|(at, block)| (*at, _effects(block))).collect();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for at in blocks.keys() {
-            let after = if successors[at].is_empty() {
-                universe.clone()
-            } else {
-                successors[at].iter().flat_map(|to| into[to].iter().copied()).collect()
-            };
-            let before = _before(&effects[at], after, &universe);
-            if before != into[at] {
-                into.insert(*at, before);
-                changing = true;
+    let effects: IndexMap<i64, Vec<Option<Effect>>> = blocks.iter().map(|(at, block)| (*at, _effects(body.bits, block))).collect();
+    // The least fixed point of a backward problem, found by a worklist that starts from the last block: a
+    // block is recomputed when a successor's lanes changed. Taken round the layout from the first block, each
+    // round carried a change one block back, and a chain of n blocks took n rounds.
+    let mut predecessors: IndexMap<i64, Vec<i64>> = blocks.keys().map(|at| (*at, Vec::new())).collect();
+    for (at, to) in &successors {
+        for next in to {
+            predecessors[next].push(*at);
+        }
+    }
+    let mut pending: Vec<i64> = blocks.keys().copied().collect();
+    let mut queued: crate::support::hash::HashSet<i64> = pending.iter().copied().collect();
+    while let Some(at) = pending.pop() {
+        VISITS.with(|visits| visits.set(visits.get() + 1));
+        queued.remove(&at);
+        let after = if successors[&at].is_empty() {
+            universe.clone()
+        } else {
+            successors[&at].iter().flat_map(|to| into[to].iter().copied()).collect()
+        };
+        let before = _before(&effects[&at], after, &universe);
+        if before != into[&at] {
+            into.insert(at, before);
+            for &pred in &predecessors[&at] {
+                if queued.insert(pred) {
+                    pending.push(pred);
+                }
             }
         }
     }
@@ -254,6 +277,31 @@ mod tests {
         let (into, _successors, _universe) = live_into(&body);
         assert!(_lanes(Register::DX).is_disjoint(&into[&1]));
         assert!(_lanes(Register::AX).is_subset(&into[&1]));
+    }
+
+    /// A chain of blocks, the last reading AX and each before it writing a register: the lanes live into the
+    /// first.
+    fn chain(blocks: i64) -> LirBody {
+        let bx = Reg { register: Register::BX, width: 2 };
+        let blocks: Vec<LirBlock> = (1..=blocks)
+            .map(|at| {
+                let insns = if at == blocks { vec![_insn(at, Operation::Move, "mov", vec![Loc::Reg(DX)], vec![Loc::Reg(AX)])] } else { vec![_insn(at, Operation::Move, "mov", vec![Loc::Reg(bx)], vec![Loc::Reg(DX)])] };
+                LirBlock { succ: if at == blocks { vec![] } else { vec![at + 1] }, ..LirBlock::new(at, insns) }
+            })
+            .collect();
+        LirBody::new("f", 1, blocks, IndexMap::default(), IndexMap::default())
+    }
+
+    /// Taken in layout order from the first block, each round of the fixed point carried a change one block
+    /// back: a chain of n blocks was n rounds of n blocks, and peephole's `dead_at_exit` was 18% of compiling
+    /// 800 blocks (#560). Starting from the last, each block is worked out about once.
+    #[test]
+    fn test_a_chain_of_blocks_is_not_a_round_of_the_body_for_each_block() {
+        let body = chain(200);
+        let before = super::visits();
+        let (into, _successors, _universe) = live_into(&body);
+        assert!(super::visits() - before <= 3 * 200, "{} block visits for 200 blocks", super::visits() - before);
+        assert!(_lanes(Register::AX).is_subset(&into[&1]), "AX is read at the end of the chain and written nowhere before");
     }
 
     #[test]

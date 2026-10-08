@@ -29,13 +29,13 @@ fn near_down(asm: &str, down: &str, up: &str) {
 
 #[test]
 fn test_c_enters_a_static_function_near() {
-    let asm = compiled("llrm-c", "near.c", "static int down(int n) { return n ? down(n - 1) + n : 0; }\nint up(int n) { return down(n); }\n", &[]);
+    let asm = compiled("llrm-c", "near.c", "static int down(int n) { return n ? n - down(n - 1) : 0; }\nint up(int n) { return down(n); }\n", &[]);
     near_down(&asm, "_down", "_up");
 }
 
 #[test]
 fn test_nib_enters_an_unexported_function_near() {
-    let source = "fn down(n: i16) -> i16:\n    if n == 0:\n        return 0\n    return down(n - 1) + n\n\n@export(\"cdecl16\")\nfn up(n: i16) -> i16:\n    return down(n)\n\nfn main() -> i16:\n    print(up(3))\n    return 0\n";
+    let source = "fn down(n: i16) -> i16:\n    if n == 0:\n        return 0\n    return n - down(n - 1)\n\n@export(\"cdecl16\")\nfn up(n: i16) -> i16:\n    return down(n)\n\nfn main() -> i16:\n    print(up(3))\n    return 0\n";
     near_down(&compiled("llrm-nib", "near.nib", source, &[]), "_down", "_up");
 }
 
@@ -52,7 +52,7 @@ fn test_basic_enters_a_module_internal_procedure_near() {
 /// loads nothing through the pointer, and its callers pass the fields.
 #[test]
 fn test_c_passes_the_field_a_static_function_reads_through_its_struct_pointer() {
-    let source = "struct P { int *data; int len; };\nstatic int sum(const struct P *p, int n) { int len = p->len; return n ? sum(p, n - 1) + len : len; }\nint up(struct P *p) { return sum(p, 3); }\n";
+    let source = "struct P { int *data; int len; };\nstatic int sum(const struct P *p, int n) { int len = p->len; return n ? len - sum(p, n - 1) : len; }\nint up(struct P *p) { return sum(p, 3); }\n";
     let asm = compiled("llrm-c", "promote.c", source, &[]);
     let body = procedure(&asm, "_sum");
     assert!(!body.contains("ptr [bx+") && !body.contains("ptr [si+") && body.contains("ret 4"), "{asm}");
@@ -62,7 +62,7 @@ fn test_c_passes_the_field_a_static_function_reads_through_its_struct_pointer() 
 #[test]
 fn test_nib_passes_the_slice_fields_an_unexported_function_reads() {
     let source = "fn total(a: &[i16], i: i16) -> i16:\n    if i == 0:\n        return a[0]\n    return total(a, i - 1) + a[i]\n\nfn main() -> i16:\n    let mut a: i16[8] = [1] * 8\n    a[3] = 5\n    print(total(a, 3))\n    return 0\n";
-    let asm = compiled("llrm-nib", "promote.nib", source, &["-fno-inline-functions"]);
+    let asm = compiled("llrm-nib", "promote.nib", source, &["-fno-inline-functions", "-fno-inline-functions-called-once"]);
     let body = procedure(&asm, "_total");
     // The descriptor's words were read through the pointer: its length at +0, its data pointer at +4.
     assert!(!body.contains("es:[bx+4]") && !body.contains("[bx+4]"), "{asm}");
@@ -73,7 +73,7 @@ fn test_nib_passes_the_slice_fields_an_unexported_function_reads() {
 /// callers pass and the check folds against `row`'s range; the constant is then no argument at all.
 #[test]
 fn test_nib_queens_loses_its_bounds_checks_and_the_arguments_that_carried_them() {
-    let asm = compiled("llrm-nib", "queens.nib", include_str!("../bench/queens/queens.nib"), &["-fno-inline-functions"]);
+    let asm = compiled("llrm-nib", "queens.nib", include_str!("../bench/queens/queens.nib"), &["-fno-inline-functions", "-fno-inline-functions-called-once"]);
     assert!(!asm.contains("N$EBND") && !asm.contains("pushw 12"), "{asm}");
 }
 
@@ -82,7 +82,7 @@ fn test_nib_queens_loses_its_bounds_checks_and_the_arguments_that_carried_them()
 #[test]
 fn test_nib_passes_a_global_array_slice_as_its_offset() {
     let source = "var table: i16[16] = [0] * 16\n\nfn total(a: &[i16], i: i16) -> i16:\n    if i == 0:\n        return a[0]\n    return total(a, i - 1) + a[i]\n\nfn main() -> i16:\n    table[3] = 5\n    print(total(table, 3))\n    return 0\n";
-    let asm = compiled("llrm-nib", "table.nib", source, &["-fno-inline-functions"]);
+    let asm = compiled("llrm-nib", "table.nib", source, &["-fno-inline-functions", "-fno-inline-functions-called-once"]);
     let body = procedure(&asm, "_total");
     assert!(!body.contains("les ") && !body.contains("es:[") && body.contains("ret 4"), "{asm}");
 }
@@ -91,7 +91,7 @@ fn test_nib_passes_a_global_array_slice_as_its_offset() {
 /// through `ss:`, one word on the stack, where `les` loaded a segment for it at every call.
 #[test]
 fn test_nib_reads_a_local_array_slice_through_ss() {
-    let asm = compiled("llrm-nib", "queens.nib", include_str!("../bench/queens/queens.nib"), &["-fno-inline-functions"]);
+    let asm = compiled("llrm-nib", "queens.nib", include_str!("../bench/queens/queens.nib"), &["-fno-inline-functions", "-fno-inline-functions-called-once"]);
     let body = procedure(&asm, "_safe");
     assert!(body.contains("ss:[") && !body.contains("les "), "{asm}");
 }

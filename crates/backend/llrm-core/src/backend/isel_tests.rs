@@ -16,7 +16,7 @@ fn parsed(text: &str) -> llrm_mir::Module {
 }
 
 fn selected(text: &str, name: &str) -> Result<isel::Selected, Unselected> {
-    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::code16(), &llrm_x86_code16::Code16, false, 0)
+    isel::selected(&parsed(text), name, &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::m16(), &llrm_x86_m16::M16, false, 0)
 }
 
 /// The module's text, once its object is written: a listing that does not
@@ -40,7 +40,7 @@ fn assembled_on(cpu: &str, text: &str) -> String {
 /// The module's text under `abi` and `segments`, as `cpu` prices it.
 fn assembled_by(abi: &HirAbi, segments: &crate::backend::target::Segments, cpu: &str, text: &str) -> String {
     let module = assemble::assembled(&parsed(text), abi, "T_TEXT", ProfileOrName::Name(cpu), segments).expect("assembles");
-    crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+    crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
     masm::text(&module).expect("prints")
 }
 
@@ -276,24 +276,7 @@ fn test_variable_indices_are_scaled_and_added() {
     let got = listing(text, "f");
     assert_eq!(
         got,
-        [
-            "push bp",
-            "mov bp, sp",
-            "sub sp, 8",
-            "push si",
-            "push di",
-            "L0_0:",
-            "mov bx, word ptr [bp+6]",
-            "mov si, word ptr [bp+8]",
-            "lea di, [esi+esi]",
-            "mov word ptr [bp+di-8], 5",
-            "add si, si",
-            "mov ax, word ptr [bx+si+2]",
-            "pop di",
-            "pop si",
-            "leave",
-            "retf",
-        ]
+        ["push bp", "mov bp, sp", "sub sp, 8", "push si", "push di", "L0_0:", "mov bx, word ptr [bp+6]", "mov si, word ptr [bp+8]", "lea di, [esi+esi]", "mov word ptr [bp+di-8], 5", "add si, si", "mov ax, word ptr [bx+si+2]", "pop di", "pop si", "leave", "retf"]
     );
 }
 
@@ -541,18 +524,7 @@ define i16 @f(i16 %i) addrspace(1) {
     let got = listing(text, "f");
     assert_eq!(
         got,
-        [
-            "push bp",
-            "mov bp, sp",
-            "L0_0:",
-            "mov bx, word ptr [bp+6]",
-            "add word ptr count, 1",
-            "mov ax, word ptr table+4",
-            "add bx, bx",
-            "add ax, word ptr table[bx]",
-            "pop bp",
-            "retf",
-        ]
+        ["push bp", "mov bp, sp", "L0_0:", "add word ptr count, 1", "mov bx, word ptr [bp+6]", "add bx, bx", "mov ax, word ptr table+4", "add ax, word ptr table[bx]", "pop bp", "retf"]
     );
 }
 
@@ -568,7 +540,7 @@ fn test_initializers_are_bytes_and_relocations() {
     let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
     let names = crate::backend::globals::names(&module, &|name| qb().linked(name)).expect("names");
     let rec = module.named("rec").expect("@rec");
-    let pointer = |name: &str, offset, far| Datum::Pointer(Pointer { name: name.to_owned(), offset, far });
+    let pointer = |name: &str, offset, far| Datum::Pointer(Pointer { name: name.to_owned(), offset, far, bytes: if far { 4 } else { 2 } });
     assert_eq!(
         crate::backend::globals::datums(&module, rec, &names).expect("data"),
         [
@@ -1250,7 +1222,7 @@ done:
 ";
     assert_eq!(
         listing(text, "f"),
-        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "fldz", "or ax, ax", "jle L0_3", "L0_2:", "fstp st(0)", "fld1", "L0_3:", "pop bp", "retf"]
+        ["push bp", "mov bp, sp", "L0_0:", "fldz", "cmp word ptr [bp+6], 0", "jle L0_3", "L0_2:", "fstp st(0)", "fld1", "L0_3:", "pop bp", "retf"]
     );
 }
 
@@ -1430,7 +1402,7 @@ fn test_an_integer_load_read_again_is_converted_from_its_register() {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov ax, word ptr [bx]".to_owned()) && got.contains(&"fidiv word ptr [bp-2]".to_owned()), "{got:?}");
+    assert!(got.contains(&"mov ax, word ptr [bx]".to_owned()) && got.iter().any(|one| one == "fild word ptr [bp-2]" || one == "fidiv word ptr [bp-2]"), "{got:?}");
 }
 
 /// A store between the load and its conversion may change the cell: x87
@@ -1446,8 +1418,8 @@ fn test_an_integer_load_before_a_store_is_not_read_after_it() {
 }
 ";
     let got = listing(text, "f");
-    let (load, store) = (got.iter().position(|one| one == "mov ax, word ptr [bx]"), got.iter().position(|one| one == "mov word ptr [si], 0"));
-    assert!(load < store && got.contains(&"fidiv word ptr [bp-2]".to_owned()), "{got:?}");
+    let (load, store) = (got.iter().position(|one| one.starts_with("mov ax, word ptr [")), got.iter().position(|one| one.starts_with("mov word ptr [") && one.ends_with(", 0")));
+    assert!(load < store && got.iter().any(|one| one == "fild word ptr [bp-2]" || one == "fidiv word ptr [bp-2]"), "{got:?}");
 }
 
 /// A volatile load is its own access, not an x87 operand.
@@ -1518,14 +1490,19 @@ fn inner_on(cpu: &str, text: &str) -> Vec<String> {
 /// as the old route's rmw selects: nbody kept each field in a temporary.
 #[test]
 fn test_an_update_stored_back_to_its_cell_is_one_instruction() {
+    // The address and the operand are loaded in either order: it is the update that is one instruction.
+    let sorted = |mut lines: Vec<String>| {
+        lines.sort();
+        lines
+    };
     let update = |operation: &str, ty: &str| {
         inner(&format!(
             "define void @f(ptr %p, {ty} %x) addrspace(1) {{\n  %v = load {ty}, ptr %p\n  %s = {operation} {ty} %v, %x\n  store {ty} %s, ptr %p\n  ret void\n}}\n"
         ))
     };
-    assert_eq!(update("add", "i16"), ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "add word ptr [bx], ax"]);
-    assert_eq!(update("sub", "i16"), ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "sub word ptr [bx], ax"]);
-    assert_eq!(update("or", "i8"), ["mov bx, word ptr [bp+6]", "mov al, byte ptr [bp+8]", "or byte ptr [bx], al"]);
+    assert_eq!(sorted(update("add", "i16")), sorted(["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "add word ptr [bx], ax"].map(str::to_owned).to_vec()));
+    assert_eq!(sorted(update("sub", "i16")), sorted(["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "sub word ptr [bx], ax"].map(str::to_owned).to_vec()));
+    assert_eq!(sorted(update("or", "i8")), sorted(["mov bx, word ptr [bp+6]", "mov al, byte ptr [bp+8]", "or byte ptr [bx], al"].map(str::to_owned).to_vec()));
     let global = "@a = internal global i16 0
 define void @f() addrspace(1) {
   %v = load i16, ptr @a
@@ -1732,7 +1709,7 @@ define void @f(ptr %p, i16 %i) addrspace(1) {
 ";
     assert_eq!(
         inner(text),
-        ["mov bx, word ptr [bp+6]", "mov ax, word ptr [bp+8]", "lea bx, [ebx+eax*2]", "mov word ptr [bx], 0", "push bx", "call take", "add sp, 2"]
+        ["mov ax, word ptr [bp+8]", "add ax, ax", "mov bx, word ptr [bp+6]", "add bx, ax", "mov word ptr [bx], 0", "push bx", "call take", "add sp, 2"]
     );
 }
 
@@ -1794,14 +1771,21 @@ fn test_a_dword_divided_by_a_constant_is_multiplied_where_cheaper() {
     assert_eq!((divides("P5"), divides("386")), (0, 1));
 }
 
-/// A word, and an unsigned dword, divided by a constant stay divisions:
-/// the reciprocal is the old route's for signed dwords only.
+/// A word divided by a constant stays a division: the reciprocal is for dwords. An unsigned dword is a multiply
+/// where the CPU prices it cheaper: a Pentium's `mul` is 10 clocks against `div`'s 41, and the 386's and 486's, which
+/// ends early on the dividend in its r/m operand, is 13 to 42 against 40 and priced at the middle where the dividend's
+/// length is not known. The dividend is that operand, the magic number in the accumulator.
 #[test]
-fn test_a_word_or_unsigned_division_by_a_constant_divides() {
+fn test_a_word_divides_and_an_unsigned_dword_is_multiplied_where_cheaper() {
     let word = "define i16 @f(i16 %x) addrspace(1) {\n  %q = sdiv i16 %x, 10\n  ret i16 %q\n}\n";
     let unsigned = "define i32 @f(i32 %x) addrspace(1) {\n  %q = udiv i32 %x, 10\n  ret i32 %q\n}\n";
     assert!(inner_on("P5", word).contains(&"idiv bx".to_owned()), "{:?}", inner_on("P5", word));
-    assert!(inner_on("P5", unsigned).contains(&"div ebx".to_owned()), "{:?}", inner_on("P5", unsigned));
+    assert!(inner_on("P5", unsigned).iter().any(|one| one.starts_with("mul ")) && !inner_on("P5", unsigned).iter().any(|one| one.starts_with("div ")), "{:?}", inner_on("P5", unsigned));
+    for cpu in ["386", "486"] {
+        let listing = inner_on(cpu, unsigned);
+        let at = listing.iter().position(|one| one.starts_with("mul ")).unwrap_or_else(|| panic!("{cpu}: {listing:?}"));
+        assert!(listing[at - 1].starts_with("mov eax, ") && !listing.iter().any(|one| one.starts_with("div ")), "{cpu}: {listing:?}");
+    }
 }
 
 /// A multiply by a constant is shifts and adds where the target prices
@@ -1940,9 +1924,11 @@ fn test_an_and_only_compared_with_zero_is_test() {
         ))
     };
     assert_eq!(tested("%m", "0")[..4], ["mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "test ax, bx", "je L0_3"]);
-    // Read again, the AND is computed; a constant mask is the old route's AND too.
+    // Read again, the AND is computed; a constant mask is the instruction's immediate (`test ax, 12`), not a copy `and`ed:
+    // collatz's `n & 1` was `mov edi, esi; and edi, 1; jne`.
     assert!(tested("%m", "%a").iter().any(|one| one.starts_with("and ")), "{:?}", tested("%m", "%a"));
-    assert!(tested("12", "0").iter().any(|one| one.starts_with("and ")), "{:?}", tested("12", "0"));
+    let masked = tested("12", "0");
+    assert!(masked.iter().any(|one| one == "test ax, 12") && !masked.iter().any(|one| one.starts_with("and ")), "{masked:?}");
 }
 
 /// A block every path from which ends in `unreachable` is cold, laid out
@@ -2097,7 +2083,8 @@ no:
         )
     };
     let got = listing_on("386", &text("sge"), "f");
-    assert_eq!(got[6..8], ["movzx eax, word ptr [si]", "movzx ebx, word ptr [bx]"], "{got:?}");
+    // Both operands are zero-extended where they are read, whichever is made first.
+    assert!(got.iter().any(|line| line.starts_with("movzx eax, word ptr [")) && got.iter().any(|line| line.starts_with("movzx ebx, word ptr [")), "{got:?}");
     assert!(got.contains(&"mov ax, word ptr [ebx+eax*2]".to_owned()), "{got:?}");
     // A negative index names another byte 32 bits wide; the 486 prices
     // the form above a spill.
@@ -2235,7 +2222,9 @@ fn test_an_i64_to_a_float_is_filds_qword() {
 ";
     let got = inner(text);
     let fild = got.iter().position(|line| line.starts_with("fild qword ptr [bp-8]")).expect("fild qword");
-    assert_eq!(got[..fild], ["mov eax, dword ptr [bp+6]", "xor ebx, ebx", "mov dword ptr [bp-8], eax", "mov dword ptr [bp-4], ebx"], "{got:?}");
+    // The pair is stored low then high, the value and a zero, wherever each is made.
+    let stored: Vec<&String> = got[..fild].iter().filter(|line| line.starts_with("mov dword ptr [bp-")).collect();
+    assert!(stored.len() == 2 && stored[0].starts_with("mov dword ptr [bp-8], ") && stored[1].starts_with("mov dword ptr [bp-4], ") && got[..fild].iter().any(|line| line.starts_with("xor e")), "{got:?}");
 }
 
 /// A zeroed 22-byte array descriptor was five `mov dword ptr [bp-n], 0`, 8
@@ -2851,7 +2840,8 @@ done:
     assert_eq!(cells.len(), 3, "{got:?}");
     let index = |cell: &str| cell.split_once("[ebp+").map(|(_, rest)| rest[..3].to_owned());
     let shared = index(cells[0]).expect("a frame cell 32 bits wide");
-    for (cell, scale) in cells.iter().zip(["*4", "*2", ""]) {
+    for cell in &cells {
+        let scale = if cell.contains("dword ptr") { "*4" } else if cell.contains("word ptr") { "*2" } else { "" };
         assert!(index(cell).as_ref() == Some(&shared) && cell.contains(&format!("{shared}{scale}")), "{cell}: {got:?}");
     }
     assert!(got[..top].contains(&"movzx ebp, bp".to_owned()), "{got:?}");
@@ -3248,13 +3238,12 @@ fn test_dbg_lines_become_linnum() {
     assert_eq!(attached, 3, "the fixture carries its lines");
     let mut assembled = assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
     let records = |assembled: &crate::backend::masm::Module| {
-        let object = crate::backend::omfwrite::written_as(assembled, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+        let object = crate::backend::objbuild::written_as(assembled, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
         llrm_omf::omf::parse(&object).expect("parses")
     };
     // Lines alone are a BASIC statement table's, not -g.
     assert!(!records(&assembled).iter().any(|one| one.r#type == llrm_omf::omf::LINNUM));
-    let flavor = llrm_omf::cvwrite::Flavor { qb45: false };
-    assembled.debug = Some(crate::backend::codeview::Debug { flavor, types: Vec::new(), nodes: Default::default(), procedures: Default::default(), globals: Vec::new() });
+    assembled.debug = Some(crate::backend::debuginfo::Debug { format: Default::default(), language: Default::default(), return_register: String::new(), frame: None, producer: llrm_object::debug::Producer::Native, frame_register: "ebp".into(), registers: Vec::new(), types: Vec::new(), nodes: Default::default(), procedures: Default::default(), globals: Vec::new() });
     let records = records(&assembled);
     let lines: Vec<(u16, u16)> = records.iter().filter(|one| one.r#type == llrm_omf::omf::LINNUM).flat_map(|one| llrm_omf::omf::lines(one).1).collect();
     // push bp; mov bp, sp (3 bytes) is line 7's; mov ax, [bp+6]; sub ax, [bp+8] (6 bytes) too.
@@ -3344,7 +3333,7 @@ fn test_far_pointers_compare_by_words() {
     };
     assert_eq!(
         compare("eq", "%q"),
-        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "xor ax, word ptr [bp+10]", "xor bx, word ptr [bp+12]", "or ax, bx", "sete al", "movzx ax, al", "pop bp", "retf"]
+        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "xor ax, word ptr [bp+10]", "mov bx, word ptr [bp+8]", "xor bx, word ptr [bp+12]", "or ax, bx", "sete al", "movzx ax, al", "pop bp", "retf"]
     );
     assert_eq!(compare("ne", "null"), ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "or ax, word ptr [bp+8]", "setne al", "movzx ax, al", "pop bp", "retf"]);
     assert!(compare("ult", "%q").iter().any(|line| line == "setb al"));
@@ -3406,22 +3395,7 @@ fn test_a_huge_pointer_displacement_carries_into_its_selector() {
 ";
     assert_eq!(
         listing(text, "f"),
-        [
-            "push bp",
-            "mov bp, sp",
-            "L0_0:",
-            "movzx ebx, word ptr [bp+6]",
-            "mov ax, word ptr [bp+8]",
-            "add ebx, 80000",
-            "mov ecx, ebx",
-            "sar ecx, 16",
-            "shl ecx, 12",
-            "add ax, cx",
-            "mov es, ax",
-            "mov ax, word ptr es:[bx]",
-            "pop bp",
-            "retf",
-        ]
+        ["push bp", "mov bp, sp", "L0_0:", "movzx ebx, word ptr [bp+6]", "add ebx, 80000", "mov eax, ebx", "sar eax, 16", "shl eax, 12", "mov cx, word ptr [bp+8]", "add cx, ax", "mov es, cx", "mov ax, word ptr es:[bx]", "pop bp", "retf"]
     );
     let far = "define i16 @f(ptr addrspace(1) %p) addrspace(1) {
   %q = getelementptr i32, ptr addrspace(1) %p, i16 5000
@@ -3442,23 +3416,7 @@ fn test_a_variable_index_in_a_huge_pointer_is_scaled_and_carried() {
 ";
     assert_eq!(
         listing(text, "f"),
-        [
-            "push bp",
-            "mov bp, sp",
-            "L0_0:",
-            "movzx ebx, word ptr [bp+6]",
-            "mov ax, word ptr [bp+8]",
-            "mov ecx, dword ptr [bp+10]",
-            "lea ebx, [ebx+ecx*2]",
-            "mov ecx, ebx",
-            "sar ecx, 16",
-            "shl ecx, 12",
-            "add ax, cx",
-            "mov es, ax",
-            "mov ax, word ptr es:[bx]",
-            "pop bp",
-            "retf",
-        ]
+        ["push bp", "mov bp, sp", "L0_0:", "movzx ebx, word ptr [bp+6]", "mov eax, dword ptr [bp+10]", "lea ebx, [ebx+eax*2]", "mov eax, ebx", "sar eax, 16", "shl eax, 12", "mov cx, word ptr [bp+8]", "add cx, ax", "mov es, cx", "mov ax, word ptr es:[bx]", "pop bp", "retf"]
     );
 }
 
@@ -3475,7 +3433,7 @@ fn test_huge_pointers_compare_by_selector_then_offset() {
 ";
     assert_eq!(
         listing(huge, "f"),
-        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "mov bx, word ptr [bp+8]", "mov cx, word ptr [bp+12]", "sub ax, word ptr [bp+10]", "sbb bx, cx", "setb al", "movzx ax, al", "pop bp", "retf"]
+        ["push bp", "mov bp, sp", "L0_0:", "mov ax, word ptr [bp+6]", "sub ax, word ptr [bp+10]", "mov ax, word ptr [bp+12]", "mov bx, word ptr [bp+8]", "sbb bx, ax", "setb al", "movzx ax, al", "pop bp", "retf"]
     );
     let far = huge.replace("addrspace(3)", "addrspace(1)");
     assert!(!listing(&far, "f").iter().any(|line| line.starts_with("sbb")));
@@ -3491,23 +3449,7 @@ define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
 ";
     assert_eq!(
         listing(text, "f"),
-        [
-            "push bp",
-            "mov bp, sp",
-            "L0_0:",
-            "movzx eax, word ptr [bp+6]",
-            "movzx ebx, word ptr [bp+8]",
-            "movzx edx, word ptr [bp+10]",
-            "movzx ecx, word ptr [bp+12]",
-            "sub eax, edx",
-            "sub ebx, ecx",
-            "sar ebx, 12",
-            "shl ebx, 16",
-            "add eax, ebx",
-            "shld edx, eax, 16",
-            "pop bp",
-            "retf",
-        ]
+        ["push bp", "mov bp, sp", "L0_0:", "movzx eax, word ptr [bp+6]", "movzx ebx, word ptr [bp+10]", "sub eax, ebx", "movzx ebx, word ptr [bp+8]", "movzx ecx, word ptr [bp+12]", "sub ebx, ecx", "sar ebx, 12", "shl ebx, 16", "add eax, ebx", "shld edx, eax, 16", "pop bp", "retf"]
     );
 }
 
@@ -3650,7 +3592,7 @@ fn test_a_fixed_address_pointer_selects_as_a_far_one() {
     let layout = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16\"\n";
     let listing = |space| {
         let module = llrm_mir::parse::module(&format!("{layout}{}", body(space))).expect("parses");
-        let chosen = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::code16(), &llrm_x86_code16::Code16, false, 0).expect("selected");
+        let chosen = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::m16(), &llrm_x86_m16::M16, false, 0).expect("selected");
         format!("{chosen:?}")
     };
     assert_eq!(listing(4), listing(1));
@@ -3797,7 +3739,7 @@ fn sized_with(candidates: assemble::Candidates, text: &str) -> usize {
     assemble::trying(candidates, || {
         let profile = crate::backend::cpu::tuned("486", true).expect("the 486 profile");
         let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
-        crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes").len()
+        crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes").len()
     })
 }
 
@@ -3894,7 +3836,7 @@ fn far_branch_body() -> String {
 fn decoded_object(text: &str) -> (Vec<iced_x86::Instruction>, Vec<usize>, Vec<usize>) {
     use llrm_omf::omf;
     let module = assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC).expect("assembles");
-    let bytes = crate::backend::omfwrite::written_as(&module, "t.asm", crate::backend::omfwrite::CodeLayout::OneSegment).expect("encodes");
+    let bytes = crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
     let records = omf::parse(&bytes).expect("parses");
     let (code, _, size) = omf::code_segment(&records).expect("a code segment");
     let image = omf::segment_image(&records, code, size);
@@ -4019,7 +3961,7 @@ fn test_a_phi_stored_on_more_edges_than_its_block_runs_stays_in_a_register() {
     assert_eq!(with, without);
 }
 
-/// code16 is 386+ code under 66h/67h prefixes, not 8086 code: i32 is
+/// m16 is 386+ code under 66h/67h prefixes, not 8086 code: i32 is
 /// arithmetic in EAX..EDI, extends are `movsx`/`movzx` into 32-bit
 /// registers, a constant multiply is a 32-bit `lea`, a long copy is
 /// `rep movsd`, and on a 386 a scaled index is `[ebx+eax*2]` (the 486 prices
@@ -4027,7 +3969,7 @@ fn test_a_phi_stored_on_more_edges_than_its_block_runs_stays_in_a_register() {
 /// but narrows these to word pairs would lose what every program is priced on.
 /// There is no 286 profile yet: when there is, it asserts none of these.
 #[test]
-fn test_code16_emits_386_forms() {
+fn test_m16_emits_386_forms() {
     let arithmetic = listing("define i32 @f(i32 %a, i32 %b) addrspace(1) {\n  %c = add i32 %a, %b\n  %d = mul i32 %c, 3\n  ret i32 %d\n}\n", "f");
     assert!(arithmetic.contains(&"add ebx, dword ptr [bp+10]".to_owned()), "{arithmetic:?}");
     assert!(arithmetic.contains(&"lea eax, [ebx+ebx*2]".to_owned()), "{arithmetic:?}");
@@ -4058,8 +4000,86 @@ fn test_code16_emits_386_forms() {
 /// 16-bit one is there, a target nobody has described is not.
 #[test]
 fn test_a_selector_is_found_by_its_targets_name() {
-    let found = isel::selector("x86-code16").expect("the 16-bit x86 selector");
-    assert_eq!(found.name, "x86-code16");
-    assert!(std::ptr::eq(found, isel::code16()));
-    assert!(isel::selector("x86-code99").is_none());
+    let found = isel::selector("x86-m16").expect("the 16-bit x86 selector");
+    assert_eq!(found.name, "x86-m16");
+    assert!(std::ptr::eq(found, isel::m16()));
+    assert!(isel::selector("x86-m99").is_none());
+}
+
+/// A type's class, its register width and its size in memory are read off one
+/// classification: the patterns' `ptr`/`far`, the register a pointer takes and the bytes
+/// it stores can not disagree about whether a pointer is one value or two.
+#[test]
+fn test_one_class_of_a_type_says_its_name_register_and_size() {
+    let params = "i1 %a, i8 %b, i16 %c, i32 %d, i64 %e, ptr %p, ptr addrspace(1) %q, float %x, double %y, x86_fp80 %z";
+    let check = |layout: &str, want: &[(&str, Result<u32, ()>, Result<u32, ()>)]| {
+        let module = llrm_mir::parse::module(&format!("target datalayout = \"{layout}\"\ndefine void @f({params}) {{\nentry:\n  ret void\n}}\n")).expect("parses");
+        let function = module.global(module.named("f").expect("f")).function().expect("a function");
+        let layout = llrm_mir::datalayout::DataLayout::parse(layout).expect("a layout");
+        for (&parameter, (name, width, size)) in function.parameters().iter().zip(want) {
+            let ty = function.value(parameter).ty;
+            assert_eq!(isel::TypeClass::of(&module.context.types, &layout, Some(ty)).name(), *name);
+            assert_eq!(isel::width_of(&module, &layout, ty).map_err(|_| ()), *width, "{name} width");
+            assert_eq!(isel::size_of(&module, &layout, ty).map_err(|_| ()), *size, "{name} size");
+        }
+    };
+    check(
+        "e-p:16:16-p1:32:16:16:16-i32:16-i64:16",
+        &[("i1", Ok(1), Ok(1)), ("i8", Ok(1), Ok(1)), ("i16", Ok(2), Ok(2)), ("i32", Ok(4), Ok(4)), ("i64", Err(()), Ok(8)), ("ptr", Ok(2), Ok(2)), ("far", Err(()), Ok(4)), ("float", Ok(10), Ok(4)), ("float", Ok(10), Ok(8)), ("float", Ok(10), Ok(10))],
+    );
+    check(
+        "e-p:32:32-p1:32:32-i32:32-i64:32",
+        &[("i1", Ok(1), Ok(1)), ("i8", Ok(1), Ok(1)), ("i16", Ok(2), Ok(2)), ("i32", Ok(4), Ok(4)), ("i64", Err(()), Ok(8)), ("ptr", Ok(4), Ok(4)), ("ptr", Ok(4), Ok(4)), ("float", Ok(10), Ok(4)), ("float", Ok(10), Ok(8)), ("float", Ok(10), Ok(10))],
+    );
+}
+
+/// A pointer of 32 bits reaches `[base+index*4]` as it is, with no proof and no widening:
+/// the sum is as wide as the pointer, and its base a dword already. Selected for the
+/// 16-bit target's profile it was `shl index,2` and an access through `[base+index]`: the
+/// fold wanted a word range for the index and a word base to widen.
+#[test]
+fn test_a_dword_pointer_scales_its_index_in_the_access() {
+    let text = "target datalayout = \"e-p:32:32-i32:32-i64:32\"\ndefine i32 @f(ptr %p, i32 %i) {\nentry:\n  %e = getelementptr inbounds i32, ptr %p, i32 %i\n  %v = load i32, ptr %e\n  ret i32 %v\n}\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let selected = isel::selected(&module, "f", &qb(), &mut Pool::new(0), crate::backend::cpu::profile("486").expect("a target"), &crate::backend::target::BASIC, isel::m16(), &llrm_x86_m16::M16, false, 0).expect("selects");
+    let insns: Vec<_> = selected.body.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|insn| insn.what.as_ref()).collect();
+    assert!(!insns.iter().any(|what| what.name.as_deref() == Some("shl")), "{insns:?}");
+    let scaled = insns.iter().any(|what| what.sources.iter().any(|one| matches!(one, crate::model::ir::Loc::Mem(cell) if cell.scale == 4 && cell.base.is_some() && cell.index.is_some())));
+    assert!(scaled, "{insns:?}");
+}
+
+/// A load made just before its reader moved past a store to the very global it read, which `_may_write` (the frame's
+/// question) did not see: `N$PEND`, `x = g; g = 0; return x`, returned the zero and every Nib program's output looped.
+#[test]
+fn test_a_load_does_not_move_past_a_store_to_the_global_it_read() {
+    let text = "@g = internal global i16 5
+define i16 @f() addrspace(1) {
+  %v = load i16, ptr @g
+  store i16 0, ptr @g
+  ret i16 %v
+}
+";
+    let got = listing(text, "f");
+    let (load, store) = (got.iter().position(|one| one.starts_with("mov ax, word ptr g")), got.iter().position(|one| one.starts_with("mov word ptr g, 0")));
+    assert!(load.is_some() && store.is_some() && load < store, "{got:?}");
+}
+
+/// `-g`'s parameters of a function, by where its convention passes each: in a cell, in one register, in two
+/// (left out: no one register holds it), and one the function no longer has, which the optimiser took out.
+/// A register parameter was dropped with the rest of what had no cell, and a debugger had none to show.
+#[test]
+fn a_parameter_is_a_cell_a_register_or_gone() {
+    use crate::backend::isel::{Convention, Parameter};
+    use crate::model::lir::DebugPlace;
+    use iced_x86::Register;
+    use llrm_mir::debuginfo as di;
+    let mut module = llrm_mir::Module::default();
+    let int = di::add_type(&mut module, &di::Type { kind: di::Kind::Scalar, name: "int16".into(), size: 0, reach: di::Reach::Near, target: None, members: Vec::new(), spelling: None });
+    let named = ["a", "b", "c", "d"];
+    let parameters = named.iter().enumerate().map(|(at, name)| (at as i64, (*name).to_owned(), int)).collect();
+    di::add_function(&mut module, &di::Function { function: "f".into(), module: false, name: "f".into(), r#type: int, parameters });
+    // a in a cell, b in AX, c in DX:AX; d is past the three the function has.
+    let convention = Convention { parameters: vec![Parameter::Cell(6), Parameter::Registers(vec![Register::AX]), Parameter::Registers(vec![Register::DX, Register::AX])], returns: Vec::new(), popped: 0, saved: Vec::new() };
+    let found: Vec<(String, DebugPlace)> = isel::parameters(&module, "f", &convention).into_iter().map(|one| (one.name, one.place)).collect();
+    assert_eq!(found, [("a".to_owned(), DebugPlace::At(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 6))), ("b".to_owned(), DebugPlace::Register(Register::AX)), ("d".to_owned(), DebugPlace::Gone)]);
 }

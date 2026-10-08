@@ -1,0 +1,171 @@
+# The ABI a program has without -mabi=, and, for each ABI, the convention an unmarked function has under it.
+default = "cdecl"
+
+[abi.cdecl]
+convention = "cdecl16"
+
+[abi.watcom]
+convention = "watcall16"
+
+[abi.ia16]
+convention = "ia16"
+
+[abi.regparm3]
+convention = "regparm3"
+
+# cdecl16, m16's C ABI: Borland's medium model as `wccq` is asked for it (-mm -ecc; `_name`
+# symbols). A far call (a procedure that is exported) leaves a 4-byte return address.
+
+[cdecl16]
+cc = "cdecl"
+slot_bytes = 2
+order = "right-to-left"
+cleanup = "caller"
+# All arguments in memory.
+argument_registers = []
+# A near call's return address; a far one's is 4 bytes.
+return_address_bytes = 2
+# From BP after `push bp; mov bp, sp`: past the saved BP and the return address.
+first_argument_offset = 4
+first_argument_offset_far = 6
+# The frame register: a cell is addressed through it, and no value is held in it.
+frame = "bp"
+stack = "sp"
+# A Borland caller keeps SI and DI, not their upper halves: each by its full register and the one a
+# prologue pushes.
+preserved = ["bp", ["esi", "si"], ["edi", "di"]]
+clobbered = ["ax", "bx", "cx", "dx", "es", "flags"]
+# Direction flag clear and the x87 stack empty on entry and on return.
+entry_state = ["df_clear", "x87_empty"]
+# char and short arguments are widened to a slot; an i64 and a double take two, low half first.
+promotion = "slot"
+wide_slots = 2
+variadic_float = "double"
+# Borland's struct return: a struct of 1, 2 or 4 bytes in AL, AX or DX:AX; any other is written to caller memory through a far
+# pointer pushed after every argument, which comes back in DX:AX.
+aggregate = "hidden-pointer"
+aggregate_in_register_bytes = [1, 2, 4]
+aggregate_pointer = "after-arguments"
+aggregate_pointer_far = true
+aggregate_pointer_returned = "eax"
+aggregate_pointer_popped_by = "caller"
+
+# Borland's C decoration, which Open Watcom's -ecc writes too.
+[cdecl16.symbol]
+omf = "_*"
+
+# By the bytes a result takes: a byte or word in AX, a dword in DX:AX, an i64 in EDX:EAX; the
+# registers are named by their dword, as the selector holds them. Floats in st(0).
+[cdecl16.result]
+1 = ["eax"]
+2 = ["eax"]
+4 = ["eax", "edx"]
+8 = ["eax", "edx"]
+pointer = ["eax"]
+float = ["st0"]
+
+# Pascal: arguments pushed left to right and popped by the callee. Nib's pascal16.
+[pascal16]
+like = "cdecl16"
+order = "left-to-right"
+cleanup = "callee"
+
+[pascal16.symbol]
+omf = "^*"
+
+# BASIC's own: the same, in the compilers of each dialect.
+[qb45]
+like = "pascal16"
+
+[pds71]
+like = "pascal16"
+
+[vbdos]
+like = "pascal16"
+
+# An interrupt handler: entered with the flags, CS and IP pushed (six bytes), it saves every register
+# (llrm_mir::opcode::X86_INTR_FRAME) and leaves by `iret`. It takes no stack arguments: its one
+# parameter points at the saved frame, so no offset is from BP.
+[interrupt16]
+like = "cdecl16"
+return_address_bytes = 6
+first_argument_offset = 0
+first_argument_offset_far = 0
+clobbered = []
+# What its frame pointer addresses, lowest address first, each slot's register and bytes: the segments it saved,
+# PUSHAD's image (EDI lowest), then what the interrupt pushed. A handler writing a slot writes what POPAD, a pop
+# or `iret` restores. The one statement of the layout: the backend pushes in this order and frontends name
+# registers through it.
+interrupt_frame = [["gs", 2], ["fs", 2], ["es", 2], ["ds", 2], ["edi", 4], ["esi", 4], ["ebp", 4], ["esp", 4], ["ebx", 4], ["edx", 4], ["ecx", 4], ["eax", 4], ["ip", 2], ["cs", 2], ["flags", 2]]
+
+# watcall16: Open Watcom's 16-bit register convention (`wcc -ecw`, `__watcall`), medium model, read from `bwcc`'s own output.
+# Arguments take AX, DX, BX, CX in order; a long or a far pointer (4 bytes) takes DX:AX or CX:BX (the low word, or a far
+# pointer's offset, first: AX, BX), the first pair with both free, and a register passed over stays free for a later word. The
+# first argument that fits no register (a float, an 8-byte value, a struct of more than 4 bytes) and every one after it goes on the
+# stack, which the callee pops (`retf n`); a struct of 1, 2 or 4 bytes is passed as an integer is. A callee changes the registers its
+# own arguments arrive in, AX, ES and, for a long result, DX, and keeps every other, as in 32 bits. A struct result larger than a
+# dword is written through the near address in SI, which the callee returns in AX. Symbols are `name_`; a variadic call is cdecl16's.
+[watcall16]
+like = "cdecl16"
+cc = "watcall"
+cleanup = "callee"
+argument_registers = ["ax", "dx", "bx", "cx"]
+wide_pairs = [["ax", "dx"], ["bx", "cx"]]
+backfill = true
+arguments_clobbered = true
+results_clobbered = true
+variadic = "cdecl16"
+preserved = ["bp", ["ebx", "bx"], ["ecx", "cx"], ["edx", "dx"], ["esi", "si"], ["edi", "di"]]
+clobbered = ["ax", "es", "st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7", "flags"]
+aggregate_pointer = "register"
+aggregate_pointer_register = "si"
+aggregate_pointer_far = false
+aggregate_pointer_popped_by = "callee"
+
+[watcall16.symbol]
+omf = "*_"
+
+# ia16: gcc-ia16's convention, as `ia16-elf-gcc -O2` (6.3) emits it, small and medium model alike: every argument on the stack, pushed
+# right to left in word slots, which the caller removes; results in AL, AX or DX:AX. A struct result of 1, 2 or 4 bytes is that
+# integer; any other is written through a near pointer that is the first argument, which the callee returns in AX. BP, SI, DI and ES are
+# kept (gcc uses ES as a general register and saves it), AX, BX, CX and DX are not. Symbols are `_name` in OMF, bare in ELF.
+[ia16]
+like = "cdecl16"
+cc = "ia16"
+preserved = ["bp", ["esi", "si"], ["edi", "di"], "es"]
+clobbered = ["ax", "bx", "cx", "dx", "flags"]
+aggregate_pointer_far = false
+
+[ia16.symbol]
+omf = "_*"
+elf = "*"
+
+# regparm3: gcc's `-mregparm=3` (i386), by the size of the argument. The first three integer or pointer arguments, left to right, take EAX,
+# EDX, ECX, each in the part its size names: AL, AX or EAX for 1, 2 or 4 bytes (a long, in one register). Everything else is on the stack
+# as cdecl16's: the fourth and later, floats, i64, structs, far pointers. A float or an i64 takes no register and does not stop the
+# later arguments taking the free ones (gcc counts integers only; Watcom's stops at the first that fits none). Results by the same size:
+# AL, AX, EAX (a long, a near pointer, a far pointer as offset low and segment high), an i64 in EDX:EAX, a float in st(0); a struct
+# of 1, 2 or 4 bytes as that integer, a larger one through cdecl16's hidden far pointer. The caller removes the stack arguments, as
+# cdecl16's; EAX, EDX and ECX are cdecl16's scratch registers. A variadic call is cdecl16's.
+[regparm3]
+like = "cdecl16"
+cc = "regparm3"
+argument_registers = ["eax", "edx", "ecx"]
+register_bytes = 4
+sized_arguments = true
+skip_memory = true
+aggregate_arguments_in_memory = true
+variadic = "cdecl16"
+
+# Spelled apart from cdecl16's `_name`: a routine declared in the other convention fails to link where it would call with its
+# arguments in the wrong place. The 3 counts the argument registers (regparm 3); Windows' stdcall `@N` counts stack bytes.
+[regparm3.symbol]
+omf = "_*@3"
+
+[regparm3.result]
+1 = ["eax"]
+2 = ["eax"]
+4 = ["eax"]
+8 = ["eax", "edx"]
+pointer = ["eax"]
+float = ["st0"]

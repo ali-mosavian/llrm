@@ -208,7 +208,10 @@ pub fn found(module: &Module, program: &ProgramProxy, elsewhere: &Elsewhere, sha
     let bodies = module.functions().filter(|(_, _, function)| !function.is_declaration()).collect::<Vec<_>>();
     for &(id, _, function) in &bodies {
         let shape = shape(id);
-        let facts = alias::points_to(&Unit { program: Some(program), ..Unit::of(module, layout, function) }.with_shape(&shape), None, None)?;
+        let unit = Unit { program: Some(program), ..Unit::of(module, layout, function) };
+        // Each access asks whether its frame object's address is exposed: found once for the body.
+        let exposed = crate::memory::exposed_frames(&unit);
+        let facts = alias::points_to(&unit.with_shape(&shape).with_exposed(&exposed), None, None)?;
         for object in facts.escaped.iter().filter(|one| one.kind == MemoryKind::Global) {
             if let Some(Identity::Global(global)) = object.identity {
                 tracked.remove(&GlobalId(global));
@@ -279,7 +282,9 @@ impl ProgramAnalysis for ProgramGlobals {
             let mut ids = held(module);
             for (_, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
                 let shape = Shape::of(function);
-                let facts = alias::points_to(&Unit { program: Some(&proxy), ..Unit::of(module, &program.layout, function) }.with_shape(&shape), None, None)?;
+                let unit = Unit { program: Some(&proxy), ..Unit::of(module, &program.layout, function) };
+                let exposed = crate::memory::exposed_frames(&unit);
+                let facts = alias::points_to(&unit.with_shape(&shape).with_exposed(&exposed), None, None)?;
                 ids.extend(facts.escaped.iter().filter(|one| one.kind == MemoryKind::Global).filter_map(|one| match one.identity {
                     Some(Identity::Global(global)) => Some(GlobalId(global)),
                     _ => None,

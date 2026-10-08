@@ -33,6 +33,16 @@ pub fn load(
     read_all(source, read)?.linked()
 }
 
+/// `load` for a target whose near pointer is `near_bytes` wide: `usize` and `NEAR_BYTES` are its.
+pub fn load_for(
+    source: &str,
+    read: &mut dyn FnMut(&str) -> Result<String, String>,
+    near_bytes: u32,
+    seeded: &BTreeMap<String, Expr>,
+) -> Result<Module, Located> {
+    read_all_for(source, read, near_bytes, seeded)?.linked()
+}
+
 /// The main module and every module it imports, each parsed as written.
 #[derive(Clone, Debug)]
 pub struct Loaded {
@@ -49,8 +59,18 @@ pub fn read_all(
     source: &str,
     read: &mut dyn FnMut(&str) -> Result<String, String>,
 ) -> Result<Loaded, Located> {
+    read_all_for(source, read, 2, &BTreeMap::new())
+}
+
+/// `read_all` for a target whose near pointer is `near_bytes` wide.
+pub fn read_all_for(
+    source: &str,
+    read: &mut dyn FnMut(&str) -> Result<String, String>,
+    near_bytes: u32,
+    seeded: &BTreeMap<String, Expr>,
+) -> Result<Loaded, Located> {
     let mut modules = BTreeMap::new();
-    let mut sources = Sources::default();
+    let mut sources = Sources { near_bytes, seeded: seeded.clone(), ..Default::default() };
     let main = lexed("", source, &mut sources)?;
     let mut order = Vec::new();
     visit("", main, &mut Vec::new(), &mut modules, &mut order, &mut sources, read)?;
@@ -96,7 +116,7 @@ fn parsed(name: &str, tokens: Vec<Token>, imports: &[Import], loaded: &BTreeMap<
                 .map(|one| (format!("{}.{}", import.name, one.name), one.value.clone()))
         })
         .collect();
-    let parsed = parse_after(tokens, sources.fixed_types, &imported).map_err(|error| (name.to_owned(), error))?;
+    let parsed = parse_after(tokens, sources.fixed_types, &imported, sources.near_bytes, &sources.seeded).map_err(|error| (name.to_owned(), error))?;
     sources.fixed_types += parsed.fixed_types.len() as u16;
     Ok(parsed)
 }
@@ -107,6 +127,9 @@ fn parsed(name: &str, tokens: Vec<Token>, imports: &[Import], loaded: &BTreeMap<
 struct Sources {
     names: Vec<String>,
     fixed_types: u16,
+    near_bytes: u32,
+    /// Constants the target seeds into every module: its physical addresses.
+    seeded: BTreeMap<String, Expr>,
 }
 
 /// Loads the module `name` and what it imports, depth first, each parsed
@@ -135,7 +158,8 @@ fn visit(
         if loaded.contains_key(&import.module) {
             continue;
         }
-        let source = if standard::supplied(&import.module) {
+        // `std.os` is the runtime's OS layer, which the target says: `read` gives it.
+        let source = if standard::supplied(&import.module) && import.module != "std.os" {
             standard::source(&import.module).map(str::to_owned).ok_or_else(|| "the compiler supplies no such module".to_owned())
         } else {
             read(&import.module)

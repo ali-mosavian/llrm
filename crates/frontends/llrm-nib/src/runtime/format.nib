@@ -26,7 +26,7 @@ fn scratch_at(at: u16) -> *near mut u8:
         let base: *near mut u8 = &mut scratch
         return base.offset(at)
 
-fn put(data: *far u8, length: u16) -> void:
+fn put(data: *far u8, length: usize) -> void:
     unsafe:
         if sink.is_null():
             os.write(data, length)
@@ -38,29 +38,29 @@ fn put_text(text: &string) -> void:
         let data: *far char = &text
         put(data.cast[u8](), text.len)
 
-fn pad(count: u16) -> void:
+fn pad(count: usize) -> void:
     unsafe:
         let filler: *near mut u8 = &mut fill
         for _at in 0..count:
             put(filler.far(), 1)
 
 # Fills in front of a value of `length` bytes; what is owed after it.
-fn open(length: u16) -> u16:
-    let missing: u16 = width > length ? width - length : 0
+fn open(length: usize) -> usize:
+    let missing: usize = width > length ? width - length : 0
     width = 0
     radix = 10
     if !left:
         pad(missing)
     return missing
 
-fn close(missing: u16) -> void:
+fn close(missing: usize) -> void:
     if left:
         pad(missing)
     fill = SPACE
     left = false
 
 # `length` bytes of `data`, filled out to the field.
-fn field(data: *far u8, length: u16) -> void:
+fn field(data: *far u8, length: usize) -> void:
     let missing = open(length)
     put(data, length)
     close(missing)

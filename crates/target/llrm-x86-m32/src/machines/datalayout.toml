@@ -1,0 +1,29 @@
+# x86-m32: flat. CS = DS = SS, base 0, 4 GB limit. ES = DS is a fact the
+# target or OS states (string ops read it); FS and GS are never assumed.
+
+# What gcc's -m names it: -m32.
+mode = 32
+
+# LLVM syntax. One pointer type; i64 is two dwords; x87 long double is 80 bits.
+datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
+
+# `near` and `far` collapse: one linear space, and none of the pair or selector
+# kinds, which a program using is refused. The unmarked pointer is a dword.
+[spaces]
+near = 0
+far = 0
+data = 0
+stack = 0
+
+[pointers]
+4 = "near"
+
+# Address forms per (mode, address size): base + index*scale + displacement. The base and index
+# are any general register but ESP as an index (registers.regs' classes), the displacement 0, 8 or
+# 32 bits, and a form with no base takes an index and disp32 or disp32 alone; the encoder prices
+# those. A flat form's only fact the passes ask is the index width and the scales.
+[[address_form]]
+address_bits = 32
+scales = [1, 2, 4, 8]
+# Cost: the `lea` and memory-form keys of `timings`; no per-form surcharge is
+# described until it is measured.

@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "loops"))
 
-from tools import innerloops  # noqa: E402
+from tools import innerloops, llrmbin  # noqa: E402
 from tests.test_innerloops import _object  # noqa: E402
 
 import quality  # noqa: E402
@@ -64,7 +64,7 @@ def test_a_stopped_program_s_reports_come_from_what_it_wrote(tmp_path):
         '{"ev":"out","handle":1,"file":"P.TXT","text":"5\\r\\n-7\\r\\n"}\n'
         '{"ev":"end","reason":"crash","ms":3}\n'
     )
-    got = dos.collect([dos.Job("p", "exe", tmp_path / "P.EXE")], tmp_path, events)["p"]
+    got = dos.reports(dos.dosbatch.collect([dos.Job("p", "exe", tmp_path / "P.EXE")], tmp_path, events)["p"])
     assert isinstance(got, dos.Stopped) and got.partial == [5, -7]
 
 
@@ -72,13 +72,10 @@ def test_the_c_start_up_gives_dos_a_stack_outside_the_code(tmp_path):
     """With no STACK segment DOS started the program with SS:SP inside its
     code; a timer interrupt before the start-up switched stacks wrote six
     bytes into a procedure, and the program restarted itself forever."""
-    bin_ = Path(__file__).resolve().parents[1] / "target" / "release"
-    here = Path(__file__).resolve().parents[1] / "tools" / "loops" / "runtime"
-    (tmp_path / "m.asm").write_text(".model medium\n.code\npublic _main\n_main proc far\n    ret\n_main endp\nend\n")
-    for source, obj in ((here / "crt.asm", "crt.obj"), (tmp_path / "m.asm", "m.obj")):
-        subprocess.run([bin_ / "jwasm", "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{tmp_path / obj}", source], check=True)
-    subprocess.run([bin_ / "jwlink", "option", "quiet", "format", "dos", "name", tmp_path / "p.exe",
-                    "file", tmp_path / "crt.obj", "file", tmp_path / "m.obj"], check=True, capture_output=True)
+    bin_ = llrmbin.bin_dir()
+    (tmp_path / "m.asm").write_text("\n".join(dos.dosbatch.linkrecipe.recipe(dos.dosbatch.REAL_MODE)["header"]) + "\n.code\npublic _main\n_main proc far\n    ret\n_main endp\nend\n")
+    subprocess.run([bin_ / "jwasm", "-q", "-c", "-Cp", "-Zg", dos.dosbatch.linkrecipe.assembler(dos.dosbatch.REAL_MODE), f"-Fo{tmp_path / 'm.obj'}", tmp_path / "m.asm"], check=True)
+    dos.dosbatch.link_c(tmp_path / "m.obj", tmp_path / "p.exe", tmp_path)
     exe = (tmp_path / "p.exe").read_bytes()
     # the code is at the load image's start; the stack must be elsewhere
     assert int.from_bytes(exe[14:16], "little") > 0
@@ -325,7 +322,7 @@ def test_a_nib_case_keeps_its_symbolic_stride(tmp_path):
     body = body[: body.index("\n}\n")]
     header, rest = body.split("\n", 1)
     import re
-    m = re.findall(r"(%\d+)[,)]", header)[3]  # the fourth parameter: m
+    m = re.findall(r"(%\d+)[,)]", header)[-1]  # the last parameter: m (an unused one before it is dropped)
     assert re.search(re.escape(m) + r"\b", rest)
 
 
@@ -346,7 +343,7 @@ def test_a_program_bc_refused_is_not_run(tmp_path):
     (tmp_path / "V1.BCO").write_text("    0 Warning Error(s)\n    3 Severe  Error(s)\n")
     events = tmp_path / "events.txt"
     events.write_text('{"ev":"end","reason":"exit"}\n{"ev":"end","reason":"crash","ms":1}\n')
-    got = dos.collect([dos.Job("v1", "bas", tmp_path / "V1.BAS")], tmp_path, events)["v1"]
+    got = dos.reports(dos.dosbatch.collect([dos.Job("v1", "bas", tmp_path / "V1.BAS")], tmp_path, events)["v1"])
     assert isinstance(got, str) and got.startswith("not built")
 
 

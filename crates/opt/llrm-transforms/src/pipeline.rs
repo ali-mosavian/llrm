@@ -34,9 +34,9 @@ use llrm_mir::passes::{Analyses, Declared, FunctionPass, ModuleAnalyses, PassMan
 use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
-use crate::{
+use crate::{jumpthread, 
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, lcssa, loopmotion, loopsimplify, lsr, peel, ports,
-    promote, rotate, unroll, unswitch, window,
+    promote, rotate, tailrec, trivialunswitch, unroll, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -61,6 +61,7 @@ pub struct Options {
     pub unroll: bool,
     pub peel: bool,
     pub fill: bool,
+    pub sibcalls: bool,
     pub unswitch: bool,
 }
 
@@ -68,7 +69,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             optimize: true,
-            limits: Limits::default(),
+            limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default(),
             lcssa: true,
             floatloop: true,
@@ -84,6 +85,7 @@ impl Default for Options {
             unroll: true,
             peel: true,
             fill: true,
+            sibcalls: true,
             unswitch: false,
         }
     }
@@ -100,10 +102,9 @@ impl Options {
         Self { unroll: false, peel: false, unswitch: false, ..Self::default() }
     }
 
-    /// -O3: LLVM's -O3 budgets, twice the unrolled size and a 250 inline threshold.
+    /// -O3: LLVM's -O3 budgets, twice the target's unroll budget and a 250 inline threshold.
     pub fn aggressive() -> Self {
-        let limits = Limits::default();
-        Self { limits: Limits { max_unrolled_operations: 2 * limits.max_unrolled_operations, ..limits }, inline: inline::Threshold::new(250), ..Self::default() }
+        Self { limits: Limits { target_percent: 200, ..Limits::default() }, inline: inline::Threshold::new(250), ..Self::default() }
     }
 
     /// -Os: no copy grows the code. Inlining keeps -O2's threshold: the
@@ -112,7 +113,7 @@ impl Options {
     /// shrinks the code here. A lower one would also refuse a constant-site
     /// clone that folds away.
     pub fn size() -> Self {
-        Self { limits: Limits { grows: false, ..Limits::default() }, inline: inline::Threshold::default().for_size(), ..Self::default() }
+        Self { limits: Limits { grows: false, target_percent: 100, ..Limits::default() }, inline: inline::Threshold::default().for_size(), ..Self::default() }
     }
 
     /// Whether code size outranks speed where they conflict: -Os and -Oz.
@@ -142,6 +143,7 @@ impl Options {
             "unroll" => self.unroll,
             "peel" => self.peel,
             "fill" | "merge" => self.fill,
+            "tailrec" => self.sibcalls,
             _ => true,
         }
     }
@@ -173,13 +175,17 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Before anything asks what a port call does to memory.
         Box::new(ports::Ports),
         Box::new(decide::Decide),
+        // Once the arguments are values rather than frame cells; the loop it makes goes to the loop passes below.
+        Box::new(tailrec::TailRecursion),
         Box::new(loopsimplify::LoopSimplify),
         Box::new(lcssa::LoopClosedSSA),
         // Strict floating recurrences must retain their original iteration
         // order; LICM may move invariant preparation out afterwards.
         Box::new(floatloop::FloatLoop),
-        Box::new(hoist::Hoist),
+        Box::new(hoist::Hoist { size: applied.options.prefers_size() }),
         Box::new(loopmotion::LoopMotion),
+        // The loop's exit tests that nothing in it changes are made once, with the loop's entry.
+        Box::new(trivialunswitch::TrivialUnswitch),
         // Before gvn: a far pointer cast from a near one is read as the near one.
         Box::new(inferspace::InferAddressSpaces),
         Box::new(dse::Dse),
@@ -187,7 +193,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
         Box::new(indvars::IndVars),
-        Box::new(algebraic::Algebraic),
+        Box::new(algebraic::Algebraic { size: applied.options.prefers_size() }),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
         Box::new(peel::Peel { limits: limits() }),
@@ -202,6 +208,19 @@ pub fn passes() -> Vec<&'static str> {
     pipeline(&Applied::default()).iter().map(|one| one.name()).collect()
 }
 
+/// Plugs the pass manager's steps into `LLRM_DEBUG=time`, if it is on.
+pub fn timed() {
+    use llrm_support::debug;
+    if !debug::enabled("time") {
+        return;
+    }
+    llrm_mir::passes::observe(llrm_mir::passes::Observer {
+        span: |kind, name, run| debug::timed_by(|| format!("{kind} {name}"), run),
+        function: |name, run| debug::in_function(name, run),
+        count: |what, hit| debug::counted(what, hit),
+    });
+}
+
 /// `program` through the pipeline.
 pub fn applied(program: &mut Program, applied: &Applied) -> Result<(), String> {
     recorded(program, applied).map(|_| ())
@@ -209,6 +228,7 @@ pub fn applied(program: &mut Program, applied: &Applied) -> Result<(), String> {
 
 /// `applied`, with what the pipeline did to each function.
 pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, String> {
+    timed();
     let mut manager = PassManager::default();
     manager.verify_each = true;
     manager.dump = applied.dump.clone();
@@ -252,7 +272,9 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     }
     // Each loop's counters chosen once, on the loop the passes above leave.
     if applied.options.wanted("lsr") {
-        manager.add(lsr::Lsr);
+        manager.add(lsr::Lsr { size: applied.options.prefers_size() });
+        // What the counters it chose leave behind (a bound subtracted from a counter rebased by it), as LLVM's LSR cleans with SimplifyInstructions.
+        manager.add(algebraic::Differences);
     }
     // On the pointers LSR chose: a huge one a loop keeps in one window is far there.
     if applied.options.wanted("window") {
@@ -261,10 +283,14 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     // Last, as the old drivers rotated in lowering: unroll and peel refuse
     // a rotated loop.
     manager.add(rotate::Rotate);
+    // After the loop passes: the cycles it makes between the cases are no natural loop. LLVM's DFAJumpThreading, gcc's FSM threader.
+    if applied.options.wanted("jumpthread") {
+        manager.add(jumpthread::JumpThread { size: applied.options.prefers_size() });
+    }
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if applied.options.wanted("hoist") {
-        manager.add(hoist::Hoist);
+        manager.add(hoist::Hoist { size: applied.options.prefers_size() });
     }
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {
@@ -276,6 +302,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
     }
     // Last: what it names are the instructions selection sees.
     manager.add_module(crate::spares::Spares);
+    manager.add_module(crate::homes::Homes);
     manager.run(program)
 }
 
@@ -289,7 +316,7 @@ fn rerun(module: &mut Module, analyses: &mut ModuleAnalyses, id: GlobalId, fixed
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
         return Err(format!("@{}: not a function", id.0));
     };
-    let mut unit = Unit { context, layout: &layout, function, metadata, declared: &mut declared };
+    let mut unit = Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared };
     let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
     analyses.invalidate(&preserved);
     declared.place(module)
@@ -457,11 +484,11 @@ impl Run {
         if !self.promotes && matches!(pass.name(), "sroa" | "promote") {
             return false;
         }
-        let preserved = pass.run(unit, analyses);
+        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses));
         if preserved.are_all_preserved() {
             return false;
         }
-        analyses.invalidate(&preserved);
+        llrm_mir::passes::spanned("invalidate", || analyses.invalidate(&preserved));
         self.changed(stage, unit, analyses);
         true
     }

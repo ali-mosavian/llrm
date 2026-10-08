@@ -114,7 +114,8 @@ plain_enums!(
     Op,
     TerminatorKind,
     DebugKind,
-    DebugReach
+    DebugReach,
+    DebugLanguage
 );
 
 macro_rules! plain_record {
@@ -138,8 +139,23 @@ plain_record!(Type, None, id => "id", name => "name", kind => "kind", width => "
 plain_record!(Place, None, id => "id", name => "name", r#type => "type", storage => "storage", offset => "offset",
     symbol => "symbol", extent => "extent", address => "address", volatile => "volatile");
 plain_record!(Value, None, id => "id", r#type => "type");
-plain_record!(DebugType, None, id => "id", kind => "kind", name => "name", target => "target", size => "size",
-    reach => "reach", members => "members");
+// `spelling` only where there is one: every other type writes as before.
+impl _Plain for model::DebugType {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("id".to_owned(), self.id._plain());
+        out.insert("kind".to_owned(), self.kind._plain());
+        out.insert("name".to_owned(), self.name._plain());
+        out.insert("target".to_owned(), self.target._plain());
+        out.insert("size".to_owned(), self.size._plain());
+        out.insert("reach".to_owned(), self.reach._plain());
+        out.insert("members".to_owned(), self.members._plain());
+        if let Some(spelling) = &self.spelling {
+            out.insert("spelling".to_owned(), spelling._plain());
+        }
+        Json::Dict(out)
+    }
+}
 // A bit field's keys only where it is one: every other member writes as before.
 impl _Plain for model::DebugMember {
     fn _plain(&self) -> JSON {
@@ -155,11 +171,38 @@ impl _Plain for model::DebugMember {
     }
 }
 plain_record!(DebugParameter, None, argument => "argument", name => "name", r#type => "type");
-plain_record!(DebugVariable, None, place => "place", name => "name", r#type => "type");
+// `parameter` only where true: every other variable writes as before.
+impl _Plain for model::DebugVariable {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        out.insert("place".to_owned(), self.place._plain());
+        out.insert("name".to_owned(), self.name._plain());
+        out.insert("type".to_owned(), self.r#type._plain());
+        if self.parameter {
+            out.insert("parameter".to_owned(), self.parameter._plain());
+        }
+        if let Some(argument) = self.argument {
+            out.insert("argument".to_owned(), argument._plain());
+        }
+        Json::Dict(out)
+    }
+}
 plain_record!(DebugFunction, None, function => "function", module => "module", name => "name", r#type => "type", parameters => "parameters",
     variables => "variables");
 plain_record!(DebugGlobal, None, function => "function", object => "object", offset => "offset", name => "name", r#type => "type");
-plain_record!(Debug, None, types => "types", functions => "functions", globals => "globals");
+// `language` only where the frontend says, so a module without one writes as before.
+impl _Plain for model::Debug {
+    fn _plain(&self) -> JSON {
+        let mut out: IndexMap<String, JSON> = IndexMap::default();
+        if self.language.is_some() {
+            out.insert("language".to_owned(), self.language._plain());
+        }
+        out.insert("types".to_owned(), self.types._plain());
+        out.insert("functions".to_owned(), self.functions._plain());
+        out.insert("globals".to_owned(), self.globals._plain());
+        Json::Dict(out)
+    }
+}
 plain_record!(ValueRef, Some("value"), value => "value");
 plain_record!(Constant, Some("constant"), r#type => "type", value => "value");
 plain_record!(PlaceRef, Some("place"), place => "place");
@@ -239,6 +282,15 @@ impl _Plain for model::CallAbi {
         out.insert("distance".to_owned(), self.distance._plain());
         out.insert("callee".to_owned(), self.callee._plain());
         float_return(&mut out, self.float_return);
+        if self.convention.is_some() {
+            out.insert("convention".to_owned(), self.convention._plain());
+        }
+        if !self.memory.is_empty() {
+            out.insert("memory".to_owned(), self.memory._plain());
+        }
+        if self.result_pointer.is_some() {
+            out.insert("result_pointer".to_owned(), self.result_pointer._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -271,6 +323,15 @@ impl _Plain for model::ProcedureAbi {
         float_return(&mut out, self.float_return);
         if self.variadic {
             out.insert("variadic".to_owned(), self.variadic._plain());
+        }
+        if self.convention.is_some() {
+            out.insert("convention".to_owned(), self.convention._plain());
+        }
+        if !self.memory.is_empty() {
+            out.insert("memory".to_owned(), self.memory._plain());
+        }
+        if self.result_pointer.is_some() {
+            out.insert("result_pointer".to_owned(), self.result_pointer._plain());
         }
         Json::Dict(out)
     }
@@ -422,6 +483,9 @@ impl _Plain for model::Program {
         }
         if !self.zeroed_locals {
             out.insert("zeroed_locals".to_owned(), self.zeroed_locals._plain());
+        }
+        if self.descriptor_word != 2 {
+            out.insert("descriptor_word".to_owned(), self.descriptor_word._plain());
         }
         if self.frames != model::Frames::Runtime {
             out.insert("frames".to_owned(), self.frames._plain());
@@ -759,7 +823,8 @@ made_enums!(
     Op,
     TerminatorKind,
     DebugKind,
-    DebugReach
+    DebugReach,
+    DebugLanguage
 );
 
 macro_rules! made_records {
@@ -871,6 +936,7 @@ macro_rules! indices {
     };
 }
 const OPTIONAL_INT: _Hint = _Hint::Union(&[_Hint::Int, _Hint::NoneType]);
+const OPTIONAL_STR: _Hint = _Hint::Union(&[_Hint::Str, _Hint::NoneType]);
 const INTS: _Hint = _Hint::Tuple(&_Hint::Int);
 const BOOLS: _Hint = _Hint::Tuple(&_Hint::Bool);
 const OPERANDS: _Hint = _Hint::Tuple(&_Hint::Operand);
@@ -1126,6 +1192,9 @@ static CALL_ABI: _Record = _Record {
         ("distance", enum_hint!(CallDistance), true),
         ("callee", OPTIONAL_INT, false),
         ("float_return", enum_hint!(FloatReturn), false),
+        ("convention", OPTIONAL_STR, false),
+        ("memory", INTS, false),
+        ("result_pointer", OPTIONAL_INT, false),
     ],
     build: |args| {
         _object(model::CallAbi {
@@ -1135,6 +1204,9 @@ static CALL_ABI: _Record = _Record {
             distance: _required(args, "distance")?,
             callee: _default(args, "callee", None)?,
             float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
+            convention: _default(args, "convention", None)?,
+            memory: _default(args, "memory", Vec::new())?,
+            result_pointer: _default(args, "result_pointer", None)?,
         })
     },
 };
@@ -1177,6 +1249,9 @@ static PROCEDURE_ABI: _Record = _Record {
         ("parameter_bytes", _Hint::Int, true),
         ("float_return", enum_hint!(FloatReturn), false),
         ("variadic", _Hint::Bool, false),
+        ("convention", OPTIONAL_STR, false),
+        ("memory", INTS, false),
+        ("result_pointer", OPTIONAL_INT, false),
     ],
     build: |args| {
         _object(model::ProcedureAbi {
@@ -1185,6 +1260,9 @@ static PROCEDURE_ABI: _Record = _Record {
             parameter_bytes: _required(args, "parameter_bytes")?,
             float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
             variadic: _default(args, "variadic", false)?,
+            convention: _default(args, "convention", None)?,
+            memory: _default(args, "memory", Vec::new())?,
+            result_pointer: _default(args, "result_pointer", None)?,
         })
     },
 };
@@ -1317,6 +1395,7 @@ static DEBUG_TYPE: _Record = _Record {
         ("size", _Hint::Int, true),
         ("reach", enum_hint!(DebugReach), true),
         ("members", _Hint::Tuple(&_Hint::Record(&DEBUG_MEMBER)), true),
+        ("spelling", OPTIONAL_STR, false),
     ],
     build: |args| {
         _object(model::DebugType {
@@ -1327,6 +1406,7 @@ static DEBUG_TYPE: _Record = _Record {
             size: _required(args, "size")?,
             reach: _required(args, "reach")?,
             members: _required(args, "members")?,
+            spelling: _default(args, "spelling", None)?,
         })
     },
 };
@@ -1353,8 +1433,10 @@ static DEBUG_PARAMETER: _Record = _Record {
 
 static DEBUG_VARIABLE: _Record = _Record {
     name: "DebugVariable",
-    fields: &[("place", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true)],
-    build: |args| _object(model::DebugVariable { place: _required(args, "place")?, name: _required(args, "name")?, r#type: _required(args, "type")? }),
+    fields: &[("place", _Hint::Int, true), ("name", _Hint::Str, true), ("type", _Hint::Int, true), ("parameter", _Hint::Bool, false), ("argument", OPTIONAL_INT, false)],
+    build: |args| {
+        _object(model::DebugVariable { place: _required(args, "place")?, name: _required(args, "name")?, r#type: _required(args, "type")?, parameter: _default(args, "parameter", false)?, argument: _default(args, "argument", None)? })
+    },
 };
 
 static DEBUG_FUNCTION: _Record = _Record {
@@ -1396,11 +1478,14 @@ static DEBUG_GLOBAL: _Record = _Record {
 static DEBUG: _Record = _Record {
     name: "Debug",
     fields: &[
+        ("language", _Hint::Union(&[enum_hint!(DebugLanguage), _Hint::NoneType]), false),
         ("types", _Hint::Tuple(&_Hint::Record(&DEBUG_TYPE)), true),
         ("functions", _Hint::Tuple(&_Hint::Record(&DEBUG_FUNCTION)), true),
         ("globals", _Hint::Tuple(&_Hint::Record(&DEBUG_GLOBAL)), true),
     ],
-    build: |args| _object(model::Debug { types: _required(args, "types")?, functions: _required(args, "functions")?, globals: _required(args, "globals")? }),
+    build: |args| {
+        _object(model::Debug { language: _default(args, "language", None)?, types: _required(args, "types")?, functions: _required(args, "functions")?, globals: _required(args, "globals")? })
+    },
 };
 
 static STATED_FACT: _Record = _Record {
@@ -1478,6 +1563,7 @@ static PROGRAM: _Record = _Record {
         ("float_mode", enum_hint!(FloatMode), false),
         ("float_semantics", enum_hint!(FloatSemantics), false),
         ("zeroed_locals", _Hint::Bool, false),
+        ("descriptor_word", _Hint::Int, false),
         ("frames", enum_hint!(Frames), false),
         ("promises", _Hint::Record(&RUNTIME_PROMISES), false),
         ("entries", _Hint::Tuple(&_Hint::Str), false),
@@ -1495,6 +1581,7 @@ static PROGRAM: _Record = _Record {
             float_mode: _default(args, "float_mode", model::FloatMode::Inline)?,
             float_semantics: _default(args, "float_semantics", model::FloatSemantics::Declared)?,
             zeroed_locals: _default(args, "zeroed_locals", true)?,
+            descriptor_word: _default(args, "descriptor_word", 2)?,
             frames: _default(args, "frames", model::Frames::Runtime)?,
             promises: _default(args, "promises", model::RuntimePromises::default())?,
             entries: _default(args, "entries", Vec::new())?,

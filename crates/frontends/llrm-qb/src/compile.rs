@@ -13,7 +13,7 @@ use llrm_core::support::hash::IndexMap;
 
 use super::abi::AbiError;
 use llrm_core::driver::{self, basic::{self, written_basic}};
-use llrm_core::backend::{masm, omfwrite};
+use llrm_core::backend::{masm, objbuild};
 use llrm_core::hir::{self, model};
 use llrm_core::objectfile::module::Space;
 use llrm_core::support::pyrepr::{self, Repr};
@@ -376,7 +376,7 @@ fn _graphics_dependencies(module: &model::Module) -> BTreeSet<String> {
 /// driver into the BASIC module object laid out here, each data object as
 /// this names it and lays it down.
 fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result<masm::Module, CompileError> {
-    let program = &_positional_data(program)?;
+    let program = &llrm_core::support::debug::timed("hir positional data", || _positional_data(program))?;
     let module = &program.modules[0];
     let functions = module.functions.iter().map(|one| (one.name.clone(), _object_name(&one.name)));
     let symbols: BTreeMap<String, String> = functions.chain(module.callables.iter().map(|one| (one.name.clone(), _link_name(one)))).collect();
@@ -402,6 +402,12 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
     let graphics = _graphics_dependencies(module);
     let datum = basic::Item::Datum;
     let label = |name: &str| datum(masm::Datum::Label(masm::Label { name: name.to_owned() }));
+    // The object's pointer cells are the target's: a far pointer's width and a near one's.
+    let (near_bytes, far_bytes) = {
+        let layout = codegen.arch.layout();
+        let datalayout = llrm_mir::datalayout::DataLayout::parse(&layout.datalayout).map_err(CompileError::from)?;
+        (datalayout.pointer(layout.spaces.near).bits / 8, datalayout.pointer(layout.spaces.far).bits / 8)
+    };
     let mut segments: Vec<(&str, Vec<basic::Item>)> = vec![
         ("BR_DATA", vec![]),
         ("BR_SKYS", vec![]),
@@ -413,7 +419,7 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         ("BC_CN", placed.swap_remove("BC_CN").unwrap_or_default()),
         ("BC_DS", read_data.into_iter().chain([masm::Datum::Bytes(vec![0xff, 0xff, 0x01])]).map(datum).collect()),
         ("BC_SAB", vec![label("$QB$SAB")]),
-        ("BC_SA", vec![label("$QB$SA"), datum(masm::Datum::Pointer(masm::Pointer { name: basic::HEADER.into(), offset: 0, far: true }))]),
+        ("BC_SA", vec![label("$QB$SA"), datum(masm::Datum::Pointer(masm::Pointer { name: basic::HEADER.into(), offset: 0, far: true, bytes: far_bytes }))]),
     ];
     let mut private: BTreeSet<String> = BTreeSet::new();
     if vbdos {
@@ -422,7 +428,7 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         private.extend(["FDATA".to_owned(), "FSL_CONST".to_owned()]);
     }
     if vbdos && !graphics.is_empty() {
-        segments.push(("QB_LINK", graphics.iter().map(|name| datum(masm::Datum::Pointer(masm::Pointer { name: name.clone(), offset: 0, far: false }))).collect()));
+        segments.push(("QB_LINK", graphics.iter().map(|name| datum(masm::Datum::Pointer(masm::Pointer { name: name.clone(), offset: 0, far: false, bytes: near_bytes }))).collect()));
         private.insert("QB_LINK".into());
     }
     let object = basic::Object {
@@ -440,7 +446,7 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
         stack_check: program.stack_check.clone(),
     };
     let mut compiled = basic::compiled(program, &object, codegen)?;
-    compiled.stack = stack_to_add(&compiled, STACK_BASE)?;
+    compiled.stack = stack_to_add(&compiled, STACK_BASE, STACK_RESERVE, llrm_core::backend::stackusage::stack_limit(codegen.arch.layout().segment_bytes()), &*codegen.arch)?;
     Ok(compiled)
 }
 
@@ -448,18 +454,21 @@ fn rich_assembled(program: &model::Program, codegen: &driver::Options) -> Result
 /// link maps of BC's and llrm-qb's objects both show; the object's own adds to it.
 pub const STACK_BASE: i64 = 0x800;
 
+/// What the BASIC runtime's routines, DOS and an interrupt use below the deepest chain of frames.
+pub const STACK_RESERVE: i64 = 512;
+
 /// Compile one QB HIR module to the shared assembly model.
 pub fn assembled(
     program: &model::Program,
     observer: Option<&mut HirObserver<'_>>,
     codegen: &driver::Options,
 ) -> Result<masm::Module, CompileError> {
-    hir::verify::verify(program).map_err(|error| CompileError::Value(error.0))?;
+    llrm_core::support::debug::timed("hir verify", || hir::verify::verify(program)).map_err(|error| CompileError::Value(error.0))?;
     if let Some(observe) = observer {
         observe(program)?;
     }
-    let laid_out = super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function));
-    let program = &_near_procedures(&laid_out);
+    let laid_out = llrm_core::support::debug::timed("hir zero fill", || super::zero_fill::laid_out(program, |module, function| !_inline_frame(program, module, function)));
+    let program = &llrm_core::support::debug::timed("hir near procedures", || _near_procedures(&laid_out));
     if program.modules.len() != 1 {
         return emission("one OMF object represents exactly one QB module");
     }
@@ -473,7 +482,7 @@ pub fn object_bytes(
     observer: Option<&mut HirObserver<'_>>,
     codegen: &driver::Options,
 ) -> Result<Vec<u8>, CompileError> {
-    let module = omfwrite::live(&assembled(program, observer, codegen)?)
+    let module = objbuild::live(&assembled(program, observer, codegen)?)
         .map_err(|error| CompileError::Value(error.to_string()))?;
     let name = source.file_name().map_or_else(String::new, |one| one.to_string_lossy().into_owned());
     Ok(written_basic(&module, _header(program)?, &name)?)

@@ -1,4 +1,4 @@
-' RUN: llrm-qb %s -O2 --cpu 486 -S -o /dev/stdout
+' RUN: llrm-qb %s -O2 -march=i486 -S -o /dev/stdout
 ' An element's address computed in both arms of an IF and read after the join
 ' was a phi of two equal addresses: each arm built it in BX (`mov bx, offset
 ' A%+2`), where the access names it as its displacement (#386).

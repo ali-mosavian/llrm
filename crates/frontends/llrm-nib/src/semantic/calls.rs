@@ -13,7 +13,7 @@ impl<'a> FunctionCompiler<'a> {
         };
         let element = self.types.resolve_element(spec, span)?;
         let bytes = self.types.width(element.id());
-        Ok(TypedOperand { operand: Some(hir::Operand::Constant(U16, i64::from(bytes))), type_name: TypeName::U16 })
+        Ok(TypedOperand { operand: Some(hir::Operand::Constant(self.word_id(), i64::from(bytes))), type_name: self.word() })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -399,7 +399,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             let data = self.array_data(&binding, element, operand.span())?;
             if rank == 1 {
-                let length = hir::Operand::Constant(U16, i64::from(shape.len()));
+                let length = hir::Operand::Constant(self.word_id(), i64::from(shape.len()));
                 let view = self.ranged_view(&name, data, length, element, range, pointer_type, operand.span())?;
                 return Ok((view, name.clone()));
             }
@@ -407,7 +407,7 @@ impl<'a> FunctionCompiler<'a> {
             let words = shape
                 .descriptor()
                 .into_iter()
-                .map(|(_, value)| hir::Operand::Constant(U16, i64::from(value)))
+                .map(|(_, value)| hir::Operand::Constant(self.word_id(), i64::from(value)))
                 .collect();
             let view = self.view_descriptor(&name, pointer_type, words, data);
             return Ok((view, name.clone()));
@@ -454,14 +454,15 @@ impl<'a> FunctionCompiler<'a> {
             .find(|one| one.id == pointer_type)
             .and_then(|one| one.element)
             .expect("slice pointer has a descriptor pointee");
-        let size = 2 * words.len() as u32;
+        let (word_bytes, word_id) = (self.word_bytes(), self.word_id());
+        let size = word_bytes * words.len() as u32;
         let descriptor =
             self.local_place(&format!("$slice_{name}"), descriptor_type, size + 4, false);
         let data_type = self.type_of(data);
         let stores = words
             .into_iter()
             .enumerate()
-            .map(|(word, value)| (2 * word as u32, U16, value));
+            .map(|(word, value)| (word_bytes * word as u32, word_id, value));
         for (offset, type_id, value) in stores.chain([(size, data_type, hir::Operand::Value(data))])
         {
             let place = hir::Operand::ProjectedPlace {

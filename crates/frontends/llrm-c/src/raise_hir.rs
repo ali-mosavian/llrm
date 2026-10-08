@@ -6,6 +6,7 @@
 //!
 //! Python's `eval` returns one of a dozen types; that union is `Got`.
 
+use llrm_target::calling::Convention;
 use std::collections::BTreeSet;
 
 
@@ -13,6 +14,14 @@ use llrm_core::abi::runtime;
 
 /// `WIDTHS.get(type_)`.
 pub fn widths(type_: &str) -> Option<u32> {
+    widths_for(false, type_)
+}
+
+/// `widths`, where flat code's `int` and pointers are 4 bytes.
+pub fn widths_for(flat: bool, type_: &str) -> Option<u32> {
+    if flat && matches!(type_, "TY_INTEGER" | "TY_UNSIGNED" | "TY_BOOLEAN" | "TY_POINTER" | "TY_NEAR_POINTER" | "TY_CODE_PTR" | "TY_NEAR_CODE_PTR") {
+        return Some(4);
+    }
     Some(match type_ {
         "TY_UINT_1" | "TY_INT_1" => 1,
         "TY_UINT_2" | "TY_INT_2" => 2,
@@ -70,6 +79,17 @@ pub(crate) fn pointers(type_: &str) -> bool {
 
 /// C's aliasing classes.
 pub(crate) fn classes(type_: &str) -> Option<&'static str> {
+    classes_for(false, type_)
+}
+
+/// `classes`, where flat code's `int` is a dword and its pointers 4 bytes.
+pub(crate) fn classes_for(flat: bool, type_: &str) -> Option<&'static str> {
+    if flat && matches!(type_, "TY_INTEGER" | "TY_UNSIGNED") {
+        return Some("int4");
+    }
+    if flat && matches!(type_, "TY_NEAR_POINTER" | "TY_POINTER") {
+        return Some("pointer4");
+    }
     Some(match type_ {
         "TY_INT_2" | "TY_UINT_2" | "TY_INTEGER" | "TY_UNSIGNED" => "int2",
         "TY_INT_4" | "TY_UINT_4" => "int4",
@@ -83,9 +103,16 @@ pub(crate) fn classes(type_: &str) -> Option<&'static str> {
     })
 }
 
-/// A call's contract in Borland's medium model: stack arguments, the
-/// result in AX or DX:AX, and `pushed` bytes its caller or it pops.
-pub(crate) fn medium_model(name: String, caller_pops: bool, pushed: i64) -> runtime::Contract {
+/// A call's contract under `convention`, a target's C ABI (`calling.toml`): stack arguments, what it
+/// clobbers, what it keeps, and `pushed` bytes its caller or it pops. `Reg` names the 16-bit
+/// registers; each stands for its family, so `eax` is `ax`, and the x87 stack is not one.
+pub(crate) fn contract(convention: &Convention, name: String, caller_pops: bool, pushed: i64) -> runtime::Contract {
+    let family = |register: &str| -> Option<runtime::Reg> {
+        let word = if register.len() == 3 && register.starts_with('e') { &register[1..] } else { register };
+        runtime::Reg::from_value(word).ok()
+    };
+    let kept = |kept: &llrm_target::calling::Kept| kept.full.to_ascii_uppercase();
+    let results = |class: &str| convention.results.get(class).map(|one| one.join(":").to_ascii_uppercase());
     runtime::Contract {
         name,
         cleanup: Some(if caller_pops { 0 } else { pushed }),
@@ -95,18 +122,15 @@ pub(crate) fn medium_model(name: String, caller_pops: bool, pushed: i64) -> runt
         error_handling: false,
         writes: runtime::Memory::Any,
         reads: runtime::Memory::Any,
-        clobbers: BTreeSet::from([
-            runtime::Reg::Ax,
-            runtime::Reg::Bx,
-            runtime::Reg::Cx,
-            runtime::Reg::Dx,
-            runtime::Reg::Es,
-            runtime::Reg::Flags,
-        ]),
+        clobbers: convention.clobbered.iter().filter_map(|register| family(register)).collect(),
         established: true,
-        evidence: "Borland medium model: stack arguments, result in AX or DX:AX; \
-                   SI, DI, BP and DS kept as 16-bit registers"
-            .to_owned(),
+        evidence: format!(
+            "{}: stack arguments, result in {} or {}; {} kept",
+            convention.name,
+            results("1").unwrap_or_default(),
+            results("8").unwrap_or_default(),
+            convention.preserved.iter().map(kept).collect::<Vec<_>>().join(", ")
+        ),
         documented: None,
         inputs: Some(BTreeSet::new()),
         direct_inputs: None,
@@ -122,3 +146,51 @@ pub(crate) fn medium_model(name: String, caller_pops: bool, pushed: i64) -> runt
 // Addresses the raise holds before any of them is a value.
 
 pub use llrm_core::backend::masm::InlinePart;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The clobber lists were `medium_model`'s and `cdecl32`'s, written in Rust beside `calling.toml`: a convention that
+    /// clobbers SI and keeps the rest says so, whichever target it is.
+    #[test]
+    fn a_contract_clobbers_what_the_targets_convention_says() {
+        let text = r#"default = "c"
+[abi.c]
+convention = "c"
+[c]
+slot_bytes = 2
+order = "right-to-left"
+cleanup = "caller"
+argument_registers = []
+return_address_bytes = 2
+first_argument_offset = 4
+frame = "bp"
+stack = "sp"
+preserved = ["bp"]
+clobbered = ["esi", "st0", "flags"]
+entry_state = []
+promotion = "slot"
+wide_slots = 2
+variadic_float = "double"
+[c.result]
+1 = ["eax"]
+8 = ["eax", "edx"]
+"#;
+        let calling = llrm_target::calling::Calling::parse(&text).unwrap();
+        let contract = contract(calling.native(), "f".to_owned(), true, 0);
+        assert_eq!(contract.clobbers, BTreeSet::from([runtime::Reg::Si, runtime::Reg::Flags]));
+        assert!(runtime::preserves(&contract).contains(&runtime::Reg::Ax));
+        assert!(contract.evidence.starts_with("c: stack arguments"), "{}", contract.evidence);
+    }
+
+    /// Both real targets: m16 clobbers AX, BX, CX, DX, ES and the flags; m32 AX, CX, DX and the flags (EBX, ESI, EDI, EBP kept).
+    #[test]
+    fn the_real_targets_clobber_what_they_did() {
+        use llrm_target::Target;
+        use runtime::Reg::*;
+        let clobbers = |target: &dyn Target| contract(target.calling().named(&crate::compile::Profile::of(target).unwrap().convention).unwrap(), String::new(), true, 0).clobbers;
+        assert_eq!(clobbers(&llrm_x86_m16::M16), BTreeSet::from([Ax, Bx, Cx, Dx, Es, Flags]));
+        assert_eq!(clobbers(&llrm_x86_m32::M32), BTreeSet::from([Ax, Cx, Dx, Flags]));
+    }
+}

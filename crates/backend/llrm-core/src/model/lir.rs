@@ -41,6 +41,9 @@ pub fn outside(reach: &BTreeSet<(i64, i64)>) -> Vec<(Addr, u32)> {
 pub struct CallMemory {
     pub effects: llrm_mir::memory::Effects,
     pub private: Vec<(Addr, u32)>,
+    /// The registers the callee's convention (the description's) disturbs: a function that keeps one for its caller saves it
+    /// before such a call, as it does before writing it. Empty where the callee's contract is what the call went by.
+    pub disturbs: BTreeSet<iced_x86::Register>,
 }
 
 impl CallMemory {
@@ -103,6 +106,12 @@ pub struct Insn {
 }
 
 impl Insn {
+    /// The instruction at a function's entry that says which registers its arguments arrive in: it is no
+    /// code, and anything placed at the entry goes after it, or it clobbers an argument.
+    #[must_use]
+    pub fn arrival(&self) -> bool {
+        self.call.is_none() && !self.delivers.is_empty() && self.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Nothing)
+    }
     /// Constructs Python's five-required-field `Insn` form with every later
     /// field at its dataclass default.
     #[must_use]
@@ -269,7 +278,25 @@ impl LirBlock {
 pub struct DebugVariable {
     pub name: String,
     pub r#type: llrm_mir::MetadataId,
-    pub addr: Addr,
+    pub place: DebugPlace,
+    /// Passed in, not declared in the body.
+    pub parameter: bool,
+    /// Of a parameter's home: the argument it was passed as.
+    pub argument: Option<i64>,
+    /// The register that argument arrives in, where one does: it holds the value until the function stores it
+    /// into the home.
+    pub arrives: Option<iced_x86::Register>,
+}
+
+/// Where a `-g` variable is.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DebugPlace {
+    /// A frame cell, or a place in data.
+    At(Addr),
+    /// The register a parameter arrives in, which holds it until the body starts.
+    Register(iced_x86::Register),
+    /// A parameter the optimiser removed: there is none to show.
+    Gone,
 }
 
 /// One lowered procedure.  Blocks remain in emitted order.
@@ -302,6 +329,12 @@ pub struct LirBody {
     pub returns_twice: bool,
     /// (load, write) by `at`: the optimizer proved the write leaves the load's cell as it was (`!llrm.spares`).
     pub spares: Arc<BTreeSet<(i64, i64)>>,
+    /// How many floating values the target holds on its register stack at once.
+    pub float_stack: usize,
+    /// A phi's value, by number, and the fixed cell the program also holds it in wherever it is live (`!llrm.home`).
+    pub homes: Arc<std::collections::BTreeMap<u32, crate::model::ir::Mem>>,
+    /// 16 or 32: the mode the target's code runs in, which decides how an instruction encodes and what it touches.
+    pub bits: u32,
 }
 
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
@@ -400,6 +433,9 @@ impl LirBody {
             odds: BlockOdds::default(),
             returns_twice: false,
             spares: Arc::default(),
+            float_stack: 0,
+            homes: Arc::default(),
+            bits: crate::frontends::bc::declen::BITNESS,
         }
     }
 
@@ -422,6 +458,9 @@ impl LirBody {
             odds: self.odds.clone(),
             returns_twice: self.returns_twice,
             spares: Arc::clone(&self.spares),
+            float_stack: self.float_stack,
+            homes: Arc::clone(&self.homes),
+            bits: self.bits,
         }
     }
 

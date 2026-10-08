@@ -1,0 +1,33 @@
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32
+# The OS layer's file calls: create, write, close, open, read, close; a missing file and a bad handle
+# are the interface's negative codes, and std.io names the codes the interface names.
+import os
+import std.io as io
+
+var buffer: u8[8] = [0] * 8
+
+fn main() -> i16:
+    let name = "OSFILES.TMP\0"
+    let missing = "NOSUCH.TMP\0"
+    unsafe:
+        let path: *far char = &name
+        let out = os.create(path)
+        let hello = "hello!"
+        let chars: *far char = &hello
+        print(os.write_file(out, chars.cast[u8](), 6))
+        print(os.close(out))
+        let handle = os.open(path, 0)
+        print(os.read(handle, &mut buffer, 8))
+        print(os.close(handle))
+        let absent: *far char = &missing
+        print(os.open(absent, 0) == -os.NOT_FOUND)
+        print(os.read(99, &mut buffer, 1) < 0)
+        print(os.close(99) == -6)
+    for i in 0..6:
+        print(buffer[i])
+    match io.File.open("NOSUCH.TMP"):
+        .err(.not_found):
+            print("not found")
+        _:
+            print("other")
+    return 0

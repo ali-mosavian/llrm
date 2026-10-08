@@ -1,3 +1,4 @@
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 extern void report(long value);
 
 /* Moves taken to carry n discs from peg a to peg b by way of peg c. */

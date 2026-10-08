@@ -72,6 +72,7 @@ impl FunctionPass for Unroll {
 /// each; whether any was.
 pub fn optimized(unit: &mut passes::Unit, analyses: &Analyses, limits: &Limits) -> Result<bool, String> {
     let costs = &profit::costs(analyses.outer());
+    let limits = &limits.on(costs.unroll_budget);
     if !profit::priced(unit.context, unit.layout, unit.function, analyses.outer().callees(), costs) {
         return Ok(false);
     }
@@ -100,8 +101,9 @@ pub fn expanded(context: &Context, layout: &DataLayout, function: &mut Function,
     let facts = analyses.fresh().get::<Registers>(context, layout, function);
     let graph = cfg::graph(function);
     let mut found = None;
-    for loop_ in cfg::Shape::of(function).loops {
-        let unit = memory::Unit::within(context, layout, function, analyses.outer());
+    let found_shape = cfg::Shape::of(function);
+    for loop_ in found_shape.loops.clone() {
+        let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_registers(&facts).with_shape(&found_shape);
         let Some(shape) = _shape(&unit, &graph, &loop_) else {
             continue;
         };

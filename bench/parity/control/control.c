@@ -1,3 +1,4 @@
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 /* Parity kernel; parameters by pointer as in the original. */
 extern void report(long value);
 

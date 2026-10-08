@@ -1,3 +1,4 @@
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32 | -Os -march=i486 -m32
 /* A word or dword stored in n cells by a loop: the cells filled and no others. */
 extern void report(long value);
 short a[64];

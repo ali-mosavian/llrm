@@ -21,6 +21,8 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "tools"))
+import llrmbin  # noqa: E402
 DEMOS = Path(environ.get("QBDEMOS", Path.home() / "work/qbdemos/orig"))
 COST = re.compile(r"executes (\d+) instructions, (\d+) memory operands")
 
@@ -151,7 +153,7 @@ def data_bytes(obj: Path) -> tuple[int, int]:
 def measure(command: list[str], level: str) -> tuple[int, int, int] | None:
     with tempfile.TemporaryDirectory() as directory:
         obj = f"{directory}/x.obj"
-        done = subprocess.run([*command, "--cpu", "486", level, "-o", obj], capture_output=True, text=True, env={**environ, "LLRM_DEBUG": "cost"}, timeout=300)
+        done = subprocess.run([*command, level, "-o", obj], capture_output=True, text=True, env={**environ, "LLRM_DEBUG": "cost"}, timeout=300)
         if not Path(obj).exists():
             return None
         found = [tuple(map(int, one)) for one in COST.findall(done.stderr)]
@@ -165,7 +167,7 @@ def frame(command: list[str], level: str) -> int | None:
     """Bytes the program's procedures reserve below BP: every `sub sp, N` of its listing."""
     with tempfile.TemporaryDirectory() as directory:
         listing = f"{directory}/x.s"
-        subprocess.run([*command, "--cpu", "486", level, "-S", "-o", listing], capture_output=True, text=True, timeout=300)
+        subprocess.run([*command, level, "-S", "-o", listing], capture_output=True, text=True, timeout=300)
         return sum(int(one) for one in SUB_SP.findall(Path(listing).read_text())) if Path(listing).exists() else None
 
 
@@ -185,7 +187,7 @@ def main() -> None:
     args = [one for one in sys.argv[1:] if not one.startswith("-")]
     levels = [one for one in sys.argv[1:] if one.startswith("-O")] or ["-O2"]
     base = Path(args[0])
-    new = Path(args[1]) if len(args) > 1 else ROOT / "target" / "release"
+    new = Path(args[1]) if len(args) > 1 else llrmbin.bin_dir()
     status = False
     for level in levels:
         before, after = table(base, level), table(new, level)

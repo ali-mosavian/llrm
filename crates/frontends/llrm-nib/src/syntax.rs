@@ -79,12 +79,38 @@ pub enum TypeName {
     Function {
         type_id: u32,
     },
-    /// `*far [mut] T` or `*near [mut] T`: its width, 4 or 2, and its HIR type.
+    /// `*far [mut] T` or `*near [mut] T`: whether it is a far one, its width in bytes (the
+    /// target's: 2 and 4 in real mode, 4 and 4 flat), and its HIR type.
     Pointer {
         type_id: u32,
+        far: bool,
         width: u8,
         mutable: bool,
     },
+    /// `usize` or `isize`: the integer as wide as the target's near pointer, which is `plain()` to
+    /// the code generator and to every rule but one: a conversion that narrows warns.
+    Word {
+        bytes: u8,
+        signed: bool,
+    },
+}
+
+impl TypeName {
+    /// The integer type this stands for, itself unless it is a word.
+    pub fn plain(self) -> Self {
+        match self {
+            Self::Word { bytes: 4, signed: false } => Self::U32,
+            Self::Word { bytes: 4, signed: true } => Self::I32,
+            Self::Word { bytes: _, signed: false } => Self::U16,
+            Self::Word { bytes: _, signed: true } => Self::I16,
+            other => other,
+        }
+    }
+
+    /// The target's unsigned word, `usize`, `bytes` wide.
+    pub fn usize(bytes: u32) -> Self {
+        Self::Word { bytes: bytes as u8, signed: false }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -181,7 +207,21 @@ pub struct Module {
 /// A foreign calling convention (section 15).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Abi {
+    /// `"c"`: the convention of an unmarked C function, the target's native one (cdecl16, watcall32): `resolved` says which.
+    C,
     Cdecl16,
+    /// The same convention on the flat target: stack arguments in dwords, EAX results.
+    Cdecl32,
+    /// The flat target's default: Open Watcom's register convention (calling.toml's `watcall32`).
+    Watcall32,
+    /// Open Watcom's 16-bit register convention (calling.toml's `watcall16`): `-mabi=watcom` on the real-mode target.
+    Watcall16,
+    /// gcc-ia16's convention (calling.toml's `ia16`): `-mabi=ia16` on the real-mode target.
+    Ia16,
+    /// gcc's `-mregparm=3` by the size of the argument (calling.toml's `regparm3`): the real-mode target's default.
+    Regparm3,
+    /// The i386 System V ABI, gcc's on Linux (calling.toml's `sysv32`): the stack convention of `-mabi=sysv`.
+    Sysv32,
     /// Arguments pushed first to last; the callee removes them.
     Pascal16,
     /// Entered by INT or an IRQ, with nothing passed, and left by `iret`.
@@ -251,9 +291,21 @@ impl Adapter {
 }
 
 impl Abi {
+    /// `"c"`, the convention of C's own functions, is the target's native one: what an unmarked C function has.
+    pub fn resolved(self, native: Self) -> Self {
+        if self == Self::C { native } else { self }
+    }
+
     pub fn named(name: &str) -> Option<Self> {
         match name {
+            "c" => Some(Self::C),
             "cdecl16" => Some(Self::Cdecl16),
+            "cdecl32" => Some(Self::Cdecl32),
+            "watcall32" => Some(Self::Watcall32),
+            "sysv32" => Some(Self::Sysv32),
+            "watcall16" => Some(Self::Watcall16),
+            "ia16" => Some(Self::Ia16),
+            "regparm3" => Some(Self::Regparm3),
             "pascal16" => Some(Self::Pascal16),
             "interrupt16" => Some(Self::Interrupt16),
             _ => Basic::ALL.into_iter().find(|one| one.name() == name).map(Self::Basic),
@@ -262,7 +314,14 @@ impl Abi {
 
     pub fn name(self) -> &'static str {
         match self {
+            Self::C => "c",
             Self::Cdecl16 => "cdecl16",
+            Self::Cdecl32 => "cdecl32",
+            Self::Watcall32 => "watcall32",
+            Self::Sysv32 => "sysv32",
+            Self::Watcall16 => "watcall16",
+            Self::Ia16 => "ia16",
+            Self::Regparm3 => "regparm3",
             Self::Pascal16 => "pascal16",
             Self::Basic(basic) => basic.name(),
             Self::Interrupt16 => "interrupt16",
@@ -272,13 +331,26 @@ impl Abi {
     /// The object symbol of `name`: C's `_name`, Pascal's and BASIC's `NAME`.
     pub fn symbol(self, name: &str) -> String {
         match self {
-            Self::Cdecl16 | Self::Interrupt16 => format!("_{name}"),
+            Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Sysv32 | Self::Ia16 | Self::Interrupt16 => format!("_{name}"),
+            Self::Watcall32 | Self::Watcall16 => format!("{name}_"),
+            Self::Regparm3 => format!("_{name}@3"),
             Self::Pascal16 | Self::Basic(_) => name.to_ascii_uppercase(),
         }
     }
 
     pub fn callee_cleans(self) -> bool {
-        self != Self::Cdecl16
+        !matches!(self, Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Sysv32 | Self::Ia16 | Self::Regparm3)
+    }
+
+    /// The `cc` of the description's convention this is, where it is not the C one: what HIR names it by.
+    pub fn convention(self) -> Option<&'static str> {
+        match self {
+            Self::Watcall32 | Self::Watcall16 => Some("watcall"),
+            Self::Sysv32 => Some("sysv"),
+            Self::Ia16 => Some("ia16"),
+            Self::Regparm3 => Some("regparm3"),
+            _ => None,
+        }
     }
 
     /// Where a float result goes, in the HIR's words: BASIC's through a
@@ -304,8 +376,8 @@ impl Abi {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Extern {
     pub abi: Abi,
-    /// The object symbol: `name=`, else the one its ABI gives the name.
-    pub symbol: String,
+    /// The object symbol `name=` gives; else its ABI's.
+    pub symbol: Option<String>,
     /// Its header; the body is empty.
     pub function: Function,
 }
@@ -316,7 +388,8 @@ pub struct Extern {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Export {
     pub abi: Option<Abi>,
-    pub symbol: String,
+    /// The object symbol `name=` gives; else its ABI's, or its own name where it has none.
+    pub symbol: Option<String>,
 }
 
 /// `const NAME: T = value`, its value folded to a literal.

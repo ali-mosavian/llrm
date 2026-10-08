@@ -68,7 +68,7 @@ pub fn step(one: &Insn, cpu: &Profile) -> Option<(Reg, Step, i64)> {
         (Operation::Binary, Some("add"), [_, Loc::Reg(other)]) if register(other) => (Step::AddRegister(*other), costs.add),
         _ => return None,
     };
-    Some((*dest, step, costs.sized(cost, width)))
+    Some((*dest, step, costs.sized(cost, width, i64::from(cpu.operand_bytes))))
 }
 
 /// The 67h address naming `terms` plus `disp`, if one does.
@@ -91,14 +91,9 @@ pub fn form(terms: &[(Register, i64)], disp: i64, scales: &BTreeSet<i64>) -> Opt
 /// The real-mode address naming `terms` plus `disp`, if one does: a lone base or index
 /// register, or one of BX/BP and one of SI/DI. No prefix, no scale.
 pub fn word_form(terms: &[(Register, i64)], disp: i64) -> Option<Address> {
-    let word = |one: Register| match one {
-        Register::EBX => Some(Register::BX),
-        Register::EBP => Some(Register::BP),
-        Register::ESI => Some(Register::SI),
-        Register::EDI => Some(Register::DI),
-        _ => None,
-    };
-    let is_base = |one: Register| matches!(one, Register::BX | Register::BP);
+    use llrm_x86::addressing16::{BASES, INDEXES};
+    let word = |one: Register| llrm_x86::registers::word_of(one).filter(|word| BASES.contains(word) || INDEXES.contains(word));
+    let is_base = |one: Register| BASES.contains(&one);
     match *terms {
         [(only, 1)] => Some(Address { through: word(only)?, offset: disp, ..Address::new(None) }),
         [(first, 1), (second, 1)] => {

@@ -55,6 +55,7 @@ impl FunctionPass for Peel {
 /// each; whether any was.
 pub fn optimized(unit: &mut passes::Unit, analyses: &Analyses, limits: &Limits) -> Result<bool, String> {
     let costs = &profit::costs(analyses.outer());
+    let limits = &limits.on(costs.unroll_budget);
     if !profit::priced(unit.context, unit.layout, unit.function, analyses.outer().callees(), costs) {
         return Ok(false);
     }
@@ -73,14 +74,15 @@ fn _candidate(context: &Context, layout: &DataLayout, function: &Function, analy
     let mut closed = function.clone();
     lcssa::closed(&mut closed)?;
     let facts = analyses.fresh().get::<Registers>(context, layout, &closed);
-    for loop_ in cfg::Shape::of(&closed).loops {
+    let shape = cfg::Shape::of(&closed);
+    for loop_ in shape.loops.clone() {
         let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else {
             continue;
         };
         if skip.contains(&latch) {
             continue;
         }
-        let unit = memory::Unit::within(context, layout, &closed, analyses.outer());
+        let unit = memory::Unit::within(context, layout, &closed, analyses.outer()).with_registers(&facts).with_shape(&shape);
         let Some(count) = induction::trip_count(&unit, &loop_, &facts) else {
             continue;
         };

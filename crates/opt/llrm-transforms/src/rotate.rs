@@ -88,7 +88,9 @@ fn _test_only(function: &Function, header: BlockId, inst: InstId) -> bool {
         Opcode::Binary(kind) => !matches!(kind, BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem),
         _ => false,
     };
-    computes && op.result.is_none_or(|value| function.users(value).iter().all(|one| function.parent(one.user) == Some(header)))
+    // A header phi reading it takes it round the back edge: it is the step of a counter, which must run before the
+    // trip it starts, not skip the first.
+    computes && op.result.is_none_or(|value| function.users(value).iter().all(|one| function.parent(one.user) == Some(header) && function.instruction(one.user).opcode != Opcode::Phi))
 }
 
 pub(crate) fn _shape(function: &Function, loop_: &Loop) -> Option<Shape> {
@@ -206,15 +208,17 @@ pub(crate) fn _rotate(context: &mut Context, function: &mut Function, shape: &Sh
 
 /// The first proven loop not in `done` entered at its body; whether one was.
 pub fn rotated(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &Analyses, done: &mut BTreeSet<BlockId>) -> Result<bool, String> {
-    let facts = analyses.fresh().get::<Registers>(context, layout, function);
-    for loop_ in cfg::Shape::of(function).loops {
+    let mut fresh = analyses.fresh();
+    let facts = fresh.get::<Registers>(context, layout, function);
+    let found = fresh.get::<cfg::Shape>(context, layout, function);
+    for loop_ in found.loops.clone() {
         if done.contains(&cfg::block(loop_.header)) {
             continue;
         }
         let Some(shape) = _shape(function, &loop_) else {
             continue;
         };
-        let unit = memory::Unit::within(context, layout, function, analyses.outer());
+        let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
         if induction::trip_count(&unit, &loop_, &facts).is_none() {
             continue;
         }

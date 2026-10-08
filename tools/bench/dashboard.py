@@ -18,6 +18,8 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+import llrmbin  # noqa: E402
 
 PAGE = r"""<!doctype html>
 <html lang="en">
@@ -211,7 +213,7 @@ def render(rows: list[dict]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("results", nargs="?")
-    parser.add_argument("-o", "--output", type=Path, default=ROOT / "target" / "bench" / "dashboard.html")
+    parser.add_argument("-o", "--output", type=Path, default=llrmbin.target_dir() / "bench" / "dashboard.html")
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(render(load(args.results)))

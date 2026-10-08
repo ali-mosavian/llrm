@@ -123,6 +123,7 @@ pub struct CallSite {
     pub callee: u32,
     pub callee_cleans: bool,
     pub float_return: &'static str,
+    pub convention: Option<&'static str>,
 }
 
 impl CallSite {
@@ -134,6 +135,7 @@ impl CallSite {
             callee,
             callee_cleans: abi.callee_cleans(),
             float_return: abi.float_return(),
+            convention: abi.convention(),
         }
     }
 }
@@ -166,6 +168,7 @@ pub struct ProcedureAbi {
     /// The argument bytes it removes on return.
     pub parameter_bytes: u32,
     pub float_return: &'static str,
+    pub convention: Option<&'static str>,
 }
 
 impl ProcedureAbi {
@@ -175,9 +178,11 @@ impl ProcedureAbi {
     pub fn of(abi: Abi, argument_bytes: u32, exported: bool) -> Option<Self> {
         let distance = if exported { "far" } else { "any" };
         match abi {
-            Abi::Cdecl16 => (!exported).then(|| Self { distance, cleanup: "caller", parameter_bytes: 0, float_return: abi.float_return() }),
-            Abi::Pascal16 | Abi::Basic(_) => Some(Self { distance, cleanup: "callee", parameter_bytes: argument_bytes, float_return: abi.float_return() }),
-            Abi::Interrupt16 => Some(Self { distance: "interrupt", cleanup: "callee", parameter_bytes: 0, float_return: abi.float_return() }),
+            Abi::C | Abi::Cdecl16 | Abi::Cdecl32 => (!exported).then(|| Self { distance, cleanup: "caller", parameter_bytes: 0, float_return: abi.float_return(), convention: None }),
+            Abi::Pascal16 | Abi::Basic(_) => Some(Self { distance, cleanup: "callee", parameter_bytes: argument_bytes, float_return: abi.float_return(), convention: None }),
+            Abi::Watcall32 | Abi::Watcall16 => Some(Self { distance, cleanup: "callee", parameter_bytes: 0, float_return: abi.float_return(), convention: abi.convention() }),
+            Abi::Sysv32 | Abi::Ia16 | Abi::Regparm3 => Some(Self { distance, cleanup: "caller", parameter_bytes: 0, float_return: abi.float_return(), convention: abi.convention() }),
+            Abi::Interrupt16 => Some(Self { distance: "interrupt", cleanup: "callee", parameter_bytes: 0, float_return: abi.float_return(), convention: None }),
         }
     }
 }
@@ -202,6 +207,9 @@ pub struct Program {
     pub data: Vec<DataObject>,
     /// `-g`: what a debugger names and how it reads it.
     pub debug: Option<llrm_core::hir::model::Debug>,
+    /// The bytes of each word of a buffer's or view's descriptor: the target's near pointer, which the
+    /// descriptor places' field type is.
+    pub descriptor_word: u32,
 }
 
 impl Program {
@@ -320,18 +328,22 @@ impl Program {
             }
             write!(out, ",\"width\":{}}}", type_.width).unwrap();
         }
-        out.push_str(
-            "]}],\"runtime\":\"freestanding\",\"schema\":5,\"target\":\"i386-real-mode\",\"zeroed_locals\":false}\n",
-        );
+        write!(out, "]}}],\"runtime\":\"freestanding\"").unwrap();
+        // Only when the target's word is not real mode's: programs read as they always have.
+        if self.descriptor_word != 2 {
+            write!(out, ",\"descriptor_word\":{}", self.descriptor_word).unwrap();
+        }
+        out.push_str(",\"schema\":5,\"target\":\"i386-real-mode\",\"zeroed_locals\":false}\n");
         out
     }
 }
 
 fn function_json(out: &mut String, function: &Function) {
     match &function.abi {
-        Some(ProcedureAbi { distance, cleanup, parameter_bytes, float_return }) => write!(
+        Some(ProcedureAbi { distance, cleanup, parameter_bytes, float_return, convention }) => write!(
             out,
-            "{{\"abi\":{{\"cleanup\":\"{cleanup}\",\"distance\":\"{distance}\",\"float_return\":\"{float_return}\",\"parameter_bytes\":{parameter_bytes}}},\"blocks\":["
+            "{{\"abi\":{{\"cleanup\":\"{cleanup}\",{}\"distance\":\"{distance}\",\"float_return\":\"{float_return}\",\"parameter_bytes\":{parameter_bytes}}},\"blocks\":[",
+            convention.map_or(String::new(), |name| format!("\"convention\":\"{name}\","))
         )
         .unwrap(),
         None => out.push_str("{\"abi\":null,\"blocks\":["),
@@ -387,9 +399,10 @@ fn function_json(out: &mut String, function: &Function) {
         comma(out, index);
         write!(
             out,
-            "{{\"callee\":{},\"cleanup\":\"{}\",\"distance\":\"far\",\"float_return\":\"{}\",\"instruction\":{},\"order\":[",
+            "{{\"callee\":{},\"cleanup\":\"{}\",{}\"distance\":\"far\",\"float_return\":\"{}\",\"instruction\":{},\"order\":[",
             call.callee,
             if call.callee_cleans { "callee" } else { "caller" },
+            call.convention.map_or(String::new(), |name| format!("\"convention\":\"{name}\",")),
             call.float_return,
             call.instruction
         )

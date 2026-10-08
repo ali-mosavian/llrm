@@ -1,0 +1,21 @@
+--- a/bld/cc/c/cfold.c	2026-10-07 19:23:24.967743833 +0200
++++ b/bld/cc/c/cfold.c	2026-10-07 19:23:24.973795540 +0200
+@@ -673,6 +673,18 @@
+     TYPEPTR     typ2;
+ 
+     /*
++     * qbopt: an integer constant meeting a floating one converts to that
++     * one's type (C11 6.3.1.8), rounding to float's 24 bits; MakeBinaryFloat
++     * alone makes it a double, so 16777217L != 16777216.0f folded to 1.
++     */
++    if( op1 != NULL ) {
++        if( op1->op.opr == OPR_PUSHINT && op2->op.opr == OPR_PUSHFLOAT ) {
++            CastFloatValue( op1, op2->op.u1.const_type );
++        } else if( op2->op.opr == OPR_PUSHINT && op1->op.opr == OPR_PUSHFLOAT ) {
++            CastFloatValue( op2, op1->op.u1.const_type );
++        }
++    }
++    /*
+      * load ld1 and ld2 from op1 and op2
+      */
+     MakeBinaryFloat( op2 );

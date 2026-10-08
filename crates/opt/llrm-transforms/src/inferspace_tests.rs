@@ -1,7 +1,7 @@
 //! A far pointer cast from DGROUP's near one is read as the near one; each case's text is the pass's input.
 
 use crate::inferspace::InferAddressSpaces;
-use crate::testing::{managed, parsed};
+use crate::testing::{Tuned, managed, managed_on, parsed};
 
 const HEAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"\n\n@g = global [64 x i16] zeroinitializer\ndeclare void @sink(ptr addrspace(1))\n\n";
 
@@ -39,6 +39,24 @@ b0:
 }
 ");
     assert!(after.contains("load i16, ptr addrspace(5)") && !after.contains("load i16, ptr addrspace(1)") && !after.contains("load i16, ptr %"), "{after}");
+}
+
+/// The stack's space was 5 in the pass: a target that numbers it 6 got its stack object's near
+/// pointer back as the data space's, read through DS.
+#[test]
+fn a_target_names_the_space_of_its_stack() {
+    let text = "define i16 @f(i16 %i) {
+b0:
+  %s = alloca [4 x i16]
+  %w = addrspacecast ptr %s to ptr addrspace(1)
+  %a = getelementptr i8, ptr addrspace(1) %w, i16 %i
+  %v = load i16, ptr addrspace(1) %a
+  ret i16 %v
+}
+";
+    let spaces = Some(llrm_mir::spaces::Spaces { stack: 6, ..llrm_x86_m16::spaces() });
+    let after = managed_on(&mut parsed(&format!("{HEAD}{text}")), InferAddressSpaces, Tuned { spaces, ..Tuned::default() });
+    assert!(after.contains("load i16, ptr addrspace(6)") && !after.contains("addrspace(5)"), "{after}");
 }
 
 /// A step of two objects is of neither space.

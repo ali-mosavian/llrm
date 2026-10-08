@@ -6,13 +6,14 @@ rust-version.workspace = true
 description = "The rich route for BC objects: raised, optimized, selected and written afresh"
 
 [dependencies]
-llrm-bc = { workspace = true }
+llrm-x86-bc = { workspace = true }
 llrm-core = { workspace = true }
+llrm-driver = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-omf = { workspace = true }
 llrm-transforms = { workspace = true }
 
 [dev-dependencies]
-llrm-x86-code16 = { workspace = true }
+llrm-x86-m16 = { workspace = true }
 iced-x86 = { workspace = true }
-llrm-bcmachine = { workspace = true }
+llrm-x86-bcmachine = { workspace = true }

@@ -1,0 +1,9 @@
+description = "A tail call carrying two doubles: 1000 steps"
+repetitions = 1
+
+[region]
+c = "bench_recfloat"
+
+[gaps]
+bas = "#784 only the C version is written"
+nib = "#784 only the C version is written"

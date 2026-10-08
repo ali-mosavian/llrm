@@ -29,15 +29,7 @@ pub fn forwarded(body: &LirBody) -> LirBody {
     if body.blocks.iter().any(|block| !block.phis.is_empty()) {
         return body.clone();
     }
-    let lanes: Vec<Lane> = [
-        Register::EAX,
-        Register::EBX,
-        Register::ECX,
-        Register::EDX,
-        Register::ESI,
-        Register::EDI,
-        Register::EBP,
-    ]
+    let lanes: Vec<Lane> = llrm_x86::registers::ROOTS
     .into_iter()
     .flat_map(_lanes)
     .collect::<Lanes>()
@@ -71,7 +63,7 @@ pub fn forwarded(body: &LirBody) -> LirBody {
             recipes.insert(id(&one), Some((Lanes::new(), Vec::new())));
             continue;
         }
-        let Some(effects) = _register_effects(&one, true, false) else {
+        let Some(effects) = _register_effects(body.bits, &one, true, false) else {
             recipes.insert(id(&one), None);
             continue;
         };
@@ -181,54 +173,84 @@ pub fn forwarded(body: &LirBody) -> LirBody {
         }
         let mapping: HashMap<Lane, Lane> = directed.iter().copied().collect();
         let mut changed: Semantics = what.clone();
+        // `Mem` equality leaves the registers out (a cell is its address), so a rewritten one is told by this.
+        let mut touched = false;
+        // One register read, named `register` at `width` bytes: the older copy's, where that encodes and reads
+        // the same lanes. `put` makes the semantics that reads `replacement` there.
+        let substitute = |changed: &Semantics, register: Register, width: i64, put: &dyn Fn(Register) -> Semantics| -> Option<Semantics> {
+            let source_lanes: Vec<Lane> = _lanes(register).into_iter().collect();
+            let candidate_lanes: Vec<Lane> = source_lanes.iter().map(|lane| mapping.get(lane).copied().unwrap_or(*lane)).collect();
+            let mut sorted_lanes = candidate_lanes.clone();
+            sorted_lanes.sort();
+            let candidate = register_for.get(&sorted_lanes).copied()?;
+            if candidate == register || width != 0 && target::width_of(candidate) != Some(width) {
+                return None;
+            }
+            if !source_lanes.iter().zip(&candidate_lanes).all(|(left, right)| equal(facts, *left, *right)) {
+                return None;
+            }
+            let before_effects = _register_effects(body.bits, &Insn { what: Some(changed.clone()), ..(**one).clone() }, true, false)?;
+            if candidate_lanes.iter().any(|lane| before_effects.1.contains(lane)) {
+                return None;
+            }
+            let proposed = put(candidate);
+            select::emit_in(body.bits, &proposed, 0, None, false, false, None)?;
+            let after_effects = _register_effects(body.bits, &Insn { what: Some(proposed.clone()), ..(**one).clone() }, true, false)?;
+            let expected_reads: Lanes =
+                before_effects.0.iter().filter(|lane| !source_lanes.contains(lane)).copied().chain(candidate_lanes.iter().copied()).collect();
+            (after_effects.1 == before_effects.1 && after_effects.0 == expected_reads).then_some(proposed)
+        };
         for index in 0..changed.sources.len() {
             let Loc::Reg(source) = changed.sources[index] else {
                 continue;
             };
-            let source_lanes: Vec<Lane> = _lanes(source.register).into_iter().collect();
-            let candidate_lanes: Vec<Lane> =
-                source_lanes.iter().map(|lane| mapping.get(lane).copied().unwrap_or(*lane)).collect();
-            let mut sorted_lanes = candidate_lanes.clone();
-            sorted_lanes.sort();
-            let Some(candidate) = register_for.get(&sorted_lanes).copied() else {
-                continue;
+            let current = changed.clone();
+            let put = |replacement: Register| {
+                let mut sources = current.sources.clone();
+                sources[index] = Loc::Reg(Reg { register: replacement, width: source.width });
+                Semantics { sources, ..current.clone() }
             };
-            if candidate == source.register {
-                continue;
+            if let Some(proposed) = substitute(&current, source.register, 0, &put) {
+                touched = true;
+                changed = proposed;
             }
-            let replacement = Reg { register: candidate, width: source.width };
-            if !source_lanes.iter().zip(&candidate_lanes).all(|(left, right)| equal(facts, *left, *right)) {
-                continue;
-            }
-            let before_effects = _register_effects(&Insn { what: Some(changed.clone()), ..(**one).clone() }, true, false);
-            let Some(before_effects) = before_effects else {
-                continue;
-            };
-            if candidate_lanes.iter().any(|lane| before_effects.1.contains(lane)) {
-                continue;
-            }
-            let mut sources = changed.sources.clone();
-            sources[index] = Loc::Reg(replacement);
-            let proposed = Semantics { sources, ..changed.clone() };
-            if select::emit(&proposed, 0, None, false, false, None).is_none() {
-                continue;
-            }
-            let after_effects =
-                _register_effects(&Insn { what: Some(proposed.clone()), ..(**one).clone() }, true, false);
-            let expected_reads: Lanes = before_effects
-                .0
-                .iter()
-                .filter(|lane| !source_lanes.contains(lane))
-                .copied()
-                .chain(candidate_lanes.iter().copied())
-                .collect();
-            match after_effects {
-                Some(after_effects) if after_effects.1 == before_effects.1 && after_effects.0 == expected_reads => {}
-                _ => continue,
-            }
-            changed = proposed;
         }
-        if changed == *what { Arc::clone(one) } else { Arc::new(Insn { what: Some(changed), ..(**one).clone() }) }
+        // The registers a cell or an address is made of: a copy's older register addresses the same.
+        for (side, count) in [(true, changed.dests.len()), (false, changed.sources.len())] {
+            for index in 0..count {
+                for through in [true, false] {
+                    let current = changed.clone();
+                    let place = if side { &current.dests[index] } else { &current.sources[index] };
+                    let register = match (place, through) {
+                        (Loc::Mem(cell), true) => cell.through,
+                        (Loc::Mem(cell), false) => cell.index_through,
+                        (Loc::Address(address), true) => address.through,
+                        (Loc::Address(address), false) => address.index,
+                        _ => continue,
+                    };
+                    if register == Register::None {
+                        continue;
+                    }
+                    let put = |replacement: Register| {
+                        let renamed = match place {
+                            Loc::Mem(cell) if through => Loc::Mem(ir::Mem { through: replacement, ..cell.clone() }),
+                            Loc::Mem(cell) => Loc::Mem(ir::Mem { index_through: replacement, ..cell.clone() }),
+                            Loc::Address(address) if through => Loc::Address(ir::Address { through: replacement, ..address.clone() }),
+                            Loc::Address(address) => Loc::Address(ir::Address { index: replacement, ..address.clone() }),
+                            other => other.clone(),
+                        };
+                        let (mut dests, mut sources) = (current.dests.clone(), current.sources.clone());
+                        if side { dests[index] = renamed } else { sources[index] = renamed }
+                        Semantics { dests, sources, ..current.clone() }
+                    };
+                    if let Some(proposed) = substitute(&current, register, target::width_of(register).unwrap_or(0), &put) {
+                        touched = true;
+                        changed = proposed;
+                    }
+                }
+            }
+        }
+        if !touched { Arc::clone(one) } else { Arc::new(Insn { what: Some(changed), ..(**one).clone() }) }
     };
 
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();

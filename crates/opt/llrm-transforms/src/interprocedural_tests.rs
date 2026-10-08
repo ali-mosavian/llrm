@@ -146,7 +146,7 @@ b:
 fn test_agreed_actuals_specialize_and_a_constant_return_is_carried() {
     let mut module = parsed(STORES);
     // With no inlining: a callee that stores to memory is inlined otherwise.
-    let (_, stages) = stepped(&mut module, &["f"], 40, Threshold::new(0));
+    let (_, stages) = stepped(&mut module, &["f"], 40, Threshold::none());
     let text = printed(&module);
     assert!(text.contains("  store i16 5, ptr @g\n"), "{text}");
     assert!(text.contains("  %s = add i16 7, %a\n"), "{text}");
@@ -955,7 +955,7 @@ b:
     let runs = std::cell::Cell::new(0);
     let mut refused = BTreeSet::new();
     let mut again = |module: &mut Module, analyses: &mut ModuleAnalyses, refused: &mut BTreeSet<_>| {
-        tried_sites::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), f, &sites, refused, &bytes, (&OperationCosts::default(), 0), "trial.", &mut |_, _, _, _| {
+        tried_sites::<String>(module, analyses, &layout, &BTreeSet::from([mix]), &BTreeSet::new(), &Default::default(), f, &sites, refused, &bytes, (&OperationCosts::default(), 0), "trial.", &mut |_, _, _, _| {
             runs.set(runs.get() + 1);
             Ok(())
         })
@@ -974,7 +974,7 @@ b:
 fn test_a_body_whose_address_is_taken_keeps_its_parameters() {
     let text = STORES.replace("@g = global i16 0\n", "@g = global i16 0\n@slot = global ptr @set\n").replace("  call void @set(i16 5)\n  call void @set(i16 5)\n", "  call void @set(i16 5)\n  %p = load ptr, ptr @slot\n  call void %p(i16 %a)\n");
     let mut module = parsed(&text);
-    stepped(&mut module, &["f"], 40, Threshold::new(0));
+    stepped(&mut module, &["f"], 40, Threshold::none());
     let after = printed(&module);
     assert!(after.contains("  store i16 %x, ptr @g\n"), "{after}");
 }
@@ -1009,7 +1009,7 @@ b:
 #[test]
 fn test_a_recursive_call_passing_a_parameter_on_leaves_the_others_actuals_agreed() {
     let mut module = parsed(&recursive("i16 %next, i16 %n", ""));
-    stepped(&mut module, &["f"], 40, Threshold::new(0));
+    stepped(&mut module, &["f"], 40, Threshold::none());
     let text = printed(&module);
     assert!(text.contains("icmp eq i16 %row, 7"), "{text}");
 }
@@ -1020,7 +1020,7 @@ fn test_a_recursive_call_passing_a_parameter_on_leaves_the_others_actuals_agreed
 fn test_another_actual_for_the_parameter_keeps_it_unknown() {
     for text in [recursive("i16 %next, i16 %n", "  %y = call i16 @place(i16 0, i16 %a)\n"), recursive("i16 %n, i16 %next", "")] {
         let mut module = parsed(&text);
-        stepped(&mut module, &["f"], 40, Threshold::new(0));
+        stepped(&mut module, &["f"], 40, Threshold::none());
         let after = printed(&module);
         assert!(after.contains("icmp eq i16 %row, %n"), "{after}");
     }
@@ -1061,7 +1061,7 @@ b:
 fn test_what_the_callers_pass_bounds_a_parameter_the_body_checks() {
     let mut module = parsed(&bounded_recursion(""));
     assert!(printed(&module).contains("icmp ult i16 %row, 12"), "premise");
-    stepped(&mut module, &["f"], 40, Threshold::new(0));
+    stepped(&mut module, &["f"], 40, Threshold::none());
     let text = printed(&module);
     assert!(text.contains("range(i16 0, 8) %row"), "{text}");
 }
@@ -1070,7 +1070,7 @@ fn test_what_the_callers_pass_bounds_a_parameter_the_body_checks() {
 #[test]
 fn test_another_caller_leaves_the_parameter_unbounded() {
     let mut module = parsed(&bounded_recursion("  %y = call i16 @place(i16 %a, i16 7)\n"));
-    stepped(&mut module, &["f"], 40, Threshold::new(0));
+    stepped(&mut module, &["f"], 40, Threshold::none());
     let text = printed(&module);
     assert!(text.contains("icmp ult i16 %row, 12"), "{text}");
 }

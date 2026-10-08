@@ -1,0 +1,24 @@
+# x86-m32: OMF with USE32 segments and 32-bit offsets, linked as an LE
+# executable under a DOS extender, and the listing's MASM header.
+formats = ["omf", "elf", "coff"]
+default = "omf"
+bitness = 32
+header = [".386", ".model flat"]
+
+# How a C test is linked (tools/dosbatch): an LE executable behind DOS/32A's stub, which
+# loads `dos32a.exe` from the program's directory; `{ow}` is the pinned Open Watcom tree.
+[link]
+format = ["format", "os2", "le"]
+options = ["option", "stub={ow}/bld/redist/dos32a/stub32a.exe"]
+first = ["runtime/shared/dos/m32/start.asm"]
+last = ["runtime/c/x86-m32/ext.asm"]
+final = ["runtime/shared/dos/m32/os.asm"]
+loader = "{ow}/bld/redist/dos32a/dos32a.exe"
+
+# The ELF objects, linked by GNU ld: its emulation (`-m`).
+[link.elf]
+emulation = "elf_i386"
+
+# The COFF objects, linked by lld-link (or link.exe): its `/machine:`.
+[link.coff]
+machine = "x86"

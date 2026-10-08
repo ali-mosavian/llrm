@@ -10,6 +10,7 @@ suite look like a missing one.
 """
 
 import os
+import sys
 import shutil
 import subprocess
 from pathlib import Path
@@ -51,7 +52,10 @@ class Run:
     seconds: float
 
 
-BUILT = Path(__file__).resolve().parents[2] / "target" / "release" / "dosbox-x"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import llrmbin  # noqa: E402
+
+BUILT = llrmbin.bin_dir() / "dosbox-x"
 
 
 def dosbox_bin() -> str | None:

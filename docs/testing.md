@@ -34,6 +34,33 @@ compile (#238 made the driver's verifier refuse five, unseen):
 
     QCPORT=~/scratch/qcport/src QCPORT_INC=~/scratch/qctc/inc tools/qcport-compile.sh
 
+## QCport runs
+
+Compiling is not running: `tools/qcport-run.py` links QCport's 65 C modules as llrm-c builds them (-O2) with the rest of a
+Borland build of it, runs it headless (`start.qmp -ticks 300`) beside the all-Borland build, and fails on any difference in
+frames, polygons or the md5 of `BENCH.BMP`. About 13 s when the objects exist (`QCPORT_OBJECTS`, the gate's qcport-cmp.sh
+output), 70 s when it compiles them; each run has 30 s (`QCPORT_RUN_SECONDS`).
+
+    QCPORT=~/scratch/qcport/src QCPORT_INC=~/scratch/qctc/inc QCPORT_BORLAND=~/scratch/qcbcc \
+        JWLINK=~/scratch/pr-jwlink/GccUnixR/jwlink tools/qcport-run.py
+
+## gcc.c-torture
+
+`tools/torture/torture.py` builds GCC's `gcc.c-torture/execute` (1698 self-checking programs, `TORTURE_CORPUS`, default
+~/work/personal/gcc/gcc/testsuite/gcc.c-torture/execute) at -O0, -O2 and -Os for m32 and runs each on the emulator: a program passes
+by exiting 0. Every program ends in one class: pass, refused by design (`tools/torture/expected.toml` `[[refused]]`: a regular
+expression on the compiler's complaint and why), differs by design (`[[differs]]`: a program that runs and exits non-zero, with its
+reason), or a finding: compile failure, link failure, wrong result. None is skipped quietly. The full run is 2 minutes and is not
+in the gate; the gate runs `torture.py --gate`, the fixed sample of `sample.txt` (15 s).
+
+    uv run --project tools python tools/torture/torture.py [names...] [--levels O0,O2,Os] [--stage compile] [--out results.json]
+
+## Debug information
+
+`tests/dwarf.rs` and `crates/target/llrm-dwarf` run llvm-dwarfdump, gdb, ld and as over the DWARF llrm
+writes. A test whose tool is missing prints `SKIPPED: why` and passes; with `LLRM_REQUIRE_DWARF=1` it
+fails instead. A gate that has the tools sets it: `. tools/debug-gate.env`.
+
 ## The loop corpus
 
 `tools/loops` judges loop code: every case is one loop program in a neutral

@@ -1,3 +1,4 @@
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 /* Volatile keeps every iteration at IEEE double precision on x87 and SSE hosts. */
 extern void report(long value);
 

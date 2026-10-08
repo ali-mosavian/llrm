@@ -7,6 +7,8 @@ impl TypeRegistry {
     /// `*far T`, `*near mut T` and the like. A huge pointer is a far one
     /// whose foreign user keeps it normalized.
     pub(super) fn raw_pointer(&mut self, target: ElementType, distance: &str, mutable: bool) -> TypeName {
+        // Where far is near, so is every pointer: one type, spelled near.
+        let distance = if self.sizes.segmented { distance } else { "near" };
         let name = format!("*{distance} {}{}", if mutable { "mut " } else { "" }, self.types[(target.id() - 1) as usize].name);
         let far = distance != "near";
         let type_id = match self.raw_pointers.get(&name) {
@@ -18,7 +20,24 @@ impl TypeRegistry {
                 id
             }
         };
-        TypeName::Pointer { type_id, width: if far { 4 } else { 2 }, mutable }
+        TypeName::Pointer { type_id, far, width: self.pointer_width(far), mutable }
+    }
+
+    /// Warns, once for each place, that a `far` or `huge` written where the target has one space is near.
+    pub(super) fn warn_target_width(&mut self, distance: &str, span: Span) {
+        if self.sizes.segmented || distance == "near" {
+            return;
+        }
+        self.warn(span, format!("warning: '{distance}' is near on this target: it has one address space"));
+    }
+
+    /// Records `message` at `span`, once, unless the build asked for no warnings.
+    pub(super) fn warn(&mut self, span: Span, message: String) {
+        let Some(warnings) = &self.warnings else { return };
+        let mut warnings = warnings.borrow_mut();
+        if !warnings.iter().any(|one| one.span == span && one.message == message) {
+            warnings.push(Diagnostic::new(span, message));
+        }
     }
 
     /// `spec` when it is already registered: a primitive, a struct, or a raw
@@ -33,10 +52,11 @@ impl TypeRegistry {
                 };
                 let target = self.resolved_element(target)?;
                 let distance = name[1..].split(' ').next()?;
+                let distance = if self.sizes.segmented { distance } else { "near" };
                 let mutable = name.ends_with(" mut");
                 let spelled = format!("*{distance} {}{}", if mutable { "mut " } else { "" }, self.types[(target.id() - 1) as usize].name);
                 let type_id = *self.raw_pointers.get(&spelled)?;
-                Some(ElementType::Scalar(TypeName::Pointer { type_id, width: if distance == "near" { 2 } else { 4 }, mutable }))
+                Some(ElementType::Scalar(TypeName::Pointer { type_id, far: distance != "near", width: self.pointer_width(distance != "near"), mutable }))
             }
             _ => None,
         }
@@ -115,8 +135,9 @@ impl FunctionCompiler<'_> {
         self.keep_lent(&kept);
         let TypeName::Pointer {
             type_id: pointer_id,
-            width,
+            far,
             mutable: writes,
+            ..
         } = pointer
         else {
             unreachable!("a raw pointer type")
@@ -127,7 +148,7 @@ impl FunctionCompiler<'_> {
         if mutable {
             self.place_writable(operand, span)?;
         }
-        if width == 2 && !self.in_dgroup(operand) {
+        if !far && self.types.sizes.segmented && !self.in_dgroup(operand) {
             return Err(Diagnostic::new(
                 span,
                 "a near pointer reaches only static data; take a *far one",
@@ -228,9 +249,10 @@ impl FunctionCompiler<'_> {
                     return None;
                 };
                 let target = self.types.raw_target(type_name)?;
+                let name = if self.types.sizes.segmented { name } else { "near" };
                 let name = format!("*{name} {}{}", if mutable { "mut " } else { "" }, self.types.types[(target.id() - 1) as usize].name);
                 let id = *self.types.raw_pointers.get(&name)?;
-                Some(TypeName::Pointer { type_id: id, width: if name.starts_with("*far") { 4 } else { 2 }, mutable })
+                Some(TypeName::Pointer { type_id: id, far: name.starts_with("*far"), width: self.types.pointer_width(name.starts_with("*far")), mutable })
             }
             ("cast", [target]) => {
                 let TypeName::Pointer { type_id: pointer_id, mutable, .. } = type_name else {
@@ -240,7 +262,7 @@ impl FunctionCompiler<'_> {
                 let target = self.types.resolved_element(target)?;
                 let name = format!("*{distance} {}{}", if mutable { "mut " } else { "" }, self.types.types[(target.id() - 1) as usize].name);
                 let id = *self.types.raw_pointers.get(&name)?;
-                Some(TypeName::Pointer { type_id: id, width: if distance == "near" { 2 } else { 4 }, mutable })
+                Some(TypeName::Pointer { type_id: id, far: distance != "near", width: self.types.pointer_width(distance != "near"), mutable })
             }
             _ => None,
         }
@@ -314,10 +336,12 @@ impl FunctionCompiler<'_> {
         let result = match (name, type_arguments, arguments) {
             // The count is signed: a pointer steps back as readily as on.
             ("offset", [], [count]) => {
-                let count = self.coerced(count, TypeName::I16)?;
-                let step = self.value(TypeName::I16);
+                // The count is the target's signed word: isize.
+                let word = if self.types.sizes.near == 4 { TypeName::I32 } else { TypeName::I16 };
+                let count = self.coerced(count, word)?;
+                let step = self.value(word);
                 let width = i64::from(self.types.width(target.id()));
-                self.emit("mul", vec![step], vec![required(count, span)?, hir::Operand::Constant(type_id(TypeName::I16), width)], None);
+                self.emit("mul", vec![step], vec![required(count, span)?, hir::Operand::Constant(type_id(word), width)], None);
                 let moved = self.value(type_name);
                 self.emit("ptr_offset", vec![moved], vec![pointer, hir::Operand::Value(step)], None);
                 TypedOperand { operand: Some(hir::Operand::Value(moved)), type_name }
@@ -334,6 +358,13 @@ impl FunctionCompiler<'_> {
             // alone, which the program vouches is in DGROUP.
             // The offset alone, which the program vouches is in DGROUP: the
             // low word of the far pointer's bytes.
+            // Where far is near the offset is the pointer: a copy, and nothing is lost.
+            ("near", [], []) if !self.types.sizes.segmented => {
+                let near = self.types.raw_pointer(target, "near", mutable);
+                let moved = self.value(near);
+                self.emit("copy", vec![moved], vec![pointer], None);
+                TypedOperand { operand: Some(hir::Operand::Value(moved)), type_name: near }
+            }
             ("near", [], []) => {
                 self.require_unsafe("a far pointer's offset", span)?;
                 let near = self.types.raw_pointer(target, "near", mutable);
@@ -343,6 +374,12 @@ impl FunctionCompiler<'_> {
                 let low = hir::Operand::ProjectedPlace { place: whole, indices: Vec::new(), offset: 0, type_id: type_id(near), member: None };
                 self.emit("load", vec![offset], vec![low], None);
                 TypedOperand { operand: Some(hir::Operand::Value(offset)), type_name: near }
+            }
+            ("far", [], []) if !self.types.sizes.segmented => {
+                let far = self.types.raw_pointer(target, name, mutable);
+                let moved = self.value(far);
+                self.emit("copy", vec![moved], vec![pointer], None);
+                TypedOperand { operand: Some(hir::Operand::Value(moved)), type_name: far }
             }
             ("far", [], []) => {
                 let far = self.types.raw_pointer(target, name, mutable);

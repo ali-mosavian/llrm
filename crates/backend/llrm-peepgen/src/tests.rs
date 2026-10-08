@@ -1,10 +1,10 @@
 use super::*;
 use automaton::{Key, Node};
 
-/// code16's forms: the family's, then its own.
+/// m16's forms: the family's, then its own.
 fn forms() -> String {
     let read = |name: &str| std::fs::read_to_string(format!("{}/../../target/{name}/src/instructions/x86.instr", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    format!("{}\n{}", read("llrm-x86"), read("llrm-x86-code16"))
+    format!("{}\n{}", read("llrm-x86"), read("llrm-x86-m16"))
 }
 
 fn table() -> table::Table {
@@ -17,8 +17,8 @@ fn compiled(rules: &str) -> Result<Vec<automaton::Automaton>, String> {
 
 #[test]
 fn the_rules_llrm_builds_with_compile() {
-    let rules = include_str!("../../../target/llrm-x86-code16/src/isel/peephole.peep");
-    let made = generate(&forms(), "x86.instr", rules, "peephole.peep");
+    let rules = format!("{}\n{}", include_str!("../../../target/llrm-x86/src/isel/peephole.peep"), include_str!("../../../target/llrm-x86-m16/src/isel/peephole.peep"));
+    let made = generate(&forms(), "x86.instr", &rules, "peephole.peep");
     assert!(made.is_ok(), "{}", made.err().unwrap_or_default());
 }
 

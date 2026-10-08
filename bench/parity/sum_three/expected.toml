@@ -1,5 +1,5 @@
-reason = "shared remat of copied loads, a stable load folded into its single use (spiller::_folded_reads) and across writes its cell survives (peephole); queens c and parity/qbsp nib trade an instruction for memory operands at lower executed work (queens c -O2/-Os 271291 -> 270819, qbsp nib -O2 440 -> 438, -Os 441 -> 439), owner-approved"
-blessed = "2026-10-06"
+reason = "a read of a frame slot a register still holds reads the register (spillforward), and a far pointer made from a long loads its segment once: memory operands and bytes only fall"
+blessed = "2026-10-07"
 
 [bas.O2]
 instructions = 88
@@ -26,28 +26,26 @@ bss_bytes = 0
 kernel_ms = 0.002
 
 [c.Os]
-instructions = 92
+instructions = 96
 memory_operands = 41
-code_bytes = 193
+code_bytes = 197
 data_bytes = 24
 bss_bytes = 0
-kernel_ms = 0.0019
 
 [nib.O2]
 instructions = 83
-memory_operands = 44
-code_bytes = 201
-data_bytes = 0
-bss_bytes = 0
-kernel_ms = 0.0023
-
-[nib.Os]
-instructions = 80
-memory_operands = 44
-code_bytes = 194
+memory_operands = 39
+code_bytes = 199
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 0.0022
+
+[nib.Os]
+instructions = 84
+memory_operands = 39
+code_bytes = 196
+data_bytes = 0
+bss_bytes = 0
 
 [ow.O2]
 instructions = 123

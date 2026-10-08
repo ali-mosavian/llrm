@@ -9,7 +9,7 @@ use std::sync::Arc;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
 use llrm_mir::{CastOp, ConstantKind, Opcode, Type, TypeId};
 
-use super::{float_conditions, insn, insn_of, refuse, semantics, Convention, Pointer, Selector, Test, Unselected, FLOAT};
+use super::{float_conditions, TypeClass, insn, insn_of, refuse, semantics, Convention, Pointer, Selector, Test, Unselected, FLOAT};
 use crate::backend::arithmetic;
 use crate::model::ir::{Held, Imm, Loc, Operation};
 use crate::model::lir::Insn;
@@ -66,10 +66,10 @@ pub fn selector(name: &str) -> Option<&'static Compiled> {
     selectors::ALL.iter().copied().find(|one| one.name == name)
 }
 
-/// The selector built for 16-bit x86, the default of every driver that is
-/// not handed another.
-pub(crate) fn code16() -> &'static Compiled {
-    &selectors::x86_code16::SELECTOR
+/// The selector built for 16-bit x86, which the tests of this crate use.
+#[cfg(test)]
+pub(crate) fn m16() -> &'static Compiled {
+    &selectors::x86_m16::SELECTOR
 }
 
 /// The instruction a pattern matched: its operands, a commutative
@@ -167,19 +167,7 @@ impl Selector<'_, '_, '_> {
     }
 
     fn class(&self, ty: Option<TypeId>) -> &'static str {
-        let Some(ty) = ty else { return "none" };
-        match self.types().get(ty) {
-            Type::Void => "void",
-            Type::Int(1) => "i1",
-            Type::Int(8) => "i8",
-            Type::Int(16) => "i16",
-            Type::Int(32) => "i32",
-            Type::Int(64) => "i64",
-            Type::Pointer(space) if self.layout.is_pair(*space) => "far",
-            Type::Pointer(_) => "ptr",
-            Type::Float(_) => "float",
-            _ => "other",
-        }
+        TypeClass::of(self.types(), &self.layout, ty).name()
     }
 
     fn kind(&self, operand: Operand) -> &'static str {
@@ -406,16 +394,21 @@ impl Selector<'_, '_, '_> {
     fn chain(&self, m: &Match, factor: Operand) -> Option<(Vec<(&'static str, i64)>, i64)> {
         let width = self.width(self.function.instruction(m.inst).ty).ok()?;
         let n = self.constant(factor, width).filter(|&n| matches!(width, 2 | 4) && 1 < n)?;
-        arithmetic::cheapest_chain(n, self.cpu).ok().flatten()
+        if width == 4 { arithmetic::cheapest_chain(n, self.cpu) } else { arithmetic::cheapest_narrow_chain(n, self.cpu) }.ok().flatten()
     }
 
     // Costs.
 
     /// Bytes of `chain`'s shifts, adds and subtracts. The copy that seeds it is not counted:
     /// the allocator drops it where the source dies, as `add si, si` shows.
-    fn chain_bytes(chain: &[(&str, i64)], width: i64) -> i64 {
-        use llrm_x86_code16::target::{register_bytes, shift_bytes};
-        chain.iter().map(|&(name, count)| if name == "shl" { shift_bytes(count, width) } else { register_bytes(width) }).sum()
+    fn chain_bytes(chain: &[(&str, i64)], width: i64, operand: i64) -> i64 {
+        use llrm_x86::encoding::{register_bytes, shift_bytes};
+        // A `lea r,[a+cur*s]` is the opcode, the ModRM and the SIB.
+        chain.iter().map(|&(name, count)| match name {
+            "shl" => shift_bytes(count, width, operand),
+            "lea" => 3 + i64::from(width != operand),
+            _ => register_bytes(width, operand),
+        }).sum()
     }
 
     /// Bytes first, clocks to break a tie: both are under 100.
@@ -427,7 +420,7 @@ impl Selector<'_, '_, '_> {
         let width = self.width(self.function.instruction(m.inst).ty)?;
         let n = self.constant(factor, width).expect("an integer factor");
         if self.cpu.size {
-            return Ok(Self::by_size(llrm_x86_code16::target::imul_immediate_bytes(n, i64::from(width)), arithmetic::immediate_multiply(self.cpu, n).map_err(Unselected)?));
+            return Ok(Self::by_size(llrm_x86::encoding::imul_immediate_bytes(n, i64::from(width), self.cpu.operand_bytes), arithmetic::immediate_multiply(self.cpu, n).map_err(Unselected)?));
         }
         arithmetic::immediate_multiply(self.cpu, n).map_err(Unselected)
     }
@@ -436,7 +429,7 @@ impl Selector<'_, '_, '_> {
         let (chain, clocks) = self.chain(m, factor).expect("a scalable factor");
         // Tuned for size, the two compete in bytes, as they compete in clocks otherwise.
         let width = self.width(self.function.instruction(m.inst).ty)?;
-        Ok(if self.cpu.size { Self::by_size(Self::chain_bytes(&chain, i64::from(width)), clocks) } else { clocks })
+        Ok(if self.cpu.size { Self::by_size(Self::chain_bytes(&chain, i64::from(width), self.cpu.operand_bytes), clocks) } else { clocks })
     }
 
     // Hooks: what is selected by hand.
@@ -449,10 +442,38 @@ impl Selector<'_, '_, '_> {
         let mut current = a.clone();
         for (index, &(name, count)) in chain.iter().enumerate() {
             let into = if index == chain.len() - 1 { result } else { self.fresh_held(result.width) };
-            let other = if name == "shl" { Loc::Imm(Imm { value: count, width: 1, address: None }) } else { a.clone() };
-            out.push(insn(m.at, semantics(Operation::Binary, name, vec![Loc::Held(into)], vec![current, other])));
+            if name == "lea" {
+                // `into = a + current*count`: the shift and add of one digit, made by the address unit.
+                let (Loc::Held(base), Loc::Held(scaled)) = (a.clone(), current.clone()) else { unreachable!("a chain works on registers") };
+                let cell = crate::model::ir::Mem { base: Some(base), index: Some(scaled), scale: count, ..crate::model::ir::Mem::new(None, result.width) };
+                out.push(insn(m.at, semantics(Operation::Address, "lea", vec![Loc::Held(into)], vec![Loc::Mem(cell)])));
+            } else {
+                let other = if name == "shl" { Loc::Imm(Imm { value: count, width: 1, address: None }) } else { a.clone() };
+                out.push(insn(m.at, semantics(Operation::Binary, name, vec![Loc::Held(into)], vec![current, other])));
+            }
             current = Loc::Held(into);
         }
+        Ok(())
+    }
+
+    /// A byte product, by the operand size's own multiply of both factors extended: only the low byte is kept, which no
+    /// extension changes.
+    fn hook_byte_multiply(&mut self, m: &Match, out: &mut Vec<Arc<Insn>>, left: Operand, right: Operand) -> Result<(), Unselected> {
+        let wide = self.cpu.operand_bytes as u32;
+        let extend = |this: &mut Self, operand: Operand, out: &mut Vec<Arc<Insn>>| -> Result<Loc, Unselected> {
+            if let Some(value) = this.constant(operand, 1) {
+                return Ok(Loc::Imm(Imm { value, width: wide, address: None }));
+            }
+            let byte = this.op_held(m, out, operand)?;
+            let into = this.fresh_held(wide);
+            out.push(insn(m.at, semantics(Operation::Extend, "movzx", vec![Loc::Held(into)], vec![byte])));
+            Ok(Loc::Held(into))
+        };
+        let (a, b) = (extend(self, left, out)?, extend(self, right, out)?);
+        let product = self.fresh_held(wide);
+        out.push(insn(m.at, semantics(Operation::Multiply, "imul", vec![Loc::Held(product)], vec![a, b])));
+        let Loc::Held(result) = self.op_result(m, out)? else { unreachable!("a register") };
+        out.push(insn(m.at, semantics(Operation::Move, "mov", vec![Loc::Held(result)], vec![Loc::Held(Held { width: 1, ..product })])));
         Ok(())
     }
 
@@ -527,6 +548,16 @@ impl Selector<'_, '_, '_> {
         let (pointer, size) = (self.pointer(pointer)?, self.size(self.type_of(constant))?);
         let Operand::Constant(id) = constant else { unreachable!("a constant") };
         let ConstantKind::Float(bits) = self.module.context.get(id).kind else { return refuse("a float constant of no bits") };
+        // An extended float is its 10 bytes: a dword, a dword and a word, as a global's initializer lays them down.
+        if size == 10 {
+            let image = llrm_mir::types::x87_extended(bits);
+            for (by, width) in [(0_usize, 4_u32), (4, 4), (8, 2)] {
+                let value = image[by..by + width as usize].iter().rev().fold(0_i64, |acc, byte| acc << 8 | i64::from(*byte));
+                let what = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(by as i64), width))], vec![Loc::Imm(Imm { value, width, address: None })]);
+                out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
+            }
+            return Ok(());
+        }
         let bits = if size == 4 { u128::from(bits as u32) } else { u128::from(bits) };
         let low = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer, 4))], vec![Loc::Imm(Imm { value: bits as u32 as i64, width: 4, address: None })]);
         let what = if size == 8 {
@@ -537,6 +568,29 @@ impl Selector<'_, '_, '_> {
             low
         };
         out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
+        Ok(())
+    }
+
+    /// An i64 read as its two dwords, the low at the address: x86 is little-endian.
+    fn hook_wide_load(&mut self, m: &Match, out: &mut Vec<Arc<Insn>>, pointer: Operand) -> Result<(), Unselected> {
+        let pointer = self.pointer(pointer)?;
+        let (low, high) = (self.fresh_held(4), self.fresh_held(4));
+        for (held, by) in [(low, 0), (high, 4)] {
+            let what = semantics(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Mem(Self::memory(pointer.moved(by), 4))]);
+            out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
+        }
+        self.wides.insert(self.function.instruction(m.inst).result.expect("a load's value"), (low, high));
+        Ok(())
+    }
+
+    /// An i64 written as its two dwords.
+    fn hook_wide_store(&mut self, m: &Match, out: &mut Vec<Arc<Insn>>, value: Operand, pointer: Operand) -> Result<(), Unselected> {
+        let (low, high) = self.wide(value, m.at, out)?;
+        let pointer = self.pointer(pointer)?;
+        for (held, by) in [(low, 0), (high, 4)] {
+            let what = semantics(Operation::Move, "mov", vec![Loc::Mem(Self::memory(pointer.moved(by), 4))], vec![Loc::Held(held)]);
+            out.push(Arc::new(Insn { volatile: m.volatile, ..insn_of(m.at, what) }));
+        }
         Ok(())
     }
 

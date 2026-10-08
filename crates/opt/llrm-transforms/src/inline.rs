@@ -63,14 +63,22 @@ pub struct Threshold {
     pub limit: i64,
     pub hint: (i64, i64),
     pub hot: (i64, i64),
-    /// The last call of a function nothing else reaches inlines at any size: where code size
-    /// outranks speed.
+    /// Where code size outranks speed: a call also removes its arguments' pushes and cleanup.
     pub single: bool,
+    /// The last call of a function nothing else reaches inlines at any size: its body moves, nothing is
+    /// copied: LLVM's last-call-to-static bonus and GCC's `-finline-functions-called-once`, which
+    /// `-fno-inline-functions` leaves on as GCC's does; `-fno-inline-functions-called-once` turns it off.
+    pub last: bool,
 }
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, hint: (325, 225), hot: (525, 225), single: false }
+        Self { limit, hint: (325, 225), hot: (525, 225), single: false, last: true }
+    }
+
+    /// Nothing inlines, the last call of a function included.
+    pub fn none() -> Self {
+        Self { last: false, ..Self::new(0) }
     }
 
     /// The same where code size outranks speed: a hint or a loop buys nothing.
@@ -105,17 +113,53 @@ fn stated(body: &Function) -> Option<Inlining> {
 /// function they add up per level.  LLVM bounds the same way.
 const FRAME_LIMIT: u64 = 256;
 
+/// Where the register allocator's cost leaves linear. gcc bounds a caller's growth at `large-function-insns` (2700)
+/// and `large-function-growth` (100%, ipa-inline.cc `caller_growth_limits`) and LLVM moves a once-called body up to the
+/// last-call bonus (15000 over 5 a instruction, about 3000): both for allocators near linear in function size. Ours
+/// rebuilds its intervals and facts over the whole body at each spill and split, so a body merged past the knee costs
+/// several times what its parts did. Measured (compile-time's curve, QCport -O2, 732 functions, instrument commit
+/// 646b62f0 on perf/walk, data in ~/scratch/ctime-out/curve): backend milliseconds per LIR instruction 0.20 up to about 200
+/// instructions, 0.45 at 200-400, 0.96 at 400-800, 1.8 above 1600; the log-log slope of time against size 1.25 below 300
+/// instructions and 2.2 above. The knee is in LIR instructions and this counts MIR operations, which are 1.86 LIR instructions
+/// each at the median (QCport's 108 functions of 60 operations or more at -O2, 16-bit; 1.66 over 15 on the 32-bit target), so
+/// 250 / 1.8. Counted as the same number, sb_build's 38-operation callee went into a caller of 190 and left 667 instructions
+/// where its parts were 175 and 465: backend 0.36 s -> 2.4 s. Called-once inlining (#769) merged part_frame from 435 to 1647
+/// instructions: backend 271 ms -> 11,385 ms.
+// Re-measure when the allocator's slot numbering lands: https://github.com/ali-mosavian/llrm/issues/794. Measured 2026-10-07.
+const KNEE_INSTRUCTIONS: i64 = 250;
+/// LIR instructions a MIR operation comes to, in percent: the median over QCport's 108 functions of 60 operations or more at
+/// -O2 (186) and 15 on the 32-bit target (166), taken as 180.
+const INSTRUCTIONS_PER_OPERATION: i64 = 180;
+/// The knee in the unit this counts, MIR operations.
+const ALLOCATION_KNEE: i64 = KNEE_INSTRUCTIONS * 100 / INSTRUCTIONS_PER_OPERATION;
+
+/// gcc's rule of `caller_growth_limits` with the knee for `large-function-insns`: an inline that leaves its caller over
+/// `ALLOCATION_KNEE` operations and over the larger of the caller's own size (before any inlining) and the callee's grown
+/// by `LARGE_GROWTH` percent is refused, the last call of a function included.
+const LARGE_FUNCTION: i64 = ALLOCATION_KNEE;
+const LARGE_GROWTH: i64 = 100;
+
+/// A body that is moved into its one caller is at most the knee: gcc's limits above let a large callee into a small
+/// caller whole, which is the merge that costs.
+const LAST_CALL_OPERATIONS: i64 = ALLOCATION_KNEE;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Candidate {
     pub body: Rc<Function>,
     /// Bytes of stack the body allocates.
     pub frame: u64,
+    /// Admitted only as the last call of a body nothing else reaches, which it moves whatever its price: not a copy
+    /// the price allows.
+    pub moved: bool,
 }
 
 /// What a caller says of itself that bounds what may be copied into it.
 pub struct Caller<'a> {
     pub layout: &'a DataLayout,
     pub recursive: bool,
+    /// The caller's operations before anything was inlined into it, 0 where that is not known: the growth
+    /// its inlines may come to is measured against it (`LARGE_FUNCTION`).
+    pub base: i64,
 }
 
 /// Whether `inst` does semantic work: not a phi, a jump or a return.
@@ -126,6 +170,11 @@ fn semantic(function: &Function, inst: InstId) -> bool {
         Opcode::Br => instruction.operands.len() != 1,
         _ => true,
     }
+}
+
+/// How many operations `body` does: gcc's size in insns, which its growth limits count.
+pub fn operations(body: &Function) -> i64 {
+    semantic_count(body)
 }
 
 fn semantic_count(body: &Function) -> i64 {
@@ -256,7 +305,7 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         };
         // Only once nothing else is: a body that a call in it is about to be inlined into would
         // be copied with that call still in it, and the call's callee counted once too many.
-        let last = threshold.single && budget.is_some() && copies == 0 && !always && !admitted();
+        let last = threshold.last && copies == 0 && semantic_count(body) <= LAST_CALL_OPERATIONS && !always && !admitted();
         // A body held only to inline from (`available_externally`) is priced by the trial of what
         // it leaves, not by its size: any size is a candidate there, never in the plain round.
         let verdict = always || admitted() || module.global(name).linkage == Linkage::AvailableExternally;
@@ -269,9 +318,9 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
             if verdict { "candidate" } else { "refused" }
         );
         if verdict {
-            out.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
+            out.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body), moved: false });
         } else if last {
-            lasts.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
+            lasts.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body), moved: true });
         }
     }
     if out.is_empty() {
@@ -334,7 +383,7 @@ pub fn constant_sites(
             if verdict { "candidate" } else { "refused" }
         );
         if verdict {
-            out.insert(at, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body) });
+            out.insert(at, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body), moved: false });
         }
     }
     out
@@ -391,7 +440,22 @@ fn fits(context: &Context, function: &Function, caller: &Caller, call: InstId, c
     info.function_type == callee.ty
         && !matches!(context.types.get(callee.ty), Type::Function { variadic: true, .. })
         && (candidate.frame == 0 || (!caller.recursive && frame(context, caller.layout, function) + candidate.frame <= FRAME_LIMIT))
+        && grows_within_limits(function, caller, callee, candidate.moved)
         && callee.parameters().iter().enumerate().all(|(at, _)| !Facts::of(&callee.parameter_attrs[at]).releases() || owned(context, function, function.instruction(call).operands[at], 0))
+}
+
+/// gcc's `caller_growth_limits`: the size after the inline, against the function limits. A caller whose size
+/// before is not known is its own base.
+fn grows_within_limits(function: &Function, caller: &Caller, callee: &Function, moved: bool) -> bool {
+    let (own, callee_size) = (semantic_count(function), semantic_count(callee));
+    let base = if caller.base > 0 { caller.base } else { own };
+    let limit = base.max(callee_size) * (100 + LARGE_GROWTH) / 100;
+    let after = own + callee_size;
+    // A body moved into a caller already past the knee is the merge that costs most: that caller does not grow by one.
+    if moved && after >= callee_size && after > ALLOCATION_KNEE && own > ALLOCATION_KNEE {
+        return false;
+    }
+    !(after >= callee_size && after > LARGE_FUNCTION && after > limit)
 }
 
 /// Whether `operand` is an object the program owns: a variable, a frame object, or a parameter, which

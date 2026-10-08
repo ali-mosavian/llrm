@@ -122,6 +122,10 @@ impl<'a> FunctionCompiler<'a> {
         if value.type_name == target {
             return Ok(value);
         }
+        // A word and its plain twin are one type to the code generator: no conversion is emitted.
+        if value.type_name.plain() == target.plain() {
+            return Ok(TypedOperand { type_name: target, ..value });
+        }
         if self.types.reads_through(value.type_name, target) {
             let read_only = self.value(target);
             self.emit("copy", vec![read_only], vec![required(value, span)?], None);
@@ -129,6 +133,15 @@ impl<'a> FunctionCompiler<'a> {
         }
         if !conversions::implicit(value.type_name) || !conversions::implicit(target) {
             return Err(type_mismatch(span, target, value.type_name));
+        }
+        // A word is the target's own width: a narrower integer cuts it, which is said once.
+        if let TypeName::Word { bytes, signed } = value.type_name
+            && is_integer(target)
+            && scalar_width(target) < u32::from(bytes)
+        {
+            let name = type_name_text(target);
+            let word = if signed { "isize" } else { "usize" };
+            self.types.warn(span, format!("warning: {word} is {bytes} bytes and {name} holds fewer: write {name}(...) to cut it"));
         }
         self.converted(value, target, span)
     }
@@ -294,6 +307,9 @@ impl<'a> FunctionCompiler<'a> {
         if source == target {
             return Ok(value);
         }
+        if source.plain() == target.plain() {
+            return Ok(TypedOperand { type_name: target, ..value });
+        }
         if matches!(source, TypeName::Bits { .. }) {
             let backing = self.bits_backing(value, span)?;
             return self.converted(backing, target, span);
@@ -384,7 +400,7 @@ impl<'a> FunctionCompiler<'a> {
             integer => (integer, 0),
         };
         // Scale in the wider storage, so rescaling up loses nothing it keeps.
-        let work = if width(to_storage) > width(stored.type_name) {
+        let work = if width(self.types.sizes, to_storage) > width(self.types.sizes, stored.type_name) {
             to_storage
         } else {
             stored.type_name
@@ -470,7 +486,7 @@ impl<'a> FunctionCompiler<'a> {
             return self.shifted("shr", value, count, span);
         }
         let type_name = value.type_name;
-        let bits = u8::try_from(8 * width(type_name) - 1).expect("an integer is under 256 bits");
+        let bits = u8::try_from(8 * width(self.types.sizes, type_name) - 1).expect("an integer is under 256 bits");
         let sign = self.shifted("sar", value.clone(), bits, span)?;
         let bias = self.value(type_name);
         self.emit(
@@ -528,7 +544,7 @@ impl<'a> FunctionCompiler<'a> {
             if !is_integer(left.type_name) || !is_integer(right.type_name) {
                 return Err(Diagnostic::new(span, "a shift requires integer operands"));
             }
-            let bits = 8 * width(self.rules.promoted(left.type_name));
+            let bits = 8 * width(self.types.sizes, self.rules.promoted(left.type_name));
             if let Some(hir::Operand::Constant(_, count)) = right.operand {
                 if !(0..i64::from(bits)).contains(&count) {
                     return Err(Diagnostic::new(

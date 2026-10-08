@@ -18,10 +18,10 @@ use llrm_mir::types::Type;
 use llrm_mir::valuetracking::underlying;
 
 use crate::inferspace::on_stack;
-use llrm_mir::types::{NEAR_DATA, NEAR_STACK};
+use llrm_mir::spaces::Spaces;
 
 /// The functions of `module` that narrowed a parameter, and the functions that call them.
-pub fn narrowed(module: &mut Module, layout: &DataLayout) -> Vec<GlobalId> {
+pub fn narrowed(module: &mut Module, layout: &DataLayout, roles: Spaces) -> Vec<GlobalId> {
     let only = direct_only(module);
     let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
     // The parameters narrowed so far: a near pointer of one is DGROUP's, for the callers it feeds.
@@ -34,7 +34,7 @@ pub fn narrowed(module: &mut Module, layout: &DataLayout) -> Vec<GlobalId> {
             let count = module.global(id).function().map_or(0, |one| one.parameters().len());
             for parameter in (0..count).rev() {
                 let Some(far) = far_space(module, layout, id, parameter) else { continue };
-                let spaces: Vec<Option<u32>> = calls.iter().map(|&(caller, call)| space_of(module, layout, &proven, id, parameter, caller, call)).collect();
+                let spaces: Vec<Option<u32>> = calls.iter().map(|&(caller, call)| space_of(module, layout, roles, &proven, id, parameter, caller, call)).collect();
                 let Some(space) = spaces.iter().flatten().copied().next() else { continue };
                 if spaces.iter().flatten().any(|&one| one != space) || spaces.iter().any(Option::is_none) && !spaces.iter().zip(calls).all(|(one, &(caller, call))| one.is_some() || passes_on(module, id, parameter, caller, call)) {
                     continue;
@@ -69,7 +69,7 @@ fn passes_on(module: &Module, id: GlobalId, parameter: usize, caller: GlobalId, 
 
 /// The near space call `call` of `caller` fills parameter `parameter` of `id` from: where the object it
 /// addresses is. None for a pass-on and for what may be anywhere.
-fn space_of(module: &Module, layout: &DataLayout, proven: &BTreeMap<(GlobalId, usize), u32>, id: GlobalId, parameter: usize, caller: GlobalId, call: InstId) -> Option<u32> {
+fn space_of(module: &Module, layout: &DataLayout, roles: Spaces, proven: &BTreeMap<(GlobalId, usize), u32>, id: GlobalId, parameter: usize, caller: GlobalId, call: InstId) -> Option<u32> {
     let function = module.global(caller).function()?;
     let actual = function.instruction(call).operands[parameter];
     if passes_on(module, id, parameter, caller, call) {
@@ -78,13 +78,13 @@ fn space_of(module: &Module, layout: &DataLayout, proven: &BTreeMap<(GlobalId, u
     let (root, _) = underlying(&module.context, layout, function, actual);
     match root {
         Operand::Constant(constant) => match module.context.get(constant).kind {
-            ConstantKind::Global(global) => (matches!(module.global(global).kind, GlobalKind::Variable(_)) && module.global(global).address_space == NEAR_DATA).then_some(NEAR_DATA),
+            ConstantKind::Global(global) => (matches!(module.global(global).kind, GlobalKind::Variable(_)) && module.global(global).address_space == roles.data).then_some(roles.data),
             _ => None,
         },
         Operand::Value(value) => match function.value(value).def {
             // A near parameter an earlier narrowing made.
             ValueDef::Argument(at) => proven.get(&(caller, at as usize)).copied(),
-            ValueDef::Instruction(_) if on_stack(&module.context, layout, function, actual) => Some(NEAR_STACK),
+            ValueDef::Instruction(_) if on_stack(&module.context, layout, function, actual) => Some(roles.stack),
             ValueDef::Instruction(_) => None,
         },
         _ => None,

@@ -27,7 +27,7 @@ pub fn parsed(source: &Path, frontend: &super::Frontend, dump: Option<&Path>) ->
     }
     let mut program = codec::decode(&text).map_err(|error| FrontendError(format!("the Nib frontend emitted invalid HIR: {error}")))?;
     if frontend.checked_stack {
-        program.stack_check = Some(super::compile::stack_check());
+        program.stack_check = Some(frontend.os.stack.clone());
     }
     Ok(program)
 }
