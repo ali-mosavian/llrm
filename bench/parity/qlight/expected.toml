@@ -1,4 +1,4 @@
-reason = "regalloc search picks one shape plus the no-split body below -Omax: grep nib code +5 bytes (the unfolded no-split trial is not tried)"
+reason = "below -Omax the backend makes a function once unless the allocator left frame traffic, and not again without callee facts: grep nib -2.0% code; nbody_fixed nib memory operands -13%/-23%, instructions -2.0%/+1.8%, code +2.7%/+0.4%"
 blessed = "2026-10-08"
 
 [bas.O2]
