@@ -5,7 +5,7 @@
 //! datalayout; every address space maps onto it, so `addrspacecast` keeps
 //! the address. Each byte also records whether it holds poison.
 
-use std::collections::HashMap;
+use crate::hash::HashMap;
 
 use crate::context::{ConstantExpr, ConstantId, ConstantKind, GlobalId, mask, signed};
 use crate::datalayout::{DataLayout, float_bits};
@@ -107,7 +107,7 @@ impl<'m> Machine<'m> {
         };
         // Address 0 is null; nothing is allocated there.
         let end = NEAR_END as usize;
-        let mut machine = Self { module, layout, memory: vec![0; end], poison: vec![false; end], addresses: HashMap::new(), fuel, near_top: 16, checked: false };
+        let mut machine = Self { module, layout, memory: vec![0; end], poison: vec![false; end], addresses: HashMap::default(), fuel, near_top: 16, checked: false };
         for (at, global) in module.globals.iter().enumerate() {
             let (size, align) = match &global.kind {
                 GlobalKind::Variable(variable) => {

@@ -3,7 +3,8 @@
 //! register. Built from the selected target (`RegisterClasses::of`) and handed
 //! down beside `Segments`; no pass reads another target's.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet};
+use crate::support::hash::HashMap;
 
 use iced_x86::Register;
 use llrm_target::Target;
@@ -15,6 +16,7 @@ use crate::support::hash::IndexMap;
 
 type Key = (String, &'static str, usize, usize);
 
+#[derive(Clone)]
 pub struct RegisterClasses {
     /// Each form's pins, by the mnemonic, the operation and the operand counts that
     /// pick it out.
@@ -40,7 +42,7 @@ impl RegisterClasses {
     pub fn of(arch: &dyn Target) -> Self {
         let forms = instructions::parse::parse(&arch.forms_text()).expect("the target's forms parse");
         let operations: HashMap<&str, &'static str> = Operation::ALL.iter().map(|op| (op.as_str(), op.as_str())).collect();
-        let mut pins: HashMap<Key, Vec<(Side, usize, Register)>> = HashMap::new();
+        let mut pins: HashMap<Key, Vec<(Side, usize, Register)>> = HashMap::default();
         for form in &forms {
             let chosen = |side: Side, index: usize, root: &str| {
                 forms.iter().any(|other| {
@@ -64,6 +66,21 @@ impl RegisterClasses {
         let (encodable_bases, indexes) = (every("base"), every("index"));
         let addressing = encodable_bases.union(&indexes).copied().collect();
         Self { pins, available: held("gpr"), word_bases: words("base"), word_indexes: words("index"), frame: arch.frame_register(), addressing, encodable_bases }
+    }
+
+    /// These classes for a function with no frame register (LLVM's `hasFP` false): the frame register is one more general register, the
+    /// last to be given out, and an address may be made of its word.
+    pub fn with_frame_free(&self) -> Self {
+        let whole = self.frame;
+        let mut free = self.clone();
+        if !free.available.contains(&whole) {
+            free.available.push(whole);
+        }
+        if let Some(word) = llrm_x86::registers::word_of(whole) {
+            free.word_bases.insert(word);
+            free.word_indexes.insert(word);
+        }
+        free
     }
 
     /// 16-bit x86's, which the tests of this crate are written for.

@@ -10,7 +10,7 @@
 //! all three shipped libraries share. Those are stored here, so what reads
 //! them later reads known values.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_x86_bcmachine::model::ir::nodes::Node;
 use llrm_x86_bcmachine::model::ir::{Imm, Loc, Operation};
@@ -107,7 +107,7 @@ pub fn requests(facts: &Facts) -> Vec<Request> {
     let mut out = Vec::new();
     for body in &facts.bodies {
         for block in &body.blocks {
-            let mut held: HashMap<usize, Imm> = HashMap::new();
+            let mut held: HashMap<usize, Imm> = HashMap::default();
             let mut pushed: Vec<Option<Imm>> = Vec::new();
             for node in body.nodes_of(block) {
                 let what = node.semantics();

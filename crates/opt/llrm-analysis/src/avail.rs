@@ -20,7 +20,8 @@
 //! `DEAD_OVERLAPS` counter.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
+use llrm_support::hash::HashSet;
 use std::ops::Deref;
 use std::rc::Rc;
 

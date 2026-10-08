@@ -234,7 +234,7 @@ pub trait Target {
 
     /// What a frame is built of.
     fn frame_registers(&self) -> FrameRegisters {
-        FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved(), slot: self.stack_slot_bytes(), optional: self.frame_optional(), enter: self.frame_enter() }
+        FrameRegisters { pointer: self.frame_register(), stack: self.stack_pointer(), saved: self.callee_saved(), slot: self.stack_slot_bytes(), optional: self.frame_optional(), enter: self.frame_enter(), free: false }
     }
 
     /// Whether a function that needs no frame register may leave it out (`calling.toml`'s `frame_optional`).
@@ -263,6 +263,8 @@ pub struct FrameRegisters {
     pub optional: bool,
     /// A frame tuned for size opens with `enter`.
     pub enter: bool,
+    /// The function has no frame register: it holds a value, and a frame cell is addressed through the stack pointer.
+    pub free: bool,
 }
 
 impl FrameRegisters {
@@ -270,7 +272,8 @@ impl FrameRegisters {
     /// LIR calls BP and SP.
     pub fn spelled(&self, register: iced_x86::Register) -> iced_x86::Register {
         match register {
-            iced_x86::Register::BP => self.pointer,
+            // Where the frame register holds a value, BP is its word view, not the frame token.
+            iced_x86::Register::BP if !self.free => self.pointer,
             iced_x86::Register::SP => self.stack,
             other => other,
         }

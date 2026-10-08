@@ -8,7 +8,7 @@
 //! and a routine that runs no program code writes only the named cells
 //! `runtime::writers` lists. GlobalsAA reads both.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use iced_x86::Register;
 use llrm_qbruntime::{self as runtime, Control};
@@ -68,7 +68,7 @@ pub fn promise(module: &Module, facts: &Facts, objects: &Objects) -> Result<Modu
     let family = facts.family();
     let family = family.value();
     let externals = omf::externals(&facts.found.records);
-    let mut named = HashMap::new();
+    let mut named = HashMap::default();
     for (index, name) in externals.iter().enumerate().skip(1) {
         if !runtime::named_only(name, family) {
             continue;

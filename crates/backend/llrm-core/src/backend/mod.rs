@@ -34,6 +34,7 @@ pub mod floatassign;
 pub mod floatregions;
 pub mod inline_asm;
 pub mod frame;
+pub mod framefree;
 pub mod relayout;
 pub mod slots;
 pub mod stackusage;
