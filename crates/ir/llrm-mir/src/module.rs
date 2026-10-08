@@ -64,6 +64,27 @@ impl Block {
     }
 }
 
+/// What a debugger is told of a source variable, from a point of the code on: where it lives in memory, what it is, or that
+/// nothing says. Not an instruction: no pass counts it, and a use of a value in one keeps nothing alive.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DebugWhat {
+    /// The variable is in the memory this address names, from here on (`llvm.dbg.declare`).
+    Declare(Operand),
+    /// The variable is this value, from here until the next record of the variable (`llvm.dbg.value`).
+    Value(Operand),
+    /// Nothing says where it is: its value was deleted.
+    Gone,
+}
+
+/// One such statement, standing before the instruction it names. The variable is a node of
+/// [`debuginfo`](crate::debuginfo).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DebugRecord {
+    pub before: InstId,
+    pub variable: MetadataId,
+    pub what: DebugWhat,
+}
+
 /// An operand slot: which instruction, and which of its operands.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Use {
@@ -148,6 +169,8 @@ pub struct Function {
     pub(crate) value_uses: Vec<Vec<Use>>,
     pub(crate) block_uses: Vec<Vec<Use>>,
     pub(crate) changes: Vec<Change>,
+    /// What `-g` says of its variables, kept true by the edits that move, replace or erase what it names.
+    pub(crate) debug_records: Vec<DebugRecord>,
     pub(crate) lineage: Lineage,
 }
 
@@ -171,6 +194,7 @@ impl Function {
             value_uses: Vec::new(),
             block_uses: Vec::new(),
             changes: Vec::new(),
+            debug_records: Vec::new(),
             lineage: Lineage::default(),
         }
     }

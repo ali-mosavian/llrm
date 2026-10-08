@@ -69,7 +69,7 @@ impl Module {
     /// A builder for `function`'s body, placed nowhere until `position`.
     pub fn builder(&mut self, function: GlobalId) -> Builder<'_> {
         let GlobalKind::Function(body) = &mut self.globals[function.0 as usize].kind else { panic!("@{function:?} is a variable") };
-        Builder { context: &mut self.context, function: body, metadata: &mut self.metadata, block: None }
+        Builder { context: &mut self.context, function: body, metadata: &mut self.metadata, block: None, pending: Vec::new() }
     }
 }
 
@@ -80,6 +80,8 @@ pub struct Builder<'m> {
     /// The module's metadata nodes, for what an instruction is annotated with.
     pub metadata: &'m mut Vec<crate::module::MetadataNode>,
     block: Option<BlockId>,
+    /// What the next instruction emitted is to stand after: said of a variable before there is one to name.
+    pending: Vec<(MetadataId, crate::module::DebugWhat)>,
 }
 
 impl Builder<'_> {
@@ -115,7 +117,16 @@ impl Builder<'_> {
     fn emit(&mut self, opcode: Opcode, ty: TypeId, operands: Vec<Operand>, flags: Flags, name: &str) -> Option<Operand> {
         let inst = self.function.create_instruction(opcode, ty, operands, flags, Some(name).filter(|one| !one.is_empty()));
         self.function.insert(inst, Position::End(self.block.expect("a position"))).expect("a placed block");
+        for (variable, what) in self.pending.drain(..) {
+            self.function.add_debug_record(inst, variable, what);
+        }
         self.function.instruction(inst).result.map(Operand::Value)
+    }
+
+    /// The variable `variable` lives in the memory `address` names, from the next instruction on: `-g`'s
+    /// `llvm.dbg.declare`, which is no instruction.
+    pub fn debug_declare(&mut self, variable: MetadataId, address: Operand) {
+        self.pending.push((variable, crate::module::DebugWhat::Declare(address)));
     }
 
     /// Attaches `node` as metadata of `kind` to the instruction just emitted.

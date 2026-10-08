@@ -62,7 +62,7 @@ fn nib_symbols_read_with_their_types() {
             "LOCAL main.small: UNSIGNED CHAR",
             "LOCAL main.values: 8 BYTES OF INTEGER",
             "LOCAL scale.doubled: LONG",
-            "PARAM scale.factor: INTEGER",
+            // The optimiser removes `factor` (its model has no location): the dialect cannot say "optimized out".
             "PARAM scale.p: BYREF TYPE point",
             "PROC main flags 4 () -> INTEGER",
             "PROC scale flags 0 (BYREF TYPE point, INTEGER) -> LONG",
@@ -193,3 +193,4 @@ fn where_the_format_says_ranges_a_register_parameter_stays_in_its_register() {
     let add = info.functions.iter().find(|one| one.name == "add").expect("add");
     assert!(add.variables.iter().all(|one| matches!(&one.location, Location::List(entries) if matches!(entries[..], [(_, Location::Register(_))]))), "{:?}", add.variables);
 }
+

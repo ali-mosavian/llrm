@@ -911,6 +911,12 @@ impl Selector<'_, '_, '_> {
         }
         self.private = crate::model::lir::outside(&reach);
         self.allocas = self.depth;
+        // What `-g` says of each variable in memory, now that the allocas have their cells.
+        for record in function.debug_records() {
+            if let llrm_mir::DebugWhat::Declare(address) = record.what {
+                self.declare_variable(record.variable, address)?;
+            }
+        }
         if self.zeroed {
             let prezeroed = self.prezeroed();
             self.consumed.extend(prezeroed);
@@ -1809,12 +1815,10 @@ impl Selector<'_, '_, '_> {
         }
     }
 
-    /// `-g`: the variable `inst`'s `!var` names is in the frame slot its
-    /// argument points at. No code.
-    fn declare_variable(&mut self, inst: InstId, arguments: &[Operand]) -> Result<(), Unselected> {
-        let attached = self.function.instruction(inst).metadata.iter().find(|(kind, _)| kind == llrm_mir::debuginfo::VARIABLE).map(|&(_, node)| node);
-        let Some(variable) = attached.and_then(|node| llrm_mir::debuginfo::read_variable(self.module, node)) else { return Ok(()) };
-        if let Ok(Pointer::Frame { disp, index: None, .. }) = self.pointer(arguments[0]) {
+    /// `-g`: the variable `node` names is in the frame slot `address` points at, from the entry on. No code.
+    fn declare_variable(&mut self, node: llrm_mir::MetadataId, address: Operand) -> Result<(), Unselected> {
+        let Some(variable) = llrm_mir::debuginfo::read_variable(self.module, node) else { return Ok(()) };
+        if let Ok(Pointer::Frame { disp, index: None, .. }) = self.pointer(address) {
             let addr = Addr::new(Space::Frame, disp + variable.offset);
             self.variables.push((variable.scope, DebugVariable { name: variable.name, r#type: variable.r#type, place: DebugPlace::At(addr), parameter: variable.parameter, argument: variable.argument, arrives: None }));
         }
@@ -3111,7 +3115,6 @@ impl Selector<'_, '_, '_> {
                 Some(Intrinsic::PtrDiff) => self.pointer_difference(inst, arguments, at, out),
                 Some(Intrinsic::Window) => self.window(inst, arguments, at, out),
                 Some(Intrinsic::VaStart) => self.va_start(arguments, at, out),
-                Some(Intrinsic::DbgDeclare) => self.declare_variable(inst, arguments),
                 // Where a local's bytes are live: read by the frame layout, no code.
                 Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => Ok(()),
                 // A fact for the passes: no code.

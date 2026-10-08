@@ -136,3 +136,96 @@ fn a_mark_names_the_changes_since_while_they_are_on_record_of_that_function() {
     assert_eq!(f.changes_since(f.mark()), Some(&[][..]));
     let _ = &mut copy;
 }
+
+const RECORDED: &str = "define i16 @f(i16 %a) {\nentry:\n  %p = alloca i16\n  #dbg_declare(ptr %p, !0)\n  %x = add i16 %a, 1\n  #dbg_value(i16 %x, !0)\n  %y = mul i16 %x, 2\n  #dbg_gone(!0)\n  ret i16 %y\n}\n\n!0 = !{!\"v\"}\n";
+
+fn records(function: &Function) -> Vec<(u32, crate::DebugWhat)> {
+    function.debug_records().iter().map(|one| (one.before.0, one.what)).collect()
+}
+
+/// What `-g` says of a variable stands before an instruction, as LLVM's debug records print: a declare, a value, and one that
+/// says nothing; read back, it prints as it was, its variable the same node.
+#[test]
+fn debug_records_print_and_parse_as_they_were() {
+    let mut parsed = module(RECORDED);
+    assert_eq!(print::module(&parsed), RECORDED);
+    let f = function(&mut parsed);
+    let (x, value) = named(f, "x");
+    let (y, _) = named(f, "y");
+    let (p, pointer) = named(f, "p");
+    let ret = f.terminator(f.entry().unwrap()).unwrap();
+    assert_eq!(
+        records(f),
+        [(x.0, crate::DebugWhat::Declare(Operand::Value(pointer))), (y.0, crate::DebugWhat::Value(Operand::Value(value))), (ret.0, crate::DebugWhat::Gone)]
+    );
+    let _ = p;
+}
+
+/// A value another replaces is the other in the records that named it, as it is in every use: a debugger that was told `x` is told
+/// `a`, not a value that is no more.
+#[test]
+fn replacing_a_value_replaces_it_in_the_records_too() {
+    let mut parsed = module(RECORDED);
+    let f = function(&mut parsed);
+    let (_, value) = named(f, "x");
+    let a = f.parameters()[0];
+    f.replace_all_uses_with(value, Operand::Value(a));
+    assert!(f.debug_records().iter().any(|one| one.what == crate::DebugWhat::Value(Operand::Value(a))), "{:?}", f.debug_records());
+    assert!(!f.debug_records().iter().any(|one| one.what == crate::DebugWhat::Value(Operand::Value(value))));
+}
+
+/// An erased value has no record that names it (a record is no use, so the erase goes through): they say it is gone. An erased
+/// instruction's records stand before what followed it, where the source said they were; so the verifier finds none dangling.
+#[test]
+fn erasing_leaves_records_gone_or_with_the_next_instruction() {
+    let mut parsed = module(RECORDED);
+    {
+        let f = function(&mut parsed);
+        let (x, value) = named(f, "x");
+        let (y, _) = named(f, "y");
+        let a = f.parameters()[0];
+        // y reads x: x cannot go until y reads a.
+        f.set_operand(y, 0, Operand::Value(a));
+        assert!(f.users(value).is_empty());
+        f.erase(x).expect("unused now");
+        assert!(f.debug_records().iter().any(|one| one.before == y && one.what == crate::DebugWhat::Gone), "{:?}", f.debug_records());
+        // The record that stood before x stands before y, which followed it.
+        let before_x: Vec<u32> = f.debug_records().iter().map(|one| one.before.0).collect();
+        assert!(before_x.iter().all(|&at| at != x.0), "{before_x:?}");
+        let ret = f.terminator(f.entry().unwrap()).unwrap();
+        f.set_operand(ret, 0, Operand::Value(a));
+        f.erase(y).expect("unused now");
+        assert!(f.debug_records().iter().all(|one| one.before == ret || matches!(one.what, crate::DebugWhat::Declare(_))), "{:?}", f.debug_records());
+    }
+    assert!(crate::verify::verify(&parsed).is_empty(), "{:?}", crate::verify::verify(&parsed));
+}
+
+/// A moved instruction leaves the records that stood before it where they were: they say what the source said at that point,
+/// and the instruction going elsewhere does not move the point.
+#[test]
+fn moving_an_instruction_leaves_its_records_in_place() {
+    let mut parsed = module(RECORDED);
+    let f = function(&mut parsed);
+    let (y, _) = named(f, "y");
+    let (x, _) = named(f, "x");
+    let ret = f.terminator(f.entry().unwrap()).unwrap();
+    f.move_to(y, Position::Before(x)).expect("moves");
+    // y reads x, which now follows it: the record of the value stood before y, and stays before `ret`, which followed y.
+    assert!(f.debug_records().iter().all(|one| one.before != y), "{:?}", f.debug_records());
+    assert!(f.debug_records().iter().any(|one| one.before == ret && matches!(one.what, crate::DebugWhat::Value(_))));
+}
+
+/// A record whose anchor is no longer in the function is the verifier's to find.
+#[test]
+fn the_verifier_finds_a_record_before_an_erased_instruction() {
+    let mut parsed = module(RECORDED);
+    let f = function(&mut parsed);
+    let (x, _) = named(f, "x");
+    let y = named(f, "y").0;
+    let a = f.parameters()[0];
+    f.set_operand(y, 0, Operand::Value(a));
+    f.erase(x).expect("unused now");
+    f.debug_records.push(crate::DebugRecord { before: x, variable: crate::MetadataId(0), what: crate::DebugWhat::Gone });
+    let found = crate::verify::verify(&parsed);
+    assert!(found.iter().any(|one| one.contains("debug record") && one.contains("no longer in the function")), "{found:?}");
+}
