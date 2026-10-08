@@ -1684,13 +1684,25 @@ fn _affine_address(
         return Ok(None);
     }
     let what = semantics(Operation::Address, "lea", vec![Loc::Reg(dest)], vec![Loc::Address(address)]);
-    let (Some(new), Some(before)) = (
-        emit(mode, &what),
-        replaced.iter().map(|one| emit(mode, one.what.as_ref().expect("checked plain"))).collect::<Option<Vec<_>>>(),
-    ) else {
+    let Some(new) = emit(mode, &what) else {
         return Ok(None);
     };
-    if new.code.len() > before.iter().map(|one| one.code.len()).sum() {
+    // What the parts are in bytes once `increments` has run: a unit add whose carry is dead is the one-byte INC or DEC.
+    let mut before = 0;
+    for one in replaced {
+        let part = one.what.as_ref().expect("checked plain");
+        let Some(plain) = emit(mode, part) else {
+            return Ok(None);
+        };
+        let unit = match (part.name.as_deref(), part.dests.as_slice(), part.sources.as_slice()) {
+            (Some(name @ ("add" | "sub")), [Loc::Reg(register)], [_, Loc::Imm(Imm { value: 1, .. })]) if dead.contains(&id(one)) => {
+                Some(semantics(Operation::Unary, if name == "add" { "inc" } else { "dec" }, vec![Loc::Reg(*register)], vec![Loc::Reg(*register)]))
+            }
+            _ => None,
+        };
+        before += unit.and_then(|unit| emit(mode, &unit)).map_or(plain.code.len(), |short| short.code.len().min(plain.code.len()));
+    }
+    if new.code.len() > before {
         return Ok(None);
     }
     // The LEA takes its first owner's bytes; the other parts' join it where
