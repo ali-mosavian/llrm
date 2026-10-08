@@ -185,16 +185,49 @@ pub trait ModuleAnalysis: 'static {
     type Result: PartialEq + std::fmt::Debug + 'static;
     const NAME: &'static str;
     fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result;
+
+    /// Whether `previous`, a result dropped by a pass, is what `run` would give now, found without working it out: the
+    /// result then stands as the same one, so what holds it (an outer proxy) is the same too. Saying no, the default, runs.
+    #[allow(unused_variables)]
+    fn unchanged(module: &Module, analyses: &mut ModuleAnalyses, previous: &Self::Result) -> bool {
+        false
+    }
 }
 
-/// What each function does to memory, as its attributes state it.
+/// The declarations an analysis last worked from: its result stands while `Declarations` is the same result.
+struct Seen<A>(Option<Rc<Vec<GlobalValue>>>, std::marker::PhantomData<A>);
+
+impl<A> Default for Seen<A> {
+    fn default() -> Self {
+        Self(None, std::marker::PhantomData)
+    }
+}
+
+/// Whether the declarations are those `A` last worked from, and recording them as the ones it works from now.
+fn declared_as_before<A: 'static>(module: &Module, analyses: &mut ModuleAnalyses, working: bool) -> bool {
+    let now = analyses.get::<Declarations>(module);
+    let seen = analyses.memo::<Seen<A>>();
+    let same = seen.0.as_ref().is_some_and(|then| Rc::ptr_eq(then, &now));
+    if working {
+        seen.0 = Some(now);
+    }
+    same
+}
+
+/// What each function does to memory, as its attributes state it: of its declaration alone, so it stands while the
+/// declarations do.
 pub struct CalleeEffects;
 
 impl ModuleAnalysis for CalleeEffects {
     type Result = crate::memory::Callees;
     const NAME: &'static str = "callee-effects";
-    fn run(module: &Module, _: &mut ModuleAnalyses) -> Self::Result {
+    fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
+        declared_as_before::<Self>(module, analyses, true);
         crate::memory::callees(module)
+    }
+
+    fn unchanged(module: &Module, analyses: &mut ModuleAnalyses, _: &Self::Result) -> bool {
+        declared_as_before::<Self>(module, analyses, false)
     }
 }
 
@@ -205,7 +238,12 @@ pub struct CallRegisters;
 impl ModuleAnalysis for CallRegisters {
     type Result = HashMap<GlobalId, i64>;
     const NAME: &'static str = "call-registers";
+    fn unchanged(module: &Module, analyses: &mut ModuleAnalyses, _: &Self::Result) -> bool {
+        declared_as_before::<Self>(module, analyses, false)
+    }
+
     fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
+        declared_as_before::<Self>(module, analyses, true);
         let target = Rc::clone(&analyses.program().target);
         module
             .globals
@@ -224,9 +262,18 @@ impl ModuleAnalysis for GlobalSizes {
     type Result = crate::valuetracking::Sizes;
     const NAME: &'static str = "global-sizes";
     fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
+        declared_as_before::<Self>(module, analyses, true);
         crate::valuetracking::sizes(module, &analyses.program().layout)
     }
+
+    fn unchanged(module: &Module, analyses: &mut ModuleAnalyses, _: &Self::Result) -> bool {
+        declared_as_before::<Self>(module, analyses, false)
+    }
 }
+
+/// The metadata the type tree was last made from.
+#[derive(Default)]
+struct TbaaSeen(Option<Vec<MetadataNode>>);
 
 /// The module's `!tbaa` type tree.
 pub struct TypeAncestry;
@@ -234,8 +281,13 @@ pub struct TypeAncestry;
 impl ModuleAnalysis for TypeAncestry {
     type Result = crate::tbaa::Tbaa;
     const NAME: &'static str = "type-ancestry";
-    fn run(module: &Module, _: &mut ModuleAnalyses) -> Self::Result {
+    fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
+        analyses.memo::<TbaaSeen>().0 = Some(module.metadata.clone());
         crate::tbaa::Tbaa::of(&module.metadata)
+    }
+
+    fn unchanged(module: &Module, analyses: &mut ModuleAnalyses, _: &Self::Result) -> bool {
+        analyses.memo::<TbaaSeen>().0.as_ref().is_some_and(|then| *then == module.metadata)
     }
 }
 
@@ -248,6 +300,10 @@ impl ModuleAnalysis for Declarations {
     const NAME: &'static str = "declarations";
     fn run(module: &Module, _: &mut ModuleAnalyses) -> Self::Result {
         module.declarations()
+    }
+
+    fn unchanged(module: &Module, _: &mut ModuleAnalyses, previous: &Self::Result) -> bool {
+        module.globals.len() == previous.len() && module.globals.iter().zip(previous).all(|(global, declared)| global.declares(declared))
     }
 }
 
@@ -561,12 +617,17 @@ pub(crate) struct Kind {
     name: &'static str,
     run: fn(&Module, &mut ModuleAnalyses) -> Rc<dyn Any>,
     agree: fn(&dyn Any, &dyn Any) -> bool,
+    unchanged: fn(&Module, &mut ModuleAnalyses, &dyn Any) -> bool,
 }
 
 impl Kind {
     fn of<M: ModuleAnalysis>() -> Self {
-        Self { id: TypeId::of::<M>(), name: M::NAME, run: computed::<M>, agree: agree::<M> }
+        Self { id: TypeId::of::<M>(), name: M::NAME, run: computed::<M>, agree: agree::<M>, unchanged: unchanged::<M> }
     }
+}
+
+fn unchanged<M: ModuleAnalysis>(module: &Module, analyses: &mut ModuleAnalyses, previous: &dyn Any) -> bool {
+    previous.downcast_ref::<M::Result>().is_some_and(|previous| M::unchanged(module, analyses, previous))
 }
 
 fn computed<M: ModuleAnalysis>(module: &Module, analyses: &mut ModuleAnalyses) -> Rc<dyn Any> {
@@ -638,6 +699,18 @@ impl ModuleAnalyses {
         if let Some((_, one)) = self.results.get(&kind.id) {
             counted(kind.name, true);
             return Rc::clone(one);
+        }
+        if let Some(old) = self.dropped.get(&kind.id).cloned() {
+            if (kind.unchanged)(module, self, &*old) {
+                counted(kind.name, true);
+                self.dropped.remove(&kind.id);
+                if std::env::var_os("LLRM_CHECK_MODULES").is_some() {
+                    let fresh = (kind.run)(module, self);
+                    assert!((kind.agree)(&*old, &*fresh), "{}: the result kept is not what working it out again gives", kind.name);
+                }
+                self.results.insert(kind.id, (kind, Rc::clone(&old)));
+                return old;
+            }
         }
         counted(kind.name, false);
         let fresh = (kind.run)(module, self);

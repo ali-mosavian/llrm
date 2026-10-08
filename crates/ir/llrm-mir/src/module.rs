@@ -241,6 +241,21 @@ impl Function {
         out
     }
 
+    /// Whether `declared` is this function's `declaration()`, found without making one.
+    pub fn declares(&self, declared: &Function) -> bool {
+        self.ty == declared.ty
+            && self.void == declared.void
+            && self.calling_convention == declared.calling_convention
+            && self.attrs == declared.attrs
+            && self.return_attrs == declared.return_attrs
+            && self.parameter_attrs == declared.parameter_attrs
+            && self.parameters.len() == declared.parameters.len()
+            && self.parameters.iter().zip(&declared.parameters).all(|(one, other)| {
+                let (mine, theirs) = (self.value(*one), declared.value(*other));
+                mine.ty == theirs.ty && mine.def == theirs.def && theirs.name.is_none()
+            })
+    }
+
     pub fn parameters(&self) -> &[ValueId] {
         &self.parameters
     }
@@ -450,6 +465,20 @@ impl GlobalValue {
                 GlobalKind::Variable(variable) => GlobalKind::Variable(variable.clone()),
             },
         }
+    }
+
+    /// Whether `declared` is this global's `declaration()`, found without making one: what `Declarations` holds of it still
+    /// stands.
+    pub fn declares(&self, declared: &GlobalValue) -> bool {
+        self.name == declared.name
+            && self.linkage == declared.linkage
+            && self.unnamed_addr == declared.unnamed_addr
+            && self.address_space == declared.address_space
+            && match (&self.kind, &declared.kind) {
+                (GlobalKind::Function(one), GlobalKind::Function(other)) => one.declares(other),
+                (GlobalKind::Variable(one), GlobalKind::Variable(other)) => one == other,
+                _ => false,
+            }
     }
 
     pub fn function(&self) -> Option<&Function> {
