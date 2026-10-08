@@ -54,7 +54,7 @@ def test_lib_tests_run_in_the_changed_crate_and_its_dependents_only():
 
 
 def test_a_python_only_change_runs_the_python_tests_and_not_the_build():
-    p = gate.plan(["tools/linkrecipe.py"])
+    p = gate.plan(["tools/msp430.py"])
     assert p.tier == "fast" and "pytest" in p.steps and "build" not in p.steps
 
 
@@ -139,3 +139,11 @@ def test_a_filter_that_matches_no_test_is_incomplete_not_a_pass():
     log = "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out\n"
     assert gate.incomplete(log, 1, True) == "its filter matched no test"
     assert gate.incomplete(log, 1, False) is None
+
+
+def test_a_step_that_runs_the_binaries_builds_them_first_even_when_no_rust_changed():
+    """A change to tools/qcport-run.py planned `pytest qcport` with no build: qcport ran against missing or stale binaries."""
+    for path in ("tools/qcport-run.py", "tools/torture/torture.py"):
+        p = gate.plan([path])
+        assert p.steps[0] == "build", (path, p.steps)
+    assert "build" not in gate.plan(["tools/msp430.py"]).steps

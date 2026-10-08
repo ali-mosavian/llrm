@@ -4091,3 +4091,21 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
     let found: Vec<(String, DebugPlace)> = isel::parameters(&module, module.functions().next().expect("@f").2, "f", &convention, &Default::default()).into_iter().map(|one| (one.name, one.place)).collect();
     assert_eq!(found, [("a".to_owned(), DebugPlace::At(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 6))), ("b".to_owned(), DebugPlace::Register(Register::AX)), ("d".to_owned(), DebugPlace::Gone)]);
 }
+
+/// Whether an alloca's address is exposed was asked of its uses once per alloca by every query that named it, and by isel once more
+/// per alloca: a function of n locals read its whole body n times over, quadratic in n (#924: a 2,048-word local was seconds). It
+/// is found for all allocas in one pass.
+#[test]
+fn test_selecting_a_function_scans_for_exposed_allocas_once_not_once_per_alloca() {
+    for locals in [30, 60] {
+        let mut text = String::from("define void @f(i16 %x) addrspace(1) {\n");
+        for at in 0..locals {
+            text += &format!("  %a{at} = alloca [4 x i16]\n  %p{at} = getelementptr i16, ptr %a{at}, i16 1\n  store i16 %x, ptr %p{at}\n  %v{at} = load i16, ptr %p{at}\n");
+        }
+        text += "  ret void\n}\n";
+        let before = llrm_analysis::frameescape::scans();
+        selected(&text, "f").unwrap();
+        let scans = llrm_analysis::frameescape::scans() - before;
+        assert!(scans <= 1, "{scans} scans for {locals} locals");
+    }
+}
