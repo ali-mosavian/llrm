@@ -13,7 +13,9 @@ runs:
         sudo apt-get update -qq
         sudo apt-get install -y -qq build-essential autoconf automake libtool pkg-config nasm libpng-dev zlib1g-dev libncurses-dev gdb binutils llvm-18 zstd
         # ubuntu-24.04 is a fixed image: gdb 15.1, binutils 2.42, LLVM 18 (the versions are printed below).
-        sudo ln -sf /usr/lib/llvm-18/bin/llvm-dwarfdump /usr/local/bin/llvm-dwarfdump
+        echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"  # llvm-dwarfdump, llvm-readobj ...
+        export PATH="$PATH:/usr/lib/llvm-18/bin"
+        sudo sysctl -q -w kernel.perf_event_paranoid=-1 || true
         gdb --version | head -1; ld --version | head -1; llvm-dwarfdump --version | sed -n 2p
     # rust-toolchain.toml names the compiler, here as on every machine.
     - shell: bash
