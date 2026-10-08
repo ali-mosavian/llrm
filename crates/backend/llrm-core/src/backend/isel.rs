@@ -605,6 +605,19 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
     body.variables = parameters(module, function, name, &convention, &selector.homes);
     body.cfa_variables = cfa;
     let mut body = noted(module, function, name, &selector.ats, &selector.values, &selector.variables, body);
+    // An argument the caller pushed is in its cell from the entry.
+    let named = body.named_values();
+    let cells: Vec<(u32, i64, u32)> = function
+        .parameters()
+        .iter()
+        .zip(&convention.parameters)
+        .filter_map(|(&parameter, place)| {
+            let (Parameter::Cell(disp), Some(&vreg)) = (place, selector.values.get(&parameter)) else { return None };
+            let bytes = u32::try_from(size_of(module, &selector.layout, function.value(parameter).ty).ok()?).ok()?;
+            named.contains(&vreg).then_some((vreg, *disp, bytes))
+        })
+        .collect();
+    body.arguments_in_cells = Arc::new(cells);
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     // An inlined callee's variables are not this procedure's.
     body.variables.extend(selector.variables.into_iter().filter(|(scope, _)| scope == name).map(|(_, one)| one));
@@ -735,6 +748,8 @@ fn noted(module: &Module, function: &Function, name: &str, ats: &IndexMap<InstId
         },
         _ => NoteValue::Nothing,
     };
+    // What the records say, by where each stands.
+    let mut said_at: Vec<(i64, u32, Option<(u32, u32)>, NoteValue)> = Vec::new();
     for record in function.debug_records() {
         let (value, piece) = match record.what {
             llrm_mir::DebugWhat::Declare(_) => continue,
@@ -744,13 +759,28 @@ fn noted(module: &Module, function: &Function, name: &str, ats: &IndexMap<InstId
             llrm_mir::DebugWhat::Gone => (NoteValue::Nothing, None),
         };
         let Some(&at) = ats.get(&record.before) else { continue };
+        said_at.push((at, record.variable.0, piece, value));
+    }
+    // Records of one variable that stand together and disagree (the statements of code that was erased and folded into one
+    // place, where which came last is no longer known) say nothing of it.
+    let mut seen: BTreeSet<(i64, u32, Option<(u32, u32)>, NoteValue)> = BTreeSet::new();
+    let mut unsure: BTreeSet<(i64, u32)> = BTreeSet::new();
+    for &(at, variable, piece, value) in &said_at {
+        let clash = said_at.iter().any(|&(other_at, other_variable, other_piece, other_value)| {
+            other_at == at && other_variable == variable && (other_piece, other_value) != (piece, value) && (other_piece == piece || other_piece.is_none() || piece.is_none())
+        });
+        if clash {
+            unsure.insert((at, variable));
+        }
+    }
+    for (at, variable, piece, value) in said_at {
+        let (piece, value) = if unsure.contains(&(at, variable)) { (None, NoteValue::Nothing) } else { (piece, value) };
         // Said twice by two passes: said once.
-        let said_already = before.get(&at).into_iter().flatten().any(|&one| notes[one as usize] == DebugNote { variable: record.variable.0, piece, value });
-        if said_already {
+        if !seen.insert((at, variable, piece, value)) {
             continue;
         }
         let note = u32::try_from(notes.len()).expect("a few notes");
-        notes.push(DebugNote { variable: record.variable.0, piece, value });
+        notes.push(DebugNote { variable, piece, value });
         before.entry(at).or_default().push(note);
         if let NoteValue::Value(vreg) = value {
             named.insert(vreg);
@@ -796,14 +826,14 @@ fn noted(module: &Module, function: &Function, name: &str, ats: &IndexMap<InstId
         .collect();
     body = body.with_blocks(blocks);
     // The variables the notes name that no cell holds.
-    let held: BTreeSet<(&str, &str)> = declared.iter().map(|(scope, one)| (scope.as_str(), one.name.as_str())).collect();
+    let held: BTreeSet<(String, String)> = declared.iter().map(|(scope, one)| (scope.clone(), one.name.clone())).chain(body.variables.iter().map(|one| (name.to_owned(), one.name.clone()))).collect();
     let mut seen = BTreeSet::new();
     for note in &notes {
         if !seen.insert(note.variable) {
             continue;
         }
         let Some(variable) = llrm_mir::debuginfo::read_variable(module, llrm_mir::MetadataId(note.variable)) else { continue };
-        if variable.scope == name && !held.contains(&(variable.scope.as_str(), variable.name.as_str())) {
+        if variable.scope == name && !held.contains(&(variable.scope.clone(), variable.name.clone())) {
             body.variables.push(DebugVariable { name: variable.name, r#type: variable.r#type, place: DebugPlace::Tracked(note.variable), parameter: variable.parameter, argument: variable.argument, arrives: None });
         }
     }

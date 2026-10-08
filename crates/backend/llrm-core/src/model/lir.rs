@@ -491,6 +491,9 @@ pub struct LirBody {
     pub cfa_variables: bool,
     /// What `-g` says of its variables at points in the code, by the numbers `DebugTags::before` holds.
     pub notes: Arc<Vec<DebugNote>>,
+    /// The values (by number) that arrive in a cell above the frame, with the cell's displacement and size: arguments the
+    /// caller pushed.
+    pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
 }
 
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
@@ -595,6 +598,7 @@ impl LirBody {
             slotted: false,
             cfa_variables: false,
             notes: Arc::default(),
+            arguments_in_cells: Arc::default(),
         }
     }
 
@@ -623,6 +627,7 @@ impl LirBody {
             slotted: self.slotted,
             cfa_variables: self.cfa_variables,
             notes: Arc::clone(&self.notes),
+            arguments_in_cells: Arc::clone(&self.arguments_in_cells),
         }
     }
 

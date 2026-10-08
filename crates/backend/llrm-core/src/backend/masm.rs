@@ -271,6 +271,11 @@ pub enum Place {
     Cell { disp: i64, bytes: u32 },
 }
 
+/// The arguments the caller pushed, as values in their cells from the first byte.
+fn blocks_arguments(body: &lir::LirBody) -> Vec<Item> {
+    body.arguments_in_cells.iter().map(|&(tag, disp, bytes)| Item::Mark(Mark::Def { tag, place: Place::Cell { disp, bytes } })).collect()
+}
+
 /// Where an instruction wrote `dest`, if a debugger can be told: a register, or a frame cell addressed by displacement alone.
 fn placed(dest: &Loc) -> Option<Place> {
     match dest {
@@ -561,7 +566,8 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
             defined.chain(one.debug.before.iter().map(|&note| Item::Mark(Mark::Note(note)))).collect::<Vec<_>>()
         })
         .collect();
-    let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(arrived).chain(enter.into_iter().map(Item::Semantics)).collect();
+    let cells = blocks_arguments(&procedure.body);
+    let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(arrived).chain(cells).chain(enter.into_iter().map(Item::Semantics)).collect();
     for (index, block) in blocks.iter().enumerate() {
         out.push(Item::Label(Label { name: label(number, block.at) }));
         if wrap.as_ref().is_some_and(|wrap| wrap.at == block.at) {

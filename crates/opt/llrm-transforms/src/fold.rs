@@ -121,7 +121,7 @@ fn _numbers(context: &mut Context, layout: &DataLayout, function: &mut Function,
     for (value, number) in &values {
         rewritten.extend(function.users(*value).iter().map(|one| one.user));
         let constant = context.int(function.value(*value).ty, _bits(number));
-        function.replace_all_uses_with(*value, Operand::Constant(constant));
+        function.replace_value(*value, Operand::Constant(constant));
     }
     for &inst in &rewritten {
         let operands = &function.instruction(inst).operands;
@@ -141,7 +141,7 @@ fn _numbers(context: &mut Context, layout: &DataLayout, function: &mut Function,
     let phi = function.create_instruction(Opcode::Phi, ty, from_arms(&incoming), Flags::default(), name.as_deref());
     let first = operations(function, edge.block)[0];
     function.insert(phi, Position::Before(first)).expect("a placed block");
-    function.replace_all_uses_with(result, Operand::Value(function.instruction(phi).result.expect("a phi's value")));
+    function.replace_value(result, Operand::Value(function.instruction(phi).result.expect("a phi's value")));
     function.erase(edge.op).expect("its uses were replaced");
     true
 }

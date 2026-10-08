@@ -534,7 +534,7 @@ fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
         let value = function.instruction(phi).result.expect("a phi's value");
         let first = function.block(block).instructions().iter().copied().find(|&one| function.instruction(one).opcode != Opcode::Phi);
         if let Some(first) = first {
-            function.add_debug_record(first, named.variable, named.is(Operand::Value(value)));
+            function.add_debug_record_first(first, named.variable, named.is(Operand::Value(value)));
         }
     }
 
@@ -555,7 +555,7 @@ fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
         }
         for inst in function.block(block).instructions().to_vec() {
             if let Some(&slot) = plan.loads.get(&inst) {
-                function.replace_all_uses_with(function.instruction(inst).result.expect("a load's value"), current[slot]);
+                function.replace_value(function.instruction(inst).result.expect("a load's value"), current[slot]);
                 dead.push(inst);
             } else if let Some(&slot) = plan.stores.get(&inst) {
                 current[slot] = function.instruction(inst).operands[0];
@@ -563,7 +563,7 @@ fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
                 if let Some(named) = plan.variables.get(slot).copied().flatten()
                     && let Some(next) = function.block(block).instructions().iter().copied().skip_while(|&one| one != inst).nth(1)
                 {
-                    function.add_debug_record(next, named.variable, named.is(current[slot]));
+                    function.add_debug_record_first(next, named.variable, named.is(current[slot]));
                 }
             }
         }

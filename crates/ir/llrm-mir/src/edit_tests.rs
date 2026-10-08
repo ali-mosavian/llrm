@@ -177,17 +177,30 @@ fn debug_records_print_and_parse_as_they_were() {
     let _ = p;
 }
 
-/// A value another replaces is the other in the records that named it, as it is in every use: a debugger that was told `x` is told
-/// `a`, not a value that is no more.
+/// A value another stands for is the other in the records that named it: a debugger that was told `x` is told `a`, not a value that
+/// is no more.
 #[test]
-fn replacing_a_value_replaces_it_in_the_records_too() {
+fn replacing_a_value_by_its_equal_replaces_it_in_the_records_too() {
+    let mut parsed = module(RECORDED);
+    let f = function(&mut parsed);
+    let (_, value) = named(f, "x");
+    let a = f.parameters()[0];
+    f.replace_value(value, Operand::Value(a));
+    assert!(f.debug_records().iter().any(|one| one.what == crate::DebugWhat::Value(Operand::Value(a))), "{:?}", f.debug_records());
+    assert!(!f.debug_records().iter().any(|one| one.what == crate::DebugWhat::Value(Operand::Value(value))));
+}
+
+/// A pass that rewrites a value's uses to rebuild a loop around it (`unroll` replaced the loop phi by its start value after the
+/// uses past the loop had been given the last trip's) does not say the variable is the start value: it was, at the end of the loop,
+/// the last trip's. A record stays on the value it named; once that value is erased it says nothing.
+#[test]
+fn rewriting_the_uses_of_a_value_leaves_the_records_naming_it() {
     let mut parsed = module(RECORDED);
     let f = function(&mut parsed);
     let (_, value) = named(f, "x");
     let a = f.parameters()[0];
     f.replace_all_uses_with(value, Operand::Value(a));
-    assert!(f.debug_records().iter().any(|one| one.what == crate::DebugWhat::Value(Operand::Value(a))), "{:?}", f.debug_records());
-    assert!(!f.debug_records().iter().any(|one| one.what == crate::DebugWhat::Value(Operand::Value(value))));
+    assert!(f.debug_records().iter().any(|one| one.what == crate::DebugWhat::Value(Operand::Value(value))), "{:?}", f.debug_records());
 }
 
 /// An erased value has no record that names it (a record is no use, so the erase goes through): they say it is gone. An erased

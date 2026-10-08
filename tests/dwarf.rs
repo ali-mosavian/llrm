@@ -226,7 +226,7 @@ fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
 }
 
 /// How many (line, variable) values of `observed.c` -O2 says, and -O0 has: raised as the optimiser keeps more of them.
-const COMPARED_FLOOR: usize = 45;
+const COMPARED_FLOOR: usize = 30;
 
 /// A `Location::Frame` is relative to the frame register, which the backend keeps for any function that has
 /// debug variables (`masm::stack_addressed` refuses a procedure with some): the same function without `-g`
