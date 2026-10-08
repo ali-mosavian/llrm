@@ -38,7 +38,7 @@ pub fn immediate_multiply<'a>(
             + 6);
     }
     // A CPU whose table gives the multiply a range of clocks prices it by the immediate's bits (`timing::multiply_clocks`).
-    if let Some(clocks) = timing::multiply_clocks(cpu, 4, Some(bit_length(number)))? {
+    if let Some(clocks) = timing::multiply_clocks_of(cpu, 4, Some(bit_length(number)), number < 0)? {
         return Ok(clocks);
     }
     cost(cpu, "imul_r32")
@@ -192,6 +192,8 @@ mod tests {
         assert_eq!(immediate_multiply(m32, 1103515245).unwrap(), 41);
         assert_eq!(immediate_multiply(m32, 10).unwrap(), 14);
         assert_eq!(immediate_multiply(m32, 3).unwrap(), 13);
+        assert_eq!(immediate_multiply(m32, -3).unwrap(), 15, "a negative multiplier has a floor of 5 bits");
+        assert_eq!(immediate_multiply(m32, -1103515245).unwrap(), 41);
         assert!(scale(1103515245, m32).unwrap().is_some(), "the chain is below the imul");
     }
 

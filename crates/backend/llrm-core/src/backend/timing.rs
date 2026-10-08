@@ -43,9 +43,17 @@ pub fn signed_multiply<'a>(
 /// dependence. An unknown multiplier is priced at the middle of the range: the estimate with no information on which
 /// bit length it has, an assumption and not a fact about any program.
 pub fn multiply_clocks<'a>(cpu: impl Into<ProfileOrName<'a>>, width: i64, bits: Option<i64>) -> Result<Option<i64>, String> {
-    let Some(Clocks { minimum, maximum }) = signed_multiply(cpu, width, false)? else { return Ok(None) };
+    multiply_clocks_of(cpu, width, bits, false)
+}
+
+/// `multiply_clocks`, for a multiplier of either sign: where the CPU's description gives a negative one a higher floor of bits
+/// (`smul_negative_bits`: the 486's `n = 5` against `3`), a negative multiplier of fewer bits costs as one of that many.
+pub fn multiply_clocks_of<'a>(cpu: impl Into<ProfileOrName<'a>>, width: i64, bits: Option<i64>, negative: bool) -> Result<Option<i64>, String> {
+    let profile = targets::profile(cpu)?;
+    let Some(Clocks { minimum, maximum }) = signed_multiply(profile, width, false)? else { return Ok(None) };
     let Some(bits) = bits else { return Ok(Some((minimum + maximum + 1) / 2)) };
-    let bits = bits.clamp(3, width * 8);
+    let floor = if negative { stated(profile, "smul_negative_bits").unwrap_or(3) } else { 3 };
+    let bits = bits.clamp(floor, width * 8);
     Ok(Some(minimum + (maximum - minimum) * (bits - 3) / (width * 8 - 3)))
 }
 
