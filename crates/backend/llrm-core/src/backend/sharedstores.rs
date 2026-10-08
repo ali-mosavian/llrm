@@ -29,7 +29,7 @@ fn literal(one: &Insn) -> Option<(u32, i64)> {
 }
 
 fn bytes(bits: u32, what: &Semantics) -> Option<usize> {
-    select::emit_in(bits, what, 0, None, false, false, None).map(|code| code.code.len())
+    select::priced_in(bits, what, 0, None, false, false, None).map(|code| code.code.len())
 }
 
 

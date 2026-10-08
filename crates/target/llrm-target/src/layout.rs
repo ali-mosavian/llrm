@@ -37,6 +37,9 @@ pub struct Layout {
     /// LLVM's datalayout string.
     pub datalayout: String,
     pub spaces: AddressSpaces,
+    /// The operations (`select`, `fptoui.i64`) the machine has no instruction for, which the compiler expands before selection:
+    /// LLVM's `setOperationAction(..., Expand)`. An operation not listed is native.
+    pub expand: Vec<String>,
 }
 
 impl AddressSpaces {
@@ -51,6 +54,11 @@ impl AddressSpaces {
 }
 
 impl Layout {
+    /// Whether the machine lacks an instruction for `operation`, so the compiler expands it (`expand` in the description).
+    pub fn expands(&self, operation: &str) -> bool {
+        self.expand.iter().any(|one| one == operation)
+    }
+
     /// The most bytes a data segment holds; none where segments are not.
     pub fn segment_bytes(&self) -> Option<usize> {
         self.spaces.segment_bytes.map(|bytes| bytes as usize)
@@ -87,9 +95,14 @@ impl Layout {
             None => None,
             Some(one) => Some(one.as_integer().and_then(|one| u64::try_from(one).ok()).filter(|one| *one > 0).ok_or("spaces.segment_bytes is not a positive size")?),
         };
+        let expand = match value.get("expand") {
+            None => Vec::new(),
+            Some(list) => list.as_array().and_then(|list| list.iter().map(|one| one.as_str().map(str::to_owned)).collect()).ok_or("expand is not a list of operation names")?,
+        };
         Ok(Self {
             mode,
             datalayout,
+            expand,
             spaces: AddressSpaces {
                 roles: Spaces { near: required("near")?, far: required("far")?, data: required("data")?, stack: required("stack")?, segment: number("segment")?, huge: number("huge")?, fixed: number("fixed")?, segment_bytes },
                 unmarked,
@@ -119,6 +132,14 @@ mod tests {
         assert_eq!(Layout::parse(FLAT).unwrap().segment_bytes(), None);
         assert_eq!(Layout::parse(&FLAT.replace("near = 0\n", "near = 0\nsegment_bytes = 65536\n")).unwrap().segment_bytes(), Some(65536));
         assert!(Layout::parse(&FLAT.replace("near = 0\n", "near = 0\nsegment_bytes = 0\n")).unwrap_err().contains("segment_bytes"));
+    }
+
+    #[test]
+    fn the_operations_a_machine_expands_are_its_descriptions_and_none_is_native() {
+        assert!(!Layout::parse(FLAT).unwrap().expands("select"));
+        let described = Layout::parse(&format!("expand = [\"select\", \"fptoui.i64\"]\n{FLAT}")).unwrap();
+        assert!(described.expands("select") && described.expands("fptoui.i64") && !described.expands("fptosi.i64"));
+        assert!(Layout::parse(&format!("expand = 3\n{FLAT}")).is_err());
     }
 
     #[test]

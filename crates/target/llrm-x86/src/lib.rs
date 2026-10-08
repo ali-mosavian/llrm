@@ -14,6 +14,9 @@ pub mod calling {
         *NAMES.get(name).unwrap_or_else(|| panic!("calling.toml names no x86 register {name}"))
     }
 
+    /// The most bytes `ret imm16` (and `retf imm16`) removes: the immediate is a word.
+    pub const RET_POPS_MOST: i64 = 0xFFFF;
+
     /// The register a frame's cells are addressed through.
     pub fn frame(convention: &Convention) -> Register {
         register(&convention.frame)

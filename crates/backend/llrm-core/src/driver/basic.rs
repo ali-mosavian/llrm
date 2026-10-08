@@ -463,7 +463,7 @@ pub struct Finalized {
 
 /// Replace allocated QB intrinsic pseudos with inline-byte placeholders.
 pub fn finalized(body: &lir::LirBody, parameter_bytes: i64) -> Result<Finalized, String> {
-    let body = masm::cleaned_returns(body, parameter_bytes)?;
+    let body = masm::cleaned_returns(body, parameter_bytes, 2)?;
     let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {
@@ -648,7 +648,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         }
         let frame = object.frames.get(module.global(id).name.as_deref().unwrap_or_default()).copied().unwrap_or(Frame::Runtime { strings: 0 });
         // B$ENRA zero-fills a runtime frame's locals.
-        let target = Target { facts: &facts, cpu, segments: &segments, selection: options.selection, arch: &*options.arch, classes: &classes, runtime: runtime.value(), basic: true, zeroed: matches!(frame, Frame::Runtime { .. }), ranges: options.location_ranges() };
+        let target = Target { facts: &facts, cpu, segments: &segments, selection: options.selection, arch: &*options.arch, classes: &classes, runtime: runtime.value(), basic: true, zeroed: matches!(frame, Frame::Runtime { .. }), ranges: options.location_ranges(), cfa: options.cfa_locations() };
         let (procedure, landing, statics) = llrm_support::debug::in_function(module.global(id).name.as_deref().unwrap_or_default(), || timed("procedure", || procedure(module, id, id == main, frame, &names, &abi, &pool, &target, runtime)))?;
         main_frame += statics;
         for callee in procedure.callees.values() {
