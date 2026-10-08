@@ -108,7 +108,6 @@ done:
             "xor cx, cx",
             "cmp cx, bx",
             "jl L0_5",
-            "L0_9:",
             "pop bp",
             "retf",
             "L0_5:",
