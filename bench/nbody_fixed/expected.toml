@@ -1,4 +1,4 @@
-reason = "regalloc search picks one shape plus the no-split body below -Omax: grep nib code +5 bytes (the unfolded no-split trial is not tried)"
+reason = "below -Omax the backend makes a function once unless the allocator left frame traffic, and not again without callee facts: grep nib -2.0% code; nbody_fixed nib memory operands -13%/-23%, instructions -2.0%/+1.8%, code +2.7%/+0.4%"
 blessed = "2026-10-08"
 
 [bas.O2]
@@ -30,16 +30,16 @@ data_bytes = 0
 bss_bytes = 96
 
 [nib.O2]
-instructions = 2981108
-memory_operands = 710068
-code_bytes = 792
+instructions = 2922133
+memory_operands = 615081
+code_bytes = 813
 data_bytes = 96
 bss_bytes = 0
 
 [nib.Os]
-instructions = 2981120
-memory_operands = 710068
-code_bytes = 790
+instructions = 3035120
+memory_operands = 548068
+code_bytes = 793
 data_bytes = 96
 bss_bytes = 0
 
