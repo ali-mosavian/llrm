@@ -1,0 +1,80 @@
+.386
+.model flat
+
+public _bench_recfloat
+public _main
+.data
+.const
+$K4 label byte
+db 000h,000h,000h,03fh
+$K5 label byte
+db 000h,000h,07ah,044h
+extern _report:near
+.code RECFLOAT_TEXT
+_decay proc near
+    push ebp
+    mov ebp, esp
+    sub esp, 16
+    push edx
+L0_0:
+    fld qword ptr [ebp+16]
+    mov eax, dword ptr [ebp+24]
+    or eax, eax
+    je L0_9
+L0_2:
+    dec eax
+    fadd qword ptr [ebp+8]
+    fld qword ptr [ebp+8]
+    fmul dword ptr $K4
+    fld1
+    faddp st(1), st(0)
+    push eax
+    fxch st(1)
+    fstp qword ptr [ebp-8]
+    push dword ptr [ebp-4]
+    push dword ptr [ebp-8]
+    fstp qword ptr [ebp-16]
+    push dword ptr [ebp-12]
+    push dword ptr [ebp-16]
+    call _decay
+L0_9:
+    pop edx
+    leave
+    ret 20
+_decay endp
+_bench_recfloat proc near
+    push ebp
+    mov ebp, esp
+    sub esp, 8
+L1_0:
+    fnstcw word ptr [ebp-6]
+    mov ax, word ptr [ebp-6]
+    or ax, 3072
+    mov word ptr [ebp-8], ax
+    push dword ptr [ebp+8]
+    pushd 0
+    pushd 0
+    pushd 1079574528
+    pushd 0
+    call _decay
+    fmul dword ptr $K5
+    fadd dword ptr $K4
+    fldcw word ptr [ebp-8]
+    fistp dword ptr [ebp-4]
+    mov eax, dword ptr [ebp-4]
+    fldcw word ptr [ebp-6]
+    leave
+    ret
+_bench_recfloat endp
+_main proc near
+L2_0:
+    pushd 1000
+    call _bench_recfloat
+    add esp, 4
+    push eax
+    call _report
+    add esp, 4
+    xor eax, eax
+    ret
+_main endp
+end
