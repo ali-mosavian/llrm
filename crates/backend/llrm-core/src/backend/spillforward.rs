@@ -21,7 +21,7 @@ use crate::model::lir::{self, Insn, LirBlock, LirBody};
 /// equality are read; which of two equal cells a meet keeps reaches nothing.
 /// Each fact says whether the register is what a store wrote the slot from: a register a reload filled may be a dead one, which a
 /// read of it would keep.
-pub type Facts = std::collections::HashMap<(Reg, Mem), bool>;
+pub type Facts = crate::support::hash::HashMap<(Reg, Mem), bool>;
 
 fn _plain(one: &Insn) -> bool {
     one.what.is_some() && one.clobbers.is_empty() && one.requires.is_empty() && one.delivers.is_empty()

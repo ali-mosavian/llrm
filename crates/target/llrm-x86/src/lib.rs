@@ -10,7 +10,7 @@ pub mod calling {
 
     /// `name` (`ebx`, `si`, `st0`), as the family spells it.
     pub fn register(name: &str) -> Register {
-        static NAMES: std::sync::LazyLock<std::collections::HashMap<String, Register>> = std::sync::LazyLock::new(|| Register::values().map(|one| (format!("{one:?}").to_ascii_lowercase(), one)).collect());
+        static NAMES: std::sync::LazyLock<llrm_support::hash::HashMap<String, Register>> = std::sync::LazyLock::new(|| Register::values().map(|one| (format!("{one:?}").to_ascii_lowercase(), one)).collect());
         *NAMES.get(name).unwrap_or_else(|| panic!("calling.toml names no x86 register {name}"))
     }
 

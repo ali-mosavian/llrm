@@ -10,9 +10,9 @@ pub use llrm_mir::facts::{Effect, Fact, Kind};
 /// A module's functions and instructions by id, found once, for every fact
 /// that names one.
 pub struct Index<'m> {
-    functions: std::collections::HashMap<i64, &'m crate::model::Function>,
-    instructions: std::collections::HashMap<(i64, i64), &'m crate::model::Instruction>,
-    value_types: std::collections::HashMap<(i64, i64), i64>,
+    functions: llrm_support::hash::HashMap<i64, &'m crate::model::Function>,
+    instructions: llrm_support::hash::HashMap<(i64, i64), &'m crate::model::Instruction>,
+    value_types: llrm_support::hash::HashMap<(i64, i64), i64>,
 }
 
 impl<'m> Index<'m> {

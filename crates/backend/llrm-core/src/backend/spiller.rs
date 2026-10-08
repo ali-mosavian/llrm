@@ -646,37 +646,72 @@ pub fn siblings(
     if values.is_empty() {
         return Ok(BTreeSet::new());
     }
-    let adjacency = llrm_support::debug::span("siblings adjacency");
-    let mut adjacent: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        let Some(pair) = _plain_move(one) else {
-            continue;
-        };
-        if pair.0 == pair.1 {
-            continue;
-        }
-        adjacent.entry(pair.0).or_default().insert(pair.1);
-        adjacent.entry(pair.1).or_default().insert(pair.0);
+    postings::following(body, |postings| siblings_over(body, values, frame, fixed, postings))
+}
+
+thread_local! {
+    static EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many instructions this thread has looked at for the copies of a value, for a test that a spill asks of the web it is
+/// in and not of every move in the body.
+pub fn examined() -> usize {
+    EXAMINED.with(std::cell::Cell::get)
+}
+
+/// The values a plain move copies to or from `value`, from the instructions that name it alone.
+fn _copied_by(body: &LirBody, postings: &Postings, value: u32) -> BTreeSet<u32> {
+    let mut at: Vec<At> = postings.defs(value).iter().chain(postings.uses(value)).copied().collect();
+    at.sort_unstable();
+    at.dedup();
+    EXAMINED.with(|examined| examined.set(examined.get() + at.len()));
+    at.iter()
+        .filter_map(|one| _plain_move(_at(body, *one)))
+        .filter(|pair| pair.0 != pair.1)
+        .filter_map(|pair| if pair.0 == value { Some(pair.1) } else if pair.1 == value { Some(pair.0) } else { None })
+        .collect()
+}
+
+/// The plain-move neighbours of the values asked about, worked out as they are asked from the occurrences of each: a spill
+/// asks of one copy web, not of every move in the body.
+struct Adjacent<'b> {
+    body: &'b LirBody,
+    postings: &'b Postings,
+    known: std::cell::RefCell<IndexMap<u32, BTreeSet<u32>>>,
+}
+
+impl Adjacent<'_> {
+    fn of(&self, value: u32) -> BTreeSet<u32> {
+        self.known.borrow_mut().entry(value).or_insert_with(|| _copied_by(self.body, self.postings, value)).clone()
     }
-    if !values.iter().any(|one| adjacent.contains_key(one)) {
+
+    fn has(&self, value: u32) -> bool {
+        !self.of(value).is_empty()
+    }
+}
+
+fn siblings_over(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame, fixed: &BTreeSet<u32>, postings: &Postings) -> Result<BTreeSet<u32>, Error> {
+    let adjacency = llrm_support::debug::span("siblings adjacency");
+    let adjacent = Adjacent { body, postings, known: Default::default() };
+    if !values.iter().any(|one| adjacent.has(*one)) {
         return Ok(BTreeSet::new());
     }
     drop(adjacency);
     // Only the copy webs that hold a value of `values` are grown from: the others are asked of by no one.
     let wanted: BTreeSet<u32> = {
-        let mut web: BTreeSet<u32> = values.iter().copied().filter(|one| adjacent.contains_key(one)).collect();
+        let mut web: BTreeSet<u32> = values.iter().copied().filter(|one| adjacent.has(*one)).collect();
         let mut work: Vec<u32> = web.iter().copied().collect();
         while let Some(one) = work.pop() {
-            for next in &adjacent[&one] {
-                if web.insert(*next) {
-                    work.push(*next);
+            for next in adjacent.of(one) {
+                if web.insert(next) {
+                    work.push(next);
                 }
             }
         }
         web
     };
     // A shared slot holds each member at every width it is used, not just moved.
-    let widths = llrm_support::debug::timed("siblings widths", || _widest(body, &wanted));
+    let widths = llrm_support::debug::timed("siblings widths", || _widest_by(body, &wanted, postings));
 
     // Only pairs among the values of those webs are asked of.
     let near = llrm_support::debug::timed("siblings interference", || coalesce::_interference_among(body, Some(&wanted)));
@@ -686,20 +721,50 @@ pub fn siblings(
             let among = |graph: &coalesce::Graph| graph.get(value).map(|near| near.intersection(&wanted).copied().collect::<BTreeSet<u32>>()).unwrap_or_default();
             assert!(among(&near) == among(&whole), "{}: the interference of value#{value} among its web differs from the whole graph's", body.name);
         }
+        // The copies, the web and the widths from the occurrences are those of a walk of the whole body.
+        let mut everywhere: IndexMap<u32, BTreeSet<u32>> = IndexMap::default();
+        for one in body.blocks.iter().flat_map(|block| &block.insns) {
+            let Some(pair) = _plain_move(one) else { continue };
+            if pair.0 != pair.1 {
+                everywhere.entry(pair.0).or_default().insert(pair.1);
+                everywhere.entry(pair.1).or_default().insert(pair.0);
+            }
+        }
+        for value in wanted.iter().chain(values) {
+            assert!(adjacent.of(*value) == everywhere.get(value).cloned().unwrap_or_default(), "{}: the copies of value#{value} from its occurrences differ from a walk of the body", body.name);
+        }
+        assert!(widths.iter().eq(_widest(body, &wanted).iter()), "{}: the widths of a copy web from its occurrences differ from a walk of the body", body.name);
     }
     let deep = llrm_support::debug::timed("siblings depths", || ranges::depths(body));
     let occurring = llrm_support::debug::span("siblings occurs");
     let mut occurs: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::default();
-    for block in &body.blocks {
-        let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
-        for one in &block.insns {
-            let named: BTreeSet<u32> = one.defines.iter().chain(&one.uses).copied().collect();
-            for value in wanted.intersection(&named) {
-                occurs.entry(*value).or_default().push((each, Arc::clone(one)));
+    for &value in &wanted {
+        let mut at: Vec<At> = postings.defs(value).iter().chain(postings.uses(value)).copied().collect();
+        at.sort_unstable();
+        at.dedup();
+        if at.is_empty() {
+            continue;
+        }
+        let each = |block: u32| ranges::level(deep.get(&body.blocks[block as usize].at).copied().unwrap_or(0));
+        occurs.insert(value, at.iter().map(|one| (each(one.0), Arc::clone(_at(body, *one)))).collect());
+    }
+    if std::env::var_os("LLRM_CHECK_SIBLINGS").is_some() {
+        let mut everywhere: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::default();
+        for block in &body.blocks {
+            let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
+            for one in &block.insns {
+                let named: BTreeSet<u32> = one.defines.iter().chain(&one.uses).copied().collect();
+                for value in wanted.intersection(&named) {
+                    everywhere.entry(*value).or_default().push((each, Arc::clone(one)));
+                }
             }
         }
+        assert!(
+            occurs.len() == everywhere.len() && occurs.iter().all(|(value, found)| everywhere.get(value).is_some_and(|other| other.len() == found.len() && other.iter().zip(found).all(|(a, b)| a.0 == b.0 && Arc::ptr_eq(&a.1, &b.1)))),
+            "{}: the occurrences of a copy web from the postings differ from a walk of the body",
+            body.name
+        );
     }
-
     drop(occurring);
     let worth = |candidate: u32, group: &PySet<i64>| -> bool {
         let (mut saved, mut cost) = (0.0, 0.0);
@@ -721,7 +786,7 @@ pub fn siblings(
 
     let mut taken: BTreeSet<u32> = BTreeSet::new();
     let mut chosen: BTreeSet<u32> = BTreeSet::new();
-    let firsts: Vec<u32> = values.iter().copied().filter(|one| adjacent.contains_key(one)).collect();
+    let firsts: Vec<u32> = values.iter().copied().filter(|one| adjacent.has(*one)).collect();
     for first in firsts {
         if taken.contains(&first) {
             continue;
@@ -734,7 +799,7 @@ pub fn siblings(
             let members: BTreeSet<u32> = group.iter().map(|one| *one as u32).collect();
             let frontier: BTreeSet<u32> = members
                 .iter()
-                .flat_map(|one| adjacent.get(one).into_iter().flatten().copied())
+                .flat_map(|one| adjacent.of(*one))
                 .filter(|one| !members.contains(one) && !taken.contains(one) && !fixed.contains(one))
                 .collect();
             for candidate in frontier {
@@ -1238,7 +1303,7 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
         let held = if _exact_frame(cell) {
             // Only what may write the cell is asked of, and the blocks between the load and its uses are gone over.
             let writers = writers.get_or_init(|| Writers::of(body));
-            let mut events: std::collections::HashMap<usize, Vec<(usize, bool)>> = std::collections::HashMap::new();
+            let mut events: crate::support::hash::HashMap<usize, Vec<(usize, bool)>> = crate::support::hash::HashMap::default();
             for (block, position) in writers.near(cell) {
                 if !_keeps(&body.blocks[block].insns[position], define, cell, true, body) {
                     events.entry(block).or_default().push((position, false));
@@ -1341,12 +1406,12 @@ impl Writers {
 /// Whether the cell holds at every one of `uses` (block, position), given where it is made to hold and where it is written:
 /// `events` per block are (position, true for the load, false for a write) in order. The same answer as `_unchanged`, found over
 /// the blocks that lie between the load and the uses and not over the whole body.
-fn _holds_at(flow: &Flow, events: &std::collections::HashMap<usize, Vec<(usize, bool)>>, uses: &[(usize, usize)]) -> bool {
-    use std::collections::{HashMap, HashSet};
+fn _holds_at(flow: &Flow, events: &crate::support::hash::HashMap<usize, Vec<(usize, bool)>>, uses: &[(usize, usize)]) -> bool {
+    use crate::support::hash::{HashMap, HashSet};
     // Whether the cell holds out of a block that has an event: after its last.
     let decided = |block: usize| events.get(&block).and_then(|list| list.last()).map(|(_, load)| *load);
     let mut needed: Vec<usize> = Vec::new();
-    let mut seen: HashSet<usize> = HashSet::new();
+    let mut seen: HashSet<usize> = HashSet::default();
     for &(block, position) in uses {
         let before = events.get(&block).and_then(|list| list.iter().rev().find(|(at, _)| *at < position));
         if before.is_none() && seen.insert(block) {
@@ -3618,6 +3683,24 @@ mod tests {
         let mut frame = Frame::new(0);
         super::siblings(&body, &set(&[1]), Some(&mut frame), &BTreeSet::new()).expect("sibling slots");
         assert_eq!(crate::backend::coalesce::last_asked(), Some(3), "the other web's values were asked of");
+    }
+
+    /// `siblings` walked every instruction of the body for its plain moves, numbered every value of it for the liveness of the
+    /// graph, and walked it again for the widths and the occurrences: 3.6 + 1.2 + 1.0 G of the 104 G of compiling `d_faces`
+    /// (6%), for a web of three values. It looks at the instructions that name the web's values.
+    #[test]
+    fn test_siblings_cost_the_size_of_the_web_not_the_size_of_the_body() {
+        let mut insns = vec![_move(1, 10, None, 0x10), _move(2, 1, None, 0x12), _add(31, 2, 0x14)];
+        for other in 0..60u32 {
+            insns.push(_move(100 + 2 * other, 101 + 2 * other, None, 0x20 + 2 * other as i64));
+        }
+        let body = _body(insns);
+        let mut frame = Frame::new(0);
+        let before = super::examined();
+        super::siblings(&body, &set(&[1]), Some(&mut frame), &BTreeSet::new()).expect("sibling slots");
+        let looked = super::examined() - before;
+        assert!(looked <= 12, "{looked} instructions looked at for the copies of a web of three values in a body of 63");
+        assert!(crate::backend::coalesce::last_numbered() <= 4, "{} values numbered for a graph of {:?}", crate::backend::coalesce::last_numbered(), crate::backend::coalesce::last_asked());
     }
 
     /// Every spill made a body of every instruction with the slots in it as values, and numbered it and

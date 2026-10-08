@@ -2,7 +2,7 @@
 //! the path every pattern still standing shares, as TableGen's matcher
 //! merges common prefixes. Identical states are one state.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use super::parse::{Pattern, KINDS, OPCODES, OPERANDS, TYPES};
 
@@ -96,7 +96,7 @@ impl Builder<'_> {
 
 pub fn build(patterns: &[Pattern]) -> Automaton {
     let constraints: Vec<_> = patterns.iter().map(constraints).collect();
-    let mut builder = Builder { constraints: &constraints, states: Vec::new(), made: HashMap::new() };
+    let mut builder = Builder { constraints: &constraints, states: Vec::new(), made: HashMap::default() };
     let root = builder.node((0..patterns.len()).collect(), 0);
     Automaton { states: builder.states, root }
 }

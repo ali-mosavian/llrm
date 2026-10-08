@@ -121,19 +121,32 @@ def measure_passes(jobs: int, axes=tuple(SIZES), levels=LEVELS) -> dict[str, tup
             return {k: v for got in pool.map(lambda t: pass_ratios(*t, Path(tmp)), todo) for k, v in got.items()}
 
 
+def judged(was: float, read: tuple[float, float] | None, slack: float = PASS_SLACK) -> str:
+    """What the gate and the refresh both say of a budget entry `was` for a step read as (ratio, share): "within" its tolerance,
+    "up" past it, "down" past it, or "gone" (under LOW of the work). One decision, so a refresh always leaves the gate passing."""
+    if read is None:
+        return "gone"
+    if read[0] > was * slack:
+        return "up"
+    return "down" if read[0] < was / slack else "within"
+
+
 def compare_passes(budget: dict[str, float], now: dict[str, tuple[float, float]], slack: float = PASS_SLACK, linear: float = LINEAR) -> tuple[list[str], list[str]]:
     """A step of HIGH share or more may more than double at 2N only at the ratio its budget entry records. An entry whose step now reads
     lower is a fix: the budget is refreshed in the same commit. So is one whose step fell under LOW; one between LOW and HIGH is
     neither, wherever it was last time."""
     lines, bad = [], []
     for key, (got, share) in sorted(now.items()):
-        allowed = max(budget.get(key, 0.0), linear)
-        if got > allowed * slack and (share >= HIGH or key in budget):
-            lines.append(f"{key}: {got:.3f} (allowed {allowed:.3f})")
-            bad.append(f"{key}: 2N/N {got:.3f} > {allowed:.3f}: a pass more than doubles" + ("" if key in budget else f" (linear is {linear}; an entry in {PASS_BUDGET.name} records a known one)"))
+        if key not in budget and got > linear * slack and share >= HIGH:
+            lines.append(f"{key}: {got:.3f} (allowed {linear:.3f})")
+            bad.append(f"{key}: 2N/N {got:.3f} > {linear:.3f}: a pass more than doubles (an entry in {PASS_BUDGET.name} records a known one)")
     for key, was in sorted(budget.items()):
-        got = now.get(key)
-        if got is None or got[0] < was / slack:
+        state = judged(was, now.get(key), slack)
+        if state == "up" and now[key][0] > max(was, linear) * slack:
+            lines.append(f"{key}: {now[key][0]:.3f} (allowed {was:.3f})")
+            bad.append(f"{key}: 2N/N {now[key][0]:.3f} > {was:.3f}: a pass more than doubles")
+        elif state in ("down", "gone"):
+            got = now.get(key)
             bad.append(f"{key}: now {'under the floor or gone' if got is None else f'{got[0]:.3f}'}, budget {was:.3f}: refresh the budget in this PR (python3 {Path(__file__).name} --refresh)")
     return lines, bad
 
@@ -149,17 +162,18 @@ def refreshed_axes(old: dict[str, float], now: dict[str, float], slack: float = 
 
 
 def refreshed_passes(old: dict[str, float], now: dict[str, tuple[float, float]], slack: float = PASS_SLACK) -> dict[str, float]:
-    """The pass budget as `compare_passes` would have it refreshed: an entry kept while its step still reads within `slack` of it
-    (or sits between LOW and FLOOR of the work, where it may flip in and out), rewritten when it moved, dropped when the step is
-    gone or no longer above LINEAR, and a new superlinear step of FLOOR or more added."""
+    """The pass budget `compare_passes` passes on this measurement, changing what it would not: an entry kept while `judged` says
+    within, rewritten when the step moved and is still above LINEAR, dropped when it is gone or no longer above LINEAR; and a new
+    superlinear step of FLOOR or more added."""
     new = pass_budget(now)
     out = {}
     for key in sorted(old.keys() | new.keys()):
-        read = now.get(key)
-        if key in old and read is not None and read[0] > LINEAR and (old[key] / slack <= read[0] <= old[key] * slack or read[1] < FLOOR):
-            out[key] = old[key]
-        elif key in new:
+        if key not in old:
             out[key] = new[key]
+        elif (state := judged(old[key], now.get(key), slack)) == "within":
+            out[key] = old[key]
+        elif state != "gone" and now[key][0] > LINEAR:
+            out[key] = round(now[key][0], 3)
     return out
 
 

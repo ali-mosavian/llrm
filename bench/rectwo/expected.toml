@@ -1,4 +1,4 @@
-reason = "return duplication (gcc copy_bb_p): a jump to a block that only returns is replaced by a copy of it at -O2: instructions fall (fib -3.7%, queens -0.4%), code bytes grow by the copies"
+reason = "return duplication (gcc copy_bb_p): a jump to a block that only returns is replaced by a copy of it at -O2: instructions fall (fib -3.7%, hanoi -3.6%, rectwo -2.4%, queens -0.4%), code bytes grow by the copies"
 blessed = "2026-10-09"
 
 [c.O2]

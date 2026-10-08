@@ -16,7 +16,8 @@
 //! bytes are pushed; a BASIC frame is an alloca for its locals and one for
 //! the arguments its caller pushed.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
+use llrm_support::hash::HashMap;
 use std::rc::Rc;
 
 use iced_x86::Register;
@@ -237,15 +238,15 @@ pub fn function(b: &mut Builder, unit: &Unit, body: &BodyFacts, handled: Option<
         body,
         blocks: BTreeMap::new(),
         block: entry,
-        current: HashMap::new(),
-        bits: HashMap::new(),
+        current: HashMap::default(),
+        bits: HashMap::default(),
         depth: 0,
         frame: Frame::Before,
         floats: 0,
-        entries: HashMap::new(),
+        entries: HashMap::default(),
         placeholders: Vec::new(),
-        ends: HashMap::new(),
-        sentinels: HashMap::new(),
+        ends: HashMap::default(),
+        sentinels: HashMap::default(),
         pure: Vec::new(),
         top,
         deepest: 0,
@@ -255,7 +256,7 @@ pub fn function(b: &mut Builder, unit: &Unit, body: &BodyFacts, handled: Option<
         prologue: false,
         making: true,
         layout: None,
-        pushes: HashMap::new(),
+        pushes: HashMap::default(),
         live_in: flagged::live_in(&body.blocks),
         insn: None,
         run: Vec::new(),
@@ -438,7 +439,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         self.b.position(id);
         // Only an edge from a call that never returns reaches it.
         let Some(&entry) = self.entries.get(&block.at) else {
-            self.ends.insert(id, (HashMap::new(), HashMap::new()));
+            self.ends.insert(id, (HashMap::default(), HashMap::default()));
             self.b.unreachable();
             return Ok(());
         };
@@ -1888,7 +1889,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             if !users.is_empty() {
                 // A partial write keeps the rest of an undefined word; only
                 // a read of those bits reads it.
-                if demanded(self.b.function, self.b.context, value, &mut HashMap::new()) != 0 {
+                if demanded(self.b.function, self.b.context, value, &mut HashMap::default()) != 0 {
                     return Err(sentinel.why);
                 }
                 let ty = self.b.function.value(value).ty;
