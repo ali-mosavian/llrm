@@ -44,7 +44,9 @@ pub struct Summary {
     pub lifetime: bool,
 }
 
-pub type Callees = HashMap<GlobalId, Summary>;
+/// Hashed with fixed keys: std's seeds each map afresh, and the work of building one then differs run to run (`callee-effects`
+/// read 97.7 to 98.6 Minstr compiling one program, which put a step at the scaling gate's 2% floor in and out of its budget).
+pub type Callees = HashMap<GlobalId, Summary, std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>>;
 
 /// One scan of every function in `module`; counted as `callees` for an observer, which a pass that asks per query shows.
 pub fn callees(module: &Module) -> Callees {
