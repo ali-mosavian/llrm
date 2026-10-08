@@ -197,8 +197,12 @@ pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String>
     }
     timed("mir assumptions", || program.modules.iter_mut().for_each(llrm_transforms::dead::assumptions_dropped));
     timed("mir ehprepare", || program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared))?;
-    timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
-    timed("mir selects", || program.modules.iter_mut().try_for_each(crate::backend::selects::lowered))?;
+    if options.arch.expands("fptoui.i64") {
+        timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
+    }
+    if options.arch.expands("select") {
+        timed("mir selects", || program.modules.iter_mut().try_for_each(crate::backend::selects::lowered))?;
+    }
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {
         timed("mir spill model", || spill_model(program));
     }

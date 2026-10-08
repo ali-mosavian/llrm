@@ -6,6 +6,10 @@ mode = 16
 
 datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
 
+# The operations this machine has no instruction for, which the compiler expands before selection: fptoui to a 64-bit integer
+# (fistp stores signed qwords) and a conditional move (none before the Pentium Pro).
+expand = ["fptoui.i64", "select"]
+
 # What a frontend's addresses are, by address space number.
 [spaces]
 near = 0
