@@ -1,6 +1,57 @@
---- a/bld/cc/c/cdinit.c	2026-09-30 13:30:15.818091172 +0200
-+++ b/bld/cc/c/cdinit.c	2026-09-30 13:30:15.829895356 +0200
-@@ -1032,8 +1032,11 @@
+--- a/bld/cc/c/cdinit.c	2026-10-08 10:12:01.190164709 +0200
++++ b/bld/cc/c/cdinit.c	2026-10-08 10:12:18.997239583 +0200
+@@ -210,6 +210,32 @@
+             ndq->u.string_leaf->literal += size;
+             ndq->u.string_leaf->length = oldsize - size;
+             size = 0;
++        } else if( dq->flags == Q_DATA && dq->type >= QDT_BOOL && dq->type <= QDT_ULONG64 && oldsize <= 8 ) {
++            /*
++             * qbopt: a bit-field unit that overhangs its struct ({ int a : 8; int b : 24; }
++             * stores b's int at offset 1) is cut back to the struct's end, and an integer
++             * quad has no 3-byte form: both parts become byte strings, which do.
++             */
++            unsigned char   bytes[8];
++            STR_HANDLE      low;
++            STR_HANDLE      high;
++
++            memset( bytes, 0, sizeof( bytes ) );
++            memcpy( bytes, &dq->u.long64, sizeof( bytes ) );
++            low = CMemAlloc( sizeof( STRING_LITERAL ) );
++            high = CMemAlloc( sizeof( STRING_LITERAL ) );
++            memset( low, 0, sizeof( *low ) );
++            memset( high, 0, sizeof( *high ) );
++            low->length = size;
++            low->literal = CMemAlloc( size );
++            memcpy( low->literal, bytes, size );
++            high->length = oldsize - size;
++            high->literal = CMemAlloc( oldsize - size );
++            memcpy( high->literal, bytes + size, oldsize - size );
++            dq->type = ndq->type = QDT_CONST;
++            dq->u.string_leaf = low;
++            ndq->u.string_leaf = high;
++            size = 0;
+         }
+     }
+     if( size != 0 ) {
+@@ -629,6 +655,17 @@
+     dqp = &CurDataQuad->next->dq;
+     if( dqp->type == QDT_CONSTANT )
+         return;
++    if( dqp->type == QDT_CONST ) {
++        /*
++         * qbopt: bytes left by SplitDataQuad
++         */
++        unsigned char   bytes[8];
++
++        memset( bytes, 0, sizeof( bytes ) );
++        memcpy( bytes, dqp->u.string_leaf->literal, dqp->u.string_leaf->length < 8 ? dqp->u.string_leaf->length : 8 );
++        memcpy( val64, bytes, sizeof( bytes ) );
++        return;
++    }
+     if( CurDataQuad->next->size == TARGET_LONG64 ) {
+         *val64 = dqp->u.long64;
+     } else {
+@@ -1032,8 +1069,11 @@
          break;
      case TYP_LONG_DOUBLE:
      case TYP_LDIMAGINARY:

@@ -29,39 +29,6 @@ pub fn flag(name: &str) -> Option<u32> {
     FLAGS.iter().find(|(one, _)| *one == name).map(|(_, bit)| *bit)
 }
 
-/// `ir::Operation`'s variants, as x86.instr spells each (`Operation::as_str`).
-pub const OPERATIONS: [(&str, &str); 29] = [
-    ("move", "Move"),
-    ("xchg", "Exchange"),
-    ("addr", "Address"),
-    ("binary", "Binary"),
-    ("mul", "Multiply"),
-    ("div", "Divide"),
-    ("cmp", "Compare"),
-    ("unary", "Unary"),
-    ("funnel", "Funnel"),
-    ("extend", "Extend"),
-    ("push", "Push"),
-    ("pop", "Pop"),
-    ("leave", "Leave"),
-    ("fill", "Fill"),
-    ("jump", "Jump"),
-    ("branch", "Branch"),
-    ("escape", "Escape"),
-    ("call", "Call"),
-    ("ret", "Return"),
-    ("nothing", "Nothing"),
-    ("restore", "Restore"),
-    ("data", "Data"),
-    ("fload", "FloatLoad"),
-    ("fstore", "FloatStore"),
-    ("farith", "FloatArith"),
-    ("farithp", "FloatArithPop"),
-    ("funary", "FloatUnary"),
-    ("barrier", "Barrier"),
-    ("copy", "Copy"),
-];
-
 #[derive(Debug)]
 pub struct Shape {
     pub dests: usize,
@@ -94,12 +61,13 @@ impl Table {
     }
 }
 
-pub fn operation(spelled: &str) -> Option<&'static str> {
-    OPERATIONS.iter().find(|(one, _)| *one == spelled).map(|(_, variant)| *variant)
+/// The variant of `ir::Operation` that x86.instr spells `spelled`.
+pub fn operation(spelled: &str) -> Option<String> {
+    llrm_lir::Operation::named(spelled).map(|op| format!("{op:?}"))
 }
 
 pub fn variant(name: &str) -> bool {
-    OPERATIONS.iter().any(|(_, variant)| *variant == name)
+    llrm_lir::Operation::ALL.iter().any(|op| format!("{op:?}") == name)
 }
 
 /// As `llrm_x86_m16::instructions::flags`: what iced's Code reads, and

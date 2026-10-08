@@ -10,16 +10,17 @@ from pathlib import Path
 
 import pytest
 
-from tools import llrmbin
+from tools import linkrecipe, llrmbin
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = llrmbin.bin_dir()
 DOT = ROOT / "examples" / "dot"
 
 CASES = [
-    ("C", [str(BIN / "llrm-c"), "dot.c", "-march=i486"], "_dot"),
+    # C's function is spelled as the default ABI of m16 spells it (`_dot@3`); Nib's own procedures are not decorated.
+    ("C", [str(BIN / "llrm-c"), "dot.c", "-march=i486"], linkrecipe.symbol("x86-m16", "dot")),
     ("Nib", [str(BIN / "llrm-nib"), "dot.nib", "--entry", "dot", "-march=i486"], "_dot"),
-    ("BASIC", [str(BIN / "llrm-qb"), "dot.bas", "--dialect", "qb45", "--runtime", "qb45", "-march=i486", "-O3", "--whole-program", "-fno-inline-functions-called-once"], "DOT"),
+    ("BASIC", [str(BIN / "llrm-qb"), "dot.bas", "--dialect", "qb45", "--runtime", "qb45", "-march=i486", "-Omax", "--whole-program", "-fno-inline-functions-called-once"], "DOT"),
 ]
 
 

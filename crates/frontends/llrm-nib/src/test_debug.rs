@@ -47,7 +47,7 @@ fn compiled(inlined: bool) -> Vec<Rc<omf::Record>> {
     omf::parse(&crate::compile::object(&module, Path::new("probe.nib"), CodeLayout::OneSegment, llrm_target::object::Format::Omf).expect("writes")).expect("parses")
 }
 
-/// Each source parameter, local and module variable with its Nib type; no
+/// Each source local and module variable, and each parameter (a stack one an argument, a register one a cell of the frame), with its Nib type; no
 /// compiler temporary.
 #[test]
 fn nib_symbols_read_with_their_types() {
@@ -62,9 +62,10 @@ fn nib_symbols_read_with_their_types() {
             "LOCAL main.small: UNSIGNED CHAR",
             "LOCAL main.values: 8 BYTES OF SHORT",
             "LOCAL scale.doubled: LONG",
-            "PARAM scale.factor: SHORT",
-            // A struct passed by value travels as a far pointer to it.
-            "PARAM scale.p: FAR * struct point {x +0 SHORT, y +2 LONG}",
+            "LOCAL scale.factor: SHORT",
+            // `scale`'s parameters arrive in registers (regparm3), stored to a cell at the entry (#883): locals of the frame. A struct
+            // passed by value travels as a far pointer to it.
+            "LOCAL scale.p: FAR * struct point {x +0 SHORT, y +2 LONG}",
             "PROC main far () -> SHORT",
             "PROC scale near (FAR * struct point {x +0 SHORT, y +2 LONG}, SHORT) -> LONG",
             "UDT point: struct point {x +0 SHORT, y +2 LONG}",

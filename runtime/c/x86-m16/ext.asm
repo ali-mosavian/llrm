@@ -237,4 +237,38 @@ _keep32@3 proc far
     retf
 _keep32@3 endp
 
+public _touch@3
+_touch@3 proc far
+    retf
+_touch@3 endp
+
+public _tick@3
+_tick@3 proc far
+    inc word ptr ticks
+    retf
+_tick@3 endp
+
+public _tick_count@3
+_tick_count@3 proc far
+    xor ax, ax
+    xchg ax, word ptr ticks
+    retf
+_tick_count@3 endp
+
+; void lcopy(void far *d, void far *s, unsigned n): n in AX, the pointers on the stack
+public _lcopy@3
+_lcopy@3 proc far
+    push bp
+    mov bp, sp
+    push ax
+    push word ptr [bp+12]
+    push word ptr [bp+10]
+    push word ptr [bp+8]
+    push word ptr [bp+6]
+    call far ptr _lcopy
+    add sp, 10
+    pop bp
+    retf
+_lcopy@3 endp
+
 end

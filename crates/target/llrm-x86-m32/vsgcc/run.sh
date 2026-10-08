@@ -4,6 +4,7 @@
 set -eo pipefail   # a harness that fails (an unresolved symbol) stops the run, not a blank row
 R=$(cd "$(dirname "$0")/../../../.." && pwd); H=$R/crates/target/llrm-x86-m32/vsgcc; export VSGCC_WORK=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}
 PROGS=$(ls $R/bench | grep -v -E "readme|parity|huge|textfill|grep")   # 16-bit only, no input, or timed only
+PROGS="$PROGS $(ls $H/kernels)"                                          # the x_ kernels
 mkdir -p $VSGCC_WORK
 (cd $R && cargo build --release --bin llrm-c -q)
 gcc -m32 -c $H/stub.s -o $VSGCC_WORK/stub.o && ld -m $(python3 $R/tools/linkrecipe.py x86-m32 ld-emulation) -static -e 0 -Ttext=0x8000 -o $VSGCC_WORK/stub.elf $VSGCC_WORK/stub.o
