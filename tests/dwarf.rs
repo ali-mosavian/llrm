@@ -479,3 +479,25 @@ fn g_leaves_the_code_of_the_basic_and_nib_bench_programs_alone() {
     }
     assert!(differing.is_empty(), "-g changed the code of {differing:?}");
 }
+
+/// The front end lists, for `-g`, every extern a header declares, used or not; each was an `extern` in the object (a symbol it asks the
+/// linker for), so a program built with `-g` differed from one built without by the symbols it asked for. gcc's undefined symbols are
+/// the ones the code names, whatever `-g` describes.
+#[test]
+fn an_extern_nothing_names_is_asked_of_no_linker_with_g_or_without() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("ext.c");
+    std::fs::write(&source, "extern int unused_one;\nextern char unused_two[4];\nextern int used;\nint main(void) { return used; }\n").unwrap();
+    for machine in ["-m16", "-m32"] {
+        let assembly = |debug: bool| {
+            let out = scratch.path().join("x.s");
+            let flags: Vec<&str> = [machine, "-fobject-format=omf", "-O2", "-S"].into_iter().chain(debug.then_some("-g")).collect();
+            let made = compile(&source, &flags, &out);
+            assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+            std::fs::read_to_string(&out).unwrap()
+        };
+        let plain = assembly(false);
+        assert!(plain.contains("used") && !plain.contains("unused"), "the instrument: without -g only the used extern is declared\n{plain}");
+        assert_eq!(plain, assembly(true), "{machine}");
+    }
+}
