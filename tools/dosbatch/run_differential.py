@@ -22,6 +22,8 @@ llrmbin = dosbatch.llrmbin
 import run_tests  # noqa: E402
 from dosbatch import ROOT, Job  # noqa: E402
 from run_tests import Program, first_difference, lines  # noqa: E402
+import os
+os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
 
 CASES = ROOT / "tests" / "differential" / "qb-bc"
 

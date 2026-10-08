@@ -451,6 +451,14 @@ pub fn gap(body: &LirBody, facts: &Facts, matcher: &Matcher, skip: Skip, first_o
         let work: Vec<usize> = (0..original.len()).filter(|at| !skip.skips(&original[*at])).collect();
         let mut at = 0;
         while at < work.len() {
+            // A slot an earlier match rewrote or consumed starts no match: the original it held is the instruction that match
+            // took away, and writing it back wrote a read of a value the match had made unread (`mov al,[m]; movsx ax,al;
+            // movsx eax,ax`: the load and the first movsx fused, then the two movsx matched on the original first and read the
+            // load's value that no longer had a definition).
+            if first_original && !Arc::ptr_eq(&original[work[at]], &insns[work[at]]) {
+                at += 1;
+                continue;
+            }
             let first = if first_original { Arc::clone(&original[work[at]]) } else { Arc::clone(&insns[work[at]]) };
             let mut next = at + 1;
             let head = Window { insns: vec![&first], at: vec![work[at]], list: &insns, gap: &[] };

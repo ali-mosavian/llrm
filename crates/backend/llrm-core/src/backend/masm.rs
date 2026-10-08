@@ -255,6 +255,37 @@ pub enum Mark {
     /// The call before it popped this many bytes of its arguments as it returned: the stack is that much higher
     /// from here.
     Pops(i64),
+    /// The instruction before it made value `tag` (by the number its register had in SSA), in `place`.
+    Def { tag: u32, place: Place },
+    /// Note `note` of the body (`LirBody::notes`) stands here.
+    Note(u32),
+    /// The call before it clobbers this register (one mark for each it clobbers).
+    Clobbered(Register),
+}
+
+/// Where an instruction put a value `-g` names.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Place {
+    Register(Register),
+    /// A frame cell, as the frame register would address it at this displacement.
+    Cell { disp: i64, bytes: u32 },
+}
+
+/// The arguments the caller pushed, as values in their cells from the first byte.
+fn blocks_arguments(body: &lir::LirBody) -> Vec<Item> {
+    body.arguments_in_cells.iter().map(|&(tag, disp, bytes)| Item::Mark(Mark::Def { tag, place: Place::Cell { disp, bytes } })).collect()
+}
+
+/// Where an instruction wrote `dest`, if a debugger can be told: a register, or a frame cell addressed by displacement alone.
+fn placed(dest: &Loc) -> Option<Place> {
+    match dest {
+        Loc::Reg(ir::Reg { register, .. }) => Some(Place::Register(*register)),
+        Loc::Mem(cell) => match &cell.addr {
+            Some(addr) if addr.space == Space::Frame && cell.index.is_none() && cell.base.is_none() => Some(Place::Cell { disp: addr.disp, bytes: cell.width }),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn reg(register: Register) -> Loc {
@@ -352,7 +383,7 @@ fn wrap_of(procedure: &Procedure) -> Option<crate::backend::shrinkwrap::Wrap> {
 
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
-    parts(procedure, stack_addressed(procedure, 0).is_some())
+    parts(procedure, frame_omitted(procedure, 0).is_some())
 }
 
 /// `_frame_parts`, with no frame register where `omit`: the entry sets none and the return takes back
@@ -366,7 +397,9 @@ fn parts(procedure: &Procedure, omit: bool) -> (Vec<Semantics>, Vec<Semantics>) 
     // no sign to say whether it lies above that cell or below it, so every one keeps its distance from it.
     let reserve = if omit && reserve != 0 { reserve + slot } else { reserve };
     // Inline code is bytes this printer cannot read, so it may address the frame.
+    // A frame the runtime's entry built (B$ENRA, B$ENRD) is not built again by a shell of ours.
     let framed = !omit
+        && procedure.entry == 0
         && (reserve != 0
             || roots.contains(&ir::root(procedure.registers.pointer))
             || procedure.callees.values().any(|one| !one.code.is_empty()));
@@ -489,7 +522,7 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
 /// The procedure as emitted, frame included: what this prints and objbuild
 /// encodes. A branch's target is still a block; `label(number, at)` names it.
 pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprintable> {
-    let items = match stack_addressed(procedure, number) {
+    let items = match frame_omitted(procedure, number) {
         Some(items) => items,
         None => built(procedure, number, false)?,
     };
@@ -518,7 +551,17 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
     let mut line = first.and_then(|one| one.line);
     let mut lines = 0..;
     let mut marked = |line: u32| Item::Mark(Mark::Line { line, index: lines.next().expect("unbounded") });
-    let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(enter.into_iter().map(Item::Semantics)).collect();
+    // The arguments are in their registers from the first byte: what the entry says of them stands before the prologue.
+    let arrival = blocks.iter().flat_map(|block| &block.insns).find(|one| one.arrival());
+    let arrived: Vec<Item> = arrival
+        .into_iter()
+        .flat_map(|one| {
+            let defined = one.delivers.iter().zip(&one.debug.defines).filter(|(_, tag)| **tag != u32::MAX).map(|((_, register), tag)| Item::Mark(Mark::Def { tag: *tag, place: Place::Register(*register) }));
+            defined.chain(one.debug.before.iter().map(|&note| Item::Mark(Mark::Note(note)))).collect::<Vec<_>>()
+        })
+        .collect();
+    let cells = blocks_arguments(&procedure.body);
+    let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(arrived).chain(cells).chain(enter.into_iter().map(Item::Semantics)).collect();
     for (index, block) in blocks.iter().enumerate() {
         out.push(Item::Label(Label { name: label(number, block.at) }));
         if wrap.as_ref().is_some_and(|wrap| wrap.at == block.at) {
@@ -529,6 +572,10 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
         for one in &block.insns {
             if first.is_some_and(|first| Arc::ptr_eq(first, one)) {
                 out.push(Item::Mark(Mark::BodyStart));
+            }
+            // What is said before an instruction stands there whether or not it is emitted: a jump to the next block is not.
+            if !one.arrival() {
+                out.extend(one.debug.before.iter().map(|&note| Item::Mark(Mark::Note(note))));
             }
             if fallthrough.is_some_and(|jump| Arc::ptr_eq(jump, one)) {
                 if last.is_some_and(|last| Arc::ptr_eq(last, one)) {
@@ -569,6 +616,9 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
                         if callee.pops != 0 && callee.code.is_empty() && first.is_some() {
                             out.push(Item::Mark(Mark::Pops(callee.pops)));
                         }
+                        if first.is_some() {
+                            out.extend(one.clobbers.iter().map(|&register| Item::Mark(Mark::Clobbered(register))));
+                        }
                     }
                 }
                 Operation::Return => {
@@ -592,6 +642,13 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
                 }
                 _ => out.push(Item::Semantics(what.clone())),
             }
+            // Where the values it made went, for a debugger: the register or frame cell it wrote.
+            if let Some(place) = what.dests.first().and_then(placed) {
+                out.extend(one.debug.defines.iter().map(|&tag| Item::Mark(Mark::Def { tag, place })));
+            } else {
+                // A call's result comes back in the register it says it delivers.
+                out.extend(one.delivers.iter().filter(|(held, _)| one.debug.defines.contains(&held.value)).map(|(held, register)| Item::Mark(Mark::Def { tag: held.value, place: Place::Register(*register) })));
+            }
             if last.is_some_and(|last| Arc::ptr_eq(last, one)) {
                 out.push(Item::Mark(Mark::BodyEnd));
             }
@@ -612,6 +669,26 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
         out.push(Item::Callee(Callee::new(check.handler.clone(), check.far)));
     }
     Ok(out)
+}
+
+/// `stack_addressed`, but tuned for size only where it is no longer: `[esp+d]` is a byte longer than `[ebp+d]`, and a
+/// displacement past 127 three more, which a large frame's cells can cost more than the entry and return save.
+fn frame_omitted(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
+    let omitted = stack_addressed(procedure, number)?;
+    if !procedure.size {
+        return Some(omitted);
+    }
+    let bytes = |items: &[Item]| -> usize {
+        items
+            .iter()
+            .filter_map(|item| match spelled(item.clone(), &procedure.registers) {
+                Item::Semantics(what) => select::emit_in(procedure.body.bits, &what, 0, None, false, false, None).map(|one| one.code.len()),
+                _ => None,
+            })
+            .sum()
+    };
+    let framed = built(procedure, number, false).ok()?;
+    (bytes(&omitted) <= bytes(&framed)).then_some(omitted)
 }
 
 /// What removes `bytes` of arguments (`address` bytes of return address on top) where `ret imm16` cannot: the return address is
@@ -689,6 +766,9 @@ fn stack_addressed(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
                             _ => return refused(procedure, &format!("{what:?}")),
                         }
                     }
+                    // An x87 register exchange and the x87 and port instructions that name no stack effect leave the stack pointer alone.
+                    Operation::Exchange if what.dests.iter().chain(&what.sources).all(|place| matches!(place, Loc::St(_))) => {}
+                    Operation::Barrier if matches!(what.name.as_deref(), Some("fnstcw" | "fldcw" | "fnstsw" | "in" | "out")) => {}
                     Operation::Leave | Operation::Exchange | Operation::Escape | Operation::Barrier | Operation::Call => return refused(procedure, &format!("{what:?}")),
                     // `pushf` and its kind move the stack and carry no operand to read the amount from.
                     Operation::Nothing if what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")) => return refused(procedure, &format!("{what:?}")),
@@ -931,6 +1011,10 @@ pub fn _roots(body: &lir::LirBody) -> BTreeSet<Register> {
                 }
                 Loc::Mem(ir::Mem { through, index_through, .. }) => {
                     found.extend([*through, *index_through].map(ir::root));
+                }
+                // `lea` of a cell reads the register the cell is addressed through as much as a load of it does.
+                Loc::Address(ir::Address { through, index, .. }) => {
+                    found.extend([*through, *index].map(ir::root));
                 }
                 _ => {}
             }

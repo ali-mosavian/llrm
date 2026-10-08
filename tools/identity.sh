@@ -13,6 +13,7 @@
 # The -m flag is passed to the compiler (default: its own, m16).
 #
 # Prints a count of each outcome and the programs that are not SAME; exit 1 if any DIFF or STATUS.
+export LLRM_VERIFY=${LLRM_VERIFY:-1}  # the gate checks each pass and phase
 set -u
 kind=${1:?kind: nib, c or qcport}; base=${2:?base compiler}; new=${3:?new compiler}; shift 3
 target=()

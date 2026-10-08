@@ -375,7 +375,7 @@ pub fn joined(function: &mut Function, insert: bool) -> Result<bool, String> {
     }
     // A provider replaced in turn reaches each phi naming it through this.
     for (&value, &with) in &replacements {
-        function.replace_all_uses_with(value, with);
+        function.replace_value(value, with);
     }
     for inst in erased {
         function.erase(inst)?;

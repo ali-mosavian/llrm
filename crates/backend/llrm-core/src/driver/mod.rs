@@ -174,6 +174,11 @@ pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, 
     let target = std::rc::Rc::new(crate::abi::qb::LoweredTarget::of(options.cpu()?, crate::abi::qb::HirAbi::of(program)?));
     let mut linked = timed("mir link", || linked(modules, runtime, target))?;
     linked.exports.entries = program.entries.iter().cloned().collect();
+    if crate::support::debug::enabled("mir") {
+        let bodies = || linked.modules.iter().flat_map(|module| module.globals.iter().filter_map(|global| global.function()).filter(|one| !one.is_declaration()));
+        let instructions: usize = bodies().map(|one| one.layout().iter().map(|&block| one.block(block).instructions().len()).sum::<usize>()).sum();
+        llrm_support::debug!("mir", "functions {} instructions {}", bodies().count(), instructions);
+    }
     Ok((linked, data))
 }
 
@@ -190,6 +195,10 @@ pub fn linked(modules: Vec<Module>, runtime: Module, target: std::rc::Rc<dyn llr
 /// module verified after.
 pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String> {
     let applied = llrm_transforms::pipeline::Applied { options: options.pipeline.clone(), dump: options.dump.clone(), ..Default::default() };
+    // The debug format finds a variable from what the notes say, so its stores need not be kept for a debugger that reads its cell.
+    if options.cfa_locations() {
+        program.modules.iter_mut().for_each(lifted);
+    }
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
     // Nothing optimises at -O0, so nothing needs a variable's stores kept for a debugger that reads its cell.
     if !options.pipeline.optimize && options.cfa_locations() {
@@ -205,6 +214,9 @@ pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String>
     }
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {
         timed("mir spill model", || spill_model(program));
+    }
+    if !llrm_support::debug::verifying() {
+        return Ok(());
     }
     timed("mir verify pipeline", || verified(program, "the pipeline"))
 }
@@ -223,6 +235,8 @@ fn lifted(module: &mut Module) {
                 llrm_mir::Opcode::Call(_) => function.set_operand(inst, 3, llrm_mir::Operand::Constant(no)),
                 _ => {}
             }
+            // The mark has done its work; metadata on an instruction is something a pass tells it from another by.
+            function.unannotate(inst, llrm_mir::debuginfo::OBSERVED);
         }
     }
 }

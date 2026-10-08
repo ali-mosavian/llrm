@@ -358,6 +358,11 @@ struct Tables<'h> {
 /// The `!dbg` metadata kind: the source line an instruction came from.
 pub const DEBUG_LINE: &str = "dbg";
 
+/// Node numbers the lowering names `-g`'s nodes by until they are made, past any a module has.
+const PROVISIONAL_OBSERVED: MetadataId = MetadataId(0x7000_0000);
+const PROVISIONAL_LINES: u32 = 0x6000_0000;
+pub(crate) const PROVISIONAL_VARIABLES: u32 = 0x4000_0000;
+
 /// A `!{i32 line}` node for each line `hir`'s instructions name.
 fn line_nodes(module: &mut Module, hir: &model::Module) -> HashMap<i64, MetadataId> {
     let i32 = module.context.types.int(32);
@@ -488,7 +493,6 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
         variables: HashMap::new(),
         observed: None,
     };
-    tables.lines = line_nodes(&mut module, hir);
     tables.tags.arrays(&mut module, hir);
     match fact_nodes(&mut module, &tables.spaces, hir, &tables.types) {
         Ok((nodes, accesses, terminators)) => (tables.fact_nodes, tables.accesses, tables.terminator_nodes) = (nodes, accesses, terminators),
@@ -587,13 +591,14 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
         let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { unreachable!("a variable") };
         variable.initializer = Some(initializer);
     }
-    match debug::emitted(&mut module, &tables, hir, &data, &declared) {
-        Ok(variables) => tables.variables = variables,
-        Err(why) => refused.push((hir.name.clone(), why)),
-    }
+    // What `-g` adds to the metadata comes after all that the code is made of, so that the numbers of the nodes the optimiser reads
+    // are the same with and without it (a pass that orders by node number would otherwise order differently). The code is lowered
+    // naming those nodes by numbers it chooses; the nodes are made last and the code renumbered.
+    tables.variables = debug::provisional(hir);
     if !tables.variables.is_empty() {
-        tables.observed = Some(llrm_mir::debuginfo::observed_node(&mut module));
+        tables.observed = Some(PROVISIONAL_OBSERVED);
     }
+    tables.lines = hir.functions.iter().flat_map(|one| &one.blocks).flat_map(|one| &one.instructions).filter_map(|one| one.line).map(|line| (line, MetadataId(PROVISIONAL_LINES + line as u32))).collect();
     let statements = hir.statements();
     let rows = statements.clone().unwrap_or_default();
     // A RESUME marker the body falls into raises; the handlers' markers do not.
@@ -655,6 +660,21 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
         }
     }
     meaning::defined(&mut module, &layout.spaces, promises);
+    // The nodes the lowering named by chosen numbers.
+    let mut real: HashMap<MetadataId, MetadataId> = HashMap::new();
+    match debug::emitted(&mut module, &tables, hir, &data, &declared) {
+        Ok(variables) => real.extend(variables.into_iter().filter_map(|(key, node)| tables.variables.get(&key).map(|chosen| (*chosen, node)))),
+        Err(why) => refused.push((hir.name.clone(), why)),
+    }
+    if tables.observed.is_some() {
+        real.insert(PROVISIONAL_OBSERVED, llrm_mir::debuginfo::observed_node(&mut module));
+    }
+    real.extend(line_nodes(&mut module, hir).into_iter().map(|(line, node)| (MetadataId(PROVISIONAL_LINES + line as u32), node)));
+    for global in &mut module.globals {
+        if let llrm_mir::GlobalKind::Function(function) = &mut global.kind {
+            function.renumber_metadata(&|node| real.get(&node).copied().unwrap_or(node));
+        }
+    }
     Emitted { module, refused, data }
 }
 
@@ -1531,6 +1551,8 @@ struct Body<'b, 'm, 'h> {
     addresses: HashMap<i64, i64>,
     /// The addresses of the variables `-g` declares.
     declared_addresses: HashSet<i64>,
+    /// Of those, the ones that are an address into a variable, with the variable, how far into it, and how many bytes it is.
+    declared_offsets: HashMap<i64, (MetadataId, i64, i64)>,
     handling: Option<handling::Handling>,
     /// The module handler, where this emits its own function.
     outlined: Option<handling::Outlined>,
@@ -1566,6 +1588,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             objects: Vec::new(),
             addresses: HashMap::new(),
             declared_addresses: HashSet::new(),
+            declared_offsets: HashMap::new(),
             handling: None,
             outlined: None,
             destination,
@@ -1608,6 +1631,39 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     /// A debugger reads a declared variable from its cell at any time, so every store into one stays, in order, as a volatile
     /// one does: not only those the language writes as stores to the variable, but any through an address into it. The
     /// optimiser asks nothing else; `-g` of a variable the allocator keeps in a register will not need it.
+    /// A store of `value` to the declared place `place` says so to the debugger from the next instruction on: the variable, or the
+    /// bytes of it a member is, has the value. A store the optimiser may delete leaves that, where it left the cell.
+    fn say_stored(&mut self, place: &Operand, value: llrm_mir::Operand) {
+        // The variable, how far into it the store is, how many bytes it writes, and how many the variable is.
+        let (variable, at, bytes, whole) = match place {
+            Operand::PlaceRef(one) => {
+                let Some(&variable) = self.tables.variables.get(&(self.function.id, one.place)) else { return };
+                let place = self.places[&one.place];
+                let width = place.extent.unwrap_or(self.tables.types[&place.r#type].width);
+                (variable, 0, width, width)
+            }
+            Operand::ProjectedPlace(one) if one.indices.iter().all(|index| matches!(index, Operand::Constant(_))) => {
+                let Some(&variable) = self.tables.variables.get(&(self.function.id, one.place)) else { return };
+                let place = self.places[&one.place];
+                (variable, one.offset, self.tables.types[&one.r#type].width, place.extent.unwrap_or(self.tables.types[&place.r#type].width))
+            }
+            Operand::IndirectPlace(one) => {
+                let Some(&(variable, at, whole)) = self.declared_offsets.get(&one.base) else { return };
+                (variable, at + one.offset, self.tables.types[&one.r#type].width, whole)
+            }
+            _ => return,
+        };
+        let what = if at == 0 && bytes == whole {
+            llrm_mir::DebugWhat::Value(value)
+        } else {
+            match (u32::try_from(at), u32::try_from(bytes)) {
+                (Ok(offset), Ok(bytes)) => llrm_mir::DebugWhat::Piece { value, offset, bytes },
+                _ => return,
+            }
+        };
+        self.b.debug_say(variable, what);
+    }
+
     /// The instruction made as the `first`th is volatile for `-g`'s sake alone.
     fn observe(&mut self, first: usize) {
         if let Some(node) = self.tables.observed {
@@ -2041,6 +2097,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             // An address of a declared variable moved by an offset is an address into it: a store through it is a store to it.
             if matches!(op, Op::Add | Op::Sub) && instruction.operands.iter().any(|one| matches!(one, Operand::ValueRef(value) if self.declared_addresses.contains(&value.value))) {
                 self.declared_addresses.insert(instruction.results[0]);
+                if let [Operand::ValueRef(base), Operand::Constant(model::Constant { value: model::Number::Int(step), .. })] = &instruction.operands[..]
+                    && let Some(&(variable, at, bytes)) = self.declared_offsets.get(&base.value)
+                    && let Ok(step) = i64::try_from(*step)
+                {
+                    self.declared_offsets.insert(instruction.results[0], (variable, at + if op == Op::Sub { -step } else { step }, bytes));
+                }
             }
             self.define(instruction, result);
             return Ok(());
@@ -2173,6 +2235,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 self.b.store(value, pointer, volatile || observed);
                 if observed && !volatile {
                     self.observe(first);
+                    self.say_stored(&instruction.operands[0], value);
                 }
                 self.tagged(tag);
                 self.stated_access(&instruction.operands[0], false);
@@ -2198,6 +2261,18 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 };
                 if let (true, Some(&result)) = (self.declared_place(&instruction.operands[0]), instruction.results.first()) {
                     self.declared_addresses.insert(result);
+                    // Where in which variable the address is, if it is a place or a member of one.
+                    let (id, at) = match &instruction.operands[0] {
+                        Operand::PlaceRef(one) => (Some(one.place), 0),
+                        Operand::ProjectedPlace(one) if one.indices.iter().all(|index| matches!(index, Operand::Constant(_))) => (Some(one.place), one.offset),
+                        _ => (None, 0),
+                    };
+                    if let Some(id) = id
+                        && let Some(&variable) = self.tables.variables.get(&(self.function.id, id))
+                    {
+                        let place = self.places[&id];
+                        self.declared_offsets.insert(result, (variable, at, place.extent.unwrap_or(self.tables.types[&place.r#type].width)));
+                    }
                 }
                 if let (Operand::PlaceRef(one), Some(&result)) = (&instruction.operands[0], instruction.results.first()) {
                     let place = self.places[&one.place];

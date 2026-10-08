@@ -135,7 +135,7 @@ impl Writer<'_> {
                         at(out);
                         Ok(())
                     })?,
-                    Location::List(_) | Location::Static { .. } => return refused("a location list holds only registers and frame cells"),
+                    Location::List(_) | Location::Static { .. } | Location::Constant(_) | Location::Pieces(_) => return refused("a location list holds only registers and frame cells"),
                 }
             }
         }
