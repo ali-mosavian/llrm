@@ -120,7 +120,9 @@ def built(sha: str) -> Path:
         git("checkout", "--detach", "--force", sha, cwd=tree)
     env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
     env.pop("LLRM_BIN", None)
-    subprocess.run(["bash", "-c", gate.BUILD], cwd=tree, env=env, check=True)
+    done = subprocess.run(["bash", "-c", gate.BUILD], cwd=tree, env=env, capture_output=True, text=True)
+    if done.returncode:
+        raise SystemExit(f"measure: the base {sha[:9]} does not build:\n{done.stderr[-2000:]}")
     return BUILD / "target" / "release"
 
 
@@ -224,7 +226,8 @@ def check(jobs: int, ref: str) -> int:
     lines, bad = rises(base, now)
     print(f"measured against {base_sha[:9]}")
     print("\n".join(lines))
-    if not git("status", "--porcelain", "--untracked-files=no") and stored(head, now["method"]) is None:
+    # A commit of the reference branch is a base for the next branches; a branch's own head is not.
+    if not git("status", "--porcelain", "--untracked-files=no") and stored(head, now["method"]) is None and subprocess.run(["git", "merge-base", "--is-ancestor", head, ref], cwd=ROOT).returncode == 0:
         save(head, now)
     if bad:
         print("COMPILE COST RISE:", *bad, sep="\n  ")

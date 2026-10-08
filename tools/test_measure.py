@@ -104,6 +104,6 @@ def test_a_base_is_built_the_way_the_gate_builds(tmp_path, monkeypatch):
     ran = []
     monkeypatch.setattr(measure, "BUILD", tmp_path)
     monkeypatch.setattr(measure, "git", lambda *args, **kw: "")
-    monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command))
+    monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
     assert measure.built("0" * 40) == tmp_path / "target" / "release"
     assert ran == [["bash", "-c", measure.gate.BUILD]]

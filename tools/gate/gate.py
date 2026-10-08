@@ -333,6 +333,10 @@ def watch_main(force: bool, every: int = 5, hours: float = 2.0) -> int:
     git("checkout", "-q", "--detach", "origin/main")
     git("clean", "-ffdxq")
     head, green = git("rev-parse", "HEAD"), state.get("green")
+    # Every commit of main this run sees gets its measurement (tools/measure.py): the base of the next branch from it.
+    if not list((Path(os.environ.get("LLRM_MEASURE_DIR") or Path.home() / ".cache/llrm/measure")).glob(f"{head}-*.json")):
+        full = plan(["Cargo.toml"], "full")
+        execute(restricted(full, ["measure"], set(commands(full, load(), packages())) | set(load()["exclusive"])))
     merges = len(git("rev-list", "--first-parent", f"{green}..{head}").split()) if green else every
     if not (force or merges >= every or merges and time.time() - state.get("when", 0) >= hours * 3600):
         print(f"main: {merges} merges since the last green; not due")
