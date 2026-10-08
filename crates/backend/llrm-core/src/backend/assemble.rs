@@ -360,7 +360,7 @@ fn directed(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>
     if traffic < SPILLER_TRAFFIC * all {
         return Ok(alone);
     }
-    let (spilled, ran) = timed("candidate spiller", || phased(module, name, abi, pool, target, hole, true, true))?;
+    let Some((spilled, ran)) = timed("candidate spiller", || phased_to(module, name, abi, pool, target, hole, true, true, true))? else { return Ok(alone) };
     let kept = match timed("candidate cost", || (cost(&spilled.0, target), cost(&alone.0, target))) {
         (Some(with), Some(without)) if without < with => return Ok(alone),
         _ => spilled,
@@ -452,6 +452,13 @@ fn far_frame(body: &LirBody) -> usize {
 /// not (`admission`); and what the spiller settled.
 #[allow(clippy::too_many_arguments)]
 fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64, spilling: bool, admission: bool) -> Result<((Machined, frame::Frame), Rc<ssaspill::Run>), String> {
+    Ok(phased_to(module, name, abi, pool, target, hole, spilling, admission, false)?.expect("a route that runs to its end"))
+}
+
+/// `phased`; or, where `until_changed`, none if the spiller left the body as it was: the rest of that route is the
+/// allocator alone's, which the caller has.
+#[allow(clippy::too_many_arguments)]
+fn phased_to(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64, spilling: bool, admission: bool, until_changed: bool) -> Result<Option<((Machined, frame::Frame), Rc<ssaspill::Run>)>, String> {
     PHASED.with(|count| count.set(count.get() + 1));
     let run = ssaspill::Run::new(admission);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
@@ -483,6 +490,9 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
         if let Some(before) = &kept {
             body = body.with_notes_kept(before).with_defs_kept(before);
         }
+        if until_changed && phase.class_name() == "SsaSpill" && !run.changed() {
+            return Ok(None);
+        }
         if phase.class_name() == "PhiElimination" {
             body = body.with_phi_copies_noted();
         }
@@ -499,7 +509,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
         }
         None => (body, None),
     };
-    Ok(((Machined { body, reserve, calls, inline, inline_places, far, pops, popped: convention.popped, registers, landing }, frame), run))
+    Ok(Some(((Machined { body, reserve, calls, inline, inline_places, far, pops, popped: convention.popped, registers, landing }, frame), run)))
 }
 
 /// `body` with its landing pad, the block `marker` starts, laid out last:
