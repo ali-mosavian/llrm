@@ -1,5 +1,7 @@
 # The second frame: lay the frame out again, not run the backend again
 
+Status: step 1 is in (#919); step 2 is #930 (`backend/relayout.rs`, `select::priced_in`, `LLRM_CHECK_FRAME`): the second layout is made from the first run's frame; every pricing and encodability call prices a frame cell as near, since a price that knew a displacement made the two layouts decide differently on m32 (sieve `-m32 -O2`: `add [slot], 1` against reload, add, store). The check finds no difference on bench m32 and tests/run at `-O0/-O2/-Os`, QCport m16 at `-O0/-O2/-Os` and `-g`, and the workspace tests. Step 3, moving the readers from displacements to slot ids, is open.
+
 TL;DR: for a function whose frame has operands past `[bp-128]`, `machined_once` runs the whole backend a second time with a hole above the allocas for spill slots, and keeps the run with fewer far operands. The second body equals the first with its frame displacements changed in 270 of 270 runs on QCport (m16, `-O0`, `-O2`, `-Os`), and the run costs 24.5% (`-O0`) to 35.8% (`-O2`) of the backend's time there. Proposal: compute the second layout from the first run's frame and body, keep the old second run as the reference under `LLRM_CHECK_FRAME`.
 
 ## What happens today
