@@ -415,7 +415,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
             flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;
         if let Some(before) = &kept {
-            body = body.with_notes_kept(before);
+            body = body.with_notes_kept(before).with_defs_kept(before);
         }
         if phase.class_name() == "PhiElimination" {
             body = body.with_phi_copies_noted();

@@ -185,6 +185,62 @@ impl LirBody {
         if changed { self.with_blocks(blocks) } else { self.clone() }
     }
 
+    /// `self`, a pass's result from `old`, with the values the instructions the pass replaced defined told of the last instruction of
+    /// the block, made from the same source instruction, that writes the same place: the value is complete there.
+    #[must_use]
+    pub fn with_defs_kept(&self, old: &LirBody) -> LirBody {
+        if self.notes.is_empty() {
+            return self.clone();
+        }
+        let mut changed = false;
+        let blocks = self
+            .blocks
+            .iter()
+            .map(|block| {
+                let Some(before) = old.blocks.iter().find(|one| one.at == block.at) else { return block.clone() };
+                let alive: BTreeSet<*const Insn> = block.insns.iter().map(Arc::as_ptr).collect();
+                let present: BTreeSet<u32> = block.insns.iter().flat_map(|one| one.debug.defines.iter().copied()).collect();
+                let mut moved: Vec<(usize, Vec<u32>)> = Vec::new();
+                for one in &before.insns {
+                    if one.arrival() || alive.contains(&Arc::as_ptr(one)) {
+                        continue;
+                    }
+                    let lost: Vec<u32> = one.debug.defines.iter().copied().filter(|tag| !present.contains(tag)).collect();
+                    let dest = one.what.as_ref().and_then(|what| what.dests.first());
+                    if lost.is_empty() || dest.is_none() {
+                        continue;
+                    }
+                    let at = block.insns.iter().rposition(|now| now.at == one.at && now.what.as_ref().and_then(|what| what.dests.first()) == dest);
+                    if let Some(at) = at {
+                        moved.push((at, lost));
+                    }
+                }
+                if moved.is_empty() {
+                    return block.clone();
+                }
+                changed = true;
+                let insns = block
+                    .insns
+                    .iter()
+                    .enumerate()
+                    .map(|(index, one)| {
+                        let tags: Vec<u32> = moved.iter().filter(|(at, _)| *at == index).flat_map(|(_, tags)| tags.iter().copied()).collect();
+                        if tags.is_empty() {
+                            return Arc::clone(one);
+                        }
+                        let mut defines = one.debug.defines.clone();
+                        defines.extend(tags);
+                        defines.sort_unstable();
+                        defines.dedup();
+                        Arc::new(Insn { debug: DebugTags { defines, ..one.debug.clone() }, ..(**one).clone() })
+                    })
+                    .collect();
+                block.with_insns(insns)
+            })
+            .collect();
+        if changed { self.with_blocks(blocks) } else { self.clone() }
+    }
+
     /// `self` with a copy that defines a value `-g` names told so: the moves that phi elimination makes for a phi's result are
     /// the only instructions that make it.
     #[must_use]

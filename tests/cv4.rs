@@ -187,23 +187,46 @@ fn os_layer(field: &str) -> String {
 /// /CO, which links the whole runtime in one segment.
 #[test]
 fn codeview_debugs_a_nib_program_as_it_does_a_c_one() {
+    let Some(screen) = nib_in_codeview("p", &["-O0"], &["bp add", "g", "p"]) else { return };
+    // `add`'s parameters arrive in registers (regparm3), which a CodeView 4 record cannot say for a scope, and `-g` stores them to no
+    // cell (it changes no code): they are left out, and the local, which is in a cell, is read.
+    for expected in ["long s = 2"] {
+        assert!(screen.contains(expected), "no {expected:?} in CodeView's screen:\n{screen}");
+    }
+    assert!(!screen.contains("short a =") && !screen.contains("long b ="), "a register parameter is in CodeView's screen:\n{screen}");
+}
+
+/// A variable the allocator keeps in one register from its first value to the last statement is a register variable to CodeView
+/// (`S_REGISTER`), and its value is read there: `k` of `regvar.nib`, built optimised, lives in `bx` across the call that clobbers `ax`.
+#[test]
+fn codeview_reads_a_nib_variable_the_allocator_keeps_in_a_register() {
+    let Some(screen) = nib_in_codeview("regvar", &["-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"], &["bp work", "g", "p"]) else { return };
+    assert!(screen.contains("reg short k = 12"), "no register `k = 12` in CodeView's screen:\n{screen}");
+}
+
+/// `fixture` (a Nib program of tests/fixtures/codeview) built with `flags` as `tools/nib-build.sh` builds it, linked by MS LINK /CO, and
+/// CodeView's screen after `commands`; none where the tools are not there.
+fn nib_in_codeview(fixture: &str, flags: &[&str], commands: &[&str]) -> Option<String> {
     let (Some(microsoft), bin) = (directory("VBDOS_DIR", "work/other/d32x/toolchains/vbdos", "BIN/CV.EXE"), Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap().to_owned()) else {
         skipped("needs VB/DOS's LINK, CVPACK and CV (VBDOS_DIR)");
-        return;
+        return None;
     };
     if !dosbox::binary().exists() || !bin.join("jwasm").exists() {
         skipped("needs the DOSBox-X this crate builds and jwasm beside the compiler");
-        return;
+        return None;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    std::fs::copy(root.join("tests/fixtures/codeview/p.nib"), scratch.path().join("p.nib")).unwrap();
+    std::fs::copy(root.join(format!("tests/fixtures/codeview/{fixture}.nib")), scratch.path().join("p.nib")).unwrap();
     let run = |program: PathBuf, args: Vec<String>| {
         let done = Command::new(&program).args(&args).current_dir(root).output().unwrap();
         assert!(done.status.success(), "{} {args:?}: {}{}", program.display(), String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
     };
     let nib = bin.join("llrm-nib");
-    run(nib.clone(), vec!["-m16".into(), "-g".into(), "-O0".into(), scratch.path().join("p.nib").display().to_string(), "-o".into(), scratch.path().join("p.obj").display().to_string()]);
+    let mut arguments: Vec<String> = vec!["-m16".into(), "-g".into()];
+    arguments.extend(flags.iter().map(|one| (*one).to_owned()));
+    arguments.extend([scratch.path().join("p.nib").display().to_string(), "-o".into(), scratch.path().join("p.obj").display().to_string()]);
+    run(nib.clone(), arguments);
     run(nib, vec!["-m16".into(), "-O0".into(), root.join("crates/frontends/llrm-nib/src/runtime/runtime.nib").display().to_string(), "-o".into(), scratch.path().join("rt.obj").display().to_string()]);
     // The OS layer's start-up, its language hook and its implementation, assembled as the OS layer says.
     let layer = PathBuf::from(os_layer("directory"));
@@ -223,11 +246,5 @@ fn codeview_debugs_a_nib_program_as_it_does_a_c_one() {
         assert!(started.elapsed() < Duration::from_secs(60), "CodeView did not come up");
         std::thread::sleep(Duration::from_secs(1));
     }
-    let screen = locals(&session, &["bp add", "g", "p"]).join("\n");
-    // `add`'s parameters arrive in registers (regparm3), which a CodeView 4 record cannot say for a scope, and `-g` stores them to no
-    // cell (it changes no code): they are left out, and the local, which is in a cell, is read.
-    for expected in ["long s = 2"] {
-        assert!(screen.contains(expected), "no {expected:?} in CodeView's screen:\n{screen}");
-    }
-    assert!(!screen.contains("short a =") && !screen.contains("long b ="), "a register parameter is in CodeView's screen:\n{screen}");
+    Some(locals(&session, commands).join("\n"))
 }

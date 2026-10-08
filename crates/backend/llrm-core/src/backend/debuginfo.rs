@@ -157,7 +157,7 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
     let file = llrm_target::registers::parse(&arch.registers_text())?;
     let frame_register = llrm_target::registers::of_class(&file, "frame").first().map(|one| (*one).to_owned()).ok_or("the target's register file has no frame register")?;
     let return_register = llrm_target::registers::of_class(&file, "pc").first().map(|one| (*one).to_owned()).unwrap_or_default();
-    let frame = (near == 32).then(|| {
+    let frame = Some({
         let registers = arch.frame_registers();
         (registers.pointer, registers.stack, [arch.return_address_bytes(false), arch.return_address_bytes(true)])
     });
@@ -183,6 +183,17 @@ fn located(at: super::valuetrack::Where) -> Location {
         super::valuetrack::Where::Place(masm::Place::Cell { disp, .. }) => Location::Frame { disp },
         super::valuetrack::Where::Constant(value) => Location::Constant(value),
     }
+}
+
+/// The one place that holds a value in every range of `ranges`, which must run on from the first without a gap to the code `until`: the
+/// place, and the offset the first range starts at.
+fn stable(ranges: &[(usize, usize, Vec<super::valuetrack::Where>)], until: usize) -> Option<(usize, super::valuetrack::Where)> {
+    let (first, last) = (ranges.first()?, ranges.last()?);
+    if last.1 < until || ranges.windows(2).any(|pair| pair[0].1 != pair[1].0) {
+        return None;
+    }
+    let place = first.2.iter().copied().find(|place| matches!(place, super::valuetrack::Where::Place(_)) && ranges.iter().all(|one| one.2.contains(place)))?;
+    Some((first.0, place))
 }
 
 /// A variable's parts, each the bytes of it (none for all of it) with where it is over ranges of the code, as the variable's one
@@ -261,7 +272,7 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                 masm::Mark::Pops(bytes) if (start + 1..=end).contains(&at) => Some((at - start, bytes)),
                 _ => None,
             }).collect();
-            super::cfi::rows(&code.image[start..end], frame, stack, entry[usize::from(procedure.far)], &pops).ok()
+            super::cfi::rows(&code.image[start..end], procedure.body.bits, frame, stack, entry[usize::from(procedure.far)], &pops).ok()
         });
         for one in &procedure.body.variables {
             let r#type = type_of(one.r#type)?;
@@ -278,17 +289,41 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                 }
                 // Found over the code from what the notes say.
                 DebugPlace::Tracked(_) => {
-                    let (model::FrameBase::Cfa { bias }, Some(rows)) = (info.frame_base, frame.as_ref()) else { continue };
+                    // Where a frame register would sit below the canonical frame address: the return address and the register saved.
+                    let bias = match (info.frame_base, debug.frame) {
+                        (model::FrameBase::Cfa { bias }, _) => bias,
+                        (_, Some((.., entry))) => entry[usize::from(procedure.far)] + entry[0],
+                        _ => continue,
+                    };
+                    let Some(rows) = frame.as_ref() else { continue };
                     let DebugPlace::Tracked(node) = one.place else { unreachable!("matched above") };
                     let marks: Vec<(usize, masm::Mark)> = code.bodies.iter().filter(|&&(_, at)| (start..=end).contains(&at)).map(|&(mark, at)| (at - start, mark)).collect();
                     // A note a pass lost with the instruction it stood before leaves the variable at whatever the notes before it said,
                     // which may be a value it no longer has: a variable with one is said to be nowhere.
                     let emitted: BTreeSet<u32> = marks.iter().filter_map(|(_, mark)| if let masm::Mark::Note(note) = mark { Some(*note) } else { None }).collect();
                     let lost = procedure.body.notes.iter().enumerate().any(|(note, said)| said.variable == node && !emitted.contains(&(note as u32)));
-                    let found = if lost { Default::default() } else { super::valuetrack::tracked(&code.image[start..end], &super::valuetrack::Regs::new(&debug.file, debug.frame.map_or(iced_x86::Register::None, |(pointer, ..)| pointer), debug.frame.map_or(iced_x86::Register::None, |(_, stack, _)| stack)), rows, bias, &procedure.body.notes, &marks) };
+                    let found = if lost { Default::default() } else { super::valuetrack::tracked(&code.image[start..end], procedure.body.bits, &super::valuetrack::Regs::new(&debug.file, debug.frame.map_or(iced_x86::Register::None, |(pointer, ..)| pointer), debug.frame.map_or(iced_x86::Register::None, |(_, stack, _)| stack)), rows, bias, &procedure.body.notes, &marks) };
                     let parts: Vec<_> = found.into_iter().filter(|((variable, _), _)| *variable == node).map(|((_, piece), ranges)| (piece, ranges)).collect();
-                    let entries = combined(parts).into_iter().map(|(from, to, location)| (model::Range { section, offset: start + from, length: to - from }, location));
-                    variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::List(entries.collect()) });
+                    // A format that names one place for a scope (CodeView 4, Turbo Debugger) says a variable that is in one register, or
+                    // one cell, from where it first has a value to the last statement (past it the epilogue puts the registers back, and
+                    // no line is there to read): the place every range of it has. One that has none, or has a gap, it leaves out.
+                    let single = match &parts[..] {
+                        [(None, ranges)] if matches!(info.frame_base, model::FrameBase::Register) => Some(stable(ranges, body.1)),
+                        _ => None,
+                    };
+                    let mut entries: Vec<(model::Range, Location)> = match single {
+                        Some(Some((from, place))) => vec![(model::Range { section, offset: start + from, length: end - start - from }, located(place))],
+                        Some(None) => Vec::new(),
+                        None => combined(parts.into_iter().map(|(piece, ranges)| (piece, ranges.into_iter().map(|(from, to, places)| (from, to, places[0])).collect())).collect()).into_iter().map(|(from, to, location)| (model::Range { section, offset: start + from, length: to - from }, location)).collect(),
+                    };
+                    if single.is_some() {
+                        // A cell is a frame variable like any other.
+                        if let [(_, Location::Frame { disp })] = &entries[..] {
+                            variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::Frame { disp: *disp } });
+                            continue;
+                        }
+                    }
+                    variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::List(entries) });
                     continue;
                 }
                 // The optimiser removed it: no location anywhere is "optimized out".
@@ -301,7 +336,7 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                 Space::Frame => {
                     let home = Location::Frame { disp: addr.disp };
                     // The argument is in its register until the function stores it into the home.
-                    let stored = one.arrives.zip(debug.frame).and_then(|(register, (frame, stack, entry))| {
+                    let stored = one.arrives.zip(debug.frame.filter(|_| procedure.body.bits == 32)).and_then(|(register, (frame, stack, entry))| {
                         let cell = match info.frame_base {
                             model::FrameBase::Register => super::arrival::Cell::Frame { register: frame, disp: addr.disp },
                             model::FrameBase::Cfa { bias } => super::arrival::Cell::Stack { register: stack, entry: entry[usize::from(procedure.far)], from_cfa: addr.disp - bias },
@@ -325,7 +360,7 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
         }
         // A format that finds a cell by the frame register says nothing of one in a function that keeps none (the code is not changed
         // for `-g` to keep it), nor of a place that is in a cell of a list: it is left out.
-        if matches!(info.frame_base, model::FrameBase::Register) && frame.as_ref().is_some_and(|rows| !rows.iter().any(|row| row.cfa_register == debug.frame_register)) {
+        if matches!(info.frame_base, model::FrameBase::Register) && procedure.body.bits == 32 && frame.as_ref().is_some_and(|rows| !rows.iter().any(|row| row.cfa_register == debug.frame_register)) {
             let framed = |location: &Location| match location {
                 Location::Frame { .. } => true,
                 Location::List(entries) => entries.iter().any(|(_, place)| matches!(place, Location::Frame { .. })),
@@ -357,3 +392,32 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
     Ok(info)
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::super::masm::Place;
+    use super::super::valuetrack::Where;
+    use super::stable;
+
+    fn reg(register: iced_x86::Register) -> Where {
+        Where::Place(Place::Register(register))
+    }
+
+    /// A format with one place for a scope takes the place every range has, not the first of the first range: `k` was computed in `ax`
+    /// and copied to `bx` for a call that clobbers `ax`, so `bx` is its place.
+    #[test]
+    fn the_place_a_scope_is_given_is_one_every_range_holds() {
+        use iced_x86::Register::{AX, BX};
+        let ranges = [(2, 6, vec![reg(AX), reg(BX)]), (6, 12, vec![reg(BX)])];
+        assert_eq!(stable(&ranges, 11), Some((2, reg(BX))));
+    }
+
+    /// A gap, a range that stops short of the last statement, and a place no range shares, each leave the variable out.
+    #[test]
+    fn a_variable_that_has_a_gap_or_stops_short_or_moves_has_no_place_for_a_scope() {
+        use iced_x86::Register::{AX, BX};
+        assert_eq!(stable(&[(2, 4, vec![reg(AX)]), (5, 12, vec![reg(AX)])], 11), None, "a gap");
+        assert_eq!(stable(&[(2, 8, vec![reg(AX)])], 11), None, "short of the last statement");
+        assert_eq!(stable(&[(2, 4, vec![reg(AX)]), (4, 12, vec![reg(BX)])], 11), None, "moved");
+    }
+}
