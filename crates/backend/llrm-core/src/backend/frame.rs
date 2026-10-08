@@ -98,7 +98,8 @@ impl Frame {
     /// The first byte of the slot that holds `disp`, as the layout the cells were selected under put it: the lowest of the
     /// selector's extents nearest it, the incoming arguments (from BP up) as one slot at 0; none when it laid out no slot.
     fn home_of(&self, disp: i64) -> Option<i64> {
-        if disp >= 0 {
+        // [bp+0] holds the caller's BP, never data: an address there is one past the end of the slot that ends at BP.
+        if disp > 0 || (disp == 0 && !self.extents.iter().any(|(start, size)| start + size == 0)) {
             return Some(0);
         }
         // The slot nearest the displacement, the lowest on a tie: a pointer into a slot, one past its end (a strength-reduced

@@ -40,7 +40,7 @@ fn count(counter: &Counter, value: u32) -> i64 {
 }
 
 fn emit(bits: u32, what: &Semantics) -> Option<select::Emitted> {
-    select::emit_in(bits, what, 0, None, false, false, None)
+    select::priced_in(bits, what, 0, None, false, false, None)
 }
 
 fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Semantics {

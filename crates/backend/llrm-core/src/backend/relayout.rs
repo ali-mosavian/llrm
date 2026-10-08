@@ -1,0 +1,211 @@
+//! The frame laid out again: a function whose frame reaches past `[bp-128]` is also tried with a hole above its allocas for the
+//! spill slots; this makes that layout from the first one, by the slot each frame cell names, where it used to run the whole
+//! backend a second time (docs/optimizations/second-frame.md).
+//!
+//! A cell is moved by its slot: the incoming arguments stay, a slot instruction selection laid out moves down by the hole, a spill
+//! slot goes where `Frame::slot` would hand it out in a frame that has the hole. Anything this does not know how to move (bytes
+//! of inline code that name a displacement, a cell in no known slot, a set of call-private ranges that is not what `outside`
+//! makes) makes it give up, and the caller runs the backend again as before. `LLRM_CHECK_FRAME=1` runs it again either way and
+//! compares.
+
+use std::sync::Arc;
+
+use iced_x86::Register;
+
+use crate::backend::assemble::Machined;
+use crate::backend::frame::Frame;
+use crate::model::ir::{Addr, Address, Loc, Mem, Semantics, Space};
+use crate::model::lir::{outside, CallMemory, DebugPlace, DebugVariable, Insn, LirBlock, WHOLE_FRAME};
+use crate::support::hash::IndexMap;
+
+/// `first`, which was laid out under `frame` (no hole), laid out with `hole` bytes above the allocas for spill slots; and its
+/// frame. None where it cannot be moved by its slots alone.
+pub fn laid_again(first: &Machined, frame: &Frame, hole: i64) -> Option<(Machined, Frame)> {
+    if !first.inline.is_empty() || frame.native.is_some() || frame.hole != 0 {
+        return None;
+    }
+    let (again, homes) = replayed(frame, hole)?;
+    let moved = Moves { frame, homes: &homes, hole };
+    let mut blocks = Vec::with_capacity(first.body.blocks.len());
+    for block in &first.body.blocks {
+        let mut insns = Vec::with_capacity(block.insns.len());
+        for one in &block.insns {
+            insns.push(moved.insn(one)?);
+        }
+        blocks.push(LirBlock { insns, ..block.clone() });
+    }
+    let mut body = first.body.with_blocks(blocks);
+    body.homes = Arc::new(first.body.homes.iter().map(|(value, cell)| Some((*value, moved.mem(cell)?))).collect::<Option<std::collections::BTreeMap<_, _>>>()?);
+    body.variables = first.body.variables.iter().map(|one| moved.variable(one)).collect::<Option<Vec<_>>>()?;
+    let reserve = -std::cmp::min(again.slots.values().copied().min().unwrap_or(0), again.floor);
+    let machined = Machined { body, reserve, calls: first.calls.clone(), inline: first.inline.clone(), far: first.far.clone(), pops: first.pops.clone(), popped: first.popped, registers: first.registers.clone(), landing: first.landing };
+    Some((machined, again))
+}
+
+/// The frame `frame` would be with `hole`: the same floor lowered by the hole, the selector's slots moved, and the spill slots
+/// handed out again in the order they were first made.
+fn replayed(frame: &Frame, hole: i64) -> Option<(Frame, IndexMap<i64, i64>)> {
+    let mut again = Frame::new(frame.floor - hole);
+    again.hole = hole;
+    again.extents = frame.extents.iter().map(|(start, size)| (start - hole, *size)).collect();
+    let mut homes: IndexMap<i64, i64> = IndexMap::default();
+    for (key, home) in &frame.slots {
+        match homes.get(home) {
+            Some(found) => {
+                again.slots.insert(key.clone(), *found);
+            }
+            None => {
+                let capacity = *frame.capacities.get(home)?;
+                let found = again.slot(key.clone(), capacity).ok()?;
+                homes.insert(*home, found);
+            }
+        }
+    }
+    // A capacity no key owns (a discarded trial's) has no cell.
+    if frame.capacities.keys().any(|home| !homes.contains_key(home)) {
+        return None;
+    }
+    Some((again, homes))
+}
+
+struct Moves<'a> {
+    frame: &'a Frame,
+    /// Each spill slot's first byte in the old layout and in the new.
+    homes: &'a IndexMap<i64, i64>,
+    hole: i64,
+}
+
+impl Moves<'_> {
+    /// Where the byte at `disp` of a cell tagged with slot `home` is in the new layout.
+    fn disp(&self, home: i64, disp: i64) -> Option<i64> {
+        if home == 0 {
+            return Some(disp);
+        }
+        // A spill slot: where the replay put the slot, and the cell's place in it.
+        if let Some(found) = self.homes.get(&home) {
+            return Some(disp - home + found);
+        }
+        if self.frame.extents.iter().any(|(start, _)| *start == home) {
+            return Some(disp - self.hole);
+        }
+        None
+    }
+
+    fn addr(&self, addr: Addr, offset: i64, through: Register) -> Option<(Addr, i64)> {
+        let new = match (addr.space, addr.slot_home()) {
+            (Space::Frame, Some(home)) => self.disp(home, addr.disp)?,
+            (Space::Frame, None) => return None,
+            // An indexed array: a literal displacement through BP, the selector's.
+            (Space::Literal, _) if matches!(through, Register::BP | Register::EBP) => addr.disp - self.hole,
+            _ => return Some((addr, offset)),
+        };
+        // `offset` repeats the displacement on a cell the spiller made from a folded frame address.
+        let offset = if addr.space == Space::Frame && addr.disp != 0 && offset == addr.disp { new } else { offset };
+        Some((Addr { disp: new, ..addr }, offset))
+    }
+
+    fn mem(&self, cell: &Mem) -> Option<Mem> {
+        let Some(addr) = cell.addr else { return Some(cell.clone()) };
+        let (addr, offset) = self.addr(addr, cell.offset, cell.through)?;
+        Some(Mem { addr: Some(addr), offset, ..cell.clone() })
+    }
+
+    fn address(&self, cell: &Address) -> Option<Address> {
+        let Some(addr) = cell.addr else { return Some(cell.clone()) };
+        let (addr, offset) = self.addr(addr, cell.offset, cell.through)?;
+        Some(Address { addr: Some(addr), offset, ..cell.clone() })
+    }
+
+    fn loc(&self, place: &Loc) -> Option<Loc> {
+        Some(match place {
+            Loc::Mem(cell) => Loc::Mem(self.mem(cell)?),
+            Loc::Address(cell) => Loc::Address(self.address(cell)?),
+            other => other.clone(),
+        })
+    }
+
+    fn insn(&self, one: &Arc<Insn>) -> Option<Arc<Insn>> {
+        let what = match &one.what {
+            Some(what) => Some(Semantics { dests: what.dests.iter().map(|place| self.loc(place)).collect::<Option<_>>()?, sources: what.sources.iter().map(|place| self.loc(place)).collect::<Option<_>>()?, ..what.clone() }),
+            None => None,
+        };
+        let call = match &one.call {
+            Some(call) => Some(Arc::new(CallMemory { private: self.private(&call.private)?, ..(**call).clone() })),
+            None => None,
+        };
+        if what == one.what && call == one.call {
+            return Some(Arc::clone(one));
+        }
+        Some(Arc::new(Insn { what, call, ..(**one).clone() }))
+    }
+
+    /// The call-private ranges when the selector's slots are `hole` lower: the complement of the bytes some pointer reaches.
+    fn private(&self, private: &[(Addr, u32)]) -> Option<Vec<(Addr, u32)>> {
+        let (whole, size) = WHOLE_FRAME;
+        let (low, high) = (whole.disp, whole.disp + i64::from(size));
+        let mut reach = std::collections::BTreeSet::new();
+        let mut at = low;
+        for (start, length) in private {
+            if start.space != Space::Frame || start.disp < at {
+                return None;
+            }
+            if start.disp > at {
+                reach.insert((at, start.disp));
+            }
+            at = start.disp + i64::from(*length);
+        }
+        if at < high {
+            reach.insert((at, high));
+        }
+        if outside(&reach) != private {
+            return None;
+        }
+        if reach.is_empty() {
+            return Some(private.to_vec());
+        }
+        // A range reaching an end of the frame is no slot of the selector's.
+        if reach.iter().any(|(start, end)| *start <= low || *end >= high) {
+            return None;
+        }
+        Some(outside(&reach.iter().map(|(start, end)| (start - self.hole, end - self.hole)).collect()))
+    }
+
+    fn variable(&self, one: &DebugVariable) -> Option<DebugVariable> {
+        Some(match &one.place {
+            DebugPlace::At(addr) if addr.space == Space::Frame => match addr.slot_home() {
+                Some(home) => DebugVariable { place: DebugPlace::At(Addr { disp: self.disp(home, addr.disp)?, ..*addr }), ..one.clone() },
+                None => return None,
+            },
+            _ => one.clone(),
+        })
+    }
+}
+
+/// What differs between two machined functions, or None where they are the same.
+pub fn difference(left: &Machined, right: &Machined) -> Option<String> {
+    if left.reserve != right.reserve {
+        return Some(format!("reserve {} against {}", left.reserve, right.reserve));
+    }
+    if left.calls != right.calls || left.inline != right.inline || left.far != right.far || left.pops != right.pops || left.popped != right.popped || left.landing != right.landing {
+        return Some("calls, inline code, far calls, pops or landing".to_owned());
+    }
+    if left.body.variables != right.body.variables {
+        return Some(format!("variables {:?} against {:?}", left.body.variables, right.body.variables));
+    }
+    if *left.body.homes != *right.body.homes {
+        return Some("homes".to_owned());
+    }
+    let (a, b) = (left.body.insns(), right.body.insns());
+    if a.len() != b.len() {
+        return Some(format!("{} instructions against {}", a.len(), b.len()));
+    }
+    for (one, other) in a.iter().zip(&b) {
+        if one != other {
+            return Some(format!("at {:#06x}:\n  {one:?}\n  {other:?}", one.at));
+        }
+    }
+    if left.body.blocks.iter().map(|block| (block.at, &block.succ)).ne(right.body.blocks.iter().map(|block| (block.at, &block.succ))) {
+        return Some("blocks".to_owned());
+    }
+    None
+}

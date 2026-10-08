@@ -790,7 +790,7 @@ fn reload_price(bits: u32, value: u32, remakes: &IndexMap<u32, Arc<Insn>>, price
             held.entry(used.value).or_insert(Register::BX);
         }
     }
-    crate::backend::select::emit_in(bits, what, 0, None, false, false, Some(&held)).map_or(prices.load, |code| code.code.len() as f64)
+    crate::backend::select::priced_in(bits, what, 0, None, false, false, Some(&held)).map_or(prices.load, |code| code.code.len() as f64)
 }
 
 /// The values of `values` that are made again rather than stored and loaded:

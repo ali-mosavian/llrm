@@ -283,7 +283,21 @@ fn machined_once(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<P
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(first);
     }
-    let (second, _) = timed("candidate second frame", || cheaper(module, name, abi, pool, target, spilled))?;
+    let laid = timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled));
+    let checking = std::env::var_os("LLRM_CHECK_FRAME").is_some();
+    let second = match laid {
+        Some((laid, _)) if !checking => laid,
+        laid => {
+            let (second, _) = timed("candidate second frame", || cheaper(module, name, abi, pool, target, spilled))?;
+            if let Some((laid, _)) = laid {
+                if let Some(difference) = crate::backend::relayout::difference(&laid, &second) {
+                    let at = first.body.insns().iter().find(|one| difference.contains(&format!("at {:#06x}", one.at))).map(|one| format!("{one:?}")).unwrap_or_default();
+                    panic!("@{name} (hole {spilled}): the frame laid again differs from the backend run again: {difference}\n  first run:\n  {at}");
+                }
+            }
+            second
+        }
+    };
     Ok(if far_frame(&second.body) < far { second } else { first })
 }
 
@@ -346,7 +360,7 @@ pub fn trying<T>(candidates: Candidates, run: impl FnOnce() -> T) -> T {
 /// else the instructions and memory operands it is expected to execute per call.
 fn cost(made: &Machined, target: &Target<'_>) -> Option<f64> {
     if target.cpu.size {
-        made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| select::emit_in(made.body.bits, what, 0, None, false, false, None).map(|code| code.code.len() as f64)).sum()
+        made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| select::priced_in(made.body.bits, what, 0, None, false, false, None).map(|code| code.code.len() as f64)).sum()
     } else {
         executed::work(&made.body)
     }
