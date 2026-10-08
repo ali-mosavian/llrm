@@ -22,6 +22,6 @@ A pass after allocation that decides by a displacement (the candidate `cost`, wh
 
 ## Not done
 
-No predictor of which run wins: the rule stays `far_frame`. The two candidates inside a run (spiller / allocator alone) are a separate question (coin flip, see the candidate statistics in #794's thread).
+No predictor of which run wins: the rule stays `far_frame`. The two candidates inside a run (spiller / allocator alone) are a separate question (a near coin flip per function, measured separately).
 
 Expected: the second run's 24-36% of the backend on programs that have one; objects identical by construction of the check.
