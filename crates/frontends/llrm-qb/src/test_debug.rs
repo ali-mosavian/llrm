@@ -56,7 +56,8 @@ fn shape(records: &[Rc<omf::Record>]) -> Vec<String> {
 }
 
 /// Each suite program's procedures, parameters and variables read as BC's
-/// /Zi object of it does, in each dialect.
+/// /Zi object of it does, in each dialect: every symbol llrm describes is BC's, spelt as BC spells it. BC describes every variable; llrm
+/// only those the program keeps (`-g` changes no code, and so keeps no variable for a debugger), so a variable nothing reads is BC's alone.
 #[test]
 fn debug_symbols_read_as_bc_writes_them() {
     for (program, fixture, dialect) in [
@@ -79,7 +80,9 @@ fn debug_symbols_read_as_bc_writes_them() {
             .expect("reads");
         let bc = shape(&omf::read(root().join(format!("tests/inputs/{fixture}.obj"))).expect("reads"));
         assert!(!bc.is_empty(), "{fixture} carries no symbols");
-        assert_eq!(shape(&object(&source, &[], dialect, dialect, true)), bc, "{fixture}");
+        let ours = shape(&object(&source, &[], dialect, dialect, true));
+        let foreign: Vec<&String> = ours.iter().filter(|one| !bc.contains(one)).collect();
+        assert!(foreign.is_empty(), "{fixture}: symbols BC does not write: {foreign:?}");
     }
 }
 
@@ -103,15 +106,15 @@ fn a_local_is_where_its_code_keeps_it() {
     }
 }
 
-/// A module variable a debugger reads keeps its memory: its store dead
-/// once the program ENDs, `m` was optimized away and missing from the
-/// symbols, and CodeView could not evaluate it.
+/// A module variable the program folds away (its one store is read by the call and dead once the program ENDs) is not kept for a
+/// debugger: `-g` changes no code, and CodeView 4 has no record for a variable that is a constant. It was kept, its memory written,
+/// and the object differed from the one built without `-g`.
 #[test]
-fn a_folded_module_variable_is_still_described() {
+fn a_folded_module_variable_is_left_out_not_kept() {
     let source = "DECLARE SUB s (BYVAL v AS DOUBLE)\nDIM m AS DOUBLE\nm = 2\ns m\nEND\nSUB s (BYVAL v AS DOUBLE)\nPRINT v\nEND SUB\n";
     let records = object(source, &[], "vbdos", "vbdos", true);
     let names: Vec<String> = cvinfo::parse(&records).variables.into_iter().map(|one| one.name).collect();
-    assert!(names.iter().any(|one| one == "m"), "{names:?}");
+    assert!(!names.iter().any(|one| one == "m"), "{names:?}");
 }
 
 /// VBDOS names a procedure as its source spells it, the whole word: `s`
