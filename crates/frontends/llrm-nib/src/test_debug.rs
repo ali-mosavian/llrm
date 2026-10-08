@@ -162,3 +162,66 @@ fn cv4_describes_a_program_with_a_code_segment_per_procedure() {
     let shape = |info: &llrm_object::debug::Info| info.functions.iter().map(|one| (one.name.clone(), one.variables.len())).collect::<Vec<_>>();
     assert_eq!(shape(&info), shape(&one));
 }
+
+const ADD: &str = "fn add(a: i16, b: i32) -> i32:
+    return i32(a) + b
+
+fn main() -> i16:
+    print(add(2, 3) + add(4, 5))
+    return 0
+";
+
+/// The model of `ADD` under `-mabi=regparm3`, its debug format `format`.
+fn regparm_model(format: llrm_object::debug::Format) -> (llrm_object::debug::Info, Vec<u8>) {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = directory.path().join("probe.nib");
+    std::fs::write(&path, ADD).expect("writes");
+    let frontend = crate::Frontend { debug: true, native_name: "regparm3".into(), ..crate::real_mode() };
+    let program = crate::driver::parsed(&path, &frontend, None).expect("parses");
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, abi: Some("regparm3".into()), debug_format: format, ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("compiles");
+    let object = llrm_core::backend::objbuild::built(&module, "probe.nib", CodeLayout::OneSegment).expect("builds");
+    let code = object.sections.iter().find(|one| one.role == llrm_object::Role::Text).expect("code").image.clone();
+    (object.debug.expect("-g's information"), code)
+}
+
+/// Under `-mabi=regparm3` a parameter arrives in a register, and CodeView 4's BASIC-era records (and Turbo Debugger's) name one place for
+/// a whole scope: `add`'s `a` and `b` were in no CodeView at all. The backend stores each to a cell at the entry and describes the
+/// cell, so the debugger stopped at the first line reads the value there; the first line starts after the stores.
+#[test]
+fn a_register_parameter_is_stored_to_a_cell_at_the_entry_where_the_format_names_one_place() {
+    use llrm_object::debug::{Kind, Location};
+    let (info, code) = regparm_model(llrm_object::debug::Format::Default);
+    let add = info.functions.iter().find(|one| one.name == "add").expect("add");
+    let cells: Vec<(&str, Kind, &Location)> = add.variables.iter().map(|one| (one.name.as_str(), one.kind, &one.location)).collect();
+    assert_eq!(cells, [("a", Kind::Parameter, &Location::Frame { disp: -2 }), ("b", Kind::Parameter, &Location::Frame { disp: -6 })], "{cells:?}");
+    // `mov [bp-2], ax` is 89 46 FE: it ends before the body begins.
+    let at = code.windows(3).position(|bytes| bytes == [0x89, 0x46, 0xFE]).expect("the store of a");
+    assert!(at + 3 <= add.body.expect("a body").0, "the store at {at} comes before the body at {:?}", add.body);
+    // The reader sees both, as locals: it tells a parameter from a local by the sign of the offset from BP, and the cells are below it.
+    let shape = cv4info::shape(&compiled_regparm());
+    assert!(shape.contains(&"LOCAL add.a: SHORT".to_owned()) && shape.contains(&"LOCAL add.b: LONG".to_owned()), "{shape:#?}");
+}
+
+fn compiled_regparm() -> Vec<Rc<omf::Record>> {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = directory.path().join("probe.nib");
+    std::fs::write(&path, ADD).expect("writes");
+    let frontend = crate::Frontend { debug: true, native_name: "regparm3".into(), ..crate::real_mode() };
+    let program = crate::driver::parsed(&path, &frontend, None).expect("parses");
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, abi: Some("regparm3".into()), ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("compiles");
+    omf::parse(&crate::compile::object(&module, Path::new("probe.nib"), CodeLayout::OneSegment, llrm_target::object::Format::Omf).expect("writes")).expect("parses")
+}
+
+/// Where the debug format can say it (DWARF's location lists), the parameter stays in its register until the code stores it: no cell
+/// is made for the debugger, and the code is the code of a build without `-g`.
+#[test]
+fn where_the_format_says_ranges_a_register_parameter_stays_in_its_register() {
+    use llrm_object::debug::Location;
+    let (info, _) = regparm_model(llrm_object::debug::Format::Dwarf { version: 5 });
+    let add = info.functions.iter().find(|one| one.name == "add").expect("add");
+    assert!(add.variables.iter().all(|one| matches!(&one.location, Location::List(entries) if matches!(entries[..], [(_, Location::Register(_))]))), "{:?}", add.variables);
+}

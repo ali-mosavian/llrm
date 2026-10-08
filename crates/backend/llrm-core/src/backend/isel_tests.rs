@@ -4080,6 +4080,6 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
     di::add_function(&mut module, &di::Function { function: "f".into(), module: false, name: "f".into(), r#type: int, parameters });
     // a in a cell, b in AX, c in DX:AX; d is past the three the function has.
     let convention = Convention { parameters: vec![Parameter::Cell(6), Parameter::Registers(vec![Register::AX]), Parameter::Registers(vec![Register::DX, Register::AX])], returns: Vec::new(), popped: 0, saved: Vec::new() };
-    let found: Vec<(String, DebugPlace)> = isel::parameters(&module, "f", &convention).into_iter().map(|one| (one.name, one.place)).collect();
+    let found: Vec<(String, DebugPlace)> = isel::parameters(&module, "f", &convention, &Default::default()).into_iter().map(|one| (one.name, one.place)).collect();
     assert_eq!(found, [("a".to_owned(), DebugPlace::At(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 6))), ("b".to_owned(), DebugPlace::Register(Register::AX)), ("d".to_owned(), DebugPlace::Gone)]);
 }
