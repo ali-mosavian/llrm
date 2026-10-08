@@ -16,6 +16,31 @@ class ResolverTests(unittest.TestCase):
             self.assertEqual(llrmbin.bin_dir({"CARGO_TARGET_DIR": built, "LLRM_BIN": "/x"}, Path(repo)), Path("/x"))
             self.assertEqual(llrmbin.bin_dir({}, Path(repo)), Path(repo) / "target" / "release")
 
+    def test_a_binary_older_than_its_source_is_refused(self):
+        """`cargo build -p llrm-c` builds only the library: bench and a repro ran a day-old llrm-c and measured the old
+        compiler. The resolver names the binaries older than a file cargo's dep-info lists, and refuses them."""
+        import os
+
+        with tempfile.TemporaryDirectory() as repo, tempfile.TemporaryDirectory() as built:
+            repo, release = Path(repo), Path(built) / "release"
+            release.mkdir()
+            (repo / "Cargo.toml").write_text('[[bin]]\nname = "llrm-c"\npath = "x.rs"\n')
+            source = repo / "lib.rs"
+            source.write_text("")
+            (release / "llrm-c").write_text("")
+            (release / "llrm-c.d").write_text(f"{release}/llrm-c: {source}\n")
+            (release / "leftover").write_text("")  # not declared: `cargo build --bins` does not rebuild it
+            (release / "leftover.d").write_text(f"{release}/leftover: {source}\n")
+            os.utime(release / "llrm-c", (1000, 1000))
+            os.utime(release / "leftover", (1000, 1000))
+            os.utime(source, (2000, 2000))
+            self.assertEqual(llrmbin.stale_binaries(release, repo), ["llrm-c"])
+            with self.assertRaises(SystemExit) as refused:
+                llrmbin.bin_dir({"LLRM_BIN": str(release)}, repo)
+            self.assertIn("cargo build --release --bins", str(refused.exception))
+            os.utime(release / "llrm-c", (3000, 3000))
+            self.assertEqual(llrmbin.bin_dir({"LLRM_BIN": str(release)}, repo), release)
+
     def test_the_shell_scripts_ask_the_resolver_not_a_copy_of_it(self):
         """Eleven scripts spelled `target/release` and `LLRM_BIN` themselves: the same fact, and wrong in a tree built elsewhere."""
         import os
