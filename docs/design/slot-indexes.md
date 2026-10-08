@@ -28,73 +28,104 @@ that insertion does not disturb, and facts that are updated for what changed.
   (LLVM's stack interval is the union of the spilled registers' live ranges; ours is access-based, below. We keep ours: output must
   not change.)
 
-## (b) What holds positions here
+## (b) What holds positions here (checked against the code by the review, 2026-10-09)
 
 | holder | file | shape today | what a spill costs |
 |---|---|---|---|
-| numbering | `analysis/intervals.rs` `Indexes` | `at: IndexMap<insn address, slot>`, dense, 2 slots per instruction, rebuilt by `indexed` / `indexed_shared` (validated by `Arc::ptr_eq` over the body) | O(body), hashing |
-| intervals | same, `Interval`/`Segment`, `Remembered`, `updated` | segments in dense slots; `updated` maps every untouched interval through the old-to-new slot map and recomputes the touched | O(values x segments) per rewrite |
-| weights | same | `weight = total / (size + GRACE)`, `size` = slots covered | follows the remap |
-| postings | `backend/postings.rs` | `At = (block, index)`; `replaced` redoes a changed block | O(block) per spill |
-| homes' colours | `spiller.rs` `_existing_colors_by`, `slots.rs` | homes as pseudo-values, liveness over a sparse body of every block, `starts` slots | O(blocks) per spill |
-| facts | `allocate.rs` `Facts::of` | live, masks, widths, hints, slots, sibling prices, classes: all values, every rewrite | O(values) |
+| change discovery | `postings.rs` `following`/`current`, `intervals.rs` `indexed_shared`, `Remembered::is_of` (up to 6 per ask), `updated` (two hashed passes) | every cache re-derives "what changed" by comparing the whole body by `Arc::ptr_eq`; the rewriters already know (`materialized`'s `named`, splitkit's `Moved`) and throw it away | O(body) per cache per ask: the floor under everything else |
+| numbering | `intervals.rs` `Indexes` | `at: IndexMap<insn address, slot>`; dense: 2 slots per instruction, +2 per block head (phi), meta instructions take none; rebuilt by `indexed` | O(body), hashing |
+| intervals | same, `Interval`/`Segment`, `Remembered`, `updated` | segments in dense slots; `updated` maps every untouched interval old to new; `Remembered::of` deep-clones all intervals per ask; gives up on any CFG change | O(values x segments) |
+| weights | `allocate.rs` 808-821, 2137, 2337 | four stages: base `total/(size+GRACE)`, sibling discount, fold discount, INF; `_totals` and the sibling sums add frequencies in body order (floats) | follows the remap |
+| postings | `postings.rs` | `At = (block, index)`; `replaced` redoes a changed block | O(body) compare + O(block) |
+| homes | `spiller.rs` `_existing_colors_by`, `_short_update_runs_whole`, `_local_updates_whole`, `slots.rs`; `Frame` | homes as pseudo-values, liveness over a sparse body of every block; the helpers number and interval their own intermediate bodies | O(blocks) per spill |
+| facts | `allocate.rs` `Facts::of` | live, masks (clobber slots), widths, hints, sibling prices, fold prices, classes: all values, every rewrite; plus `constrain::required`, the after-queue loop and `_overlapping` over all values | O(values) |
+| splitkit | `splitkit.rs` | `Region` spans, `index.slot`, `window_end == slot(next)`; split appends bridge blocks and rewrites `succ`/`phis` inside one allocation | positions + CFG change |
 | holders | `liveunion.rs` | segments per register; `refresh()` drops the indexes | rebuilt lazily |
 | frequency | `analysis/frequency.rs` | `Frequency::of(body)` per rewrite | O(body) |
 
-An instruction already has an identity: the address of its `Arc<Insn>` (`key(insn)`), kept alive by `Remembered`/`Followed`. What is
-missing is a stable *number* and an *order structure* over those identities.
+Not affected: coalesce, ssaspill and peephole number their own bodies outside the allocation loop.
+
+An instruction already has an identity: the address of its `Arc<Insn>` (`key`), kept alive by `Remembered`/`Followed`. The invariant
+the design relies on, which the spiller and splitkit obey (`_renamed` -> `_with` makes a new `Arc`): a kept `Arc` keeps its order
+relative to the other kept ones, an `Arc` appears once, a replacement is a new `Arc`. `Slots` holds the `Arc`s (so an address is not
+reused) and asserts the invariant under the check switch.
 
 ## Design
 
-1. **`Slots`**: one persistent numbering per allocation, owned by the allocator state (not a thread-local keyed on a body scan). Key:
-   instruction identity. Value: a gapped slot (spacing `DIST`, midpoint insertion, local renumber, repack at 20%, as LLVM).
-   `Slots::apply(old_body -> new_body)` takes the changed blocks (the same `Arc::ptr_eq` diff `postings` does, O(changed blocks) when
-   the caller says which blocks it rewrote) and inserts/removes entries. Block spans live beside it.
-2. **Rank, for byte-identical output.** Today `Interval::size` counts dense slots, and weights, spill choice and queue order read it.
-   With gaps, `end - start` is no longer a count. So `Slots` also answers `rank(slot)` (instructions before it) in O(log n) (a Fenwick
-   tree over entry order, updated on insert/remove), and `size`/`weight` are derived from ranks. Without this the series is not
-   byte-identical; it is the part most likely to be wrong and the first thing to build and check.
-3. **Intervals** keep their segments across a rewrite. Only values the rewrite names (and values live across a changed block's
-   boundary) are recomputed, as `updated` already decides; the remap disappears. Weights are computed when read (the queue reads
-   them for values it holds), not stored for all.
-4. **Postings** hold `InsnId` (the entry), not `(block, index)`; `block_of`/`index_of` come from `Slots`.
-5. **Homes (LiveStacks analogue)**: `Frame` keeps, per home, its interval in `Slots` numbers, extended at the point the spiller emits
-   an access. `_existing_colors_by` reads it. The sparse walk stays as the check.
-6. **Facts** keep their per-value entries; `Facts::of` becomes `Facts::updated(previous, touched)`.
-7. **LiveUnion** is not refreshed: only the touched values leave and re-enter.
+0. **`Edit`** (LiveRangeEdit): what a rewrite did to the body, returned by every rewriter and consumed by every fact: blocks
+   changed, instructions removed / inserted / replaced (with their neighbours), blocks appended, values touched. The `Arc::ptr_eq` diff
+   stays only as the check (`LLRM_CHECK_EDIT`: the edit equals the diff). One type and one check switch, not one per fact. A rewrite
+   that cannot say what it did returns `Edit::whole()`, and every consumer falls back to what it does now.
+1. **`Slots`**: one persistent numbering per allocation, owned by the allocation state (the thread-local caches keyed on a body scan
+   go). Key: instruction identity. Value: a gapped number (spacing `DIST`, midpoint insertion, local renumber, repack at 20%, as
+   LLVM). `Slots::apply(&Edit)` inserts, removes and appends blocks; cost O(edit).
+2. **A written point contract**: each instruction owns a *read* point and a *def* point; a block owns a head point (phi results) and an
+   end; a derived `end` of a dead def is the next entry's read point. A meta instruction owns none (and an operand added by a rewrite
+   can flip meta-ness: that is an insert or a remove in `Slots`, not a no-op). One function `dense(point)` is the only bridge to
+   the old numbering; nothing else does arithmetic on points (the existing test `test_nothing_outside_the_numbering_does_arithmetic_on_slots`
+   is extended to cover it).
+3. **Rank, for byte-identical output.** `Interval::size` counts dense slots, and weights, spill choice and queue order read it. With
+   gaps `end - start` is not a count, so `Slots` answers `rank(point)` (dense number) in O(log n) with an order-statistic tree (a
+   balanced tree with subtree counts; a Fenwick tree cannot take a middle insertion). `size` and every position-derived length go
+   through it.
+4. **Weight has one owner**: the four-stage composition (base, sibling, fold, INF) moves into one accessor over `Slots`; "weights on
+   read" never leaves two places that compose them. Sums are recomputed for each touched entry from its occurrences **in body
+   order**, never by adding or subtracting deltas (floating-point sums; otherwise not byte-identical).
+5. **Intervals** keep their segments across an edit; only touched values and values live across an edited block are recomputed. A CFG
+   change (split bridge blocks) is an `Edit` with appended blocks; if the interval update cannot handle it, it falls back to a rebuild
+   for that rewrite. How often splits do that is measured before PR 4 (`updated` gives up on any block change today).
+6. **Postings** hold `InsnId` (the entry); block and index come from `Slots`.
+7. **Homes (LiveStacks analogue)** belong to the allocation's `Slots` state, not to `Frame` (shared across the base and trial
+   allocations and restored by snapshot). A home's interval is not "extended at each access": it is live through the blocks between a
+   store and a load and cleanup removes accesses, so it is recomputed for the homes the edit touches. The spiller helpers that number
+   their own intermediate bodies (`_short_update_runs_whole`, `_local_updates_whole`, `_existing_colors_by`) take `&Slots`/`&Edit`; until
+   they do, the old caches survive beside the new owner, so this is part of the PR, not a follow-up.
+8. **Facts** keep their per-value entries (`Facts::updated(previous, &Edit)`); `Masks`, `constrain::required`, the after-queue loop and
+   `_overlapping` work on the touched values.
+9. **LiveUnion** is not refreshed: touched values leave and re-enter.
 
-Each of 3-7 compares against the old whole computation under its own `LLRM_CHECK_*` switch, as `LLRM_CHECK_POSTINGS` and
-`LLRM_CHECK_SIBLINGS` do, over the 393-object corpus (66 programs + 65 QCport modules x 3 levels) and the unit tests.
+Each step compares against the old whole computation under `LLRM_CHECK_*`, over the 393-object corpus (66 programs + 65 QCport modules
+x 3 levels) and the unit tests.
 
-## (c) PR series (each byte-identical, own check, own fail-first test, `measure` step shows the drop)
+## (c) PR series (byte-identical; each PR's own check, fail-first test, and `measure` drop)
 
-1. `Slots` + rank behind `indexed()`: gapped numbering and rank, same answers. Check: every instruction's rank equals its dense
-   slot / 2, and ordering is isomorphic, over the corpus; unit tests for insertion, local renumber and repack. No consumer changes.
-2. Intervals without the remap (`updated` keeps segments; weights on read). Check: `updated` == `worked_out`.
-3. Postings by `InsnId`. Check: `LLRM_CHECK_POSTINGS` as now, plus ids.
-4. Homes' intervals kept (`_existing_colors_by` reads them). Check: == sparse walk (`LLRM_CHECK_COLORS`, `LLRM_CHECK_RANGES`).
-5. `Facts::updated`. Check: == `Facts::of`.
-6. `LiveUnion` without `refresh()`, `Frequency` carried. Check: == rebuilt.
+0. `Edit`, produced by the spiller and splitkit rewriters; consumed by `postings`, `Remembered`, `indexed_shared` (O(edit) change
+   discovery instead of O(body) `Arc` comparisons). Byte-identical by construction. Pays on its own.
+1. `Facts::updated` for the fields that carry no position (widths, hints, sibling and fold prices, classes), fed by `Edit`.
+2. `Slots` + rank + the point contract behind `indexed()`: same answers. Check: `dense(p)` equals the old numbering for every point
+   kind (read, def, block head, derived end, meta) over the corpus; unit tests for insertion, local renumber, repack, meta flip.
+3. Intervals without the remap, weights through the single accessor.
+4. Masks, `LiveUnion` without `refresh()`, `constrain::required` and the queue loops on touched values.
+5. Homes in `Slots`, the spiller helpers threaded.
 
-## (d) Expected drop (d_faces share of the compile, from the profile; to be re-measured per PR)
+## (d) Expected drop (d_faces share of the compile; profile: `perf record -F 400 --call-graph fp` of `llrm-c -O2` on QCport
+`render/d_faces.c`, binary built with `-C force-frame-pointers=yes` at main d78fb2434; flat, top leaf 2.3%; re-measured per PR)
 
 | PR | removes | d_faces | QCport total |
 |---|---|---|---|
-| 1 | infrastructure; the `indexed` rebuild (~1-2) | -1 | -0.3 |
-| 2 | `intervals_over` + `updated` 9.4 -> ~3 | -6 | -2 |
-| 3 | `postings::following`/`replaced` (2.0 + 0.8 + part of 3) | -3 | -1 |
-| 4 | `_existing_colors_by` 9.0 -> ~1 | -8 | -2 |
-| 5 | rest of `Facts::of` (17.7 - 9.4) -> ~3 | -5 | -2 |
-| 6 | `refresh`, `_overlapping`, `Frequency::of` (~3) -> ~1 | -2 | -0.7 |
-| | | about -25% | about -8% |
+| 0 | O(body) change discovery: `postings::following` 2.0, `indexed_shared` 0.8, `Remembered::is_of`, `updated`'s passes (~3) | -4 | -1.3 |
+| 1 | non-positional part of `Facts::of` (widths 1.2 + sibling/fold prices + classes + hints, ~5 of 8.3) | -4 | -1.3 |
+| 2 | infrastructure | -0 | 0 |
+| 3 | `intervals_over` + `updated` remap + `Remembered::of` clones (9.4 -> ~3) | -6 | -2 |
+| 4 | masks, `refresh`, `_overlapping`, `constrain::required`, queue loops (~4 -> ~1) | -3 | -1 |
+| 5 | `_existing_colors_by` 9.0 -> ~3 (home liveness is recomputed for touched homes, not free) | -6 | -2 |
+| | | about -23% | about -8% |
 
-The `live` axis should fall from 3.5 toward ~2.2, the point of #981. These are estimates from a flat profile; each PR reports its
-measured drop, and the series stops where one comes in under half its estimate.
+Stop rule: PR 2 is not judged alone (it enables 3-5); PRs 0, 1, 3, 4, 5 are judged against their own row, and the series stops where a
+measured drop is under half its estimate. The `live` axis should fall from 3.5 toward ~2.2 (#981).
+
+## Alternatives considered
+
+- Edit log + `Arc`-shared blocks (`Arc<[Arc<Insn>]>`): identity checks and body clones O(blocks). This is PR 0 plus a cheaper body
+  clone; it does not remove the interval remap, so it is a step of the series, not a replacement.
+- Batching spills: changes the allocation order, not byte-identical. Rejected.
+- Ids stored in `Insn`: copied by `_with`/clone, so a replacement would keep the old id. Rejected; `Arc` address is the key.
+- An instruction arena: too invasive for the gain.
+- Per-block dense numbering with a tree over block bases: parity by construction, but breaks `LiveUnion`'s global keys. Gapped
+  numbering with rank is the choice for intervals and the union.
 
 ## Risks
 
-- Rank/size parity (2 above). If it cannot be made exact, the output changes: the series would then be a quality change and must be
-  measured as one (geomean and worst row), not claimed byte-identical.
-- Instruction identity by `Arc` address assumes bodies keep `Arc<Insn>` for unchanged instructions. True for the spiller, split and
-  the rewrite helpers today (`postings` relies on it); a pass that rebuilds every `Arc` forces a full renumber (cost as now).
-- Blocks that change order between phases get a fresh `Slots`: the persistent numbering is per allocation.
+- Rank/size parity (3): if it cannot be made exact the output changes, and the series is a quality change to be measured as one.
+- A pass that rebuilds every `Arc` forces a full renumber (cost as now).
+- Blocks that change order between phases get a fresh `Slots`: the numbering is per allocation.
