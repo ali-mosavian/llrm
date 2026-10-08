@@ -296,6 +296,21 @@ fn test_a_functions_exposed_frames_are_found_once_not_per_access() {
     assert_eq!(names.len(), 1, "only @hidden's address is handed out: {names:?}");
 }
 
+/// The observers analysis (dse) built its unit without the exposure table, so every access it resolved scanned its alloca's uses:
+/// slope 2 in a function's accesses, 4% of compiling 2,000 stores at -O2 (#924).
+#[test]
+fn test_the_published_objects_analysis_asks_the_exposed_frames_once() {
+    let accesses: String = (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
+    let module = parsed(&format!("{DOS}declare void @out(ptr)\n\ndefine i16 @f() {{\nentry:\n  %slot = alloca i16\n  %hidden = alloca i16\n{accesses}  call void @out(ptr %hidden)\n  ret i16 %v39\n}}\n"));
+    let layout = layout(&module);
+    let function = function(&module, "f");
+    let mut analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
+    analyses.get::<super::ExposedFrames>(&module.context, &layout, function);
+    let before = crate::frameescape::scans();
+    analyses.get::<crate::observers::Published>(&module.context, &layout, function).as_ref().as_ref().expect("publishes");
+    assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
+}
+
 /// GlobalsAA ran points-to over every body without the exposure table, so each access scanned its alloca's
 /// uses: 34% of compiling a function of 1600 statements (#560). The table is made once per body.
 #[test]
