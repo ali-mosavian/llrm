@@ -286,3 +286,20 @@ fn taken_changes_stay_for_an_analysis_computed_before_them() {
     assert_eq!(f.changes_since(before).map(<[Change]>::len), Some(1), "the taken change is gone from the log");
     assert!(f.take_changes().is_empty(), "a change was handed out twice");
 }
+
+/// A copy carried the original's whole log (up to 64k changes since the log stopped being emptied, #984): gvn clones the body to
+/// number it, and Vec<Change>::clone was 16% of compiling a program with a hundred inlines. A copy's edits are its own.
+#[test]
+fn a_copy_starts_with_an_empty_log_and_equals_the_function_it_copies() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let (_, value) = named(f, "x");
+    let a = f.parameters()[0];
+    f.replace_all_uses_with(value, Operand::Value(a));
+    assert!(!f.changes.0.is_empty());
+    let mut copy = f.clone();
+    assert!(copy.changes.0.is_empty(), "the copy carries {} changes", copy.changes.0.len());
+    assert!(*f == copy, "the log is no part of what a function is");
+    let mark = copy.mark();
+    assert_eq!(copy.changes_since(mark), Some(&[][..]));
+}
