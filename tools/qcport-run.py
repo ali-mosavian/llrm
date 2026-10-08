@@ -115,7 +115,7 @@ def main() -> int:
     else:
         with ThreadPoolExecutor() as pool:
             failed = [one for one in pool.map(compile_one, sources) if one]
-    stand_in = subprocess.run([str(compiler), "-O1", "-fno-tree-loop-distribute-patterns", str(HERE / "qcport" / "strlib.c"), "-o", str(sides["llrm"] / "strlib.obj")], capture_output=True, text=True)
+    stand_in = subprocess.run([str(compiler), "-O1", "-fno-tree-loop-distribute-patterns", "-I", str(include), str(HERE / "qcport" / "strlib.c"), "-o", str(sides["llrm"] / "strlib.obj")], capture_output=True, text=True)
     if failed or stand_in.returncode:
         print("compile failed:", *failed, stand_in.stderr.strip(), sep="\n  ")
         return 1

@@ -24,6 +24,25 @@ class CauseTests(unittest.TestCase):
 
 
 
+class OptionTests(unittest.TestCase):
+    def test_a_program_that_needs_fwrapv_is_built_with_it(self):
+        """950704-1 checks for signed overflow after the add and says so with dg-additional-options "-fwrapv": built without
+        it the optimiser dropped the check and the program aborted (wrong, at -O2 and -Os)."""
+        self.assertEqual(torture.program_options('/* { dg-additional-options "-fwrapv" } */\nint x;'), ["-fwrapv"])
+        self.assertEqual(torture.program_options('/* { dg-additional-options "-O3 -fwrapv -fno-tree-ccp" } */'), ["-fwrapv"])
+        self.assertEqual(torture.program_options("int x;"), [])
+
+class SymbolTests(unittest.TestCase):
+    def test_an_undefined_symbol_is_refused_whichever_way_the_target_decorates_it(self):
+        """m16 (cdecl, a leading underscore) reported `___builtin_prefetch` and `_sprintf`: the refusals name `__builtin_` and
+        `sprintf`, so 114 builds of programs that need a builtin or libc routine the runner lacks counted as link findings."""
+        rules = torture.expected()
+        for symbol in ("__builtin_prefetch_", "___builtin_prefetch", "_sprintf", "sprintf_", "___builtin_ffs@3", "_sprintf@3"):
+            found = [torture.refusal(f"undefined symbol {one}", rules) for one in torture.spellings(symbol)]
+            self.assertTrue(any(found), symbol)
+        self.assertFalse(any(torture.refusal(f"undefined symbol {one}", rules) for one in torture.spellings("_frobnicate")))
+
+
 class WorkTests(unittest.TestCase):
     def test_two_runs_without_a_work_option_do_not_share_a_directory(self):
         """The default was one fixed directory: a gate running beside a full run deleted its files (`dosbatch.run` clears its

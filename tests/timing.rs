@@ -22,21 +22,24 @@ fn compiled(channels: Option<&str>) -> String {
     String::from_utf8_lossy(&done.stderr).into_owned()
 }
 
-/// The number before `ms` in the `[time] wall ...` line's field called `field`.
-fn field(report: &str, field: &str) -> f64 {
-    let line = report.lines().find(|one| one.starts_with("[time] wall")).expect("a wall line");
+/// The number before `ms` in the `[time] <line> ...` line's field called `field`.
+fn field(report: &str, line: &str, field: &str) -> f64 {
+    let line = report.lines().find(|one| one.starts_with(line)).unwrap_or_else(|| panic!("a `{line}` line"));
     let after = line.split(field).nth(1).unwrap_or_else(|| panic!("{field} in {line}"));
     after.trim().split_whitespace().next().unwrap().parse().unwrap()
 }
 
 /// Before the whole run was timed, about half of a compile was in no timed step (#394): the
-/// outermost steps must add up to the wall clock.
+/// outermost steps must add up to the run. By the thread's CPU time, not the wall clock: on a loaded machine the
+/// thread waits for its turn between two steps, which is in no step and in nothing the compiler did (4 of 10 runs failed
+/// with eight busy loops on the test's CPU).
 #[test]
-fn test_the_outermost_steps_add_up_to_the_wall_clock() {
+fn test_the_outermost_steps_add_up_to_the_runs_cpu_time() {
     let report = compiled(Some("time"));
-    let wall = field(&report, "wall");
-    let untimed = field(&report, "untimed");
-    assert!(untimed <= (wall * 0.02).max(2.0), "{untimed} ms of {wall} ms is in no step:\n{report}");
+    let cpu = field(&report, "[time] cpu", "cpu");
+    let untimed = field(&report, "[time] cpu", "untimed cpu");
+    assert!(cpu > 0.0, "the CPU clock did not run:\n{report}");
+    assert!(untimed <= (cpu * 0.02).max(2.0), "{untimed} ms of {cpu} ms of CPU is in no step:\n{report}");
 }
 
 /// A pass the pass manager ran, and the analyses it asked for, are in the report, under the

@@ -64,6 +64,9 @@ Sources read:
 | unroll times (partial) | none | `max-unroll-times` 8 (729), `max-unrolled-insns` 200 (733) | `unroll-partial-threshold` 150 | no partial unroll here: listed |
 | peel loop times / insns | none | `max-peel-times` 16 (621), `max-peeled-insns` 100 (625) | none | no counterpart pass here |
 | jump threading path | 100 `jumpthread.rs:34` | `max-fsm-thread-path-insns` 100 (513) | none | same |
+| jump threading, branch path | 7 instructions `jumpthread.rs:122` (15 `:37`, scale 2 `:39`) | `max-jump-thread-duplication-stmts` 15 (params.opt:589) with `fsm-scale-path-stmts` 2 (165): `profitable_path_p` rejects `n * 2 >= 15` (tree-ssa-threadbackward.cc) | `jump-threading-threshold` 6 `Scalar/JumpThreading.cpp:88` | gcc's; phis other than the state's count 1 each, as gcc counts them |
+| jump threading, branch at -Os | 0 copies `jumpthread.rs` | none copied unless every statement of the block dies (tree-ssa-threadupdate.cc:2077) | 3 at minsize (`JumpThreading.cpp:310`) | gcc's: 0 |
+| jump threading into a loop through its header | not done | `thread_through_loop_header` (tree-ssa-threadupdate.cc:1712) only for two idioms | none | left to `Rotate` |
 | jump threading total | 400 `jumpthread.rs:36` | `max-fsm-thread-paths` (not in 13.4.0's params.opt) | none | stays |
 | last chance recoloring | depth 5, interference 8 `allocate.rs:1651` | none | `lcr-max-depth` 5, `lcr-max-interf` 8 `CodeGen/RegAllocGreedy.cpp:95,100` | same |
 | tail duplication | 2 `jumps.rs:91` | none | `tail-dup-size` 2 `CodeGen/TailDuplicator.cpp:60` | same |

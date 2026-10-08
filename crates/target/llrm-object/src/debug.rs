@@ -52,10 +52,22 @@ pub enum Language {
     Nib,
 }
 
+/// The CodeView 4 a unit's records are written as: the frontend states it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Dialect {
+    /// What BASIC's compilers write (BC, QuickBASIC's), which BASIC's records match.
+    #[default]
+    Bc,
+    /// The standard form, as C7-era tools write it.
+    Cv4,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Info {
     pub format: Format,
     pub language: Language,
+    /// Which CodeView 4 an OMF object carries, where the frontend says.
+    pub dialect: Dialect,
     pub producer: Producer,
     /// The register a [`Location::Frame`] is relative to.
     pub frame_register: String,

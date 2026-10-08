@@ -37,7 +37,7 @@ shift_ri     2   1
 shift_r1     3   1
 movzx        3   3
 cdq          3   2
-lea          2   1
+lea          1   1
 imul_r32     26  10
 imul_m32     27  11
 mul_r32      26  10
@@ -89,6 +89,8 @@ smul_max_w2     26   10
 smul_min_w4     13   10
 smul_max_w4     42   10
 smul_full_w2     -   11
+# Intel 240440-002 Table 10.1 note 3: n = 3 for a positive multiplier, 5 for a negative one (the bits floor of 10 + max(bits, n)).
+smul_negative_bits  5    -
 sdiv_w2         27   30
 sdiv_w4         43   46
 udiv_w2         24   25
@@ -107,7 +109,7 @@ shift_ri     2   1
 shift_r1     3   1
 movzx        3   3
 cdq          3   2
-lea          2   1
+lea          1   1
 imul_r32     26  10
 imul_m32     27  11
 mul_r32      26  10
