@@ -625,6 +625,20 @@ mod tests {
         assert!(recorded.contains("2147483647"), "__INT_MAX__ is defined: {recorded}");
     }
 
+    /// Borland's dos.h names a parameter `__segment` (`peek( unsigned __segment, unsigned __offset )`), an Open Watcom keyword: on the flat
+    /// target the declaration was E1060 "Invalid type" (QCport host/dbg and game/mdl_ai at m32). Both targets' headers rename it.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_flat_program_may_name_a_parameter_segment() {
+        let scratch = tempfile::tempdir().unwrap();
+        let source = scratch.path().join("seg.c");
+        std::fs::write(&source, "int peek( unsigned __segment, unsigned __offset );\nint peek( unsigned __segment, unsigned __offset ) { return __segment + __offset; }\n").unwrap();
+        for target in [super::Profile::of(&llrm_x86_m16::M16).unwrap(), super::Profile::of(&llrm_x86_m32::M32).unwrap()] {
+            super::recorded_for(&source, &[], false, &[], &target).unwrap_or_else(|error| panic!("{}: {error:?}", target.cpu));
+        }
+    }
+
     /// The loop in `function` that reads `marker`, from its label to its backward branch, as the rich route selects it.
     fn selected_loop(fixture: &str, function: &str, marker: &str) -> Vec<String> {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
