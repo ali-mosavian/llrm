@@ -167,16 +167,16 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
             }
             parent.insert(here, there);
             live.insert(there, merged);
-            live.shift_remove(&here);
+            live.swap_remove(&here);
             may.insert(there, allowed);
-            may.shift_remove(&here);
+            may.swap_remove(&here);
             widths.insert(there, width);
-            widths.shift_remove(&here);
+            widths.swap_remove(&here);
             if mine_pin.is_some() || theirs_pin.is_some() {
                 held.insert(there, mine_pin.or(theirs_pin).expect("one is pinned"));
             }
-            held.shift_remove(&here);
-            for other in near.shift_remove(&here).unwrap_or_default() {
+            held.swap_remove(&here);
+            for other in near.swap_remove(&here).unwrap_or_default() {
                 if let Some(found) = near.get_mut(&other) {
                     found.remove(&here);
                 }
