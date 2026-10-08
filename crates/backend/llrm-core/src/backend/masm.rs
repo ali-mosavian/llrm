@@ -1029,7 +1029,7 @@ pub fn _falls_to(block: &lir::LirBlock, name: &str) -> Result<Option<i64>, Unpri
 
 /// `_roots` where the frame register holds a value: a frame cell (a stack array's too) names it only as the address it is, and
 /// does not use it.
-pub fn _roots_of_values(body: &lir::LirBody, pointer: Register) -> BTreeSet<Register> {
+fn _roots_of_values(body: &lir::LirBody, pointer: Register) -> BTreeSet<Register> {
     let mut found = BTreeSet::new();
     for one in body.insns() {
         let Some(what) = &one.what else { continue };

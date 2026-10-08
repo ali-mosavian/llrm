@@ -13,18 +13,6 @@ use iced_x86::Register;
 use crate::model::ir::{Loc, Operation};
 use crate::model::lir::LirBody;
 
-thread_local! {
-    static ALLOWED: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
-}
-
-/// `run` with the frame register kept as the frame's on this thread: the candidate `machined` prices a freed register against.
-pub fn framed<T>(run: impl FnOnce() -> T) -> T {
-    let before = ALLOWED.with(|one| one.replace(false));
-    let done = run();
-    ALLOWED.with(|one| one.set(before));
-    done
-}
-
 /// The registers that are the frame register as LIR names it.
 fn is_frame(register: Register, pointer: Register) -> bool {
     register != Register::None && crate::model::ir::root(register) == crate::model::ir::root(pointer)
@@ -32,9 +20,6 @@ fn is_frame(register: Register, pointer: Register) -> bool {
 
 /// Whether the function described by `body` (its calls' popped bytes in `pops`) can have no frame register.
 pub fn without_frame_register(body: &LirBody, registers: &llrm_target::FrameRegisters, pops: &BTreeMap<i64, i64>, inline: bool, far: bool, landing: bool) -> bool {
-    if !ALLOWED.with(std::cell::Cell::get) {
-        return false;
-    }
     let pointer = registers.pointer;
     if !registers.optional || body.bits != 32 || far || inline || landing || body.returns_twice || (!body.variables.is_empty() && !body.cfa_variables) {
         return false;
