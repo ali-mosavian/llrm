@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # g-identical.sh llrm-c "mode:format ...": the assembly of every bench C program with and without -g, per target and level;
 # lists the ones that differ. The targets are the pairs -g ships, for example "m32:elf".
+export LLRM_VERIFY=${LLRM_VERIFY:-1}  # the gate checks each pass and phase
 C=$1; TARGETS=$2; T=$(mktemp -d); same=0; differ=0
 for f in bench/*/*.c; do n=$(basename "$f" .c)
   for t in $TARGETS; do m=${t%%:*}; fmt=${t##*:}; for o in O0 O1 O2 Os; do

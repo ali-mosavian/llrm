@@ -113,15 +113,19 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool, classe
     // The invariance instrument, LLVM's `-g` rule: stripped of meta
     // instructions, every phase must make the same code.
     let body = if std::env::var_os("LLRM_STRIP_META").is_some() { without_meta(body) } else { body };
-    let owned = crate::support::debug::timed("lir owned bytes", || body.owned_bytes());
+    let verifying = crate::support::debug::verifying();
+    let owned = if verifying { crate::support::debug::timed("lir owned bytes", || body.owned_bytes()) } else { Vec::new() };
     let transformed =
         crate::support::debug::timed_by(|| format!("lir {stage}"), || phase.transform_raising(body)).map_err(Checked::Refused)?;
-    let body = crate::support::debug::timed("lir verify", || verified(transformed, &stage, in_ssa)).map_err(Checked::Malformed)?;
+    let body = if verifying { crate::support::debug::timed("lir verify", || verified(transformed, &stage, in_ssa)).map_err(Checked::Malformed)? } else { transformed };
     if crate::support::debug::enabled("regclass") && matches!(stage.as_str(), "SsaSpill" | "ssaspill" | "PhiElimination" | "phielim" | "FloatAssign" | "FloatAlloc" | "TwoAddress" | "twoaddr" | "Coalescer" | "coalesce") {
         let found = crate::backend::regclass::violations(&body, &crate::backend::target::BUILT_IN, classes,  &crate::backend::ssaspill::untouchable(&body));
         let peak = found.iter().filter_map(|one| if let crate::backend::regclass::Why::Crowded { live, registers } = one.why { Some(live - registers) } else { None }).max().unwrap_or(0);
         let blocks: std::collections::BTreeSet<i64> = found.iter().map(|one| one.block).collect();
         llrm_support::debug!("regclass", "{} after {stage}: {} points do not fit, peak {peak} over, {} blocks", body.name, found.len(), blocks.len());
+    }
+    if !verifying {
+        return Ok(body);
     }
     let now = crate::support::debug::timed("lir owned bytes", || body.owned_bytes());
     if now != owned {

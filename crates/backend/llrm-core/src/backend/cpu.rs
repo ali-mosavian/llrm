@@ -54,6 +54,48 @@ pub struct Profile {
     pub size: bool,
     /// How the target this profile is for builds its cost model from the CPU's prices.
     pub model: llrm_target::CostModel,
+    /// The chains of shifts and adds found for constant multiplies under this profile's prices (GCC's `alg_hash`).
+    pub multiplies: MultiplyChains,
+}
+
+/// What `arithmetic` found for a multiply by a constant under one profile's prices, by constant and by whether a `lea` may be used:
+/// the profile owns it, so it lives and is keyed with the prices it was found under.
+#[derive(Default)]
+pub struct MultiplyChains(std::sync::Mutex<std::collections::HashMap<(i64, bool), Option<(Vec<(&'static str, i64)>, i64)>>>);
+
+impl MultiplyChains {
+    pub fn get(&self, number: i64, with_lea: bool) -> Option<Option<(Vec<(&'static str, i64)>, i64)>> {
+        self.0.lock().expect("not poisoned").get(&(number, with_lea)).cloned()
+    }
+
+    pub fn put(&self, number: i64, with_lea: bool, found: Option<(Vec<(&'static str, i64)>, i64)>) {
+        self.0.lock().expect("not poisoned").insert((number, with_lea), found);
+    }
+}
+
+// A cache is not part of what a profile is: a clone starts empty and two profiles are equal by their prices.
+impl Clone for MultiplyChains {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl std::fmt::Debug for MultiplyChains {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("MultiplyChains")
+    }
+}
+
+impl PartialEq for MultiplyChains {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for MultiplyChains {}
+
+impl std::hash::Hash for MultiplyChains {
+    fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
 }
 
 impl Profile {
@@ -118,6 +160,7 @@ impl Profile {
             address_prefix_stall: 0,
             size: false,
             model: arch.cost_model(),
+            multiplies: Default::default(),
         }
     }
 

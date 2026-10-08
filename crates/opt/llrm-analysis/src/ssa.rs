@@ -281,7 +281,7 @@ impl SsaUpdater {
     /// `single` in place of the trivial `phi`.
     fn replaced(&mut self, function: &mut Function, phi: InstId, result: Operand, single: Operand) -> Operand {
         let Operand::Value(value) = result else { unreachable!("a phi's value") };
-        function.replace_all_uses_with(value, single);
+        function.replace_value(value, single);
         function.set_operands(phi, Vec::new());
         function.erase(phi).expect("its uses were replaced");
         self.inserted.retain(|&one| one != phi);
