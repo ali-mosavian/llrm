@@ -1,5 +1,6 @@
 """`uv run --project tools python -m unittest discover -s tools/dosbatch`"""
 
+import os
 import sys
 import tempfile
 import time
@@ -78,10 +79,15 @@ class NibCutTests(unittest.TestCase):
             named = [command[i + 1] for i, word in enumerate(command) if word == "--used-by"]
             self.assertEqual(named, ["p.obj", "f.obj", *map(str, layer.values())])
 
-    @unittest.skipUnless((dosbatch.BIN / "jwlink").exists() and (dosbatch.BIN / "llrm-nib").exists(), "needs jwlink and llrm-nib")
     def test_a_program_that_divides_nothing_links_with_the_hooks_division_fault_handler(self):
         """init.asm's divide-fault handler calls N$EDIV, which the cut left out when only the program was named:
-        jwlink E2028 on `fn main() -> i16: print("hook")`."""
+        jwlink E2028 on `fn main() -> i16: print("hook")`. LLRM_REQUIRE_JWLINK=1 (the gate's) makes a missing tool a failure,
+        not a skip."""
+        missing = [name for name in ("jwlink", "llrm-nib") if not (dosbatch.BIN / name).exists()]
+        if missing:
+            self.assertFalse(os.environ.get("LLRM_REQUIRE_JWLINK"), f"LLRM_REQUIRE_JWLINK is set and {missing} is missing")
+            print(f"SKIPPED: needs {missing}", file=sys.stderr)
+            self.skipTest(f"needs {missing}")
         with tempfile.TemporaryDirectory() as work:
             work = Path(work)
             source = work / "h.nib"
