@@ -494,6 +494,13 @@ impl Webs {
 
 thread_local! {
     static ASKED: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static NUMBERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many values the liveness rows of the last interference graph of this thread numbered, for a test that a graph of a few
+/// values is not made over every value in the body.
+pub fn last_numbered() -> usize {
+    NUMBERED.with(std::cell::Cell::get)
 }
 
 /// How many values the last interference graph of this thread was asked for, none for all, for a test
@@ -511,7 +518,10 @@ pub fn _interference(body: &LirBody) -> Graph {
 pub fn _interference_among(body: &LirBody, only: Option<&BTreeSet<u32>>) -> Graph {
     ASKED.with(|asked| asked.set(only.map(BTreeSet::len)));
     let wanted = |value: u32| only.is_none_or(|only| only.contains(&value));
-    let rows = allocate::live_rows(body);
+    // Rows of the values asked of alone: a web of a few is not a liveness over every value in the body.
+    let rows = allocate::live_rows_by(body, wanted);
+    NUMBERED.with(|numbered| numbered.set(rows.numbered()));
+    // A copy's widths are read only where both its values are asked of (an edge needs both).
     let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         let mut held: Vec<Held> = match &one.what {
@@ -520,12 +530,16 @@ pub fn _interference_among(body: &LirBody, only: Option<&BTreeSet<u32>>) -> Grap
         };
         held.extend(one.requires.iter().chain(&one.delivers).map(|(value, _)| *value));
         for value in held {
-            let had = widths.get(&value.value).copied().unwrap_or(0);
-            widths.insert(value.value, had.max(value.width));
+            if wanted(value.value) {
+                let had = widths.get(&value.value).copied().unwrap_or(0);
+                widths.insert(value.value, had.max(value.width));
+            }
         }
         for (value, width) in &one.widths {
-            let had = widths.get(value).copied().unwrap_or(0);
-            widths.insert(*value, had.max(*width));
+            if wanted(*value) {
+                let had = widths.get(value).copied().unwrap_or(0);
+                widths.insert(*value, had.max(*width));
+            }
         }
     }
     let mut graph: Graph = IndexMap::default();
@@ -548,11 +562,25 @@ pub fn _interference_among(body: &LirBody, only: Option<&BTreeSet<u32>>) -> Grap
     let targets: BTreeSet<i64> = body.blocks.iter().flat_map(|block| block.succ.iter().copied()).collect();
     let mut entries: BTreeSet<i64> = BTreeSet::from([body.entry]);
     entries.extend(body.blocks.iter().map(|block| block.at).filter(|at| !targets.contains(at)));
-    for block in &body.blocks {
+    // Asked of a few values, a block that names none of them changes nothing in the walk: what is live in it stays so from its end to
+    // its start, so it adds pairs only at the entry, at its phis, and at a parallel copy where two of them are live.
+    let touched: Option<BTreeSet<usize>> = only.map(|only| {
+        crate::backend::postings::following(body, |postings| only.iter().flat_map(|value| postings.defs(*value).iter().chain(postings.uses(*value))).map(|at| at.0 as usize).collect())
+    });
+    for (block_index, block) in body.blocks.iter().enumerate() {
+        let mut alive: BTreeSet<u32> = rows.leaving(block.at).filter(|one| wanted(*one)).collect();
+        if let Some(touched) = &touched {
+            let quiet = !touched.contains(&block_index)
+                && !entries.contains(&block.at)
+                && block.phis.is_empty()
+                && (alive.len() < 2 || !block.insns.iter().any(|one| one.group.is_some()));
+            if quiet {
+                continue;
+            }
+        }
         if entries.contains(&block.at) {
             all_pairs(&mut graph, &rows.entering(block.at).filter(|one| wanted(*one)).collect());
         }
-        let mut alive: BTreeSet<u32> = rows.leaving(block.at).filter(|one| wanted(*one)).collect();
         let mut index = block.insns.len() as i64 - 1;
         while index >= 0 {
             let one = &block.insns[index as usize];
