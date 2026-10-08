@@ -240,7 +240,10 @@ fn _promoted(context: &mut Context, layout: &DataLayout, function: &mut Function
     let plan = {
         let accesses = Accesses::managed(context, layout, function, analyses)?;
         let held = Held::of(context, layout, function, analyses, true);
-        plan(&held.unit(context, layout, function, analyses.outer()), &accesses, aggregate_only)?
+        let unit = held.unit(context, layout, function, analyses.outer());
+        let mut plan = plan(&unit, &accesses, aggregate_only)?;
+        plan.variables = named_cells(&unit, &plan, &analyses.outer().metadata);
+        plan
     };
     if plan.loads.is_empty() {
         return Ok(false);
@@ -253,9 +256,37 @@ fn _promoted(context: &mut Context, layout: &DataLayout, function: &mut Function
 /// stores that define one, and the loads that read one's stored value.
 #[derive(Debug, Default)]
 struct Plan {
+    /// The variable `-g` names that each cell is, where it is one (`llrm_mir::DebugRecord`).
+    variables: Vec<Option<llrm_mir::MetadataId>>,
     types: Vec<TypeId>,
     stores: HashMap<InstId, usize>,
     loads: HashMap<InstId, usize>,
+}
+
+/// The variable `-g` declared that each cell of `plan` is: the one at the offset a store of it writes in the frame object the
+/// declaration names.
+fn named_cells(unit: &Unit, plan: &Plan, metadata: &[llrm_mir::module::MetadataNode]) -> Vec<Option<llrm_mir::MetadataId>> {
+    let declared: Vec<(Operand, llrm_mir::MetadataId, i64)> = unit
+        .function
+        .debug_records()
+        .iter()
+        .filter_map(|one| match one.what {
+            llrm_mir::DebugWhat::Declare(address) => Some((address, one.variable, llrm_mir::debuginfo::variable_offset(metadata, unit.context, one.variable)?)),
+            _ => None,
+        })
+        .collect();
+    let mut named = vec![None; plan.types.len()];
+    if declared.is_empty() {
+        return named;
+    }
+    for (&inst, &slot) in &plan.stores {
+        let pointer = unit.function.instruction(inst).operands[1];
+        let (base, offset) = llrm_mir::valuetracking::underlying(unit.context, unit.layout, unit.function, pointer);
+        if let Some(&(_, variable, _)) = declared.iter().find(|(address, _, at)| *address == base && Some(*at) == offset) {
+            named[slot] = Some(variable);
+        }
+    }
+    named
 }
 
 /// The type `inst` loads or stores.
@@ -328,7 +359,7 @@ fn plan(unit: &Unit, accesses: &Accesses, aggregate_only: bool) -> Result<Plan, 
     let types = used.iter().map(|&slot| candidates[slot]).collect();
     let stores = slots.iter().filter(|(inst, slot)| !is_load(unit, **inst) && used.contains(slot)).map(|(&inst, slot)| (inst, renumbered[slot])).collect();
     let loads = usable.into_iter().map(|inst| (inst, renumbered[&slots[&inst]])).collect();
-    Ok(Plan { types, stores, loads })
+    Ok(Plan { variables: Vec::new(), types, stores, loads })
 }
 
 /// Loads a stored value reaches on every path, with no write between that
@@ -442,6 +473,7 @@ fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
 
     // Each phi placed, by block and cell, with the block each input comes from.
     let mut phis = HashMap::<(i64, usize), (InstId, Vec<BlockId>)>::default();
+    let mut named_phis = Vec::new();
     for (slot, &ty) in plan.types.iter().enumerate() {
         let defining = plan.stores.iter().filter(|(_, one)| **one == slot).filter_map(|(inst, _)| function.parent(*inst)).map(cfg::id).collect::<BTreeSet<_>>();
         let mut work = defining.iter().copied().collect::<Vec<_>>();
@@ -458,10 +490,22 @@ fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
                 let first = function.block(block).instructions().first().copied();
                 function.insert(phi, first.map_or(Position::End(block), Position::Before)).expect("a placed block");
                 phis.insert((frontier, slot), (phi, from));
+                if let Some(variable) = plan.variables.get(slot).copied().flatten() {
+                    named_phis.push((block, phi, variable));
+                }
                 if !defining.contains(&frontier) {
                     work.push(frontier);
                 }
             }
+        }
+    }
+
+    // What the debugger is told of a variable: the phi that merges its paths, from the top of the block on.
+    for (block, phi, variable) in named_phis {
+        let value = function.instruction(phi).result.expect("a phi's value");
+        let first = function.block(block).instructions().iter().copied().find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        if let Some(first) = first {
+            function.add_debug_record(first, variable, llrm_mir::DebugWhat::Value(Operand::Value(value)));
         }
     }
 
@@ -486,6 +530,12 @@ fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
                 dead.push(inst);
             } else if let Some(&slot) = plan.stores.get(&inst) {
                 current[slot] = function.instruction(inst).operands[0];
+                // And the value it stores, from the instruction after it on.
+                if let Some(variable) = plan.variables.get(slot).copied().flatten()
+                    && let Some(next) = function.block(block).instructions().iter().copied().skip_while(|&one| one != inst).nth(1)
+                {
+                    function.add_debug_record(next, variable, llrm_mir::DebugWhat::Value(current[slot]));
+                }
             }
         }
         for successor in function.successors(block) {

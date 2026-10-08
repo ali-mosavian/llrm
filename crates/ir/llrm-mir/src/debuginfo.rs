@@ -380,6 +380,18 @@ pub fn add_variable(module: &mut Module, one: &Variable) -> MetadataId {
     node(module, operands)
 }
 
+/// The byte offset in its frame object of the variable node `id` names, read where only the module's metadata and constants are at
+/// hand (a pass).
+pub fn variable_offset(metadata: &[crate::module::MetadataNode], context: &crate::context::Context, id: MetadataId) -> Option<i64> {
+    match metadata.get(id.0 as usize)?.operands.get(3)? {
+        MetadataOperand::Constant(value) => match context.get(*value).kind {
+            ConstantKind::Int(value) => Some(value as u64 as i64),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 pub fn read_variable(module: &Module, id: MetadataId) -> Option<Variable> {
     let one = Reader::of(module, id)?;
     Some(Variable { scope: one.text(0)?, name: one.text(1)?, r#type: one.node(2)?, offset: one.int(3)?, parameter: one.int(4).is_some_and(|flag| flag != 0), argument: one.int(5) })
