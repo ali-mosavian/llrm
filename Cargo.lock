@@ -222,6 +222,7 @@ dependencies = [
  "llrm-driver",
  "llrm-mir",
  "llrm-object",
+ "llrm-support",
  "llrm-target",
  "llrm-transforms",
  "llrm-x86",
@@ -323,6 +324,7 @@ dependencies = [
  "llrm-elf64",
  "llrm-macho",
  "llrm-object",
+ "llrm-support",
  "tempfile",
 ]
 
@@ -430,6 +432,7 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-lir",
+ "llrm-support",
  "serde",
  "toml",
 ]
@@ -443,6 +446,7 @@ dependencies = [
  "llrm-core",
  "llrm-driver",
  "llrm-mir",
+ "llrm-support",
  "llrm-transforms",
  "llrm-x86-m16",
  "num-bigint",
@@ -522,6 +526,7 @@ dependencies = [
  "llrm-mir",
  "llrm-omf",
  "llrm-qbruntime",
+ "llrm-support",
  "llrm-target",
  "llrm-x86-bcmachine",
  "llrm-x86-m16",

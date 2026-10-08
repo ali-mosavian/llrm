@@ -100,7 +100,7 @@ pub(crate) fn _four_clobbers() -> BTreeSet<Reg> {
 /// Run as they were in a 32-bit segment the prefixes made 16-bit operations of them: a 64-bit remainder was garbage.
 pub(crate) fn flat(bytes: &[u8]) -> Vec<u8> {
     use iced_x86::{BlockEncoder, BlockEncoderOptions, Code, Decoder, DecoderOptions, FlowControl, Instruction, InstructionBlock};
-    let wide: std::collections::HashMap<String, Code> = Code::values().map(|code| (format!("{code:?}"), code)).collect();
+    let wide: crate::support::hash::HashMap<String, Code> = Code::values().map(|code| (format!("{code:?}"), code)).collect();
     let mut decoder = Decoder::with_ip(16, bytes, 0, DecoderOptions::NONE);
     let mut found = Vec::new();
     while decoder.can_decode() {

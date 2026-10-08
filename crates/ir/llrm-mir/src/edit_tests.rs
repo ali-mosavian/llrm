@@ -303,3 +303,18 @@ fn a_copy_starts_with_an_empty_log_and_equals_the_function_it_copies() {
     let mark = copy.mark();
     assert_eq!(copy.changes_since(mark), Some(&[][..]));
 }
+
+/// A move logs what follows it as the position named, without finding it in the block: that scan made each append of a
+/// straight-line body linear, and `hir to mir` 3.3x for twice the size (#992).
+#[test]
+fn a_move_logs_what_the_position_named() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let (x, _) = named(f, "x");
+    let (y, _) = named(f, "y");
+    let block = f.entry().unwrap();
+    f.take_changes();
+    f.move_to(y, Position::Before(x)).unwrap();
+    f.move_to(x, Position::End(block)).unwrap();
+    assert_eq!(f.take_changes(), [Change::Moved { inst: y, block, next: Some(x), from: block }, Change::Moved { inst: x, block, next: None, from: block }]);
+}

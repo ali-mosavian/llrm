@@ -130,16 +130,12 @@
 "mulconst O2 frontend translate": 2.408,
 "mulconst O2 mir gvn": 2.425,
 "mulconst Os frontend translate": 2.408,
-"mulconst Os hir to mir": 2.633,
 "mulconst Os mir gvn": 2.423,
 "straight O1 frontend translate": 2.367,
-"straight O1 hir to mir": 2.931,
 "straight O1 mir promote": 3.453,
 "straight O2 frontend translate": 2.367,
-"straight O2 hir to mir": 2.931,
 "straight O2 mir gvn": 2.492,
 "straight Os frontend translate": 2.367,
-"straight Os hir to mir": 2.931,
 "straight Os lir peephole": 2.163,
 "straight Os mir gvn": 2.497
 }

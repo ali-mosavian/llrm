@@ -3,7 +3,8 @@
 //! register. Built from the selected target (`RegisterClasses::of`) and handed
 //! down beside `Segments`; no pass reads another target's.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet};
+use crate::support::hash::HashMap;
 
 use iced_x86::Register;
 use llrm_target::Target;
@@ -40,7 +41,7 @@ impl RegisterClasses {
     pub fn of(arch: &dyn Target) -> Self {
         let forms = instructions::parse::parse(&arch.forms_text()).expect("the target's forms parse");
         let operations: HashMap<&str, &'static str> = Operation::ALL.iter().map(|op| (op.as_str(), op.as_str())).collect();
-        let mut pins: HashMap<Key, Vec<(Side, usize, Register)>> = HashMap::new();
+        let mut pins: HashMap<Key, Vec<(Side, usize, Register)>> = HashMap::default();
         for form in &forms {
             let chosen = |side: Side, index: usize, root: &str| {
                 forms.iter().any(|other| {
