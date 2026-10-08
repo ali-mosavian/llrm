@@ -85,7 +85,10 @@ pub struct Unit<'a> {
 /// declaration once the pass has run over the function.
 #[derive(Clone, Debug, Default)]
 pub struct Declared {
-    ids: HashMap<String, GlobalId>,
+    /// The module's names, worked out when a pass first declares one: most runs declare nothing.
+    ids: Option<HashMap<String, GlobalId>>,
+    /// Where the names come from while `ids` is not made: the module's `Declarations`.
+    held: Option<Rc<Vec<GlobalValue>>>,
     next: u32,
     pending: Vec<(String, crate::types::TypeId)>,
     /// Metadata nodes made, numbered after the module's.
@@ -95,8 +98,23 @@ pub struct Declared {
 
 impl Declared {
     pub fn of(module: &Module) -> Self {
+        counted("declared names", false);
         let ids = module.globals.iter().enumerate().filter_map(|(at, one)| Some((one.name.clone()?, GlobalId(at as u32)))).collect();
-        Self { ids, next: module.globals.len() as u32, pending: Vec::new(), nodes: Vec::new(), first_node: module.metadata.len() as u32 }
+        Self { ids: Some(ids), held: None, next: module.globals.len() as u32, pending: Vec::new(), nodes: Vec::new(), first_node: module.metadata.len() as u32 }
+    }
+
+    /// As `of`, over the module's `Declarations` (`held`, its `metadata` node count): nothing is scanned or copied
+    /// unless a pass declares a function. LLVM's `getOrInsertFunction` is a symbol-table lookup, not a scan.
+    pub fn over(held: Rc<Vec<GlobalValue>>, metadata: usize) -> Self {
+        Self { ids: None, next: held.len() as u32, held: Some(held), pending: Vec::new(), nodes: Vec::new(), first_node: metadata as u32 }
+    }
+
+    fn names(&mut self) -> &mut HashMap<String, GlobalId> {
+        let held = &self.held;
+        self.ids.get_or_insert_with(|| {
+            counted("declared names", false);
+            held.iter().flat_map(|all| all.iter()).enumerate().filter_map(|(at, one)| Some((one.name.clone()?, GlobalId(at as u32)))).collect()
+        })
     }
 
     /// A metadata node, its id at once, added to the module after the pass.
@@ -107,26 +125,27 @@ impl Declared {
 
     /// The function `name` of type `ty`, declared where the module has none.
     pub fn declare(&mut self, name: &str, ty: crate::types::TypeId) -> GlobalId {
-        if let Some(&id) = self.ids.get(name) {
+        if let Some(&id) = self.names().get(name) {
             return id;
         }
         let id = GlobalId(self.next);
         self.next += 1;
-        self.ids.insert(name.to_owned(), id);
+        self.names().insert(name.to_owned(), id);
         self.pending.push((name.to_owned(), ty));
         id
     }
 
-    /// The declarations made, added to `module`.
-    pub fn place(&mut self, module: &mut Module) -> Result<(), String> {
-        for (name, ty) in self.pending.drain(..) {
+    /// The declarations made, added to `module`; how many.
+    pub fn place(&mut self, module: &mut Module) -> Result<usize, String> {
+        let made = self.pending.len();
+        for (name, ty) in std::mem::take(&mut self.pending) {
             let id = module.add_function(&name, ty, crate::module::Linkage::External)?;
-            assert_eq!(Some(&id), self.ids.get(&name), "declared in order");
+            assert_eq!(Some(&id), self.names().get(&name), "declared in order");
         }
         assert_eq!(module.metadata.len() as u32, self.first_node, "nodes numbered after the module's");
         module.metadata.append(&mut self.nodes);
         self.first_node = module.metadata.len() as u32;
-        Ok(())
+        Ok(made)
     }
 }
 

@@ -7,11 +7,14 @@ use llrm_transforms::inline::Threshold;
 use llrm_transforms::interprocedural::{managers, optimized, roots};
 
 static SCANS: AtomicUsize = AtomicUsize::new(0);
+static NAME_TABLES: AtomicUsize = AtomicUsize::new(0);
 
 fn counting(what: &'static str, _hit: bool) {
-    if what == "callees" {
-        SCANS.fetch_add(1, Ordering::Relaxed);
-    }
+    match what {
+        "callees" => SCANS.fetch_add(1, Ordering::Relaxed),
+        "declared names" => NAME_TABLES.fetch_add(1, Ordering::Relaxed),
+        _ => 0,
+    };
 }
 
 /// `callers` functions, each calling two small callees, all called from `main`.
@@ -40,6 +43,7 @@ fn test_the_whole_module_step_scans_the_callees_after_a_change_not_for_every_que
         let mut m = llrm_mir::parse::module(&source(callers)).unwrap_or_else(|error| panic!("{error}"));
         let edits = std::cell::Cell::new(0usize);
         SCANS.store(0, Ordering::Relaxed);
+        NAME_TABLES.store(0, Ordering::Relaxed);
         Program::lend(&mut m, std::rc::Rc::new(llrm_mir::target::Neutral), |program| {
             let mut modules = managers(program, &mut ProgramAnalyses::default());
             let roots = roots(program);
@@ -52,6 +56,9 @@ fn test_the_whole_module_step_scans_the_callees_after_a_change_not_for_every_que
         if let Some((before, small)) = prior {
             assert!(scans <= 2 * before + 8, "{scans} scans at {callers} callers, {before} at {small}: grows faster than the module");
         }
+        // A name table of every global, built and copied for each body looked at: no pass here declares a function.
+        let tables = NAME_TABLES.load(Ordering::Relaxed);
+        assert!(tables <= 8, "{callers} callers: {tables} name tables of the module's globals built");
         prior = Some((scans, callers));
     }
 }
