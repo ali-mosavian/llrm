@@ -39,6 +39,7 @@ from configs import DIVERGES
 from cache import cached_launch
 from configs import switches_for
 from cache import toolchain_identity
+os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
 
 
 ROOT = Path(__file__).resolve().parents[2]

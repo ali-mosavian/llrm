@@ -932,6 +932,9 @@ impl ProgramPass for PassManager {
 
 /// The dump and the verifier after pass `number`.
 fn after(dump: &Option<std::path::PathBuf>, verify_each: bool, number: usize, name: &str, module: &Module) -> Result<(), String> {
+    if dump.is_none() && !verify_each {
+        return Ok(());
+    }
     spanned("verify after pass", || after_pass(dump, verify_each, number, name, module))
 }
 

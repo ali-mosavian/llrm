@@ -124,7 +124,7 @@ pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
                 let mut values = incoming.iter().map(|&(value, _)| value).filter(|&value| value != Operand::Value(result)).collect::<Vec<_>>();
                 values.dedup();
                 if let [value] = values[..] {
-                    function.replace_all_uses_with(result, value);
+                    function.replace_value(result, value);
                     function.set_operands(phi, Vec::new());
                     function.erase(phi)?;
                     changed = true;
@@ -152,7 +152,7 @@ fn _duplicate_phis(function: &mut Function) -> Result<bool, String> {
             incoming.sort_by_key(|&(from, _)| from);
             match seen.entry((ty, incoming)) {
                 std::collections::hash_map::Entry::Occupied(earlier) => {
-                    function.replace_all_uses_with(result, Operand::Value(*earlier.get()));
+                    function.replace_value(result, Operand::Value(*earlier.get()));
                     function.set_operands(phi, Vec::new());
                     function.erase(phi)?;
                     changed = true;
@@ -243,7 +243,7 @@ pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_
     }
     // A leader is never itself swapped, so the order is free.
     for (&value, &with) in &swap {
-        function.replace_all_uses_with(value, with);
+        function.replace_value(value, with);
     }
     for inst in gone {
         function.erase(inst)?;
@@ -355,7 +355,7 @@ pub fn forwarded(context: &Context, layout: &DataLayout, function: &mut Function
     // A load may be served by another served load.
     let replacements = served.iter().map(|one| (function.instruction(one.at).result.expect("a load's value"), one.value)).collect::<BTreeMap<_, _>>();
     for (&value, &with) in &replacements {
-        function.replace_all_uses_with(value, ssa::provider(with, &replacements).map_err(|error| error.to_string())?);
+        function.replace_value(value, ssa::provider(with, &replacements).map_err(|error| error.to_string())?);
     }
     for one in served {
         function.erase(one.at)?;
