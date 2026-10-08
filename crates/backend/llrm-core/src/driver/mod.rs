@@ -205,6 +205,9 @@ pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String>
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {
         timed("mir spill model", || spill_model(program));
     }
+    if !llrm_support::debug::verifying() {
+        return Ok(());
+    }
     timed("mir verify pipeline", || verified(program, "the pipeline"))
 }
 
