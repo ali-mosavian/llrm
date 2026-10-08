@@ -658,7 +658,7 @@ pub struct Function {
 }
 
 /// The debug vocabulary, as MIR's metadata spells it.
-pub use llrm_mir::debuginfo::{Kind as DebugKind, Language as DebugLanguage, Reach as DebugReach, Scalar as DebugScalar};
+pub use llrm_mir::debuginfo::{Kind as DebugKind, Dialect as DebugDialect, Language as DebugLanguage, Reach as DebugReach, Scalar as DebugScalar};
 
 /// A source type, as a debugger shows it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -733,6 +733,8 @@ pub struct DebugGlobal {
 pub struct Debug {
     /// The source language, where the frontend says.
     pub language: Option<DebugLanguage>,
+    /// The CodeView 4 it is written as, where the frontend says; BASIC's compilers' otherwise.
+    pub dialect: Option<DebugDialect>,
     pub types: Vec<DebugType>,
     pub functions: Vec<DebugFunction>,
     pub globals: Vec<DebugGlobal>,

@@ -194,6 +194,45 @@ fn enumerators(list: &[u8]) -> Vec<String> {
     out
 }
 
+/// A procedure as its record says it, with the frame variables up to its end.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Procedure {
+    pub name: String,
+    pub length: u32,
+    /// Where its body starts and ends, from its first byte.
+    pub debug_start: u32,
+    pub debug_end: u32,
+    /// Each BP-relative variable by name and offset, in the order written.
+    pub variables: Vec<(String, i64)>,
+}
+
+/// The procedures of `records`' CodeView 4, 16- or 32-bit.
+pub fn procedures(records_of_object: &[Rc<Record>]) -> Vec<Procedure> {
+    let symbols = cvinfo::symbols(records_of_object);
+    let mut out: Vec<Procedure> = Vec::new();
+    for (code, data) in if symbols.len() >= 4 { records(&symbols) } else { Vec::new() } {
+        let wide = code >= 0x0200;
+        match code {
+            0x0104 | 0x0105 | 0x0204 | 0x0205 => {
+                let at = |field: usize| -> u32 { if wide { u32::from_le_bytes(data[12 + 4 * field..16 + 4 * field].try_into().unwrap()) } else { u32::from(u16_at(&data, 12 + 2 * field)) } };
+                let (lengths, address) = if wide { (12, 6) } else { (6, 4) };
+                let (name, _) = pascal(&data, 12 + lengths + address + 3);
+                out.push(Procedure { name, length: at(0), debug_start: at(1), debug_end: at(2), variables: Vec::new() });
+            }
+            0x0100 | 0x0200 => {
+                let width = if wide { 4 } else { 2 };
+                let disp = if wide { i64::from(i32::from_le_bytes(data[..4].try_into().unwrap())) } else { i64::from(i16::from_le_bytes([data[0], data[1]])) };
+                let (name, _) = pascal(&data, width + 2);
+                if let Some(last) = out.last_mut() {
+                    last.variables.push((name, disp));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// What `records`' CodeView 4 says, one line each and sorted: `PROC name far|near (parameters) -> result`,
 /// `PARAM` and `LOCAL name.variable: type`, `REGISTER name.variable: type in register N`, `DATA name: type` and
 /// `UDT name: type`.

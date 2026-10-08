@@ -415,8 +415,10 @@ fn built_inner(module: &masm::Module, source: &str, layout: CodeLayout) -> Resul
     for (index, group) in groups.iter().enumerate() {
         _code(&mut segments[index], index, module, group, &mut symbols)?;
     }
-    if module.debug.is_some() && groups.len() != 1 {
-        return Err(Unencodable("-g with a code segment per procedure".into()).into());
+    // The BASIC dialect's records name an address by its offset alone, so they need the one code segment the module's code is in;
+    // CodeView 4 as C7 writes it has the segment in each address.
+    if module.debug.as_ref().is_some_and(|debug| debug.dialect == llrm_object::debug::Dialect::Bc) && groups.len() != 1 {
+        return Err(Unencodable("-g of the BASIC dialect with a code segment per procedure".into()).into());
     }
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     object_of(module, source, segments, &symbols, &externs)

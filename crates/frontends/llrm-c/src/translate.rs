@@ -1878,9 +1878,9 @@ impl<'a, 't> Body<'a, 't> {
         })
     }
 
-    /// Whether C promises a signed result fits: an int or wider.
+    /// Whether C promises a signed result fits: an int or wider, unless `-fwrapv` says it wraps.
     fn wraps(&self, type_: &str, bits: i64) -> bool {
-        signed(&self.unit.canonical_type(type_)) && bits >= 16
+        !self.unit.wrapv && signed(&self.unit.canonical_type(type_)) && bits >= 16
     }
 
     /// The index of a pointer add scaled to bytes, `index * size`: the

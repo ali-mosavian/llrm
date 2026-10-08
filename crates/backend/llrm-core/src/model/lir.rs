@@ -237,7 +237,7 @@ impl Repr for Phi {
 /// One LIR CFG block.
 ///
 /// Direct port of `qbopt.model.lir:LirBlock`.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct LirBlock {
     pub at: i64,
     pub insns: Vec<Arc<Insn>>,
@@ -245,6 +245,20 @@ pub struct LirBlock {
     pub phis: Vec<Phi>,
     /// Laid out after the hot code: every path from it ends in `unreachable`, isel finds.
     pub cold: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The blocks this thread has cloned: what a pass that copies the body per change shows (#560, #913).
+    pub static BLOCK_CLONES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+impl Clone for LirBlock {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        BLOCK_CLONES.with(|count| count.set(count.get() + 1));
+        Self { at: self.at, insns: self.insns.clone(), succ: self.succ.clone(), phis: self.phis.clone(), cold: self.cold }
+    }
 }
 
 impl LirBlock {
@@ -335,6 +349,9 @@ pub struct LirBody {
     pub homes: Arc<std::collections::BTreeMap<u32, crate::model::ir::Mem>>,
     /// 16 or 32: the mode the target's code runs in, which decides how an instruction encodes and what it touches.
     pub bits: u32,
+    /// Every frame cell names the slot it lies in (`Addr::slot_home`): set once instruction selection has tagged them, and
+    /// then a rule of the verifier.
+    pub slotted: bool,
 }
 
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
@@ -436,6 +453,7 @@ impl LirBody {
             float_stack: 0,
             homes: Arc::default(),
             bits: crate::frontends::bc::declen::BITNESS,
+            slotted: false,
         }
     }
 
@@ -461,6 +479,7 @@ impl LirBody {
             float_stack: self.float_stack,
             homes: Arc::clone(&self.homes),
             bits: self.bits,
+            slotted: self.slotted,
         }
     }
 

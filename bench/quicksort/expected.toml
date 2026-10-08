@@ -1,4 +1,4 @@
-reason = "synth_mult: a constant multiply is the cheaper of the Horner chain and gcc's (factors 2^m +- 1, t - 1 and t + 1); four parity c rows are one instruction longer and one byte smaller, chosen by clocks"
+reason = "synth_mult: a constant multiply is the cheaper of the Horner chain and gcc's (factors 2^m +- 1, t - 1, t + 1): quicksort c -O2 163104 -> 162079 instructions, qlight -5 bytes"
 blessed = "2026-10-08"
 
 [bas.O2]
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 169410
+instructions = 168387
 memory_operands = 60750
-code_bytes = 427
+code_bytes = 426
 data_bytes = 0
 bss_bytes = 0
 

@@ -859,14 +859,20 @@ fn test_a_loops_proven_test_is_not_copied_into_a_loop_inside_it() {
     assert!(after >= 0.75 * before, "{before} before ControlFlow, {after} after");
 }
 
-/// Each change threading made copied every block, twice, and went back to the first: a body of n jumps to
-/// the next block was n copies of n blocks, 2.1 s of compiling 800 blocks (#560). A change edits in place.
+/// Each change threading made copied every block, twice, and went back to the first: a body of n jumps to the next block was n
+/// copies of n blocks, 2.1 s of compiling 800 blocks (#560). A change edits in place. Measured as the work, not the time (a
+/// loaded machine failed the old wall-clock bound, #913): the blocks cloned grow with n, not with n squared.
 #[test]
 fn test_threading_a_long_run_of_jumps_does_not_copy_the_body_for_each() {
-    let n = 3000;
-    let blocks: Vec<LirBlock> = (0..n).map(|at| block(at, vec![_move(at * 2, imm(at)), _jump(at * 2 + 1, at + 1)], vec![at + 1])).chain([block(n, vec![_return(n * 2)], vec![])]).collect();
-    let started = std::time::Instant::now();
-    let threaded = threaded(&body("f", 0, blocks));
-    assert!(threaded.blocks.iter().take(n as usize).all(|one| _real(one).iter().all(|insn| insn.what.as_ref().is_none_or(|what| what.op != Operation::Jump))), "a fall-through jump is left");
-    assert!(started.elapsed().as_secs_f64() < 0.5, "{:?} for 3,000 blocks", started.elapsed());
+    let cloned = |n: i64| {
+        let blocks: Vec<LirBlock> = (0..n).map(|at| block(at, vec![_move(at * 2, imm(at)), _jump(at * 2 + 1, at + 1)], vec![at + 1])).chain([block(n, vec![_return(n * 2)], vec![])]).collect();
+        let body = body("f", 0, blocks);
+        let before = crate::model::lir::BLOCK_CLONES.with(std::cell::Cell::get);
+        let threaded = threaded(&body);
+        let copies = crate::model::lir::BLOCK_CLONES.with(std::cell::Cell::get) - before;
+        assert!(threaded.blocks.iter().take(n as usize).all(|one| _real(one).iter().all(|insn| insn.what.as_ref().is_none_or(|what| what.op != Operation::Jump))), "a fall-through jump is left");
+        copies
+    };
+    let (small, large) = (cloned(500), cloned(1000));
+    assert!(large <= 3 * small, "{small} block copies for 500 blocks, {large} for 1,000: more than linear");
 }
