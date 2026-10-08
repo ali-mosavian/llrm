@@ -73,8 +73,9 @@ def refusal(text: str, rules: list[dict]) -> str | None:
 
 def spellings(symbol: str) -> list[str]:
     """What a linker's undefined symbol is called in C: the Watcom convention adds a trailing underscore (`sprintf_`), cdecl a leading
-    one (`_sprintf`, `___builtin_ffs`), and the target decides which."""
-    return list(dict.fromkeys([symbol.rstrip("_"), symbol[1:] if symbol.startswith("_") else symbol, symbol]))
+    one (`_sprintf`, `___builtin_ffs`), regparm3 a `@3` (`___builtin_ffs@3`), and the target decides which."""
+    plain = re.sub(r"@\d+$", "", symbol)
+    return list(dict.fromkeys([plain.rstrip("_"), plain[1:] if plain.startswith("_") else plain, plain, symbol]))
 
 
 def build(source: Path, level: str, target: str, work: Path, support: Path, stem: str, rules: list[dict]) -> tuple[str, str, Path | None]:

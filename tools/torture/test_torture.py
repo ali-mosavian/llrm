@@ -27,7 +27,7 @@ class SymbolTests(unittest.TestCase):
         """m16 (cdecl, a leading underscore) reported `___builtin_prefetch` and `_sprintf`: the refusals name `__builtin_` and
         `sprintf`, so 114 builds of programs that need a builtin or libc routine the runner lacks counted as link findings."""
         rules = torture.expected()
-        for symbol in ("__builtin_prefetch_", "___builtin_prefetch", "_sprintf", "sprintf_"):
+        for symbol in ("__builtin_prefetch_", "___builtin_prefetch", "_sprintf", "sprintf_", "___builtin_ffs@3", "_sprintf@3"):
             found = [torture.refusal(f"undefined symbol {one}", rules) for one in torture.spellings(symbol)]
             self.assertTrue(any(found), symbol)
         self.assertFalse(any(torture.refusal(f"undefined symbol {one}", rules) for one in torture.spellings("_frobnicate")))
