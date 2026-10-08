@@ -3,11 +3,11 @@
 "branches O2": 2.844,
 "branches Os": 3.088,
 "callers O1": 1.933,
-"callers O2": 3.016,
+"callers O2": 2.972,
 "callers Os": 3.399,
-"chain O1": 3.676,
-"chain O2": 3.651,
-"chain Os": 3.637,
+"chain O1": 3.06,
+"chain O2": 3.093,
+"chain Os": 3.087,
 "functions O1": 2.117,
 "functions O2": 2.112,
 "functions Os": 2.109,
@@ -17,7 +17,7 @@
 "mulconst O1": 2.059,
 "mulconst O2": 2.065,
 "mulconst Os": 2.077,
-"straight O1": 2.061,
-"straight O2": 2.09,
-"straight Os": 2.135
+"straight O1": 2.062,
+"straight O2": 2.086,
+"straight Os": 2.136
 }
