@@ -86,7 +86,7 @@ STACK_SLACK = 4096
 
 
 def stack_needed(text: str) -> int | None:
-    """The bytes of `{ dg-require-stack-size "EXPR" }` (`0x10000`, `128 * 128 * 4 + 1024`), none if the test does not say."""
+    """The bytes of `{ dg-require-stack-size "EXPR" }` (a hex size, or `128 * 128 * 4 + 1024`), none if the test does not say."""
     found = re.search(r'dg-require-stack-size\s+"([^"]*)"', text)
     if not found:
         return None
