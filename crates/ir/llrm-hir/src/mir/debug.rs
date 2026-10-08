@@ -3,7 +3,7 @@
 //! a record that it lives where its frame object is, which [`Body::declare_variables`]
 //! says: `llvm.dbg.declare`, as a [`DebugRecord`](llrm_mir::DebugRecord), no instruction.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_mir::debuginfo as di;
 use llrm_mir::{GlobalId, MetadataId, Module};
@@ -61,12 +61,12 @@ pub(super) fn emitted<'h>(
     data: &HashMap<i64, GlobalId>,
     functions: &HashMap<i64, GlobalId>,
 ) -> Emit<HashMap<(i64, i64), MetadataId>> {
-    let mut variables = HashMap::new();
+    let mut variables = HashMap::default();
     let Some(debug) = &hir.debug else { return Ok(variables) };
     if let Some(language) = debug.language {
         di::set_language(module, language, debug.dialect.unwrap_or(di::Dialect::Bc));
     }
-    let mut types = Types { of: debug.types.iter().map(|one| (one.id, one)).collect(), made: HashMap::new() };
+    let mut types = Types { of: debug.types.iter().map(|one| (one.id, one)).collect(), made: HashMap::default() };
     for global in &debug.globals {
         let Some(&object) = data.get(&global.object) else { continue };
         let scope = match global.function {
@@ -118,7 +118,7 @@ pub(super) fn emitted<'h>(
 
 /// The number each frame variable is named by while the code is lowered, before its node is made.
 pub(super) fn provisional(hir: &model::Module) -> HashMap<(i64, i64), MetadataId> {
-    let mut chosen = HashMap::new();
+    let mut chosen = HashMap::default();
     let Some(debug) = &hir.debug else { return chosen };
     for procedure in &debug.functions {
         let Some(function) = hir.functions.iter().find(|one| one.id == procedure.function) else { continue };

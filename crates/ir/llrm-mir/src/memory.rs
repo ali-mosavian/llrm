@@ -2,7 +2,7 @@
 //! `Instruction::mayReadFromMemory`/`mayWriteToMemory` answer: a call from
 //! its callee's `memory(...)`, anything else from its opcode.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::context::{ConstantKind, Context, GlobalId};
 use crate::facts::Facts;
@@ -46,7 +46,7 @@ pub struct Summary {
 
 /// Hashed with fixed keys: std's seeds each map afresh, and the work of building one then differs run to run (`callee-effects`
 /// read 97.7 to 98.6 Minstr compiling one program, which put a step at the scaling gate's 2% floor in and out of its budget).
-pub type Callees = HashMap<GlobalId, Summary, std::hash::BuildHasherDefault<std::collections::hash_map::DefaultHasher>>;
+pub type Callees = HashMap<GlobalId, Summary>;
 
 /// One scan of every function in `module`; counted as `callees` for an observer, which a pass that asks per query shows.
 pub fn callees(module: &Module) -> Callees {

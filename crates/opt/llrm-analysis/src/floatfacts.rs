@@ -27,7 +27,7 @@
 //! `test_entry_bytes_are_killed_by_a_store`, consts' own.
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use llrm_support::hash::HashSet;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
 use crate::graph::loops;

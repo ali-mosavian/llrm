@@ -11,7 +11,7 @@
 //! and recomputing every analysis a pass claims to have preserved.
 
 use std::any::{Any, TypeId};
-use std::collections::{HashMap, HashSet};
+use llrm_support::hash::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::context::{Context, GlobalId};
@@ -317,7 +317,7 @@ pub struct PreservedAnalyses {
 
 impl PreservedAnalyses {
     pub fn all() -> Self {
-        Self { all: true, kept: HashSet::new(), function: true }
+        Self { all: true, kept: HashSet::default(), function: true }
     }
 
     pub fn none() -> Self {
@@ -491,7 +491,7 @@ fn check_replay() -> bool {
 
 impl Analyses {
     pub fn new(outer: Rc<Outer>) -> Self {
-        Self { cache: HashMap::new(), kept: HashMap::new(), outer }
+        Self { cache: HashMap::default(), kept: HashMap::default(), outer }
     }
 
     /// An empty cache over the same module and target, for another body.
@@ -617,7 +617,7 @@ pub struct ModuleAnalyses {
 
 impl ModuleAnalyses {
     pub fn new(program: Rc<ProgramProxy>) -> Self {
-        Self { program, required: Vec::new(), results: HashMap::new(), dropped: HashMap::new(), outer: None, functions: HashMap::new(), memos: HashMap::new() }
+        Self { program, required: Vec::new(), results: HashMap::default(), dropped: HashMap::default(), outer: None, functions: HashMap::default(), memos: HashMap::default() }
     }
 
     /// The `T` an analysis left for its next run, made empty the first time: what survives `invalidate`, for an analysis that
@@ -681,7 +681,7 @@ impl ModuleAnalyses {
         if !self.functions.contains_key(&id) {
             let outer = match &self.outer {
                 Some(outer) => Rc::clone(outer),
-                None => Rc::new(Outer { metadata: Vec::new(), globals: Rc::default(), program: Rc::clone(&self.program), modules: HashMap::new() }),
+                None => Rc::new(Outer { metadata: Vec::new(), globals: Rc::default(), program: Rc::clone(&self.program), modules: HashMap::default() }),
             };
             self.functions.insert(id, Analyses::new(outer));
         }

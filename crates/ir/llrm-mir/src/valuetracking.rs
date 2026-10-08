@@ -1,7 +1,7 @@
 //! Facts about a value's bits, as LLVM's ValueTracking proves them for
 //! every pass and selector to ask.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::context::{signed, ConstantExpr, ConstantKind, Context, GlobalId};
 use crate::datalayout::DataLayout;

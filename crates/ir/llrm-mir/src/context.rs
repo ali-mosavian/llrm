@@ -1,6 +1,6 @@
 //! LLVM's context: the uniqued types and constants a module's code refers to.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::opcode::CastOp;
 use crate::types::{TypeId, Types};

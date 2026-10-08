@@ -2,7 +2,7 @@
 //! mnemonic's LIR operation, operand shapes and fixed registers, and the
 //! flags iced-x86 says its forms read and write.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use iced_x86::{Code, Instruction, RflagsBits};
 use indexmap::IndexMap;

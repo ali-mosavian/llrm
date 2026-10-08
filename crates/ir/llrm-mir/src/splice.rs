@@ -2,7 +2,7 @@
 //! branching to what followed. Where to inline is `llrm_transforms::inline`'s
 //! policy; this is only how.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::context::Context;
 use crate::edit::Position;
@@ -49,7 +49,7 @@ pub fn splice(context: &mut Context, function: &mut Function, call: InstId, call
     }
     let arguments = &function.instruction(call).operands;
     let mut values: HashMap<ValueId, Operand> = callee.parameters().iter().copied().zip(arguments.iter().copied()).collect();
-    let mut blocks: HashMap<BlockId, BlockId> = HashMap::new();
+    let mut blocks: HashMap<BlockId, BlockId> = HashMap::default();
     let mut last = block;
     for &one in callee.layout() {
         let copy = function.create_block(None);

@@ -9,7 +9,8 @@
 //! accepting state -- equal operands and guards -- the rules there run in
 //! their order in the file.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
+use llrm_support::hash::HashMap;
 
 use crate::resolve::{RGroup, RInsn, Side, Ty, Var};
 use crate::syntax::{Class, OperandPat};

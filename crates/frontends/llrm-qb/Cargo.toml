@@ -6,6 +6,7 @@ rust-version.workspace = true
 description = "The QuickBASIC-family source frontend"
 
 [dependencies]
+llrm-support = { workspace = true }
 llrm-core = { workspace = true }
 llrm-driver = { workspace = true }
 qbfront = { path = "../qbfront" }

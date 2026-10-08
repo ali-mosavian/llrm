@@ -6,6 +6,7 @@ rust-version.workspace = true
 description = "llrm's DWARF writer: debug::Info as .debug_info, .debug_abbrev, .debug_line, .debug_str, .debug_aranges"
 
 [dependencies]
+llrm-support = { workspace = true }
 llrm-object = { workspace = true }
 
 [dev-dependencies]

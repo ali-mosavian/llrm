@@ -3,7 +3,7 @@
 //! adds a loop invariant to, and sums, differences and invariant multiples
 //! of such. Arithmetic wraps, so each holds modulo its width.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use crate::context::{ConstantKind, Context};
 use crate::dominators::DominatorTree;
@@ -34,7 +34,7 @@ pub struct Evolution {
 
 impl Evolution {
     pub fn new(context: &Context, function: &Function, loops: &LoopInfo) -> Self {
-        let mut solver = Solver { context, function, loops, known: HashMap::new() };
+        let mut solver = Solver { context, function, loops, known: HashMap::default() };
         for (block, inst) in function.walk() {
             if let Some(value) = function.instruction(inst).result
                 && loops.loop_of(block).is_some()

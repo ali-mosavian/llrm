@@ -1,6 +1,6 @@
 //! Types, uniqued by the context as LLVM's are, so a type is a copyable id.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TypeId(u32);

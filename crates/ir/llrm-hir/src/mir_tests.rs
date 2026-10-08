@@ -794,7 +794,7 @@ fn a_call_through_a_functions_address() {
 fn a_routine_reading_its_arguments_is_argmem_read() {
     let module = llrm_mir::parse::module("declare i16 @_strlen(ptr)\ndeclare void @_puts(ptr)\n").unwrap();
     let promises = crate::model::RuntimePromises { reads_arguments: vec!["_strlen".to_owned()], ..Default::default() };
-    let runtime = llrm_mir::print::module(&crate::mir::promised(&[(&module, std::collections::HashMap::new())], &promises).unwrap());
+    let runtime = llrm_mir::print::module(&crate::mir::promised(&[(&module, llrm_support::hash::HashMap::default())], &promises).unwrap());
     assert!(runtime.contains("declare i16 @_strlen(ptr nocapture) memory(argmem: read)\n") && !runtime.contains("puts"), "{runtime}");
 }
 
@@ -804,7 +804,7 @@ fn a_routine_reading_its_arguments_is_argmem_read() {
 fn a_routine_retaining_nothing_is_noretain() {
     let module = llrm_mir::parse::module("declare void @erase(ptr)\ndeclare void @puts(ptr)\n").unwrap();
     let promises = crate::model::RuntimePromises { no_retain: vec!["erase".to_owned()], ..Default::default() };
-    let runtime = llrm_mir::print::module(&crate::mir::promised(&[(&module, std::collections::HashMap::new())], &promises).unwrap());
+    let runtime = llrm_mir::print::module(&crate::mir::promised(&[(&module, llrm_support::hash::HashMap::default())], &promises).unwrap());
     assert!(runtime.contains("declare void @erase(ptr nocapture noretain)\n") && !runtime.contains("puts"), "{runtime}");
 }
 

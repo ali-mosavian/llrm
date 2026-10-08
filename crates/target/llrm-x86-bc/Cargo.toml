@@ -6,6 +6,7 @@ rust-version.workspace = true
 description = "The BC object frontend: machine code raised onto llrm-mir"
 
 [dependencies]
+llrm-support = { workspace = true }
 llrm-x86-bcmachine = { workspace = true }
 llrm-target = { workspace = true }
 llrm-qbruntime = { workspace = true }
