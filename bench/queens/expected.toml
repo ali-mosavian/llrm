@@ -1,4 +1,4 @@
-reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+reason = "jumpthread decides a branch on a compare of a phi of constants on each way into it (gcc's budget, empty copies at -Os): queens c -O2 instructions 148191 -> 137439, -Os 174112 -> 160327; qlight c +1 instruction, -1 byte"
 blessed = "2026-10-08"
 
 [bas.O2]
@@ -16,16 +16,16 @@ data_bytes = 15
 bss_bytes = 0
 
 [c.O2]
-instructions = 148191
+instructions = 137439
 memory_operands = 28501
-code_bytes = 191
+code_bytes = 178
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 174112
+instructions = 160327
 memory_operands = 19850
-code_bytes = 170
+code_bytes = 159
 data_bytes = 0
 bss_bytes = 0
 
