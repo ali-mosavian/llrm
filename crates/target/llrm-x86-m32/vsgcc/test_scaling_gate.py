@@ -67,19 +67,29 @@ def steps_compiler(linear="0.01 * n", quadratic="0.0002 * n * n", unit="Minstr")
 
 def test_a_step_gone_quadratic_reads_four_and_is_over_the_linear_limit(tmp_path):
     got = gate.pass_ratios("straight", "O2", tmp_path, steps_compiler(), "s")
-    assert got["straight O2 quadratic step"] == pytest.approx(4.0, abs=0.3)
-    assert got["straight O2 linear step"] == pytest.approx(2.0, abs=0.1)
-    assert "straight O2 tiny step" not in got  # under 2% of the work: its count moves with run order
+    assert got["straight O2 quadratic step"][0] == pytest.approx(4.0, abs=0.3)
+    assert got["straight O2 linear step"][0] == pytest.approx(2.0, abs=0.1)
+    assert "straight O2 tiny step" not in got  # under LOW of the work: its count moves with run order
     _, bad = gate.compare_passes({}, got)
     assert any("quadratic step" in line for line in bad) and not any("linear step" in line for line in bad), bad
 
 
 def test_a_known_superlinear_step_passes_at_its_ratio_and_fails_above_and_below():
     budget = {"a O2 x": 3.0}
-    assert gate.compare_passes(budget, {"a O2 x": 3.05})[1] == []
-    assert any("more than doubles" in line for line in gate.compare_passes(budget, {"a O2 x": 3.5})[1])
-    assert any("refresh the budget" in line for line in gate.compare_passes(budget, {"a O2 x": 2.5})[1])
-    assert any("refresh the budget" in line for line in gate.compare_passes(budget, {})[1])  # fell under the floor or gone
+    assert gate.compare_passes(budget, {"a O2 x": (3.05, 0.1)})[1] == []
+    assert any("more than doubles" in line for line in gate.compare_passes(budget, {"a O2 x": (3.5, 0.1)})[1])
+    assert any("refresh the budget" in line for line in gate.compare_passes(budget, {"a O2 x": (2.5, 0.1)})[1])
+    assert any("refresh the budget" in line for line in gate.compare_passes(budget, {})[1])  # fell under LOW or gone
+
+
+def test_a_step_on_the_edge_of_the_share_floor_fails_neither_by_being_there_nor_by_being_gone():
+    """callers -Os `analysis callee-effects` sat at 2.0% of the work: the same binary read fail, pass, pass, because a share of
+    1.99% and 2.01% put it in and out of the measurement."""
+    in_the_band = {"a O2 x": (3.4, (gate.LOW + gate.HIGH) / 2)}
+    assert gate.compare_passes({}, in_the_band)[1] == []  # new, but not above HIGH
+    assert gate.compare_passes({"a O2 x": 3.4}, in_the_band)[1] == []  # recorded, and still there
+    assert gate.compare_passes({}, {"a O2 x": (3.4, gate.HIGH + 0.001)})[1]  # above HIGH and new: a superlinear step
+    assert gate.pass_budget({"a O2 x": (3.4, gate.FLOOR - 0.001), "b O2 x": (3.4, gate.FLOOR)}) == {"b O2 x": 3.4}
 
 
 def test_cpu_time_instead_of_instruction_counts_is_no_counter(tmp_path):
