@@ -129,3 +129,13 @@ def test_a_refresh_changes_only_the_pass_entries_that_moved():
         "f O2 u": (3.3, gate.LOW),  # new but small: not recorded
     }  # d is gone
     assert gate.refreshed_passes(budget, now) == {"a O2 x": 4.0, "c O2 z": 2.4, "e O2 v": 3.3}
+
+
+def test_a_refresh_rewrites_an_entry_that_moved_whatever_its_share():
+    """A step at 1.8% of the work with its ratio down 10% was kept by the refresh (share under FLOOR) and failed the comparison that
+    read it ("now 3.668, budget 4.058"): a refresh must leave the gate passing."""
+    budget = {"a O2 x": 4.058}
+    now = {"a O2 x": (3.668, gate.LOW + 0.001)}
+    refreshed = gate.refreshed_passes(budget, now)
+    assert refreshed == {"a O2 x": 3.668}
+    assert gate.compare_passes(refreshed, now)[1] == []

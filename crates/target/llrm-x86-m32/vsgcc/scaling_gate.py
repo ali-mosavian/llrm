@@ -149,16 +149,18 @@ def refreshed_axes(old: dict[str, float], now: dict[str, float], slack: float = 
 
 
 def refreshed_passes(old: dict[str, float], now: dict[str, tuple[float, float]], slack: float = PASS_SLACK) -> dict[str, float]:
-    """The pass budget as `compare_passes` would have it refreshed: an entry kept while its step still reads within `slack` of it
-    (or sits between LOW and FLOOR of the work, where it may flip in and out), rewritten when it moved, dropped when the step is
+    """The pass budget as `compare_passes` would have it refreshed: an entry kept while its step still reads within `slack` of it,
+    rewritten when it moved (the step still above LINEAR, whatever its share: the comparison reads it), dropped when the step is
     gone or no longer above LINEAR, and a new superlinear step of FLOOR or more added."""
     new = pass_budget(now)
     out = {}
     for key in sorted(old.keys() | new.keys()):
         read = now.get(key)
-        if key in old and read is not None and read[0] > LINEAR and (old[key] / slack <= read[0] <= old[key] * slack or read[1] < FLOOR):
-            out[key] = old[key]
-        elif key in new:
+        if key in old:
+            if read is None or read[0] <= LINEAR:
+                continue
+            out[key] = old[key] if old[key] / slack <= read[0] <= old[key] * slack else round(read[0], 3)
+        else:
             out[key] = new[key]
     return out
 
