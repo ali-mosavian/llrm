@@ -821,7 +821,7 @@ pub fn _duplicable_return_size(bits: u32, block: &LirBlock, return_overhead: i64
         || real.is_empty()
         || real[real.len() - 1].what.as_ref().is_none_or(|what| what.op != Operation::Return)
         // A return that pops 64 KB or more is several instructions (`masm::moved_return`), not one `ret`.
-        || real[real.len() - 1].what.as_ref().is_some_and(|what| matches!(what.sources.first(), Some(crate::model::ir::Loc::Imm(popped)) if popped.value > 0xFFFF))
+        || real[real.len() - 1].what.as_ref().is_some_and(|what| matches!(what.sources.first(), Some(crate::model::ir::Loc::Imm(popped)) if popped.value > llrm_x86::calling::RET_POPS_MOST))
         || block.insns.iter().any(|one| {
             !one.inserted()
                 || one.what.is_none()

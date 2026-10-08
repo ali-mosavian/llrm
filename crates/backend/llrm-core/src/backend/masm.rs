@@ -269,7 +269,7 @@ fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> S
 /// arguments. `ret imm16` cannot remove 64 KB or more: a near return of a 32-bit target keeps the count, and the epilogue
 /// writes `pop [esp + n]; add esp, n; ret` (`moved_return`); `address` is the bytes of a return address.
 pub fn cleaned_returns(body: &lir::LirBody, bytes: i64, address: i64) -> Result<lir::LirBody, String> {
-    if !(0..=0xFFFF).contains(&bytes) && !(bytes > 0xFFFF && address == 4) {
+    if !(0..=llrm_x86::calling::RET_POPS_MOST).contains(&bytes) && !(bytes > llrm_x86::calling::RET_POPS_MOST && address == 4) {
         return Err("far-return cleanup exceeds 16 bits".into());
     }
     if bytes == 0 {
@@ -286,7 +286,7 @@ pub fn cleaned_returns(body: &lir::LirBody, bytes: i64, address: i64) -> Result<
                     Some(what) if what.op == Operation::Return => {
                         let mut replaced = (**one).clone();
                         replaced.what = Some(Semantics {
-                            sources: vec![Loc::Imm(ir::Imm { value: bytes, width: if bytes > 0xFFFF { 4 } else { 2 }, address: None })],
+                            sources: vec![Loc::Imm(ir::Imm { value: bytes, width: if bytes > llrm_x86::calling::RET_POPS_MOST { 4 } else { 2 }, address: None })],
                             ..what.clone()
                         });
                         Arc::new(replaced)
@@ -577,7 +577,7 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
                     }
                     out.extend(leave.iter().cloned().map(Item::Semantics));
                     if let Some(Loc::Imm(popped)) = what.sources.first().filter(|_| procedure.interrupt.is_none() && !procedure.far) {
-                        if popped.value > 0xFFFF {
+                        if popped.value > llrm_x86::calling::RET_POPS_MOST {
                             out.extend(moved_return(popped.value, procedure.registers.slot, procedure.registers.spelled(Register::SP)).into_iter().map(Item::Semantics));
                             out.push(Item::Semantics(Semantics { name: Some("ret".to_owned()), sources: vec![], ..what.clone() }));
                             continue;
