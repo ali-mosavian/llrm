@@ -7,6 +7,8 @@
 //! its inner loop with `mov di,bx` whose destination no path reads before writing
 //! it again.
 
+use std::sync::Arc;
+
 use iced_x86::Register;
 use crate::support::hash::IndexMap;
 
@@ -222,8 +224,41 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
     (into, successors, universe)
 }
 
-/// Per block, the lanes nothing reads again after it.
+thread_local! {
+    /// The body `dead_at_exit` last answered for, and its answer.
+    static EXITS: std::cell::RefCell<Option<(LirBody, IndexMap<i64, Lanes>)>> = const { std::cell::RefCell::new(None) };
+    static EXITS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out a body's dead lanes at its blocks' exits, for a test that asking again of a body
+/// no pass changed does not.
+pub fn exits_computed() -> usize {
+    EXITS_COMPUTED.with(std::cell::Cell::get)
+}
+
+/// Whether `body` is `kept` over again: the same blocks of the same instructions, which are immutable.
+fn unchanged(kept: &LirBody, body: &LirBody) -> bool {
+    kept.bits == body.bits
+        && kept.blocks.len() == body.blocks.len()
+        && kept.blocks.iter().zip(&body.blocks).all(|(one, other)| {
+            one.at == other.at && one.succ == other.succ && one.insns.len() == other.insns.len() && one.insns.iter().zip(&other.insns).all(|(a, b)| Arc::ptr_eq(a, b))
+        })
+}
+
+/// Per block, the lanes nothing reads again after it. Ten passes of the peephole ask in turn, most leaving the body as it was
+/// (the same instructions, shared): the last answer stands for a body that is the same (#924: 500,000 decodes of 16,000
+/// instructions in one module).
 pub fn dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
+    if let Some(answer) = EXITS.with(|held| held.borrow().as_ref().filter(|(kept, _)| unchanged(kept, body)).map(|(_, answer)| answer.clone())) {
+        return answer;
+    }
+    EXITS_COMPUTED.with(|count| count.set(count.get() + 1));
+    let answer = _dead_at_exit(body);
+    EXITS.with(|held| *held.borrow_mut() = Some((body.clone(), answer.clone())));
+    answer
+}
+
+fn _dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
     let (into, successors, universe) = live_into(body);
     into.keys()
         .map(|at| {
