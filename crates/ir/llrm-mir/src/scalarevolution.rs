@@ -3,7 +3,7 @@
 //! adds a loop invariant to, and sums, differences and invariant multiples
 //! of such. Arithmetic wraps, so each holds modulo its width.
 
-use llrm_support::hash::HashMap;
+use crate::hash::HashMap;
 
 use crate::context::{ConstantKind, Context};
 use crate::dominators::DominatorTree;

@@ -384,9 +384,6 @@ dependencies = [
 [[package]]
 name = "llrm-mir"
 version = "0.1.0"
-dependencies = [
- "llrm-support",
-]
 
 [[package]]
 name = "llrm-nib"

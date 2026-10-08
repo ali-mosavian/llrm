@@ -6,8 +6,8 @@ use std::fs;
 use std::path::Path;
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
-/// Where the one definition of the aliases stands.
-const ALIASES: &str = "crates/support/llrm-support/src/hash.rs";
+/// Where the aliases are defined: llrm-mir depends on nothing, so it has its own.
+const ALIASES: [&str; 2] = ["crates/support/llrm-support/src/hash.rs", "crates/ir/llrm-mir/src/hash.rs"];
 
 fn sources(dir: &Path, out: &mut Vec<String>) {
     for entry in fs::read_dir(dir).unwrap().flatten() {
@@ -31,7 +31,7 @@ fn test_no_source_names_a_randomly_seeded_std_map() {
         }
     }
     let mut found = Vec::new();
-    for file in files.iter().filter(|file| file.as_str() != ALIASES && file.as_str() != "tests/seeded_maps.rs") {
+    for file in files.iter().filter(|file| !ALIASES.contains(&file.as_str()) && file.as_str() != "tests/seeded_maps.rs") {
         for (number, line) in fs::read_to_string(Path::new(ROOT).join(file)).unwrap().lines().enumerate() {
             let code = line.split("//").next().unwrap();
             let std_set = code.contains("collections::HashSet") || code.contains("collections::HashMap") || code.contains("RandomState");

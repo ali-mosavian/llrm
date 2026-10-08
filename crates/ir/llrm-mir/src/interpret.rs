@@ -5,7 +5,7 @@
 //! datalayout; every address space maps onto it, so `addrspacecast` keeps
 //! the address. Each byte also records whether it holds poison.
 
-use llrm_support::hash::HashMap;
+use crate::hash::HashMap;
 
 use crate::context::{ConstantExpr, ConstantId, ConstantKind, GlobalId, mask, signed};
 use crate::datalayout::{DataLayout, float_bits};

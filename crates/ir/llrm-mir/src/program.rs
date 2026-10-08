@@ -7,7 +7,7 @@
 
 use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, BTreeSet};
-use llrm_support::hash::HashMap;
+use crate::hash::HashMap;
 use std::rc::Rc;
 
 use crate::context::GlobalId;

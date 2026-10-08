@@ -7,7 +7,7 @@
 use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
 use crate::intrinsics::Intrinsic;
-use llrm_support::hash::{HashMap, HashSet};
+use crate::hash::{HashMap, HashSet};
 
 use crate::module::{BlockId, Function, GlobalKind, InstId, Module, Operand, Use};
 use crate::opcode::Opcode;

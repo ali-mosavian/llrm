@@ -2,7 +2,7 @@
 //! function, and the block or instruction at fault. `opt -passes=verify`
 //! is its oracle: `tools/mir-oracle.sh` holds the two to the same verdicts.
 
-use llrm_support::hash::{HashMap, HashSet};
+use crate::hash::{HashMap, HashSet};
 
 use crate::context::{ConstantKind, Context};
 use crate::dominators::DominatorTree;

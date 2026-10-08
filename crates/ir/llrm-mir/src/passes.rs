@@ -11,7 +11,7 @@
 //! and recomputing every analysis a pass claims to have preserved.
 
 use std::any::{Any, TypeId};
-use llrm_support::hash::{HashMap, HashSet};
+use crate::hash::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::context::{Context, GlobalId};

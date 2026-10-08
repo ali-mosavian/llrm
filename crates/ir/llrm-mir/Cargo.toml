@@ -8,4 +8,3 @@ description = "llrm's MIR: a subset of LLVM IR, its text and object model"
 # No dependencies: MIR names no decoder, object file or target, and the
 # dependency graph is what enforces it (see `tests::the_crate_depends_on_nothing`).
 [dependencies]
-llrm-support = { workspace = true }

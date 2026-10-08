@@ -2,7 +2,7 @@
 //! `Instruction::mayReadFromMemory`/`mayWriteToMemory` answer: a call from
 //! its callee's `memory(...)`, anything else from its opcode.
 
-use llrm_support::hash::HashMap;
+use crate::hash::HashMap;
 
 use crate::context::{ConstantKind, Context, GlobalId};
 use crate::facts::Facts;

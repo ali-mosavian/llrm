@@ -1,7 +1,7 @@
 //! Writes MIR as LLVM's assembly language, following LLVM's `AsmWriter`
 //! except that function attributes are written inline, not as `#N` groups.
 
-use llrm_support::hash::HashMap;
+use crate::hash::HashMap;
 use std::fmt::Write;
 
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, signed};

@@ -5,7 +5,7 @@
 //! referred to before they appear. A function's values and blocks may be
 //! used before their definition; the definition must agree with the use.
 
-use llrm_support::hash::{HashMap, HashSet};
+use crate::hash::{HashMap, HashSet};
 
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, GlobalId, mask};
 use crate::intrinsics;
