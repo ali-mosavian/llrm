@@ -14,6 +14,7 @@ output=${2:-${source%.*}.exe}
 level=${3:--O2}
 shift $(($# < 3 ? $# : 3))
 bin=$(python3 "$root/tools/llrmbin.py" bin)
+target=x86-m16
 toolchain=${TOOLCHAIN:-$HOME/work/other/d32x/toolchains/native/bin}
 
 # The ABI the program is built for is the runtime's and the foreign C's too: their calls cross it.
@@ -42,7 +43,7 @@ case " ${NIB_FLAGS:-} " in
 esac
 "$bin/nibfront" --declare h $abi "$source" >"$work/$(basename "$source" .nib).h"
 defines=""
-recipe() { python3 "$root/tools/linkrecipe.py" x86-m16 "$1"; }
+recipe() { python3 "$root/tools/linkrecipe.py" "$target" "$1"; }
 omf=$(recipe assembler)
 for one in $("$bin/llrm-nib" --os-layer defines); do defines="$defines -D$one"; done
 objects=""
@@ -57,20 +58,12 @@ for part in "$@"; do
     objects="$objects file $work/$name.obj"
     used="$used --used-by $work/$name.obj"
 done
-layer=$("$bin/llrm-nib" --os-layer directory)
-for field in start implementation; do
-    part=$("$bin/llrm-nib" --os-layer $field)
-    # shellcheck disable=SC2086
-    "$toolchain/jwasm" -q -c -Cp -Zg $omf $defines "-Fo$work/$field.obj" "$layer/$part"
-    used="$used --used-by $work/$field.obj"
+# The OS layer's objects come from the one function that knows which they are (dosbatch.os_objects).
+for line in $(python3 "$root/tools/dosbatch/os_objects.py" "$target" nib "$work"); do
+    field=${line%%=*}
+    used="$used --used-by ${line#*=}"
+    case $field in hook) hookobj="file ${line#*=}" ;; esac
 done
-hook=$("$bin/llrm-nib" --os-layer language_file)
-if [ -n "$hook" ]; then
-    # shellcheck disable=SC2086
-    "$toolchain/jwasm" -q -c -Cp -Zg $omf $defines "-Fo$work/hook.obj" "$hook"
-    used="$used --used-by $work/hook.obj"
-    hookobj="file $work/hook.obj"
-fi
 # jwlink keeps whatever any segment references, even one it drops, so the
 # runtime keeps only the routines the other objects name.
 "$bin/llrm-nib" "$root/crates/frontends/llrm-nib/src/runtime/runtime.nib" -o "$work/runtime.obj" "$level" --procedure-segments $abi $used >/dev/null

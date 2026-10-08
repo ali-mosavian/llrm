@@ -248,10 +248,22 @@ def c_support(target: str, work: Path) -> list[Path]:
     return [runtime_object(name, work / (Path(name).stem.upper() + ".OBJ"), defines) for name in (*link["last"], *link["final"])]
 
 
+def os_objects(target: str, language: str, work: Path) -> dict[str, Path]:
+    """The OS layer's objects a `language` program on `target` is linked with, made in `work`: `start`, `implementation`
+    and, where the language has one, its `hook`. The one place that says which they are: the runtime's cut must see
+    every one (a hook that calls N$EDIV keeps it), and the link names them."""
+    defines = os_defines(target, language)
+    directory = Path(os_layer(target, "directory", language))
+    sources = {field: directory / os_layer(target, field, language) for field in ("start", "implementation")}
+    if hook := os_layer(target, "language_file", language):
+        sources["hook"] = Path(hook)
+    return {field: runtime_object(str(source), work / f"{field}.obj", defines) for field, source in sources.items()}
+
+
 def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level: str, foreign: tuple[Path, ...], abi: tuple[str, ...] = ()) -> tuple[Path, ...]:
-    """A Nib program for `target`: its object, `runtime.nib` cut to what the program and the OS layer name, linked as the target says."""
+    """A Nib program for `target`: its object, `runtime.nib` cut to what the program and the OS layer (`os_objects`) name, linked as the target says."""
     runtime = work / (obj.stem + "R.obj")
-    used = [word for one in (obj, *foreign) for word in ("--used-by", str(one))]
+    used = [word for one in (obj, *foreign, *os_objects(target, "nib", work).values()) for word in ("--used-by", str(one))]
     _host([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), m_flag(target), *abi, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used])
     return link_target(target, obj, exe, work, runtime=(os_start(target, "nib"), []), objects_after=(runtime, *foreign), defines=os_defines(target, "nib"))
 

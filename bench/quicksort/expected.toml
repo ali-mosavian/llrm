@@ -1,4 +1,4 @@
-reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+reason = "the 486's LEA is one clock (the table held the 386's two): a copy and an add are one lea where it costs no more; down only"
 blessed = "2026-10-08"
 
 [bas.O2]
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 169410
+instructions = 168387
 memory_operands = 60750
-code_bytes = 427
+code_bytes = 426
 data_bytes = 0
 bss_bytes = 0
 

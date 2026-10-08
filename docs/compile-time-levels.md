@@ -58,3 +58,15 @@ Start-up, compiling an empty file (instructions): llrm 8.1M (`-O0`), 8.7M (`-O2`
 | shellsort | 464.9 | 95.0 | 182.7 | 4.89x | 2.55x |
 | sieve | 345.1 | 83.7 | 81.2 | 4.12x | 4.25x |
 | tile | 217.6 | 81.8 | 79.3 | 2.66x | 2.74x |
+
+## With the 37 x_* kernels (66 programs)
+
+Same method, `vsgcc/kernels/` included (llrm at the levels of main on 2026-10-08, `-O2` still the growing one): llrm/gcc and llrm/clang, geomean and worst program.
+
+| level | llrm/gcc | worst | llrm/clang | worst |
+|---|---|---|---|---|
+| -O0 | 1.68x | 4.5x fpbench | 1.94x | 5.2x fpbench |
+| -O1 | 3.90x | 14.3x x_life | 3.75x | 18.4x x_life |
+| -O2 | 3.19x | 29.8x nbody_fixed | 3.85x | 35.3x nbody_fixed |
+| -O3 | 2.43x | 14.4x nbody_fixed | 3.70x | 24.8x nbody_fixed |
+| -Os | 3.47x | 11.8x x_life | 3.88x | 16.8x x_life |

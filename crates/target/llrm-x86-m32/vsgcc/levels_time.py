@@ -3,8 +3,8 @@ RUNS runs, one process each, source to object (`-m32`, no assembler or linker st
 
     uv run --project tools python crates/target/llrm-x86-m32/vsgcc/levels_time.py [--runs 3] [--extra DIR ...]
 
-Writes $VSGCC_WORK/levels_time.json and prints the tables. `--extra DIR` adds the `*.c` of DIR that gcc and clang both
-accept. What each side times, as `perf stat -e instructions:u` counts it (children included):
+Writes $VSGCC_WORK/levels_time.json and prints the tables. `--extra DIR` adds the `*.c` under DIR that gcc and clang both
+accept; the x_* kernels in `kernels/` are always in. What each side times, as `perf stat -e instructions:u` counts it (children included):
   llrm-c   C front end (its preprocessor included), HIR, MIR passes, instruction selection, register allocation, OMF object
            writer; one process.
   gcc -c   the driver, cc1 (preprocessor and compiler) and `as`; three processes.
@@ -57,10 +57,11 @@ def main() -> None:
     parser.add_argument("--extra", nargs="*", default=[])
     args = parser.parse_args()
     sources = {p: R / "bench" / p / f"{p}.c" for p in sorted(x.name for x in (R / "bench").iterdir()) if p not in SKIP}
-    for directory in args.extra:
-        for source in sorted(Path(directory).glob("*.c")):
+    kernels = Path(__file__).resolve().parent / "kernels"
+    for directory in ([kernels] if kernels.is_dir() else []) + [Path(d) for d in args.extra]:
+        for source in sorted(Path(directory).glob("**/*.c")):
             if accepted(source):
-                sources[f"{Path(directory).name}/{source.stem}"] = source
+                sources[source.stem if source.stem.startswith("x_") else f"{Path(directory).name}/{source.stem}"] = source
     with tempfile.TemporaryDirectory() as scratch:
         empty = Path(scratch) / "empty.c"
         empty.write_text("")
