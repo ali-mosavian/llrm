@@ -288,13 +288,9 @@ fn placed(dest: &Loc) -> Option<Place> {
     }
 }
 
-/// The registers of `clobbers` as `Mark::Clobbers` says them.
+/// The registers of `clobbers` as `Mark::Clobbers` says them: bit `n` for the general register numbered `n`.
 fn clobber_bits(clobbers: &BTreeSet<Register>) -> u8 {
-    [Register::EAX, Register::ECX, Register::EDX, Register::EBX, Register::ESP, Register::EBP, Register::ESI, Register::EDI]
-        .iter()
-        .enumerate()
-        .filter(|(_, family)| clobbers.iter().any(|one| one.is_gpr() && one.full_register32() == **family))
-        .fold(0, |bits, (bit, _)| bits | 1 << bit)
+    clobbers.iter().filter(|one| one.is_gpr()).fold(0, |bits, one| bits | 1 << one.full_register32().number())
 }
 
 fn reg(register: Register) -> Loc {

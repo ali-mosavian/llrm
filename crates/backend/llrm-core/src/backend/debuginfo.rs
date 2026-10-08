@@ -280,7 +280,7 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                     // which may be a value it no longer has: a variable with one is said to be nowhere.
                     let emitted: BTreeSet<u32> = marks.iter().filter_map(|(_, mark)| if let masm::Mark::Note(note) = mark { Some(*note) } else { None }).collect();
                     let lost = procedure.body.notes.iter().enumerate().any(|(note, said)| said.variable == node && !emitted.contains(&(note as u32)));
-                    let found = if lost { Default::default() } else { super::valuetrack::tracked(&code.image[start..end], rows, bias, &procedure.body.notes, &marks) };
+                    let found = if lost { Default::default() } else { super::valuetrack::tracked(&code.image[start..end], super::valuetrack::Frame { pointer: debug.frame.map(|(pointer, ..)| pointer).unwrap_or(iced_x86::Register::None), stack: debug.frame.map(|(_, stack, _)| stack).unwrap_or(iced_x86::Register::None) }, rows, bias, &procedure.body.notes, &marks) };
                     let parts: Vec<_> = found.into_iter().filter(|((variable, _), _)| *variable == node).map(|((_, piece), ranges)| (piece, ranges)).collect();
                     let entries = combined(parts).into_iter().map(|(from, to, location)| (model::Range { section, offset: start + from, length: to - from }, location));
                     variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::List(entries.collect()) });
