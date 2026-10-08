@@ -486,11 +486,11 @@ enum Pointer {
 
 /// `hole` bytes below BP are left free, above the allocas, for spill slots.
 pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, compiled: &'static Compiled, arch: &'c dyn llrm_target::Target, zeroed: bool, hole: i64) -> Result<Selected, Unselected> {
-    selected_with(module, name, abi, pool, cpu, segments, compiled, arch, zeroed, hole, &CalleeFacts::none(), true)
+    selected_with(module, name, abi, pool, cpu, segments, compiled, arch, zeroed, hole, &CalleeFacts::none(), true, false)
 }
 
 /// `selected`, a function that takes part in `facts` saving nothing and its calls of one that does clobbering what it wrote.
-pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, compiled: &'static Compiled, arch: &'c dyn llrm_target::Target, zeroed: bool, hole: i64, callee_facts: &'c CalleeFacts, ranges: bool) -> Result<Selected, Unselected> {
+pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, compiled: &'static Compiled, arch: &'c dyn llrm_target::Target, zeroed: bool, hole: i64, callee_facts: &'c CalleeFacts, ranges: bool, cfa: bool) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -603,6 +603,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
     body.spares = Arc::new(spared(module, function, &selector.ats));
     body.homes = Arc::new(homed(module, function, &selector.ats, &selector.values, &body));
     body.variables = parameters(module, function, name, &convention, &selector.homes);
+    body.cfa_variables = cfa;
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     // An inlined callee's variables are not this procedure's.
     body.variables.extend(selector.variables.into_iter().filter(|(scope, _)| scope == name).map(|(_, one)| one));

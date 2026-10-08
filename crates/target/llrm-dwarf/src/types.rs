@@ -1,6 +1,6 @@
 //! The DIE tree of `Info`: the compile unit, its types, globals and functions.
 
-use llrm_object::debug::{self as model, Block, Function, Info, Kind, Language, Location, Reach, Scalar, Type, Variable};
+use llrm_object::debug::{self as model, Block, FrameBase, Function, Info, Kind, Language, Location, Reach, Scalar, Type, Variable};
 use llrm_object::{Binding, Object, Unsupported};
 
 use crate::die::*;
@@ -201,7 +201,13 @@ impl Tree<'_> {
     /// The expression of where a frame cell or a register is.
     fn expression(&self, location: &Location) -> Result<Vec<u8>, Unsupported> {
         match location {
-            Location::Frame { disp } => Ok([vec![0x91], crate::sleb(*disp)].concat()),
+            Location::Frame { disp } => {
+                let from_frame_base = match self.info.frame_base {
+                    FrameBase::Register => *disp,
+                    FrameBase::Cfa { bias } => disp - bias,
+                };
+                Ok([vec![0x91], crate::sleb(from_frame_base)].concat())
+            }
             Location::Register(name) => self.register(name),
             _ => refused("a location list holds frame cells and registers"),
         }
@@ -322,8 +328,15 @@ impl Tree<'_> {
             _ => false,
         });
         if framed {
-            let base = self.info.registers.iter().find(|register| register.name == self.info.frame_register).map(|register| register.name.clone()).ok_or_else(|| Unsupported("DWARF: no frame register".into()))?;
-            die.attrs.push((AT_FRAME_BASE, Value::Expr(self.register(&base)?)));
+            let base = match self.info.frame_base {
+                // DW_OP_call_frame_cfa.
+                FrameBase::Cfa { .. } => vec![0x9C],
+                FrameBase::Register => {
+                    let base = self.info.registers.iter().find(|register| register.name == self.info.frame_register).map(|register| register.name.clone()).ok_or_else(|| Unsupported("DWARF: no frame register".into()))?;
+                    self.register(&base)?
+                }
+            };
+            die.attrs.push((AT_FRAME_BASE, Value::Expr(base)));
         }
         self.scope(&mut die, &one.variables, &one.blocks)?;
         Ok(self.push(die))
