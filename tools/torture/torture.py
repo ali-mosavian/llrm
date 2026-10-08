@@ -80,6 +80,12 @@ def program_options(text: str) -> list[str]:
     asked = [word for line in re.findall(r'dg-additional-options\s+"([^"]*)"', text) for word in line.split()]
     return [word for word in dict.fromkeys(asked) if word in PROGRAM_OPTIONS]
 
+def spellings(symbol: str) -> list[str]:
+    """What a linker's undefined symbol is called in C: the Watcom convention adds a trailing underscore (`sprintf_`), cdecl a leading
+    one (`_sprintf`, `___builtin_ffs`), regparm3 a `@3` (`___builtin_ffs@3`), and the target decides which."""
+    plain = re.sub(r"@\d+$", "", symbol)
+    return list(dict.fromkeys([plain.rstrip("_"), plain[1:] if plain.startswith("_") else plain, plain, symbol]))
+
 
 def build(source: Path, level: str, target: str, work: Path, support: Path, stem: str, rules: list[dict]) -> tuple[str, str, Path | None]:
     """(class, why, exe): class is built, refused, compile or link."""
@@ -105,9 +111,9 @@ def build(source: Path, level: str, target: str, work: Path, support: Path, stem
     except (dosbatch.BuildError, dosbatch.TooBig) as error:
         text = str(error)
         missing = re.search(r"undefined symbol (\S+)", text)
-        text = f"undefined symbol {missing.group(1).rstrip('_')}" if missing else text
-        why = refusal(text, rules)
-        return ("refused", why, None) if why else ("link", text if missing else cause(text), None)
+        named = [f"undefined symbol {one}" for one in spellings(missing.group(1))] if missing else [text]
+        why = next(filter(None, (refusal(one, rules) for one in named)), None)
+        return ("refused", why, None) if why else ("link", named[0] if missing else cause(text), None)
     return "built", "", exe
 
 
