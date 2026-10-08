@@ -381,15 +381,19 @@ fn gdb_reads_a_parameter_at_the_first_instruction_from_the_register_it_arrived_i
 /// is the code.
 #[test]
 fn an_elf_function_with_variables_has_the_code_it_has_without_g() {
-    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let assembly = |flags: &[&str]| {
+    let assembly = |source: &Path, flags: &[&str]| {
         let out = scratch.path().join("x.s");
-        let made = compile(&fixtures.join("gdb.c"), &[&["-m32", "-O0", "-fobject-format=elf", "-S"], flags].concat(), &out);
+        let made = compile(source, &[&["-m32", "-O0", "-fobject-format=elf", "-S"], flags].concat(), &out);
         assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
         std::fs::read_to_string(&out).unwrap()
     };
-    let (plain, debug) = (assembly(&[]), assembly(&["-g"]));
-    assert!(!plain.contains("ebp"), "the instrument: without -g the function keeps no frame register\n{plain}");
-    assert_eq!(plain, debug);
+    let gdb = root.join("tests/fixtures/dwarf/gdb.c");
+    assert!(!assembly(&gdb, &[]).contains("ebp"), "the instrument: without -g the function keeps no frame register");
+    // `crc` bumps a local in place (`add dword ptr [ebp-n], 1`), which `-g` split into a load, an add and a store while it marked
+    // the store volatile for the optimiser, which -O0 does not run.
+    for source in [gdb, root.join("bench/crc/crc.c")] {
+        assert_eq!(assembly(&source, &[]), assembly(&source, &["-g"]), "{}", source.display());
+    }
 }

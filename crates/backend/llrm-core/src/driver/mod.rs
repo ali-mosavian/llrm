@@ -191,6 +191,10 @@ pub fn linked(modules: Vec<Module>, runtime: Module, target: std::rc::Rc<dyn llr
 pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String> {
     let applied = llrm_transforms::pipeline::Applied { options: options.pipeline.clone(), dump: options.dump.clone(), ..Default::default() };
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
+    // Nothing optimises at -O0, so nothing needs a variable's stores kept for a debugger that reads its cell.
+    if !options.pipeline.optimize && options.cfa_locations() {
+        program.modules.iter_mut().for_each(lifted);
+    }
     timed("mir assumptions", || program.modules.iter_mut().for_each(llrm_transforms::dead::assumptions_dropped));
     timed("mir ehprepare", || program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared))?;
     timed("mir selects", || program.modules.iter_mut().try_for_each(crate::backend::selects::lowered))?;
@@ -198,6 +202,24 @@ pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String>
         timed("mir spill model", || spill_model(program));
     }
     timed("mir verify pipeline", || verified(program, "the pipeline"))
+}
+
+/// `module` without the volatile that `-g` put on accesses to its variables (`llrm_mir::debuginfo::OBSERVED`), so `-g` changes no code.
+fn lifted(module: &mut Module) {
+    let one = module.context.types.int(1);
+    let no = module.context.int(one, 0);
+    for global in &mut module.globals {
+        let llrm_mir::GlobalKind::Function(function) = &mut global.kind else { continue };
+        let marked: Vec<llrm_mir::InstId> = function.walk().map(|(_, inst)| inst).filter(|&inst| function.instruction(inst).metadata.iter().any(|(kind, _)| kind == llrm_mir::debuginfo::OBSERVED)).collect();
+        for inst in marked {
+            match function.instruction(inst).opcode {
+                llrm_mir::Opcode::Store { .. } => function.make_store_plain(inst),
+                // The copy's volatile argument.
+                llrm_mir::Opcode::Call(_) => function.set_operand(inst, 3, llrm_mir::Operand::Constant(no)),
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Refuses `program` where a module does not verify, `stage` having made it.

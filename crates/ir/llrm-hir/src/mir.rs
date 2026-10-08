@@ -306,6 +306,8 @@ fn class_tags(module: &mut Module, classes: &[model::AliasClass]) -> Emit<HashMa
 }
 
 struct Tables<'h> {
+    /// The node that marks an access made volatile for `-g`'s sake (`llrm_mir::debuginfo::OBSERVED`), where the module declares any.
+    observed: Option<MetadataId>,
     /// The target's address spaces: what the HIR's near, far, segment, huge and fixed addresses are.
     spaces: AddressSpaces,
     /// The bytes of a descriptor's words, which the program states (`Program::descriptor_word`).
@@ -484,6 +486,7 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
         place_facts,
         field_facts,
         variables: HashMap::new(),
+        observed: None,
     };
     tables.lines = line_nodes(&mut module, hir);
     tables.tags.arrays(&mut module, hir);
@@ -587,6 +590,9 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
     match debug::emitted(&mut module, &tables, hir, &data, &declared) {
         Ok(variables) => tables.variables = variables,
         Err(why) => refused.push((hir.name.clone(), why)),
+    }
+    if !tables.variables.is_empty() {
+        tables.observed = Some(llrm_mir::debuginfo::observed_node(&mut module));
     }
     let statements = hir.statements();
     let rows = statements.clone().unwrap_or_default();
@@ -1585,6 +1591,13 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     /// A debugger reads a declared variable from its cell at any time, so every store into one stays, in order, as a volatile
     /// one does: not only those the language writes as stores to the variable, but any through an address into it. The
     /// optimiser asks nothing else; `-g` of a variable the allocator keeps in a register will not need it.
+    /// The instruction made as the `first`th is volatile for `-g`'s sake alone.
+    fn observe(&mut self, first: usize) {
+        if let Some(node) = self.tables.observed {
+            self.b.function.annotate(llrm_mir::InstId(first as u32), llrm_mir::debuginfo::OBSERVED, node);
+        }
+    }
+
     fn observe_declared_stores(&mut self) {
         let declared: HashSet<llrm_mir::Operand> = self.b.function.debug_records().iter().filter_map(|one| if let llrm_mir::DebugWhat::Declare(at) = one.what { Some(at) } else { None }).collect();
         if declared.is_empty() {
@@ -1596,6 +1609,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let pointer = self.b.function.instruction(inst).operands[1];
             if declared.contains(&llrm_mir::valuetracking::underlying(self.b.context, &layout, self.b.function, pointer).0) {
                 self.b.function.make_store_volatile(inst);
+                if let Some(node) = self.tables.observed {
+                    self.b.function.annotate(inst, llrm_mir::debuginfo::OBSERVED, node);
+                }
             }
         }
     }
@@ -2116,7 +2132,11 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 // As a store to a declared variable: the copy into it stays.
                 let observed = self.declared_place(&instruction.operands[0]);
                 let (size, volatile) = (self.b.int(16, i128::from(*bytes)), self.b.int(1, i128::from(observed)));
+                let first = self.b.function.instruction_count();
                 self.b.call(ty, callee, &[to, from, size, volatile], "");
+                if observed {
+                    self.observe(first);
+                }
             }
             Op::Copy | Op::Load => {
                 let value = self.value(&instruction.operands[0])?;
@@ -2128,7 +2148,11 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 // A debugger reads a declared variable from its cell at any time: every store to
                 // it stays, in order, as one to a volatile does. The optimiser asks nothing else.
                 let observed = self.declared_place(&instruction.operands[0]);
+                let first = self.b.function.instruction_count();
                 self.b.store(value, pointer, volatile || observed);
+                if observed && !volatile {
+                    self.observe(first);
+                }
                 self.tagged(tag);
                 self.stated_access(&instruction.operands[0], false);
             }
