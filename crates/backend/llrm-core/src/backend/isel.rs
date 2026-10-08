@@ -1906,7 +1906,7 @@ impl Selector<'_, '_, '_> {
         }
         let offset = offset as i64;
         let base = self.pointer(instruction.operands[0])?;
-        let pointer = self.within_object(base, base.moved(offset), self.width(instruction.ty)?);
+        let pointer = self.within_object(base, base.moved(offset), instruction.ty);
         self.pointers.insert(value, pointer);
         Ok(Some(pointer))
     }
@@ -1914,8 +1914,9 @@ impl Selector<'_, '_, '_> {
     /// `moved`, a frame address a constant GEP reached from `base`, as the address that lies in the object `base` is in. An
     /// index is a signed pointer-width integer: 32798 into a 32,800-byte object on a 16-bit target is -32738 in an i16, the same
     /// address modulo 64 KB but below the object, where it made the frame twice as big (and, past 64 KB, wrap).
-    fn within_object(&self, base: Pointer, moved: Pointer, width: u32) -> Pointer {
+    fn within_object(&self, base: Pointer, moved: Pointer, ty: TypeId) -> Pointer {
         let (Pointer::Frame { disp: from, .. }, Pointer::Frame { disp: to, index, scale }) = (base, moved) else { return moved };
+        let Ok(width) = self.width(ty) else { return moved };
         let wrap = 1i64 << (8 * width.min(4));
         let Some(&(object, size)) = self.frame_objects.iter().find(|&&(object, size)| (object..=object + size).contains(&from)) else { return moved };
         if to < object && to + wrap <= object + size {
