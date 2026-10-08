@@ -95,7 +95,12 @@ impl Session {
         let this = Session { child, stream, owners, replies };
         this.command(&serde_json::json!({"cmd": "continue"}));
         std::thread::sleep(Duration::from_secs(1));
-        this.command(&serde_json::json!({"cmd": "wait_for_shell", "timeoutMs": 5000}));
+        // The shell is up before anything is armed or run: a breakpoint on the next program's load, set while the shell is
+        // still starting, stops it at the shell's own load, and no command is taken after that.
+        let waiting = std::time::Instant::now();
+        while this.command(&serde_json::json!({"cmd": "wait_for_shell", "timeoutMs": 5000}))["status"] == "error" {
+            assert!(waiting.elapsed() < Duration::from_secs(120), "the shell did not come up");
+        }
         this
     }
 
@@ -105,9 +110,19 @@ impl Session {
         self.replies.recv_timeout(Duration::from_secs(20)).expect("a reply")
     }
 
-    /// Runs a DOS command line in the shell.
+    /// Runs a DOS command line in the shell: asked again until the shell takes it, which on a loaded machine it has not yet
+    /// when the socket is up (it answers "Shell not initialized"), and a command it never ran left a test waiting for a
+    /// program that never started.
     pub fn dos(&self, line: &str) {
-        self.command(&serde_json::json!({"cmd": "dos_cmd", "command": line}));
+        let asked = std::time::Instant::now();
+        loop {
+            let answer = self.command(&serde_json::json!({"cmd": "dos_cmd", "command": line}));
+            if answer["status"] != "error" {
+                return;
+            }
+            assert!(asked.elapsed() < Duration::from_secs(120), "the shell never took `{line}`: {answer}");
+            std::thread::sleep(Duration::from_millis(500));
+        }
     }
 
     /// Types `line` and Enter through the keyboard controller, which is how a debugger that hooks the keyboard
