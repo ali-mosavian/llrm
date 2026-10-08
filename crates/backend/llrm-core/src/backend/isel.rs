@@ -538,6 +538,10 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
     // The body is not changed while it is selected: what is known of it without memory is found once.
     let shape = llrm_analysis::cfg::Shape::of(function);
     let unit = unit.with_shape(&shape);
+    // Which allocas' addresses are exposed, for every query that names one: found for all of them in one pass, not by a scan of the
+    // body for each.
+    let exposed = llrm_analysis::memory::exposed_frames(&unit);
+    let unit = unit.with_exposed(&exposed);
     let registers = llrm_analysis::consts::known(&unit, None, None, None);
     let unit = unit.with_registers(&registers);
     let exact = ranges::exact_offsets(&unit).map_err(Unselected)?;
@@ -925,6 +929,8 @@ impl Selector<'_, '_, '_> {
         let mut reach = BTreeSet::new();
         let (group_of, capacity) = self.alloca_groups(layout);
         let mut homes = IndexMap::<usize, i64>::default();
+        // Every alloca whose address is exposed, in one pass: the scan for each asked the whole body of it.
+        let exposed = llrm_analysis::frameescape::exposed_allocas(function, |inst| self.marker(inst));
         for &block in layout {
             block_at.insert(block, at);
             for &inst in function.block(block).instructions() {
@@ -941,7 +947,7 @@ impl Selector<'_, '_, '_> {
                     let address = function.instruction(inst).result.expect("an address");
                     self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1 });
                     self.frame_objects.push((disp, size));
-                    if llrm_analysis::frameescape::exposes(function, address, |inst| self.marker(inst)) {
+                    if exposed.contains(&address) {
                         reach.insert((disp, disp + size));
                     }
                 }
@@ -1245,6 +1251,8 @@ impl Selector<'_, '_, '_> {
     /// Each loop's header and constant trips, as `induction` proves them.
     fn trip_counts(&self, block_at: &IndexMap<BlockId, i64>) -> Vec<(i64, i64)> {
         let unit = Unit::of(self.module, &self.layout, self.function).with_spaces(self.spaces).with_registers(&self.registers).with_shape(&self.shape);
+        let exposed = llrm_analysis::memory::exposed_frames(&unit);
+        let unit = unit.with_exposed(&exposed);
         let facts = unit.registers();
         let mut counts: Vec<(i64, i64)> = self
             .shape
