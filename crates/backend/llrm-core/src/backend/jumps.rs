@@ -810,7 +810,7 @@ pub fn duplicated_returns(body: LirBody, return_overhead: i64) -> LirBody {
 fn _arm_bytes(bits: u32, block: &LirBlock) -> Option<i64> {
     let real = _real(block);
     let body = real.split_last().map_or(&real[..], |(last, rest)| if last.what.as_ref().is_some_and(|what| what.op == Operation::Jump) { rest } else { &real[..] });
-    body.iter().map(|one| select::emit_in(bits, one.what.as_ref()?, 0, None, false, false, None).map(|made| made.code.len() as i64)).sum()
+    body.iter().map(|one| select::priced_in(bits, one.what.as_ref()?, 0, None, false, false, None).map(|made| made.code.len() as i64)).sum()
 }
 
 /// Selected bytes in a source-unowned terminal return block.
@@ -820,6 +820,8 @@ pub fn _duplicable_return_size(bits: u32, block: &LirBlock, return_overhead: i64
         || !block.succ.is_empty()
         || real.is_empty()
         || real[real.len() - 1].what.as_ref().is_none_or(|what| what.op != Operation::Return)
+        // A return that pops 64 KB or more is several instructions (`masm::moved_return`), not one `ret`.
+        || real[real.len() - 1].what.as_ref().is_some_and(|what| matches!(what.sources.first(), Some(crate::model::ir::Loc::Imm(popped)) if popped.value > llrm_x86::calling::RET_POPS_MOST))
         || block.insns.iter().any(|one| {
             !one.inserted()
                 || one.what.is_none()
@@ -838,7 +840,7 @@ pub fn _duplicable_return_size(bits: u32, block: &LirBlock, return_overhead: i64
     }
     let emitted: Vec<Option<select::Emitted>> = real
         .iter()
-        .map(|one| select::emit_in(bits, one.what.as_ref().expect("checked above"), 0, None, false, false, None))
+        .map(|one| select::priced_in(bits, one.what.as_ref().expect("checked above"), 0, None, false, false, None))
         .collect();
     if emitted.iter().any(Option::is_none) {
         return None;
@@ -860,7 +862,7 @@ pub fn _return_parent(bits: u32, block: &LirBlock, target: i64) -> Option<(&LirB
         {
             return None;
         }
-        let emitted = select::emit_in(bits, &Semantics { target: Some(2), ..what.clone() }, 0, None, true, false, None);
+        let emitted = select::priced_in(bits, &Semantics { target: Some(2), ..what.clone() }, 0, None, true, false, None);
         return emitted.map(|emitted| (block, emitted.code.len() as i64));
     }
     if matches!(what.op, Operation::Branch | Operation::Call | Operation::Data | Operation::Return) {

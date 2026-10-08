@@ -1220,6 +1220,11 @@ pub fn trip_count(unit: &Unit, loop_: &Loop, facts: &IndexMap<ValueId, Known>) -
     agreed_count(&counted(unit, loop_, Some(facts), false))
 }
 
+/// `trip_count` for a loop that may also leave by another exit: the trips as long as it does not, so at most the trips it makes.
+pub fn trip_bound(unit: &Unit, loop_: &Loop, facts: &IndexMap<ValueId, Known>) -> Option<BigInt> {
+    agreed_count(&counted_leaving(unit, loop_, Some(facts), false))
+}
+
 /// `trip_count` for a loop that may also stop the program: its trips whenever it does not.
 pub fn trips_unless_stopped(unit: &Unit, loop_: &Loop, facts: &IndexMap<ValueId, Known>) -> Option<BigInt> {
     agreed_count(&counted_unless_stopped(unit, loop_, Some(facts), false))

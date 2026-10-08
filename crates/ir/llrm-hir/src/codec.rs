@@ -292,6 +292,10 @@ impl _Plain for model::CallAbi {
         if !self.memory.is_empty() {
             out.insert("memory".to_owned(), self.memory._plain());
         }
+        if !self.byval.is_empty() {
+            out.insert("byval".to_owned(), self.byval._plain());
+            out.insert("byval_bytes".to_owned(), self.byval_bytes._plain());
+        }
         if self.result_pointer.is_some() {
             out.insert("result_pointer".to_owned(), self.result_pointer._plain());
         }
@@ -333,6 +337,10 @@ impl _Plain for model::ProcedureAbi {
         }
         if !self.memory.is_empty() {
             out.insert("memory".to_owned(), self.memory._plain());
+        }
+        if !self.byval.is_empty() {
+            out.insert("byval".to_owned(), self.byval._plain());
+            out.insert("byval_bytes".to_owned(), self.byval_bytes._plain());
         }
         if self.result_pointer.is_some() {
             out.insert("result_pointer".to_owned(), self.result_pointer._plain());
@@ -1199,6 +1207,8 @@ static CALL_ABI: _Record = _Record {
         ("float_return", enum_hint!(FloatReturn), false),
         ("convention", OPTIONAL_STR, false),
         ("memory", INTS, false),
+        ("byval", INTS, false),
+        ("byval_bytes", INTS, false),
         ("result_pointer", OPTIONAL_INT, false),
     ],
     build: |args| {
@@ -1211,6 +1221,8 @@ static CALL_ABI: _Record = _Record {
             float_return: _default(args, "float_return", model::FloatReturn::Pointer)?,
             convention: _default(args, "convention", None)?,
             memory: _default(args, "memory", Vec::new())?,
+            byval: _default(args, "byval", Vec::new())?,
+            byval_bytes: _default(args, "byval_bytes", Vec::new())?,
             result_pointer: _default(args, "result_pointer", None)?,
         })
     },
@@ -1256,6 +1268,8 @@ static PROCEDURE_ABI: _Record = _Record {
         ("variadic", _Hint::Bool, false),
         ("convention", OPTIONAL_STR, false),
         ("memory", INTS, false),
+        ("byval", INTS, false),
+        ("byval_bytes", INTS, false),
         ("result_pointer", OPTIONAL_INT, false),
     ],
     build: |args| {
@@ -1267,6 +1281,8 @@ static PROCEDURE_ABI: _Record = _Record {
             variadic: _default(args, "variadic", false)?,
             convention: _default(args, "convention", None)?,
             memory: _default(args, "memory", Vec::new())?,
+            byval: _default(args, "byval", Vec::new())?,
+            byval_bytes: _default(args, "byval_bytes", Vec::new())?,
             result_pointer: _default(args, "result_pointer", None)?,
         })
     },

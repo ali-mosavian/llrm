@@ -463,7 +463,7 @@ pub struct Finalized {
 
 /// Replace allocated QB intrinsic pseudos with inline-byte placeholders.
 pub fn finalized(body: &lir::LirBody, parameter_bytes: i64) -> Result<Finalized, String> {
-    let body = masm::cleaned_returns(body, parameter_bytes)?;
+    let body = masm::cleaned_returns(body, parameter_bytes, 2)?;
     let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {

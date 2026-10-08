@@ -403,8 +403,8 @@ pub fn optimized<E: From<String>>(
     spliced: &mut dyn FnMut(&Module, GlobalId, &str) -> Result<(), E>,
 ) -> Result<Proved, E> {
     let count = program.modules.len();
-    let procedures: Vec<Vec<GlobalId>> = (0..count).map(|at| procedures(program, at)).collect();
-    let private: Vec<BTreeSet<GlobalId>> = (0..count).map(|at| private(program, at)).collect();
+    let mut procedures: Vec<Vec<GlobalId>> = (0..count).map(|at| procedures(program, at)).collect();
+    let mut private: Vec<BTreeSet<GlobalId>> = (0..count).map(|at| private(program, at)).collect();
     let unexported = unexported(program);
     let edited = |analyses: &mut ModuleAnalyses, bodies: &[GlobalId]| {
         for &id in bodies {
@@ -419,7 +419,7 @@ pub fn optimized<E: From<String>>(
     // removal below read.
     stamped_all(program, modules).map_err(E::from)?;
     // How large each body is before anything is inlined into it: what its growth is measured against.
-    let bases: Vec<llrm_support::hash::IndexMap<GlobalId, i64>> = (0..count).map(|at| procedures[at].iter().filter_map(|&id| Some((id, inline::operations(program.modules[at].global(id).function()?)))).collect()).collect();
+    let mut bases: Vec<llrm_support::hash::IndexMap<GlobalId, i64>> = (0..count).map(|at| procedures[at].iter().filter_map(|&id| Some((id, inline::operations(program.modules[at].global(id).function()?)))).collect()).collect();
     let mut refused: BTreeSet<(GlobalId, llrm_mir::module::InstId)> = BTreeSet::new();
     let mut inline_round = 0;
     loop {
@@ -481,7 +481,8 @@ pub fn optimized<E: From<String>>(
     let mut return_round = 0;
 
     // Materialize every newly constant result.
-    let propagate_constant_returns = |program: &mut Program,
+    let propagate_constant_returns = |procedures: &[Vec<GlobalId>],
+                                      program: &mut Program,
                                       modules: &mut [ModuleAnalyses],
                                       return_round: &mut i64,
                                       reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>|
@@ -510,8 +511,9 @@ pub fn optimized<E: From<String>>(
     // A return fact may make the actual of a different direct call
     // constant.  Alternate that current-MIR proof with return propagation
     // until neither side discovers a new fact.
-    propagate_constant_returns(program, modules, &mut return_round, reoptimised)?;
+    propagate_constant_returns(&procedures, program, modules, &mut return_round, reoptimised)?;
     let mut argument_round = 0;
+    let mut cloning = crate::ipacp::Cloning::default();
     loop {
         let constants = facts::program_parameters(program, &unexported);
         let mut changed = false;
@@ -531,7 +533,28 @@ pub fn optimized<E: From<String>>(
         }
         if changed {
             argument_round += 1;
-            propagate_constant_returns(program, modules, &mut return_round, reoptimised)?;
+            propagate_constant_returns(&procedures, program, modules, &mut return_round, reoptimised)?;
+        }
+
+        // A function called with a constant is copied for it (gcc's ipa-cp), and the calls go to the copy.
+        let mut cloned_now = false;
+        for at in 0..count {
+            let made = crate::ipacp::cloned(&mut program.modules[at], &program.layout, &procedures[at], &private[at], costs, threshold.cp_clone, &mut cloning);
+            for &id in &made.added {
+                let size = inline::operations(program.modules[at].global(id).function().expect("a procedure"));
+                procedures[at].push(id);
+                private[at].insert(id);
+                bases[at].insert(id, size);
+            }
+            for &id in made.added.iter().chain(&made.edited) {
+                edited(&mut modules[at], &[id]);
+                reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-cp.")?;
+                cloned_now = true;
+            }
+        }
+        if cloned_now {
+            propagate_constant_returns(&procedures, program, modules, &mut return_round, reoptimised)?;
+            changed = true;
         }
 
         // A single current-MIR constant may be worth cloning even where
@@ -563,7 +586,7 @@ pub fn optimized<E: From<String>>(
             }
         }
         if inlined {
-            propagate_constant_returns(program, modules, &mut return_round, reoptimised)?;
+            propagate_constant_returns(&procedures, program, modules, &mut return_round, reoptimised)?;
         }
         if !changed && !inlined {
             break;

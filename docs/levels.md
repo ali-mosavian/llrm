@@ -41,6 +41,8 @@ Sources read:
 | `unroll` / `unroll-loops` | complete unrolling (`cunroll`) is in the loop passes at every level with loop optimisation; it may *grow* the code only with `-O3`, `-funroll-loops` or `-fpeel-loops` (`opts.cc` 1311-1316, `flag_cunroll_grow_size`) | -O1 and up; may grow at -O3 | -O1 and up, may grow at -O3 (`limits.grows`) |
 | `peel` / `peel-loops` | `-fpeel-loops` | -O3 (679) | -O3 |
 | `unswitch` / `unswitch-loops` | `-funswitch-loops` | -O3 (685) | -O3 |
+| `inline.cp_clone` / `ipa-cp-clone` | `-fipa-cp-clone` | -O3 (676) | -O3: `ipacp` copies a function for the constants a hot call passes |
+| (`program_parameters`) | `-fipa-cp` | -O2 (629) | every level above -O0: a constant every call passes is the parameter's value |
 
 ## Limits
 
@@ -71,6 +73,11 @@ Sources read:
 | recursive inlining depth | 8 `inline.rs` (`RECURSIVE_DEPTH`) | `max-inline-recursive-depth-auto` 8 (params.opt:573) | none | gcc's |
 | recursive inlining size | 450 operations `inline.rs` (`RECURSIVE_SIZE`) | `max-inline-insns-recursive-auto` 450 (:553) | none | gcc's number in our operations |
 | recursive inlining probability | 10% `inline.rs` (`RECURSIVE_PROBABILITY`) | `min-inline-recursive-probability` 10 (:769) | none | gcc's |
+| ipa-cp evaluation | 500 `ipacp.rs:32` | `ipa-cp-eval-threshold` 500 (params.opt:217) | none | gcc's; benefit x frequency x 1000 / size, benefit from our clocks |
+| ipa-cp clones of a function | 8 `ipacp.rs:34` | `ipa-cp-max-recursive-depth` 8 (225), `ipa-cp-value-list-size` 8 (253) | none | gcc's, one cap for both |
+| ipa-cp recursion penalty | 40% `ipacp.rs:36` | `ipa-cp-recursion-penalty` 40 (237) | none | gcc's |
+| ipa-cp unit growth | 10% of the unit, 16000 large `ipacp.rs:38` | `ipa-cp-unit-growth` 10 (245), `ipa-cp-large-unit-insns` 16000 (249) | none | gcc's |
+| ipa-cp hot call | a call in `main` only in a loop (frequency 1.5) `ipacp.rs` | `cgraph_edge::maybe_hot_p`, `ipcp_cloning_candidate_p` ("no hot calls") | none | gcc's |
 | last chance recoloring | depth 5, interference 8 `allocate.rs:1651` | none | `lcr-max-depth` 5, `lcr-max-interf` 8 `CodeGen/RegAllocGreedy.cpp:95,100` | same |
 | tail duplication | 2 `jumps.rs:91` | none | `tail-dup-size` 2 `CodeGen/TailDuplicator.cpp:60` | same |
 | memset / memcpy expansion | 16 / 8 `isel.rs:419,423` | none | `MaxStoresPerMemset` 16, `MaxStoresPerMemcpy` 8 `Target/X86/X86ISelLowering.cpp:2936,2938` | same |
