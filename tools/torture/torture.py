@@ -71,6 +71,16 @@ def refusal(text: str, rules: list[dict]) -> str | None:
     return None
 
 
+# The options a program asks for (dg-additional-options) that llrm-c has: the rest tune GCC's passes.
+PROGRAM_OPTIONS = ("-fwrapv",)
+
+
+def program_options(text: str) -> list[str]:
+    """The options of `{ dg-additional-options "..." }` lines that llrm-c takes."""
+    asked = [word for line in re.findall(r'dg-additional-options\s+"([^"]*)"', text) for word in line.split()]
+    return [word for word in dict.fromkeys(asked) if word in PROGRAM_OPTIONS]
+
+
 def build(source: Path, level: str, target: str, work: Path, support: Path, stem: str, rules: list[dict]) -> tuple[str, str, Path | None]:
     """(class, why, exe): class is built, refused, compile or link."""
     obj = work / f"{stem}.obj"
@@ -80,7 +90,7 @@ def build(source: Path, level: str, target: str, work: Path, support: Path, stem
         if needs:
             return "refused", f"the program requires {needs.group(1)} (dg-require-effective-target): the real-mode target's int is 16 bits", None
     try:
-        done = subprocess.run([str(BIN / "llrm-c"), str(source), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), LEVELS[level], "-o", str(obj)],
+        done = subprocess.run([str(BIN / "llrm-c"), str(source), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), LEVELS[level], *program_options(source.read_text(errors="replace")), "-o", str(obj)],
                               capture_output=True, text=True, timeout=COMPILE_SECONDS)
     except subprocess.TimeoutExpired:
         return "compile", f"did not finish in {COMPILE_SECONDS} s", None

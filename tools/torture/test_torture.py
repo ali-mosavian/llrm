@@ -22,6 +22,15 @@ class CauseTests(unittest.TestCase):
 
 
 
+class OptionTests(unittest.TestCase):
+    def test_a_program_that_needs_fwrapv_is_built_with_it(self):
+        """950704-1 checks for signed overflow after the add and says so with dg-additional-options "-fwrapv": built without
+        it the optimiser dropped the check and the program aborted (wrong, at -O2 and -Os)."""
+        self.assertEqual(torture.program_options('/* { dg-additional-options "-fwrapv" } */\nint x;'), ["-fwrapv"])
+        self.assertEqual(torture.program_options('/* { dg-additional-options "-O3 -fwrapv -fno-tree-ccp" } */'), ["-fwrapv"])
+        self.assertEqual(torture.program_options("int x;"), [])
+
+
 class DifferencesTests(unittest.TestCase):
     def test_a_program_that_differs_by_design_names_its_reason(self):
         self.assertIn("ISO C11", torture.differences()["pr32244-1"])

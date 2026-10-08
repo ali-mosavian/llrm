@@ -172,3 +172,9 @@ fn a_target_is_named_by_gccs_m_flag() {
     // The machine flags that begin with -m stay their own.
     assert_eq!(parsed(&["-mstack-is-data"]).unwrap().mode(), None);
 }
+
+#[test]
+fn fwrapv_makes_signed_arithmetic_wrap() {
+    assert!(parsed(&["-fwrapv"]).unwrap().wrapv);
+    assert!(!parsed(&["-fwrapv", "-fno-wrapv"]).unwrap().wrapv && !parsed(&[]).unwrap().wrapv);
+}
