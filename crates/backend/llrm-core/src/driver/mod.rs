@@ -7,7 +7,7 @@ pub mod basic;
 mod data;
 pub mod flags;
 
-use std::collections::HashMap;
+use crate::support::hash::HashMap;
 use std::path::PathBuf;
 
 use llrm_mir::program::Program;

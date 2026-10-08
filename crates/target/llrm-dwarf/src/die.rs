@@ -1,6 +1,6 @@
 //! The DIE tree as bytes: abbreviations found, offsets laid out, references resolved.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
 use llrm_object::debug::Info;
 use llrm_object::{Object, Unsupported};
@@ -130,7 +130,7 @@ pub fn unit(object: &Object, info: &Info, out: &mut Out) -> Result<(Done, Done, 
     let (dies, locations) = crate::types::tree(object, info, out.version, usize::from(out.address))?;
     let address = usize::from(out.address);
     // Abbreviations in the order DIEs are first met, and each DIE's offset.
-    let mut layout = Layout { codes: HashMap::new(), order: Vec::new(), code_of: vec![0; dies.len()], offsets: vec![0; dies.len()], address };
+    let mut layout = Layout { codes: HashMap::default(), order: Vec::new(), code_of: vec![0; dies.len()], offsets: vec![0; dies.len()], address };
     let header = if out.version >= 5 { 12 } else { 11 };
     layout.place(&dies, 0, header);
     let Layout { order, code_of, offsets, .. } = layout;

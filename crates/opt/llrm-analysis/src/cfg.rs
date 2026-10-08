@@ -1,7 +1,8 @@
 //! A function's blocks as `graph` walks them: each block by its id,
 //! in layout order, the entry first.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
+use llrm_support::hash::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::graph::loops::{self, Dominates, Loop, Node};
@@ -140,7 +141,7 @@ impl Dominates for Dominance {
 /// else in the order their first back edge comes in the layout.
 pub fn natural(function: &Function, info: &LoopInfo) -> Vec<Loop> {
     let headers = info.loops.iter().map(|one| (one.header, one)).collect::<HashMap<_, _>>();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut found = Vec::with_capacity(info.loops.len());
     for &at in function.layout() {
         for successor in function.successors(at) {

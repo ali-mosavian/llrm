@@ -5,7 +5,7 @@
 //! referred to before they appear. A function's values and blocks may be
 //! used before their definition; the definition must agree with the use.
 
-use std::collections::{HashMap, HashSet};
+use crate::hash::{HashMap, HashSet};
 
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, GlobalId, mask};
 use crate::intrinsics;
@@ -65,12 +65,12 @@ impl Parser {
             tokens,
             at: 0,
             module: Module::default(),
-            globals: HashMap::new(),
+            globals: HashMap::default(),
             global_uses: Vec::new(),
-            defined_globals: HashSet::new(),
-            groups: HashMap::new(),
-            metadata: HashMap::new(),
-            defined_metadata: HashSet::new(),
+            defined_globals: HashSet::default(),
+            groups: HashMap::default(),
+            metadata: HashMap::default(),
+            defined_metadata: HashSet::default(),
             group_spans: Vec::new(),
         }
     }
@@ -486,10 +486,10 @@ impl Parser {
         function.calling_convention = calling_convention;
         let mut local = Local {
             function,
-            values: HashMap::new(),
-            blocks: HashMap::new(),
-            pending_values: HashMap::new(),
-            pending_blocks: HashMap::new(),
+            values: HashMap::default(),
+            blocks: HashMap::default(),
+            pending_values: HashMap::default(),
+            pending_blocks: HashMap::default(),
             pending_records: Vec::new(),
             next_slot: 0,
         };

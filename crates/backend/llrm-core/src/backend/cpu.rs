@@ -65,7 +65,7 @@ pub struct Profile {
 /// What `arithmetic` found for a multiply by a constant under one profile's prices, by constant and by whether a `lea` may be used:
 /// the profile owns it, so it lives and is keyed with the prices it was found under.
 #[derive(Default)]
-pub struct MultiplyChains(std::sync::Mutex<std::collections::HashMap<(i64, bool), Option<(Vec<(&'static str, i64)>, i64)>>>);
+pub struct MultiplyChains(std::sync::Mutex<crate::support::hash::HashMap<(i64, bool), Option<(Vec<(&'static str, i64)>, i64)>>>);
 
 impl MultiplyChains {
     pub fn get(&self, number: i64, with_lea: bool) -> Option<Option<(Vec<(&'static str, i64)>, i64)>> {
@@ -249,7 +249,7 @@ fn _profile(arch: &dyn Target, name: &str) -> Result<Profile, String> {
 }
 
 /// The profiles made so far, by target, CPU and size: each made once, as the passes hold them.
-static _MADE: LazyLock<std::sync::Mutex<std::collections::HashMap<(&'static str, String, bool, bool, bool), &'static Profile>>> = LazyLock::new(Default::default);
+static _MADE: LazyLock<std::sync::Mutex<crate::support::hash::HashMap<(&'static str, String, bool, bool, bool), &'static Profile>>> = LazyLock::new(Default::default);
 
 /// `name`'s profile on the target `arch`, tuned for size where `size`.
 pub fn tuned_for(arch: &dyn Target, name: &str, size: bool) -> Result<&'static Profile, String> {

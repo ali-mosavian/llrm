@@ -1,0 +1,6 @@
+# std's maps are randomly seeded: a pass's work and any order that reaches output varies run to run (#992).
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "use llrm_support::hash::HashMap, a fixed-key hasher" },
+    { path = "std::collections::HashSet", reason = "use llrm_support::hash::HashSet, a fixed-key hasher" },
+    { path = "std::hash::RandomState", reason = "randomly seeded; use llrm_support::hash::FxBuild" },
+]

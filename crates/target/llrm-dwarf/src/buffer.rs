@@ -99,7 +99,7 @@ impl Buf {
 #[derive(Default)]
 pub struct Strings {
     bytes: Vec<u8>,
-    seen: std::collections::HashMap<String, u32>,
+    seen: llrm_support::hash::HashMap<String, u32>,
 }
 
 impl Strings {
