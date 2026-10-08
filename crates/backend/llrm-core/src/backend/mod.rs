@@ -13,6 +13,7 @@ pub mod arithmetic;
 pub mod asm;
 pub mod coalesce;
 pub mod arrival;
+pub mod valuetrack;
 pub mod cfi;
 pub mod debuginfo;
 pub mod comparefold;
@@ -33,6 +34,7 @@ pub mod floatassign;
 pub mod floatregions;
 pub mod inline_asm;
 pub mod frame;
+pub mod relayout;
 pub mod slots;
 pub mod stackusage;
 pub mod jumps;
@@ -70,6 +72,34 @@ pub mod shrinkwrap;
 /// The x86 encoder is `llrm_x86::select`; the tests of this crate encode in real mode through `emit`.
 pub mod select {
     pub use llrm_x86::select::*;
+
+    /// A deliberate model simplification (pricing every frame cell as near costs two bytes of the objects, accepted): see below.
+    /// `emit_in`, for a price: the bytes an instruction takes, or whether it encodes. A frame cell is priced as a near one (a one-byte
+    /// displacement): where it ends up is for the frame layout to decide after the machine phases, and a price that knew a
+    /// displacement would be wrong the moment the layout moved. Incoming arguments, whose place is fixed, keep theirs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn priced_in(bits: u32, what: &crate::model::ir::Semantics, at: u64, r#where: Option<Where<'_>>, short: bool, relocated: bool, held: Option<&HeldMap>) -> Option<Emitted> {
+        use crate::model::ir::{Addr, Loc};
+        /// Where a frame cell is priced.
+        const NEAR: i64 = -8;
+        // A frame cell below BP whose place is not fixed: not an incoming argument.
+        let placed = |addr: &Option<Addr>, in_frame: bool| addr.is_some_and(|addr| in_frame && addr.disp < 0 && addr.slot_home() != Some(0));
+        let moves = |place: &Loc| match place {
+            Loc::Mem(cell) => placed(&cell.addr, cell.in_frame()),
+            Loc::Address(cell) => placed(&cell.addr, cell.in_frame()),
+            _ => false,
+        };
+        if !what.dests.iter().chain(&what.sources).any(moves) {
+            return emit_in(bits, what, at, r#where, short, relocated, held);
+        }
+        let near = |place: &Loc| match place {
+            Loc::Mem(cell) if placed(&cell.addr, cell.in_frame()) => Loc::Mem(crate::model::ir::Mem { addr: cell.addr.map(|addr| Addr { disp: NEAR, ..addr }), ..cell.clone() }),
+            Loc::Address(cell) if placed(&cell.addr, cell.in_frame()) => Loc::Address(crate::model::ir::Address { addr: cell.addr.map(|addr| Addr { disp: NEAR, ..addr }), ..cell.clone() }),
+            other => other.clone(),
+        };
+        let priced = crate::model::ir::Semantics { dests: what.dests.iter().map(&near).collect(), sources: what.sources.iter().map(&near).collect(), ..what.clone() };
+        emit_in(bits, &priced, at, r#where, short, relocated, held)
+    }
 
     #[cfg(test)]
     pub fn emit(what: &crate::model::ir::Semantics, at: u64, r#where: Option<Where<'_>>, short: bool, relocated: bool, held: Option<&HeldMap>) -> Option<Emitted> {

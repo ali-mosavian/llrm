@@ -3,6 +3,7 @@
 # program's and Nib fixture's HIR emitted as MIR, which llrm-mir's verifier
 # and opt must both accept, and which must hold no poison its language
 # defines; what the emitter refuses is counted by reason.
+export LLRM_VERIFY=${LLRM_VERIFY:-1}  # the gate checks each pass and phase
 set -u
 bin=${LLVM20:-/usr/lib/llvm-20/bin}
 root=$(cd "$(dirname "$0")/.." && pwd)

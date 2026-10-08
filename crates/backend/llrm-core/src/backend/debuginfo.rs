@@ -2,6 +2,7 @@
 //! encodes it in. [`described`] reads MIR's metadata (`llrm_mir::debuginfo`); once the code is
 //! laid out, [`laid_out`] adds each procedure's place, variables and lines.
 
+use std::collections::BTreeSet;
 use llrm_mir::{debuginfo as di, MetadataId};
 use llrm_object::debug::{self as model, Info, Kind, Location, Variable};
 
@@ -37,6 +38,8 @@ pub struct Debug {
     pub dialect: model::Dialect,
     pub producer: model::Producer,
     pub frame_register: String,
+    /// The target's register file, as described: which registers are views of which, and which hold values.
+    pub file: Vec<llrm_target::registers::Register>,
     /// What the target calls a call's return address in call frame information; empty where it numbers none.
     pub return_register: String,
     /// The frame and stack registers of 32-bit code, and the bytes a call pushes (near, far): what its frame
@@ -156,6 +159,7 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
         let registers = arch.frame_registers();
         (registers.pointer, registers.stack, [arch.return_address_bytes(false), arch.return_address_bytes(true)])
     });
+    let file_copy = file.clone();
     let registers = file.into_iter().map(|one| model::Register { name: one.name, bits: one.bits, dwarf: one.dwarf, codeview: one.codeview }).collect();
     let language = match di::language(module) {
         Some(di::Language::C) => model::Language::C,
@@ -167,7 +171,57 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
         di::Dialect::Bc => model::Dialect::Bc,
         di::Dialect::Cv4 => model::Dialect::Cv4,
     };
-    Ok(Some(Debug { format: model::Format::Default, language, dialect, producer, frame_register, return_register, frame, registers, types, nodes, procedures, globals: out }))
+    Ok(Some(Debug { format: model::Format::Default, language, dialect, producer, frame_register, file: file_copy, return_register, frame, registers, types, nodes, procedures, globals: out }))
+}
+
+/// Where one value is, as the model says it.
+fn located(at: super::valuetrack::Where) -> Location {
+    match at {
+        super::valuetrack::Where::Place(masm::Place::Register(register)) => Location::Register(format!("{register:?}").to_lowercase()),
+        super::valuetrack::Where::Place(masm::Place::Cell { disp, .. }) => Location::Frame { disp },
+        super::valuetrack::Where::Constant(value) => Location::Constant(value),
+    }
+}
+
+/// A variable's parts, each the bytes of it (none for all of it) with where it is over ranges of the code, as the variable's one
+/// location over the code: the whole where there is one, else the pieces there are, in order, a piece nowhere left a gap.
+fn combined(parts: Vec<(Option<(u32, u32)>, Vec<(usize, usize, super::valuetrack::Where)>)>) -> Vec<(usize, usize, Location)> {
+    let mut edges: BTreeSet<usize> = BTreeSet::new();
+    for (_, ranges) in &parts {
+        for &(from, to, _) in ranges {
+            edges.extend([from, to]);
+        }
+    }
+    let edges: Vec<usize> = edges.into_iter().collect();
+    let mut out: Vec<(usize, usize, Location)> = Vec::new();
+    for pair in edges.windows(2) {
+        let (from, to) = (pair[0], pair[1]);
+        let at = |ranges: &Vec<(usize, usize, super::valuetrack::Where)>| ranges.iter().find(|&&(a, b, _)| a <= from && to <= b).map(|&(.., place)| place);
+        let location = if let Some(whole) = parts.iter().find(|(piece, _)| piece.is_none()).and_then(|(_, ranges)| at(ranges)) {
+            located(whole)
+        } else {
+            let mut pieces: Vec<(u32, u32, super::valuetrack::Where)> = parts.iter().filter_map(|(piece, ranges)| Some((piece.map(|(offset, _)| offset)?, piece.map(|(_, bytes)| bytes)?, at(ranges)?))).collect();
+            if pieces.is_empty() {
+                continue;
+            }
+            pieces.sort_by_key(|&(offset, ..)| offset);
+            let mut made = Vec::new();
+            let mut next = 0;
+            for (offset, bytes, place) in pieces {
+                if offset > next {
+                    made.push((offset - next, None));
+                }
+                made.push((bytes, Some(located(place))));
+                next = offset + bytes;
+            }
+            Location::Pieces(made)
+        };
+        match out.last_mut() {
+            Some(last) if last.1 == from && last.2 == location => last.1 = to,
+            _ => out.push((from, to, location)),
+        }
+    }
+    out
 }
 
 /// `module`'s debug information for the object `source`, its code laid out in `segments` (a procedure's
@@ -199,6 +253,14 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
         // A body starts before its end, and ends after its start.
         let bound = |mark: masm::Mark, within: std::ops::Range<usize>| code.bodies.iter().find(|&&(one, at)| one == mark && within.contains(&at)).map(|&(_, at)| at - start);
         let body = (bound(masm::Mark::BodyStart, start..end).unwrap_or(0), bound(masm::Mark::BodyEnd, start + 1..end + 1).unwrap_or(end - start));
+        // How to find the caller from each place in the code, where the code can be followed.
+        let frame = debug.frame.and_then(|(frame, stack, entry)| {
+            let pops: Vec<(usize, i64)> = code.bodies.iter().filter_map(|&(mark, at)| match mark {
+                masm::Mark::Pops(bytes) if (start + 1..=end).contains(&at) => Some((at - start, bytes)),
+                _ => None,
+            }).collect();
+            super::cfi::rows(&code.image[start..end], frame, stack, entry[usize::from(procedure.far)], &pops).ok()
+        });
         for one in &procedure.body.variables {
             let r#type = type_of(one.r#type)?;
             let kind = if one.parameter { Kind::Parameter } else { Kind::Local };
@@ -210,6 +272,21 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                     let entry = model::Range { section, offset: start, length: body.0 + 1 };
                     let location = Location::List(vec![(entry, Location::Register(format!("{register:?}").to_lowercase()))]);
                     variables.push(Variable { name: one.name.clone(), r#type, kind, location });
+                    continue;
+                }
+                // Found over the code from what the notes say.
+                DebugPlace::Tracked(_) => {
+                    let (model::FrameBase::Cfa { bias }, Some(rows)) = (info.frame_base, frame.as_ref()) else { continue };
+                    let DebugPlace::Tracked(node) = one.place else { unreachable!("matched above") };
+                    let marks: Vec<(usize, masm::Mark)> = code.bodies.iter().filter(|&&(_, at)| (start..=end).contains(&at)).map(|&(mark, at)| (at - start, mark)).collect();
+                    // A note a pass lost with the instruction it stood before leaves the variable at whatever the notes before it said,
+                    // which may be a value it no longer has: a variable with one is said to be nowhere.
+                    let emitted: BTreeSet<u32> = marks.iter().filter_map(|(_, mark)| if let masm::Mark::Note(note) = mark { Some(*note) } else { None }).collect();
+                    let lost = procedure.body.notes.iter().enumerate().any(|(note, said)| said.variable == node && !emitted.contains(&(note as u32)));
+                    let found = if lost { Default::default() } else { super::valuetrack::tracked(&code.image[start..end], &super::valuetrack::Regs::new(&debug.file, debug.frame.map_or(iced_x86::Register::None, |(pointer, ..)| pointer), debug.frame.map_or(iced_x86::Register::None, |(_, stack, _)| stack)), rows, bias, &procedure.body.notes, &marks) };
+                    let parts: Vec<_> = found.into_iter().filter(|((variable, _), _)| *variable == node).map(|((_, piece), ranges)| (piece, ranges)).collect();
+                    let entries = combined(parts).into_iter().map(|(from, to, location)| (model::Range { section, offset: start + from, length: to - from }, location));
+                    variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::List(entries.collect()) });
                     continue;
                 }
                 // The optimiser removed it: no location anywhere is "optimized out".
@@ -244,14 +321,6 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                 }
             }
         }
-        // How to find the caller from each place in the code, where the code can be followed.
-        let frame = debug.frame.and_then(|(frame, stack, entry)| {
-            let pops: Vec<(usize, i64)> = code.bodies.iter().filter_map(|&(mark, at)| match mark {
-                masm::Mark::Pops(bytes) if (start + 1..=end).contains(&at) => Some((at - start, bytes)),
-                _ => None,
-            }).collect();
-            super::cfi::rows(&code.image[start..end], frame, stack, entry[usize::from(procedure.far)], &pops).ok()
-        });
         info.functions.push(model::Function {
             name: described.name.clone(),
             symbol: ids[&procedure.name],

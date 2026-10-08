@@ -379,7 +379,8 @@ impl _Stack {
         };
         let operands = held(&what.sources);
         let results = held(&what.dests);
-        if results.len() > 1 || (_float_copy(one).is_none() && results.iter().any(|result| self.values.contains(result))) {
+        // A result may be an operand's own name (`x = x / m`, the loop's carried value updated in place): that operand dies here.
+        if results.len() > 1 || (_float_copy(one).is_none() && results.iter().any(|result| self.values.contains(result) && !operands.contains(result))) {
             return Err(unlowered("floating stack result is not a fresh value"));
         }
         let two = _two_values(Some(&what));
@@ -573,8 +574,9 @@ impl _Stack {
 
     /// An instruction replacing the top with its result.
     fn consume(&mut self, source: u32, what: Semantics, result: u32) -> Result<(), Raised> {
-        // A value that stays is copied from where it is: exchanging it up first moved what lay above it.
-        if self.survives(source) {
+        // A value that stays is copied from where it is: exchanging it up first moved what lay above it. One the result is
+        // the new value of does not: its later reads are the result's.
+        if source != result && self.survives(source) {
             self.duplicate(source)?;
         } else {
             self.top(source)?;
@@ -591,7 +593,8 @@ impl _Stack {
                 return Err(unlowered("floating stack input is unavailable"));
             }
         }
-        let (mut dies_left, dies_right) = (!self.survives(left), !self.survives(right));
+        // An operand the result renames dies here: what reads it later reads the result.
+        let (mut dies_left, dies_right) = (left == result || !self.survives(left), right == result || !self.survives(right));
         if left == right {
             // A value that stays is copied from where it is, and the product replaces the copy: no exchange.
             let depth = index_of(&self.values, left);

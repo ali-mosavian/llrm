@@ -65,7 +65,7 @@ fn replaced(function: &mut Function, inst: InstId, opcode: Opcode, operands: Vec
     let new = function.create_instruction(opcode, instruction.ty, operands, instruction.flags, None);
     function.insert(new, Position::Before(inst)).expect("a placed instruction");
     let (old, value) = (function.instruction(inst).result.expect("a value"), function.instruction(new).result.expect("a value"));
-    function.replace_all_uses_with(old, Operand::Value(value));
+    function.replace_value(old, Operand::Value(value));
     function.erase(inst).expect("its uses were replaced");
 }
 
@@ -80,7 +80,7 @@ pub fn identities(context: &mut Context, function: &mut Function) -> bool {
     for inst in function.walk().map(|(_, inst)| inst).collect::<Vec<_>>() {
         if let Some(kept) = algebraic::identity(context, function, inst) {
             let result = function.instruction(inst).result.expect("a value");
-            function.replace_all_uses_with(result, kept);
+            function.replace_value(result, kept);
             function.erase(inst).expect("its uses were replaced");
             changed = true;
         } else if _zero_tested(context, function, inst) {
@@ -137,7 +137,7 @@ fn _zero_tested(context: &mut Context, function: &mut Function, inst: InstId) ->
         }
         _ => return false,
     };
-    function.replace_all_uses_with(result, with);
+    function.replace_value(result, with);
     function.erase(inst).expect("its uses were replaced");
     true
 }

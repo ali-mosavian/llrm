@@ -194,7 +194,7 @@ pub fn forwarded(body: &LirBody) -> LirBody {
                 return None;
             }
             let proposed = put(candidate);
-            select::emit_in(body.bits, &proposed, 0, None, false, false, None)?;
+            select::priced_in(body.bits, &proposed, 0, None, false, false, None)?;
             let after_effects = _register_effects(body.bits, &Insn { what: Some(proposed.clone()), ..(**one).clone() }, true, false)?;
             let expected_reads: Lanes =
                 before_effects.0.iter().filter(|lane| !source_lanes.contains(lane)).copied().chain(candidate_lanes.iter().copied()).collect();

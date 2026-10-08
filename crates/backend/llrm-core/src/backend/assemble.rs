@@ -214,6 +214,8 @@ pub struct Machined {
     pub calls: IndexMap<i64, String>,
     /// The code laid down in place of each call to an inline helper.
     pub inline: IndexMap<i64, Vec<u8>>,
+    /// Where the frame places the inline code names were patched in, by site: (byte, displacement, addend).
+    pub inline_places: IndexMap<i64, Vec<(usize, i64, i64)>>,
     pub far: BTreeSet<i64>,
     /// The argument bytes each direct call's callee pops.
     pub pops: IndexMap<i64, i64>,
@@ -285,8 +287,24 @@ fn machined_once(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<P
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(first);
     }
-    let (second, _) = timed("candidate second frame", || cheaper(module, name, abi, pool, target, spilled))?;
-    Ok(if far_frame(&second.body) < far { second } else { first })
+    // The second layout is made from the first run's frame, not by running the backend again; `LLRM_CHECK_FRAME=1` runs it again
+    // beside, and the two must be the same function. A frame that cannot be moved keeps its first layout.
+    let laid = timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled));
+    if std::env::var_os("LLRM_CHECK_FRAME").is_some() {
+        let (again, _) = cheaper(module, name, abi, pool, target, spilled)?;
+        match &laid {
+            Some((laid, _)) => {
+                if let Some(difference) = crate::backend::relayout::difference(laid, &again) {
+                    panic!("@{name} (hole {spilled}): the frame laid again differs from the backend run again: {difference}");
+                }
+            }
+            None => panic!("@{name} (hole {spilled}): the frame could not be laid again"),
+        }
+    }
+    Ok(match laid {
+        Some((second, _)) if far_frame(&second.body) < far => second,
+        _ => first,
+    })
 }
 
 /// `phased`, with the spiller; and, where the spiller changed the body, without it too: the
@@ -348,7 +366,7 @@ pub fn trying<T>(candidates: Candidates, run: impl FnOnce() -> T) -> T {
 /// else the instructions and memory operands it is expected to execute per call.
 fn cost(made: &Machined, target: &Target<'_>) -> Option<f64> {
     if target.cpu.size {
-        made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| select::emit_in(made.body.bits, what, 0, None, false, false, None).map(|code| code.code.len() as f64)).sum()
+        made.body.insns().iter().filter_map(|one| one.what.as_ref()).map(|what| select::priced_in(made.body.bits, what, 0, None, false, false, None).map(|code| code.code.len() as f64)).sum()
     } else {
         executed::work(&made.body)
     }
@@ -378,9 +396,9 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let run = ssaspill::Run::new(admission);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let selected = timed("isel", || isel::selected_with(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole, target.facts, target.ranges, target.cfa));
-    let Selected { body, convention, calls, inline, far, pops, depth, extents, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
+    let Selected { body, convention, calls, inline, inline_places, far, pops, depth, extents, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
-    let mut body = timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)?;
+    let mut body = if llrm_support::debug::verifying() { timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)? } else { body };
     let mut frame = timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
     frame.hole = hole;
@@ -397,10 +415,17 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
         if phase.class_name() == "PhiElimination" {
             in_ssa = false;
         }
+        let kept = (!body.notes.is_empty()).then(|| body.clone());
         body = flow::checked(body, phase.as_mut(), in_ssa, target.classes).map_err(|error| match error {
             flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
             flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;
+        if let Some(before) = &kept {
+            body = body.with_notes_kept(before);
+        }
+        if phase.class_name() == "PhiElimination" {
+            body = body.with_phi_copies_noted();
+        }
         if std::env::var_os("ISEL_DUMP").is_some() {
             println!("{}", crate::backend::lirtext::lir_stage(phase.class_name(), &[(body.name.clone(), body.clone())]));
         }
@@ -414,7 +439,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
         }
         None => (body, None),
     };
-    Ok(((Machined { body, reserve, calls, inline, far, pops, popped: convention.popped, registers, landing }, frame), run))
+    Ok(((Machined { body, reserve, calls, inline, inline_places, far, pops, popped: convention.popped, registers, landing }, frame), run))
 }
 
 /// `body` with its landing pad, the block `marker` starts, laid out last:

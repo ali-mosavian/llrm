@@ -25,7 +25,7 @@ use crate::backend::target::Segments;
 use crate::backend::{addressforms, division};
 use crate::backend::callregs::{call_clobbered_high_keeping, call_clobbers};
 use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
-use crate::model::lir::{BlockOdds, DebugPlace, DebugVariable, Insn, LirBlock, LirBody, Phi};
+use crate::model::lir::{BlockOdds, DebugNote, DebugPlace, DebugTags, NoteValue, DebugVariable, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::AddressForm;
 use crate::support::hash::IndexMap;
 
@@ -322,6 +322,8 @@ pub struct Selected {
     pub calls: IndexMap<i64, String>,
     /// The code laid down in place of each call to an inline helper.
     pub inline: IndexMap<i64, Vec<u8>>,
+    /// Where the frame places an inline site's code names were patched in, by site: (byte, displacement, addend).
+    pub inline_places: IndexMap<i64, Vec<(usize, i64, i64)>>,
     pub far: BTreeSet<i64>,
     /// The argument bytes each direct call's callee pops as it returns, where it does.
     pub pops: IndexMap<i64, i64>,
@@ -536,6 +538,10 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
     // The body is not changed while it is selected: what is known of it without memory is found once.
     let shape = llrm_analysis::cfg::Shape::of(function);
     let unit = unit.with_shape(&shape);
+    // Which allocas' addresses are exposed, for every query that names one: found for all of them in one pass, not by a scan of the
+    // body for each.
+    let exposed = llrm_analysis::memory::exposed_frames(&unit);
+    let unit = unit.with_exposed(&exposed);
     let registers = llrm_analysis::consts::known(&unit, None, None, None);
     let unit = unit.with_registers(&registers);
     let exact = ranges::exact_offsets(&unit).map_err(Unselected)?;
@@ -608,6 +614,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
         abi,
         calls: IndexMap::default(),
         inline: IndexMap::default(),
+        inline_places: IndexMap::default(),
         far: BTreeSet::new(),
         pops: IndexMap::default(),
         landing: None,
@@ -638,6 +645,20 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
     body.homes = Arc::new(homed(module, function, &selector.ats, &selector.values, &body));
     body.variables = parameters(module, function, name, &convention, &selector.homes);
     body.cfa_variables = cfa;
+    let mut body = noted(module, function, name, &selector.ats, &selector.values, &selector.variables, body);
+    // An argument the caller pushed is in its cell from the entry.
+    let named = body.named_values();
+    let cells: Vec<(u32, i64, u32)> = function
+        .parameters()
+        .iter()
+        .zip(&convention.parameters)
+        .filter_map(|(&parameter, place)| {
+            let (Parameter::Cell(disp), Some(&vreg)) = (place, selector.values.get(&parameter)) else { return None };
+            let bytes = u32::try_from(size_of(module, &selector.layout, function.value(parameter).ty).ok()?).ok()?;
+            named.contains(&vreg).then_some((vreg, *disp, bytes))
+        })
+        .collect();
+    body.arguments_in_cells = Arc::new(cells);
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     // An inlined callee's variables are not this procedure's.
     body.variables.extend(selector.variables.into_iter().filter(|(scope, _)| scope == name).map(|(_, one)| one));
@@ -650,7 +671,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
             };
         }
     }
-    Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, pops: selector.pops, depth: selector.depth, extents: selector.extents, landing: selector.landing })
+    Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, inline_places: selector.inline_places, far: selector.far, pops: selector.pops, depth: selector.depth, extents: selector.extents, landing: selector.landing })
 }
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes them in.
@@ -746,6 +767,119 @@ fn lined(module: &Module, function: &Function, ats: &IndexMap<InstId, i64>, body
         }).collect()))
         .collect();
     body.with_blocks(blocks)
+}
+
+/// `body` with what `-g` says of the values a variable has, as notes: each `dbg_value` record is a note, standing before the
+/// first instruction selected from the MIR instruction it stands before; and each instruction that defines a value a note names is
+/// told so. A variable a note names that no frame cell holds is a variable of the body, found over the code from the notes.
+fn noted(module: &Module, function: &Function, name: &str, ats: &IndexMap<InstId, i64>, values: &IndexMap<ValueId, u32>, declared: &[(String, DebugVariable)], body: LirBody) -> LirBody {
+    let mut body = body;
+    let mut notes = Vec::new();
+    let mut before: IndexMap<i64, Vec<u32>> = IndexMap::default();
+    let mut named: BTreeSet<u32> = BTreeSet::new();
+    let said = |operand: llrm_mir::Operand| match operand {
+        llrm_mir::Operand::Value(one) => values.get(&one).map_or(NoteValue::Nothing, |&vreg| NoteValue::Value(vreg)),
+        llrm_mir::Operand::Constant(id) => match module.context.get(id).kind {
+            llrm_mir::ConstantKind::Int(bits) => {
+                let width = module.context.types.int_bits(module.context.get(id).ty).unwrap_or(64);
+                let extended = if width < 128 && bits >> (width - 1) & 1 == 1 { bits as i128 - (1_i128 << width) } else { bits as i128 };
+                i64::try_from(extended).map_or(NoteValue::Nothing, NoteValue::Constant)
+            }
+            _ => NoteValue::Nothing,
+        },
+        _ => NoteValue::Nothing,
+    };
+    // What the records say, by where each stands.
+    let mut said_at: Vec<(i64, u32, Option<(u32, u32)>, NoteValue)> = Vec::new();
+    for record in function.debug_records() {
+        let (value, piece) = match record.what {
+            llrm_mir::DebugWhat::Declare(_) => continue,
+            llrm_mir::DebugWhat::Value(one) => (said(one), None),
+            llrm_mir::DebugWhat::Piece { value, offset, bytes } => (said(value), Some((offset, bytes))),
+            llrm_mir::DebugWhat::GonePiece { offset, bytes } => (NoteValue::Nothing, Some((offset, bytes))),
+            llrm_mir::DebugWhat::Gone => (NoteValue::Nothing, None),
+        };
+        let Some(&at) = ats.get(&record.before) else { continue };
+        said_at.push((at, record.variable.0, piece, value));
+    }
+    // Records of one variable that stand together and disagree (the statements of code that was erased and folded into one
+    // place, where which came last is no longer known) say nothing of it.
+    let mut seen: BTreeSet<(i64, u32, Option<(u32, u32)>, NoteValue)> = BTreeSet::new();
+    let mut unsure: BTreeSet<(i64, u32)> = BTreeSet::new();
+    for &(at, variable, piece, value) in &said_at {
+        let clash = said_at.iter().any(|&(other_at, other_variable, other_piece, other_value)| {
+            other_at == at && other_variable == variable && (other_piece, other_value) != (piece, value) && (other_piece == piece || other_piece.is_none() || piece.is_none())
+        });
+        if clash {
+            unsure.insert((at, variable));
+        }
+    }
+    for (at, variable, piece, value) in said_at {
+        let (piece, value) = if unsure.contains(&(at, variable)) { (None, NoteValue::Nothing) } else { (piece, value) };
+        // Said twice by two passes: said once.
+        if !seen.insert((at, variable, piece, value)) {
+            continue;
+        }
+        let note = u32::try_from(notes.len()).expect("a few notes");
+        notes.push(DebugNote { variable, piece, value });
+        before.entry(at).or_default().push(note);
+        if let NoteValue::Value(vreg) = value {
+            named.insert(vreg);
+        }
+    }
+    // A variable some of whose records went with deleted code is said to be nowhere: a note that stands before no instruction is
+    // one that was lost, and a variable with one has no place.
+    for variable in function.debug_dropped() {
+        notes.push(DebugNote { variable: variable.0, piece: None, value: NoteValue::Nothing });
+    }
+    if notes.is_empty() {
+        return body;
+    }
+    // A note stands before the first instruction selected from its MIR instruction, or else from the next one that was.
+    let mut taken: BTreeSet<i64> = BTreeSet::new();
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let insns = block
+                .insns
+                .iter()
+                .map(|one| {
+                    let ats_here: Vec<i64> = before.keys().copied().filter(|&at| at <= one.at && !taken.contains(&at)).collect();
+                    let ahead: Vec<u32> = ats_here.iter().flat_map(|at| before[at].iter().copied()).collect();
+                    // An argument is made where the function is entered, by the instruction that says where each arrives: it tells
+                    // which, by position, as the registers it names are renumbered by the allocator but stay in their order.
+                    let defined: Vec<u32> = if one.arrival() {
+                        one.delivers.iter().map(|(held, _)| if named.contains(&held.value) { held.value } else { u32::MAX }).collect()
+                    } else {
+                        one.defines.iter().copied().chain(one.delivers.iter().map(|(held, _)| held.value)).filter(|vreg| named.contains(vreg)).collect()
+                    };
+                    let defined = if defined.iter().all(|one| *one == u32::MAX) { Vec::new() } else { defined };
+                    if ahead.is_empty() && defined.is_empty() {
+                        return Arc::clone(one);
+                    }
+                    taken.extend(ats_here);
+                    Arc::new(Insn { debug: DebugTags { defines: defined, before: ahead }, ..(**one).clone() })
+                })
+                .collect();
+            block.with_insns(insns)
+        })
+        .collect();
+    body = body.with_blocks(blocks);
+    // The variables the notes name that no cell holds.
+    let held: BTreeSet<(String, String)> = declared.iter().map(|(scope, one)| (scope.clone(), one.name.clone())).chain(body.variables.iter().map(|one| (name.to_owned(), one.name.clone()))).collect();
+    let mut seen = BTreeSet::new();
+    for note in &notes {
+        if !seen.insert(note.variable) {
+            continue;
+        }
+        let Some(variable) = llrm_mir::debuginfo::read_variable(module, llrm_mir::MetadataId(note.variable)) else { continue };
+        if variable.scope == name && !held.contains(&(variable.scope.clone(), variable.name.clone())) {
+            body.variables.push(DebugVariable { name: variable.name, r#type: variable.r#type, place: DebugPlace::Tracked(note.variable), parameter: variable.parameter, argument: variable.argument, arrives: None });
+        }
+    }
+    body.notes = Arc::new(notes);
+    body
 }
 
 /// `body` with the stores of arguments to their cells (`homes`) belonging to no source line: they are the prologue's, so the body
@@ -874,6 +1008,7 @@ struct Selector<'m, 'c, 'p> {
     calls: IndexMap<i64, String>,
     /// The code laid down in place of each call to an inline helper.
     inline: IndexMap<i64, Vec<u8>>,
+    inline_places: IndexMap<i64, Vec<(usize, i64, i64)>>,
     far: BTreeSet<i64>,
     pops: IndexMap<i64, i64>,
     /// The `at` of what starts the landing pad.
@@ -921,6 +1056,8 @@ impl Selector<'_, '_, '_> {
         let mut reach = BTreeSet::new();
         let (group_of, capacity) = self.alloca_groups(layout);
         let mut homes = IndexMap::<usize, i64>::default();
+        // Every alloca whose address is exposed, in one pass: the scan for each asked the whole body of it.
+        let exposed = llrm_analysis::frameescape::exposed_allocas(function, |inst| self.marker(inst));
         for &block in layout {
             block_at.insert(block, at);
             for &inst in function.block(block).instructions() {
@@ -937,7 +1074,7 @@ impl Selector<'_, '_, '_> {
                     let address = function.instruction(inst).result.expect("an address");
                     self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1 });
                     self.frame_objects.push((disp, size));
-                    if llrm_analysis::frameescape::exposes(function, address, |inst| self.marker(inst)) {
+                    if exposed.contains(&address) {
                         reach.insert((disp, disp + size));
                     }
                 }
@@ -1241,6 +1378,8 @@ impl Selector<'_, '_, '_> {
     /// Each loop's header and constant trips, as `induction` proves them.
     fn trip_counts(&self, block_at: &IndexMap<BlockId, i64>) -> Vec<(i64, i64)> {
         let unit = Unit::of(self.module, &self.layout, self.function).with_spaces(self.spaces).with_registers(&self.registers).with_shape(&self.shape);
+        let exposed = llrm_analysis::memory::exposed_frames(&unit);
+        let unit = unit.with_exposed(&exposed);
         let facts = unit.registers();
         let mut counts: Vec<(i64, i64)> = self
             .shape
@@ -3249,10 +3388,13 @@ impl Selector<'_, '_, '_> {
     /// its arguments name patched in as a displacement from BP.
     fn inline_code(&mut self, inst: InstId, convention: u32, name: String, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let Some((mut bytes, places)) = llrm_mir::intrinsics::code(&name) else { return refuse(format!("@{name} does not parse")) };
+        let mut patched = Vec::new();
         for (&argument, (offset, addend)) in arguments.iter().zip(places) {
             let Pointer::Frame { disp, index: None, .. } = self.pointer(argument)? else { return refuse("inline code naming other than a frame place") };
             bytes[offset..offset + 2].copy_from_slice(&((disp + addend) as u16).to_le_bytes());
+            patched.push((offset, disp, addend));
         }
+        self.inline_places.insert(at, patched);
         self.called(inst, convention, Callee::Inline(name, bytes), &[], at, out)
     }
 

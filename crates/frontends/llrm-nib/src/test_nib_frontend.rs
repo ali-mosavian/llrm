@@ -2123,10 +2123,11 @@ fn test_mir_infers_what_a_nib_function_touches() {
 
 /// A range loop's counter cannot wrap (`nsw`), so its trip count is `n` and
 /// the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
-/// in the loop.
+/// in the loop. Two callers pass different bounds: with one, the bound is a constant of the body, and the loop (which leaves by its
+/// bounds check as well) is copied out by it.
 #[test]
 fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
-    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    return 0\n";
+    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 6))\n    return 0\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "trip.nib", source));
     let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
@@ -2143,6 +2144,23 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
         .expect("a loop");
     let looped = between(&body[..end], &format!("{head}:\n"), "\0");
     assert!(!looped.contains("cmp"), "{looped}");
+}
+
+/// One caller passes 5, so the body's bound is the constant 5: the loop, which also leaves by its bounds check, is copied out by that
+/// bound (gcc's `cunroll` by `loop_max_iterations`) and no backward jump is left. The test above needs two callers to keep the loop.
+#[test]
+fn test_a_range_loop_whose_bound_every_caller_passes_is_copied_out() {
+    let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    return 0\n";
+    let directory = tempfile::tempdir().unwrap();
+    let program = parsed(&written(&directory, "copied.nib", source));
+    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
+    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
+    let assembly = masm::text(&module).expect("prints");
+    let body = between(&assembly, "_total proc near\n", "_total endp");
+    let jump = Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
+    let backward = jump.captures_iter(body).any(|one| body[..one.get(0).unwrap().start()].contains(&format!("{}:\n", &one[1])));
+    assert!(!backward, "{body}");
 }
 
 /// Nib frames are not zeroed, but the program claimed they were: the MIR

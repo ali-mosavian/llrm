@@ -3251,7 +3251,7 @@ fn test_dbg_lines_become_linnum() {
     };
     // Lines alone are a BASIC statement table's, not -g.
     assert!(!records(&assembled).iter().any(|one| one.r#type == llrm_omf::omf::LINNUM));
-    assembled.debug = Some(crate::backend::debuginfo::Debug { format: Default::default(), language: Default::default(), dialect: Default::default(), return_register: String::new(), frame: None, producer: llrm_object::debug::Producer::Native, frame_register: "ebp".into(), registers: Vec::new(), types: Vec::new(), nodes: Default::default(), procedures: Default::default(), globals: Vec::new() });
+    assembled.debug = Some(crate::backend::debuginfo::Debug { format: Default::default(), language: Default::default(), dialect: Default::default(), return_register: String::new(), frame: None, producer: llrm_object::debug::Producer::Native, frame_register: "ebp".into(), file: Vec::new(), registers: Vec::new(), types: Vec::new(), nodes: Default::default(), procedures: Default::default(), globals: Vec::new() });
     let records = records(&assembled);
     let lines: Vec<(u16, u16)> = records.iter().filter(|one| one.r#type == llrm_omf::omf::LINNUM).flat_map(|one| llrm_omf::omf::lines(one).1).collect();
     // push bp; mov bp, sp (3 bytes) is line 7's; mov ax, [bp+6]; sub ax, [bp+8] (6 bytes) too.
@@ -4090,4 +4090,22 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
     let convention = Convention { parameters: vec![Parameter::Cell(6), Parameter::Registers(vec![Register::AX]), Parameter::Registers(vec![Register::DX, Register::AX])], returns: Vec::new(), popped: 0, saved: Vec::new() };
     let found: Vec<(String, DebugPlace)> = isel::parameters(&module, module.functions().next().expect("@f").2, "f", &convention, &Default::default()).into_iter().map(|one| (one.name, one.place)).collect();
     assert_eq!(found, [("a".to_owned(), DebugPlace::At(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 6))), ("b".to_owned(), DebugPlace::Register(Register::AX)), ("d".to_owned(), DebugPlace::Gone)]);
+}
+
+/// Whether an alloca's address is exposed was asked of its uses once per alloca by every query that named it, and by isel once more
+/// per alloca: a function of n locals read its whole body n times over, quadratic in n (#924: a 2,048-word local was seconds). It
+/// is found for all allocas in one pass.
+#[test]
+fn test_selecting_a_function_scans_for_exposed_allocas_once_not_once_per_alloca() {
+    for locals in [30, 60] {
+        let mut text = String::from("define void @f(i16 %x) addrspace(1) {\n");
+        for at in 0..locals {
+            text += &format!("  %a{at} = alloca [4 x i16]\n  %p{at} = getelementptr i16, ptr %a{at}, i16 1\n  store i16 %x, ptr %p{at}\n  %v{at} = load i16, ptr %p{at}\n");
+        }
+        text += "  ret void\n}\n";
+        let before = llrm_analysis::frameescape::scans();
+        selected(&text, "f").unwrap();
+        let scans = llrm_analysis::frameescape::scans() - before;
+        assert!(scans <= 1, "{scans} scans for {locals} locals");
+    }
 }

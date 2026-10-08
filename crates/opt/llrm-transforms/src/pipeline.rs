@@ -126,12 +126,12 @@ impl Options {
 
     /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the code, and the larger inline threshold.
     pub fn speed() -> Self {
-        Self { inline: inline::Threshold::new(250), unswitch: true, ..Self::default() }
+        Self { inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) }, unswitch: true, ..Self::default() }
     }
 
     /// -Omax: every pass the default has on, LLVM's -O3 budgets, twice the target's unroll budget and a 250 inline threshold.
     pub fn aggressive() -> Self {
-        Self { limits: Limits { target_percent: 200, ..Limits::default() }, inline: inline::Threshold::new(250), ..Self::default() }
+        Self { limits: Limits { target_percent: 200, ..Limits::default() }, inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) }, ..Self::default() }
     }
 
     /// -Os: no copy grows the code. Inlining keeps -O2's threshold: the
@@ -257,7 +257,7 @@ pub fn applied(program: &mut Program, applied: &Applied) -> Result<(), String> {
 pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, String> {
     timed();
     let mut manager = PassManager::default();
-    manager.verify_each = true;
+    manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
     if !applied.options.optimize {
         manager.add_program(availableexternally::EliminateAvailableExternally);

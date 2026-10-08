@@ -72,6 +72,10 @@ pub enum DebugWhat {
     Declare(Operand),
     /// The variable is this value, from here until the next record of the variable (`llvm.dbg.value`).
     Value(Operand),
+    /// `bytes` of the variable from byte `offset` are this value, from here on (`DW_OP_piece`): an aggregate the optimiser split.
+    Piece { value: Operand, offset: u32, bytes: u32 },
+    /// Nothing says where those bytes are: their value was deleted.
+    GonePiece { offset: u32, bytes: u32 },
     /// Nothing says where it is: its value was deleted.
     Gone,
 }
@@ -171,6 +175,8 @@ pub struct Function {
     pub(crate) changes: Vec<Change>,
     /// What `-g` says of its variables, kept true by the edits that move, replace or erase what it names.
     pub(crate) debug_records: Vec<DebugRecord>,
+    /// The variables a record of which went with the code it stood in (a block erased): what is said of them is not all that was.
+    pub(crate) debug_dropped: Vec<MetadataId>,
     /// The position each parameter had when the function was made, once one was removed or added; empty while none moved.
     pub(crate) parameter_origins: Vec<Option<usize>>,
     pub(crate) lineage: Lineage,
@@ -197,6 +203,7 @@ impl Function {
             block_uses: Vec::new(),
             changes: Vec::new(),
             debug_records: Vec::new(),
+            debug_dropped: Vec::new(),
             parameter_origins: Vec::new(),
             lineage: Lineage::default(),
         }
