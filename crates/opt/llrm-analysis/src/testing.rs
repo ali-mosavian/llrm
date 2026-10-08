@@ -41,6 +41,11 @@ pub fn block(function: &Function, name: &str) -> BlockId {
 /// Every module of `corpus/` (`tools/mir-corpus.sh`), named by its
 /// directory and program, as `emitted/qb-addrm`.
 pub fn corpus() -> Vec<(String, Module)> {
+    corpus_files().into_iter().map(|(name, path)| (name.clone(), parse_corpus_entry(&name, &path))).collect()
+}
+
+/// The corpus entries' names and files, in order, unparsed: a test that spreads the entries over threads parses each on its own.
+pub fn corpus_files() -> Vec<(String, std::path::PathBuf)> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
     let mut paths: Vec<_> = ["emitted", "optimized"]
         .iter()
@@ -52,12 +57,14 @@ pub fn corpus() -> Vec<(String, Module)> {
         .into_iter()
         .map(|path| {
             let stage = path.parent().unwrap().file_name().unwrap().to_string_lossy();
-            let name = format!("{stage}/{}", path.file_stem().unwrap().to_string_lossy());
-            let text = std::fs::read_to_string(&path).unwrap();
-            let module = llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
-            (name, module)
+            (format!("{stage}/{}", path.file_stem().unwrap().to_string_lossy()), path)
         })
         .collect()
+}
+
+pub fn parse_corpus_entry(name: &str, path: &std::path::Path) -> Module {
+    let text = std::fs::read_to_string(path).unwrap();
+    llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{name}: {error}"))
 }
 
 /// `unit` carrying what is known of its body without memory and its shape, derived once for the body a test built, which no manager
