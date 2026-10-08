@@ -73,23 +73,34 @@ def test_a_compiler_that_succeeds_is_no_failure(tmp_path):
 
 
 def fake_qcport(tmp_path, body):
-    (tmp_path / "tools").mkdir()
+    """A QCport whose tools/run.sh is `body`, run in the directory it is given."""
     script = tmp_path / "tools" / "run.sh"
-    script.write_text("#!/bin/bash\n" + body)
+    script.parent.mkdir()
+    script.write_text("#!/bin/bash\ncd \"$1\"\n" + body)
     script.chmod(0o755)
-    return tmp_path / "src"
+    (tmp_path / "src").mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+    return tmp_path / "src", work
 
 
-def test_a_run_that_waits_is_not_one_that_ran_out_of_time(tmp_path):
-    """The limit was 30 s of wall clock and failed the gate on a correct build at load 88: a loaded host makes a run wait for its turn."""
-    qcport = fake_qcport(tmp_path, "sleep 2\n")
-    qcport_run.run(tmp_path / "work", qcport, 1)
+def test_a_run_slow_on_the_wall_that_keeps_drawing_finishes():
+    """'a run did not finish in 30s' failed a gate at load 90 and passed on the rerun: the limit measured the host."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as raw:
+        src, work = fake_qcport(Path(raw), "for i in 1 2 3 4 5 6 7 8; do echo step >> dosbox.log; sleep 0.4; done\n")
+        assert qcport_run.run(work, src, stall=1.0, cap=60, tick=0.1) is None
 
 
-def test_a_run_that_computes_past_its_limit_is_a_timeout(tmp_path):
-    import subprocess
-    import pytest
+def test_a_run_that_stops_stepping_is_stopped_however_the_host_is_loaded():
+    import tempfile
+    with tempfile.TemporaryDirectory() as raw:
+        src, work = fake_qcport(Path(raw), "echo step >> dosbox.log\nsleep 600\n")
+        assert "no progress" in qcport_run.run(work, src, stall=1.0, cap=60, tick=0.1)
 
-    qcport = fake_qcport(tmp_path, "while :; do :; done\n")
-    with pytest.raises(subprocess.TimeoutExpired):
-        qcport_run.run(tmp_path / "work", qcport, 1)
+
+def test_a_run_that_steps_forever_is_stopped_by_the_cap():
+    import tempfile
+    with tempfile.TemporaryDirectory() as raw:
+        src, work = fake_qcport(Path(raw), "while true; do echo step >> dosbox.log; sleep 0.05; done\n")
+        assert "after 2s" in qcport_run.run(work, src, stall=30, cap=2, tick=0.1)

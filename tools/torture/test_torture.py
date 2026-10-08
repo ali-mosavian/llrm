@@ -70,6 +70,21 @@ class WorkTests(unittest.TestCase):
             shutil.rmtree(one, ignore_errors=True)
 
 
+class StackTests(unittest.TestCase):
+    def test_a_required_stack_size_is_the_expression_the_test_states(self):
+        for text, bytes in (('/* { dg-require-stack-size "0x10000" } */', 65536), ('/* { dg-require-stack-size "128 * 128 * 4 + 1024" } */', 66560), ('{ dg-require-stack-size "8*100*100" }', 80000), ("int x;", None)):
+            self.assertEqual(torture.stack_needed(text), bytes, text)
+
+    def test_a_program_gets_the_stack_it_asks_for_and_the_size_it_may_use(self):
+        """pr20621-1 needs 64 KB of stack and ran on the 16 KB the start-up gave every program (exit 255 at the guard); the programs
+        that size themselves from STACK_SIZE were named differences, one of them 24 KB deep against 16."""
+        self.assertEqual(torture.stack_plan("int x;", 16384, 32), (16384, None))
+        self.assertEqual(torture.stack_plan('{ dg-require-stack-size "0x10000" }', 16384, 32), (65536 + torture.STACK_SLACK, None))
+        self.assertEqual(torture.stack_plan("/* { dg-add-options stack_size } */", 16384, 32), (16384, 16384 - torture.STACK_SLACK))
+        # A real-mode segment holds 64 KB with the data: the stack is asked for as far as it goes.
+        self.assertEqual(torture.stack_plan('{ dg-require-stack-size "524544" }', 16384, 16)[0], 65536 - 2 * torture.STACK_SLACK)
+
+
 class DifferencesTests(unittest.TestCase):
     def test_a_program_that_differs_by_design_names_its_reason(self):
         self.assertIn("ISO C11", torture.differences()["pr32244-1"])

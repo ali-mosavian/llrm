@@ -75,7 +75,8 @@ impl Analysis for Published {
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let pointers = analyses.get::<Pointers>(context, layout, function);
         let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
-        Ok(_published(&Unit::within(context, layout, function, analyses.outer()), pointers))
+        let exposed = analyses.get::<crate::manager::ExposedFrames>(context, layout, function);
+        Ok(_published(&Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed), pointers))
     }
 }
 

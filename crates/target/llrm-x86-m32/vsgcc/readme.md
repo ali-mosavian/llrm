@@ -21,3 +21,9 @@ worst program beside each geomean.
 The kernel is called from `main` through a volatile pointer to it (`wrap.py`, in the copy every compiler builds), so none of them can inline
 it into `main`, and none can clone it for `main`'s constants (`-fipa-cp-clone`'s doing in gcc -O3); everything else inlines as the level
 says. `-fno-inline-functions` was on for all three before, which the table never showed was turning inlining off.
+
+## Compile-time scaling
+
+`scaling.py` measures how the compile cost of llrm, gcc and clang (`levels_time.py`'s commands, `perf stat instructions:u` and task-clock) grows with program size: six generated axes (functions, straight-line statements, branches, live values, callers, call-chain depth; N doubling until a compile takes 10 s) and QCport's 65 modules against llrm's MIR size (`LLRM_DEBUG=mir`). `run` writes `$VSGCC_WORK/scaling.json`, `report` prints the tables and one PNG per axis. `check` runs each axis' program on gcc, clang and llrm (emulator) and requires one value. Results: [scaling.md](scaling.md). Test: `pytest test_scaling.py` (a stand-in compiler of known quadratic cost must read as slope 2).
+
+    uv run --project tools --with matplotlib python crates/target/llrm-x86-m32/vsgcc/scaling.py run --programs
