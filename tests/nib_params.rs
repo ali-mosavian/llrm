@@ -10,7 +10,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use common::dosbox::{self, Session};
-use llrm_core::objectfile::{cvinfo, omf};
+use llrm_core::objectfile::{cv4info, omf};
 
 fn skipped(reason: &str) {
     dosbox::skipped("LLRM_REQUIRE_NIBRUN", reason);
@@ -51,9 +51,10 @@ fn a_register_parameter_is_in_its_cell_where_the_debugger_stops_at_the_body() {
     let map = std::fs::read_to_string(scratch.path().join("par.map")).unwrap();
     let segment = map.lines().find(|line| line.starts_with("PARAMS_TEXT")).and_then(|line| line.split_whitespace().nth(3)).and_then(|at| at.split_once(':')).map(|(_, offset)| usize::from_str_radix(offset, 16).unwrap()).expect("the program's segment in the map");
     let records = omf::parse(&std::fs::read(scratch.path().join("program.obj")).unwrap()).unwrap();
-    let info = cvinfo::parse(&records);
-    let add = info.procedures.iter().find(|one| one.name == "add").expect("add");
-    let body = segment + add.offset as usize + add.debug_start as usize;
+    let procedures = cv4info::procedures(&records);
+    let add = procedures.iter().find(|one| one.name == "add").expect("add");
+    // `add` is the first procedure of the program: the first bytes of its segment.
+    let body = segment + add.debug_start as usize;
 
     let session = Session::start(&[('w', scratch.path())], "");
     session.command(&serde_json::json!({"cmd": "bp_on_load"}));
@@ -94,7 +95,6 @@ fn a_register_parameter_is_in_its_cell_where_the_debugger_stops_at_the_body() {
     let frame = regs["SS"].as_u64().unwrap() as usize * 16 + bp;
     let read = |disp: usize, len: usize| word(session.command(&serde_json::json!({"cmd": "mem_read_linear", "addr": frame - disp, "len": len}))["data"].as_str().unwrap());
     // `a` is at BP-2 (a word) and `b` at BP-6 (a dword): the cells the debug records give the two parameters.
-    let cells: Vec<(String, i64)> = info.procedures.iter().find(|one| one.name == "add").unwrap().locals.iter().map(|one| (one.name.clone(), one.bp_offset)).collect();
-    assert_eq!(cells, [("a".to_owned(), -2), ("b".to_owned(), -6)], "{cells:?}");
+    assert_eq!(add.variables, [("a".to_owned(), -2), ("b".to_owned(), -6)], "{:?}", add.variables);
     assert_eq!((read(2, 2), read(6, 4)), (2, 3), "the cells at the body's first instruction");
 }

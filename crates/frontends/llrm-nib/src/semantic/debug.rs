@@ -79,7 +79,7 @@ impl Described<'_> {
 /// `functions`' debug information: each one's source parameters and
 /// variables, and the module's variables, once.
 pub(super) fn described(functions: &[hir::Function], types: &TypeRegistry) -> Debug {
-    let mut described = Described { types, builder: Builder::for_language(llrm_core::hir::model::DebugLanguage::Nib), made: BTreeMap::new() };
+    let mut described = Described { types, builder: Builder::for_language(llrm_core::hir::model::DebugLanguage::Nib, llrm_core::hir::model::DebugDialect::Cv4), made: BTreeMap::new() };
     let mut globals = BTreeSet::new();
     for function in functions {
         let value_type = |value: u32| function.values.iter().find(|one| one.id == value).map(|one| one.type_id);
