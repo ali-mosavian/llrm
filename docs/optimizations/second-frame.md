@@ -12,16 +12,40 @@ Instrumented `machined_once` to compare the two bodies instruction by instructio
 
 Share of the backend (`assemble`) spent in the second run: QCport `-O0` 24.5%, `-O2` 35.8% (16 and 26 of 65 modules have one). The m32 bench kernels have almost none (their frames are small).
 
-## Proposal
+## Proposal: frame indices, as LLVM has them
 
-After run 1, build run 2's frame by replaying the slot hand-out: a `Frame::new(floor - hole)` with `hole`, asking `slot(key, capacity)` for each of run 1's slots in creation order; then map every frame cell of run 1's body: inside a slot `[home, home + capacity)` to the replayed home plus the offset; any other negative displacement at or above run 1's floor (an alloca or temporary) to `disp - hole`; positive (arguments) unchanged. `Machined.reserve`, `frame.floor`, and anything else derived from the layout follow. Choose by `far_frame` as now.
+A displacement computed by a replay is a patch over a decision made too early: cells name BP offsets from isel on, and anything that reads an offset before the frame is final (an encoding size, an adjacency, a debug home, bytes patched into inline code) must be remade when the layout moves. The general form: a frame cell names a slot (a frame index: slot id, offset inside the slot, kind) until one frame-finalization pass after allocation and the peephole assigns the offsets, so that `far_frame` is an input to that pass and the second run disappears with nothing to keep honest.
 
-## What can differ, and the guard
+### Who reads a concrete offset today (read-only survey of `llrm-core/src` and the x86 encoder, spot-checked at isel.rs 3183 and 2631, select.rs 209-232)
 
-A pass after allocation that decides by a displacement (the candidate `cost`, which prices encodings; peephole) could decide differently in a real second run. The measurement says it did not in 270 cases; it is not a proof. So: `LLRM_CHECK_FRAME=1` runs the real second run beside the computed one and asserts the two bodies and frames equal (displacements included); the gate runs it over the libs, bench, QCport at `-O0/-O2/-Os` and `-g`. Debug info that records a displacement from isel's side tables (not from the body) is the open point: `-g` builds are compared too, and the computed layout is not used where the check finds a difference in any program.
+| class | where | with a slot id |
+|---|---|---|
+| layout (decides the numbers) | isel allocas, temporaries, homed arguments (860-976, 4162); `Frame::slot`/`cell`/`of` (frame.rs); spiller slot colouring (`siblings`, `_color_slots`, `_existing_colors_by`); `prologue`, `masm` reserve, `driver/basic.rs` `_static_frame`/`_runtime_frame` | one place owns ordering, hole, floor, reserve: the finalization pass |
+| identity / overlap | `overlap.rs` `frame_bytes`; `peephole` `_frame_cell`; `spillforward`; spiller `_keeps`/`_may_write`/`_identity`/`_copied_with`; `loopslots`; `CallMemory.private` (built as the complement of escaped byte ranges) | `slot_a == slot_b` and offsets meet; `private` becomes a set of escaped ids with a default-private rule |
+| adjacency arithmetic | `peep/guards.rs` `next_word`, `farload.rs`, `peephole.rs:733`, spiller `_address_source`, `exactaddress.rs`, isel `Pointer::moved` | `(slot, off + 2)`; a merge of two slots is refused (one object is one slot) |
+| cost or encoding by value | x86 `select.rs` 209-232, 280-294 (a Frame operand's size is derived from `disp`, `disp_width` ignored); `assemble.rs` `cost` (`-Os` sums encoded bytes), `far_frame`; `ssaspill` `reload_price`; peephole byte comparisons; `sharedstores`; `jumps` `_arm_bytes` | a size estimate by kind; this is where objects can change (below) |
+| alignment | `WORD` rounding in frame.rs, isel 1359, 4163, masm 363 | kind carries it |
+| debug | isel 1818 builds `DebugPlace::At(frame disp)`; `_static_frame`/`_runtime_frame` rewrite it; `debuginfo.rs` | `(slot, off)`, resolved by the pass as `_static_frame` already does; `arrival.rs` reads bytes and is unaffected |
+| sign tests for incoming arguments | `disp > 0`, `>= 4`, `spills_at` | `kind == Incoming`, `kind == Spill` |
+
+Cannot be symbolic, by their nature: (1) the inline-code bytes of isel 3183, which patch `disp + addend` into a byte vector (needs fixup records resolved by the pass); (2) fixed cells from native or lifted input, the incoming arguments, `variadic`, the interrupt save area (fixed frame indices with an immutable offset; `floor` is the end of that region); (3) indexed arrays, which are `Addr{Literal, disp, SS}` through BP and carry no slot today (need a slot id on that form); (4) the frame-size immediates (`prologue._adjust`, `_arguments`) and the `far_frame` decision itself, which needs a tentative layout.
+
+### Order of steps
+
+1. Annotation, no behaviour change. Every frame cell gets a slot id and an offset inside its slot alongside the concrete displacement it has now (`Addr.index` is unused for Frame cells; the indexed form needs a field). isel, `Frame::slot`, the spiller's colouring and the inline-code patches record it; arithmetic on a cell keeps the id. A verifier rule fails the compile on a frame cell without one: that is the check that nothing was missed, and it is a cheap one. Decisions still read the concrete numbers of layout A, exactly run 1's.
+2. The finalization pass: take the layout (A, or B with the hole), assign offsets from `(slot, off)`, rewrite cells, debug homes, inline-code fixups and the reserve; choose A or B by `far_frame` over the result. The second backend run is deleted.
+3. Optional, later, one reader at a time: migrate the identity/adjacency readers to slot ids, then the cost readers to size estimates. Each is its own change; none is needed for the second run to go.
+
+### Do objects change
+
+After step 2 an object differs from today's only where run 2 would have decided differently from run 1 on a displacement-dependent choice (the candidate `cost` at `-Os`, `jumps`, peephole byte tests): none of 270 did. Because step 2 rewrites the whole frame from slot ids, it also fixes what a displacement remap would have missed (debug homes, inline bytes); step 3 is the one that may change objects, and is not proposed here. If the corpus shows a difference, the gate shows it as a changed object, not a silent one.
+
+### Size
+
+Step 1 touches about fifteen files (isel, frame, spiller, ssaspill, floatassign, floatalloc, farcall, loopslots, driver/basic, the omf `Addr` form and its printer, the verifier) and is the bulk: an estimate of 600-900 lines and a new test per producer. Step 2 is about 150 lines. A displacement remap by replay would be about 150 lines in total and is what this replaces; it is cheaper and has the weakness above.
 
 ## Not done
 
 No predictor of which run wins: the rule stays `far_frame`. The two candidates inside a run (spiller / allocator alone) are a separate question (a near coin flip per function, measured separately).
 
-Expected: the second run's 24-36% of the backend on programs that have one; objects identical by construction of the check.
+Expected: the second run's 24-36% of the backend on programs that have one.
