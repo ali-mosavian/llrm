@@ -37,6 +37,16 @@ that moved past noise; `--update` rewrites all), so the cost is in the diff and 
 need `QCPORT` and `QCPORT_INC` (`~/scratch/qcport-env.sh`); without them they are reported as not measured. Without a working
 counter the step exits 77 (SKIPPED).
 
+### Scaling
+
+`crates/target/*/vsgcc/scaling_gate.py` (step `scaling`, same owners as compile-cost) compiles each of scaling.py's generated
+programs at N and 2N (llrm-c -O1, -O2, -Os) and compares the ratio of instructions, net of the empty file, with
+`tools/gate/scaling-budget.json`. Linear work reads 2.0; a pass gone quadratic pulls its axis towards 4. The same build
+twice differs by 0.0014 at worst; it fails past 1% either way, so a fix that lowers an axis refreshes the budget in the same
+commit: `python3 crates/target/*/vsgcc/scaling_gate.py --refresh`. The gcc-like target is about 2.1 on every axis; the budget
+is main today (branches, live, chain and callers at -Os read 2.8 to 4.6: #924 and #941). Wall time per pass is not usable
+here (a linear pass read 4-6x at 2N under load); a per-pass gate waits for per-pass instruction counts in `LLRM_DEBUG=time`.
+
 ## What belongs in the suite
 
 Tests assert program behavior, representation invariants, or a named regression.
