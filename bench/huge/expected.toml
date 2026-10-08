@@ -1,13 +1,12 @@
-reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+reason = "frequency kept from isel: huge -O2 memory operands -200 (-0.12..-0.24%), instructions +1..2, code +2..7 B"
 blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 609549
-memory_operands = 163285
-code_bytes = 374
+instructions = 609551
+memory_operands = 163087
+code_bytes = 381
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 8.3504
 
 [bas.Os]
 instructions = 690584
@@ -18,9 +17,9 @@ bss_bytes = 0
 kernel_ms = 9.4315
 
 [c.O2]
-instructions = 569019
-memory_operands = 82806
-code_bytes = 201
+instructions = 569020
+memory_operands = 82606
+code_bytes = 203
 data_bytes = 80400
 bss_bytes = 0
 
@@ -32,9 +31,9 @@ data_bytes = 80400
 bss_bytes = 0
 
 [nib.O2]
-instructions = 569019
-memory_operands = 82806
-code_bytes = 204
+instructions = 569020
+memory_operands = 82606
+code_bytes = 206
 data_bytes = 0
 bss_bytes = 80400
 
