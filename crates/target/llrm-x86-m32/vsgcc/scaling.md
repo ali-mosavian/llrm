@@ -1,6 +1,6 @@
 # Compile-time scaling, main aa93a260 (tinytim, instructions:u, median of 3, 6 axes run 6 at a time)
 
-Slopes are over the sizes llrm reached; "top 4" is the largest four. "Total" ratios are whole-process instructions; "net" subtract each compiler's empty-file cost. Pass tables: steps of llrm -O2 above exponent 1.15 (own ms, wall, so approximate). Regenerate: `scaling.py run --programs && scaling.py report`.
+Slopes are over the sizes llrm reached; "top 4" is the largest four. "Total" ratios are whole-process instructions; "net" subtract each compiler's empty-file cost. Pass tables: steps of llrm -O2 above exponent 1.15 (own ms, wall, so approximate). `mulconst` is N multiplies by large odd constants (#951: isel's multiply search); `straight` and `branches` use small multipliers. Regenerate: `scaling.py run --programs && scaling.py report`.
 
 ### functions
 
@@ -31,53 +31,51 @@ Passes of llrm -O2 above exponent 1.15 on functions (top 4 sizes, own ms; larges
 
 | level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
 |---|---|---|---|---|---|---|---|---|
-| -O0 | 1.21 / 1.43 | 1.02 / 1.22 | 0.86 / 0.97 | 1.14 / 1.51 | 8.60x @ 2^4 | 29.29x @ 2^11 | 29.35x | 8 / 10 |
-| -O1 | 1.08 / 1.19 | 0.98 / 1.03 | 1.01 / 1.05 | 1.01 / 1.11 | 5.49x @ 2^4 | 10.74x @ 2^11 | 10.76x | 8 / 10 |
-| -O2 | 1.08 / 1.19 | 0.99 / 1.02 | 1.00 / 1.05 | 1.02 / 1.09 | 4.31x @ 2^4 | 7.74x @ 2^11 | 7.75x | 8 / 10 |
-| -O3 | 1.08 / 1.19 | 0.99 / 1.02 | 1.00 / 1.05 | 1.02 / 1.09 | 4.30x @ 2^4 | 7.73x @ 2^11 | 7.74x | 8 / 10 |
-| -Os | 1.05 / 1.16 | 0.92 / 0.99 | 1.02 / 1.12 | 0.96 / 1.04 | 5.40x @ 2^4 | 15.62x @ 2^12 | 15.65x | 9 / 12 |
+| -O0 | 1.47 / 1.85 | 0.88 / 1.14 | 0.88 / 0.98 | 1.06 / 1.59 | 1.77x @ 2^4 | 57.92x @ 2^12 | 58.11x | 9 / 12 |
+| -O1 | 1.18 / 1.57 | 0.95 / 1.08 | 1.05 / 1.19 | 0.97 / 1.15 | 1.73x @ 2^4 | 9.72x @ 2^13 | 9.72x | 10 / 11 |
+| -O2 | 1.12 / 1.40 | 0.95 / 1.02 | 1.02 / 1.10 | 0.99 / 1.12 | 1.50x @ 2^4 | 4.56x @ 2^12 | 4.57x | 9 / 11 |
+| -O3 | 1.16 / 1.56 | 0.97 / 1.06 | 1.04 / 1.18 | 0.99 / 1.12 | 1.65x @ 2^4 | 7.01x @ 2^13 | 7.01x | 10 / 11 |
+| -Os | 1.16 / 1.53 | 0.93 / 1.01 | 1.04 / 1.18 | 0.95 / 1.05 | 1.73x @ 2^4 | 9.78x @ 2^13 | 9.79x | 10 / 12 |
 
-Passes of llrm -O2 above exponent 1.15 on straight (top 4 sizes, own ms; largest N = 2048):
+Passes of llrm -O2 above exponent 1.15 on straight (top 4 sizes, own ms; largest N = 4096):
 
 | step | ms @ largest | slope |
 |---|---|---|
-| lir twoaddr | 7051.9 | 1.75 |
-| lir coalesce | 5119.5 | 1.56 |
-| regalloc base | 1857.7 | 1.68 |
-| hir to mir | 283.2 | 1.58 |
-| frontend translate | 249.6 | 1.29 |
-| frontend wccq | 145.8 | 1.50 |
-| analysis registers | 134.6 | 1.41 |
-| analysis published | 108.8 | 1.97 |
-| lir phielim | 29.8 | 1.46 |
-| mir sroa | 28.3 | 1.69 |
-
-Stopped early: clang O3 at N=32768
+| lir coalesce | 5492.6 | 2.36 |
+| regalloc base | 3484.5 | 2.60 |
+| lir twoaddr | 2962.3 | 2.21 |
+| mir gvn | 1560.4 | 1.65 |
+| lir peephole | 1251.7 | 1.29 |
+| lir verify | 543.0 | 1.40 |
+| analysis published | 463.0 | 2.03 |
+| hir to mir | 424.7 | 1.87 |
+| frontend translate | 365.9 | 1.51 |
+| regalloc prepare | 221.8 | 1.78 |
 
 ### branches
 
 | level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
 |---|---|---|---|---|---|---|---|---|
-| -O0 | 1.40 / 1.56 | 0.88 / 0.95 | 0.88 / 0.95 | 0.96 / 1.02 | 9.46x @ 2^4 | 71.34x @ 2^9 | 72.19x | 6 / 12 |
-| -O1 | 1.65 / 1.74 | 0.95 / 0.97 | 1.01 / 1.02 | 1.01 / 1.11 | 13.90x @ 2^4 | 106.58x @ 2^8 | 107.46x | 5 / 10 |
-| -O2 | 1.64 / 1.73 | 0.97 / 0.98 | 1.01 / 1.02 | 1.02 / 1.08 | 10.67x @ 2^4 | 73.51x @ 2^8 | 73.92x | 5 / 10 |
-| -O3 | 1.64 / 1.73 | 0.97 / 0.98 | 1.01 / 1.02 | 1.01 / 1.06 | 10.57x @ 2^4 | 72.14x @ 2^8 | 72.53x | 5 / 10 |
-| -Os | 1.58 / 1.68 | 0.91 / 0.94 | 1.01 / 1.02 | 1.02 / 1.18 | 12.77x @ 2^4 | 93.16x @ 2^8 | 94.18x | 5 / 10 |
+| -O0 | 1.72 / 1.90 | 0.81 / 0.93 | 0.90 / 0.97 | 0.92 / 1.02 | 3.89x @ 2^4 | 210.25x @ 2^10 | 212.86x | 7 / 12 |
+| -O1 | 1.76 / 1.83 | 0.88 / 0.92 | 1.00 / 1.02 | 1.06 / 1.47 | 10.19x @ 2^4 | 137.86x @ 2^8 | 139.96x | 5 / 11 |
+| -O2 | 1.75 / 1.82 | 0.92 / 0.95 | 1.01 / 1.02 | 1.02 / 1.17 | 7.98x @ 2^4 | 88.55x @ 2^8 | 89.38x | 5 / 10 |
+| -O3 | 1.73 / 1.82 | 0.92 / 0.95 | 1.01 / 1.02 | 1.01 / 1.15 | 8.25x @ 2^4 | 86.12x @ 2^8 | 86.90x | 5 / 10 |
+| -Os | 1.74 / 1.84 | 0.90 / 0.94 | 1.01 / 1.02 | 1.02 / 1.19 | 8.34x @ 2^4 | 94.23x @ 2^8 | 95.31x | 5 / 10 |
 
 Passes of llrm -O2 above exponent 1.15 on branches (top 4 sizes, own ms; largest N = 256):
 
 | step | ms @ largest | slope |
 |---|---|---|
-| regalloc recolor | 12001.3 | 1.57 |
-| siblings interference | 1802.9 | 1.91 |
-| intervals walk | 1747.7 | 1.79 |
-| lir peephole | 1380.7 | 1.19 |
-| mir gvn | 855.4 | 1.37 |
-| split carving | 771.4 | 2.05 |
-| siblings widths | 749.0 | 1.96 |
-| regalloc spill | 737.1 | 1.31 |
-| spill color slots | 728.0 | 2.10 |
-| regalloc candidates | 683.3 | 2.78 |
+| regalloc recolor | 8227.4 | 1.76 |
+| siblings interference | 925.6 | 2.10 |
+| lir peephole | 791.3 | 1.30 |
+| intervals walk | 771.5 | 1.87 |
+| mir gvn | 530.8 | 1.49 |
+| split carving | 450.9 | 1.81 |
+| regalloc spill | 428.7 | 1.71 |
+| regalloc candidates | 421.9 | 3.05 |
+| analysis registers | 358.7 | 1.78 |
+| siblings widths | 334.4 | 1.98 |
 
 ### live
 
@@ -153,6 +151,31 @@ Passes of llrm -O2 above exponent 1.15 on chain (top 4 sizes, own ms; largest N 
 | analysis callee-effects | 633.3 | 1.61 |
 | regalloc spill | 580.2 | 1.68 |
 | mir decide | 492.0 | 1.45 |
+
+### mulconst
+
+| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
+|---|---|---|---|---|---|---|---|---|
+| -O0 | 1.18 / 1.36 | 1.02 / 1.22 | 0.78 / 0.95 | 1.13 / 1.51 | 8.70x @ 2^4 | 26.24x @ 2^11 | 26.29x | 8 / 10 |
+| -O1 | 1.06 / 1.14 | 0.98 / 1.01 | 0.97 / 1.06 | 1.00 / 1.08 | 5.46x @ 2^4 | 9.87x @ 2^11 | 9.88x | 8 / 11 |
+| -O2 | 1.06 / 1.14 | 0.98 / 1.01 | 0.97 / 1.06 | 1.01 / 1.09 | 4.82x @ 2^4 | 8.37x @ 2^11 | 8.38x | 8 / 11 |
+| -O3 | 1.06 / 1.14 | 0.98 / 1.01 | 0.97 / 1.06 | 1.01 / 1.09 | 4.89x @ 2^4 | 8.36x @ 2^11 | 8.37x | 8 / 11 |
+| -Os | 1.01 / 1.05 | 0.85 / 1.03 | 0.99 / 1.12 | 0.97 / 1.30 | 7.02x @ 2^4 | 24.74x @ 2^12 | 24.83x | 9 / 12 |
+
+Passes of llrm -O2 above exponent 1.15 on mulconst (top 4 sizes, own ms; largest N = 2048):
+
+| step | ms @ largest | slope |
+|---|---|---|
+| lir twoaddr | 1678.4 | 2.08 |
+| lir coalesce | 1370.0 | 1.89 |
+| regalloc base | 874.2 | 1.90 |
+| analysis published | 112.5 | 1.88 |
+| analysis globals-aa | 68.3 | 1.30 |
+| analysis registers | 34.1 | 1.17 |
+| lir loopslots | 27.9 | 1.15 |
+| hir to mir | 27.7 | 1.27 |
+| mir sroa | 16.5 | 1.60 |
+| lir owned bytes | 14.6 | 1.56 |
 
 ### QCport: 65 modules, cost against llrm's MIR instructions (instructions:u; slopes and "net" ratios are less the empty file's cost: gcc 18.7 M, clang 41 M, llrm 8.1 M)
 

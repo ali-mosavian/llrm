@@ -64,3 +64,10 @@ def test_qcport_stubs_catch_the_asserts_with_padding_and_the_asm_blocks(tmp_path
     assert (tmp_path / "work/inc/dos.h").read_bytes() == b"int x;"
     cc = subprocess.run(["gcc", "-m32", "-fsyntax-only", "-x", "c", str(sources[0])], capture_output=True, text=True)
     assert cc.returncode == 0, cc.stderr
+
+
+def test_a_straight_statement_does_not_cost_millions_of_instructions(tmp_path):
+    """16 statements multiplying by random 32-bit constants cost llrm -O0 749 M instructions (gcc 87 M): 8.6x gcc from isel's multiply search, not from size."""
+    source = tmp_path / "s.c"
+    source.write_text(scaling.AXES["straight"](16))
+    assert scaling.measure(levels_time.command("llrm", "O0", source), 1)["ins"] < 150_000_000

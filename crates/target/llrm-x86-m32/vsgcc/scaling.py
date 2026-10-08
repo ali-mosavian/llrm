@@ -31,6 +31,11 @@ def lcg(k: int) -> int:
 PRELUDE_C = "extern void report(long value);\n"
 
 
+def small(k: int) -> int:
+    """A small odd multiplier: a 32-bit one sends llrm's isel into a ~75 M-instruction synth_mult search per multiply (see `mulconst`)."""
+    return lcg(k) % 61 * 2 + 3
+
+
 def _main(axis: str, body: str) -> str:
     """`bench_AXIS`, the entry harness.py counts, running `body` (which returns a value), and a main that reports it."""
     return f"long bench_{axis}(int n) {{\n{body}}}\nint main(void) {{\n    long (*volatile entry)(int) = bench_{axis};\n    report(entry(0));\n    return 0;\n}}\n"
@@ -47,8 +52,15 @@ def functions(n: int) -> str:
 def straight(n: int) -> str:
     """One function of N straight-line statements on four live values."""
     v = "abcd"
-    body = "".join(f"    {v[k % 4]} = {v[k % 4]} * {lcg(k) | 1}u + ({v[(k + 1) % 4]} ^ ({v[(k + 2) % 4]} >> {k % 7 + 1})) + {lcg(k + 1)}u;\n" for k in range(n))
+    body = "".join(f"    {v[k % 4]} = {v[k % 4]} * {small(k)}u + ({v[(k + 1) % 4]} ^ ({v[(k + 2) % 4]} >> {k % 7 + 1})) + {lcg(k + 1)}u;\n" for k in range(n))
     return PRELUDE_C + "unsigned fn(unsigned a, unsigned b, unsigned c, unsigned d) {\n" + body + "    return a ^ b ^ c ^ d;\n}\n" + _main("straight", "    return (long)fn(1, 2, 3, 4);\n")
+
+
+def mulconst(n: int) -> str:
+    """N multiplies by large odd 32-bit constants on four values: what instruction selection spends on constant multiplies."""
+    v = "abcd"
+    body = "".join(f"    {v[k % 4]} = {v[k % 4]} * {lcg(k) | 1}u + {v[(k + 1) % 4]};\n" for k in range(n))
+    return PRELUDE_C + "unsigned fn(unsigned a, unsigned b, unsigned c, unsigned d) {\n" + body + "    return a ^ b ^ c ^ d;\n}\n" + _main("mulconst", "    return (long)fn(1, 2, 3, 4);\n")
 
 
 def branches(n: int) -> str:
@@ -60,7 +72,7 @@ def branches(n: int) -> str:
         if k % 8 == 7:
             body.append(f"    for (i = 0; i < ({x} & 3u); i++) {y} += i ^ {z};\n")
         else:
-            body.append(f"    if (({x} ^ {lcg(k)}u) & {1 << (k % 5)}u) {{ {y} += {x} * {lcg(k + 1) | 1}u; {z} ^= {y}; }} else {{ {x} += {z}; {y} ^= {x} >> 3; }}\n")
+            body.append(f"    if (({x} ^ {lcg(k)}u) & {1 << (k % 5)}u) {{ {y} += {x} * {small(k + 1)}u; {z} ^= {y}; }} else {{ {x} += {z}; {y} ^= {x} >> 3; }}\n")
     return PRELUDE_C + "unsigned fn(unsigned a, unsigned b, unsigned c, unsigned d, unsigned e, unsigned f) {\n    unsigned i;\n" + "".join(body) + "    return a ^ b ^ c ^ d ^ e ^ f;\n}\n" + _main("branches", "    return (long)fn(1, 2, 3, 4, 5, 6);\n")
 
 
@@ -95,7 +107,7 @@ def chain(n: int) -> str:
     return "\n".join(out)
 
 
-AXES = {"functions": functions, "straight": straight, "branches": branches, "live": live, "callers": callers, "chain": chain}
+AXES = {"functions": functions, "straight": straight, "mulconst": mulconst, "branches": branches, "live": live, "callers": callers, "chain": chain}
 
 
 # --- measuring -------------------------------------------------------------------------------------------------------
