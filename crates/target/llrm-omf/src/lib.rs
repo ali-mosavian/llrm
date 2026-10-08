@@ -2,6 +2,7 @@
 
 /// CodeView 4, its older BASIC dialect and Turbo Debugger's records name one place for a whole scope.
 pub const LOCATION_RANGES: bool = false;
+pub const CFA_LOCATIONS: bool = false;
 
 pub mod addends;
 pub mod codeview;

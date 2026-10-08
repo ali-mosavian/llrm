@@ -38,7 +38,7 @@ pub mod verify;
 pub use edit::Position;
 pub use context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
 pub use lexer::ParseError;
-pub use module::{
+pub use module::{DebugRecord, DebugWhat, 
     Block, BlockId, Change, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction, Linkage, MetadataId, MetadataNode, MetadataOperand,
     Module, Operand, UnnamedAddr, Use, ValueData, ValueDef, ValueId,
 };

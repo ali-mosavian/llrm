@@ -262,6 +262,27 @@ fn a_removed_variable_has_no_location_and_the_others_have_theirs() {
     assert!(local.contains("DW_OP_fbreg +8"), "{local}");
 }
 
+/// A function the code gives no frame register is found from the canonical frame address: `-g` kept `ebp` for every function with
+/// a variable, which cost the code a `push ebp` a build without `-g` does not have. A cell the register would have addressed at
+/// `disp` is `disp - bias` from the address.
+#[test]
+fn a_frame_cell_is_found_from_the_canonical_frame_address_where_the_code_keeps_no_register() {
+    let Some(dump) = dwarfdump() else {
+        skipped("llvm-dwarfdump is not installed");
+        return;
+    };
+    let mut made = object(vec![frame("x", -4)], vec![int()], Format::Default);
+    made.debug.as_mut().unwrap().frame_base = llrm_object::debug::FrameBase::Cfa { bias: 8 };
+    let made = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let path = scratch.path().join("x.o");
+    std::fs::write(&path, llrm_elf32::write(&made).unwrap()).unwrap();
+    let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
+    let shown = String::from_utf8_lossy(&shown.stdout).into_owned();
+    assert!(shown.contains("DW_AT_frame_base\t(DW_OP_call_frame_cfa)"), "{shown}");
+    assert!(shown.contains("DW_OP_fbreg -12"), "{shown}");
+}
+
 /// `.debug_frame`: the CIE says the frame address is `esp+4` and the return address is DWARF column 8 just below
 /// it; the function's FDE says each change by the shortest instruction: an offset change alone, a register
 /// change alone, both, a register saved (`DW_CFA_offset`, the offset in units of -4) and restored.

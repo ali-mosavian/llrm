@@ -128,6 +128,12 @@ pub trait Target {
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
 
+    /// Whether the machine has no instruction for `operation` (its description's `expand`), so the compiler expands it before
+    /// selection.
+    fn expands(&self, operation: &str) -> bool {
+        self.layout().expands(operation)
+    }
+
     /// The processors this target prices, as a platform description names them.
     fn cpus(&self) -> &'static [&'static str];
 

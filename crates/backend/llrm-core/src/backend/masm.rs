@@ -619,7 +619,7 @@ fn stack_addressed(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
         || procedure.interrupt.is_some()
         || procedure.entry != 0
         || procedure.body.bits != 32
-        || !procedure.body.variables.is_empty()
+        || (!procedure.body.variables.is_empty() && !procedure.body.cfa_variables)
         || procedure.callees.values().any(|one| !one.code.is_empty())
     {
         return None;
