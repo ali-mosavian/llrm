@@ -5,11 +5,11 @@
 use std::process::Command;
 
 /// (program, flags) whose frames reach past one-byte displacements and spill.
-const FAR: [(&str, &[&str]); 5] = [
+// shellsort -m32 left the list: with EBP a value register (no frame pointer) it no longer spills.
+const FAR: [(&str, &[&str]); 4] = [
     ("matmul", &["-m32", "-march=i486"]),
     ("matmul", &[]),
     ("nbody", &[]),
-    ("shellsort", &["-m32", "-march=i486"]),
     ("sieve", &["-m32", "-march=i486"]),
 ];
 

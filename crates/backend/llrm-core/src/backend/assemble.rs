@@ -397,7 +397,17 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let selected = timed("isel", || isel::selected_with(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole, target.facts, target.ranges, target.cfa));
     let Selected { body, convention, calls, inline, inline_places, far, pops, depth, extents, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
-    let registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
+    let mut registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
+    // LLVM's `hasFP`, before allocation: a function that can do without its frame register has it as a value register.
+    let framed_classes;
+    let classes: &Rc<RegisterClasses> = if crate::backend::framefree::without_frame_register(&body, &registers, &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(), !inline.is_empty(), false, landing.is_some()) {
+        registers.free = true;
+        registers.saved.push((registers.pointer, registers.pointer));
+        framed_classes = Rc::new(target.classes.with_frame_free());
+        &framed_classes
+    } else {
+        target.classes
+    };
     let mut body = timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)?;
     let mut frame = timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
@@ -407,7 +417,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let frame = Rc::new(RefCell::new(frame));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, target.classes, spilling.then(|| Rc::clone(&run)), target.selection.rules(), &registers)? {
+    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, classes, spilling.then(|| Rc::clone(&run)), target.selection.rules(), &registers)? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
             continue;
@@ -415,7 +425,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
         if phase.class_name() == "PhiElimination" {
             in_ssa = false;
         }
-        body = flow::checked(body, phase.as_mut(), in_ssa, target.classes).map_err(|error| match error {
+        body = flow::checked(body, phase.as_mut(), in_ssa, classes).map_err(|error| match error {
             flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
             flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;
