@@ -661,15 +661,46 @@ mod tests {
     }
 
     fn regparm3_at(function: &str, level: llrm_core::driver::flags::Level) -> Vec<String> {
+        procedure_of(&regparm3_listing(level), &format!("{function}@3"))
+    }
+
+    /// The lines of `symbol`'s procedure in `asm`.
+    fn procedure_of(asm: &str, symbol: &str) -> Vec<String> {
+        let from = asm.find(&format!("{symbol} proc")).expect("the function");
+        asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
+    }
+
+    /// tests/fixtures/c/regparm3.c compiled under `-mabi=regparm3`.
+    fn regparm3_listing(level: llrm_core::driver::flags::Level) -> String {
         let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("regparm3")).unwrap();
         let source = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/regparm3.c");
         let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records regparm3.c");
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let options = llrm_core::driver::Options { abi: Some("regparm3".to_owned()), pipeline: level.options(), ..llrm_driver::m16_options(machine) };
         let built = super::selected(&text, "regparm3", None, &options).unwrap();
-        let asm = llrm_core::backend::masm::text(&built).unwrap();
-        let from = asm.find(&format!("{function}@3 proc")).expect("the function");
-        asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
+        llrm_core::backend::masm::text(&built).unwrap()
+    }
+
+    /// A definition has the convention of its prior declaration, as with any C compiler: `declared` follows a `__cdecl` prototype and
+    /// is `_declared`, cdecl's, under the regparm3 default, where `plain` after no prototype is `_plain@3`. The Borland routines a
+    /// program replaces are defined so (QCport's strlib.c).
+    #[test]
+    fn test_m16_regparm3_a_definition_takes_the_convention_of_its_declaration() {
+        let asm = regparm3_listing(llrm_core::driver::flags::Level::O2);
+        assert!(asm.contains("public _declared\n") && asm.contains("_declared proc"), "{asm}");
+        assert!(asm.contains("_plain@3 proc"), "{asm}");
+        let body = procedure_of(&asm, "_declared");
+        assert!(body.iter().any(|line| line.contains("[bp+6]")), "its arguments are on the stack: {body:?}");
+    }
+
+    /// A definition that contradicts its prototype's convention is an error, as Open Watcom says.
+    #[test]
+    fn test_a_definition_contradicting_its_prototype_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("clash.c");
+        std::fs::write(&source, "int __cdecl f(int a, int b);\nint __pascal f(int a, int b) { return a - b; }\n").unwrap();
+        let error = super::recorded_for(&source, &[], false, &[], &super::Profile::for_abi(&llrm_x86_m16::M16, Some("regparm3")).unwrap()).unwrap_err();
+        assert!(error.0.contains("Modifiers disagree"), "{}", error.0);
     }
 
     /// The first three integer arguments arrive in AL, DX and ECX, each the width of its value (a long in one register); the fourth
