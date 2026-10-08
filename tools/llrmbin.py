@@ -41,7 +41,10 @@ def stale_binaries(directory: Path, repo: Path = REPO) -> list[str]:
             continue
         built = binary.stat().st_mtime
         sources = [Path(path) for path in info.read_text().partition(":")[2].replace("\\\n", " ").split()]
-        newest = max([source.stat().st_mtime for source in sources if source.is_file()] + patches, default=0)
+        # Sources only: a build script rewrites its outputs under the target directory whenever it reruns.
+        written = directory.resolve().parent
+        tracked = [source for source in sources if source.is_file() and source.resolve().is_relative_to(repo.resolve()) and not source.resolve().is_relative_to(written)]
+        newest = max([source.stat().st_mtime for source in tracked] + patches, default=0)
         if newest > built:
             stale.append(binary.name)
     return stale

@@ -31,14 +31,19 @@ class ResolverTests(unittest.TestCase):
             (release / "llrm-c.d").write_text(f"{release}/llrm-c: {source}\n")
             (release / "leftover").write_text("")  # not declared: `cargo build --bins` does not rebuild it
             (release / "leftover.d").write_text(f"{release}/leftover: {source}\n")
+            generated = release / "build" / "core-1" / "out" / "selectors.rs"  # a build script rewrites these when it reruns
+            generated.parent.mkdir(parents=True)
+            generated.write_text("")
+            (release / "llrm-c.d").write_text(f"{release}/llrm-c: {source} {generated}\n")
             os.utime(release / "llrm-c", (1000, 1000))
             os.utime(release / "leftover", (1000, 1000))
+            os.utime(generated, (5000, 5000))
             os.utime(source, (2000, 2000))
             self.assertEqual(llrmbin.stale_binaries(release, repo), ["llrm-c"])
             with self.assertRaises(SystemExit) as refused:
                 llrmbin.bin_dir({"LLRM_BIN": str(release)}, repo)
             self.assertIn("cargo build --release --bins", str(refused.exception))
-            os.utime(release / "llrm-c", (3000, 3000))
+            os.utime(release / "llrm-c", (3000, 3000))  # newer than the source, older than the generated file
             self.assertEqual(llrmbin.bin_dir({"LLRM_BIN": str(release)}, repo), release)
 
     def test_the_shell_scripts_ask_the_resolver_not_a_copy_of_it(self):
