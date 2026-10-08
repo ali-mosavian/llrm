@@ -111,7 +111,7 @@ pub fn merged(function: &mut Function) -> bool {
         };
         function.erase(last).expect("a jump defines nothing");
         for (value, with) in swaps {
-            function.replace_all_uses_with(value, with);
+            function.replace_value(value, with);
         }
         for phi in phis {
             function.erase(phi).expect("a replaced phi");

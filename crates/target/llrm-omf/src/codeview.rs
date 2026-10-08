@@ -132,6 +132,8 @@ fn module(object: &Object, info: &Info) -> Result<cvwrite::Module, Error> {
                 // left out, as it was before the model said it.
                 Location::List(entries) if entries.iter().all(|(_, location)| matches!(location, Location::Register(_))) => {}
                 Location::List(_) => return refused(format!("{} has a location list, which is not written yet", variable.name)),
+                // A value in no place, or in pieces: nothing in CodeView 4's records says it, so it is left out.
+                Location::Constant(_) | Location::Pieces(_) => {}
             }
         }
         if !function.blocks.is_empty() {

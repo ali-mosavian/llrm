@@ -144,7 +144,7 @@ fn what_dwarf_cannot_say_is_refused_by_name() {
     // A list of one that holds neither a frame cell nor a register (a static, say) has no expression here.
     let range = Range { section: 0, offset: 0, length: 4 };
     let moved = Variable { name: "m".into(), r#type: 0, kind: Kind::Local, location: Location::List(vec![(range, Location::Static { symbol: 0, disp: 0 })]) };
-    assert!(written(vec![moved], vec![int()], Format::Default).unwrap_err().0.contains("holds frame cells and registers"));
+    assert!(written(vec![moved], vec![int()], Format::Default).unwrap_err().0.contains("holds frame cells, registers"));
 }
 
 /// A format this writer does not write is refused with which: an object cannot carry the

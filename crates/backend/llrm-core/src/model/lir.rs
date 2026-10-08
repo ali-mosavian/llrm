@@ -72,6 +72,25 @@ impl CallMemory {
     }
 }
 
+/// What `-g` says of the values an instruction makes, and where in the source's variables it stands. Equal whatever it holds: two
+/// instructions the code does not tell apart are not told apart by what a debugger is told of them, or `-g` would change the code
+/// wherever a pass compares instructions.
+#[derive(Clone, Debug, Default)]
+pub struct DebugTags {
+    /// The values (by the number their register had in SSA) this instruction defines, whichever register it ends up writing.
+    pub defines: Vec<u32>,
+    /// The notes (`LirBody::notes`) that stand before it.
+    pub before: Vec<u32>,
+}
+
+impl PartialEq for DebugTags {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for DebugTags {}
+
 /// One machine instruction, as the thing that emits it needs it.
 ///
 /// Direct port of `qbopt.model.lir:Insn`.  `call` is a shared owned reference
@@ -103,6 +122,96 @@ pub struct Insn {
     pub reads_complete: bool,
     /// The source line of the MIR instruction it was selected from (`!dbg`).
     pub line: Option<u32>,
+    pub debug: DebugTags,
+}
+
+impl LirBody {
+    /// The values (by the number their register had in SSA) that `-g`'s notes name.
+    #[must_use]
+    pub fn named_values(&self) -> BTreeSet<u32> {
+        self.notes.iter().filter_map(|note| if let NoteValue::Value(value) = note.value { Some(value) } else { None }).collect()
+    }
+
+    /// `self`, a pass's result from `old`, with the notes of the instructions the pass removed or replaced standing before the next
+    /// instruction of the block that is still there, or the last: a note says where in the source a variable takes a value, and
+    /// that place has not moved because the instruction it stood before is gone.
+    #[must_use]
+    pub fn with_notes_kept(&self, old: &LirBody) -> LirBody {
+        if self.notes.is_empty() {
+            return self.clone();
+        }
+        let mut changed = false;
+        let blocks = self
+            .blocks
+            .iter()
+            .map(|block| {
+                let Some(before) = old.blocks.iter().find(|one| one.at == block.at) else { return block.clone() };
+                let present: BTreeSet<u32> = block.insns.iter().flat_map(|one| one.debug.before.iter().copied()).collect();
+                let alive: BTreeSet<*const Insn> = block.insns.iter().map(Arc::as_ptr).collect();
+                // Where each lost note goes: the index in the new block of the first old instruction after it that survives.
+                let mut moved: Vec<(usize, u32)> = Vec::new();
+                for (index, one) in before.insns.iter().enumerate() {
+                    let lost: Vec<u32> = one.debug.before.iter().copied().filter(|note| !present.contains(note)).collect();
+                    if lost.is_empty() {
+                        continue;
+                    }
+                    let survivor = before.insns[index..].iter().find(|later| alive.contains(&Arc::as_ptr(later))).and_then(|later| block.insns.iter().position(|now| Arc::ptr_eq(now, later)));
+                    let at = survivor.or_else(|| block.insns.len().checked_sub(1));
+                    if let Some(at) = at {
+                        moved.extend(lost.into_iter().map(|note| (at, note)));
+                    }
+                }
+                if moved.is_empty() {
+                    return block.clone();
+                }
+                changed = true;
+                let insns = block
+                    .insns
+                    .iter()
+                    .enumerate()
+                    .map(|(index, one)| {
+                        let mut notes: Vec<u32> = moved.iter().filter(|(at, _)| *at == index).map(|&(_, note)| note).collect();
+                        if notes.is_empty() {
+                            return Arc::clone(one);
+                        }
+                        notes.extend(one.debug.before.iter().copied());
+                        notes.sort_unstable();
+                        Arc::new(Insn { debug: DebugTags { before: notes, ..one.debug.clone() }, ..(**one).clone() })
+                    })
+                    .collect();
+                block.with_insns(insns)
+            })
+            .collect();
+        if changed { self.with_blocks(blocks) } else { self.clone() }
+    }
+
+    /// `self` with a copy that defines a value `-g` names told so: the moves that phi elimination makes for a phi's result are
+    /// the only instructions that make it.
+    #[must_use]
+    pub fn with_phi_copies_noted(&self) -> Self {
+        let named = self.named_values();
+        if named.is_empty() {
+            return self.clone();
+        }
+        let blocks = self
+            .blocks
+            .iter()
+            .map(|block| {
+                let insns = block
+                    .insns
+                    .iter()
+                    .map(|one| match one.defines.as_slice() {
+                        [value] if named.contains(value) && one.debug.defines.is_empty() && one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Move) && one.uses.len() == 1 => {
+                            Arc::new(Insn { debug: DebugTags { defines: vec![*value], ..one.debug.clone() }, ..(**one).clone() })
+                        }
+                        _ => Arc::clone(one),
+                    })
+                    .collect();
+                block.with_insns(insns)
+            })
+            .collect();
+        self.with_blocks(blocks)
+    }
 }
 
 impl Insn {
@@ -144,6 +253,7 @@ impl Insn {
             volatile: false,
             reads_complete: false,
             line: None,
+            debug: DebugTags::default(),
         }
     }
 
@@ -311,6 +421,30 @@ pub enum DebugPlace {
     Register(iced_x86::Register),
     /// A parameter the optimiser removed: there is none to show.
     Gone,
+    /// A variable the code keeps in no one place: where it is over the code is found from the notes (`LirBody::notes`) that
+    /// name it, the variable's metadata node being the number.
+    Tracked(u32),
+}
+
+/// What `-g` says of a variable at a point in the code: the value it has from there on, or that it has none.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DebugNote {
+    /// The variable's metadata node.
+    pub variable: u32,
+    /// The bytes of the variable the value is, from the byte (`DW_OP_piece`); none where it is all of it.
+    pub piece: Option<(u32, u32)>,
+    pub value: NoteValue,
+}
+
+/// What a note says a variable (or a piece of it) is.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum NoteValue {
+    /// Nothing: its value was deleted.
+    Nothing,
+    /// The value, by the number its register had in SSA.
+    Value(u32),
+    /// A constant.
+    Constant(i64),
 }
 
 /// One lowered procedure.  Blocks remain in emitted order.
@@ -355,6 +489,11 @@ pub struct LirBody {
     /// `-g`'s variables are found from the canonical frame address, so they need no frame register: the debug format says
     /// where a cell is by its distance from the caller's frame (`FrameBase::Cfa`), whichever register the code addresses it by.
     pub cfa_variables: bool,
+    /// What `-g` says of its variables at points in the code, by the numbers `DebugTags::before` holds.
+    pub notes: Arc<Vec<DebugNote>>,
+    /// The values (by number) that arrive in a cell above the frame, with the cell's displacement and size: arguments the
+    /// caller pushed.
+    pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
 }
 
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
@@ -458,6 +597,8 @@ impl LirBody {
             bits: crate::frontends::bc::declen::BITNESS,
             slotted: false,
             cfa_variables: false,
+            notes: Arc::default(),
+            arguments_in_cells: Arc::default(),
         }
     }
 
@@ -485,6 +626,8 @@ impl LirBody {
             bits: self.bits,
             slotted: self.slotted,
             cfa_variables: self.cfa_variables,
+            notes: Arc::clone(&self.notes),
+            arguments_in_cells: Arc::clone(&self.arguments_in_cells),
         }
     }
 
