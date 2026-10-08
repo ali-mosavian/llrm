@@ -4,7 +4,7 @@
 
 ## Method
 
-- llrm: `llrm-c --target x86-m32 -O2 -march=i486 -fno-inline-functions`. gcc/clang: `-m32 -march=i486 -fno-pic -fno-inline-functions -fno-stack-protector -fcf-protection=none`, `-O2` and `-Os`. Same `-fno-inline-functions` as tools/bench; the kernel carries `noinline` for gcc/clang, which otherwise inline it into `main` (llrm does not).
+- llrm: `llrm-c -m32 -mabi=ABI -O<n> -march=i486`. gcc/clang: `-m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none`, at -O1, -O2, -O3 and -Os. No `-fno-inline-functions` (tools/bench has it): `main` calls the kernel through a volatile pointer, so the kernel stays a call for all three and everything else inlines (`vsgcc/wrap.py`).
 - One emulator (unicorn) for all: llrm's OMF is linked in Python, gcc/clang's ELF by `ld`; both resolve `report`/`memset`/`memcpy`/`memmove` to the same stub. The whole program runs from `main`; the kernel `bench_X` is counted from entry to its own return, callees included. Counting follows tools/bench/icount.py (a `rep` instruction counts once per iteration; memory operands exclude `lea`). Clock estimates use a 486 table (`cost()` in harness.py), without pipeline effects.
 - Not counted: alignment `nop`s (clang pads loops with them, e.g. 94710 in fib), reported in the `nops` column of table.md.
 - Skipped: `grep` (10 MB input, timed only), `huge`, `textfill` (16-bit only). `lru` is built with `-Dfar=` for gcc/clang. `parity` is not a program.

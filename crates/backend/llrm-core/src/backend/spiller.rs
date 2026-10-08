@@ -2760,7 +2760,7 @@ fn _encodable(bits: u32, what: &Semantics, classes: &RegisterClasses) -> Result<
         sources: what.sources.iter().map(&mut placed).collect(),
         ..what.clone()
     };
-    Ok(super::select::emit_in(bits, &probe, 0, None, false, false, None).is_some())
+    Ok(super::select::priced_in(bits, &probe, 0, None, false, false, None).is_some())
 }
 
 /// One past the highest value id this body names.
