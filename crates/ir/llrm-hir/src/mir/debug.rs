@@ -1,17 +1,15 @@
 //! `-g`: HIR's debug information as MIR's, through `llrm_mir::debuginfo`.
 //! A variable in data is listed with the module; one in a frame is an
-//! `llvm.dbg.declare` of its frame object, which [`Body::declare_variables`]
-//! emits.
+//! a record that it lives where its frame object is, which [`Body::declare_variables`]
+//! says: `llvm.dbg.declare`, as a [`DebugRecord`](llrm_mir::DebugRecord), no instruction.
 
 use std::collections::HashMap;
 
 use llrm_mir::debuginfo as di;
-use llrm_mir::{GlobalId, InstId, Linkage, MetadataId, Module};
+use llrm_mir::{GlobalId, MetadataId, Module};
 
-use super::{frame_groups, function_type, Body, Emit, Tables};
+use super::{frame_groups, Body, Emit, Tables};
 use crate::model::{self, Storage};
-
-pub(super) const DECLARE: &str = "llvm.dbg.declare.p0";
 
 /// Each HIR debug type's node, made on first use.
 struct Types<'h> {
@@ -118,32 +116,13 @@ pub(super) fn emitted<'h>(
     Ok(variables)
 }
 
-/// Declares `llvm.dbg.declare` where a frame variable needs it.
-pub(super) fn declared(module: &mut Module, tables: &mut Tables<'_>) -> Emit<()> {
-    if tables.variables.is_empty() || tables.callees.contains_key(DECLARE) {
-        return Ok(());
-    }
-    let types = &mut module.context.types;
-    let (void, pointer) = (types.void(), types.ptr(0));
-    let ty = function_type(types, void, vec![pointer]);
-    let global = module.add_function(DECLARE, ty, Linkage::External)?;
-    tables.callees.insert(DECLARE.to_owned(), module.reference(global));
-    Ok(())
-}
-
 impl Body<'_, '_, '_> {
     /// Each frame variable declared where its frame object is.
     pub(super) fn declare_variables(&mut self) {
         for place in &self.function.places {
             let Some(&node) = self.tables.variables.get(&(self.function.id, place.id)) else { continue };
             let Some(&(object, _)) = self.frame.get(&place.id) else { continue };
-            let pointer = self.b.context.types.ptr(0);
-            let void = self.b.context.types.void();
-            let ty = function_type(&mut self.b.context.types, void, vec![pointer]);
-            let callee = llrm_mir::Operand::Constant(self.tables.callees[DECLARE]);
-            let first = self.b.function.instruction_count();
-            self.b.call(ty, callee, &[self.objects[object]], "");
-            self.b.function.annotate(InstId(first as u32), di::VARIABLE, node);
+            self.b.debug_declare(node, self.objects[object]);
         }
     }
 }

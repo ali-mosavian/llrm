@@ -92,6 +92,12 @@ pub fn lex(text: &str) -> Result<Vec<(Token, usize)>, ParseError> {
                 };
                 out.push((token, line));
             }
+            // `#dbg_declare`, `#dbg_value`, `#dbg_gone`: a debug record, which stands before an instruction.
+            b'#' if bytes.get(at + 1).is_some_and(|b| b.is_ascii_alphabetic()) => {
+                let end = scan(bytes, at + 1, |b| b.is_ascii_alphanumeric() || b == b'_');
+                out.push((Token::Word(text[at..end].to_owned()), line));
+                at = end;
+            }
             b'#' => {
                 let end = scan(bytes, at + 1, |b| b.is_ascii_digit());
                 let Ok(group) = text[at + 1..end].parse() else { return fail(line, "`#` must be followed by a number".to_owned()) };
