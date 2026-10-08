@@ -1,6 +1,6 @@
 """One emulator for every compiler's m32 object: link, run main, count the kernel's work.
 
-    harness.py PROG VARIANT      VARIANT: llrm llrmOs llrmElfO2 llrmElfOs gccO2 gccOs clangO2 clangOs
+    harness.py PROG VARIANT      VARIANT: llrm (-O2) llrmO1 llrmO3 llrmOs llrmElfO2 llrmElfOs, and gcc and clang each at O1 O2 O3 Os
 
 llrm's OMF is linked here (segments by class, fixups resolved); ELF, llrm's (llrmElf*) and gcc/clang's, is linked by ld.
 Both resolve report/memset/memcpy to stub.elf, loaded at STUB. The region counted is bench_PROG
@@ -34,7 +34,7 @@ import llrmbin  # noqa: E402
 LLRM = llrmbin.bin_dir() / "llrm-c"   # where cargo put it; build.sh and ctime.py use the same
 STUB, SENT, STACK_TOP, MEM = 0x8000, 0x7000, 0x7F0000, 0x800000
 BASE = 0x10000
-OMF_VARIANTS = ("llrm", "llrmOs")
+OMF_VARIANTS = ("llrmO1", "llrm", "llrmO3", "llrmOs")   # "llrm" is -O2
 MEMORY = {OpKind.MEMORY, OpKind.MEMORY_SEG_SI, OpKind.MEMORY_SEG_ESI, OpKind.MEMORY_ESDI, OpKind.MEMORY_ESEDI}
 
 

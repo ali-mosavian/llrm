@@ -5,9 +5,9 @@ import table
 
 
 def programs(ratios):
-    """llrm at `ratio` times gcc and clang on every counter, at both levels."""
+    """llrm at `ratio` times gcc (and half of clang) on every counter, at every level."""
     one = lambda n: {'ins': n, 'clocks': n, 'code': n}
-    return {name: {'llrm': one(100 * r), 'llrmOs': one(100 * r), 'gccO2': one(100), 'clangO2': one(200), 'gccOs': one(100), 'clangOs': one(200)} for name, r in ratios.items()}
+    return {name: {table.llrm(l): one(100 * r) for l in table.LEVELS} | {f'gcc{l}': one(100) for l in table.LEVELS} | {f'clang{l}': one(200) for l in table.LEVELS} for name, r in ratios.items()}
 
 
 def test_the_summary_names_the_worst_program_beside_each_geomean():
@@ -15,14 +15,15 @@ def test_the_summary_names_the_worst_program_beside_each_geomean():
     assert "geomean llrm/best O2 clocks: 1.59" in lines
     assert "worst llrm/best O2 clocks: 4.00 (b)" in lines
     assert "worst llrm/best Os code: 4.00 (b)" in lines
-    assert len(lines) == 12
+    assert "worst llrm/gcc O3 ins: 4.00 (b)" in lines
+    assert len(lines) == 48
 
 
 def test_a_program_without_a_variant_is_refused_not_averaged():
     """An unresolved symbol left the harness without a row, and the table averaged what remained."""
     P = programs({'a': 1.0, 'b': 2.0})
-    del P['b']['clangOs']
-    with pytest.raises(AssertionError, match="clangOs"):
+    del P['b']['clangO3']
+    with pytest.raises(AssertionError, match="clangO3"):
         table.complete(P)
 
 
@@ -46,4 +47,4 @@ def test_the_x_kernels_are_summarised_apart_from_the_bench_programs():
     lines = table.grouped(programs({'a': 1.0, 'b': 2.0, 'x_c': 4.0, 'x_d': 1.0}))
     assert "bench (n=2) worst llrm/best O2 ins: 2.00 (b)" in lines
     assert "x_ kernels (n=2) worst llrm/best O2 ins: 4.00 (x_c)" in lines
-    assert len(lines) == 24
+    assert len(lines) == 96
