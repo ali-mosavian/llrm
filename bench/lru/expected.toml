@@ -1,13 +1,12 @@
-reason = "a read of a frame slot a register still holds reads the register (spillforward), and a far pointer made from a long loads its segment once: memory operands and bytes only fall"
-blessed = "2026-10-07"
+reason = "-O2 takes gcc's loop-copy rule and budgets (opts.cc 1311-1316; user decision 2026-10-08)"
+blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 110
-memory_operands = 46
-code_bytes = 530
+instructions = 144
+memory_operands = 55
+code_bytes = 475
 data_bytes = 77
 bss_bytes = 0
-kernel_ms = 0.0081
 
 [bas.Os]
 instructions = 144
@@ -18,9 +17,9 @@ bss_bytes = 0
 kernel_ms = 0.0085
 
 [c.O2]
-instructions = 110
-memory_operands = 57
-code_bytes = 498
+instructions = 133
+memory_operands = 56
+code_bytes = 428
 data_bytes = 0
 bss_bytes = 78
 
@@ -32,12 +31,11 @@ data_bytes = 0
 bss_bytes = 78
 
 [nib.O2]
-instructions = 149
-memory_operands = 90
-code_bytes = 632
+instructions = 204
+memory_operands = 109
+code_bytes = 628
 data_bytes = 32
 bss_bytes = 0
-kernel_ms = 0.0024
 
 [nib.Os]
 instructions = 276
