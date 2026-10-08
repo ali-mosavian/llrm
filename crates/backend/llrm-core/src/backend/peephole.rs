@@ -1695,8 +1695,15 @@ fn _affine_address(
             return Ok(None);
         };
         let unit = match (part.name.as_deref(), part.dests.as_slice(), part.sources.as_slice()) {
-            (Some(name @ ("add" | "sub")), [Loc::Reg(register)], [_, Loc::Imm(Imm { value: 1, .. })]) if dead.contains(&id(one)) => {
-                Some(semantics(Operation::Unary, if name == "add" { "inc" } else { "dec" }, vec![Loc::Reg(*register)], vec![Loc::Reg(*register)]))
+            (Some(name @ ("add" | "sub")), [Loc::Reg(register)], [_, Loc::Imm(Imm { value, .. })]) if dead.contains(&id(one)) => {
+                // By the register's width: 1 and -1 (0xFFFF in a word) are the unit.
+                let bits = i64::from(register.width) * 8;
+                let step = match (*value + (1 << (bits - 1))).rem_euclid(1 << bits) - (1 << (bits - 1)) {
+                    1 => Some(name == "add"),
+                    -1 => Some(name != "add"),
+                    _ => None,
+                };
+                step.map(|up| semantics(Operation::Unary, if up { "inc" } else { "dec" }, vec![Loc::Reg(*register)], vec![Loc::Reg(*register)]))
             }
             _ => None,
         };
