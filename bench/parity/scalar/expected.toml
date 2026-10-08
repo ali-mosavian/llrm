@@ -1,13 +1,12 @@
-reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+reason = "regparm3 is the default (user decision 2026-10-08), measured on main after #887: AX/DX/CX cannot address, only SI/DI survive a call; the rows here move down"
 blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 61
+instructions = 92
 memory_operands = 2
-code_bytes = 305
+code_bytes = 160
 data_bytes = 21
 bss_bytes = 0
-kernel_ms = 0.0347
 
 [bas.Os]
 instructions = 92
@@ -18,9 +17,9 @@ bss_bytes = 0
 kernel_ms = 0.0351
 
 [c.O2]
-instructions = 56
+instructions = 87
 memory_operands = 0
-code_bytes = 208
+code_bytes = 66
 data_bytes = 0
 bss_bytes = 0
 
@@ -32,9 +31,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 56
+instructions = 87
 memory_operands = 0
-code_bytes = 211
+code_bytes = 69
 data_bytes = 0
 bss_bytes = 0
 

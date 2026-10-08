@@ -19,19 +19,40 @@ fn pipeline(arguments: &[&str]) -> Options {
     parsed(arguments).unwrap().pipeline()
 }
 
+/// The passes a level runs are gcc 13.4.0's `default_options_table` (opts.cc 573-694) for the passes this compiler has:
+/// -O1 the scalar ones and the last call inlined, -O2 adds inlining, gcse, sibling calls and pattern fill, -O3 peeling,
+/// unswitching, complete copies of loops that grow the code, and the larger inline threshold. Before, -O1 and -O2 differed
+/// by loop copies alone and -O2 let a complete copy grow the code.
 #[test]
-fn each_level_selects_its_pipeline() {
-    let o2 = Options::default();
-    assert_eq!(pipeline(&[]), o2);
-    assert_eq!(pipeline(&["-O2"]), o2);
-    assert_eq!(pipeline(&["-O0"]), Options { optimize: false, ..o2.clone() });
-    let o1 = Options { unroll: false, peel: false, unswitch: false, ..o2.clone() };
-    assert_eq!(pipeline(&["-O1"]), o1);
-    assert_eq!(pipeline(&["-O"]), o1);
-    assert_eq!(pipeline(&["-Og"]), o1);
-    let o3 = pipeline(&["-O3"]);
-    assert_eq!(o3.limits, Limits { target_percent: 200, ..Limits::default() });
-    assert_eq!((o3.inline, o3.unroll, o3.peel), (Threshold::new(250), true, true));
+fn each_level_selects_gcc_s_passes() {
+    // (scalar passes, last call inlined, inlines at all, gcse, sibling calls, fill, peel, unswitch, copies may grow)
+    let row = |level: &str| {
+        let o = pipeline(&[level]);
+        (
+            [o.dead, o.promote, o.drop_stores, o.hoist, o.strength],
+            o.inline.last,
+            o.inline.limit > 0,
+            o.forward && o.drop_loads,
+            o.sibcalls,
+            o.fill,
+            o.peel,
+            o.unswitch,
+            o.limits.grows,
+            o.unroll,
+        )
+    };
+    let scalar = [true; 5];
+    assert!(!pipeline(&["-O0"]).optimize);
+    assert_eq!(row("-O1"), (scalar, true, true, false, false, false, false, false, false, true));
+    assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, false, false, true));
+    assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true, true, true));
+    assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));
+    assert_eq!(pipeline(&["-Og"]), pipeline(&["-O1"]));
+    assert_eq!(pipeline(&[]), pipeline(&["-O2"]));
+    assert_eq!((pipeline(&["-O1"]).inline.limit, pipeline(&["-O2"]).inline.limit, pipeline(&["-O3"]).inline.limit), (90, 225, 250));
+    let max = pipeline(&["-Omax"]);
+    assert_eq!(max.limits, Limits { target_percent: 200, ..Limits::default() });
+    assert_eq!((max.inline, max.unroll, max.peel), (Threshold::new(250), true, true));
     let os = pipeline(&["-Os"]);
     assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default().for_size(), true));
     let oz = pipeline(&["-Oz"]);
