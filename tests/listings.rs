@@ -7,6 +7,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod common;
+
 const REGISTERS: [&str; 8] = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp"];
 
 /// `register`'s family and width in bytes: `eax` is (ax, 4).
@@ -124,8 +126,8 @@ fn kernels(dir: &Path, stem: &str, basic: &str) -> [(&'static str, Vec<(Vec<Stri
     let c = compiled("llrm-c", &source("c"), &[&cpu[..], &["-fno-inline-functions"]].concat());
     let nib = compiled("llrm-nib", &source("nib"), &[&cpu[..], &["-fno-inline-functions-called-once"]].concat());
     let of = |asm: &str, name: &str| loops(&procedure(asm, name)).iter().map(|(one, inner)| (normalized(one), *inner)).collect();
-    let kernel = format!("_bench_{stem}");
-    [("bas", of(&bas, basic)), ("c", of(&c, &kernel)), ("nib", of(&nib, &kernel))]
+    // C's kernel is spelled as the default ABI spells it; Nib's own procedures are not decorated.
+    [("bas", of(&bas, basic)), ("c", of(&c, &common::symbol(&format!("bench_{stem}")))), ("nib", of(&nib, &format!("_bench_{stem}")))]
 }
 
 /// Huge arrays: QB called B$HARY for every element, C redid the 32-bit

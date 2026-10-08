@@ -47,7 +47,7 @@ fn compiled(inlined: bool) -> Vec<Rc<omf::Record>> {
     omf::parse(&crate::compile::object(&module, Path::new("probe.nib"), CodeLayout::OneSegment, llrm_target::object::Format::Omf).expect("writes")).expect("parses")
 }
 
-/// Each source parameter, local and module variable with its Nib type; no
+/// Each source local and module variable, and each parameter (a stack one an argument, a register one a cell of the frame), with its Nib type; no
 /// compiler temporary.
 #[test]
 fn nib_symbols_read_with_their_types() {
@@ -62,8 +62,10 @@ fn nib_symbols_read_with_their_types() {
             "LOCAL main.small: UNSIGNED CHAR",
             "LOCAL main.values: 8 BYTES OF INTEGER",
             "LOCAL scale.doubled: LONG",
-            // The optimiser removes `factor` (its model has no location): the dialect cannot say "optimized out".
-            "PARAM scale.p: BYREF TYPE point",
+            // `scale`'s parameters arrive in registers (regparm3), which this dialect cannot follow: each is stored to a cell at the entry
+            // (#883), a local of the frame, not an argument above it.
+            "LOCAL scale.factor: INTEGER",
+            "LOCAL scale.p: BYREF TYPE point",
             "PROC main flags 4 () -> INTEGER",
             "PROC scale flags 0 (BYREF TYPE point, INTEGER) -> LONG",
         ]
@@ -193,4 +195,3 @@ fn where_the_format_says_ranges_a_register_parameter_stays_in_its_register() {
     let add = info.functions.iter().find(|one| one.name == "add").expect("add");
     assert!(add.variables.iter().all(|one| matches!(&one.location, Location::List(entries) if matches!(entries[..], [(_, Location::Register(_))]))), "{:?}", add.variables);
 }
-

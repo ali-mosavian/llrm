@@ -39,3 +39,11 @@ def test_a_stub_built_from_another_stub_s_is_refused(tmp_path, monkeypatch):
         harness.fresh_stub()
     harness.record_stub(tmp_path)
     assert harness.fresh_stub() == tmp_path / "stub.elf"
+
+
+def test_the_x_kernels_are_summarised_apart_from_the_bench_programs():
+    """One summary over both hid the kernels' worst rows behind the bench programs' geomean (or the reverse)."""
+    lines = table.grouped(programs({'a': 1.0, 'b': 2.0, 'x_c': 4.0, 'x_d': 1.0}))
+    assert "bench (n=2) worst llrm/best O2 ins: 2.00 (b)" in lines
+    assert "x_ kernels (n=2) worst llrm/best O2 ins: 4.00 (x_c)" in lines
+    assert len(lines) == 24

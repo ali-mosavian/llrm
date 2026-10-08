@@ -63,6 +63,9 @@ pub struct Options {
     pub fill: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
+    /// Code size outranks speed where they conflict: -Os and -Oz. (Whether a complete copy of a loop may grow the
+    /// code is `limits.grows`, which gcc lets only -O3 do.)
+    pub for_size: bool,
 }
 
 impl Default for Options {
@@ -87,6 +90,7 @@ impl Default for Options {
             fill: true,
             sibcalls: true,
             unswitch: false,
+            for_size: false,
         }
     }
 }
@@ -97,12 +101,35 @@ impl Options {
         Self { optimize: false, ..Self::default() }
     }
 
-    /// -O1: the scalar passes; no loop is copied or unswitched.
+    /// -O1: gcc's: the scalar passes and `-finline-functions-called-once`; a loop is copied out completely only where the
+    /// code does not grow; nothing is inlined that `early-inlining-insns` (6) over `max-inline-insns-auto` (15) of the -O2
+    /// threshold does not admit, and no gcse, sibling calls, pattern fill, peeling or unswitching.
     pub fn basic() -> Self {
-        Self { unroll: false, peel: false, unswitch: false, ..Self::default() }
+        Self {
+            limits: Limits { grows: false, ..Self::default().limits },
+            inline: inline::Threshold::new(Self::default().inline.limit * 6 / 15),
+            forward: false,
+            drop_loads: false,
+            fill: false,
+            sibcalls: false,
+            peel: false,
+            unswitch: false,
+            ..Self::default()
+        }
     }
 
-    /// -O3: LLVM's -O3 budgets, twice the target's unroll budget and a 250 inline threshold.
+    /// -O2: gcc's: -O1 with inlining, gcse, sibling calls and pattern fill; a complete copy of a loop still must not grow
+    /// the code (`flag_cunroll_grow_size` is on at -O3, `-funroll-loops` and `-fpeel-loops` only).
+    pub fn standard() -> Self {
+        Self { limits: Limits { grows: false, ..Self::default().limits }, peel: false, unswitch: false, ..Self::default() }
+    }
+
+    /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the code, and the larger inline threshold.
+    pub fn speed() -> Self {
+        Self { inline: inline::Threshold::new(250), unswitch: true, ..Self::default() }
+    }
+
+    /// -Omax: every pass the default has on, LLVM's -O3 budgets, twice the target's unroll budget and a 250 inline threshold.
     pub fn aggressive() -> Self {
         Self { limits: Limits { target_percent: 200, ..Limits::default() }, inline: inline::Threshold::new(250), ..Self::default() }
     }
@@ -113,12 +140,12 @@ impl Options {
     /// shrinks the code here. A lower one would also refuse a constant-site
     /// clone that folds away.
     pub fn size() -> Self {
-        Self { limits: Limits { grows: false, target_percent: 100, ..Limits::default() }, inline: inline::Threshold::default().for_size(), ..Self::default() }
+        Self { limits: Limits { grows: false, target_percent: 100, ..Limits::default() }, inline: inline::Threshold::default().for_size(), for_size: true, ..Self::default() }
     }
 
     /// Whether code size outranks speed where they conflict: -Os and -Oz.
     pub fn prefers_size(&self) -> bool {
-        !self.limits.grows
+        self.for_size
     }
 
     /// -Oz: no loop is copied.

@@ -97,8 +97,8 @@ fn a_copy_that_folds_away_is_admitted_whatever_it_would_have_grown_to() {
 
 #[test]
 fn past_max_completely_peel_times_nothing_is_copied() {
-    assert!(summing(10, "0", "").admitted(&Limits::default()));
-    assert!(!summing(11, "0", "").admitted(&Limits::default()));
+    assert!(summing(16, "0", "").admitted(&Limits::default()));
+    assert!(!summing(17, "0", "").admitted(&Limits::default()));
     assert!(summing(17, "0", "").admitted(&Limits { max_unroll_iterations: 0, ..Limits::default() }));
 }
 
@@ -120,7 +120,7 @@ fn over_max_completely_peeled_insns_is_refused() {
     assert!(summing(8, "%x", "").admitted(&Limits { max_unrolled_operations: 2, ..Limits::default() }));
 }
 
-/// A branch on `%x` no iteration decides, once or twice a trip, twelve trips.
+/// A branch on `%x` no iteration decides, once or twice a trip, seventeen trips.
 fn branching(twice: bool) -> Parsed {
     let second = if twice { "%c2, label %b5, label %b6" } else { "true, label %b5, label %b6" };
     Parsed::new(&format!(
@@ -131,7 +131,7 @@ b0:
 b1:
   %i = phi i16 [ 0, %b0 ], [ %next, %b7 ]
   %acc = phi i16 [ 0, %b0 ], [ %out, %b7 ]
-  %go = icmp slt i16 %i, 10
+  %go = icmp slt i16 %i, 17
   br i1 %go, label %b2, label %b8
 
 b2:
@@ -168,8 +168,10 @@ b8:
 
 #[test]
 fn past_max_peel_branches_undecided_branches_are_refused() {
-    assert!(branching(false).admitted(&Limits::default()));
-    assert!(!branching(true).admitted(&Limits::default()));
+    // gcc's `max-peel-branches` is 32: seventeen trips of one branch are 17, of two 34.
+    let unbounded = Limits { max_unroll_iterations: 0, ..Limits::default() };
+    assert!(branching(false).admitted(&unbounded));
+    assert!(!branching(true).admitted(&unbounded));
 }
 
 /// An outer loop of two trips around an inner one: copied only when that shrinks it.
@@ -231,9 +233,12 @@ fn a_cold_loop_is_not_copied_where_the_code_grows() {
 }
 
 /// QCport's 16-trip clear and fill loops (console.c, mdl.c) were copied 16 times, +100 to +400 bytes
-/// each: LLVM analyses at most 10 iterations (`-unroll-max-iteration-count-to-analyze`).
+/// each, when the limit was 16; it was 10 (LLVM's `-unroll-max-iteration-count-to-analyze`) until -O2 became gcc's, where
+/// no complete copy grows the code (`grows: false`) and the limit is gcc's `max-completely-peel-times`, 16.
 #[test]
-fn a_loop_of_more_than_ten_trips_is_not_copied() {
+fn a_loop_of_sixteen_trips_is_copied_only_where_it_does_not_grow() {
+    let kept = Limits { grows: false, ..Limits::default() };
     assert!(summing(10, "%x", "").admitted(&Limits::default()));
-    assert!(!summing(16, "%x", "").admitted(&Limits::default()));
+    assert!(!summing(17, "%x", "").admitted(&Limits::default()));
+    assert!(!summing(16, "%x", "").admitted(&kept));
 }

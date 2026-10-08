@@ -1,5 +1,5 @@
-reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
-blessed = "2026-10-07"
+reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+blessed = "2026-10-08"
 
 [bas.O2]
 instructions = 4181
@@ -16,30 +16,30 @@ data_bytes = 8205
 bss_bytes = 0
 
 [c.O2]
-instructions = 4156
+instructions = 4155
 memory_operands = 1000
-code_bytes = 107
+code_bytes = 97
 data_bytes = 0
 bss_bytes = 8192
 
 [c.Os]
-instructions = 4156
+instructions = 4155
 memory_operands = 1000
-code_bytes = 106
+code_bytes = 97
 data_bytes = 0
 bss_bytes = 8192
 
 [nib.O2]
-instructions = 4181
+instructions = 4180
 memory_operands = 1000
-code_bytes = 111
+code_bytes = 101
 data_bytes = 8192
 bss_bytes = 0
 
 [nib.Os]
-instructions = 4181
+instructions = 4180
 memory_operands = 1000
-code_bytes = 110
+code_bytes = 101
 data_bytes = 8192
 bss_bytes = 0
 
