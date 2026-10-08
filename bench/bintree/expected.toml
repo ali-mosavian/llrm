@@ -1,5 +1,5 @@
-reason = "a read of a frame slot a register still holds reads the register (spillforward), and a far pointer made from a long loads its segment once: memory operands and bytes only fall"
-blessed = "2026-10-07"
+reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+blessed = "2026-10-08"
 
 [bas.O2]
 instructions = 146294
@@ -18,31 +18,30 @@ bss_bytes = 0
 kernel_ms = 1.9135
 
 [c.O2]
-instructions = 63575
-memory_operands = 13630
-code_bytes = 324
+instructions = 62075
+memory_operands = 12128
+code_bytes = 289
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 58239
-memory_operands = 14384
-code_bytes = 275
+instructions = 56438
+memory_operands = 12882
+code_bytes = 243
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 111422
-memory_operands = 23200
-code_bytes = 485
+instructions = 95071
+memory_operands = 13028
+code_bytes = 404
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 1.4901
 
 [nib.Os]
-instructions = 124252
-memory_operands = 35331
-code_bytes = 503
+instructions = 112966
+memory_operands = 29152
+code_bytes = 442
 data_bytes = 0
 bss_bytes = 0
 

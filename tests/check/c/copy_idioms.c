@@ -1,39 +1,39 @@
 // RUN: llrm-c %s {-O2 | -Os} -march=i486 -fno-inline-functions -S -o /dev/stdout
 // Loops people write that are one string move, and look-alikes that are not.
-// CHECK-LABEL: _copy proc
+// CHECK-LABEL: {{_copy(@3)?}} proc
 // CHECK: rep movsd
 // CHECK-NOT: std
-// CHECK: _copy endp
-// CHECK-LABEL: _scroll_up proc
+// CHECK: {{_copy(@3)?}} endp
+// CHECK-LABEL: {{_scroll_up(@3)?}} proc
 // CHECK: rep movsd
 // CHECK-NOT: std
-// CHECK: _scroll_up endp
-// CHECK-LABEL: _scroll_down proc
+// CHECK: {{_scroll_up(@3)?}} endp
+// CHECK-LABEL: {{_scroll_down(@3)?}} proc
 // CHECK: std
 // CHECK: rep movsd
 // CHECK: cld
-// CHECK: _scroll_down endp
-// CHECK-LABEL: _palette proc
+// CHECK: {{_scroll_down(@3)?}} endp
+// CHECK-LABEL: {{_palette(@3)?}} proc
 // CHECK: rep stosw
-// CHECK: _palette endp
-// CHECK-LABEL: _block proc
+// CHECK: {{_palette(@3)?}} endp
+// CHECK-LABEL: {{_block(@3)?}} proc
 // CHECK: rep movsd
-// CHECK: _block endp
-// CHECK-LABEL: _smear proc
+// CHECK: {{_block(@3)?}} endp
+// CHECK-LABEL: {{_smear(@3)?}} proc
 // CHECK-NOT: rep
-// CHECK: _smear endp
-// CHECK-LABEL: _changed proc
+// CHECK: {{_smear(@3)?}} endp
+// CHECK-LABEL: {{_changed(@3)?}} proc
 // CHECK-NOT: rep
-// CHECK: _changed endp
-// CHECK-LABEL: _two_stores proc
+// CHECK: {{_changed(@3)?}} endp
+// CHECK-LABEL: {{_two_stores(@3)?}} proc
 // CHECK-NOT: rep
-// CHECK: _two_stores endp
-// CHECK-LABEL: _strides proc
+// CHECK: {{_two_stores(@3)?}} endp
+// CHECK-LABEL: {{_strides(@3)?}} proc
 // CHECK-NOT: rep
-// CHECK: _strides endp
-// CHECK-LABEL: _written proc
+// CHECK: {{_strides(@3)?}} endp
+// CHECK-LABEL: {{_written(@3)?}} proc
 // CHECK-NOT: rep
-// CHECK: _written endp
+// CHECK: {{_written(@3)?}} endp
 short a[160], b[160], c[160], pal[64];
 void copy(short n) { short i; for (i = 0; i < n; ++i) a[i] = b[i]; }
 void scroll_up(short n) { short i; for (i = 0; i < n; ++i) a[i] = a[i + 16]; }

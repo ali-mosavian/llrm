@@ -1,7 +1,7 @@
 #!/bin/bash
 # build.sh PROG: llrm (OMF, and ELF as llrmElfO2/llrmElfOs), gcc and clang (ELF) at -O2 and -Os into $VSGCC_WORK, flags as tools/bench plus -fno-inline-functions
 set -e
-P=$1; R=$(cd "$(dirname "$0")/../../../.." && pwd); O=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}; S=$R/bench/$P/$P.c
+P=$1; R=$(cd "$(dirname "$0")/../../../.." && pwd); O=${VSGCC_WORK:-$HOME/scratch/vsgcc-work}; K=$(cd "$(dirname "$0")" && pwd)/kernels; if [ -d $K/$P ]; then S=$K/$P/$P.c; else S=$R/bench/$P/$P.c; fi
 LLRM=${LLRM:-$(python3 "$R/tools/llrmbin.py" bin)/llrm-c}
 mkdir -p $O/b $O/o
 # llrm side in the convention gcc and clang use, or the table measures register arguments against stack ones
