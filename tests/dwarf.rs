@@ -165,10 +165,11 @@ fn stopped_at(gdb: &Path, program: &Path, line: u32, fixtures: &Path) -> Option<
     Some((at, values))
 }
 
-/// A debugger reads a variable from its frame cell, so at -O2 the cell holds what -O0's holds at every
-/// line both stop on: before a store to a declared variable stayed where the source wrote it, the
-/// optimiser kept `a` and `i` in registers and wrote their cells once at the exit, and gdb read
-/// `a = 0, i = 0` through the loop where -O0 reads `a = 20, i = 4`.
+/// What gdb reads of a program's variables at -O2 is never what -O0 does not: where -O2 says a value it is the value -O0 has at that
+/// line or at the next one it stops at (a line's first instruction may come after its first assignment at -O2), and where it says
+/// none (`<optimized out>`) it says no wrong one. Before `-g` described values over the code, a store to a declared variable stayed
+/// where the source wrote it for gdb to read the cell, and -g changed the code at -O2 by every one of those stores; a value the
+/// optimiser keeps nowhere is now said to be nowhere.
 #[test]
 fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
     let (Some(gdb), Some(ld), Some(assembler)) = (tool("gdb"), tool("ld"), tool("as")) else {
@@ -194,22 +195,38 @@ fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
         return;
     }
     assert_eq!(Command::new(&programs[1]).output().unwrap().status.code(), Some(73), "-O2 computes what -O0 does");
-    let (mut same, mut wrong) = (0, Vec::new());
+    let mut slow_stops = Vec::new();
+    let mut fast_stops = Vec::new();
     for line in 10..=48 {
         let (Some(slow), Some(fast)) = (stopped_at(&gdb, &programs[0], line, &fixtures), stopped_at(&gdb, &programs[1], line, &fixtures)) else { continue };
         // A line with no code stops at the next one that has some: compare where both stopped alike.
-        if slow.0 != fast.0 {
-            continue;
+        if slow.0 == fast.0 {
+            slow_stops.push(slow);
+            fast_stops.push(fast);
         }
-        if slow.1 == fast.1 {
-            same += 1;
-        } else {
-            wrong.push(format!("line {}: -O0 {:?}, -O2 {:?}", slow.0, slow.1, fast.1));
+    }
+    let value = |stop: &(u32, Vec<String>), name: &str| stop.1.iter().find_map(|one| one.strip_prefix(&format!("{name} = ")).map(str::to_owned));
+    let (mut compared, mut wrong) = (0, Vec::new());
+    for (at, fast) in fast_stops.iter().enumerate() {
+        for one in &fast.1 {
+            let Some((name, said)) = one.split_once(" = ") else { continue };
+            if said.contains("<optimized out>") {
+                continue;
+            }
+            let allowed = [value(&slow_stops[at], name), slow_stops.get(at + 1).and_then(|next| value(next, name))];
+            if allowed.iter().flatten().any(|slow| slow == said) {
+                compared += 1;
+            } else {
+                wrong.push(format!("line {}: {name} is {said} at -O2, and {allowed:?} at -O0", fast.0));
+            }
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    assert!(same >= 20, "only {same} lines were compared");
+    assert!(compared >= COMPARED_FLOOR, "only {compared} values were compared: -O2 says more of them than that");
 }
+
+/// How many (line, variable) values of `observed.c` -O2 says, and -O0 has: raised as the optimiser keeps more of them.
+const COMPARED_FLOOR: usize = 45;
 
 /// A `Location::Frame` is relative to the frame register, which the backend keeps for any function that has
 /// debug variables (`masm::stack_addressed` refuses a procedure with some): the same function without `-g`
@@ -400,7 +417,7 @@ fn an_elf_function_with_variables_has_the_code_it_has_without_g() {
 
 /// The programs, per level, whose code `-g` must leave alone, at least: raised as the ranges land (#755). `None` is every
 /// bench program. A level not listed has no floor yet.
-const IDENTICAL_FLOOR: &[(&str, Option<usize>)] = &[("O0", None)];
+const IDENTICAL_FLOOR: &[(&str, Option<usize>)] = &[("O0", None), ("O1", None), ("O2", None), ("Os", None)];
 
 /// `-g` changed the code of every bench program: a frame register kept for its variables and a volatile on their stores.
 /// The count of bench programs whose assembly is the same with and without `-g` may not fall below the floor.
@@ -425,4 +442,24 @@ fn g_leaves_the_code_of_the_bench_programs_alone_to_the_floor() {
         let floor = floor.unwrap_or(programs.len());
         assert!(identical >= floor, "{level}: -g changed the code of {differing:?}: {identical} of {} identical, the floor is {floor}", programs.len());
     }
+}
+
+/// A global nothing reads was kept in the data when `-g` described it, "for a debugger to read at any time", where the build without
+/// `-g` drops it: the object differed by the global, and its neighbours in the layout by the room it took. A debugger is told of what
+/// the program keeps, and of nothing else.
+#[test]
+fn a_global_the_optimiser_drops_is_dropped_with_g_too() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("unused.c");
+    std::fs::write(&source, "static int unused[4] = { 1, 2, 3, 4 };\nint kept[2] = { 5, 6 };\nint main(void) { return kept[1]; }\n").unwrap();
+    let assembly = |debug: bool| {
+        let out = scratch.path().join("x.s");
+        let flags: Vec<&str> = ["-m32", "-O2", "-fobject-format=elf", "-S"].into_iter().chain(debug.then_some("-g")).collect();
+        let made = compile(&source, &flags, &out);
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        std::fs::read_to_string(&out).unwrap()
+    };
+    let plain = assembly(false);
+    assert!(!plain.contains("unused"), "the instrument: without -g the unused static is dropped\n{plain}");
+    assert_eq!(plain, assembly(true));
 }

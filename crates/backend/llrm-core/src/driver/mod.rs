@@ -218,6 +218,8 @@ fn lifted(module: &mut Module) {
                 llrm_mir::Opcode::Call(_) => function.set_operand(inst, 3, llrm_mir::Operand::Constant(no)),
                 _ => {}
             }
+            // The mark has done its work; metadata on an instruction is something a pass tells it from another by.
+            function.unannotate(inst, llrm_mir::debuginfo::OBSERVED);
         }
     }
 }

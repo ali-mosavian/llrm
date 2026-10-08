@@ -303,6 +303,17 @@ impl Function {
         }
     }
 
+    /// What named `value` says nothing now (a use of it in a record is no use, so it can go while the records stand).
+    fn forget_debug_value(&mut self, value: ValueId) {
+        for record in &mut self.debug_records {
+            match record.what {
+                DebugWhat::Declare(at) | DebugWhat::Value(at) if at == Operand::Value(value) => record.what = DebugWhat::Gone,
+                DebugWhat::Piece { value: at, offset, bytes } if at == Operand::Value(value) => record.what = DebugWhat::GonePiece { offset, bytes },
+                _ => {}
+            }
+        }
+    }
+
     /// Every terminator and phi naming `block` now names `with`.
     pub fn replace_block_uses_with(&mut self, block: BlockId, with: BlockId) {
         if with != block {
@@ -326,14 +337,7 @@ impl Function {
             self.remove_use(operand, Use { user: inst, index: index as u32 });
         }
         if let Some(result) = self.instruction(inst).result {
-            // What named the value says nothing now (a use of it is no use).
-            for record in &mut self.debug_records {
-                match record.what {
-                    DebugWhat::Declare(at) | DebugWhat::Value(at) if at == Operand::Value(result) => record.what = DebugWhat::Gone,
-                    DebugWhat::Piece { value, offset, bytes } if value == Operand::Value(result) => record.what = DebugWhat::GonePiece { offset, bytes },
-                    _ => {}
-                }
-            }
+            self.forget_debug_value(result);
         }
         if let Some((block, next)) = self.detach(inst, false) {
             self.log(Change::Erased { inst, block, next });
@@ -389,6 +393,7 @@ impl Function {
     /// Parameter `at`, which nothing uses, is gone; the function's type follows.
     pub fn remove_parameter(&mut self, context: &mut crate::context::Context, at: usize) {
         assert!(self.users(self.parameters[at]).is_empty(), "a parameter removed is unused");
+        self.forget_debug_value(self.parameters[at]);
         self.track_parameters();
         self.parameter_origins.remove(at);
         self.parameters.remove(at);
@@ -444,6 +449,27 @@ impl Function {
     /// Attaches `node` to `inst` as metadata of `kind`.
     pub fn annotate(&mut self, inst: InstId, kind: &str, node: MetadataId) {
         self.instructions[inst.0 as usize].metadata.push((kind.to_owned(), node));
+    }
+
+    /// Every metadata node the function names (on an instruction, or in a debug record) is the one `map` says it is: nodes made last
+    /// are numbered last, and the code that named them before they were made named them by a number it chose.
+    pub fn renumber_metadata(&mut self, map: &dyn Fn(MetadataId) -> MetadataId) {
+        for inst in &mut self.instructions {
+            for (_, node) in &mut inst.metadata {
+                *node = map(*node);
+            }
+        }
+        for record in &mut self.debug_records {
+            record.variable = map(record.variable);
+        }
+        for node in &mut self.debug_dropped {
+            *node = map(*node);
+        }
+    }
+
+    /// Takes the metadata of `kind` off `inst`.
+    pub fn unannotate(&mut self, inst: InstId, kind: &str) {
+        self.instructions[inst.0 as usize].metadata.retain(|(one, _)| one != kind);
     }
 
     /// A copy of `inst`, placed nowhere, its result unnamed.

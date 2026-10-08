@@ -557,7 +557,7 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
     let arrived: Vec<Item> = arrival
         .into_iter()
         .flat_map(|one| {
-            let defined = one.delivers.iter().filter(|(held, _)| one.debug.defines.contains(&held.value)).map(|(held, register)| Item::Mark(Mark::Def { tag: held.value, place: Place::Register(*register) }));
+            let defined = one.delivers.iter().zip(&one.debug.defines).filter(|(_, tag)| **tag != u32::MAX).map(|((_, register), tag)| Item::Mark(Mark::Def { tag: *tag, place: Place::Register(*register) }));
             defined.chain(one.debug.before.iter().map(|&note| Item::Mark(Mark::Note(note)))).collect::<Vec<_>>()
         })
         .collect();

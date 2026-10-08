@@ -245,3 +245,14 @@ fn the_verifier_finds_a_record_before_an_erased_instruction() {
     let found = crate::verify::verify(&parsed);
     assert!(found.iter().any(|one| one.contains("debug record") && one.contains("no longer in the function")), "{found:?}");
 }
+
+/// A parameter the passes removed (dead-argument elimination) was named by a record, which is no use of it: the record stood naming
+/// a value of no function, and printing the body (the pipeline compares bodies by their text) panicked on `hanoi` at -Os with `-g`.
+#[test]
+fn removing_a_parameter_leaves_the_records_that_named_it_gone() {
+    let mut parsed = module("define i16 @f(i16 %a, i16 %b) {\nentry:\n  #dbg_value(i16 %b, !0)\n  ret i16 %a\n}\n\n!0 = !{!\"v\"}\n");
+    let (context, f) = parsed.function_mut("f").expect("@f");
+    f.remove_parameter(context, 1);
+    let text = print::module(&parsed);
+    assert!(text.contains("#dbg_gone(!0)") && !text.contains("#dbg_value"), "{text}");
+}

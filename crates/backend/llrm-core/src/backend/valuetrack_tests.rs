@@ -66,3 +66,16 @@ fn a_call_loses_the_registers_it_clobbers_and_keeps_the_others() {
     assert_eq!(found[&(1, None)], [(10, 15, Where::Place(Place::Register(EAX)))]);
     assert_eq!(found[&(2, None)], [(10, 16, Where::Place(Place::Register(ECX)))]);
 }
+
+/// A cell the function lets the address of out (`lea ecx, [ebp-4]`) may be written by the callee it is handed to: the value a variable
+/// had in it is no longer known after the call. Before, `n` was read from `p.x`'s cell after `bump(&p, ..)` had added to it, and gdb
+/// said `n = 23` where it is 3.
+#[test]
+fn a_cell_whose_address_went_out_is_lost_at_the_next_call() {
+    // push ebp; mov ebp,esp; sub esp,8; mov eax,5; mov [ebp-4],eax; lea ecx,[ebp-4]; xor eax,eax; call +0; ret
+    let code = [0x55, 0x89, 0xE5, 0x83, 0xEC, 0x08, 0xB8, 5, 0, 0, 0, 0x89, 0x45, 0xFC, 0x8D, 0x4D, 0xFC, 0x31, 0xC0, 0xE8, 0, 0, 0, 0, 0xC3];
+    let rows = crate::backend::cfi::rows(&code, iced_x86::Register::EBP, iced_x86::Register::ESP, 4, &[]).expect("followable");
+    let marks = [(11, Mark::Def { tag: 7, place: Place::Register(EAX) }), (11, Mark::Note(0))];
+    let found = tracked(&code, &rows, 8, &[note(1, Some(7))], &marks);
+    assert_eq!(found[&(1, None)], [(11, 19, Where::Place(Place::Register(EAX))), (19, 24, Where::Place(Place::Cell { disp: -4, bytes: 4 }))]);
+}

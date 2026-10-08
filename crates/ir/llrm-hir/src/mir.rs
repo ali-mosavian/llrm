@@ -358,6 +358,11 @@ struct Tables<'h> {
 /// The `!dbg` metadata kind: the source line an instruction came from.
 pub const DEBUG_LINE: &str = "dbg";
 
+/// Node numbers the lowering names `-g`'s nodes by until they are made, past any a module has.
+const PROVISIONAL_OBSERVED: MetadataId = MetadataId(0x7000_0000);
+const PROVISIONAL_LINES: u32 = 0x6000_0000;
+pub(crate) const PROVISIONAL_VARIABLES: u32 = 0x4000_0000;
+
 /// A `!{i32 line}` node for each line `hir`'s instructions name.
 fn line_nodes(module: &mut Module, hir: &model::Module) -> HashMap<i64, MetadataId> {
     let i32 = module.context.types.int(32);
@@ -488,7 +493,6 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
         variables: HashMap::new(),
         observed: None,
     };
-    tables.lines = line_nodes(&mut module, hir);
     tables.tags.arrays(&mut module, hir);
     match fact_nodes(&mut module, &tables.spaces, hir, &tables.types) {
         Ok((nodes, accesses, terminators)) => (tables.fact_nodes, tables.accesses, tables.terminator_nodes) = (nodes, accesses, terminators),
@@ -587,13 +591,14 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
         let llrm_mir::GlobalKind::Variable(variable) = &mut module.globals[global.0 as usize].kind else { unreachable!("a variable") };
         variable.initializer = Some(initializer);
     }
-    match debug::emitted(&mut module, &tables, hir, &data, &declared) {
-        Ok(variables) => tables.variables = variables,
-        Err(why) => refused.push((hir.name.clone(), why)),
-    }
+    // What `-g` adds to the metadata comes after all that the code is made of, so that the numbers of the nodes the optimiser reads
+    // are the same with and without it (a pass that orders by node number would otherwise order differently). The code is lowered
+    // naming those nodes by numbers it chooses; the nodes are made last and the code renumbered.
+    tables.variables = debug::provisional(hir);
     if !tables.variables.is_empty() {
-        tables.observed = Some(llrm_mir::debuginfo::observed_node(&mut module));
+        tables.observed = Some(PROVISIONAL_OBSERVED);
     }
+    tables.lines = hir.functions.iter().flat_map(|one| &one.blocks).flat_map(|one| &one.instructions).filter_map(|one| one.line).map(|line| (line, MetadataId(PROVISIONAL_LINES + line as u32))).collect();
     let statements = hir.statements();
     let rows = statements.clone().unwrap_or_default();
     // A RESUME marker the body falls into raises; the handlers' markers do not.
@@ -655,6 +660,21 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
         }
     }
     meaning::defined(&mut module, &layout.spaces, promises);
+    // The nodes the lowering named by chosen numbers.
+    let mut real: HashMap<MetadataId, MetadataId> = HashMap::new();
+    match debug::emitted(&mut module, &tables, hir, &data, &declared) {
+        Ok(variables) => real.extend(variables.into_iter().filter_map(|(key, node)| tables.variables.get(&key).map(|chosen| (*chosen, node)))),
+        Err(why) => refused.push((hir.name.clone(), why)),
+    }
+    if tables.observed.is_some() {
+        real.insert(PROVISIONAL_OBSERVED, llrm_mir::debuginfo::observed_node(&mut module));
+    }
+    real.extend(line_nodes(&mut module, hir).into_iter().map(|(line, node)| (MetadataId(PROVISIONAL_LINES + line as u32), node)));
+    for global in &mut module.globals {
+        if let llrm_mir::GlobalKind::Function(function) = &mut global.kind {
+            function.renumber_metadata(&|node| real.get(&node).copied().unwrap_or(node));
+        }
+    }
     Emitted { module, refused, data }
 }
 

@@ -776,8 +776,14 @@ fn noted(module: &Module, function: &Function, name: &str, ats: &IndexMap<InstId
                 .map(|one| {
                     let ats_here: Vec<i64> = before.keys().copied().filter(|&at| at <= one.at && !taken.contains(&at)).collect();
                     let ahead: Vec<u32> = ats_here.iter().flat_map(|at| before[at].iter().copied()).collect();
-                    // An argument is made where the function is entered: by the instruction that says where it arrives.
-                    let defined: Vec<u32> = one.defines.iter().copied().chain(one.delivers.iter().map(|(held, _)| held.value)).filter(|vreg| named.contains(vreg)).collect();
+                    // An argument is made where the function is entered, by the instruction that says where each arrives: it tells
+                    // which, by position, as the registers it names are renumbered by the allocator but stay in their order.
+                    let defined: Vec<u32> = if one.arrival() {
+                        one.delivers.iter().map(|(held, _)| if named.contains(&held.value) { held.value } else { u32::MAX }).collect()
+                    } else {
+                        one.defines.iter().copied().chain(one.delivers.iter().map(|(held, _)| held.value)).filter(|vreg| named.contains(vreg)).collect()
+                    };
+                    let defined = if defined.iter().all(|one| *one == u32::MAX) { Vec::new() } else { defined };
                     if ahead.is_empty() && defined.is_empty() {
                         return Arc::clone(one);
                     }
