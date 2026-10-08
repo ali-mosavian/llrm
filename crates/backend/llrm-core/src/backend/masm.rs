@@ -831,7 +831,7 @@ fn addressed_pass(procedure: &Procedure, number: usize, items: Vec<Item>, known:
                         }
                     }
                     // An exchange of x87 registers or of general ones (not the stack pointer) and the x87 and port instructions that name no stack effect leave the stack pointer alone.
-                    Operation::Exchange if what.dests.iter().chain(&what.sources).all(|place| matches!(place, Loc::St(_)) || matches!(place, Loc::Reg(reg) if ir::root(reg.register) != ir::root(registers.stack))) => {}
+                    Operation::Exchange if what.dests.iter().chain(&what.sources).all(|place| matches!(place, Loc::St(_) | Loc::Mem(_)) || matches!(place, Loc::Reg(reg) if ir::root(reg.register) != ir::root(registers.stack))) => {}
                     Operation::Barrier if matches!(what.name.as_deref(), Some("fnstcw" | "fldcw" | "fnstsw" | "in" | "out")) => {}
                     Operation::Leave | Operation::Exchange | Operation::Escape | Operation::Barrier | Operation::Call => return Err(stop(procedure, &format!("{what:?}"))),
                     // `pushf` and its kind move the stack and carry no operand to read the amount from.

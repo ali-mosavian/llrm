@@ -85,3 +85,26 @@ fn test_size_keeps_the_stack_addressed_frame_where_a_value_holds_the_frame_regis
         assert!(output.status.success(), "{program}: {}", String::from_utf8_lossy(&output.stderr));
     }
 }
+
+/// A spill swap `xchg edi, [cell]` was refused by `masm::stack_addressed`, which allowed an exchange of registers only: with a value
+/// in the freed frame register the compile failed (vsgcc x_hanoi2 at -O2 and -Os, "the frame register was given to a value ...").
+#[test]
+fn test_an_exchange_with_a_frame_cell_is_addressed_through_the_stack_pointer() {
+    let source = "
+static long moves; static int peg[3][16], top[3];
+static void mv(int n, int from, int to, int via)
+{
+    if (n == 0) return;
+    mv(n - 1, from, via, to);
+    peg[to][top[to]++] = peg[from][--top[from]]; ++moves;
+    mv(n - 1, via, to, from);
+}
+long f(int n) { int i; for (i = 0; i < n; ++i) peg[0][top[0]++] = n - i; mv(n, 0, 2, 1); return moves * 100 + top[2]; }
+";
+    for level in ["-O2", "-Os"] {
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::write(scratch.path().join("a.c"), source).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(scratch.path()).args(["-m32", "-mabi=sysv", "-march=i486", level, "-S", "-o", "a.s", "a.c"]).output().unwrap();
+        assert!(output.status.success(), "{level}: {}", String::from_utf8_lossy(&output.stderr));
+    }
+}
