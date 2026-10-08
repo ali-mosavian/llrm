@@ -503,6 +503,18 @@ pub enum NoteValue {
     Constant(i64),
 }
 
+/// How often each block runs per call, by `at`.
+#[derive(Clone, Debug, Default)]
+pub struct BlockFrequencies(pub IndexMap<i64, f64>);
+
+impl PartialEq for BlockFrequencies {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.len() == other.0.len() && self.0.iter().all(|(at, runs)| other.0.get(at).is_some_and(|more| more.to_bits() == runs.to_bits()))
+    }
+}
+
+impl Eq for BlockFrequencies {}
+
 /// One lowered procedure.  Blocks remain in emitted order.
 ///
 /// Direct port of `qbopt.model.lir:LirBody`.
@@ -529,6 +541,10 @@ pub struct LirBody {
     /// Estimated branch probabilities, by edge, as isel found them; an
     /// edge made since has none.
     pub odds: BlockOdds,
+    /// How often each block runs per call, worked out once where the loops are plain (instruction selection) and kept
+    /// through every rewrite: a block made since is derived from its predecessors' (`Frequency::of`), one removed drops out.
+    /// The estimate is a fact about the program, not about the shape of whatever blocks the allocator has put on its edges.
+    pub frequencies: Option<Arc<BlockFrequencies>>,
     /// It calls a routine that returns twice (`setjmp`): no frame slot is shared.
     pub returns_twice: bool,
     /// (load, write) by `at`: the optimizer proved the write leaves the load's cell as it was (`!llrm.spares`).
@@ -646,6 +662,7 @@ impl LirBody {
             sealed_arguments: false,
             variables: Vec::new(),
             odds: BlockOdds::default(),
+            frequencies: None,
             returns_twice: false,
             spares: Arc::default(),
             float_stack: 0,
@@ -675,6 +692,7 @@ impl LirBody {
             sealed_arguments: self.sealed_arguments,
             variables: self.variables.clone(),
             odds: self.odds.clone(),
+            frequencies: self.frequencies.clone(),
             returns_twice: self.returns_twice,
             spares: Arc::clone(&self.spares),
             float_stack: self.float_stack,

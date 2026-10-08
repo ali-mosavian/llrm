@@ -68,6 +68,9 @@ impl Frequency {
     /// and on no instruction, so the last answer stands for every body of that shape: a rewrite that
     /// only inserts instructions (a spill, a reload) asks the same question again and again.
     pub fn of(body: &LirBody) -> Rc<Self> {
+        if let Some(kept) = body.frequencies.as_deref().and_then(|table| Self::carried(body, &table.0)) {
+            return Rc::new(kept);
+        }
         LAST.with(|last| {
             if let Some(held) = last.borrow().as_ref().filter(|held| held.is_of(body)) {
                 return Rc::clone(&held.answer);
@@ -76,6 +79,43 @@ impl Frequency {
             *last.borrow_mut() = Some(Held::of(body, &answer));
             answer
         })
+    }
+
+    /// The table kept on the body, with the blocks made since filled in from their predecessors' (a block put on an
+    /// edge runs as often as the edge is taken). `None` where one cannot be: a block made since that only a cycle
+    /// reaches, or the entry.
+    fn carried(body: &LirBody, table: &IndexMap<i64, f64>) -> Option<Self> {
+        let mut taken = IndexMap::default();
+        let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
+        for block in &body.blocks {
+            for to in block.succ.iter().copied().collect::<BTreeSet<_>>() {
+                taken.insert((block.at, to), body.odds.chance(block.at, &block.succ, to));
+                predecessors.entry(to).or_default().push(block.at);
+            }
+        }
+        let mut block: IndexMap<i64, f64> = body.blocks.iter().filter_map(|one| table.get(&one.at).map(|runs| (one.at, *runs))).collect();
+        let mut missing: Vec<i64> = body.blocks.iter().map(|one| one.at).filter(|at| !block.contains_key(at)).collect();
+        while !missing.is_empty() {
+            let before = missing.len();
+            missing.retain(|at| {
+                let Some(from) = predecessors.get(at) else { return true };
+                if from.iter().any(|one| !block.contains_key(one)) {
+                    return true;
+                }
+                let runs = from.iter().map(|one| block[one] * taken[&(*one, *at)]).sum();
+                block.insert(*at, runs);
+                false
+            });
+            if missing.len() == before {
+                return None;
+            }
+        }
+        Some(Self { block, taken })
+    }
+
+    /// Every block's frequency, to keep on the body.
+    pub fn table(&self) -> std::sync::Arc<crate::model::lir::BlockFrequencies> {
+        std::sync::Arc::new(crate::model::lir::BlockFrequencies(self.block.clone()))
     }
 
     /// `blocks`, a later arrangement of `body`'s, on `body`'s odds and trips.
@@ -281,5 +321,24 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Copies put on a loop's back edge make a block with work in it, which the shape alone reads as the loop's body: a
+    /// loop tested after its trip then reads as tested before it, and 5 trips as 6 (`_part_frame`, 8x). The frequencies
+    /// worked out before stay, and the copy block runs as often as its edge.
+    #[test]
+    fn test_copies_on_the_back_edge_do_not_change_what_the_loop_runs() {
+        let mut body = counted(Some(5), 124.0 / 128.0);
+        body.frequencies = Some(Frequency::of(&body).table());
+        let before = Frequency::of(&body);
+        let mut split = body.clone();
+        split.odds.rerouted(2, &[2, 3], 2, &[(9, 1.0)]);
+        split.blocks[1].succ = vec![9, 3];
+        split.blocks.push(LirBlock { succ: vec![2], ..LirBlock::new(9, vec![insn(9, Operation::Move, "mov"), insn(9, Operation::Jump, "jmp")]) });
+        let after = Frequency::of(&split);
+        for at in [1, 2, 3] {
+            assert_eq!(before.block(at), after.block(at), "block {at}");
+        }
+        assert!((after.block(9) - 5.0 * 124.0 / 128.0).abs() < 1e-9, "the copies run {}", after.block(9));
     }
 }
