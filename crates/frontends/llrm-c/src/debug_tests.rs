@@ -38,11 +38,13 @@ fn c_symbols_read_with_their_types() {
             "DATA gu: union mix {b +0 UNSIGNED CHAR, w +0 UNSIGNED SHORT}",
             "DATA gul: UNSIGNED LONG",
             "DATA st: SHORT",
-            "LOCAL f.a: SHORT",
-            "LOCAL f.b: NEAR * struct pt {x +0 SHORT, y +2 LONG}",
-            "LOCAL f.c: RCHAR",
-            "LOCAL f.l: SHORT",
-            "LOCAL twice.x: SHORT",
+            // The arguments the caller pushed: each is in its cell above the frame for the whole function. `l` is a copy of one, so it
+            // is in that cell too, and the reader, which tells a parameter by the sign of the offset, says so.
+            "PARAM f.a: SHORT",
+            "PARAM f.b: NEAR * struct pt {x +0 SHORT, y +2 LONG}",
+            "PARAM f.c: RCHAR",
+            "PARAM f.l: SHORT",
+            "PARAM twice.x: SHORT",
             "PROC f far (SHORT, NEAR * struct pt {x +0 SHORT, y +2 LONG}, RCHAR) -> LONG",
             // Static: near.
             "PROC twice near (SHORT) -> SHORT",
@@ -57,7 +59,8 @@ fn c_symbols_read_with_their_types() {
 #[test]
 fn c_lines_are_the_main_files() {
     let lines: Vec<u16> = object().iter().filter(|one| one.r#type == omf::LINNUM).flat_map(|one| omf::lines(one).1).map(|(line, _)| line).collect();
-    assert_eq!(lines, [13, 15, 16, 17]);
+    // A statement whose code the optimiser removed has no line (it had one while `-g` kept the stores); one it copied has two.
+    assert_eq!(lines, [15, 16, 15, 16, 17]);
 }
 
 /// HIR's codec writes a member's bit keys only for a bit field, so a program
@@ -121,7 +124,7 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
     assert_eq!(object.symbols[f.symbol].name, "_f");
     let range = f.ranges[0];
     assert!(range.length > 0 && range.offset + range.length <= object.sections[range.section].image.len());
-    assert_eq!(info.lines.iter().map(|one| one.line).collect::<Vec<_>>(), [13, 15, 16, 17]);
+    assert_eq!(info.lines.iter().map(|one| one.line).collect::<Vec<_>>(), [15, 16, 15, 16, 17]);
     assert!(info.lines.iter().all(|one| one.file == 0));
     // The target's register file, once, for writers that know no target.
     assert_eq!(info.frame_register, "ebp");

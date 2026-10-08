@@ -648,7 +648,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
         }
         let frame = object.frames.get(module.global(id).name.as_deref().unwrap_or_default()).copied().unwrap_or(Frame::Runtime { strings: 0 });
         // B$ENRA zero-fills a runtime frame's locals.
-        let target = Target { facts: &facts, cpu, segments: &segments, selection: options.selection, arch: &*options.arch, classes: &classes, runtime: runtime.value(), basic: true, zeroed: matches!(frame, Frame::Runtime { .. }), ranges: options.location_ranges(), cfa: options.cfa_locations() };
+        let target = Target { facts: &facts, cpu, segments: &segments, selection: options.selection, arch: &*options.arch, classes: &classes, runtime: runtime.value(), basic: true, zeroed: matches!(frame, Frame::Runtime { .. }) };
         let (procedure, landing, statics) = llrm_support::debug::in_function(module.global(id).name.as_deref().unwrap_or_default(), || timed("procedure", || procedure(module, id, id == main, frame, &names, &abi, &pool, &target, runtime)))?;
         main_frame += statics;
         for callee in procedure.callees.values() {
@@ -719,6 +719,8 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
     let mut debug = timed("debug info", || debuginfo::described(module, &names, producer, &*options.arch))?;
     if let Some(debug) = debug.as_mut() {
         debug.format = options.debug_format;
+        debug.cfa = options.cfa_locations();
+        debug.ranges = options.location_ranges();
     }
     Ok(masm::Module {
         code: object.code.clone(),

@@ -8,7 +8,7 @@ fn row(offset: usize, register: &str, cfa: i64, saved: &[(&str, i64)]) -> FrameR
 }
 
 fn of(code: &[u8], pops: &[(usize, i64)]) -> Result<Vec<FrameRow>, String> {
-    rows(code, EBP, ESP, 4, pops)
+    rows(code, 32, EBP, ESP, 4, pops)
 }
 
 /// `push ebp; mov ebp, esp; sub esp, 8; nop; leave; ret`: the frame address is the stack pointer's plus four
