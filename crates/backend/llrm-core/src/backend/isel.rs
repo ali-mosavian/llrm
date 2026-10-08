@@ -1918,8 +1918,7 @@ impl Selector<'_, '_, '_> {
     fn within_object(&self, base: Pointer, moved: Pointer, ty: TypeId) -> Pointer {
         let (Pointer::Frame { disp: from, .. }, Pointer::Frame { disp: to, index, scale }) = (base, moved) else { return moved };
         let Type::Pointer(space) = self.types().get(ty) else { return moved };
-        // A pair's offset word, else the whole pointer.
-        let bits = if self.layout.is_pair(*space) { self.layout.offset_bits(*space) } else { 8 * self.width(ty).unwrap_or(8) };
+        let bits = self.layout.offset_bits(*space);
         if bits >= 32 {
             return moved;
         }
