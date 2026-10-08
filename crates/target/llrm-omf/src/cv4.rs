@@ -425,7 +425,7 @@ impl Symbols<'_> {
         match location {
             Location::Static { symbol, disp } => self.data(types, variable, *symbol, *disp),
             Location::Register(register) => self.register(types, variable, register),
-            Location::List(_) => Ok(()),
+            Location::List(_) | Location::Constant(_) | Location::Pieces(_) => Ok(()),
             Location::Frame { disp } => {
                 let mut data = Vec::new();
                 let frame = &self.info.frame_register;

@@ -1165,8 +1165,10 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
     if values.is_empty() {
         return IndexMap::default();
     }
-    let mut definitions: IndexMap<u32, Vec<(Arc<Insn>, Option<Mem>)>> = IndexMap::default();
+    let mut definitions: IndexMap<u32, Vec<(Arc<Insn>, Option<Mem>, (usize, usize))>> = IndexMap::default();
     let mut uses: IndexMap<u32, Vec<Arc<Insn>>> = values.iter().map(|value| (*value, Vec::new())).collect();
+    // Where each use and each load is: (block, position), in step with `uses` and `definitions`.
+    let mut use_places: IndexMap<u32, Vec<(usize, usize)>> = values.iter().map(|value| (*value, Vec::new())).collect();
     // The load a copy comes from, through copies of copies.
     let root = |value: u32| {
         let mut at = value;
@@ -1175,16 +1177,18 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
         }
         at
     };
-    for block in &body.blocks {
-        for one in &block.insns {
+    for (block_at, block) in body.blocks.iter().enumerate() {
+        for (position, one) in block.insns.iter().enumerate() {
             for value in _set(&one.uses) {
                 let owner = root(value);
                 if owner != value && values.contains(&owner) {
                     uses[&owner].push(Arc::clone(one));
+                    use_places[&owner].push((block_at, position));
                 }
             }
             for value in values.intersection(&_set(&one.uses)) {
                 uses[value].push(Arc::clone(one));
+                use_places[value].push((block_at, position));
             }
             for value in values.intersection(&_set(&one.defines)) {
                 let mut cell = None;
@@ -1207,7 +1211,7 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
                         }
                     }
                 }
-                definitions.entry(*value).or_default().push((Arc::clone(one), cell));
+                definitions.entry(*value).or_default().push((Arc::clone(one), cell, (block_at, position)));
             }
         }
     }
@@ -1215,6 +1219,7 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
     let mut result: IndexMap<u32, Mem> = IndexMap::default();
     // What every value asks of the body's blocks alike, found for the first that asks.
     let flow = std::cell::OnceCell::new();
+    let writers = std::cell::OnceCell::new();
     for value in values {
         let Some(found) = definitions.get(value) else {
             continue;
@@ -1222,7 +1227,7 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
         if found.len() != 1 || uses[value].is_empty() {
             continue;
         }
-        let (define, cell) = &found[0];
+        let (define, cell, define_at) = &found[0];
         let Some(cell) = cell else {
             continue;
         };
@@ -1230,7 +1235,23 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
             continue;
         }
         let flow = flow.get_or_init(|| Flow::of(body));
-        let held = _unchanged(body, flow, define, cell, &uses[value]);
+        let held = if _exact_frame(cell) {
+            // Only what may write the cell is asked of, and the blocks between the load and its uses are gone over.
+            let writers = writers.get_or_init(|| Writers::of(body));
+            let mut events: std::collections::HashMap<usize, Vec<(usize, bool)>> = std::collections::HashMap::new();
+            for (block, position) in writers.near(cell) {
+                if !_keeps(&body.blocks[block].insns[position], define, cell, true, body) {
+                    events.entry(block).or_default().push((position, false));
+                }
+            }
+            events.entry(define_at.0).or_default().push((define_at.1, true));
+            for list in events.values_mut() {
+                list.sort_unstable();
+            }
+            _holds_at(flow, &events, &use_places[value])
+        } else {
+            _unchanged(body, flow, define, cell, &uses[value])
+        };
         if std::env::var_os("LLRM_CHECK_UNCHANGED").is_some() {
             assert!(held == _unchanged_reference(body, define, cell, &uses[value]), "{}: whether the cell holds differs from working it out as before", body.name);
         }
@@ -1248,12 +1269,122 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
 struct Flow<'a> {
     predecessors: IndexMap<i64, Vec<i64>>,
     blocks: IndexMap<i64, &'a LirBlock>,
+    /// The same by position in `body.blocks`.
+    parents: Vec<Vec<usize>>,
+    entry: usize,
 }
 
 impl<'a> Flow<'a> {
     fn of(body: &'a LirBody) -> Self {
-        Self { predecessors: _predecessors(body), blocks: body.blocks.iter().map(|block| (block.at, block)).collect() }
+        let predecessors = _predecessors(body);
+        let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+        let parents = body.blocks.iter().map(|block| predecessors[&block.at].iter().filter_map(|at| blocks.get_index_of(at)).collect()).collect();
+        let entry = blocks.get_index_of(&body.entry).unwrap_or(0);
+        Self { predecessors, blocks, parents, entry }
     }
+}
+
+/// Where the instructions that may write a frame cell are, found once for a body: the loads asked about are many and an instruction
+/// that writes none of their cells is nearly every instruction.
+struct Writers {
+    /// (block, position) of what may write memory no exact frame cell names: a call, an unmodeled write, a store to a based, indexed
+    /// or unplaced cell.
+    wild: Vec<(usize, usize)>,
+    /// The stores to an exact frame cell, by its first byte.
+    exact: std::collections::BTreeMap<i64, Vec<(usize, usize)>>,
+    /// The widest of those cells.
+    widest: i64,
+}
+
+impl Writers {
+    fn of(body: &LirBody) -> Self {
+        let mut found = Self { wild: Vec::new(), exact: Default::default(), widest: 1 };
+        for (block, one_block) in body.blocks.iter().enumerate() {
+            for (position, one) in one_block.insns.iter().enumerate() {
+                let dests = one.what.iter().flat_map(|what| &what.dests).filter_map(|dest| match dest {
+                    Loc::Mem(cell) => Some(cell),
+                    _ => None,
+                });
+                let mut wild = one.call.is_some() || one.unmodeled_write();
+                for cell in dests {
+                    if _exact_frame(cell) {
+                        let addr = cell.addr.expect("an exact frame cell has an address");
+                        found.exact.entry(addr.disp).or_default().push((block, position));
+                        found.widest = found.widest.max(i64::from(cell.width));
+                    } else {
+                        wild = true;
+                    }
+                }
+                if wild {
+                    found.wild.push((block, position));
+                }
+            }
+        }
+        found
+    }
+
+    /// The instructions that can fail to keep `cell` (an exact frame cell): any other writes nothing but exact frame cells that do not
+    /// meet it, and keeps it, as `_keeps` finds.
+    fn near(&self, cell: &Mem) -> Vec<(usize, usize)> {
+        let low = cell.addr.expect("an exact frame cell has an address").disp;
+        let high = low + i64::from(cell.width);
+        let mut found = self.wild.clone();
+        for places in self.exact.range(low - self.widest + 1..high).map(|(_, places)| places) {
+            found.extend(places.iter().copied());
+        }
+        found.sort_unstable();
+        found.dedup();
+        found
+    }
+}
+
+/// Whether the cell holds at every one of `uses` (block, position), given where it is made to hold and where it is written:
+/// `events` per block are (position, true for the load, false for a write) in order. The same answer as `_unchanged`, found over
+/// the blocks that lie between the load and the uses and not over the whole body.
+fn _holds_at(flow: &Flow, events: &std::collections::HashMap<usize, Vec<(usize, bool)>>, uses: &[(usize, usize)]) -> bool {
+    use std::collections::{HashMap, HashSet};
+    // Whether the cell holds out of a block that has an event: after its last.
+    let decided = |block: usize| events.get(&block).and_then(|list| list.last()).map(|(_, load)| *load);
+    let mut needed: Vec<usize> = Vec::new();
+    let mut seen: HashSet<usize> = HashSet::new();
+    for &(block, position) in uses {
+        let before = events.get(&block).and_then(|list| list.iter().rev().find(|(at, _)| *at < position));
+        if before.is_none() && seen.insert(block) {
+            needed.push(block);
+        }
+    }
+    // The blocks whose entry state the uses depend on, through blocks that have no event of their own.
+    let mut region = needed.clone();
+    let mut next = 0;
+    while next < region.len() {
+        let block = region[next];
+        next += 1;
+        for &parent in &flow.parents[block] {
+            if decided(parent).is_none() && seen.insert(parent) {
+                region.push(parent);
+            }
+        }
+    }
+    // Held coming in: not at the entry, and the most held that the blocks leading in allow.
+    let mut held: HashMap<usize, bool> = region.iter().map(|&block| (block, block != flow.entry)).collect();
+    let mut changing = true;
+    while changing {
+        changing = false;
+        for &block in &region {
+            if block == flow.entry || flow.parents[block].is_empty() {
+                continue;
+            }
+            let met = flow.parents[block].iter().all(|&parent| decided(parent).unwrap_or_else(|| held[&parent]));
+            if met != held[&block] {
+                held.insert(block, met);
+                changing = true;
+            }
+        }
+    }
+    uses.iter().all(|&(block, position)| match events.get(&block).and_then(|list| list.iter().rev().find(|(at, _)| *at < position)) {
+        Some((_, load)) => *load,
+        None => held[&block],
+    })
 }
 
 
@@ -3851,6 +3982,38 @@ mod tests {
         let asked = super::KEEPS.with(std::cell::Cell::get) - before;
         assert_eq!(stable.len(), 1, "the load of a cell nothing writes is stable");
         assert!(asked <= 2 * 43, "{asked} questions of `_keeps` for a body of 43 instructions");
+    }
+
+    /// A function with n values loaded from the frame asked of every instruction for each: a by-value struct of 2,048 words spent
+    /// 41% of its 6.1 s in `_keeps`, `_may_write` and the walk around them (#924). Only what may write a cell is asked about it, and
+    /// a store that does overlap one cell still makes that one unstable.
+    #[test]
+    fn test_a_loaded_cell_is_asked_about_only_what_may_write_it() {
+        let cell = |disp: i64| Loc::Mem(mem(Addr::new(Space::Frame, disp), 2, Register::BP, disp, 1));
+        let n = 60_i64;
+        let mut insns = Vec::new();
+        for i in 0..n {
+            insns.push(insn(i, (i, i + 1), semantics(Operation::Move, "mov", vec![held(1 + i as u32, 2)], vec![cell(-2 * (i + 1))]), &[1 + i as u32], &[]));
+        }
+        // Stores to cells of their own, far from every load's, and one onto the cell of the load numbered 7.
+        for i in 0..n {
+            let at = 100 + i;
+            insns.push(insn(at, (at, at + 1), semantics(Operation::Move, "mov", vec![cell(-1000 - 2 * i)], vec![Loc::Imm(Imm { value: 0, width: 2, address: None })]), &[], &[]));
+        }
+        insns.push(insn(300, (300, 301), semantics(Operation::Move, "mov", vec![cell(-16)], vec![Loc::Imm(Imm { value: 1, width: 2, address: None })]), &[], &[]));
+        for i in 0..n {
+            let at = 400 + i;
+            insns.push(insn(at, (at, at + 1), semantics(Operation::Push, "push", vec![], vec![held(1 + i as u32, 2)]), &[], &[1 + i as u32]));
+        }
+        let total = insns.len() as i64;
+        let body = _body(insns);
+        let values: Vec<u32> = (1..=n as u32).collect();
+        let before = super::KEEPS.with(std::cell::Cell::get);
+        let stable = super::_stable_loads(&body, &set(&values));
+        let asked = super::KEEPS.with(std::cell::Cell::get) - before;
+        assert_eq!(stable.len() as i64, n - 1, "every load but the one whose cell is stored to");
+        assert!(!stable.contains_key(&8), "value 8 was loaded from [bp-16], which a store overwrites");
+        assert!(asked as i64 <= 2 * n, "{asked} questions of `_keeps` for {n} loads in a body of {total} instructions");
     }
 
     #[test]

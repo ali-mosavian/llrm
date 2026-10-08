@@ -738,3 +738,21 @@ b0:
     assert!(across("!4").contains("ret i16 7"), "{}", across("!4"));
     assert!(across("!2").contains("load i16"), "{}", across("!2"));
 }
+
+/// A declared variable the promotion makes values of is told to the debugger as it goes: the value each store gives it, from the
+/// instruction after the store, and the phi that merges the paths, from the top of the block. Without them the variable's stores
+/// (which dead-store elimination removes) were its only record, and `-g` kept them by making them volatile.
+#[test]
+fn a_promoted_variable_is_named_by_the_value_of_each_store_and_the_phi_that_joins_them() {
+    let mut module = module(
+        "define i16 @f(i1 %c) {\nentry:\n  %x = alloca i16\n  #dbg_declare(ptr %x, !0)\n  store i16 1, ptr %x\n  br i1 %c, label %a, label %j\na:\n  store i16 2, ptr %x\n  br label %j\nj:\n  %v = load i16, ptr %x\n  ret i16 %v\n}\n\n!0 = !{!\"f\", !\"x\", !1, i64 0}\n!1 = !{!\"int\"}\n",
+    );
+    promote_all(&mut module, false).expect("promotes");
+    let text = printed(&module);
+    let values: Vec<&str> = text.lines().map(str::trim).filter(|line| line.starts_with("#dbg_value")).collect();
+    assert_eq!(values.len(), 3, "{text}");
+    assert!(values.contains(&"#dbg_value(i16 1, !0)") && values.contains(&"#dbg_value(i16 2, !0)"), "{text}");
+    // The third names the phi, which the return reads.
+    let phi = text.lines().map(str::trim).find_map(|line| line.split_once(" = phi i16 ").map(|(result, _)| result.to_owned())).expect("a phi");
+    assert!(values.contains(&format!("#dbg_value(i16 {phi}, !0)").as_str()), "{phi} in {text}");
+}
