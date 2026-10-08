@@ -879,4 +879,42 @@ mod tests {
         let pops = out.insns().iter().filter(|insn| is_bp(insn, Operation::Pop)).count();
         assert_eq!((pushes, pops), (1, 1), "the slot lives in EBP between a push and a pop");
     }
+
+    /// A loop that reads a far pointer's low word and also loads the pointer with `les` from the same
+    /// slot: LoopSlots held the word's slot in a register and rewrote the `les` to read it ("les si, dx":
+    /// no encoding, llrm-nib stopped, #107). The `les` must keep reading memory.
+    #[test]
+    fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_the_low_word() {
+        let one = Imm { value: 1, width: 2, address: None };
+        let bump = |at: i64, register: Register| made(at, Operation::Binary, "add", vec![reg(register)], vec![reg(register), Loc::Imm(one.clone())]);
+        let les = made(0x14, Operation::Move, "les", vec![reg(Register::BX), reg(Register::ES)], vec![Loc::Mem(cell(4, -4))]);
+        let body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]),
+                block(
+                    0x10,
+                    vec![
+                        bump(0x10, Register::DX),
+                        made(0x13, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), Loc::Mem(cell(2, -4))]),
+                        les,
+                        made(0x17, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), Loc::Mem(cell(2, -4))]),
+                        made(0x17, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), Loc::Mem(cell(2, -4))]),
+                        made(0x17, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), Loc::Mem(cell(2, -4))]),
+                        made(0x17, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), Loc::Mem(cell(2, -4))]),
+                        Arc::new(Insn::new(0x18, Some((0x18, 0x19)), Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }), vec![], vec![])),
+                    ],
+                    vec![0x10, 0x20],
+                ),
+                block(0x20, vec![made(0x20, Operation::Return, "ret", vec![], vec![])], vec![]),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let costs = &crate::backend::cpu::profile("486").unwrap().operations;
+        let out = promoted(2, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::from([-4]), costs, 2);
+        let reads = |body: &LirBody| body.insns().iter().filter_map(|one| one.what.as_ref()).filter(|what| what.sources.iter().any(|place| matches!(place, Loc::Mem(mem) if mem.width == 2))).count();
+        assert_eq!(reads(&out), reads(&body), "the word reads stay in memory: the les reads the slot there, a register copy would be stale");
+    }
 }

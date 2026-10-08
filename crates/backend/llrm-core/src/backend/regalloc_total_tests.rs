@@ -4,11 +4,9 @@
 
 use iced_x86::Register;
 
-use crate::backend::regalloc_input::{before_regalloc, before_regalloc_in, before_regalloc_unspilled, through, Calls};
-use crate::backend::target;
+use crate::backend::regalloc_input::{before_regalloc, before_regalloc_unspilled, through};
 use crate::model::ir::Loc;
 use crate::model::lir::LirBody;
-use crate::model::passes::LIRTransform;
 
 /// An instruction that names a value in two different required registers.
 fn requires_two_registers(body: &LirBody) -> bool {
@@ -64,52 +62,6 @@ fn test_a_parallel_copy_cycle_through_a_frame_slot_is_scheduled() {
 }
 
 const CONC7: &str = "_f_conc7_s1102468_xi_bpf_index_n_st1_sum_counteraffine_permute622_dup1";
-
-/// The frame cell `les` or `lds` loads a far pointer from, and the displacement
-/// of a word access to either half of it.
-fn far_pointer_slot_also_read_as_words(body: &LirBody) -> bool {
-    let cell = |place: &Loc| match place {
-        Loc::Mem(mem) if mem.through == Register::BP && mem.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame) => {
-            Some((mem.addr.expect("a frame cell").disp + mem.offset, mem.width))
-        }
-        _ => None,
-    };
-    let places: Vec<(bool, i64, u32)> = body
-        .insns()
-        .iter()
-        .filter_map(|one| one.what.as_ref().map(|what| (target::far_load(what), what)))
-        .flat_map(|(far, what)| what.dests.iter().chain(&what.sources).filter_map(cell).map(move |(at, width)| (far, at, width)).collect::<Vec<_>>())
-        .collect();
-    places.iter().any(|(far, at, width)| {
-        *far && *width == 4 && places.iter().any(|(_, other, narrow)| *narrow == 2 && (*other == *at || *other == *at + 2))
-    })
-}
-
-/// `conc9` at `-march=core2` reloads a far pointer's halves as words, which
-/// the peephole fuses into `les`; LoopSlots then held the low word's slot in
-/// a register and rewrote the `les` to read it ("les si, dx": no encoding,
-/// llrm-nib stopped, #107).
-#[test]
-fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_words_in_registers() {
-    // Without the spiller: the selector class it now holds in registers no longer leaves this far pointer reloaded as words.
-    // The queue ordered by size alone is what left it so; the register class first no longer does, on any CPU.
-    crate::backend::allocate::without_class_priority(|| {
-        let (body, phases) = crate::backend::regalloc_input::before_phase_skipping(Calls::Everything, "conc9_les.ll", "f_conc9_s2_xi_bgnlnpfpn_index_n_st1_sum", "Core", "RegAlloc", &["SsaSpill"]);
-        let mut body = body;
-        let mut phases = phases.into_iter();
-        for mut phase in phases.by_ref() {
-            if phase.class_name() == "LoopSlots" {
-                assert!(far_pointer_slot_also_read_as_words(&body), "premise: a far pointer's slot is read as words too");
-                body = phase.transform(body).expect("loop slots");
-                break;
-            }
-            body = phase.transform(body).expect("phase");
-        }
-        for one in body.insns().iter().filter_map(|one| one.what.as_ref()).filter(|what| target::far_load(what)) {
-            assert!(matches!(one.sources.as_slice(), [Loc::Mem(_)]), "a far pointer load reads memory only: {one:?}");
-        }
-    });
-}
 
 /// Seven pointers walking 24-byte records at `-march=core2`: the loop's
 /// parallel copy has a move for each, each reading an address made again.
