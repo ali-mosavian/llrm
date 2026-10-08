@@ -1,5 +1,6 @@
 """The gate's path map: a change in an area selects that area's tests, and nothing is left out by omission."""
 
+import pytest
 import sys
 import subprocess
 from pathlib import Path
@@ -176,3 +177,15 @@ def test_a_backend_change_runs_the_scaling_step_and_a_frontend_only_change_does_
     assert "scaling" not in gate.plan(["crates/frontends/llrm-qb/src/lib.rs"]).steps
     cmds = gate.commands(gate.plan(["crates/opt/llrm-transforms/src/gvn.rs"]), gate.load(), gate.packages())
     assert "scaling_gate.py" in cmds["scaling"] and (ROOT / "tools/gate/scaling-budget.json").exists()
+
+
+def test_steps_asked_for_replace_the_planned_ones_and_the_build_comes_first():
+    """After a conflict in the budget files only build, compile-cost and scaling need to run again; the full gate took 5-7 minutes."""
+    known = set(gate.commands(gate.plan(["tools/gate/gate.py"]), gate.load(), gate.packages()))
+    p = gate.plan(["tools/gate/scaling-budget.json"])
+    assert p.tier == "full" and len(p.steps) > 8
+    one = gate.restricted(p, ["scaling", "compile-cost"], known)
+    assert one.steps == ["build", "scaling", "compile-cost"] and one.tier == p.tier and one.languages == p.languages
+    assert gate.restricted(p, ["pytest"], known).steps == ["pytest"]
+    with pytest.raises(SystemExit):
+        gate.restricted(p, ["scalling"], known)
