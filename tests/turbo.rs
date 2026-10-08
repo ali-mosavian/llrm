@@ -259,3 +259,21 @@ fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
     assert!(turbo.iter().any(|one| one == "n->v int 3 (0x3)") && turbo.iter().any(|one| one.starts_with("n struct node * ds:") && one.ends_with("[_head]")), "premise: Turbo C++'s own values: {turbo:?}");
     assert_eq!(llrm, turbo);
 }
+
+/// A variable the allocator keeps in one register from its first value to the last statement is a register variable to Turbo Debugger
+/// too: `k` of `regvar.c`, built optimised, is in TLINK's table as a `register`.
+#[test]
+fn tdump_names_a_variable_the_allocator_keeps_in_a_register_as_a_register() {
+    let Some((borland, dosbox)) = toolchain() else {
+        skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/regvar.c"), scratch.path().join("rv.c")).unwrap();
+    let made = Command::new(llrm_c()).args(["-m16", "-gtd", "-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"]).arg(scratch.path().join("rv.c")).arg("-o").arg(scratch.path().join("lrv.obj")).output().unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    dosbox::run(&[('c', &borland), ('w', scratch.path())], "c:\\bin", &["tlink /v c:\\lib\\c0m lrv.obj, lrv.exe,, c:\\lib\\cm > lrv.tl".into(), "tdump lrv.exe > lrv.tx".into()]);
+    let dump = std::fs::read_to_string(scratch.path().join("LRV.TX")).expect("TDUMP's output");
+    let (_, locals, _) = module(&dump);
+    assert!(locals.iter().any(|one| one.contains("register") && one.split_whitespace().any(|word| word == "k")), "no register k in {locals:?}");
+}

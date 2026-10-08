@@ -209,6 +209,15 @@ impl Tree<'_> {
                 Ok([vec![0x91], crate::sleb(from_frame_base)].concat())
             }
             Location::Register(name) => self.register(name),
+            // DW_OP_breg<n> disp: the register's value plus the displacement.
+            Location::Relative { register, disp } => {
+                let named = self.register(register)?;
+                Ok(match named[..] {
+                    [one] if (0x50..0x70).contains(&one) => [vec![one + 0x20], crate::sleb(*disp)].concat(),
+                    // DW_OP_regx n -> DW_OP_bregx n.
+                    _ => [vec![0x92], named[1..].to_vec(), crate::sleb(*disp)].concat(),
+                })
+            }
             // DW_OP_consts, DW_OP_stack_value.
             Location::Constant(value) => Ok([vec![0x11], crate::sleb(*value), vec![0x9F]].concat()),
             // Each piece's place, then DW_OP_piece and its size; a piece with no place is the size alone.
@@ -230,7 +239,7 @@ impl Tree<'_> {
     /// The expression of where `location` is.
     fn location(&mut self, location: &Location) -> Result<Value, Unsupported> {
         Ok(match location {
-            Location::Frame { .. } | Location::Register(_) | Location::Constant(_) | Location::Pieces(_) => Value::Expr(self.expression(location)?),
+            Location::Frame { .. } | Location::Register(_) | Location::Relative { .. } | Location::Constant(_) | Location::Pieces(_) => Value::Expr(self.expression(location)?),
             Location::Static { symbol, disp } => Value::ExprAddr { symbol: *symbol, delta: *disp },
             Location::List(entries) => Value::LocList(self.list(entries)?),
         })

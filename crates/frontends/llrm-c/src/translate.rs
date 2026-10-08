@@ -26,6 +26,24 @@ fn refuse<T>(what: impl Into<String>) -> R<T> {
     Err(Unsupported(what.into()))
 }
 
+/// `data` without the extern objects no place of `functions`, and no data, names.
+fn unreferenced_externs_dropped(data: Vec<h::DataObject>, functions: &[h::Function]) -> Vec<h::DataObject> {
+    let mut used: HashSet<i64> = data.iter().flat_map(|one| one.relocations.iter().map(|relocation| relocation.target)).collect();
+    for function in functions {
+        let mut places: HashSet<i64> = HashSet::new();
+        for operand in function.blocks.iter().flat_map(|block| &block.instructions).flat_map(|instruction| &instruction.operands) {
+            match operand {
+                h::Operand::PlaceRef(one) => places.insert(one.place),
+                h::Operand::ArrayElement(one) => places.insert(one.place),
+                h::Operand::ProjectedPlace(one) => places.insert(one.place),
+                _ => false,
+            };
+        }
+        used.extend(function.places.iter().filter(|place| places.contains(&place.id)).map(|place| place.symbol));
+    }
+    data.into_iter().filter(|one| one.linkage != DataLinkage::External || used.contains(&one.id)).collect()
+}
+
 /// The unit as a HIR program of one module.
 pub fn program(unit: &hir::Unit, name: &str, calling: &llrm_target::calling::Calling, profile: &crate::compile::Profile) -> R<h::Program> {
     let convention = calling.named(&profile.convention).ok_or_else(|| Unsupported(format!("calling.toml has no {}", profile.convention)))?;
@@ -88,6 +106,9 @@ pub fn program(unit: &hir::Unit, name: &str, calling: &llrm_target::calling::Cal
             }
         }
     }
+    // An extern the code never names is asked of no linker: the front end lists the ones `-g` describes (every extern a header
+    // declares), and a program built with `-g` would otherwise differ from one built without it by the symbols it asks for.
+    let data = unreferenced_externs_dropped(data.clone(), &functions);
     let (types, alias_classes) = types.finished();
     let module = h::Module { data, callables, alias_classes, debug, facts: facts.finish(), ..h::Module::new(1, name, types, functions) };
     // A call keeps what its target's C convention does not clobber; the compiler's constants go in CONST.

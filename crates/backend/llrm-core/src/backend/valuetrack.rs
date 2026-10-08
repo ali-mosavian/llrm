@@ -207,15 +207,15 @@ fn noted(state: &mut State, note: &DebugNote) {
     }
 }
 
-/// The place the value of `variable`'s `piece` is in at a point where `state` holds it: a register, else a cell.
-fn where_is(state: &State, variable: u32, piece: Option<(u32, u32)>) -> Option<Where> {
-    match *state.has.get(&(variable, piece))? {
-        NoteValue::Nothing => None,
-        NoteValue::Constant(value) => Some(Where::Constant(value)),
-        NoteValue::Value(value) => {
-            let mut found: Vec<&Held> = state.holds.iter().filter(|(_, held)| **held == value).map(|(held, _)| held).collect();
+/// Every place the value of `variable`'s `piece` is in at a point where `state` holds it, registers first; a constant is the only one it has.
+fn holders(state: &State, variable: u32, piece: Option<(u32, u32)>) -> Vec<Where> {
+    match state.has.get(&(variable, piece)) {
+        None | Some(NoteValue::Nothing) => Vec::new(),
+        Some(NoteValue::Constant(value)) => vec![Where::Constant(*value)],
+        Some(NoteValue::Value(value)) => {
+            let mut found: Vec<&Held> = state.holds.iter().filter(|(_, held)| *held == value).map(|(held, _)| held).collect();
             found.sort_by_key(|held| matches!(held, Held::Cell { .. }));
-            found.first().map(|held| Where::Place(**held))
+            found.into_iter().map(|held| Where::Place(*held)).collect()
         }
     }
 }
@@ -223,8 +223,8 @@ fn where_is(state: &State, variable: u32, piece: Option<(u32, u32)>) -> Option<W
 /// Each variable the notes name, with the ranges of `code` (start, end) it is in a place over. `marks` are the procedure's, by
 /// the offset into `code` they stand at, in the order masm wrote them; `rows` its frame rows; `bias` how far below the
 /// canonical frame address the frame register would sit (a cell `Place::Cell { disp }` is `disp - bias` from it).
-pub fn tracked(code: &[u8], regs: &Regs, rows: &[FrameRow], bias: i64, notes: &[DebugNote], marks: &[(usize, Mark)]) -> BTreeMap<(u32, Option<(u32, u32)>), Vec<(usize, usize, Where)>> {
-    let mut decoder = Decoder::with_ip(32, code, 0, DecoderOptions::NONE);
+pub fn tracked(code: &[u8], bits: u32, regs: &Regs, rows: &[FrameRow], bias: i64, notes: &[DebugNote], marks: &[(usize, Mark)]) -> BTreeMap<(u32, Option<(u32, u32)>), Vec<(usize, usize, Vec<Where>)>> {
+    let mut decoder = Decoder::with_ip(bits, code, 0, DecoderOptions::NONE);
     let mut decode = |at: usize| -> Option<Instruction> {
         decoder.set_position(at).ok()?;
         decoder.set_ip(at as u64);
@@ -248,7 +248,7 @@ pub fn tracked(code: &[u8], regs: &Regs, rows: &[FrameRow], bias: i64, notes: &[
     // Whether the function lets the address of a frame cell out: then a call, or a write through a pointer, may write any of them
     // (which one, only the allocator's frame layout says, and the code is read after it).
     let exposed = {
-        let mut scan = Decoder::with_ip(32, code, 0, DecoderOptions::NONE);
+        let mut scan = Decoder::with_ip(bits, code, 0, DecoderOptions::NONE);
         let mut found = false;
         while scan.can_decode() {
             let one = scan.decode();
@@ -304,7 +304,7 @@ pub fn tracked(code: &[u8], regs: &Regs, rows: &[FrameRow], bias: i64, notes: &[
     }
     // The variable's place before each instruction, with the notes of that point taken.
     let variables: BTreeSet<(u32, Option<(u32, u32)>)> = notes.iter().map(|note| (note.variable, note.piece)).collect();
-    let mut out: BTreeMap<(u32, Option<(u32, u32)>), Vec<(usize, usize, Where)>> = variables.iter().map(|&key| (key, Vec::new())).collect();
+    let mut out: BTreeMap<(u32, Option<(u32, u32)>), Vec<(usize, usize, Vec<Where>)>> = variables.iter().map(|&key| (key, Vec::new())).collect();
     for (&at, (one, entry)) in &seen {
         let mut state = entry.clone();
         for &note in before.get(&at).into_iter().flatten() {
@@ -312,11 +312,14 @@ pub fn tracked(code: &[u8], regs: &Regs, rows: &[FrameRow], bias: i64, notes: &[
         }
         let end = at + one.len();
         for &(variable, piece) in &variables {
-            let Some(place) = where_is(&state, variable, piece) else { continue };
+            let places = holders(&state, variable, piece);
+            if places.is_empty() {
+                continue;
+            }
             let ranges = out.get_mut(&(variable, piece)).expect("every variable has its ranges");
             match ranges.last_mut() {
-                Some(last) if last.1 == at && last.2 == place => last.1 = end,
-                _ => ranges.push((at, end, place)),
+                Some(last) if last.1 == at && last.2 == places => last.1 = end,
+                _ => ranges.push((at, end, places)),
             }
         }
     }

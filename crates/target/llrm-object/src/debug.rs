@@ -193,6 +193,9 @@ pub enum Location {
     List(Vec<(Range, Location)>),
     /// `disp` bytes into the data `symbol` names.
     Static { symbol: SymbolId, disp: i64 },
+    /// `disp` bytes from the register `register` names: a cell reached through the stack pointer where the code keeps no frame
+    /// register (the displacement changes as the stack pointer does, so it is told over the ranges it holds for).
+    Relative { register: String, disp: i64 },
     /// The value itself, which is in no place.
     Constant(i64),
     /// Its bytes in pieces, from the first: each piece's size in bytes and where it is; none for a piece that is nowhere.
