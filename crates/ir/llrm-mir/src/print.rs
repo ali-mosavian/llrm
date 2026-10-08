@@ -313,6 +313,8 @@ impl Printer<'_> {
                     let _ = match record.what {
                         DebugWhat::Declare(at) => writeln!(out, "  #dbg_declare({}, !{})", self.typed(function, slots, at), record.variable.0),
                         DebugWhat::Value(at) => writeln!(out, "  #dbg_value({}, !{})", self.typed(function, slots, at), record.variable.0),
+                        DebugWhat::Piece { value, offset, bytes } => writeln!(out, "  #dbg_piece({}, !{}, {offset}, {bytes})", self.typed(function, slots, value), record.variable.0),
+                        DebugWhat::GonePiece { offset, bytes } => writeln!(out, "  #dbg_gonepiece(!{}, {offset}, {bytes})", record.variable.0),
                         DebugWhat::Gone => writeln!(out, "  #dbg_gone(!{})", record.variable.0),
                     };
                 }

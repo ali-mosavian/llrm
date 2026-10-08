@@ -255,6 +255,37 @@ pub enum Mark {
     /// The call before it popped this many bytes of its arguments as it returned: the stack is that much higher
     /// from here.
     Pops(i64),
+    /// The instruction before it made value `tag` (by the number its register had in SSA), in `place`.
+    Def { tag: u32, place: Place },
+    /// Note `note` of the body (`LirBody::notes`) stands here.
+    Note(u32),
+    /// The call before it clobbers this register (one mark for each it clobbers).
+    Clobbered(Register),
+}
+
+/// Where an instruction put a value `-g` names.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Place {
+    Register(Register),
+    /// A frame cell, as the frame register would address it at this displacement.
+    Cell { disp: i64, bytes: u32 },
+}
+
+/// The arguments the caller pushed, as values in their cells from the first byte.
+fn blocks_arguments(body: &lir::LirBody) -> Vec<Item> {
+    body.arguments_in_cells.iter().map(|&(tag, disp, bytes)| Item::Mark(Mark::Def { tag, place: Place::Cell { disp, bytes } })).collect()
+}
+
+/// Where an instruction wrote `dest`, if a debugger can be told: a register, or a frame cell addressed by displacement alone.
+fn placed(dest: &Loc) -> Option<Place> {
+    match dest {
+        Loc::Reg(ir::Reg { register, .. }) => Some(Place::Register(*register)),
+        Loc::Mem(cell) => match &cell.addr {
+            Some(addr) if addr.space == Space::Frame && cell.index.is_none() && cell.base.is_none() => Some(Place::Cell { disp: addr.disp, bytes: cell.width }),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn reg(register: Register) -> Loc {
@@ -519,7 +550,17 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
     let mut line = first.and_then(|one| one.line);
     let mut lines = 0..;
     let mut marked = |line: u32| Item::Mark(Mark::Line { line, index: lines.next().expect("unbounded") });
-    let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(enter.into_iter().map(Item::Semantics)).collect();
+    // The arguments are in their registers from the first byte: what the entry says of them stands before the prologue.
+    let arrival = blocks.iter().flat_map(|block| &block.insns).find(|one| one.arrival());
+    let arrived: Vec<Item> = arrival
+        .into_iter()
+        .flat_map(|one| {
+            let defined = one.delivers.iter().zip(&one.debug.defines).filter(|(_, tag)| **tag != u32::MAX).map(|((_, register), tag)| Item::Mark(Mark::Def { tag: *tag, place: Place::Register(*register) }));
+            defined.chain(one.debug.before.iter().map(|&note| Item::Mark(Mark::Note(note)))).collect::<Vec<_>>()
+        })
+        .collect();
+    let cells = blocks_arguments(&procedure.body);
+    let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(arrived).chain(cells).chain(enter.into_iter().map(Item::Semantics)).collect();
     for (index, block) in blocks.iter().enumerate() {
         out.push(Item::Label(Label { name: label(number, block.at) }));
         if wrap.as_ref().is_some_and(|wrap| wrap.at == block.at) {
@@ -530,6 +571,10 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
         for one in &block.insns {
             if first.is_some_and(|first| Arc::ptr_eq(first, one)) {
                 out.push(Item::Mark(Mark::BodyStart));
+            }
+            // What is said before an instruction stands there whether or not it is emitted: a jump to the next block is not.
+            if !one.arrival() {
+                out.extend(one.debug.before.iter().map(|&note| Item::Mark(Mark::Note(note))));
             }
             if fallthrough.is_some_and(|jump| Arc::ptr_eq(jump, one)) {
                 if last.is_some_and(|last| Arc::ptr_eq(last, one)) {
@@ -570,6 +615,9 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
                         if callee.pops != 0 && callee.code.is_empty() && first.is_some() {
                             out.push(Item::Mark(Mark::Pops(callee.pops)));
                         }
+                        if first.is_some() {
+                            out.extend(one.clobbers.iter().map(|&register| Item::Mark(Mark::Clobbered(register))));
+                        }
                     }
                 }
                 Operation::Return => {
@@ -592,6 +640,13 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
                     out.push(Item::Semantics(Semantics { name: Some(name), ..what.clone() }));
                 }
                 _ => out.push(Item::Semantics(what.clone())),
+            }
+            // Where the values it made went, for a debugger: the register or frame cell it wrote.
+            if let Some(place) = what.dests.first().and_then(placed) {
+                out.extend(one.debug.defines.iter().map(|&tag| Item::Mark(Mark::Def { tag, place })));
+            } else {
+                // A call's result comes back in the register it says it delivers.
+                out.extend(one.delivers.iter().filter(|(held, _)| one.debug.defines.contains(&held.value)).map(|(held, register)| Item::Mark(Mark::Def { tag: held.value, place: Place::Register(*register) })));
             }
             if last.is_some_and(|last| Arc::ptr_eq(last, one)) {
                 out.push(Item::Mark(Mark::BodyEnd));

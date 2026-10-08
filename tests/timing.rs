@@ -7,13 +7,21 @@ const PROGRAM: &str = "DIM s AS INTEGER\nFOR i = 1 TO 10\n s = s + i\nNEXT\nPRIN
 
 /// llrm-qb's stderr on `PROGRAM` with `LLRM_DEBUG` set to `channels`, if any.
 fn compiled(channels: Option<&str>) -> String {
+    compiled_checking(channels, None)
+}
+
+/// The same with `LLRM_VERIFY` removed, or set to `verify`.
+fn compiled_checking(channels: Option<&str>, verify: Option<&str>) -> String {
     let directory = tempfile::tempdir().expect("a directory");
     let source = directory.path().join("t.bas");
     std::fs::write(&source, PROGRAM).expect("writes the source");
     let mut command = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-qb")));
     command.args([source.to_str().unwrap(), "--dialect", "qb45", "--runtime", "qb45", "-O2", "-o", directory.path().join("t.obj").to_str().unwrap()]);
     // Every step is listed: under load, the top 30 by own time are not always the same 30.
-    command.env_remove("LLRM_DEBUG").env("LLRM_TIME_TOP", "1000");
+    command.env_remove("LLRM_DEBUG").env_remove("LLRM_VERIFY").env("LLRM_TIME_TOP", "1000");
+    if let Some(verify) = verify {
+        command.env("LLRM_VERIFY", verify);
+    }
     if let Some(channels) = channels {
         command.env("LLRM_DEBUG", channels);
     }
@@ -65,4 +73,21 @@ fn test_timefunc_lists_the_costliest_functions() {
 fn test_no_time_report_without_the_flag() {
     let report = compiled(None);
     assert!(!report.contains("[time]"), "{report}");
+}
+
+/// Every pass and every machine phase was verified in a user's compile: 22 LIR verifications and 8 of the MIR a function, 5% of
+/// a small program's compile time. LLVM's release pipeline verifies its input once; the tests, the gate and torture set `LLRM_VERIFY`.
+#[test]
+fn test_each_pass_and_phase_is_verified_only_when_asked() {
+    let plain = compiled_checking(Some("time"), None);
+    for step in ["lir verify", "mir verify after pass", "lir owned bytes", "mir verify pipeline"] {
+        assert!(!plain.contains(step), "`{step}` ran without LLRM_VERIFY:\n{plain}");
+    }
+    assert!(plain.contains("mir verify frontend"), "the module the frontend made is verified either way:\n{plain}");
+    let checked = compiled_checking(Some("time"), Some("1"));
+    for step in ["lir verify", "mir verify after pass", "lir owned bytes", "mir verify pipeline"] {
+        assert!(checked.contains(step), "no `{step}` with LLRM_VERIFY=1:\n{checked}");
+    }
+    let off = compiled_checking(Some("time"), Some("0"));
+    assert!(!off.contains("lir verify"), "LLRM_VERIFY=0 is off:\n{off}");
 }

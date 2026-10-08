@@ -4,6 +4,7 @@
 # QCPORT at its src/ and QCPORT_INC at the Borland headers it builds with.
 #
 #   QCPORT=~/scratch/qcport/src QCPORT_INC=~/scratch/qctc/inc tools/qcport-compile.sh [llrm-c]
+export LLRM_VERIFY=${LLRM_VERIFY:-1}  # the gate checks each pass and phase
 set -u
 LLRM_C="${1:-$(python3 "$(dirname "$0")/llrmbin.py" bin)/llrm-c}"
 QCPORT="${QCPORT:?QCPORT names the QCport src directory}"

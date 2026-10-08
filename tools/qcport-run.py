@@ -31,6 +31,7 @@ sys.path.insert(0, str(HERE / "dosbatch"))
 
 import dosbatch  # noqa: E402
 import llrmbin  # noqa: E402
+os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
 
 MODULES = ("host", "render", "model", "game", "sound", "ui")
 DATA = ("stuff.ini", "default.cfg", "start.qmp", "QUAKE.QPK", "run.conf")

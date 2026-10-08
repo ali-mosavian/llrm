@@ -129,6 +129,11 @@ impl Builder<'_> {
         self.pending.push((variable, crate::module::DebugWhat::Declare(address)));
     }
 
+    /// What `-g` says of the variable `variable` from the next instruction on, when it is not a declaration: `llvm.dbg.value`.
+    pub fn debug_say(&mut self, variable: MetadataId, what: crate::module::DebugWhat) {
+        self.pending.push((variable, what));
+    }
+
     /// Attaches `node` as metadata of `kind` to the instruction just emitted.
     pub fn attach(&mut self, kind: &str, node: MetadataId) {
         let block = self.block.expect("a position");

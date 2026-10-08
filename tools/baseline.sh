@@ -4,6 +4,7 @@
 # `diff -r` against the tree from before it. Refusals are recorded, not fatal.
 #
 # usage: tools/baseline.sh OUT
+export LLRM_VERIFY=${LLRM_VERIFY:-1}  # the gate checks each pass and phase
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:?usage: tools/baseline.sh OUT}
