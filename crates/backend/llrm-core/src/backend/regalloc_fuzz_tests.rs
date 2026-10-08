@@ -760,6 +760,32 @@ fn test_a_value_that_cannot_be_spilled_takes_a_register_by_force() {
     assert!(crate::backend::allocate::last_resorts() > before, "premise: the allocation needed the last resort");
 }
 
+/// LLVM and GCC allocate a function once. The allocator here also allocated the body in each other shape its spills suggested,
+/// twice each, and kept the cheapest: 85 allocations of `d_faces`'s big function (#944). A profile that does not search makes
+/// the one allocation, and the same output where no other shape was cheaper.
+#[test]
+fn test_an_allocator_that_does_not_search_allocates_a_body_once() {
+    use crate::backend::allocate::trials;
+    let shape = Shape { pool: 12, ops: 11 };
+    let mut searched = 0;
+    for seed in 0..12 {
+        let run = |search: bool| {
+            let (body, _) = body(seed, &shape);
+            let cpu = crate::backend::cpu::tuned_searching(&llrm_x86_m16::M16, "386", false, search).expect("a profile");
+            let mut phase = RegAlloc::new(None, None, ProfileOrName::Profile(cpu), &*target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("a phase");
+            let before = trials();
+            let out = phase.transform(body).expect("allocated");
+            (trials() - before, out)
+        };
+        let (with, _) = run(true);
+        let (without, alone) = run(false);
+        searched += with;
+        assert_eq!(without, 0, "seed {seed}: allocated again by a profile that does not search");
+        assert!(complaints(&alone).is_empty(), "seed {seed}: {:?}", complaints(&alone));
+    }
+    assert!(searched > 0, "premise: some body had a shape to try");
+}
+
 /// `allocate::live` was built from per-block sorted sets and converted to bit rows for the fixed point:
 /// 24% of compiling QCport's `d_faces` (#559). Dense rows all the way give the same sets.
 #[test]

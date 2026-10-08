@@ -456,6 +456,16 @@ fn _through_arguments(allowed: &Allowed, actual: &[Provenance]) -> (BTreeSet<Sli
 /// What an unsummarized callee may read and write at `at` other than
 /// through its arguments.
 fn _unknown_other(unit: &Unit, facts: &PointsTo, at: InstId, callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
+    let (mut reads, mut writes, back) = _unknown_base(unit, facts, at)?;
+    if back {
+        _calling_back(unit, callbacks, true, true, &mut reads, &mut writes);
+    }
+    Ok((reads, writes))
+}
+
+/// `_unknown_other` less what a call back into the module adds, which depends on the callbacks and nothing else a revisit changes;
+/// and whether the call may call back.
+fn _unknown_base(unit: &Unit, facts: &PointsTo, at: InstId) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>, bool), String> {
     OTHER_RUNS.with(|runs| runs.set(runs.get() + 1));
     let mut reads = NONLOCAL.slices.clone();
     reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default()));
@@ -467,28 +477,39 @@ fn _unknown_other(unit: &Unit, facts: &PointsTo, at: InstId, callbacks: Option<&
         reads.extend(frames.filter_map(|(_, inst)| memory::object_of(unit, Operand::Value(unit.function.instruction(inst).result?))).map(Slice::whole));
     }
     let mut writes = reads.clone();
-    let Some(globals) = unit.globals_aa else { return Ok((reads, writes)) };
+    let Some(globals) = unit.globals_aa else { return Ok((reads, writes, false)) };
     let callee = llrm_mir::memory::callee(unit.context, unit.function, at);
     let (read, written) = globals.unsummarized(callee);
     reads.extend(_globals(unit, read));
     writes.extend(_globals(unit, written));
     // An indirect callee may be an entry itself.
-    if callee.is_none() || globalsaa::calls_back(unit, at) {
-        let Some(callbacks) = callbacks else {
+    Ok((reads, writes, callee.is_none() || globalsaa::calls_back(unit, at)))
+}
+
+/// What a call back into the module adds to what a call reads and writes: the callbacks' effects, and of the tracked globals all
+/// that the callbacks do not state, or where none are known.
+fn _calling_back(unit: &Unit, callbacks: Option<&Summary>, reading: bool, writing: bool, reads: &mut BTreeSet<Slice>, writes: &mut BTreeSet<Slice>) {
+    let Some(callbacks) = callbacks else {
+        if reading {
             reads.extend(_tracked(unit));
+        }
+        if writing {
             writes.extend(_tracked(unit));
-            return Ok((reads, writes));
-        };
+        }
+        return;
+    };
+    if reading {
         reads.extend(callbacks.reads.iter().cloned());
-        writes.extend(callbacks.writes.iter().cloned());
         if callbacks.unknown_read {
             reads.extend(_tracked(unit));
         }
+    }
+    if writing {
+        writes.extend(callbacks.writes.iter().cloned());
         if callbacks.unknown_write {
             writes.extend(_tracked(unit));
         }
     }
-    Ok((reads, writes))
 }
 
 /// What calling back into the module may do: the effects of the unit's
@@ -660,18 +681,54 @@ fn _summary<'s>(unit: &Unit, known: &'s IndexMap<String, Summary>, name: &str) -
 /// functions. A body in this compilation unit always takes precedence; one
 /// that may be replaced describes no call.
 pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexMap<String, Summary>>) -> Result<IndexMap<String, Summary>, String> {
+    summaries_updating(procedures, known, &mut SummaryMemo::default(), None)
+}
+
+/// What a run of `summaries` leaves for the next: the summaries, the bodies' own (`direct`) and their last visits, and what they were
+/// made from.
+#[derive(Default)]
+pub struct SummaryMemo {
+    result: IndexMap<String, Summary>,
+    direct: IndexMap<String, Summary>,
+    found: IndexMap<String, Visit>,
+    known: Option<IndexMap<String, Summary>>,
+}
+
+/// `summaries`, where only the bodies in `dirty` differ from the run `memo` holds, and nothing else it was made from does (the
+/// caller's to know: the globals' facts, the declarations, `known`).
+///
+/// A body's summary reads its own, its callees' and, where it calls something unknown, the entries' (`callbacks`). So what an edit
+/// can change is the dirty bodies and every body that reads them through a chain of calls. That closure starts again from nothing,
+/// as a whole run does, and the rest is as it was: nothing outside the closure reads anything in it. (The callbacks are an
+/// entry's summaries read by every body that calls something unknown, and an entry among those feeds them: a closure with an
+/// entry takes all of them.) `None` for `dirty`, or a memo of other bodies, is a whole run.
+pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Option<&IndexMap<String, Summary>>, memo: &mut SummaryMemo, dirty: Option<&BTreeSet<String>>) -> Result<IndexMap<String, Summary>, String> {
+    let same_bodies = memo.result.len() >= procedures.len() && procedures.keys().all(|name| memo.direct.contains_key(name) && memo.result.contains_key(name)) && memo.direct.len() == procedures.len();
+    let whole = dirty.is_none() || !same_bodies || memo.known.as_ref() != known;
+    if whole {
+        *memo = SummaryMemo::default();
+    }
+    let dirty_names: BTreeSet<&String> = match dirty {
+        Some(dirty) if !whole => dirty.iter().collect(),
+        _ => procedures.keys().collect(),
+    };
     // What a body captures grows from nothing: a call captures what its
     // callee's summary says, so a least fixed point, as a recursive one
     // that captures nothing proves.
-    // What a body does on its own does not change from round to round: made once.
-    let direct = llrm_support::debug::timed("summaries direct", || {
-        procedures.iter().map(|(name, one)| Ok((name.clone(), _direct_summary(&one.unit)?))).collect::<Result<IndexMap<_, _>, String>>()
+    // What a body does on its own does not change from round to round: made once, and again only for a body that was edited.
+    llrm_support::debug::timed("summaries direct", || {
+        for (name, one) in procedures {
+            if whole || dirty_names.contains(name) {
+                memo.direct.insert(name.clone(), _direct_summary(&one.unit)?);
+            }
+        }
+        Ok::<(), String>(())
     })?;
-    let mut result = known.cloned().unwrap_or_default();
-    result.extend(direct.iter().map(|(name, one)| (name.clone(), Summary { captures: BTreeSet::new(), ..one.clone() })));
-    // A worklist, callees first. A body is visited again only when a summary it reads changed: a
-    // callee's, or, where it calls something unknown, an entry's (`_callbacks`). So a body in no cycle
-    // is visited once, and a cycle iterates only as long as it changes.
+    let direct = &memo.direct;
+    let mut result = if whole { known.cloned().unwrap_or_default() } else { std::mem::take(&mut memo.result) };
+    if whole {
+        result.extend(direct.iter().map(|(name, one)| (name.clone(), Summary { captures: BTreeSet::new(), ..one.clone() })));
+    }
     let edges = procedures
         .iter()
         .enumerate()
@@ -704,18 +761,48 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
         for target in procedure.calls.values().filter_map(|target| procedures.get_index_of(target)) {
             readers[target].insert(at);
         }
+        // Asked against the summaries as the bodies' own start from them: whether a callee has one does not change.
         if call_sites(&procedure.unit).iter().any(|site| procedure.calls.get(site).and_then(|target| _summary(&procedure.unit, &result, target)).is_none()) {
             callers_of_unknown.insert(at);
+        }
+    }
+    // The bodies to work out again.
+    let mut closure = vec![whole; procedures.len()];
+    if !whole {
+        let mut todo: Vec<usize> = dirty_names.iter().filter_map(|name| procedures.get_index_of(*name)).collect();
+        // A callee defined elsewhere whose declaration was restated: its callers read it.
+        todo.extend(procedures.iter().enumerate().filter(|(_, (_, one))| one.calls.values().any(|target| dirty_names.contains(target) && !procedures.contains_key(target))).map(|(at, _)| at));
+        // An entry's summary is what a call back into the module does (`callbacks`), which the bodies that call something unknown
+        // were made against, and an entry among those feeds it: they stand or fall together, so a closure with an entry in it
+        // takes them all (one that kept their old values could keep what only the old callbacks held up).
+        let mut unknown_added = false;
+        while let Some(at) = todo.pop() {
+            if closure[at] {
+                continue;
+            }
+            closure[at] = true;
+            todo.extend(readers[at].iter().copied());
+            if !unknown_added && entries.contains(&at) {
+                unknown_added = true;
+                todo.extend(callers_of_unknown.iter().copied());
+            }
+        }
+        for (at, (name, _)) in procedures.iter().enumerate() {
+            if closure[at] {
+                result.insert(name.clone(), Summary { captures: BTreeSet::new(), ..direct[name].clone() });
+            }
         }
     }
     let called_back = |result: &IndexMap<String, Summary>| procedures.values().next().and_then(|one| _callbacks(&one.unit, result));
     let mut callbacks = called_back(&result);
     // What each body's points-to facts were found from: they change only with the callees' captures,
-    // not with the effects a revisit is for.
-    let mut found: Vec<Option<Visit>> = vec![None; procedures.len()];
+    // not with the effects a revisit is for. A visit of an earlier run says what its calls to something unknown did
+    // for the callbacks it had: that is worked out again.
+    // A body that was edited has other facts than its last visit found.
+    let mut found: Vec<Option<Visit>> = procedures.keys().map(|name| memo.found.shift_remove(name).filter(|_| !dirty_names.contains(name)).map(|visit| Visit { version: None, ..visit })).collect();
     let mut version = 0;
-    let mut queued = vec![true; procedures.len()];
-    let mut work: std::collections::BinaryHeap<std::cmp::Reverse<usize>> = (0..procedures.len()).map(std::cmp::Reverse).collect();
+    let mut queued: Vec<bool> = closure.clone();
+    let mut work: std::collections::BinaryHeap<std::cmp::Reverse<usize>> = (0..procedures.len()).filter(|first| closure[order[*first]]).map(std::cmp::Reverse).collect();
     while let Some(std::cmp::Reverse(first)) = work.pop() {
         let at = order[first];
         queued[at] = false;
@@ -730,7 +817,7 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
                 if now != callbacks {
                     callbacks = now;
                     version += 1;
-                    woken.extend(callers_of_unknown.iter().copied());
+                    woken.extend(callers_of_unknown.iter().copied().filter(|one| closure[*one]));
                 }
             }
             for reader in woken {
@@ -741,6 +828,9 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
             }
         }
     }
+    memo.found = procedures.keys().cloned().zip(found).filter_map(|(name, visit)| Some((name, visit?))).collect();
+    memo.known = known.cloned();
+    memo.result = result.clone();
     Ok(result)
 }
 
@@ -752,6 +842,9 @@ struct Visit {
     facts: Rc<PointsTo>,
     version: Option<usize>,
     unknown: (BTreeSet<Slice>, BTreeSet<Slice>),
+    /// What the calls to something unknown may do besides calling back, with whether the reads and the writes of one that does are
+    /// wanted: found once from the facts, where `unknown` is found again for each callbacks.
+    base: Option<(BTreeSet<Slice>, BTreeSet<Slice>, bool, bool)>,
 }
 
 /// `procedure`'s summary given `result`, the summaries of what it calls so far: what its body does
@@ -770,19 +863,20 @@ fn _summarized(
     let captured_at = procedure.calls.iter().map(|(at, target)| (*at, _summary(&procedure.unit, result, target).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
     if memo.as_ref().is_none_or(|one| one.captured != captured_at) {
         let facts = Rc::new(llrm_support::debug::timed("summaries points-to", || points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at)))?);
-        *memo = Some(Visit { captured: captured_at, facts, version: None, unknown: Default::default() });
+        *memo = Some(Visit { captured: captured_at, facts, version: None, unknown: Default::default(), base: None });
     }
     let visit = memo.as_mut().expect("made above");
     let facts = Rc::clone(&visit.facts);
     // What the calls to something unknown may do, all of them together, depends on the facts and on
     // what a call back into the module may do, and on nothing a revisit changes.
-    if visit.version != Some(version) {
+    if visit.base.is_none() {
         let unit = &procedure.unit;
         let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
         // What a call may do other than through its arguments depends on its callee and on what escaped
         // before it, and a body calls the same few routines again and again: each pair is worked out
         // once, and added to the whole once.
-        let mut others: Vec<(Option<GlobalId>, Option<&Bits>, bool, bool, (BTreeSet<Slice>, BTreeSet<Slice>))> = Vec::new();
+        #[allow(clippy::type_complexity)]
+        let mut others: Vec<(Option<GlobalId>, Option<&Bits>, bool, bool, (BTreeSet<Slice>, BTreeSet<Slice>, bool))> = Vec::new();
         for at in call_sites(unit) {
             if procedure.calls.get(&at).and_then(|target| _summary(unit, result, target)).is_some() {
                 continue;
@@ -800,17 +894,26 @@ fn _summarized(
                     *wants_reads |= allowed.other.reads;
                     *wants_writes |= allowed.other.writes;
                 }
-                None => others.push((callee, escaped, allowed.other.reads, allowed.other.writes, _unknown_other(unit, &facts, at, callbacks)?)),
+                None => others.push((callee, escaped, allowed.other.reads, allowed.other.writes, _unknown_base(unit, &facts, at)?)),
             }
         }
-        for (_, _, wants_reads, wants_writes, (other_reads, other_writes)) in others {
+        let (mut back_reads, mut back_writes) = (false, false);
+        for (_, _, wants_reads, wants_writes, (other_reads, other_writes, back)) in others {
             if wants_reads {
                 reads.extend(other_reads);
+                back_reads |= back;
             }
             if wants_writes {
                 writes.extend(other_writes);
+                back_writes |= back;
             }
         }
+        visit.base = Some((reads, writes, back_reads, back_writes));
+        visit.version = None;
+    }
+    if visit.version != Some(version) {
+        let (mut reads, mut writes, back_reads, back_writes) = visit.base.clone().expect("found above");
+        _calling_back(&procedure.unit, callbacks, back_reads, back_writes, &mut reads, &mut writes);
         visit.unknown = (reads, writes);
         visit.version = Some(version);
     }
