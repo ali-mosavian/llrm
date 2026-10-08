@@ -292,7 +292,7 @@ impl Builder<'_> {
             Location::Register(register) => return refused(format!("{} is in register {register}, which is not written yet", variable.name)),
             Location::List(_) => return refused(format!("{} has a location list, which is not written yet", variable.name)),
             // Turbo Debugger's records say neither a value in no place nor one in pieces: left out.
-            Location::Constant(_) | Location::Pieces(_) => return Ok(Vec::new()),
+            Location::Constant(_) | Location::Pieces(_) | Location::Relative { .. } => return Ok(Vec::new()),
         }
         Ok(data)
     }

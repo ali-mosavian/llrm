@@ -1,0 +1,11 @@
+fn id(x: i16) -> i16:
+    return x + 1
+
+fn work(a: i16) -> i16:
+    let k = a * 3
+    let r = id(k)
+    return r + k
+
+fn main() -> i16:
+    print(work(4) + work(5))
+    return 0

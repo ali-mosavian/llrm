@@ -383,7 +383,7 @@ fn wrap_of(procedure: &Procedure) -> Option<crate::backend::shrinkwrap::Wrap> {
 
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
-    parts(procedure, stack_addressed(procedure, 0).is_some())
+    parts(procedure, frame_omitted(procedure, 0).is_some())
 }
 
 /// `_frame_parts`, with no frame register where `omit`: the entry sets none and the return takes back
@@ -397,7 +397,9 @@ fn parts(procedure: &Procedure, omit: bool) -> (Vec<Semantics>, Vec<Semantics>) 
     // no sign to say whether it lies above that cell or below it, so every one keeps its distance from it.
     let reserve = if omit && reserve != 0 { reserve + slot } else { reserve };
     // Inline code is bytes this printer cannot read, so it may address the frame.
+    // A frame the runtime's entry built (B$ENRA, B$ENRD) is not built again by a shell of ours.
     let framed = !omit
+        && procedure.entry == 0
         && (reserve != 0
             || roots.contains(&ir::root(procedure.registers.pointer))
             || procedure.callees.values().any(|one| !one.code.is_empty()));
@@ -520,7 +522,7 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
 /// The procedure as emitted, frame included: what this prints and objbuild
 /// encodes. A branch's target is still a block; `label(number, at)` names it.
 pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprintable> {
-    let items = match stack_addressed(procedure, number) {
+    let items = match frame_omitted(procedure, number) {
         Some(items) => items,
         None => built(procedure, number, false)?,
     };
@@ -669,6 +671,26 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
     Ok(out)
 }
 
+/// `stack_addressed`, but tuned for size only where it is no longer: `[esp+d]` is a byte longer than `[ebp+d]`, and a
+/// displacement past 127 three more, which a large frame's cells can cost more than the entry and return save.
+fn frame_omitted(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
+    let omitted = stack_addressed(procedure, number)?;
+    if !procedure.size {
+        return Some(omitted);
+    }
+    let bytes = |items: &[Item]| -> usize {
+        items
+            .iter()
+            .filter_map(|item| match spelled(item.clone(), &procedure.registers) {
+                Item::Semantics(what) => select::emit_in(procedure.body.bits, &what, 0, None, false, false, None).map(|one| one.code.len()),
+                _ => None,
+            })
+            .sum()
+    };
+    let framed = built(procedure, number, false).ok()?;
+    (bytes(&omitted) <= bytes(&framed)).then_some(omitted)
+}
+
 /// What removes `bytes` of arguments (`address` bytes of return address on top) where `ret imm16` cannot: the return address is
 /// popped into the last slot of the area, the stack raised to it, and a plain `ret` follows. LLVM's `pop ecx; add esp, n; push
 /// ecx; ret` (X86ExpandPseudo, the RET pseudo) holds the address in ECX, which Open Watcom's register convention keeps for its
@@ -744,6 +766,9 @@ fn stack_addressed(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
                             _ => return refused(procedure, &format!("{what:?}")),
                         }
                     }
+                    // An x87 register exchange and the x87 and port instructions that name no stack effect leave the stack pointer alone.
+                    Operation::Exchange if what.dests.iter().chain(&what.sources).all(|place| matches!(place, Loc::St(_))) => {}
+                    Operation::Barrier if matches!(what.name.as_deref(), Some("fnstcw" | "fldcw" | "fnstsw" | "in" | "out")) => {}
                     Operation::Leave | Operation::Exchange | Operation::Escape | Operation::Barrier | Operation::Call => return refused(procedure, &format!("{what:?}")),
                     // `pushf` and its kind move the stack and carry no operand to read the amount from.
                     Operation::Nothing if what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")) => return refused(procedure, &format!("{what:?}")),
@@ -986,6 +1011,10 @@ pub fn _roots(body: &lir::LirBody) -> BTreeSet<Register> {
                 }
                 Loc::Mem(ir::Mem { through, index_through, .. }) => {
                     found.extend([*through, *index_through].map(ir::root));
+                }
+                // `lea` of a cell reads the register the cell is addressed through as much as a load of it does.
+                Loc::Address(ir::Address { through, index, .. }) => {
+                    found.extend([*through, *index].map(ir::root));
                 }
                 _ => {}
             }

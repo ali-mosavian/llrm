@@ -34,7 +34,7 @@ use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::memory::Effects;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module};
 use llrm_mir::opcode::{Attribute, Opcode};
-use llrm_mir::passes::{Declarations, ModuleAnalyses, PreservedAnalyses};
+use llrm_mir::passes::{Declarations, Declared, ModuleAnalyses, PreservedAnalyses};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 use llrm_mir::types::Type;
 
@@ -218,10 +218,13 @@ fn tried_sites<E: From<String>>(
         let kept = module.global(caller).function().expect("a procedure").clone();
         let before = inline::size(module, caller, costs);
         let bought = llrm_mir::memory::callee(&module.context, &kept, site).map_or(0, |callee| allowance(module, callee, 1, credit.0, credit.1));
+        let mut declared = Declared::of(module);
         let (context, function) = function_mut(module, caller);
         let by = inline::Caller { layout, recursive: recursive.contains(&caller), base: bases.get(&caller).copied().unwrap_or(0) };
         let one = llrm_support::hash::IndexMap::from_iter([(site, candidate.clone())]);
-        if !inline::expanded(context, function, &by, &Default::default(), Some(&one)).map_err(E::from)? {
+        let spliced = inline::expanded(context, function, &by, &Default::default(), Some(&one), &mut declared).map_err(E::from)?;
+        declared.place(module).map_err(E::from)?;
+        if !spliced {
             refused.insert((caller, site));
             continue;
         }
@@ -320,20 +323,23 @@ fn trial<E: From<String>>(
     let available: llrm_support::hash::IndexMap<GlobalId, inline::Candidate> = callees.iter().map(|(callee, candidate)| (*callee, (*candidate).clone())).collect();
     let mut done = false;
     for &id in &callers {
-        let (mut context, mut function) = function_mut(module, id);
         let by = inline::Caller { layout, recursive: recursive.contains(&id), base: bases.get(&id).copied().unwrap_or(0) };
         // One site a time, as the rounds do, the body through the pipeline after each.
         let mut spliced = false;
-        while inline::expanded(context, function, &by, &available, None).map_err(E::from)? {
+        loop {
+            let mut declared = Declared::of(module);
+            let (context, function) = function_mut(module, id);
+            let more = inline::expanded(context, function, &by, &available, None, &mut declared).map_err(E::from)?;
+            declared.place(module).map_err(E::from)?;
+            if !more {
+                break;
+            }
             spliced = true;
             if !held {
                 modules.changed(id);
                 modules.invalidate(&PreservedAnalyses::none());
                 reoptimised(module, modules, id, "inline-trial.")?;
             }
-            let (next_context, next) = function_mut(module, id);
-            context = next_context;
-            function = next;
         }
         if spliced && held {
             modules.changed(id);
@@ -433,9 +439,12 @@ pub fn optimized<E: From<String>>(
                 let caller = module.global(id).function().expect("a procedure");
                 let constants = facts::current_call_constants(&module.context, caller);
                 let (constant, constant_more) = constant_sites(module, &program.layout, &recursive, caller, &constants, costs, loose, reach, threshold);
+                let mut declared = Declared::of(module);
                 let (context, function) = function_mut(module, id);
                 let by = inline::Caller { layout: &program.layout, recursive: recursive.contains(&id), base: bases[at].get(&id).copied().unwrap_or(0) };
-                if inline::expanded(context, function, &by, &available, Some(&constant))? {
+                let spliced_now = inline::expanded(context, function, &by, &available, Some(&constant), &mut declared)?;
+                declared.place(module)?;
+                if spliced_now {
                     edited(&mut modules[at], &[id]);
                     let stage = format!("inline{inline_round}");
                     spliced(module, id, &stage)?;
@@ -569,9 +578,12 @@ pub fn optimized<E: From<String>>(
                 let caller = module.global(id).function().expect("a procedure");
                 let current = facts::current_call_constants(&module.context, caller);
                 let (constant, constant_more) = constant_sites(module, &program.layout, &recursive, caller, &current, costs, loose, reach, threshold);
+                let mut declared = Declared::of(module);
                 let (context, function) = function_mut(module, id);
                 let by = inline::Caller { layout: &program.layout, recursive: recursive.contains(&id), base: bases[at].get(&id).copied().unwrap_or(0) };
-                if inline::expanded(context, function, &by, &available, Some(&constant))? {
+                let spliced_now = inline::expanded(context, function, &by, &available, Some(&constant), &mut declared)?;
+                declared.place(module)?;
+                if spliced_now {
                     edited(&mut modules[at], &[id]);
                     reoptimised(module, &mut modules[at], id, &format!("ipa-inline{argument_round}."))?;
                     inlined = true;
@@ -612,6 +624,30 @@ pub fn optimized<E: From<String>>(
             reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-deadargs.")?;
         }
     }
+    // GCC's recursive inlining: a function that calls itself is given copies of itself (`inline::inlined_into_itself`), as -finline-functions
+    // does, so not at -O1's none or -Os (the recursive call is cold there). After the parameters nothing reads are gone and the tail calls
+    // are loops, as GCC's early passes have made them: a body with two calls would be a tree, not a chain.
+    if let Some(budget) = threshold.budget(reach).filter(|_| !threshold.single) {
+        for at in 0..count {
+            for &id in &procedures[at] {
+                let module = &mut program.modules[at];
+                let Some(original) = module.global(id).function().cloned() else { continue };
+                if !original.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, &original, inst) == Some(id)) {
+                    continue;
+                }
+                let mut work = original.clone();
+                let (metadata, globals) = (module.metadata.clone(), module.globals.iter().map(GlobalValue::declaration).collect::<Vec<_>>());
+                let made = inline::inlined_into_itself(id, &mut work, &original, budget, &|context, function| crate::profit::_frequencies(context, &metadata, &globals, function, None).unwrap_or_default(), &mut module.context);
+                if made == 0 {
+                    continue;
+                }
+                *function_mut(module, id).1 = work;
+                edited(&mut modules[at], &[id]);
+                reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-recursive.")?;
+            }
+        }
+    }
+
     // Propagation may have left a body doing less than it states.
     stamped_all(program, modules).map_err(E::from)?;
     for at in 0..count {
