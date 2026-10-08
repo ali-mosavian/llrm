@@ -3,7 +3,7 @@
     gate.py plan [--base REF] [--files F...] [--tier auto|fast|full]
     gate.py run  [same]            needs CARGO_TARGET_DIR; JOBS=N sets the concurrency (default 4)
     gate.py bisect GOOD BAD STEP...  first commit on main (first-parent) where the named steps fail
-    gate.py main [--force]       the scheduled full tier over origin/main: runs when 5 merges or an hour have passed since
+    gate.py main [--force]       the scheduled full tier over origin/main: runs when 5 merges or 2 hours have passed since
                                  the last green; red -> bisects since that green. Needs CARGO_TARGET_DIR, a tree of its own.
 """
 
@@ -183,11 +183,48 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, str]:
     return steps
 
 
-def run_step(name: str, command: str, logs: Path, env: dict) -> tuple[str, int, float]:
+def incomplete(text: str, binaries: int | None, filtered: bool) -> str | None:
+    """Why a cargo test log shows a run cut short, or None. A cut run prints fewer results, not failures."""
+    results = re.findall(r"^test result: \w+\. (\d+) passed", text, re.M)
+    running = len(re.findall(r"^running \d+ tests?", text, re.M))
+    if not results:
+        return "no test result"
+    if len(results) < running:
+        return f"{len(results)} results of {running} test binaries"
+    if binaries is not None and len(results) != binaries:
+        return f"{len(results)} results of {binaries} test binaries"
+    if filtered and not sum(map(int, results)):
+        return "its filter matched no test"
+    return None
+
+
+def expected(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, tuple[int | None, bool]]:
+    """(test binaries that must report, whether a filter must match a test) per cargo test step."""
+    whole = set(cfg["whole"].values()) | set(cfg["exclusive"].values())
+    selected = set(p.packages or pkgs)
+    out = {
+        "lib": (None, False),
+        "doc": (None, False),
+        "integration": (sum(1 for t in root_tests() if t != "timing" and t not in whole), False),
+        "run": (1, True),
+    }
+    ct = sum(1 for n, _ in crate_tests(pkgs) if n in selected)
+    if ct:
+        out["crate-tests"] = (ct, False)
+    for s in cfg["split"]:
+        out[s["step"]] = (1, True)
+    out.update({step: (1, False) for step in {**cfg["whole"], **cfg["exclusive"]}})
+    return out
+
+
+def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None) -> tuple[str, int, float]:
     start = time.time()
     prelude = ". tools/debug-gate.env 2>/dev/null; set -o pipefail; "
     with open(logs / f"{name}.log", "w") as log:
         code = subprocess.call(["bash", "-c", prelude + command], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+    if code == 0 and check and (why := incomplete((logs / f"{name}.log").read_text(), *check)):
+        (logs / f"{name}.log").open("a").write(f"\nINCOMPLETE: {why}\n")
+        code = 78
     return name, code, time.time() - start
 
 
@@ -199,13 +236,14 @@ def execute(p: Plan) -> tuple[int, list[str]]:
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")}
     logs = Path(target) / "gate-logs"
     logs.mkdir(exist_ok=True)
-    cmds = commands(p, load(), packages())
+    pkgs = packages()
+    cmds, checks = commands(p, load(), pkgs), expected(p, load(), pkgs)
     start = time.time()
     results: dict[str, tuple[int, float]] = {}
 
     def report(name: str, code: int, took: float) -> None:
         results[name] = (code, took)
-        verdict = "ok" if code == 0 else "SKIPPED" if code == 77 else "FAIL"
+        verdict = "ok" if code == 0 else "SKIPPED" if code == 77 else "INCOMPLETE" if code == 78 else "FAIL"
         print(f"[time] {name} {verdict} {took:.0f}s", flush=True)
         if code not in (0, 77):
             tail = (logs / f"{name}.log").read_text().splitlines()[-30:]
@@ -222,13 +260,14 @@ def execute(p: Plan) -> tuple[int, list[str]]:
     with ThreadPoolExecutor(jobs) as pool:
         # The longest steps start first.
         order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "pytest-programs", "turbo", "bench"))
-        for future in as_completed([pool.submit(run_step, s, cmds[s], logs, env) for s in order]):
+        for future in as_completed([pool.submit(run_step, s, cmds[s], logs, env, checks.get(s)) for s in order]):
             report(*future.result())
     for name in alone:
-        report(*run_step(name, cmds[name], logs, env))
+        report(*run_step(name, cmds[name], logs, env, checks.get(name)))
     failed = [n for n, (c, _) in results.items() if c not in (0, 77)]
     skipped = [n for n, (c, _) in results.items() if c == 77]
-    print(f"GATE {p.tier} {'FAIL: ' + ' '.join(failed) if failed else 'PASS'} in {time.time() - start:.0f}s" + (f" (skipped: {' '.join(skipped)})" if skipped else ""))
+    cut = [n for n in failed if results[n][0] == 78]
+    print(f"GATE {p.tier} {'FAIL: ' + ' '.join(failed) if failed else 'PASS'}{' (INCOMPLETE: ' + ' '.join(cut) + ')' if cut else ''} in {time.time() - start:.0f}s" + (f" (skipped: {' '.join(skipped)})" if skipped else ""))
     return (1 if failed else 0), failed
 
 
@@ -261,8 +300,8 @@ def git(*args: str) -> str:
     return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
 
 
-def watch_main(force: bool, every: int = 5, hours: float = 1.0) -> int:
-    """Full tier over origin/main once `every` merges or `hours` have passed since the last green; red bisects since that green."""
+def watch_main(force: bool, every: int = 5, hours: float = 2.0) -> int:
+    """Full tier over origin/main once `every` merges have landed, or `hours` have passed with any since the last green; red bisects since that green."""
     target = os.environ.get("CARGO_TARGET_DIR")
     if not target:
         sys.exit("gate: CARGO_TARGET_DIR is not set")

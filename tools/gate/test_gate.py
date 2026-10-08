@@ -123,3 +123,19 @@ def test_the_run_step_runs_only_the_languages_the_diff_can_affect():
     cfg, pkgs = gate.load(), gate.packages()
     p = gate.plan(["crates/frontends/llrm-nib/src/lib.rs"])
     assert "LLRM_RUN_ONLY='nib'" in gate.commands(p, cfg, pkgs)["run"]
+
+
+def test_a_test_run_cut_short_is_incomplete_not_a_pass():
+    whole = "running 2 tests\n..\ntest result: ok. 2 passed; 0 failed\n\nrunning 1 test\n.\ntest result: ok. 1 passed; 0 failed\n"
+    assert gate.incomplete(whole, 2, False) is None
+    cut = "running 2 tests\n..\ntest result: ok. 2 passed; 0 failed\n\nrunning 1 test\n"
+    assert "1 results of 2" in gate.incomplete(cut, None, False)
+    assert "2 results of 3" in gate.incomplete(whole, 3, False)
+    assert gate.incomplete("", None, False) == "no test result"
+
+
+def test_a_filter_that_matches_no_test_is_incomplete_not_a_pass():
+    """A renamed test would make `cargo test -- old_name` pass having run nothing."""
+    log = "running 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out\n"
+    assert gate.incomplete(log, 1, True) == "its filter matched no test"
+    assert gate.incomplete(log, 1, False) is None
