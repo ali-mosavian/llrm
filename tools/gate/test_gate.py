@@ -265,3 +265,20 @@ def test_without_the_opt_in_the_plan_and_the_commands_are_what_they_were(tmp_pat
     assert gate.commands(p, cfg, pkgs) == gate.commands(p, cfg, pkgs, frozenset())
     assert gate.skipped_steps(p.steps, gate.missing_capabilities(env), p.languages) == {}
     assert "--test differential " in gate.commands(p, cfg, pkgs)["integration"] + " "
+
+
+def test_a_python_test_file_that_needs_a_missing_probe_is_left_out_of_pytest_by_name():
+    """test_scaling.py failed 'Access to performance monitoring ... is limited' on a runner whose VM has no instruction counters."""
+    missing = {"perf": "perf: `perf stat` fails here"}
+    assert gate.python_tests_unusable(missing) == ["crates/target/llrm-x86-m32/vsgcc/test_scaling.py"]
+    p = gate.plan(["tools/linkrecipe.py"])
+    cmds = gate.commands(p, gate.load(), gate.packages(), frozenset(), tuple(gate.python_tests_unusable(missing)))
+    assert "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling.py" in cmds["pytest"]
+    assert "test_scaling" not in gate.commands(p, gate.load(), gate.packages())["pytest"]
+
+
+def test_a_probe_that_fails_makes_the_capability_missing_and_one_that_succeeds_does_not(tmp_path, monkeypatch):
+    cfg = {"capability": {"x": {"require": [], "needs": [{"run": "false"}]}, "y": {"require": [], "needs": [{"run": "true"}]}}}
+    monkeypatch.setattr(gate, "load", lambda: cfg)
+    got = gate.missing_capabilities({"HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1", "PATH": "/usr/bin:/bin"})
+    assert list(got) == ["x"] and "false" in got["x"]

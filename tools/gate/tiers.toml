@@ -118,8 +118,9 @@ needs = [
   { env = "QCPORT_BORLAND", default = "~/scratch/qcbcc", marker = "." },
 ]
 
-# What each item needs, one table. A key is a step (`turbo`), a `run` language (`lang:qb`) or a cheap test binary (`bin:differential`).
-# A step is skipped whole; a language or binary is left out of the step that runs it, and the step is skipped if none is left.
+# What each item needs, one table. A key is a step (`turbo`), a `run` language (`lang:qb`), a cheap test binary (`bin:differential`)
+# or a Python test file (`py:path`). A step is skipped whole; a language, binary or file is left out of the step that runs it,
+# and the step is skipped if no language is left.
 [requires]
 turbo = ["turbo"]
 cv4 = ["codeview"]
@@ -127,9 +128,15 @@ qcport = ["qcport"]
 bench = ["qb45"]
 "lang:qb" = ["qb45"]
 "bin:differential" = ["qb45"]
+"py:crates/target/llrm-x86-m32/vsgcc/test_scaling.py" = ["perf"]
 
 # Microsoft QuickBASIC 4.5's LINK and BC: the qb programs link with them, and the BC differential and the bench's BASIC rows run them.
 [capability.qb45]
 require = []
 needs = [{ env = "QB45_DIR", default = "~/work/42-labs/mini-qb/dosbox/qb45", marker = "LINK.EXE" }]
 
+
+# Hardware instruction counters (`perf stat`): a VM often has none.
+[capability.perf]
+require = []
+needs = [{ run = "perf stat -e instructions:u true" }]

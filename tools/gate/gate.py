@@ -157,7 +157,7 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
 
 
 # Commands. Each runs under bash in the repo root with CARGO_TARGET_DIR set.
-def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str] = frozenset()) -> dict[str, str]:
+def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str] = frozenset(), skip_py: tuple[str, ...] = ()) -> dict[str, str]:
     scope = "--workspace" if p.packages is None else " ".join(f"-p {n}" for n in p.packages)
     cargo = "cargo test --release -q --no-fail-fast"
     split = cfg["split"]
@@ -178,7 +178,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         "crate-tests": f"{cargo} {ct}" if ct else "true",
         "bench": bench,
         "torture": "timeout 600 uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work",
-        "pytest": "uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py",
+        "pytest": "uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py" + "".join(f" --ignore={f}" for f in skip_py),
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
         "qcport": "[ -f ~/scratch/qcport-env.sh ] || { echo SKIPPED: no ~/scratch/qcport-env.sh; exit 77; }; . ~/scratch/qcport-env.sh && uv run -q --project tools python tools/qcport-run.py",
         "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} --test run -- test_every_program_under_tests_run_prints_its_out",
@@ -236,6 +236,11 @@ def missing_capabilities(environ: dict | None = None) -> dict[str, str]:
         if any(environ.get(v) for v in cap["require"]):
             continue
         for need in cap["needs"]:
+            if "run" in need:  # a probe: the command must succeed
+                if subprocess.run(need["run"], shell=True, capture_output=True, env=dict(environ)).returncode:
+                    out[name] = f"{name}: `{need['run']}` fails here"
+                    break
+                continue
             where = Path((environ.get(need["env"]) or need["default"]).replace("~", environ.get("HOME", "~"), 1))
             if not (where / need["marker"]).exists():
                 out[name] = f"{name}: {where / need['marker']} not found (set {need['env']})"
@@ -250,6 +255,11 @@ def skipped_steps(steps: list[str], missing: dict[str, str], languages: list[str
     if "run" in steps and languages and not [l for l in languages if l not in unusable(missing)[0]]:
         out["run"] = "no run language can run here: " + "; ".join(missing.values())
     return out
+
+
+def python_tests_unusable(missing: dict[str, str]) -> list[str]:
+    """Python test files (`py:` keys of [requires]) that need a capability this host lacks."""
+    return sorted(k[3:] for k, needs in load().get("requires", {}).items() if k.startswith("py:") and any(c in missing for c in needs))
 
 
 def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
@@ -288,7 +298,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     missing = missing_capabilities()
     no_langs, skip_bins = unusable(missing)
     languages, p.languages = p.languages, [l for l in p.languages if l not in no_langs]
-    cmds, checks = commands(p, load(), pkgs, skip_bins), expected(p, load(), pkgs, skip_bins)
+    cmds, checks = commands(p, load(), pkgs, skip_bins, tuple(python_tests_unusable(missing))), expected(p, load(), pkgs, skip_bins)
     unset = tuple(v for c in missing for v in load()["capability"][c]["require"])
     skipped = skipped_steps(p.steps, missing, languages)
     if group:
@@ -311,7 +321,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
             report(name, 77, 0)
     p.steps = [s for s in p.steps if s not in skipped]
     for key, needs in load().get("requires", {}).items():
-        if key.startswith(("lang:", "bin:")) and (hit := [missing[c] for c in needs if c in missing]):
+        if key.startswith(("lang:", "bin:", "py:")) and (hit := [missing[c] for c in needs if c in missing]):
             print(f"[dropped] {key}: {'; '.join(hit)}", flush=True)
     for name, why in missing.items():
         print(f"[unavailable] {why}: its tests in other steps skip; run languages {no_langs}, test binaries {sorted(skip_bins)} left out", flush=True)
