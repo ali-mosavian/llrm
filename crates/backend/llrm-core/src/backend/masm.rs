@@ -955,6 +955,10 @@ pub fn _roots(body: &lir::LirBody) -> BTreeSet<Register> {
                 Loc::Mem(ir::Mem { through, index_through, .. }) => {
                     found.extend([*through, *index_through].map(ir::root));
                 }
+                // `lea` of a cell reads the register the cell is addressed through as much as a load of it does.
+                Loc::Address(ir::Address { through, index, .. }) => {
+                    found.extend([*through, *index].map(ir::root));
+                }
                 _ => {}
             }
         }
