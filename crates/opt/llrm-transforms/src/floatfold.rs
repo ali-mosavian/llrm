@@ -141,6 +141,17 @@ fn _simplified(context: &mut Context, function: &Function, inst: InstId) -> Opti
     }
 }
 
+/// Whether `1 / divisor` is exact in `kind`: a normal power of two whose reciprocal is normal too.
+fn exact_reciprocal(kind: FloatKind, divisor: f64) -> bool {
+    match kind {
+        FloatKind::Float => {
+            let divisor = divisor as f32;
+            divisor.is_normal() && divisor.to_bits() & 0x7f_ffff == 0 && (1.0 / divisor).is_normal()
+        }
+        FloatKind::Double | FloatKind::X86Fp80 => divisor.is_normal() && divisor.to_bits() & 0xf_ffff_ffff_ffff == 0 && (1.0 / divisor).is_normal(),
+    }
+}
+
 /// `inst` rewritten where a flag lets the language's freedom be used.
 fn _combined(context: &mut Context, function: &mut Function, inst: InstId) -> bool {
     let instruction = function.instruction(inst).clone();
@@ -153,9 +164,10 @@ fn _combined(context: &mut Context, function: &mut Function, inst: InstId) -> bo
             function.set_operand(inst, 1, instruction.operands[0]);
             true
         }
-        // A division by a constant is a multiply by its reciprocal.
-        Opcode::Binary(BinaryOp::FDiv) if facts.allow_reciprocal() => {
-            let Some((kind, divisor)) = float(context, instruction.operands[1]).filter(|(_, divisor)| divisor.is_finite() && *divisor != 0.0) else { return false };
+        // A division by a constant is a multiply by its reciprocal, as `arcp` lets, or whenever the reciprocal is exact (LLVM's
+        // InstCombine, GCC's `fold_binary` for `RDIV_EXPR`): the product rounds as the quotient did.
+        Opcode::Binary(BinaryOp::FDiv) => {
+            let Some((kind, divisor)) = float(context, instruction.operands[1]).filter(|(kind, divisor)| divisor.is_finite() && *divisor != 0.0 && (facts.allow_reciprocal() || exact_reciprocal(*kind, *divisor))) else { return false };
             let reciprocal = float_constant(context, ty, kind, 1.0 / divisor);
             let multiply = function.create_instruction(Opcode::Binary(BinaryOp::FMul), ty, vec![instruction.operands[0], reciprocal], instruction.flags, None);
             _replaced(function, inst, multiply)
