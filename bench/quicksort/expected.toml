@@ -1,4 +1,4 @@
-reason = "synth_mult: a constant multiply is the cheaper of the Horner chain and gcc's (factors 2^m +- 1, t - 1, t + 1): quicksort c -O2 163104 -> 162079 instructions, qlight -5 bytes"
+reason = "the queue takes the value fewest registers may hold first (LLVM's register class priority): m16 base/index values before wide ones; 38 instruction rows change, 23 better; QCport bytes -0.34% (-O2), -0.36% (-Os)"
 blessed = "2026-10-08"
 
 [bas.O2]
@@ -16,30 +16,30 @@ data_bytes = 17
 bss_bytes = 0
 
 [c.O2]
-instructions = 162079
-memory_operands = 58878
-code_bytes = 301
+instructions = 160718
+memory_operands = 57516
+code_bytes = 297
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 151839
-memory_operands = 58878
-code_bytes = 271
+instructions = 150478
+memory_operands = 57516
+code_bytes = 267
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 168387
-memory_operands = 60750
-code_bytes = 426
+instructions = 165663
+memory_operands = 59388
+code_bytes = 416
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 167059
-memory_operands = 73063
-code_bytes = 409
+instructions = 169659
+memory_operands = 69658
+code_bytes = 401
 data_bytes = 0
 bss_bytes = 0
 

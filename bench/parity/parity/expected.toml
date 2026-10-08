@@ -1,4 +1,4 @@
-reason = "regparm3 is the default (user decision 2026-10-08), measured on main after #887: AX/DX/CX cannot address, only SI/DI survive a call; the rows here move down"
+reason = "the queue takes the value fewest registers may hold first (LLVM's register class priority): m16 base/index values before wide ones; 38 instruction rows change, 23 better; QCport bytes -0.34% (-O2), -0.36% (-Os)"
 blessed = "2026-10-08"
 
 [bas.O2]
