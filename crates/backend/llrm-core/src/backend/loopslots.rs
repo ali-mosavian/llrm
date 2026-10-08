@@ -349,7 +349,8 @@ fn made(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) 
 }
 
 fn cell(m: u32, at: i64) -> Mem {
-    Mem { through: Register::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, at)), m) }
+    // A word the frame handed out as a slot of its own: `at` is its first byte.
+    Mem { through: Register::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, at).in_slot(at)), m) }
 }
 
 /// `one` with each slot access made its register.

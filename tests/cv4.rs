@@ -110,6 +110,7 @@ fn synthetic() -> (llrm_object::Object, String) {
     };
     let info = Info {
         language: Language::C,
+        dialect: llrm_object::debug::Dialect::Cv4,
         frame_register: "bp".into(),
         registers: vec![Register { name: "si".into(), bits: 16, dwarf: None, codeview: Some(15) }],
         code: vec![whole],
@@ -169,6 +170,61 @@ fn codeview_reads_an_enum_a_const_a_register_variable_and_a_block_scope() {
     // Stopped at `main`, then a line at a time to the first line of the block.
     let screen = locals(&session, &["bp main", "g", "p", "p", "p"]).join("\n");
     for expected in ["const short k", "color e = 5", "SI reg short r = 42"] {
+        assert!(screen.contains(expected), "no {expected:?} in CodeView's screen:\n{screen}");
+    }
+}
+
+/// What `llrm-nib --os-layer FIELD` says of the real-mode target's OS layer.
+fn os_layer(field: &str) -> String {
+    let out = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap().join("llrm-nib")).args(["-m16", "--os-layer", field]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// A Nib program is CodeView 4 as C is: `bp add` finds the function by name, and the locals window at its second line shows the
+/// parameters and a local with their values. Written in the BASIC compilers' dialect it could not be debugged (#892): CodeView took the
+/// module's addresses for the start-up's segment and found no `add`. Built as `tools/nib-build.sh` builds it but linked by MS LINK
+/// /CO, which links the whole runtime in one segment.
+#[test]
+fn codeview_debugs_a_nib_program_as_it_does_a_c_one() {
+    let (Some(microsoft), bin) = (directory("VBDOS_DIR", "work/other/d32x/toolchains/vbdos", "BIN/CV.EXE"), Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap().to_owned()) else {
+        skipped("needs VB/DOS's LINK, CVPACK and CV (VBDOS_DIR)");
+        return;
+    };
+    if !dosbox::binary().exists() || !bin.join("jwasm").exists() {
+        skipped("needs the DOSBox-X this crate builds and jwasm beside the compiler");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::copy(root.join("tests/fixtures/codeview/p.nib"), scratch.path().join("p.nib")).unwrap();
+    let run = |program: PathBuf, args: Vec<String>| {
+        let done = Command::new(&program).args(&args).current_dir(root).output().unwrap();
+        assert!(done.status.success(), "{} {args:?}: {}{}", program.display(), String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+    };
+    let nib = bin.join("llrm-nib");
+    run(nib.clone(), vec!["-m16".into(), "-g".into(), "-O0".into(), scratch.path().join("p.nib").display().to_string(), "-o".into(), scratch.path().join("p.obj").display().to_string()]);
+    run(nib, vec!["-m16".into(), "-O0".into(), root.join("crates/frontends/llrm-nib/src/runtime/runtime.nib").display().to_string(), "-o".into(), scratch.path().join("rt.obj").display().to_string()]);
+    // The OS layer's start-up, its language hook and its implementation, assembled as the OS layer says.
+    let layer = PathBuf::from(os_layer("directory"));
+    let defines: Vec<String> = os_layer("defines").split_whitespace().map(|one| format!("-D{one}")).collect();
+    for (output, source) in [("start.obj", layer.join(os_layer("start"))), ("impl.obj", layer.join(os_layer("implementation"))), ("hook.obj", PathBuf::from(os_layer("language_file")))] {
+        let mut args = vec!["-q".to_owned(), "-c".into(), "-Cp".into(), "-Zg".into(), "-omf".into()];
+        args.extend(defines.iter().cloned());
+        args.extend([format!("-Fo{}", scratch.path().join(output).display()), source.display().to_string()]);
+        run(bin.join("jwasm"), args);
+    }
+    dosbox::run(&[('v', &microsoft), ('w', scratch.path())], "v:\\bin", &["link /CO /NOI start.obj hook.obj p.obj rt.obj impl.obj,p.exe,p.map,; > link.txt".into()]);
+    assert!(scratch.path().join("P.EXE").exists(), "LINK made no P.EXE: {}", std::fs::read_to_string(scratch.path().join("LINK.TXT")).unwrap_or_default());
+    let session = Session::start(&[('v', &microsoft), ('w', scratch.path())], "v:\\bin");
+    session.dos("cv p.exe");
+    let started = Instant::now();
+    while !session.video_text().iter().any(|row| row.contains("source1")) {
+        assert!(started.elapsed() < Duration::from_secs(60), "CodeView did not come up");
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    let screen = locals(&session, &["bp add", "g", "p"]).join("\n");
+    for expected in ["short a = 2", "long b = 3", "long s = 2"] {
         assert!(screen.contains(expected), "no {expected:?} in CodeView's screen:\n{screen}");
     }
 }

@@ -66,7 +66,7 @@ impl From<std::io::Error> for CompileError {
 /// C through the rich MIR: translated to HIR, then compiled by the driver,
 /// which writes each stage to `dump` or where `LLRM_MIR_STAGES` names.
 pub fn selected(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options) -> Result<masm::Module, CompileError> {
-    selected_checking(text, module, dump, codegen, None)
+    selected_checking(text, module, dump, codegen, None, false)
 }
 
 /// What C's runtime says of its stack on `target`: the `stack.toml` its description names, the OS layer's
@@ -83,9 +83,10 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
 }
 
 /// [`selected`], each function checking its stack as `stack_check` says (`-fsanitize=stack`).
-pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options, stack_check: Option<llrm_core::hir::model::StackCheck>) -> Result<masm::Module, CompileError> {
+pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options, stack_check: Option<llrm_core::hir::model::StackCheck>, wrapv: bool) -> Result<masm::Module, CompileError> {
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
         let mut unit = hir::unit(&stream::parse(text))?;
+        unit.wrapv = wrapv;
         let profile = Profile::for_abi(&*codegen.arch, codegen.abi.as_deref()).map_err(hir::Unsupported)?;
         let calling = codegen.arch.calling();
         let cc_of = |name: &str| calling.named(name).and_then(|one| one.cc.clone()).ok_or_else(|| hir::Unsupported(format!("calling.toml has no {name} with a cc")));
@@ -329,7 +330,7 @@ pub fn main(argv: &[String]) -> i32 {
             .unwrap_or_default();
         let format = args.flags.format(&*args.codegen.arch)?;
         let spelled = llrm_core::driver::Options { object_format: format.name(), ..args.codegen.clone() };
-        let built = selected_checking(&text, module, args.dump.as_deref(), &spelled, args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)))?;
+        let built = selected_checking(&text, module, args.dump.as_deref(), &spelled, args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)), args.flags.wrapv)?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if !args.flags.assembly && matches!(output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref(), Some("obj" | "o")) {
             let bytes = objbuild::written_in(&built, name, objbuild::CodeLayout::OneSegment, format)?;
@@ -386,7 +387,7 @@ mod tests {
         assert!(runtime("c/x86-m16/ext.asm").contains(&format!("public {}", check.handler)));
         let text = std::fs::read_to_string(root.join("tests/fixtures/c/anims.cgs")).unwrap();
         let options = llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() });
-        let listing = |check| llrm_core::backend::masm::text(&super::selected_checking(&text, "anims", None, &options, check).unwrap()).unwrap();
+        let listing = |check| llrm_core::backend::masm::text(&super::selected_checking(&text, "anims", None, &options, check, false).unwrap()).unwrap();
         let named = llrm_core::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check };
         let checked = listing(Some(named));
         assert!(checked.contains("cmp sp, word ptr FOO") && checked.contains("call far ptr BAR") && !checked.contains("_llrm_os_stack_low"), "{checked}");
@@ -661,15 +662,46 @@ mod tests {
     }
 
     fn regparm3_at(function: &str, level: llrm_core::driver::flags::Level) -> Vec<String> {
+        procedure_of(&regparm3_listing(level), &format!("{function}@3"))
+    }
+
+    /// The lines of `symbol`'s procedure in `asm`.
+    fn procedure_of(asm: &str, symbol: &str) -> Vec<String> {
+        let from = asm.find(&format!("{symbol} proc")).expect("the function");
+        asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
+    }
+
+    /// tests/fixtures/c/regparm3.c compiled under `-mabi=regparm3`.
+    fn regparm3_listing(level: llrm_core::driver::flags::Level) -> String {
         let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("regparm3")).unwrap();
         let source = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/regparm3.c");
         let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records regparm3.c");
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let options = llrm_core::driver::Options { abi: Some("regparm3".to_owned()), pipeline: level.options(), ..llrm_driver::m16_options(machine) };
         let built = super::selected(&text, "regparm3", None, &options).unwrap();
-        let asm = llrm_core::backend::masm::text(&built).unwrap();
-        let from = asm.find(&format!("{function}@3 proc")).expect("the function");
-        asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).map(str::to_owned).collect()
+        llrm_core::backend::masm::text(&built).unwrap()
+    }
+
+    /// A definition has the convention of its prior declaration, as with any C compiler: `declared` follows a `__cdecl` prototype and
+    /// is `_declared`, cdecl's, under the regparm3 default, where `plain` after no prototype is `_plain@3`. The Borland routines a
+    /// program replaces are defined so (QCport's strlib.c).
+    #[test]
+    fn test_m16_regparm3_a_definition_takes_the_convention_of_its_declaration() {
+        let asm = regparm3_listing(llrm_core::driver::flags::Level::O2);
+        assert!(asm.contains("public _declared\n") && asm.contains("_declared proc"), "{asm}");
+        assert!(asm.contains("_plain@3 proc"), "{asm}");
+        let body = procedure_of(&asm, "_declared");
+        assert!(body.iter().any(|line| line.contains("[bp+6]")), "its arguments are on the stack: {body:?}");
+    }
+
+    /// A definition that contradicts its prototype's convention is an error, as Open Watcom says.
+    #[test]
+    fn test_a_definition_contradicting_its_prototype_is_refused() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("clash.c");
+        std::fs::write(&source, "int __cdecl f(int a, int b);\nint __pascal f(int a, int b) { return a - b; }\n").unwrap();
+        let error = super::recorded_for(&source, &[], false, &[], &super::Profile::for_abi(&llrm_x86_m16::M16, Some("regparm3")).unwrap()).unwrap_err();
+        assert!(error.0.contains("Modifiers disagree"), "{}", error.0);
     }
 
     /// The first three integer arguments arrive in AL, DX and ECX, each the width of its value (a long in one register); the fourth
@@ -716,6 +748,23 @@ mod tests {
     fn test_m16_regparm3_a_small_struct_argument_is_on_the_stack() {
         let body = regparm3("_take4");
         assert!(body.contains(&"mov ax, word ptr [bp+6]".to_owned()) && body.contains(&"mov ax, word ptr [bp+8]".to_owned()), "{body:?}");
+    }
+
+    /// A copy and an add, `mov r,ax; add r,k`, are one `lea r,[eax+k]` where it costs no more: the 486's LEA is one clock (its table
+    /// held the 386's two), so with the address-size prefix it is the two instructions' two clocks in a byte less. Two values off one
+    /// argument took two instructions each.
+    #[test]
+    fn test_m16_regparm3_a_copy_and_an_add_are_one_lea_where_it_costs_no_more() {
+        let body = regparm3("_leas");
+        let leas = body.iter().filter(|line| line.starts_with("lea ") && line.contains("[eax+")).count();
+        assert!(leas == 2 && !body.iter().any(|line| line.starts_with("mov ")), "{body:?}");
+    }
+
+    /// A copy and a unit add stay `mov r,ax; inc r`: the INC makes them three bytes, the LEA is four.
+    #[test]
+    fn test_m16_regparm3_a_copy_and_a_unit_add_stay_when_the_lea_is_longer_than_the_inc() {
+        let body = regparm3_at("_incs", llrm_core::driver::flags::Level::Os);
+        assert!(body.iter().any(|line| line.starts_with("inc ")) && !body.iter().any(|line| line.starts_with("lea ")), "{body:?}");
     }
 
     /// `calleepop` serves a regparm3 function as it does a cdecl16 one: `many`'s fourth and fifth arguments are the only ones on the
@@ -916,8 +965,10 @@ mod tests {
     fn test_arrays_of_several_strides_keep_their_indexes_in_registers() {
         for function in ["_bench_strides3", "_bench_strides4"] {
             let body = selected_loop("strides", function, "xor");
+            // An access's address registers; a `lea` reaches no memory, its operands are arithmetic.
             let registers: std::collections::BTreeSet<String> = body
                 .iter()
+                .filter(|one| !one.starts_with("lea "))
                 .filter_map(|one| Some(one.split_once('[')?.1.split_once(']')?.0.to_owned()))
                 .flat_map(|inside| inside.split(['+', '-', '*']).map(str::trim).map(str::to_owned).collect::<Vec<_>>())
                 .filter(|part| part.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && !matches!(part.as_str(), "bp" | "ebp"))
@@ -1456,7 +1507,7 @@ mod tests {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32/add.cgs")).unwrap();
         let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
         let args = super::parse_args(&argv).unwrap();
-        let built = super::selected_checking(&text, "add", None, &args.codegen, Some(super::stack_check(&llrm_x86_m32::M32))).unwrap();
+        let built = super::selected_checking(&text, "add", None, &args.codegen, Some(super::stack_check(&llrm_x86_m32::M32)), false).unwrap();
         let listing = llrm_core::backend::masm::text(&built).unwrap();
         assert!(listing.contains("cmp esp, dword ptr _llrm_os_stack_low") && listing.contains("call __STKOVERFLOW"), "{listing}");
         assert!(!listing.contains("far ptr") && listing.contains("extern __STKOVERFLOW:near"), "{listing}");

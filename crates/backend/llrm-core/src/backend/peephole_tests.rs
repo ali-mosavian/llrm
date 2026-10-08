@@ -1097,8 +1097,10 @@ fn test_affine_address_is_a_word_lea_where_the_sum_is_a_real_mode_address() {
     for (label, source, then, expected, through, index, offset) in [
         ("base and offset", Register::DI, ("sub", im(4, 2)), vec!["lea", "call"], Register::DI, Register::None, -4),
         ("base and index", Register::BX, ("add", rl(Register::SI, 2)), vec!["lea", "call"], Register::BX, Register::SI, 0),
-        ("not an address register", Register::CX, ("sub", im(4, 2)), vec!["mov", "sub", "call"], Register::None, Register::None, 0),
-        ("two indexes", Register::SI, ("add", rl(Register::DI, 2)), vec!["mov", "add", "call"], Register::None, Register::None, 0),
+        // CX names no word address: the dword form `lea ax,[ecx-4]`, which the 486 prices at its two clocks and a prefix, as the pair.
+        ("not an address register", Register::CX, ("sub", im(4, 2)), vec!["lea", "call"], Register::ECX, Register::None, -4),
+        // Two index registers are no word address either: the dword form, `lea ax,[esi+edi]`, in the pair's bytes and clocks.
+        ("two indexes", Register::SI, ("add", rl(Register::DI, 2)), vec!["lea", "call"], Register::ESI, Register::EDI, 0),
     ] {
         let ax = rl(Register::AX, 2);
         let insns = vec![
@@ -2513,8 +2515,9 @@ fn _constant_sum_body(amount: i64, symbolic_add: bool) -> LirBody {
 
 #[test]
 fn test_constant_sum_uses_67h_lea_without_code_growth() {
-    // Matmul initialized each local element with `mov bx,ax; add bx,1`.
-    for (amount, displacement) in [(1, 1), (0xFFFF, -1)] {
+    // Matmul initialized each local element with `mov bx,ax; add bx,1`; `increments` makes that `mov; inc`, three bytes, and the LEA is
+    // four: a unit sum stays. A sum of two is the LEA's four bytes against `mov; add` at five.
+    for (amount, displacement) in [(2, 2), (0xFFFE, -2)] {
         let result = addresses(&_constant_sum_body(amount, false), "386").unwrap().insns();
 
         assert_eq!(names(&result), ["lea", "mov", "cmp"]);
@@ -2532,6 +2535,15 @@ fn test_constant_sum_uses_67h_lea_without_code_growth() {
 }
 
 #[test]
+fn test_constant_sum_of_one_stays_the_move_and_the_inc() {
+    // The unit sum is `mov; inc` once `increments` has run, a byte under the LEA, in both directions.
+    for amount in [1, 0xFFFF] {
+        let result = addresses(&_constant_sum_body(amount, false), "386").unwrap().insns();
+        assert_eq!(names(&result), ["mov", "add", "mov", "cmp"], "{amount}");
+    }
+}
+
+#[test]
 fn test_constant_sum_keeps_a_shorter_move_add_encoding() {
     // A 32-bit LEA displacement must not grow a shorter word-immediate pair.
     let result = addresses(&_constant_sum_body(0x1234, false), "386").unwrap().insns();
@@ -2541,7 +2553,7 @@ fn test_constant_sum_keeps_a_shorter_move_add_encoding() {
 #[test]
 fn test_constant_sum_preserves_unrolled_source_anchor_on_lea() {
     // Matmul's unrolled ADD clone owned its conservative source anchor.
-    let result = addresses(&_constant_sum_body(1, true), "386").unwrap().insns();
+    let result = addresses(&_constant_sum_body(2, true), "386").unwrap().insns();
     assert_eq!(names(&result), ["lea", "mov", "cmp"]);
     assert_eq!(result[0].symbol, Some(true));
 }

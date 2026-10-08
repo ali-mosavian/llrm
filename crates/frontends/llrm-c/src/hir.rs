@@ -307,6 +307,8 @@ pub struct Unit {
     /// Compiled with -d2.
     pub debug: Option<Debug>,
     /// The routine the runtime's start calls, and the `cc` of the convention it calls it in (the C runtime description's).
+    /// `-fwrapv`: signed overflow wraps, and C promises nothing of it.
+    pub wrapv: bool,
     pub entry: String,
     pub entry_cc: String,
     /// What the front end records of a function it passes in its default registers.

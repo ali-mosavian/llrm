@@ -77,6 +77,8 @@ pub struct Frame {
     pub capacities: IndexMap<i64, i64>,
     /// Bytes just below BP, above the allocas, that spill slots fill first.
     pub hole: i64,
+    /// The slots the selector laid out (first byte, size); see `isel::Selected::extents`.
+    pub extents: Vec<(i64, i64)>,
 }
 
 impl Frame {
@@ -89,7 +91,77 @@ impl Frame {
             native_pins: IndexMap::default(),
             capacities: IndexMap::default(),
             hole: 0,
+            extents: Vec::new(),
         }
+    }
+
+    /// The first byte of the slot that holds `disp`, as the layout the cells were selected under put it: the lowest of the
+    /// selector's extents nearest it, the incoming arguments (from BP up) as one slot at 0; none when it laid out no slot.
+    fn home_of(&self, disp: i64) -> Option<i64> {
+        if disp >= 0 {
+            return Some(0);
+        }
+        // The slot nearest the displacement, the lowest on a tie: a pointer into a slot, one past its end (a strength-reduced
+        // loop's limit) or before its start (a pre-incremented one) belongs to the slot it was made from.
+        let gap = |(start, size): &(i64, i64)| if disp < *start { start - disp } else { (disp - (start + size - 1)).max(0) };
+        self.extents.iter().min_by_key(|extent| (gap(extent), extent.0)).map(|(start, _)| *start)
+    }
+
+    /// `body` with every frame cell tagged with its slot (`Addr::in_slot`) and the body marked `slotted`: the verifier then fails
+    /// any cell a later phase makes without one. A cell in no slot is refused.
+    pub fn tagged(&self, body: &LirBody) -> Result<LirBody, Refused> {
+        let tag = |addr: Addr| -> Result<Addr, Refused> {
+            if addr.slot_home().is_some() {
+                return Ok(addr);
+            }
+            self.home_of(addr.disp)
+                .map(|home| addr.in_slot(home))
+                .ok_or_else(|| Refused(format!("@{}: a frame cell at {} is in no slot the selector laid out ({:?})", body.name, addr.disp, self.extents)))
+        };
+        let tag_loc = |place: &Loc| -> Result<Loc, Refused> {
+            Ok(match place {
+                Loc::Mem(cell) if framed(cell.addr) => Loc::Mem(Mem { addr: cell.addr.map(&tag).transpose()?, ..cell.clone() }),
+                Loc::Address(cell) if framed(cell.addr) => Loc::Address(crate::model::ir::Address { addr: cell.addr.map(&tag).transpose()?, ..cell.clone() }),
+                other => other.clone(),
+            })
+        };
+        let mut blocks = Vec::with_capacity(body.blocks.len());
+        for block in &body.blocks {
+            let mut insns = Vec::with_capacity(block.insns.len());
+            for one in &block.insns {
+                let Some(what) = &one.what else {
+                    insns.push(std::sync::Arc::clone(one));
+                    continue;
+                };
+                let dests = what.dests.iter().map(&tag_loc).collect::<Result<Vec<_>, _>>()?;
+                let sources = what.sources.iter().map(&tag_loc).collect::<Result<Vec<_>, _>>()?;
+                if !what.dests.iter().chain(&what.sources).any(untagged) {
+                    insns.push(std::sync::Arc::clone(one));
+                } else {
+                    insns.push(std::sync::Arc::new(crate::model::lir::Insn { what: Some(crate::model::ir::Semantics { dests, sources, ..what.clone() }), ..(**one).clone() }));
+                }
+            }
+            blocks.push(crate::model::lir::LirBlock { insns, ..block.clone() });
+        }
+        let mut tagged = body.with_blocks(blocks);
+        let homes = body
+            .homes
+            .iter()
+            .map(|(value, cell)| Ok((*value, if framed(cell.addr) { Mem { addr: cell.addr.map(&tag).transpose()?, ..cell.clone() } } else { cell.clone() })))
+            .collect::<Result<std::collections::BTreeMap<_, _>, Refused>>()?;
+        tagged.homes = std::sync::Arc::new(homes);
+        tagged.variables = body
+            .variables
+            .iter()
+            .map(|variable| match &variable.place {
+                crate::model::lir::DebugPlace::At(addr) if addr.space == Space::Frame => {
+                    Ok(crate::model::lir::DebugVariable { place: crate::model::lir::DebugPlace::At(tag(*addr)?), ..variable.clone() })
+                }
+                _ => Ok(variable.clone()),
+            })
+            .collect::<Result<Vec<_>, Refused>>()?;
+        tagged.slotted = true;
+        Ok(tagged)
     }
 
     /// How many bytes the prologue has to reserve beyond BC's own.
@@ -153,8 +225,23 @@ impl Frame {
             through: Register::BP,
             offset: 0,
             disp_width: 2,
-            ..Mem::new(Some(Addr::new(Space::Frame, disp)), width as u32)
+            ..Mem::new(Some(Addr::new(Space::Frame, disp).in_slot(disp)), width as u32)
         })
+    }
+}
+
+/// Whether `addr` is a frame cell proper: the indexed form of an array (a literal displacement through BP) is not tagged, since
+/// a literal address's `index` may be a symbol's.
+fn framed(addr: Option<Addr>) -> bool {
+    addr.is_some_and(|addr| addr.space == Space::Frame)
+}
+
+/// Whether a frame operand names no slot: its `Addr` carries no tag.
+fn untagged(place: &Loc) -> bool {
+    match place {
+        Loc::Mem(cell) => framed(cell.addr) && cell.addr.is_some_and(|addr| addr.slot_home().is_none()),
+        Loc::Address(cell) => framed(cell.addr) && cell.addr.is_some_and(|addr| addr.slot_home().is_none()),
+        _ => false,
     }
 }
 
@@ -303,5 +390,27 @@ mod tests {
                 assert!(message.contains("known constant"));
             }
         }
+    }
+
+    /// matmul's end pointer is one past its array and quicksort's one before: an address made from a slot is tagged with that
+    /// slot, not refused (bench matmul -O2: "a frame cell at -32 is in no slot").
+    #[test]
+    fn test_a_pointer_one_past_a_slot_or_before_it_is_tagged_with_the_slot() {
+        let mut frame = super::Frame::new(0);
+        frame.extents = vec![(-160, 128), (-288, 128)];
+        assert_eq!(frame.home_of(-100), Some(-160));
+        assert_eq!(frame.home_of(-32), Some(-160), "one past the end");
+        assert_eq!(frame.home_of(-30), Some(-160), "past the end");
+        assert_eq!(frame.home_of(-292), Some(-288), "before the start");
+        assert_eq!(frame.home_of(-160), Some(-160), "the start of one slot is the end of another");
+        assert_eq!(frame.home_of(6), Some(0), "an incoming argument");
+    }
+
+    #[test]
+    fn test_a_spill_cell_names_the_slot_it_is_the_home_of() {
+        let mut frame = super::Frame::new(-10);
+        let cell = frame.cell(7_i64, 2).expect("a cell");
+        let addr = cell.addr.expect("an address");
+        assert_eq!(addr.slot_home(), Some(addr.disp));
     }
 }

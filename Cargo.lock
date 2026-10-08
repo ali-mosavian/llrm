@@ -472,6 +472,7 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "libc",
  "num-bigint",
  "num-traits",
  "rustc-hash",

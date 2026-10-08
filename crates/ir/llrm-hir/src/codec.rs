@@ -115,7 +115,8 @@ plain_enums!(
     TerminatorKind,
     DebugKind,
     DebugReach,
-    DebugLanguage
+    DebugLanguage,
+    DebugDialect
 );
 
 macro_rules! plain_record {
@@ -196,6 +197,9 @@ impl _Plain for model::Debug {
         let mut out: IndexMap<String, JSON> = IndexMap::default();
         if self.language.is_some() {
             out.insert("language".to_owned(), self.language._plain());
+        }
+        if self.dialect.is_some() {
+            out.insert("dialect".to_owned(), self.dialect._plain());
         }
         out.insert("types".to_owned(), self.types._plain());
         out.insert("functions".to_owned(), self.functions._plain());
@@ -824,7 +828,8 @@ made_enums!(
     TerminatorKind,
     DebugKind,
     DebugReach,
-    DebugLanguage
+    DebugLanguage,
+    DebugDialect
 );
 
 macro_rules! made_records {
@@ -1479,12 +1484,13 @@ static DEBUG: _Record = _Record {
     name: "Debug",
     fields: &[
         ("language", _Hint::Union(&[enum_hint!(DebugLanguage), _Hint::NoneType]), false),
+        ("dialect", _Hint::Union(&[enum_hint!(DebugDialect), _Hint::NoneType]), false),
         ("types", _Hint::Tuple(&_Hint::Record(&DEBUG_TYPE)), true),
         ("functions", _Hint::Tuple(&_Hint::Record(&DEBUG_FUNCTION)), true),
         ("globals", _Hint::Tuple(&_Hint::Record(&DEBUG_GLOBAL)), true),
     ],
     build: |args| {
-        _object(model::Debug { language: _default(args, "language", None)?, types: _required(args, "types")?, functions: _required(args, "functions")?, globals: _required(args, "globals")? })
+        _object(model::Debug { language: _default(args, "language", None)?, dialect: _default(args, "dialect", None)?, types: _required(args, "types")?, functions: _required(args, "functions")?, globals: _required(args, "globals")? })
     },
 };
 

@@ -64,7 +64,7 @@ pub(super) fn emitted<'h>(
     let mut variables = HashMap::new();
     let Some(debug) = &hir.debug else { return Ok(variables) };
     if let Some(language) = debug.language {
-        di::set_language(module, language);
+        di::set_language(module, language, debug.dialect.unwrap_or(di::Dialect::Bc));
     }
     let mut types = Types { of: debug.types.iter().map(|one| (one.id, one)).collect(), made: HashMap::new() };
     for global in &debug.globals {

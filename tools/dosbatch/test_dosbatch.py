@@ -1,5 +1,6 @@
 """`uv run --project tools python -m unittest discover -s tools/dosbatch`"""
 
+import os
 import sys
 import tempfile
 import time
@@ -56,6 +57,44 @@ class LinkTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NibCutTests(unittest.TestCase):
+    def test_the_runtime_is_cut_to_what_the_program_and_the_whole_os_layer_name(self):
+        """link_nib named the program and its foreign objects only, so a runtime routine the OS layer's hook calls (N$EDIV) was
+        cut and the link failed (jwlink E2028); nib-build.sh named start, implementation and hook. Both ask os_objects."""
+        with tempfile.TemporaryDirectory() as work:
+            layer = {"start": Path(work) / "start.obj", "implementation": Path(work) / "implementation.obj", "hook": Path(work) / "hook.obj"}
+            commands = []
+            with (
+                mock.patch.object(dosbatch, "os_objects", return_value=layer),
+                mock.patch.object(dosbatch, "_host", side_effect=commands.append),
+                mock.patch.object(dosbatch, "link_target", return_value=()),
+                mock.patch.object(dosbatch, "m_flag", return_value="-m16"),
+                mock.patch.object(dosbatch, "os_start", return_value=[]),
+                mock.patch.object(dosbatch, "os_defines", return_value=()),
+            ):
+                dosbatch.link_nib("x86-m16", Path("p.nib"), Path("p.obj"), Path("p.exe"), Path(work), "-O2", (Path("f.obj"),))
+            command = commands[0]
+            named = [command[i + 1] for i, word in enumerate(command) if word == "--used-by"]
+            self.assertEqual(named, ["p.obj", "f.obj", *map(str, layer.values())])
+
+    def test_a_program_that_divides_nothing_links_with_the_hooks_division_fault_handler(self):
+        """init.asm's divide-fault handler calls N$EDIV, which the cut left out when only the program was named:
+        jwlink E2028 on `fn main() -> i16: print("hook")`. LLRM_REQUIRE_JWLINK=1 (the gate's) makes a missing tool a failure,
+        not a skip."""
+        missing = [name for name in ("jwlink", "llrm-nib") if not (dosbatch.BIN / name).exists()]
+        if missing:
+            self.assertFalse(os.environ.get("LLRM_REQUIRE_JWLINK"), f"LLRM_REQUIRE_JWLINK is set and {missing} is missing")
+            print(f"SKIPPED: needs {missing}", file=sys.stderr)
+            self.skipTest(f"needs {missing}")
+        with tempfile.TemporaryDirectory() as work:
+            work = Path(work)
+            source = work / "h.nib"
+            source.write_text('fn main() -> i16:\n    print("hook")\n    return 0\n')
+            dosbatch._host([str(dosbatch.BIN / "llrm-nib"), str(source), "-m16", "-O2", "--procedure-segments", "-o", str(work / "P.OBJ")])
+            dosbatch.link_nib(dosbatch.REAL_MODE, source, work / "P.OBJ", work / "P.EXE", work, "-O2", ())
+            self.assertTrue((work / "P.EXE").stat().st_size > 0)
 
 
 class OutputCapTests(unittest.TestCase):

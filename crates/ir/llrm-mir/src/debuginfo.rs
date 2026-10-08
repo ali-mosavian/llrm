@@ -100,6 +100,16 @@ spelled!(
     }
 );
 
+spelled!(
+    /// The form of CodeView 4 a program's records are written in: its frontend says.
+    Dialect {
+        /// What BASIC's compilers write.
+        Bc = "bc",
+        /// The standard form.
+        Cv4 = "cv4",
+    }
+);
+
 pub const LANGUAGE: &str = "llrm.dbg.language";
 pub const TYPES: &str = "llrm.dbg.types";
 pub const FUNCTIONS: &str = "llrm.dbg.functions";
@@ -302,9 +312,14 @@ pub fn add_function(module: &mut Module, one: &Function) {
 }
 
 /// The module's source language.
-pub fn set_language(module: &mut Module, language: Language) {
-    let id = node(module, vec![text(language.value())]);
+pub fn set_language(module: &mut Module, language: Language, dialect: Dialect) {
+    let id = node(module, vec![text(language.value()), text(dialect.value())]);
     named(module, LANGUAGE, id);
+}
+
+/// The form of CodeView 4 the frontend says: the BASIC compilers' where it says none.
+pub fn dialect(module: &Module) -> Dialect {
+    listed(module, LANGUAGE).next().and_then(|id| Dialect::from_value(&Reader::of(module, id)?.text(1)?)).unwrap_or(Dialect::Bc)
 }
 
 pub fn language(module: &Module) -> Option<Language> {
