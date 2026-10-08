@@ -173,6 +173,9 @@ pub struct Function {
     pub(crate) value_uses: Vec<Vec<Use>>,
     pub(crate) block_uses: Vec<Vec<Use>>,
     pub(crate) changes: Vec<Change>,
+    /// How many changes `take_changes` has handed out: the log keeps them, so an analysis computed before can still be
+    /// brought up to date.
+    pub(crate) taken: usize,
     /// What `-g` says of its variables, kept true by the edits that move, replace or erase what it names.
     pub(crate) debug_records: Vec<DebugRecord>,
     /// The variables a record of which went with the code it stood in (a block erased): what is said of them is not all that was.
@@ -202,6 +205,7 @@ impl Function {
             value_uses: Vec::new(),
             block_uses: Vec::new(),
             changes: Vec::new(),
+            taken: 0,
             debug_records: Vec::new(),
             debug_dropped: Vec::new(),
             parameter_origins: Vec::new(),
@@ -344,9 +348,17 @@ impl Function {
         self.layout.iter().flat_map(move |&block| self.block(block).instructions.iter().map(move |&one| (block, one)))
     }
 
-    /// The log of changes since the last `take_changes`.
+    /// The log of changes since the last `take_changes`. They stay in the log, to `changes_since`, until it holds more
+    /// than `LOG` of them.
     pub fn take_changes(&mut self) -> Vec<Change> {
-        std::mem::take(&mut self.changes)
+        const LOG: usize = 1 << 16;
+        let kept_from = self.lineage.logged - self.changes.len();
+        let out = self.changes[self.taken.max(kept_from) - kept_from..].to_vec();
+        self.taken = self.lineage.logged;
+        if self.changes.len() > LOG {
+            self.changes.drain(..self.changes.len() - LOG / 2);
+        }
+        out
     }
 
     pub(crate) fn log(&mut self, change: Change) {
