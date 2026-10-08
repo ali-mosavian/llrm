@@ -40,7 +40,10 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::facts::{Facts, Inlining};
 use llrm_mir::memory::{Callees, Effects, callee};
 use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::edit::Position;
+use llrm_mir::module::MetadataId;
+use llrm_mir::opcode::{CallInfo, Flags, Opcode};
+use llrm_mir::passes::Declared;
 use llrm_mir::splice::{carries, splice};
 use llrm_mir::types::Type;
 use llrm_support::hash::IndexMap;
@@ -188,12 +191,67 @@ fn body(module: &Module, id: GlobalId) -> Option<&Function> {
     module.global(id).function().filter(|function| !function.is_declaration())
 }
 
+/// The `byval` aggregate of each parameter of `callee`, by position.
+fn byval_types(callee: &Function) -> Vec<(usize, llrm_mir::types::TypeId)> {
+    callee
+        .parameter_attrs
+        .iter()
+        .enumerate()
+        .filter_map(|(at, attrs)| attrs.iter().find_map(|one| match one {
+            llrm_mir::Attribute::Type(name, ty) if name == "byval" => Some((at, *ty)),
+            _ => None,
+        }))
+        .collect()
+}
+
+/// A `byval` parameter is the callee's own copy: the pointer the call passes is the caller's object, which the callee may write.
+/// LLVM's InlineFunction (HandleByValArgument) passes the pointer on when the callee only reads memory, and otherwise copies the
+/// object into a new alloca on the caller's entry and passes that: the same, here, with `memcpy` declared as the module needs it.
+fn copy_byval_arguments(context: &mut Context, function: &mut Function, layout: &DataLayout, call: InstId, callee: &Function, declared: &mut Declared) -> Result<(), String> {
+    if !llrm_mir::memory::stated(&callee.attrs).writes {
+        return Ok(());
+    }
+    for (at, aggregate) in byval_types(callee) {
+        let source = function.instruction(call).operands[at];
+        let space = match context.types.get(function.operand_type(context, source).ok_or("a typed byval argument")?) {
+            Type::Pointer(space) => *space,
+            _ => return Err("a byval argument that is no pointer".to_owned()),
+        };
+        let bytes = layout.alloc_size(&context.types, aggregate);
+        let width = layout.pointer(space).index_bits;
+        let (pointer, void, flag) = (context.types.ptr(0), context.types.void(), context.types.int(1));
+        let entry = function.entry().ok_or("a caller with a body")?;
+        let first = function.block(entry).instructions().iter().copied().find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }));
+        let alloca = function.create_instruction(Opcode::Alloca { allocated: aggregate, align: None, address_space: 0 }, pointer, Vec::new(), Flags::default(), Some("byval"));
+        function.insert(alloca, first.map_or(Position::End(entry), Position::Before))?;
+        let copy = Operand::Value(function.instruction(alloca).result.expect("a pointer"));
+        let count_type = context.types.int(width);
+        let length = Operand::Constant(context.int(count_type, i128::from(bytes)));
+        let (memcpy, memcpy_type) = crate::fill::_copy(context, declared, crate::fill::How::Apart, 0, space, width);
+        let callee_pointer = Operand::Constant(context.constant(llrm_mir::context::Constant { ty: pointer, kind: ConstantKind::Global(memcpy) }));
+        let info = CallInfo { function_type: memcpy_type, calling_convention: 0, return_attrs: Vec::new(), argument_attrs: vec![Vec::new(); 4], attrs: Vec::new(), tail: Default::default() };
+        let off = Operand::Constant(context.int(flag, 0));
+        let made = function.create_instruction(Opcode::Call(Box::new(info)), void, vec![copy, source, length, off, callee_pointer], Flags::default(), None);
+        function.insert(made, Position::Before(call))?;
+        let mut operands = function.instruction(call).operands.clone();
+        operands[at] = copy;
+        function.set_operands(call, operands);
+    }
+    Ok(())
+}
+
 /// Bytes of stack `function` allocates.
 fn frame(context: &Context, layout: &DataLayout, function: &Function) -> u64 {
     function
         .walk()
         .filter_map(|(_, inst)| if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode { Some(layout.alloc_size(&context.types, allocated)) } else { None })
         .sum()
+}
+
+/// The stack a copy of `body` adds to a caller: its allocas, and a copy of each `byval` object it may write.
+fn grown(context: &Context, layout: &DataLayout, body: &Function) -> u64 {
+    let copies: u64 = if llrm_mir::memory::stated(&body.attrs).writes { byval_types(body).iter().map(|&(_, ty)| layout.alloc_size(&context.types, ty)).sum() } else { 0 };
+    frame(context, layout, body) + copies
 }
 
 /// The functions that call themselves, directly or not.
@@ -302,7 +360,12 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         // A hint is worth a larger body, and a larger duplication, by LLVM's ratio.
         let scale = |n: i64| if stated(body) == Some(Inlining::Hint) { n * threshold.hint.0 / threshold.hint.1 } else { n };
         // What a call removes: it, and where code size is what counts, its arguments' pushes and cleanup.
-        let saved = call_cost + if threshold.single { module.signature(body.ty).1.len() as i64 * costs.argument } else { 0 };
+        // A `byval` argument's copy goes too, as LLVM counts it (InlineCost: the bytes copied): a push's price per word.
+        let copied: i64 = body.parameter_attrs.iter().flatten().filter_map(|one| match one {
+            llrm_mir::Attribute::Type(kind, ty) if kind == "byval" => Some(layout.alloc_size(&module.context.types, *ty) as i64 / 4),
+            _ => None,
+        }).sum();
+        let saved = call_cost + copied * costs.argument + if threshold.single { module.signature(body.ty).1.len() as i64 * costs.argument } else { 0 };
         let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
         // The last call of a function nothing else reaches moves its body: no copy, and the call,
         // its arguments and the return gone (LLVM's last-call-to-static bonus).
@@ -325,9 +388,9 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
             if verdict { "candidate" } else { "refused" }
         );
         if verdict {
-            out.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body), moved: false });
+            out.insert(name, Candidate { body: Rc::new(body.clone()), frame: grown(&module.context, layout, body), moved: false });
         } else if last {
-            lasts.insert(name, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body), moved: true });
+            lasts.insert(name, Candidate { body: Rc::new(body.clone()), frame: grown(&module.context, layout, body), moved: true });
         }
     }
     if out.is_empty() {
@@ -390,7 +453,7 @@ pub fn constant_sites(
             if verdict { "candidate" } else { "refused" }
         );
         if verdict {
-            out.insert(at, Candidate { body: Rc::new(body.clone()), frame: frame(&module.context, layout, body), moved: false });
+            out.insert(at, Candidate { body: Rc::new(body.clone()), frame: grown(&module.context, layout, body), moved: false });
         }
     }
     out
@@ -419,6 +482,7 @@ pub fn expanded(
     caller: &Caller,
     available: &IndexMap<GlobalId, Candidate>,
     constant: Option<&IndexMap<InstId, Candidate>>,
+    declared: &mut Declared,
 ) -> Result<bool, String> {
     let empty = IndexMap::default();
     let constant = constant.unwrap_or(&empty);
@@ -432,6 +496,7 @@ pub fn expanded(
             continue;
         };
         if fits(context, function, caller, call, candidate) {
+            copy_byval_arguments(context, function, caller.layout, call, &candidate.body, declared)?;
             splice(context, function, call, &candidate.body);
             return Ok(true);
         }
@@ -444,10 +509,7 @@ pub fn expanded(
 fn fits(context: &Context, function: &Function, caller: &Caller, call: InstId, candidate: &Candidate) -> bool {
     let callee = &*candidate.body;
     let Opcode::Call(info) = &function.instruction(call).opcode else { return false };
-    // A `byval` parameter is the callee's own copy: the pointer would be the caller's object, which the callee may write. LLVM's
-    // InlineFunction copies it into a fresh alloca first (HandleByValArgument); not here yet, so such a call stays a call.
-    callee.parameter_attrs.iter().all(|attrs| !attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Type(name, _) if name == "byval")))
-        && info.function_type == callee.ty
+    info.function_type == callee.ty
         && !matches!(context.types.get(callee.ty), Type::Function { variadic: true, .. })
         && (candidate.frame == 0 || (!caller.recursive && frame(context, caller.layout, function) + candidate.frame <= FRAME_LIMIT))
         && grows_within_limits(function, caller, callee, candidate.moved)
