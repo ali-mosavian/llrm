@@ -41,6 +41,7 @@ pub mod lanes;
 pub mod layout;
 pub mod lifetimes;
 pub mod liveness;
+pub mod liveunion;
 pub mod globals;
 pub mod isel;
 #[cfg(test)]
