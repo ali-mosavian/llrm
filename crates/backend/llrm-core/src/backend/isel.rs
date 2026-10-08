@@ -483,11 +483,11 @@ enum Pointer {
 
 /// `hole` bytes below BP are left free, above the allocas, for spill slots.
 pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, compiled: &'static Compiled, arch: &'c dyn llrm_target::Target, zeroed: bool, hole: i64) -> Result<Selected, Unselected> {
-    selected_with(module, name, abi, pool, cpu, segments, compiled, arch, zeroed, hole, &CalleeFacts::none())
+    selected_with(module, name, abi, pool, cpu, segments, compiled, arch, zeroed, hole, &CalleeFacts::none(), true)
 }
 
 /// `selected`, a function that takes part in `facts` saving nothing and its calls of one that does clobbering what it wrote.
-pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, compiled: &'static Compiled, arch: &'c dyn llrm_target::Target, zeroed: bool, hole: i64, callee_facts: &'c CalleeFacts) -> Result<Selected, Unselected> {
+pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, compiled: &'static Compiled, arch: &'c dyn llrm_target::Target, zeroed: bool, hole: i64, callee_facts: &'c CalleeFacts, ranges: bool) -> Result<Selected, Unselected> {
     let Some(global) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(global).function().filter(|one| !one.is_declaration()) else {
         return refuse(format!("@{name} has no body"));
@@ -578,12 +578,25 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
         unsealed: false,
         variadic: None,
         variables: Vec::new(),
+        homed: BTreeSet::new(),
+        homes: IndexMap::default(),
     };
+    if !ranges {
+        for (index, ..) in llrm_mir::debuginfo::functions(module).into_iter().find(|one| one.function == name).map(|one| one.parameters).unwrap_or_default() {
+            let index = usize::try_from(index).unwrap_or(usize::MAX);
+            if matches!(convention.parameters.get(index), Some(Parameter::Registers(registers)) if registers.len() == 1) {
+                selector.homed.insert(index);
+            }
+        }
+    }
     let body = selector.body(name, &convention)?;
     let mut body = lined(module, function, &selector.ats, body);
+    if !selector.homes.is_empty() {
+        body = entry_stores_unlined(body, &selector.homes);
+    }
     body.spares = Arc::new(spared(module, function, &selector.ats));
     body.homes = Arc::new(homed(module, function, &selector.ats, &selector.values, &body));
-    body.variables = parameters(module, name, &convention);
+    body.variables = parameters(module, name, &convention, &selector.homes);
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     // An inlined callee's variables are not this procedure's.
     body.variables.extend(selector.variables.into_iter().filter(|(scope, _)| scope == name).map(|(_, one)| one));
@@ -600,7 +613,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
 }
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes them in.
-pub(crate) fn parameters(module: &Module, name: &str, convention: &Convention) -> Vec<DebugVariable> {
+pub(crate) fn parameters(module: &Module, name: &str, convention: &Convention, homes: &IndexMap<usize, i64>) -> Vec<DebugVariable> {
     let Some(function) = llrm_mir::debuginfo::functions(module).into_iter().find(|one| one.function == name) else { return Vec::new() };
     function
         .parameters
@@ -608,6 +621,8 @@ pub(crate) fn parameters(module: &Module, name: &str, convention: &Convention) -
         .filter_map(|(index, name, r#type)| {
             let place = match usize::try_from(index).ok().and_then(|index| convention.parameters.get(index)) {
                 Some(Parameter::Cell(disp)) => DebugPlace::At(Addr::new(Space::Frame, *disp)),
+                // Stored at the entry, so the cell is where it is.
+                Some(Parameter::Registers(_)) if usize::try_from(index).is_ok_and(|index| homes.contains_key(&index)) => DebugPlace::At(Addr::new(Space::Frame, homes[&(index as usize)])),
                 // One register holds it; a value in two (a long in dx:ax) is no register's, and is left out.
                 Some(Parameter::Registers(registers)) if registers.len() == 1 => DebugPlace::Register(registers[0]),
                 Some(Parameter::Registers(_)) => return None,
@@ -687,6 +702,18 @@ fn lined(module: &Module, function: &Function, ats: &IndexMap<InstId, i64>, body
             _ => Arc::clone(one),
         }).collect()))
         .collect();
+    body.with_blocks(blocks)
+}
+
+/// `body` with the stores of arguments to their cells (`homes`) belonging to no source line: they are the prologue's, so the body
+/// a debugger stops at begins after them and the cell holds the value there.
+fn entry_stores_unlined(body: LirBody, homes: &IndexMap<usize, i64>) -> LirBody {
+    let cells: BTreeSet<i64> = homes.values().copied().collect();
+    let is_home_store = |one: &Insn| {
+        // The entry's delivery of the arguments in their registers, which comes first, is the prologue's too.
+        !one.delivers.is_empty() || one.volatile && one.what.as_ref().is_some_and(|what| matches!(what.dests.as_slice(), [Loc::Mem(cell)] if cell.addr.as_ref().is_some_and(|addr| addr.space == Space::Frame && cells.contains(&addr.disp))))
+    };
+    let blocks = body.blocks.iter().map(|block| block.with_insns(block.insns.iter().map(|one| if is_home_store(one) && one.line.is_some() { Arc::new(Insn { line: None, ..(**one).clone() }) } else { Arc::clone(one) }).collect())).collect();
     body.with_blocks(blocks)
 }
 
@@ -818,6 +845,11 @@ struct Selector<'m, 'c, 'p> {
     variadic: Option<i64>,
     /// `-g`'s frame variables, each with the function declaring it.
     variables: Vec<(String, DebugVariable)>,
+    /// The arguments `-g` names that the debug format cannot say are in their register until stored: each is stored to a
+    /// frame cell at the entry (when the format can say it, none is).
+    homed: BTreeSet<usize>,
+    /// The cell each of those was stored to, by argument.
+    homes: IndexMap<usize, i64>,
 }
 
 impl Selector<'_, '_, '_> {
@@ -904,9 +936,10 @@ impl Selector<'_, '_, '_> {
         let entry = function.entry().expect("a body");
         let mut prologue = Vec::new();
         let mut arrived: Vec<(Held, Register)> = Vec::new();
-        for (&parameter, place) in function.parameters().iter().zip(&convention.parameters) {
-            // Only a used argument is loaded, as a DAG has no node for an unused one.
-            if function.users(parameter).is_empty() && function.calling_convention != llrm_mir::opcode::X86_INTR {
+        for (index, (&parameter, place)) in function.parameters().iter().zip(&convention.parameters).enumerate() {
+            // Only a used argument is loaded, as a DAG has no node for an unused one; one `-g` names and a debug format
+            // cannot follow in its register is stored to its cell whether the code reads it or not.
+            if function.users(parameter).is_empty() && function.calling_convention != llrm_mir::opcode::X86_INTR && !self.homed.contains(&index) {
                 continue;
             }
             let ty = function.value(parameter).ty;
@@ -921,6 +954,16 @@ impl Selector<'_, '_, '_> {
                         let own = if registers.len() == 1 { Held { value: self.value(parameter), width } } else { self.fresh_held(width) };
                         arrived.push((own, crate::backend::target::named(register, i64::from(width))));
                         halves.push(own);
+                        if registers.len() == 1 && self.homed.contains(&index) {
+                            // Below the allocas, where the frame has room: a cell of its own for the value, written at the entry
+                            // and never read by the code (`volatile`: no pass takes it for a dead store).
+                            self.depth += i64::from(width);
+                            self.allocas = self.depth;
+                            let disp = -self.depth;
+                            self.homes.insert(index, disp);
+                            let what = semantics(Operation::Move, "mov", vec![Loc::Mem(frame(disp, width))], vec![Loc::Held(own)]);
+                            prologue.push(Arc::new(Insn { volatile: true, ..(*insn(block_at[&entry], what)).clone() }));
+                        }
                     }
                     if let [low, high] = halves[..] {
                         if self.is_wide(ty) {

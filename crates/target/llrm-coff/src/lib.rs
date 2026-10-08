@@ -2,6 +2,9 @@
 //! machine adds is its COFF machine number and its relocation types: see [`Machine`].
 //! `llrm-coff32` and `llrm-coff64` are the machines.
 
+/// C13 gives each local the ranges its place holds over.
+pub const LOCATION_RANGES: bool = true;
+
 pub mod codeview;
 
 use llrm_object::{Arch, Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};

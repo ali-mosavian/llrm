@@ -11,6 +11,8 @@ llrm-target = { workspace = true }
 llrm-x86 = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-omf = { workspace = true }
+llrm-dwarf = { workspace = true }
+llrm-coff = { workspace = true }
 llrm-object = { workspace = true }
 llrm-coff32 = { workspace = true }
 llrm-coff64 = { workspace = true }
