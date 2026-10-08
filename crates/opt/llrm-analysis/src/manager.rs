@@ -245,6 +245,50 @@ fn carried(slices: &BTreeSet<Slice>, from: &Module, to: &Module, unknown: &mut b
     out
 }
 
+/// Whether `changes` leave what the pointer analyses derive (`ExposedFrames`, `Pointers`, `CallEffects`, `Writes`) as it was:
+/// no instruction they touched, and none that reads a value a touched one makes (through any chain of users), is one that can
+/// make, move or name a pointer or an aggregate, or is a call. An integer loaded, computed, stored and compared is nothing to
+/// them; one that reaches an address or a call is. Where a result is not so, `LLRM_CHECK_REPLAY` says.
+pub fn pointers_unaffected(changes: &[Change], context: &Context, function: &Function, scalars_matter: bool) -> bool {
+    let wide = |ty| !matches!(context.types.get(ty), llrm_mir::types::Type::Int(_) | llrm_mir::types::Type::Float(_) | llrm_mir::types::Type::Void);
+    let relevant = |inst: InstId| {
+        let one = function.instruction(inst);
+        match &one.opcode {
+            Opcode::Load { .. } if !scalars_matter => wide(one.ty),
+            Opcode::Store { .. } if !scalars_matter => one.operands.first().and_then(|value| function.operand_type(context, *value)).is_none_or(wide),
+            Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Alloca { .. } | Opcode::GetElementPtr { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume => true,
+            Opcode::Cast(llrm_mir::opcode::CastOp::PtrToInt | llrm_mir::opcode::CastOp::IntToPtr | llrm_mir::opcode::CastOp::BitCast | llrm_mir::opcode::CastOp::AddrSpaceCast) => true,
+            Opcode::Phi | Opcode::Select | Opcode::Freeze | Opcode::ExtractValue(_) | Opcode::InsertValue(_) => wide(one.ty),
+            op => op.is_terminator(),
+        }
+    };
+    let mut work: Vec<InstId> = Vec::new();
+    for change in changes {
+        match *change {
+            Change::BlockCreated(_) | Change::BlockErased(_) => return false,
+            Change::Inserted { inst, .. } | Change::Erased { inst, .. } | Change::Moved { inst, .. } | Change::Rewritten(inst) | Change::Cloned { to: inst, .. } => work.push(inst),
+        }
+    }
+    let mut seen: BTreeSet<InstId> = work.iter().copied().collect();
+    while let Some(inst) = work.pop() {
+        if relevant(inst) {
+            return false;
+        }
+        if let Some(result) = function.instruction(inst).result {
+            for user in function.users(result) {
+                // A scalar a call, a branch, a return or a store takes is nothing to a pointer.
+                if matches!(function.instruction(user.user).opcode, Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Br | Opcode::Switch | Opcode::Ret | Opcode::Store { .. }) {
+                    continue;
+                }
+                if seen.insert(user.user) {
+                    work.push(user.user);
+                }
+            }
+        }
+    }
+    true
+}
+
 /// The allocas whose address is exposed: `frameescape::exposed_allocas`, once for the function where
 /// each access asked of its own alloca's uses (`memory::object_of`).
 pub struct ExposedFrames;
@@ -252,6 +296,10 @@ pub struct ExposedFrames;
 impl Analysis for ExposedFrames {
     type Result = BTreeSet<ValueId>;
     const NAME: &'static str = "exposed-frames";
+    const SKIPS: bool = true;
+    fn unaffected(changes: &[Change], context: &Context, function: &Function) -> bool {
+        pointers_unaffected(changes, context, function, true)
+    }
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         crate::memory::exposed_frames(&Unit::within(context, layout, function, analyses.outer()))
     }
@@ -263,6 +311,10 @@ pub struct Pointers;
 impl Analysis for Pointers {
     type Result = Result<PointsTo, String>;
     const NAME: &'static str = "points-to";
+    const SKIPS: bool = true;
+    fn unaffected(changes: &[Change], context: &Context, function: &Function) -> bool {
+        pointers_unaffected(changes, context, function, true)
+    }
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let shape = analyses.get::<Shape>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
@@ -305,6 +357,10 @@ pub struct CallEffects;
 impl Analysis for CallEffects {
     type Result = Result<IndexMap<InstId, Effect>, String>;
     const NAME: &'static str = "call-effects";
+    const SKIPS: bool = true;
+    fn unaffected(changes: &[Change], context: &Context, function: &Function) -> bool {
+        pointers_unaffected(changes, context, function, false)
+    }
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let shape = analyses.get::<Shape>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
@@ -424,6 +480,10 @@ pub struct Writes;
 impl Analysis for Writes {
     type Result = Result<Calls, String>;
     const NAME: &'static str = "writes";
+    const SKIPS: bool = true;
+    fn unaffected(changes: &[Change], context: &Context, function: &Function) -> bool {
+        pointers_unaffected(changes, context, function, false)
+    }
     fn run(context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Self::Result {
         let effects = analyses.get::<CallEffects>(context, layout, function);
         Ok(Result::as_ref(&*effects).map_err(String::clone)?.iter().map(|(&at, effect)| (at, effect.stores.clone())).collect())

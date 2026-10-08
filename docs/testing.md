@@ -44,8 +44,9 @@ programs at N and 2N (llrm-c -O1, -O2, -Os) and compares the ratio of instructio
 `tools/gate/scaling-budget.json`. Linear work reads 2.0; a pass gone quadratic pulls its axis towards 4. The same build
 twice differs by 0.0014 at worst; it fails past 1% either way, so a fix that lowers an axis refreshes the budget in the same
 commit: `python3 crates/target/*/vsgcc/scaling_gate.py --refresh`. The gcc-like target is about 2.1 on every axis; the budget
-is main today (branches, live, chain and callers at -Os read 2.8 to 4.6: #924 and #941). Wall time per pass is not usable
-here (a linear pass read 4-6x at 2N under load); a per-pass gate waits for per-pass instruction counts in `LLRM_DEBUG=time`.
+is main today (branches, live, chain and callers at -Os read 2.8 to 4.6: #924 and #941). Per step, `LLRM_DEBUG=time`'s `[instr]` rows (own user-space instructions, net of the empty file) give 2N/N for every step with 2% or more of
+the compile's work; one above 2.1 must have its ratio in `tools/gate/pass-budget.json` (±5%, the counts move 2.7% between runs), so a new
+superlinear step fails and a fixed one asks for a refresh. Wall time per step is not usable (a linear step read 4-6x at 2N under load).
 
 ## What belongs in the suite
 

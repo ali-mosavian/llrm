@@ -51,3 +51,48 @@ def test_every_axis_has_a_size_and_the_budget_names_each_axis_and_level():
 
     assert set(gate.SIZES) == set(scaling.AXES)
     assert set(json.loads(gate.BUDGET.read_text())) == {f"{a} {l}" for a in gate.SIZES for l in gate.LEVELS}
+
+
+STEPS = (
+    "import sys; n = len(open(sys.argv[1]).read().splitlines())\n"
+    "rows = {{'linear step': {linear}, 'quadratic step': {quadratic}, 'tiny step': 0.001 * n}}\n"
+    "for name, v in rows.items(): print(f'[instr] {{v:.3f}} {unit} own {{v:.3f}} {unit} total 1x {{name}}', file=sys.stderr)\n"
+)
+
+
+def steps_compiler(linear="0.01 * n", quadratic="0.0002 * n * n", unit="Minstr"):
+    """A 'compiler' printing the [instr] rows llrm-c does: one linear step, one quadratic, one too small to count."""
+    return lambda compiler, level, source: [sys.executable, "-I", "-c", STEPS.format(linear=linear, quadratic=quadratic, unit=unit), str(source)]
+
+
+def test_a_step_gone_quadratic_reads_four_and_is_over_the_linear_limit(tmp_path):
+    got = gate.pass_ratios("straight", "O2", tmp_path, steps_compiler(), "s")
+    assert got["straight O2 quadratic step"] == pytest.approx(4.0, abs=0.3)
+    assert got["straight O2 linear step"] == pytest.approx(2.0, abs=0.1)
+    assert "straight O2 tiny step" not in got  # under 2% of the work: its count moves with run order
+    _, bad = gate.compare_passes({}, got)
+    assert any("quadratic step" in line for line in bad) and not any("linear step" in line for line in bad), bad
+
+
+def test_a_known_superlinear_step_passes_at_its_ratio_and_fails_above_and_below():
+    budget = {"a O2 x": 3.0}
+    assert gate.compare_passes(budget, {"a O2 x": 3.05})[1] == []
+    assert any("more than doubles" in line for line in gate.compare_passes(budget, {"a O2 x": 3.5})[1])
+    assert any("refresh the budget" in line for line in gate.compare_passes(budget, {"a O2 x": 2.5})[1])
+    assert any("refresh the budget" in line for line in gate.compare_passes(budget, {})[1])  # fell under the floor or gone
+
+
+def test_cpu_time_instead_of_instruction_counts_is_no_counter(tmp_path):
+    """compile-time prints Mcpu-ns where the host has no counter: a time, not a count of work done."""
+    source = tmp_path / "a.c"
+    source.write_text("x\n")
+    with pytest.raises(gate.NoCounter):
+        gate.own_work(steps_compiler(unit="Mcpu-ns")("llrm", "O2", source))
+    assert gate.own_work(steps_compiler()("llrm", "O2", source))["linear step"] == pytest.approx(0.01)
+
+
+def test_the_pass_budget_holds_only_steps_above_linear():
+    import json
+
+    budget = json.loads(gate.PASS_BUDGET.read_text())
+    assert budget and all(v > gate.LINEAR for v in budget.values())
