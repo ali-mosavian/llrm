@@ -24,14 +24,29 @@ done
 work=$(mktemp -d "${TMPDIR:-/tmp}/nib-build.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
-"$bin/llrm-nib" "$source" -o "$work/program.obj" "$level" --procedure-segments ${NIB_FLAGS:-} >/dev/null
+# `-g` is written for one code segment, and the runtime is cut by the procedures of another: the same program without `-g`, in
+# a segment each, names what the runtime must keep. The program that is linked is the `-g` one.
+case " ${NIB_FLAGS:-} " in
+*" -g "*)
+    plain=""
+    for flag in $NIB_FLAGS; do [ "$flag" = -g ] || plain="$plain $flag"; done
+    # shellcheck disable=SC2086
+    "$bin/llrm-nib" "$source" -o "$work/plain.obj" "$level" --procedure-segments $plain >/dev/null
+    "$bin/llrm-nib" "$source" -o "$work/program.obj" "$level" ${NIB_FLAGS:-} >/dev/null
+    cut="$work/plain.obj"
+    ;;
+*)
+    "$bin/llrm-nib" "$source" -o "$work/program.obj" "$level" --procedure-segments ${NIB_FLAGS:-} >/dev/null
+    cut="$work/program.obj"
+    ;;
+esac
 "$bin/nibfront" --declare h $abi "$source" >"$work/$(basename "$source" .nib).h"
 defines=""
 recipe() { python3 "$root/tools/linkrecipe.py" x86-m16 "$1"; }
 omf=$(recipe assembler)
 for one in $("$bin/llrm-nib" --os-layer defines); do defines="$defines -D$one"; done
 objects=""
-used="--used-by $work/program.obj"
+used="--used-by $cut"
 for part in "$@"; do
     name=$(basename "$part")
     case $part in
