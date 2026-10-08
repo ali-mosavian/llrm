@@ -44,6 +44,7 @@ llrm-support = { workspace = true }
 
 [features]
 # testing, for the other crates' tests
+default = ["testing"]
 testing = ["llrm-omf/testing"]
 
 [dev-dependencies]
