@@ -60,11 +60,10 @@ the model; a frontend fills them as it learns to, and a writer that cannot say o
 
 A `Location::Frame` is relative to the frame register after the prologue, which the backend keeps for any function that has debug variables (`masm::stack_addressed` refuses one with variables), so the model carries one frame register, not one per function.
 
-With `-g`, a variable the program declares is read from its frame cell at any line, so each store to it
-is lowered volatile (`hir/mir.rs`, `declared_place`) and no pass drops, merges or moves one. At
--O>0 that costs code a gcc or clang `-g` build does not (they note each value's place with `dbg.value`
-and leave the code alone); without `-g` nothing changes. The lift is `dbg.value` plus the allocator's
-ranges as location lists, which makes the stores unnecessary. Tracking issue: #755.
+**`-g` never changes the code; what a format cannot say is left out** (gcc's way). A variable lives in MIR as a debug
+record (`#dbg_declare`, `#dbg_value`, `#dbg_gone`), a side table kept true by the edit points, not an instruction.
+Until the backend reads the allocator's ranges (#755 phases 2 and 3), a declared variable's stores are still lowered
+volatile (`hir/mir.rs`, `observe_declared_stores`), which costs code at -O>0.
 
 ## Moves
 

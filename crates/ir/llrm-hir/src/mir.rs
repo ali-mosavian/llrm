@@ -588,9 +588,6 @@ fn emit_module<'h>(hir: &'h model::Module, program: &model::Program, promises: &
         Ok(variables) => tables.variables = variables,
         Err(why) => refused.push((hir.name.clone(), why)),
     }
-    if let Err(why) = debug::declared(&mut module, &mut tables) {
-        refused.push((hir.name.clone(), why));
-    }
     let statements = hir.statements();
     let rows = statements.clone().unwrap_or_default();
     // A RESUME marker the body falls into raises; the handlers' markers do not.
@@ -1581,7 +1578,26 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         for block in emission_order(self.function).into_iter().filter(|one| !elsewhere.contains(&one.id)) {
             self.emit_block(block)?;
         }
+        self.observe_declared_stores();
         self.close_handling()
+    }
+
+    /// A debugger reads a declared variable from its cell at any time, so every store into one stays, in order, as a volatile
+    /// one does: not only those the language writes as stores to the variable, but any through an address into it. The
+    /// optimiser asks nothing else; `-g` of a variable the allocator keeps in a register will not need it.
+    fn observe_declared_stores(&mut self) {
+        let declared: HashSet<llrm_mir::Operand> = self.b.function.debug_records().iter().filter_map(|one| if let llrm_mir::DebugWhat::Declare(at) = one.what { Some(at) } else { None }).collect();
+        if declared.is_empty() {
+            return;
+        }
+        let layout = llrm_mir::datalayout::DataLayout::parse("").expect("the default layout");
+        let stores: Vec<llrm_mir::InstId> = self.b.function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(self.b.function.instruction(inst).opcode, llrm_mir::Opcode::Store { volatile: false, .. })).collect();
+        for inst in stores {
+            let pointer = self.b.function.instruction(inst).operands[1];
+            if declared.contains(&llrm_mir::valuetracking::underlying(self.b.context, &layout, self.b.function, pointer).0) {
+                self.b.function.make_store_volatile(inst);
+            }
+        }
     }
 
     fn emit_block(&mut self, block: &model::Block) -> Emit<()> {
@@ -1985,6 +2001,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 self.trapping(instruction.id, b)?;
             }
             let result = self.b.binary(binary, a, b, flags, "");
+            // An address of a declared variable moved by an offset is an address into it: a store through it is a store to it.
+            if matches!(op, Op::Add | Op::Sub) && instruction.operands.iter().any(|one| matches!(one, Operand::ValueRef(value) if self.declared_addresses.contains(&value.value))) {
+                self.declared_addresses.insert(instruction.results[0]);
+            }
             self.define(instruction, result);
             return Ok(());
         }

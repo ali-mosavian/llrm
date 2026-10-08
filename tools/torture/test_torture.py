@@ -23,6 +23,13 @@ class CauseTests(unittest.TestCase):
         self.assertIsNone(torture.refusal("_main: .X is neither defined nor imported", rules))
 
 
+    def test_the_front_ends_gnu_and_c99_limits_are_named_not_counted_as_findings(self):
+        """Five more wccq errors (15 builds) were listed as compile findings; each is syntax Open Watcom lacks."""
+        rules = torture.expected()
+        for cause in ("wccq: Cannot use typedef '_' as a variable", "wccq: Incomplete enum declaration", "wccq: Type cast must be a scalar type",
+                      "wccq: Assembler error: '_'", "wccq: Expression for '_' must be a '_' or '_'"):
+            self.assertIsNotNone(torture.refusal(cause, rules), cause)
+
 
 class OptionTests(unittest.TestCase):
     def test_a_program_that_needs_fwrapv_is_built_with_it(self):
@@ -31,6 +38,16 @@ class OptionTests(unittest.TestCase):
         self.assertEqual(torture.program_options('/* { dg-additional-options "-fwrapv" } */\nint x;'), ["-fwrapv"])
         self.assertEqual(torture.program_options('/* { dg-additional-options "-O3 -fwrapv -fno-tree-ccp" } */'), ["-fwrapv"])
         self.assertEqual(torture.program_options("int x;"), [])
+
+class SymbolTests(unittest.TestCase):
+    def test_an_undefined_symbol_is_refused_whichever_way_the_target_decorates_it(self):
+        """m16 (cdecl, a leading underscore) reported `___builtin_prefetch` and `_sprintf`: the refusals name `__builtin_` and
+        `sprintf`, so 114 builds of programs that need a builtin or libc routine the runner lacks counted as link findings."""
+        rules = torture.expected()
+        for symbol in ("__builtin_prefetch_", "___builtin_prefetch", "_sprintf", "sprintf_", "___builtin_ffs@3", "_sprintf@3"):
+            found = [torture.refusal(f"undefined symbol {one}", rules) for one in torture.spellings(symbol)]
+            self.assertTrue(any(found), symbol)
+        self.assertFalse(any(torture.refusal(f"undefined symbol {one}", rules) for one in torture.spellings("_frobnicate")))
 
 
 class WorkTests(unittest.TestCase):

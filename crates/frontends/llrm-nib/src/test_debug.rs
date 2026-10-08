@@ -63,9 +63,9 @@ fn nib_symbols_read_with_their_types() {
             "LOCAL main.values: 8 BYTES OF SHORT",
             "LOCAL scale.doubled: LONG",
             "LOCAL scale.factor: SHORT",
-            // `scale`'s parameters arrive in registers (regparm3), stored to a cell at the entry (#883): locals of the frame. A struct
-            // passed by value travels as a far pointer to it.
-            "LOCAL scale.p: FAR * struct point {x +0 SHORT, y +2 LONG}",
+            // `scale`'s parameters arrive in registers (regparm3), stored to a cell at the entry (#883): locals of the frame. `p` was
+            // the call's constant, which the optimiser (no longer held by `-g`) took out: `factor` is the function's first parameter
+            // now, and the cell is its own, not `p`'s.
             "PROC main far () -> SHORT",
             "PROC scale near (FAR * struct point {x +0 SHORT, y +2 LONG}, SHORT) -> LONG",
             "UDT point: struct point {x +0 SHORT, y +2 LONG}",
