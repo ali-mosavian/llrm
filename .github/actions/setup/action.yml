@@ -10,13 +10,16 @@ runs:
     - name: apt
       shell: bash
       run: |
+        # LLVM 20, as on the development hosts (tools/debug-gate.env), from apt.llvm.org: the tests look in /usr/lib/llvm-20/bin.
+        curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+        echo "deb https://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm20.list
         sudo apt-get update -qq
-        sudo apt-get install -y -qq build-essential autoconf automake libtool pkg-config nasm libpng-dev zlib1g-dev libncurses-dev gdb binutils llvm-18 zstd
-        # ubuntu-24.04 is a fixed image: gdb 15.1, binutils 2.42, LLVM 18 (the versions are printed below).
-        echo /usr/lib/llvm-18/bin >> "$GITHUB_PATH"  # llvm-dwarfdump, llvm-readobj ...
-        export PATH="$PATH:/usr/lib/llvm-18/bin"
+        sudo apt-get install -y -qq build-essential autoconf automake libtool pkg-config nasm libpng-dev zlib1g-dev libncurses-dev gdb binutils llvm-20 clang-20 lld-20 zstd
+        # ubuntu-24.04 is a fixed image: gdb 15.1, binutils 2.42 (printed below).
+        echo /usr/lib/llvm-20/bin >> "$GITHUB_PATH"
+        export PATH="/usr/lib/llvm-20/bin:$PATH"
         sudo sysctl -q -w kernel.perf_event_paranoid=-1 || true
-        gdb --version | head -1; ld --version | head -1; llvm-dwarfdump --version | sed -n 2p
+        gdb --version | head -1; ld --version | head -1; llvm-dwarfdump --version | sed -n 2p; clang-cl --version | head -1; lld-link --version
     # rust-toolchain.toml names the compiler, here as on every machine.
     - shell: bash
       run: rustup toolchain install

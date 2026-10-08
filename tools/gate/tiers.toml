@@ -139,4 +139,5 @@ needs = [{ env = "QB45_DIR", default = "~/work/42-labs/mini-qb/dosbox/qb45", mar
 # Hardware instruction counters (`perf stat`): a VM often has none.
 [capability.perf]
 require = []
-needs = [{ run = "perf stat -e instructions:u true" }]
+# perf exits 0 and prints "<not supported>" where there is no counter: the probe reads the count.
+needs = [{ run = "perf stat -x, -e instructions:u true 2>&1 | grep -Eq '^[0-9]+,'" }]

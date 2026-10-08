@@ -282,3 +282,14 @@ def test_a_probe_that_fails_makes_the_capability_missing_and_one_that_succeeds_d
     monkeypatch.setattr(gate, "load", lambda: cfg)
     got = gate.missing_capabilities({"HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1", "PATH": "/usr/bin:/bin"})
     assert list(got) == ["x"] and "false" in got["x"]
+
+
+def test_the_perf_probe_reads_a_count_not_the_exit_status(tmp_path):
+    """`perf stat` exits 0 and prints '<not supported>' on a VM: the probe said the counters were there and test_scaling.py died on float('<not supported>')."""
+    fake = tmp_path / "perf"
+    fake.write_text("#!/bin/sh\necho '<not supported>,,instructions:u,0,100.00,,'\n")
+    fake.chmod(0o755)
+    env = {"HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1", "PATH": f"{tmp_path}:/usr/bin:/bin", "QB45_DIR": ""}
+    assert "perf" in gate.missing_capabilities(env)
+    fake.write_text("#!/bin/sh\necho '123456,,instructions:u,100,100.00,,'\n")
+    assert "perf" not in gate.missing_capabilities(env)
