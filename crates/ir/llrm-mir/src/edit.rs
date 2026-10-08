@@ -329,6 +329,8 @@ impl Function {
                 value
             })
             .collect();
+        self.track_parameters();
+        self.parameter_origins.splice(at..at, made.iter().map(|_| None));
         self.parameters.splice(at..at, made.iter().copied());
         if self.parameter_attrs.len() > at {
             self.parameter_attrs.splice(at..at, made.iter().map(|_| Vec::new()));
@@ -340,11 +342,20 @@ impl Function {
     /// Parameter `at`, which nothing uses, is gone; the function's type follows.
     pub fn remove_parameter(&mut self, context: &mut crate::context::Context, at: usize) {
         assert!(self.users(self.parameters[at]).is_empty(), "a parameter removed is unused");
+        self.track_parameters();
+        self.parameter_origins.remove(at);
         self.parameters.remove(at);
         if self.parameter_attrs.len() > at {
             self.parameter_attrs.remove(at);
         }
         self.parameters_changed(context);
+    }
+
+    /// From the first change of the parameters on, each one's origin is kept.
+    fn track_parameters(&mut self) {
+        if self.parameter_origins.is_empty() {
+            self.parameter_origins = (0..self.parameters.len()).map(Some).collect();
+        }
     }
 
     fn parameters_changed(&mut self, context: &mut crate::context::Context) {

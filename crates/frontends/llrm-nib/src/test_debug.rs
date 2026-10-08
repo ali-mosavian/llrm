@@ -65,7 +65,8 @@ fn nib_symbols_read_with_their_types() {
             // `scale`'s parameters arrive in registers (regparm3), which this dialect cannot follow: each is stored to a cell at the entry
             // (#883), a local of the frame, not an argument above it.
             "LOCAL scale.factor: INTEGER",
-            "LOCAL scale.p: BYREF TYPE point",
+            // `p` was the call's constant, which the optimiser (no longer held by `-g`) took out: `factor`, which stayed, is the
+            // function's first parameter now, and it is `factor` the cell belongs to, not `p`.
             "PROC main flags 4 () -> INTEGER",
             "PROC scale flags 0 (BYREF TYPE point, INTEGER) -> LONG",
         ]

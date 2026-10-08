@@ -137,6 +137,22 @@ fn a_mark_names_the_changes_since_while_they_are_on_record_of_that_function() {
     let _ = &mut copy;
 }
 
+/// A parameter the passes removed leaves the others named by the position they had: `-g` named `scale(p, factor)`'s `factor` the
+/// second, and the function that kept only it made the first parameter `p`'s, a cell and a name that were not its own.
+#[test]
+fn a_parameter_keeps_the_position_it_was_named_by() {
+    let mut parsed = module("define i16 @f(i16 %a, i16 %b, i16 %c) {\nentry:\n  %x = add i16 %b, 1\n  ret i16 %x\n}\n");
+    let (context, f) = parsed.function_mut("f").expect("@f");
+    assert_eq!((f.parameter_origin(0), f.parameter_origin(1)), (Some(0), Some(1)));
+    f.remove_parameter(context, 2);
+    f.remove_parameter(context, 0);
+    assert_eq!(f.parameter_origin(0), Some(1));
+    assert_eq!(f.parameter_origin(1), None);
+    let i16 = context.types.int(16);
+    f.insert_parameters(context, 0, &[i16]);
+    assert_eq!((f.parameter_origin(0), f.parameter_origin(1)), (None, Some(1)));
+}
+
 const RECORDED: &str = "define i16 @f(i16 %a) {\nentry:\n  %p = alloca i16\n  #dbg_declare(ptr %p, !0)\n  %x = add i16 %a, 1\n  #dbg_value(i16 %x, !0)\n  %y = mul i16 %x, 2\n  #dbg_gone(!0)\n  ret i16 %y\n}\n\n!0 = !{!\"v\"}\n";
 
 fn records(function: &Function) -> Vec<(u32, crate::DebugWhat)> {

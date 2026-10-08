@@ -171,6 +171,8 @@ pub struct Function {
     pub(crate) changes: Vec<Change>,
     /// What `-g` says of its variables, kept true by the edits that move, replace or erase what it names.
     pub(crate) debug_records: Vec<DebugRecord>,
+    /// The position each parameter had when the function was made, once one was removed or added; empty while none moved.
+    pub(crate) parameter_origins: Vec<Option<usize>>,
     pub(crate) lineage: Lineage,
 }
 
@@ -195,6 +197,7 @@ impl Function {
             block_uses: Vec::new(),
             changes: Vec::new(),
             debug_records: Vec::new(),
+            parameter_origins: Vec::new(),
             lineage: Lineage::default(),
         }
     }
@@ -229,6 +232,12 @@ impl Function {
 
     pub fn parameters(&self) -> &[ValueId] {
         &self.parameters
+    }
+
+    /// The position parameter `at` had when the function was made, none for one the passes added: what `-g` names a
+    /// parameter by.
+    pub fn parameter_origin(&self, at: usize) -> Option<usize> {
+        if self.parameter_origins.is_empty() { Some(at) } else { self.parameter_origins.get(at).copied().flatten() }
     }
 
     pub fn value(&self, id: ValueId) -> &ValueData {

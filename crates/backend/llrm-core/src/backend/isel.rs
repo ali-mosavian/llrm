@@ -584,8 +584,9 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
     if !ranges {
         for (index, ..) in llrm_mir::debuginfo::functions(module).into_iter().find(|one| one.function == name).map(|one| one.parameters).unwrap_or_default() {
             let index = usize::try_from(index).unwrap_or(usize::MAX);
-            if matches!(convention.parameters.get(index), Some(Parameter::Registers(registers)) if registers.len() == 1) {
-                selector.homed.insert(index);
+            let Some(at) = (0..convention.parameters.len()).find(|&at| function.parameter_origin(at) == Some(index)) else { continue };
+            if matches!(convention.parameters.get(at), Some(Parameter::Registers(registers)) if registers.len() == 1) {
+                selector.homed.insert(at);
             }
         }
     }
@@ -596,7 +597,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
     }
     body.spares = Arc::new(spared(module, function, &selector.ats));
     body.homes = Arc::new(homed(module, function, &selector.ats, &selector.values, &body));
-    body.variables = parameters(module, name, &convention, &selector.homes);
+    body.variables = parameters(module, function, name, &convention, &selector.homes);
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     // An inlined callee's variables are not this procedure's.
     body.variables.extend(selector.variables.into_iter().filter(|(scope, _)| scope == name).map(|(_, one)| one));
@@ -613,16 +614,18 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
 }
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes them in.
-pub(crate) fn parameters(module: &Module, name: &str, convention: &Convention, homes: &IndexMap<usize, i64>) -> Vec<DebugVariable> {
-    let Some(function) = llrm_mir::debuginfo::functions(module).into_iter().find(|one| one.function == name) else { return Vec::new() };
-    function
+pub(crate) fn parameters(module: &Module, function: &Function, name: &str, convention: &Convention, homes: &IndexMap<usize, i64>) -> Vec<DebugVariable> {
+    let Some(named) = llrm_mir::debuginfo::functions(module).into_iter().find(|one| one.function == name) else { return Vec::new() };
+    named
         .parameters
         .into_iter()
         .filter_map(|(index, name, r#type)| {
-            let place = match usize::try_from(index).ok().and_then(|index| convention.parameters.get(index)) {
+            // The parameter the source named `index`th is wherever the passes left it.
+            let at = usize::try_from(index).ok().and_then(|index| (0..convention.parameters.len()).find(|&at| function.parameter_origin(at) == Some(index)));
+            let place = match at.and_then(|at| convention.parameters.get(at)) {
                 Some(Parameter::Cell(disp)) => DebugPlace::At(Addr::new(Space::Frame, *disp)),
                 // Stored at the entry, so the cell is where it is.
-                Some(Parameter::Registers(_)) if usize::try_from(index).is_ok_and(|index| homes.contains_key(&index)) => DebugPlace::At(Addr::new(Space::Frame, homes[&(index as usize)])),
+                Some(Parameter::Registers(_)) if at.is_some_and(|at| homes.contains_key(&at)) => DebugPlace::At(Addr::new(Space::Frame, homes[&at.unwrap_or_default()])),
                 // One register holds it; a value in two (a long in dx:ax) is no register's, and is left out.
                 Some(Parameter::Registers(registers)) if registers.len() == 1 => DebugPlace::Register(registers[0]),
                 Some(Parameter::Registers(_)) => return None,
