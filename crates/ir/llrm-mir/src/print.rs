@@ -7,7 +7,7 @@ use std::fmt::Write;
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, signed};
 use crate::lexer::is_name;
 use crate::module::{
-    BlockId, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataOperand, Module, Operand, UnnamedAddr, ValueId,
+    BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataOperand, Module, Operand, UnnamedAddr, ValueId,
 };
 use crate::opcode::{Attribute, CAST, Clause, FLOAT_PREDICATE, INT_PREDICATE, Opcode, Tail, spelling};
 use crate::types::{FloatKind, Type, TypeId, struct_text};
@@ -309,6 +309,13 @@ impl Printer<'_> {
                 let _ = writeln!(out, "{}:", slots.blocks[&block]);
             }
             for &inst in &function.block(block).instructions {
+                for record in function.debug_records().iter().filter(|one| one.before == inst) {
+                    let _ = match record.what {
+                        DebugWhat::Declare(at) => writeln!(out, "  #dbg_declare({}, !{})", self.typed(function, slots, at), record.variable.0),
+                        DebugWhat::Value(at) => writeln!(out, "  #dbg_value({}, !{})", self.typed(function, slots, at), record.variable.0),
+                        DebugWhat::Gone => writeln!(out, "  #dbg_gone(!{})", record.variable.0),
+                    };
+                }
                 out.push_str("  ");
                 out.push_str(&self.instruction(function, slots, inst));
                 out.push('\n');
