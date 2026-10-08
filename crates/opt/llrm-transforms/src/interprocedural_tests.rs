@@ -545,7 +545,7 @@ b:
   ret i16 %y
 }
 
-define i16 @f(i16 %x) {
+define i16 @h(i16 %x) {
 b:
   %y = call i16 @returns(i16 %x)
   ret i16 %y
