@@ -26,10 +26,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-VSGCC = ROOT / "crates/target/llrm-x86-m32/vsgcc"
+VSGCC = next((ROOT / "crates/target").glob("*/vsgcc"))  # the target the comparison is for owns its programs and flags
 BASELINE = HERE / "gate" / "compile-baseline.json"
 LEVELS = ("-O1", "-O2", "-Os")
-NOT_PROGRAMS = {"readme.md", "parity", "huge", "textfill", "grep"}  # 16-bit only, no input, or timed only (vsgcc/run.sh)
 SCRATCH = os.environ.get("CARGO_TARGET_DIR")  # never /tmp
 MODULES = ("host", "render", "model", "game", "sound", "ui")
 GEOMEAN_LIMIT = 1.003  # same build twice (--noise, 393 files, 2026-10-08): geomean within 0.0001, worst file 0.0047
@@ -38,6 +37,7 @@ WORST_LIMIT = 1.02
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(VSGCC))
 import llrmbin  # noqa: E402
+import programs  # noqa: E402
 import wrap  # noqa: E402
 
 
@@ -61,12 +61,11 @@ def instructions(command: list[str]) -> int:
 def files(work: Path) -> dict[str, tuple[Path, list[str]]]:
     """Name -> (source, extra flags): the 66 programs, wrapped as vsgcc/build.sh does, and QCport when it is available."""
     found: dict[str, tuple[Path, list[str]]] = {}
-    sources = {p.name: p / f"{p.name}.c" for p in sorted((ROOT / "bench").iterdir()) if p.is_dir() and p.name not in NOT_PROGRAMS}
-    sources |= {p.name: p / f"{p.name}.c" for p in sorted((VSGCC / "kernels").iterdir())}
+    sources = programs.sources()
     for name, source in sources.items():
         wrapped = work / f"{name}.c"
         wrapped.write_text(wrap.wrapped(name, source.read_text()))
-        found[name] = (wrapped, ["-m32", "-mabi=sysv", "-march=i486"])
+        found[name] = (wrapped, programs.LLRM_FLAGS)
     if (qcport := os.environ.get("QCPORT")) and (headers := os.environ.get("QCPORT_INC")):
         base = Path(qcport).expanduser()
         include = [flag for d in (*MODULES, "qgl") for flag in ("-I", str(base / d))] + ["-I", str(Path(headers).expanduser())]
