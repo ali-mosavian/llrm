@@ -266,9 +266,10 @@ fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> S
 }
 
 /// Every return of `body` as `retf bytes`, for a callee that removes its
-/// arguments.
-pub fn cleaned_returns(body: &lir::LirBody, bytes: i64) -> Result<lir::LirBody, String> {
-    if !(0..=0xFFFF).contains(&bytes) {
+/// arguments. `ret imm16` cannot remove 64 KB or more: a near return of a 32-bit target keeps the count, and the epilogue
+/// writes `pop [esp + n]; add esp, n; ret` (`moved_return`); `address` is the bytes of a return address.
+pub fn cleaned_returns(body: &lir::LirBody, bytes: i64, address: i64) -> Result<lir::LirBody, String> {
+    if !(0..=llrm_x86::calling::RET_POPS_MOST).contains(&bytes) && !(bytes > llrm_x86::calling::RET_POPS_MOST && address == 4) {
         return Err("far-return cleanup exceeds 16 bits".into());
     }
     if bytes == 0 {
@@ -285,7 +286,7 @@ pub fn cleaned_returns(body: &lir::LirBody, bytes: i64) -> Result<lir::LirBody, 
                     Some(what) if what.op == Operation::Return => {
                         let mut replaced = (**one).clone();
                         replaced.what = Some(Semantics {
-                            sources: vec![Loc::Imm(ir::Imm { value: bytes, width: 2, address: None })],
+                            sources: vec![Loc::Imm(ir::Imm { value: bytes, width: if bytes > llrm_x86::calling::RET_POPS_MOST { 4 } else { 2 }, address: None })],
                             ..what.clone()
                         });
                         Arc::new(replaced)
@@ -575,6 +576,13 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
                         out.extend(restores.iter().cloned().map(Item::Semantics));
                     }
                     out.extend(leave.iter().cloned().map(Item::Semantics));
+                    if let Some(Loc::Imm(popped)) = what.sources.first().filter(|_| procedure.interrupt.is_none() && !procedure.far) {
+                        if popped.value > llrm_x86::calling::RET_POPS_MOST {
+                            out.extend(moved_return(popped.value, procedure.registers.slot, procedure.registers.spelled(Register::SP)).into_iter().map(Item::Semantics));
+                            out.push(Item::Semantics(Semantics { name: Some("ret".to_owned()), sources: vec![], ..what.clone() }));
+                            continue;
+                        }
+                    }
                     let name = match what.name.as_deref() {
                         _ if procedure.interrupt.is_some() => "iret".to_owned(),
                         Some(name) if !name.is_empty() => name.to_owned(),
@@ -624,6 +632,18 @@ fn frame_omitted(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
     };
     let framed = built(procedure, number, false).ok()?;
     (bytes(&omitted) <= bytes(&framed)).then_some(omitted)
+}
+
+/// What removes `bytes` of arguments (`address` bytes of return address on top) where `ret imm16` cannot: the return address is
+/// popped into the last slot of the area, the stack raised to it, and a plain `ret` follows. LLVM's `pop ecx; add esp, n; push
+/// ecx; ret` (X86ExpandPseudo, the RET pseudo) holds the address in ECX, which Open Watcom's register convention keeps for its
+/// caller; the stack alone is as long and clobbers nothing.
+fn moved_return(bytes: i64, address: i64, stack: Register) -> Vec<Semantics> {
+    let up = bytes - address;
+    let above = ir::Mem { through: stack, offset: up, disp_width: 4, ..ir::Mem::new(None, address as u32) };
+    let sp = Loc::Reg(ir::Reg { register: stack, width: address as u32 });
+    let raise = Loc::Imm(ir::Imm { value: up, width: 4, address: None });
+    vec![semantics(Operation::Pop, "pop", vec![Loc::Mem(above)], vec![]), semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, raise])]
 }
 
 /// The items of a procedure that needs no frame register, its cells addressed through the stack
@@ -1395,6 +1415,23 @@ mod tests {
 
         assert_eq!(return_overhead_bytes(&procedure(0)).unwrap(), 1);
         assert_eq!(return_overhead_bytes(&procedure(4)).unwrap(), 1);
+    }
+
+    /// `ret imm16` pops at most 64 KB less one: a flat callee that pops more raises the stack over its arguments with the return
+    /// address moved to the top of them (pr20621-1: a 64 KB struct by value), not `ret 65540`.
+    #[test]
+    fn test_a_callee_that_pops_64_kb_moves_its_return_address_over_the_arguments() {
+        let popping = |bytes: i64| {
+            let returned = insn(1, semantics(Operation::Return, "ret", vec![], vec![]));
+            let body = lir::LirBody::new("get", 1, vec![lir::LirBlock::new(1, vec![returned])], IndexMap::default(), IndexMap::default());
+            let body = cleaned_returns(&body, bytes, 4).unwrap();
+            let procedure = Procedure { name: "_get".into(), public: true, far: false, body, reserve: 0, callees: IndexMap::default(), interrupt: None, size: false, entry: 0, stack_check: None, registers: llrm_target::Target::frame_registers(&llrm_x86_m32::M32) };
+            _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect::<Vec<_>>()
+        };
+        assert!(popping(65535).iter().any(|line| line == "ret 65535"), "{:?}", popping(65535));
+        let lines = popping(65540);
+        assert!(lines.windows(3).any(|three| three == ["pop dword ptr [esp+65536]", "add esp, 65536", "ret"]), "{lines:?}");
+        assert!(cleaned_returns(&lir::LirBody::new("get", 1, Vec::new(), IndexMap::default(), IndexMap::default()), 65540, 2).is_err());
     }
 
     /// The listing opened `.model medium` whatever the target: a flat program's header is its target's.

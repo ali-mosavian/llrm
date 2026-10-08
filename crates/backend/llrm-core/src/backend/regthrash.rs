@@ -225,7 +225,7 @@ fn _renamed(bits: u32, one: &Insn, before: Register, after: Register, result_onl
     if changed == *what {
         return None;
     }
-    select::emit_in(bits, &changed, 0, None, false, false, None)?;
+    select::priced_in(bits, &changed, 0, None, false, false, None)?;
     // Encodable is not renamed: an operand the instruction fixes -- `idiv`'s
     // EDX -- emits the same bytes under any name. The decoded effects have to
     // move from `before` to `after`, or the rename exists only in the LIR.

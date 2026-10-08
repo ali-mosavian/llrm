@@ -260,7 +260,7 @@ pub fn _graph(bits: u32, window: &[Arc<Insn>]) -> Graph {
 /// and all forms whose category is not complete here.
 pub fn _pair_class(bits: u32, one: &Insn) -> &'static str {
     let what = one.what.as_ref().expect("a safe form has semantics");
-    let Some(encoded) = select::emit_in(bits, what, 0, None, false, false, None) else {
+    let Some(encoded) = select::priced_in(bits, what, 0, None, false, false, None) else {
         return "np";
     };
     // GCC's Pentium description marks scalar SHLD/SHRD `pent_pair=np` even
