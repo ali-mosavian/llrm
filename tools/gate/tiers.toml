@@ -1,0 +1,83 @@
+# The gate's tiers and the path map. `gate.py plan` shows what a diff selects; `gate.py run` runs it.
+#
+#   fast  every cheap step, plus each heavy step whose owner paths the diff touches.
+#         Purpose: the confidence most PRs need. Budget: 5 minutes on the loaded host.
+#   full  every step. Chosen when the diff touches [shared] or a path no rule knows. Budget: 10 minutes.
+#         Also run over main after every 5 merges and nightly (`gate.py run --tier full`); red -> `gate.py bisect`.
+#
+# A step is cheap (runs in both tiers) unless a [[heavy]] below names it. A test file under tests/ or
+# crates/*/*/tests/ that nobody lists is cheap, so a new test is never forgotten.
+# A diff of only [inert] paths runs nothing. Changed paths in no table below are unknown: full.
+
+[inert]
+paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**"]
+
+# Shared code every area runs through: the IR, the support library, target descriptions, the workspace. A change here
+# takes the full tier. The backend (isel, regalloc, conventions, driver) and transforms are not listed: they take the
+# fast tier plus every codegen step (run on all languages, qcport, pytest-programs; see [[heavy]]), which is everything
+# the full tier adds except the debugger sessions and the identity gate. Move "crates/backend/**" and "crates/opt/**"
+# here to send them to the full tier instead; the plan's `replay` cost is in docs/testing.md.
+[shared]
+paths = [
+  "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "build.rs", "src/**", "tests/common/**",
+  "crates/ir/**", "crates/support/**",
+  "crates/target/llrm-target/**", "crates/target/llrm-object/**",
+  "tools/gate/**",
+]
+
+# Paths outside [shared] the cheap steps cover on their own; they select no heavy step.
+[plain]
+paths = ["tests/**", "tools/**", "bench/**", "examples/**", "runtime/**", "toolchain/**", "crates/**"]
+
+# Heavy steps (> 15 s on the loaded host): fast runs one only when a changed path matches its owners.
+[[heavy]]
+step = "turbo"
+why = "Turbo Debugger session over a program: 48 s"
+owners = ["crates/backend/llrm-core/src/backend/debuginfo.rs", "crates/backend/llrm-core/src/backend/frame.rs", "crates/backend/llrm-core/src/backend/cfi*.rs", "tests/turbo.rs", "tests/common/**", "crates/target/llrm-omf/**", "crates/target/llrm-coff*/**", "crates/target/llrm-dwarf/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
+
+[[heavy]]
+step = "cv4"
+why = "Microsoft link + CodeView sessions: 30 s"
+owners = ["crates/backend/llrm-core/src/backend/debuginfo.rs", "crates/backend/llrm-core/src/backend/frame.rs", "crates/backend/llrm-core/src/backend/cfi*.rs", "tests/cv4.rs", "crates/target/llrm-coff*/**", "crates/target/llrm-omf/**", "toolchain/**", "tools/dosbatch/**", "tools/debug-gate.env"]
+
+[[heavy]]
+step = "identity"
+why = "the identity gate rebuilds the compiler against itself: 96 s"
+owners = ["tests/toolchain.rs", "tools/identity.sh", "tools/g-identical.sh", "tools/baseline.sh", "tools/llrmbin.py"]
+
+[[heavy]]
+step = "pytest-programs"
+why = "compiles every program, and the loop cross-cases: 60 s"
+owners = ["tests/test_programs_compile.py", "tests/test_loops.py", "tests/test_innerloops.py", "tools/sizes*", "tools/loops/**", "tools/innerloops.py", "examples/**", "bench/**", "tests/run/**", "crates/frontends/**", "crates/backend/**", "crates/opt/**"]
+
+[[heavy]]
+step = "qcport"
+why = "builds and runs QCport against the all-Borland build: 100 s"
+owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**"]
+
+# `run` always runs when code changed, on the languages the diff can affect (all, in a full tier).
+[run_languages]
+qb = ["crates/frontends/llrm-qb/**", "crates/frontends/qbfront/**", "crates/frontends/llrm-qbruntime/**", "tests/run/qb/**"]
+c = ["crates/frontends/llrm-c/**", "tests/run/c/**"]
+nib = ["crates/frontends/llrm-nib/**", "tests/run/nib/**"]
+# Everything else (targets, examples, bench, tests/run/huge, tests/run/alias, run.rs) runs all languages.
+
+# One slow test inside an otherwise cheap binary: split out, so the binary's other tests stay cheap.
+[[split]]
+step = "turbo"
+bin = "turbo"
+filter = "turbo_debugger_shows_the_same_values"
+
+[[split]]
+step = "identity"
+bin = "toolchain"
+filter = "test_the_identity_gate_passes"
+
+# Whole binaries that are heavy: every test in them is slow.
+[whole]
+cv4 = "cv4"
+
+# Binaries that change the working tree or run cargo on it (a probe file under crates/, a nested build): the run test
+# compares the tree before and after, and cargo's lock serialises the rest. They run alone, after the other steps.
+[exclusive]
+build-script-reruns = "build_script_reruns"

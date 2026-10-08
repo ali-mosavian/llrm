@@ -7,6 +7,23 @@ Unit tests sit beside their module (`*_tests.rs`); frontend tests are
 bootstrapped DOS toolchain and runs them. Release builds are incremental, so a
 rebuild after an edit takes about 30 seconds.
 
+## The gate in tiers
+
+    python3 tools/gate/gate.py plan            what the diff against origin/main selects
+    python3 tools/gate/gate.py run             run it (CARGO_TARGET_DIR set; JOBS=6 steps at once)
+    python3 tools/gate/gate.py main            scheduled: full tier over origin/main every 5 merges or hour, bisects a red
+
+The path map is `tools/gate/tiers.toml`, the only place a path is tied to a test. Fast runs every cheap step plus
+each heavy step (debugger sessions, identity gate, QCport, compile-everything) whose owner paths the diff touches;
+full runs everything and is chosen when the diff touches IR, support, target descriptions or the workspace manifests,
+or a path no table knows. Backend and transform changes take fast plus every codegen step.
+
+Measured on the loaded host (load 55-90, `JOBS=6`, build warm): fast 3m50 for a backend diff, full 3m35; the gate
+before ran about 20 minutes, one step after another. Steps run at once, so the wall is the longest step (QCport,
+the Python tests, the compile-everything test: 2-2.5 minutes); the tiers cut the work a diff starts (a frontend diff
+skips ~190 s of debugger and identity steps) and the load it puts on the host. Replaying the 45 red steps in the 194
+gate logs, the fast tier selects the failing step every time. Of the last 80 merges, 61 pick fast, 17 full, 2 nothing.
+
 ## What belongs in the suite
 
 Tests assert program behavior, representation invariants, or a named regression.
