@@ -10,6 +10,7 @@
 # tables, not uniformly verified; audited bounds are the `smul_*` and `sdiv_*` rows below, see
 # docs/measurement/timing-audit.md. Correct them in place.
 #
+# LEA: the 386 is 2 clocks and the 486 and later 1 (Intel's 486 table, as HelpPC 2.10's `LEA reg,mem 2+EA 3 2 1` has it; the 486 column held the 386's).
 # The 386 column is Intel's 80386 table (POP m is five clocks, Jcc is 7+m taken
 # and 3 not, REP MOVS is 8+4n) and GCC's i386 table for the x87 forms; its
 # latencies are its clocks. x87 forms: 486 Intel's i486 data sheet, Table 10.3
@@ -76,7 +77,7 @@ mul_r16                22   13   11    4    4    3    5    3
 div_r16                27   24   25   23   24   24   24   22
 lahf                    2    3    2    3    2    2    2    3
 sahf                    3    2    2    1    1    1    1    1
-lea                     2    2    1    1    1    1    1    1
+lea                     2    1    1    1    1    1    1    1
 rep_stos                5    7    9   30   10   10   15   30
 rep_stos_cell           5    4    1    1    1    1    1    1
 rep_movs                8   12   13   30   12   12   15   30   # Intel's 80386 table: REP MOVS is 8+4n.
@@ -146,7 +147,7 @@ sahf                    3    2    2    1    1    1    1    1
 unknown                 -    2    2    2    2    2    2    2
 alu_ri                  2    1    1    1    1    1    1    1   # ... reg,imm
 ret_pop                18   13    4   17    4    4    5   18
-lea                     2    2    1    1    1    1    1    1
+lea                     2    1    1    1    1    1    1    1
 rep_stos                5    7    9   30   10   10   15   30
 rep_stos_cell           5    4    1    1    1    1    1    1
 rep_movs                8   12   13   30   12   12   15   30

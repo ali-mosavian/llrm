@@ -719,6 +719,23 @@ mod tests {
         assert!(body.contains(&"mov ax, word ptr [bp+6]".to_owned()) && body.contains(&"mov ax, word ptr [bp+8]".to_owned()), "{body:?}");
     }
 
+    /// A copy and an add, `mov r,ax; add r,k`, are one `lea r,[eax+k]` where it costs no more: the 486's LEA is one clock (its table
+    /// held the 386's two), so with the address-size prefix it is the two instructions' two clocks in a byte less. Two values off one
+    /// argument took two instructions each.
+    #[test]
+    fn test_m16_regparm3_a_copy_and_an_add_are_one_lea_where_it_costs_no_more() {
+        let body = regparm3("_leas");
+        let leas = body.iter().filter(|line| line.starts_with("lea ") && line.contains("[eax+")).count();
+        assert!(leas == 2 && !body.iter().any(|line| line.starts_with("mov ")), "{body:?}");
+    }
+
+    /// A copy and a unit add stay `mov r,ax; inc r`: the INC makes them three bytes, the LEA is four.
+    #[test]
+    fn test_m16_regparm3_a_copy_and_a_unit_add_stay_when_the_lea_is_longer_than_the_inc() {
+        let body = regparm3_at("_incs", llrm_core::driver::flags::Level::Os);
+        assert!(body.iter().any(|line| line.starts_with("inc ")) && !body.iter().any(|line| line.starts_with("lea ")), "{body:?}");
+    }
+
     /// `calleepop` serves a regparm3 function as it does a cdecl16 one: `many`'s fourth and fifth arguments are the only ones on the
     /// stack, and its callee removes them (`ret 4`), its callers nothing.
     #[test]
@@ -917,8 +934,10 @@ mod tests {
     fn test_arrays_of_several_strides_keep_their_indexes_in_registers() {
         for function in ["_bench_strides3", "_bench_strides4"] {
             let body = selected_loop("strides", function, "xor");
+            // An access's address registers; a `lea` reaches no memory, its operands are arithmetic.
             let registers: std::collections::BTreeSet<String> = body
                 .iter()
+                .filter(|one| !one.starts_with("lea "))
                 .filter_map(|one| Some(one.split_once('[')?.1.split_once(']')?.0.to_owned()))
                 .flat_map(|inside| inside.split(['+', '-', '*']).map(str::trim).map(str::to_owned).collect::<Vec<_>>())
                 .filter(|part| part.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && !matches!(part.as_str(), "bp" | "ebp"))
