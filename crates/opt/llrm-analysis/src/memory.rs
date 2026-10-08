@@ -151,9 +151,110 @@ impl PartialOrd for MemoryObject {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Structural comparisons of objects, for the test that sets of slices make none.
+    pub static OBJECT_COMPARES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Ord for MemoryObject {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        #[cfg(test)]
+        OBJECT_COMPARES.with(|count| count.set(count.get() + 1));
         self.key().cmp(&other.key())
+    }
+}
+
+/// A `MemoryObject` from the process's one interner: a small id compared, hashed and ordered as an integer, and the object
+/// read through a reference that is never freed. Interned by every field, the facts too, so two spellings that differ in a
+/// fact are two objects here and a set keeps both (none was seen to differ, in 1,700 programs and QCport). The order is the
+/// order of first interning, not `MemoryObject`'s: nothing may depend on the order of a set of slices.
+#[derive(Clone, Copy)]
+pub struct ObjectRef {
+    id: u32,
+    object: &'static MemoryObject,
+}
+
+struct Exact(MemoryObject);
+
+impl PartialEq for Exact {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0 && self.0.addressed == other.0.addressed && self.0.captured == other.0.captured && self.0.constant == other.0.constant
+    }
+}
+
+impl Eq for Exact {}
+
+impl std::hash::Hash for Exact {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+        (self.0.addressed, self.0.captured, self.0.constant).hash(state);
+    }
+}
+
+static INTERNED: std::sync::Mutex<Option<llrm_support::hash::HashMap<Exact, ObjectRef>>> = std::sync::Mutex::new(None);
+
+impl ObjectRef {
+    pub fn new(object: MemoryObject) -> Self {
+        let mut held = INTERNED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let table = held.get_or_insert_with(Default::default);
+        let key = Exact(object);
+        if let Some(&found) = table.get(&key) {
+            return found;
+        }
+        let made = Self { id: table.len() as u32, object: Box::leak(Box::new(key.0.clone())) };
+        table.insert(key, made);
+        made
+    }
+
+    /// The number this object was given: the order it was first interned in.
+    pub fn id(self) -> u32 {
+        self.id
+    }
+}
+
+impl From<MemoryObject> for ObjectRef {
+    fn from(object: MemoryObject) -> Self {
+        Self::new(object)
+    }
+}
+
+impl std::ops::Deref for ObjectRef {
+    type Target = MemoryObject;
+    fn deref(&self) -> &MemoryObject {
+        self.object
+    }
+}
+
+impl PartialEq for ObjectRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for ObjectRef {}
+
+impl std::hash::Hash for ObjectRef {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
+impl PartialOrd for ObjectRef {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ObjectRef {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+
+impl fmt::Debug for ObjectRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.object.fmt(formatter)
     }
 }
 
@@ -161,9 +262,9 @@ pub const WHOLE_LOW: i64 = -(1_i64 << 31);
 pub const WHOLE_HIGH: i64 = 1_i64 << 31;
 
 /// Python `qbopt.model.memory:Slice`.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Slice {
-    pub object: MemoryObject,
+    pub object: ObjectRef,
     pub low: i64,
     pub high: i64,
     pub stride: i64,
@@ -191,7 +292,8 @@ impl fmt::Display for SliceError {
 impl std::error::Error for SliceError {}
 
 impl Slice {
-    pub fn new(object: MemoryObject, low: i64, high: i64, stride: i64, width: i64) -> Result<Self, SliceError> {
+    pub fn new(object: impl Into<ObjectRef>, low: i64, high: i64, stride: i64, width: i64) -> Result<Self, SliceError> {
+        let object = object.into();
         if high <= low {
             return Err(SliceError::Empty);
         }
@@ -204,13 +306,14 @@ impl Slice {
         Ok(Self { object, low, high, stride, width })
     }
 
-    pub fn whole(object: MemoryObject) -> Self {
+    pub fn whole(object: impl Into<ObjectRef>) -> Self {
         Self::new(object, WHOLE_LOW, WHOLE_HIGH, 1, 1).expect("the fixed whole-object slice is valid")
     }
 
     /// Every byte of `object`; none of a zero-byte one, which overlaps
     /// nothing, as in LLVM.
-    pub fn every_byte(object: MemoryObject) -> Option<Self> {
+    pub fn every_byte(object: impl Into<ObjectRef>) -> Option<Self> {
+        let object = object.into();
         match object.extent {
             Some(extent) => Self::new(object, 0, extent, 1, 1).ok(),
             None => Some(Self::whole(object)),
@@ -218,7 +321,7 @@ impl Slice {
     }
 
     pub fn shifted(&self, amount: i64) -> Self {
-        Self::new(self.object.clone(), self.low + amount, self.high + amount, self.stride, self.width)
+        Self::new(self.object, self.low + amount, self.high + amount, self.stride, self.width)
             .expect("shifting a valid slice retains its positive shape")
     }
 
@@ -285,12 +388,12 @@ pub struct Provenance {
 
 impl Provenance {
     /// `Provenance.one` with the whole-object bounds and no restrict roots.
-    pub fn one(object: MemoryObject) -> Self {
+    pub fn one(object: impl Into<ObjectRef>) -> Self {
         Self { slices: BTreeSet::from([Slice::whole(object)]), restrict: BTreeSet::new() }
     }
 
     pub fn one_with_slice(
-        object: MemoryObject,
+        object: impl Into<ObjectRef>,
         low: i64,
         high: i64,
         stride: i64,
@@ -648,7 +751,7 @@ pub fn exposed_frames(unit: &Unit) -> BTreeSet<ValueId> {
 
 /// The object `root` is the address of, where it is an object's own: an
 /// alloca (`Frame`) or a global variable (`Global`).
-pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
+pub fn object_of(unit: &Unit, root: Operand) -> Option<ObjectRef> {
     match root {
         Operand::Value(value) => {
             let (_, instruction) = unit.defining(root)?;
@@ -664,13 +767,13 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
                 Some(found) => found.contains(&value),
                 None => crate::frameescape::exposes(unit.function, value, |inst| is_lifetime_marker(unit, inst)),
             };
-            Some(MemoryObject {
+            Some(ObjectRef::new(MemoryObject {
                 identity: Some(Identity::Value(value.0)),
                 extent: count.map(|count| size * count),
                 addressed: exposed,
                 captured: exposed,
                 ..MemoryObject::new(MemoryKind::Frame)
-            })
+            }))
         }
         Operand::Constant(id) => {
             let ConstantKind::Global(global) = unit.context.get(id).kind else { return None };
@@ -681,14 +784,14 @@ pub fn object_of(unit: &Unit, root: Operand) -> Option<MemoryObject> {
 }
 
 /// The object a global variable is.
-pub fn global_object(unit: &Unit, global: GlobalId) -> Option<MemoryObject> {
+pub fn global_object(unit: &Unit, global: GlobalId) -> Option<ObjectRef> {
     let extent = match &unit.globals.get(global.0 as usize)?.kind {
         GlobalKind::Variable(variable) => Some(unit.layout.alloc_size(&unit.context.types, variable.ty) as i64),
         GlobalKind::Function(_) => return None,
     };
     let captured = !unit.globals_aa.is_some_and(|aa| aa.tracked(global));
     let constant = matches!(&unit.globals.get(global.0 as usize)?.kind, GlobalKind::Variable(variable) if variable.constant);
-    Some(MemoryObject { identity: Some(Identity::Global(global.0)), extent, captured, constant, ..MemoryObject::new(MemoryKind::Global) })
+    Some(ObjectRef::new(MemoryObject { identity: Some(Identity::Global(global.0)), extent, captured, constant, ..MemoryObject::new(MemoryKind::Global) }))
 }
 
 /// An access as the alias queries read it: LLVM's `MemoryLocation`, its
@@ -1120,6 +1223,35 @@ mod tests {
         assert_eq!(Unit::of(&module, &layout, f).spaces(), llrm_mir::spaces::Spaces::FLAT);
         assert_eq!(Unit::of(&module, &layout, f).with_spaces(dos).spaces(), dos);
         assert!(Unit::of(&module, &layout, f).with_spaces(dos).spaces().is_fixed(4));
+    }
+
+    /// A set of slices compared the objects' identities (strings, tuples) tree against tree at every step of every insert, and
+    /// cloned them: `BTreeSet<Slice>` was 10% of host.c's compile, `MemoryObject::cmp` 8%, malloc 10%. An object is a number
+    /// once interned: building, probing and cloning sets of slices compares none structurally.
+    #[test]
+    fn a_set_of_slices_compares_no_object_structurally() {
+        let slices: Vec<Slice> = (0..200)
+            .map(|index| Slice::whole(MemoryObject { identity: Some(Identity::Tuple(vec![Identity::Str(format!("object{index}")), Identity::Int(index)])), ..object(MemoryKind::Global) }))
+            .collect();
+        let before = super::OBJECT_COMPARES.with(std::cell::Cell::get);
+        let set: BTreeSet<Slice> = slices.iter().copied().collect();
+        assert_eq!(set.len(), 200);
+        assert!(slices.iter().all(|one| set.contains(one)));
+        let copy = set.clone();
+        assert_eq!(copy, set);
+        assert_eq!(super::OBJECT_COMPARES.with(std::cell::Cell::get) - before, 0, "objects compared tree against tree");
+    }
+
+    /// Two spellings of an object that differ in a fact are two objects here, and one spelling is one object however often it
+    /// is interned.
+    #[test]
+    fn an_object_is_interned_by_every_field_once() {
+        let global = MemoryObject { identity: Some(Identity::Global(9)), ..object(MemoryKind::Global) };
+        let (one, again) = (super::ObjectRef::new(global.clone()), super::ObjectRef::new(global.clone()));
+        assert_eq!(one, again);
+        assert_eq!(one.id(), again.id());
+        let private = super::ObjectRef::new(MemoryObject { captured: false, ..global });
+        assert_ne!(one, private);
     }
 
     #[test]

@@ -50,7 +50,7 @@ use crate::cfg;
 use crate::consts::Known;
 use crate::globalsaa;
 use crate::induction;
-use crate::memory::{self, Addr, Identity, MemRef, MemoryKind, MemoryObject, Provenance, Slice, Unit, object_of, unmodeled_write, wrapped};
+use crate::memory::{self, Addr, Identity, MemRef, MemoryKind, MemoryObject, ObjectRef, Provenance, Slice, Unit, object_of, unmodeled_write, wrapped};
 use crate::ranges;
 use crate::regions::{self, ByteRange};
 
@@ -71,13 +71,13 @@ pub enum Actual {
 /// and width.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum CellKey {
-    Object(MemoryObject, i64, i64),
+    Object(ObjectRef, i64, i64),
     Address(Addr, i64),
 }
 
 /// Whole objects an unknown callee can reach through pointers it owns.
-fn _whole<'a>(provenances: impl IntoIterator<Item = &'a Provenance>, escaped: &BTreeSet<MemoryObject>) -> BTreeSet<Slice> {
-    let mut objects = provenances.into_iter().flat_map(|provenance| provenance.slices.iter().map(|one| one.object.clone())).collect::<BTreeSet<_>>();
+fn _whole<'a>(provenances: impl IntoIterator<Item = &'a Provenance>, escaped: &BTreeSet<ObjectRef>) -> BTreeSet<Slice> {
+    let mut objects = provenances.into_iter().flat_map(|provenance| provenance.slices.iter().map(|one| one.object)).collect::<BTreeSet<_>>();
     objects.extend(escaped.iter().cloned());
     objects.into_iter().filter_map(Slice::every_byte).collect()
 }
@@ -86,7 +86,7 @@ fn _whole<'a>(provenances: impl IntoIterator<Item = &'a Provenance>, escaped: &B
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PointsTo {
     pub values: IndexMap<ValueId, Provenance>,
-    pub escaped: BTreeSet<MemoryObject>,
+    pub escaped: BTreeSet<ObjectRef>,
     /// Objects visible immediately before each call.
     pub escaped_before: EscapedBefore,
 }
@@ -95,12 +95,12 @@ pub struct PointsTo {
 /// numbering and named only when asked: most solves never read them.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EscapedBefore {
-    objects: Rc<IndexSet<MemoryObject>>,
+    objects: Rc<IndexSet<ObjectRef>>,
     at: IndexMap<InstId, Bits>,
 }
 
 impl EscapedBefore {
-    pub fn get(&self, at: &InstId) -> Option<BTreeSet<MemoryObject>> {
+    pub fn get(&self, at: &InstId) -> Option<BTreeSet<ObjectRef>> {
         self.at.get(at).map(|bits| bits.iter().map(|one| self.objects[one].clone()).collect())
     }
 
@@ -118,7 +118,7 @@ impl EscapedBefore {
         // No provenance is a pointer no fact follows: `_lost` publishes what
         // it came from.
         let escaping = reference.provenance.as_ref().is_none_or(|one| one.slices.iter().all(|slice| matches!(slice.object.kind, MemoryKind::Unknown | MemoryKind::Nonlocal)));
-        let unreached = |object: &MemoryObject| object.kind == MemoryKind::Frame && self.objects.get_index_of(object).is_none_or(|one| !bits.contains(one));
+        let unreached = |object: &ObjectRef| object.kind == MemoryKind::Frame && self.objects.get_index_of(object).is_none_or(|one| !bits.contains(one));
         escaping && cell.provenance.as_ref().is_some_and(|one| !one.slices.is_empty() && one.slices.iter().all(|slice| unreached(&slice.object)))
     }
 }
@@ -228,7 +228,7 @@ fn _resolved_reference(unit: &Unit, reference: &MemRef, values: &IndexMap<ValueI
     let slices = source
         .slices
         .iter()
-        .map(|one| Slice::new(one.object.clone(), one.low, one.high, one.stride, i64::from(reference.width.max(1))).expect("a slice keeps its positive shape"))
+        .map(|one| Slice::new(one.object, one.low, one.high, one.stride, i64::from(reference.width.max(1))).expect("a slice keeps its positive shape"))
         .collect();
     Some(Provenance { slices, restrict: source.restrict })
 }
@@ -646,7 +646,7 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
 
 fn _widen_parameters(summary: Summary) -> Summary {
     let widened = |items: &BTreeSet<Slice>| {
-        items.iter().map(|one| if one.object.kind == MemoryKind::Parameter { Slice::whole(one.object.clone()) } else { one.clone() }).collect()
+        items.iter().map(|one| if one.object.kind == MemoryKind::Parameter { Slice::whole(one.object) } else { one.clone() }).collect()
     };
     Summary { reads: widened(&summary.reads), writes: widened(&summary.writes), ..summary }
 }
@@ -1125,7 +1125,7 @@ pub fn initialized(procedure: &Procedure, known: &IndexMap<String, Summary>) -> 
     let read = |state: &mut State, one: &Slice| {
         for (index, ranges) in state.iter_mut().enumerate() {
             let parameter = MemoryObject { identity: Some(Identity::Int(index as i64)), ..MemoryObject::new(MemoryKind::Parameter) };
-            let bytes = if one.object == parameter {
+            let bytes = if *one.object == parameter {
                 _bytes(one)
             } else if memory::objects_may_alias(&one.object, &parameter) {
                 None
@@ -1224,7 +1224,7 @@ fn _union<'a>(parts: impl IntoIterator<Item = Option<&'a Provenance>>) -> Option
 /// instead. Keeping object identity and restrict roots still proves the
 /// important disjointness facts; only the changing subrange is forgotten.
 fn _widened(provenance: &Provenance) -> Provenance {
-    let slices = provenance.slices.iter().filter_map(|one| Slice::every_byte(one.object.clone())).collect();
+    let slices = provenance.slices.iter().filter_map(|one| Slice::every_byte(one.object)).collect();
     Provenance { slices, restrict: provenance.restrict.clone() }
 }
 
@@ -1233,7 +1233,7 @@ fn _cell_key(reference: &MemRef) -> Option<CellKey> {
         if provenance.slices.len() == 1 {
             let one = provenance.slices.first().expect("one slice");
             if one.stride == 1 {
-                return Some(CellKey::Object(one.object.clone(), one.low, one.high));
+                return Some(CellKey::Object(one.object, one.low, one.high));
             }
         }
     }
@@ -1347,9 +1347,9 @@ pub fn points_to(
     let touched = RefCell::new(HashMap::<ValueId, u64>::default());
     // Every pointer stored anywhere in each object: what a cell of it may
     // hold when its exact contents are not known.
-    let mut fields = HashMap::<MemoryObject, Provenance>::default();
+    let mut fields = HashMap::<ObjectRef, Provenance>::default();
     // Objects a call or an unknown value may have written: no such bound.
-    let mut unbounded = HashSet::<MemoryObject>::default();
+    let mut unbounded = HashSet::<ObjectRef>::default();
     let mut sent = HashMap::<i64, u64>::default();
     let mut visited = vec![None::<u64>; graph.len()];
     loop {
@@ -1453,7 +1453,7 @@ pub fn points_to(
                         let bounded = source.is_some() || !pointer_stored;
                         if let (false, Some(targets)) = (bounded, &keyed.provenance) {
                             for one in &targets.slices {
-                                if unbounded.insert(one.object.clone()) {
+                                if unbounded.insert(one.object) {
                                     changed.set(true);
                                 }
                             }
@@ -1463,7 +1463,7 @@ pub fn points_to(
                                 // Whole objects: stored offsets may shift each trip around a loop.
                                 let grown = _widened(&fields.get(&one.object).map_or_else(|| source.clone(), |held| held.union(source)));
                                 if fields.get(&one.object) != Some(&grown) {
-                                    fields.insert(one.object.clone(), grown);
+                                    fields.insert(one.object, grown);
                                     changed.set(true);
                                 }
                             }
@@ -1496,30 +1496,30 @@ pub fn points_to(
 
     // Escape is flow-sensitive separately from pointer contents. A pointer
     // published after a call must not make the earlier call reach its frame.
-    let mut pointer_fields: IndexMap<MemoryObject, BTreeSet<MemoryObject>> = IndexMap::default();
+    let mut pointer_fields: IndexMap<ObjectRef, BTreeSet<ObjectRef>> = IndexMap::default();
     for (_, inst) in function.walk() {
         let op = function.instruction(inst);
         let (Opcode::Store { .. }, Some(reference)) = (&op.opcode, MemRef::of(unit, inst)) else { continue };
         let Some(source) = _operand(unit, op.operands[0], &values) else { continue };
         let targets = _resolved_reference(unit, &reference, &values).into_iter().flat_map(|provenance| provenance.slices.into_iter().map(|one| one.object)).collect::<BTreeSet<_>>();
         for target in targets {
-            pointer_fields.entry(target).or_default().extend(source.slices.iter().map(|one| one.object.clone()));
+            pointer_fields.entry(target).or_default().extend(source.slices.iter().map(|one| one.object));
         }
     }
 
     // Objects numbered once, so closures and unions compare indices instead
     // of identity trees.
-    let objects = RefCell::new(IndexSet::<MemoryObject>::default());
-    let number = |object: &MemoryObject| {
+    let objects = RefCell::new(IndexSet::<ObjectRef>::default());
+    let number = |object: &ObjectRef| {
         let mut objects = objects.borrow_mut();
         match objects.get_index_of(object) {
             Some(index) => index,
-            None => objects.insert_full(object.clone()).0,
+            None => objects.insert_full(*object).0,
         }
     };
     let pointer_fields = pointer_fields.iter().map(|(target, sources)| (number(target), sources.iter().map(number).collect::<Vec<_>>())).collect::<HashMap<_, _>>();
     // Close publication through pointer-valued fields of known objects.
-    let pointees = |objects: BTreeSet<MemoryObject>, cells: &IndexMap<CellKey, Provenance>| {
+    let pointees = |objects: BTreeSet<ObjectRef>, cells: &IndexMap<CellKey, Provenance>| {
         let mut reached = objects.iter().map(number).collect::<HashSet<_>>();
         if reached.is_empty() {
             return Vec::new();
@@ -1598,7 +1598,7 @@ pub fn points_to(
                     let through = _allowed(unit, inst).through;
                     let reads = |index: usize| through.get(index).is_none_or(|one| one.reads);
                     for (index, one) in actual.iter().enumerate() {
-                        let objects = one.slices.iter().map(|one| one.object.clone());
+                        let objects = one.slices.iter().map(|one| one.object);
                         if kept(index)? {
                             newly.extend(objects)
                         } else if reads(index) {
@@ -1722,7 +1722,7 @@ fn _read(function: &llrm_mir::module::Function, value: ValueId, seen: &mut BTree
 /// provenance neither the result nor the access carries, and a global in
 /// a constant that is no pointer. A comparison captures nothing; what a
 /// call, a return, a store and a `ptrtoint` publish, their own rules say.
-fn _lost(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) -> Vec<MemoryObject> {
+fn _lost(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) -> Vec<ObjectRef> {
     let op = unit.function.instruction(inst);
     let carried = match &op.opcode {
         Opcode::ICmp(_) => return Vec::new(),
@@ -1760,7 +1760,7 @@ fn _resolved_actuals(actuals: &[Actual], values: &IndexMap<ValueId, Provenance>)
 /// The object a cell key lies in: only keys sharing it can overlap.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum KeyBucket {
-    Object(MemoryObject),
+    Object(ObjectRef),
     Address(Operand),
 }
 

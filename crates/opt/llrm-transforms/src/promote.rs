@@ -96,9 +96,9 @@ pub fn _leaf(reference: &MemRef, canonical: &Canonical) -> Option<_Leaf> {
     if span.object.extent.is_some_and(|extent| !(0 <= span.low && span.low < high && high <= extent)) {
         return None;
     }
-    let type_class = reference.typed.clone().or_else(|| canonical.get(&(span.object.clone(), span.low, high)).cloned());
+    let type_class = reference.typed.clone().or_else(|| canonical.get(&((*span.object).clone(), span.low, high)).cloned());
     let restrict = reference.provenance.as_ref().map(|provenance| provenance.restrict.clone()).unwrap_or_default();
-    Some(_Leaf { object: span.object.clone(), low: span.low, high, type_class, restrict })
+    Some(_Leaf { object: (*span.object).clone(), low: span.low, high, type_class, restrict })
 }
 
 /// Bytes whose accesses cannot form disjoint scalar leaves.

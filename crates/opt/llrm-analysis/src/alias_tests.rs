@@ -42,7 +42,7 @@ impl Parsed {
 
     /// The object `%name` allocates.
     fn object(&self, name: &str) -> MemoryObject {
-        object_of(&self.unit(), Operand::Value(self.value(name))).expect("an object")
+        (*object_of(&self.unit(), Operand::Value(self.value(name))).expect("an object")).clone()
     }
 
     /// The instructions of `@f` whose opcode `is` picks.
@@ -182,7 +182,7 @@ b20:
         sender.send(parsed.facts().values[&parsed.value("loaded")].clone()).unwrap();
     });
     let loaded = receiver.recv_timeout(std::time::Duration::from_secs(10)).expect("points_to terminates");
-    assert!(loaded.slices.iter().any(|one| one.object == parameter(0)));
+    assert!(loaded.slices.iter().any(|one| *one.object == parameter(0)));
 }
 
 #[test]
@@ -200,7 +200,7 @@ b0:
     );
     let load = parsed.all(|op| matches!(op, Opcode::Load { .. }))[0];
     let tagged = annotated(&parsed.unit()).unwrap()[&load].provenance.clone().expect("a derived provenance");
-    assert_eq!(tagged.slices.iter().map(|one| one.object.clone()).collect::<BTreeSet<_>>(), BTreeSet::from([parsed.object("a")]));
+    assert_eq!(tagged.slices.iter().map(|one| (*one.object).clone()).collect::<BTreeSet<_>>(), BTreeSet::from([parsed.object("a")]));
 }
 
 #[test]
@@ -225,7 +225,7 @@ b0:
     let summary = _direct_summary(&parsed.unit()).unwrap();
     assert_eq!(facts.values[&parsed.value("second")], facts.values[&parsed.value("root")]);
     assert!(!summary.unknown_write);
-    assert_eq!(summary.writes.iter().map(|one| one.object.clone()).collect::<BTreeSet<_>>(), BTreeSet::from([parameter(0)]));
+    assert_eq!(summary.writes.iter().map(|one| (*one.object).clone()).collect::<BTreeSet<_>>(), BTreeSet::from([parameter(0)]));
 }
 
 #[test]
@@ -525,7 +525,7 @@ b0:
 }}
 "
     ));
-    parsed.facts().escaped
+    parsed.facts().escaped.iter().map(|one| (**one).clone()).collect()
 }
 
 #[test]

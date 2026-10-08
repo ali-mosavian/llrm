@@ -237,7 +237,7 @@ fn carried(slices: &BTreeSet<Slice>, from: &Module, to: &Module, unknown: &mut b
         let there = global.name.as_deref().filter(|_| !matches!(global.linkage, Linkage::Internal | Linkage::Private)).and_then(|name| to.named(name));
         match there {
             Some(there) => {
-                out.insert(Slice { object: MemoryObject { identity: Some(Identity::Global(there.0)), ..one.object.clone() }, ..one.clone() });
+                out.insert(Slice { object: MemoryObject { identity: Some(Identity::Global(there.0)), ..(*one.object).clone() }.into(), ..*one });
             }
             None => *unknown |= one.object.captured,
         }
