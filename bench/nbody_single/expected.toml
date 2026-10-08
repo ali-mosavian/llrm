@@ -1,4 +1,4 @@
-reason = "x/16.0f is x*0.0625f (#938): the constant is an fmul memory operand (11 clocks, read twice a step) in place of a register copy fdiv'd (73); m32 clocks 9321367 -> 8643367, instructions equal, memory operands +4.3%, code +2 bytes"
+reason = "return duplication (gcc copy_bb_p): a jump to a block that only returns is replaced by a copy of it at -O2: instructions fall (fib -3.7%), code bytes grow by the copies; parity/qbsp c -O2 instructions +3 are loop-alignment nops its fall-through now executes (the copy moved the loop head's offset)"
 blessed = "2026-10-08"
 
 [bas.O2]

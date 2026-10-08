@@ -84,7 +84,70 @@ pub fn optimized(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintabl
         }
     }
     let placed = preferred(&baseline, &threaded(&candidate)).clone();
-    Ok(if size { placed } else { duplicated_tails(&placed) })
+    Ok(if size {
+        placed
+    } else {
+        let tails = duplicated_tails(&placed);
+        returns_copied(&tails).map_or(tails, |copied| threaded(&copied))
+    })
+}
+
+/// gcc's `max-grow-copy-bb-insns` (bb-reorder `copy_bb_p`): a block is copied while it is at most this many unconditional jumps long.
+const COPY_BB_JUMPS: usize = 8;
+
+/// gcc's bb-reorder `copy_bb_p` for return blocks: each jump to a block that only returns gets a copy of it, so the path that
+/// took it returns without meeting the paths that reach the shared block (the early exit of a recursion, which shrink-wrapping
+/// needs apart from the loop's). The block it falls through to is left as it is, and the copy is made only where the block stays
+/// within `COPY_BB_JUMPS` jumps of code.
+pub fn returns_copied(body: &LirBody) -> Option<LirBody> {
+    let jump = if body.bits == 32 { 5 } else { 3 };
+    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let mut next_at = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
+    let mut odds = body.odds.clone();
+    let mut blocks: Vec<LirBlock> = Vec::with_capacity(body.blocks.len());
+    let mut changed = false;
+    for parent in &body.blocks {
+        let real = _real(parent);
+        let branch = real.last().filter(|last| last.what.as_ref().is_some_and(|what| what.op == Operation::Jump && !what.indirect));
+        let target = branch.and_then(|last| last.what.as_ref()?.target);
+        let tail = target.filter(|at| *at != parent.at && *at != body.entry).and_then(|at| by_at.get(&at)).filter(|tail| _return_tail(body.bits, tail, jump * COPY_BB_JUMPS));
+        // A branch ahead of the jump to the same block, or a second one, would leave the copy a fall-through that `masm::_falls_to` cannot name.
+        let tail = tail.filter(|tail| parent.succ.len() <= 2 && !real.iter().rev().skip(1).any(|one| one.what.as_ref().is_some_and(|what| what.target == Some(tail.at))));
+        let (Some(last), Some(tail)) = (branch, tail) else {
+            blocks.push(parent.clone());
+            continue;
+        };
+        // A jump that already ends at a block with no other way in is left to `duplicated_tails`' reach: the copy is for a shared tail.
+        let at = next_at;
+        next_at += 1;
+        let copies = tail.insns.iter().map(|one| Arc::new(Insn { at, covers: Some((at, at)), spread: Vec::new(), ..(**one).clone() })).collect();
+        let copy = LirBlock { cold: parent.cold, ..tail.with_insns(copies) };
+        let copy = LirBlock { at, ..copy };
+        odds.rerouted(parent.at, &parent.succ, tail.at, &[(at, 1.0)]);
+        let moved = _retargeted(parent, last, at);
+        blocks.push(moved);
+        blocks.push(copy);
+        changed = true;
+    }
+    if !changed {
+        return None;
+    }
+    Some(_reachable(&LirBody { odds, ..body.clone() }, blocks))
+}
+
+/// A block that only returns: plain operations then a `ret`, no way on, within `limit` bytes and none of it source-owned.
+fn _return_tail(bits: u32, block: &LirBlock, limit: usize) -> bool {
+    if !block.phis.is_empty() || !block.succ.is_empty() || block.insns.iter().any(|one| one.group.is_some() || one.symbol == Some(true) || !one.spread.is_empty()) {
+        return false;
+    }
+    let real = _real(block);
+    let Some((last, rest)) = real.split_last() else { return false };
+    if last.what.as_ref().is_none_or(|what| what.op != Operation::Return)
+        || rest.iter().any(|one| one.what.as_ref().is_none_or(|what| matches!(what.op, Operation::Barrier | Operation::Branch | Operation::Call | Operation::Data | Operation::Jump | Operation::Return)))
+    {
+        return false;
+    }
+    real.iter().try_fold(0usize, |bytes, one| select::priced_in(bits, one.what.as_ref()?, 0, None, false, false, None).map(|made| bytes + made.code.len())).is_some_and(|bytes| bytes <= limit)
 }
 
 /// LLVM's `TailDupSize` at -O2: the instructions a tail may hold besides its jumps.

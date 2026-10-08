@@ -1,13 +1,12 @@
-reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+reason = "return duplication (gcc copy_bb_p): a jump to a block that only returns is replaced by a copy of it at -O2: instructions fall (fib -3.7%), code bytes grow by the copies; parity/qbsp c -O2 instructions +3 are loop-alignment nops its fall-through now executes (the copy moved the loop head's offset)"
 blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 344048
+instructions = 335856
 memory_operands = 131059
-code_bytes = 211
+code_bytes = 213
 data_bytes = 15
 bss_bytes = 0
-kernel_ms = 4.5989
 
 [bas.Os]
 instructions = 344048
@@ -18,9 +17,9 @@ bss_bytes = 0
 kernel_ms = 5.691
 
 [c.O2]
-instructions = 229362
+instructions = 221170
 memory_operands = 0
-code_bytes = 55
+code_bytes = 58
 data_bytes = 0
 bss_bytes = 0
 
