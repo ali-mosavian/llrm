@@ -876,3 +876,11 @@ fn test_threading_a_long_run_of_jumps_does_not_copy_the_body_for_each() {
     let (small, large) = (cloned(500), cloned(1000));
     assert!(large <= 3 * small, "{small} block copies for 500 blocks, {large} for 1,000: more than linear");
 }
+
+/// The copy limit is eight jumps of the target's own encoding, not a guess in the pass: 3 bytes in real mode, 5 in flat.
+#[test]
+fn test_the_copy_limit_is_priced_from_the_targets_jump() {
+    assert_eq!(uncond_jump_bytes(16), 3);
+    assert_eq!(uncond_jump_bytes(32), 5);
+    assert_eq!(copy_limit(32), 40);
+}
