@@ -26,6 +26,32 @@ pub fn verify(body: &LirBody, in_ssa: bool) -> Vec<String> {
     out.extend(_spans(body));
     out.extend(_operands(body));
     out.extend(_values(body, in_ssa));
+    out.extend(_slots(body));
+    out
+}
+
+/// Once instruction selection has tagged them, every frame cell names the slot it lies in: a phase that makes a cell from a
+/// displacement alone leaves the frame layout unable to move it.
+fn _slots(body: &LirBody) -> Vec<String> {
+    if !body.slotted {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for block in &body.blocks {
+        for one in &block.insns {
+            let Some(what) = &one.what else { continue };
+            for place in what.dests.iter().chain(&what.sources) {
+                let addr = match place {
+                    Loc::Mem(cell) => cell.addr,
+                    Loc::Address(cell) => cell.addr,
+                    _ => None,
+                };
+                if let Some(addr) = addr.filter(|addr| addr.space == ir::Space::Frame && addr.slot_home().is_none()) {
+                    out.push(format!("{:#06x}: a frame cell at {} names no slot", one.at, addr.disp));
+                }
+            }
+        }
+    }
     out
 }
 
@@ -261,5 +287,26 @@ mod tests {
         let work = Insn::new(2, Some((2, 4)), Some(push), vec![], vec![]);
         let body = body("dead-work", vec![LirBlock::new(1, vec![]), LirBlock::new(2, vec![Arc::new(work)])]);
         assert!(verify(&body, false).iter().any(|complaint| complaint.contains("block 0x0002 is not reachable")));
+    }
+
+    /// A phase that made a frame cell from a displacement alone left the frame layout unable to move it: a `slotted` body is
+    /// refused one, and a cell of another space (a global whose `index` is a symbol's) is not a frame cell.
+    #[test]
+    fn test_a_slotted_body_refuses_a_frame_cell_that_names_no_slot() {
+        let cell = |addr: ir::Addr| Loc::Mem(ir::Mem { through: iced_x86::Register::BP, ..ir::Mem::new(Some(addr), 2) });
+        let store = |addr| {
+            let what = semantics(Operation::Move, "mov", vec![cell(addr)], vec![Loc::Imm(ir::Imm { value: 1, width: 2, address: None })]);
+            Insn::new(2, Some((2, 4)), Some(what), vec![], vec![])
+        };
+        let named = |addr: ir::Addr, slotted: bool| {
+            let mut made = body("slots", vec![LirBlock::new(1, vec![Arc::new(store(addr))])]);
+            made.slotted = slotted;
+            verify(&made, false)
+        };
+        let bare = ir::Addr::new(ir::Space::Frame, -4);
+        assert!(named(bare, false).is_empty(), "an untagged body is not checked");
+        assert!(named(bare, true).iter().any(|complaint| complaint.contains("a frame cell at -4 names no slot")));
+        assert!(named(bare.in_slot(-4), true).is_empty());
+        assert!(named(ir::Addr::new(ir::Space::Literal, -4), true).is_empty());
     }
 }
