@@ -383,7 +383,7 @@ fn wrap_of(procedure: &Procedure) -> Option<crate::backend::shrinkwrap::Wrap> {
 
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
-    parts(procedure, frame_omitted(procedure, 0).is_some())
+    parts(procedure, frame_omitted(procedure, 0, frame_held(procedure)).is_some())
 }
 
 /// `_frame_parts`, with no frame register where `omit`: the entry sets none and the return takes back
@@ -521,13 +521,22 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
 
 /// The procedure as emitted, frame included: what this prints and objbuild
 /// encodes. A branch's target is still a block; `label(number, at)` names it.
+/// A value lives in the frame register the description frees: there is no frame to fall back to.
+fn frame_held(procedure: &Procedure) -> bool {
+    let registers = &procedure.registers;
+    registers.free && _roots_of_values(&procedure.body, registers.pointer).contains(&ir::root(registers.pointer))
+}
+
 pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprintable> {
-    let items = match frame_omitted(procedure, number) {
-        Some(items) => items,
-        None if procedure.registers.free => return Err(Unprintable(format!("{}: the frame register was given to a value and the frame cannot be addressed through the stack pointer", procedure.name))),
-        None => built(procedure, number, false)?,
+    let registers = &procedure.registers;
+    let held = frame_held(procedure);
+    let (items, registers) = match frame_omitted(procedure, number, held) {
+        Some(items) => (items, registers.clone()),
+        None if held => return Err(Unprintable(format!("{}: the frame register was given to a value and the frame cannot be addressed through the stack pointer", procedure.name))),
+        // Nothing holds the freed register: the frame is the register's again.
+        None => (built(procedure, number, false)?, llrm_target::FrameRegisters { free: false, ..registers.clone() }),
     };
-    Ok(items.into_iter().map(|item| spelled(item, &procedure.registers)).collect())
+    Ok(items.into_iter().map(|item| spelled(item, &registers)).collect())
 }
 
 /// The procedure's items with the frame register LIR names BP, or not where `omit`.
@@ -674,9 +683,9 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
 
 /// `stack_addressed`, but tuned for size only where it is no longer: `[esp+d]` is a byte longer than `[ebp+d]`, and a
 /// displacement past 127 three more, which a large frame's cells can cost more than the entry and return save.
-fn frame_omitted(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
+fn frame_omitted(procedure: &Procedure, number: usize, held: bool) -> Option<Vec<Item>> {
     let omitted = stack_addressed(procedure, number)?;
-    if !procedure.size {
+    if !procedure.size || held {
         return Some(omitted);
     }
     let bytes = |items: &[Item]| -> usize {
@@ -720,10 +729,17 @@ fn stack_addressed(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
         || (!procedure.body.variables.is_empty() && !procedure.body.cfa_variables)
         || procedure.callees.values().any(|one| !one.code.is_empty())
     {
+        llrm_support::debug!("frame", "{}: kept: far {} interrupt {} entry {} bits {} variables {} inline {}", procedure.name, procedure.far, procedure.interrupt.is_some(), procedure.entry, procedure.body.bits, procedure.body.variables.len(), procedure.callees.values().filter(|one| !one.code.is_empty()).count());
         return None;
     }
     let slot = registers.slot;
-    let items = built(procedure, number, true).ok()?;
+    let items = match built(procedure, number, true) {
+        Ok(items) => items,
+        Err(error) => {
+            llrm_support::debug!("frame", "{}: kept: {}", procedure.name, error.0);
+            return None;
+        }
+    };
     // The depth at each label, from whichever edge reached it first. A label only a later branch reaches (a loop entered at its test)
     // has its depth from that branch: the pass is made again with what the last one learned.
     let mut known: IndexMap<String, i64> = IndexMap::default();

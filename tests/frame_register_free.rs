@@ -72,3 +72,16 @@ fn test_a_function_that_only_reads_a_stack_argument_does_not_save_the_frame_regi
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(!text.contains("ebp"), "{text}");
 }
+
+/// At -Os `masm::frame_omitted` took the framed body when it was shorter, though a value already lived in the freed frame register:
+/// "the frame register was given to a value and the frame cannot be addressed through the stack pointer" (c/fill_nest, c/stack_arrays_copy,
+/// nib/idioms, torture 990513-1 at -Os).
+#[test]
+fn test_size_keeps_the_stack_addressed_frame_where_a_value_holds_the_frame_register() {
+    for program in ["fill_nest", "stack_arrays_copy"] {
+        let source = format!("{}/tests/run/c/{program}.c", env!("CARGO_MANIFEST_DIR"));
+        let scratch = tempfile::tempdir().unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(scratch.path()).args(["-m32", "-march=i486", "-Os", "-S", "-o", "a.s", &source]).output().unwrap();
+        assert!(output.status.success(), "{program}: {}", String::from_utf8_lossy(&output.stderr));
+    }
+}
