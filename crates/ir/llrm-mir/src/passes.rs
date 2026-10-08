@@ -555,11 +555,19 @@ pub struct ModuleAnalyses {
     dropped: HashMap<TypeId, Rc<dyn Any>>,
     outer: Option<Rc<Outer>>,
     functions: HashMap<GlobalId, Analyses>,
+    /// What an analysis keeps for its next run, by its type: the working of an update that reuses the last.
+    memos: HashMap<TypeId, Box<dyn Any>>,
 }
 
 impl ModuleAnalyses {
     pub fn new(program: Rc<ProgramProxy>) -> Self {
-        Self { program, required: Vec::new(), results: HashMap::new(), dropped: HashMap::new(), outer: None, functions: HashMap::new() }
+        Self { program, required: Vec::new(), results: HashMap::new(), dropped: HashMap::new(), outer: None, functions: HashMap::new(), memos: HashMap::new() }
+    }
+
+    /// The `T` an analysis left for its next run, made empty the first time: what survives `invalidate`, for an analysis that
+    /// brings its last result up to date instead of working it out again.
+    pub fn memo<T: Default + 'static>(&mut self) -> &mut T {
+        self.memos.entry(TypeId::of::<T>()).or_insert_with(|| Box::new(T::default())).downcast_mut::<T>().expect("keyed by its type")
     }
 
     /// `module`'s, a program of its own for `target`: for analyses asked

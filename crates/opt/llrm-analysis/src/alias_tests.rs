@@ -838,6 +838,46 @@ fn a_body_in_no_cycle_of_calls_is_visited_once() {
     assert!(super::visits() - before >= 2, "a cycle is visited until nothing changes");
 }
 
+/// Every inline splice worked the summaries of the whole module out again (host.c: 72 runs, 20.8 s of 35.8 s). After one body is
+/// edited only it and what reads it are visited and made again, and the result is what a whole run makes.
+#[test]
+fn an_edit_visits_the_edited_body_and_its_callers_only() {
+    let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
+    let procedures = IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+    let mut memo = super::SummaryMemo::default();
+    let whole = super::summaries_updating(&procedures, None, &mut memo, None).unwrap();
+    assert_eq!(whole, summaries(&procedures, None).unwrap());
+    // `f` calls `callee`: editing `f` leaves `callee` as it was.
+    let (visits, direct) = (super::visits(), super::direct_runs());
+    let again = super::summaries_updating(&procedures, None, &mut memo, Some(&BTreeSet::from(["f".to_owned()]))).unwrap();
+    assert_eq!((super::visits() - visits, super::direct_runs() - direct), (1, 1), "only f is made again");
+    assert_eq!(again, whole);
+    // Editing `callee` is read by `f`.
+    let (visits, direct) = (super::visits(), super::direct_runs());
+    let again = super::summaries_updating(&procedures, None, &mut memo, Some(&BTreeSet::from(["callee".to_owned()]))).unwrap();
+    assert_eq!((super::visits() - visits, super::direct_runs() - direct), (2, 1), "callee, and f which reads it");
+    assert_eq!(again, whole);
+}
+
+/// The facts a visit found are of the body as it was: an edited body is visited from its own, and the summaries are what a whole run
+/// of the edited module makes (host.c: one function differed before).
+#[test]
+fn an_edited_body_is_summarized_from_its_new_facts() {
+    // The pointer passed is an instruction's, found by the body's points-to facts, not a constant.
+    let text = |at: u32| CALLEE_WRITES_ITS_PARAMETER.replace("  call void @callee(ptr getelementptr (i8, ptr @g, i16 4))", &format!("  %x = getelementptr i8, ptr @g, i16 {at}\n  call void @callee(ptr %x)"));
+    let before = Parsed::new(&text(4));
+    let after = Parsed::new(&text(8));
+    fn made(parsed: &Parsed) -> IndexMap<String, Procedure<'_>> {
+        IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))))
+    }
+    let mut memo = super::SummaryMemo::default();
+    let first = super::summaries_updating(&made(&before), None, &mut memo, None).unwrap();
+    let edited = made(&after);
+    let again = super::summaries_updating(&edited, None, &mut memo, Some(&BTreeSet::from(["f".to_owned()]))).unwrap();
+    assert_eq!(again, summaries(&edited, None).unwrap());
+    assert_ne!(again, first, "premise: the edit changes the summary");
+}
+
 /// Each call to something unknown built what it may do besides what its arguments reach (every
 /// tracked global, the callbacks) afresh: `_unknown_visible` was 28% of compiling deedlines, and
 /// `analysis summaries` 12 s of it (#558). Calls to one routine with the same escaped objects are

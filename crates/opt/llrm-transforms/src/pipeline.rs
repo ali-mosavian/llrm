@@ -66,6 +66,8 @@ pub struct Options {
     /// Code size outranks speed where they conflict: -Os and -Oz. (Whether a complete copy of a loop may grow the
     /// code is `limits.grows`, which gcc lets only -O3 do.)
     pub for_size: bool,
+    /// The allocator tries other shapes of a body and keeps the cheapest (`-fallocation-search`).
+    pub search: bool,
 }
 
 impl Default for Options {
@@ -91,6 +93,7 @@ impl Default for Options {
             sibcalls: true,
             unswitch: false,
             for_size: false,
+            search: true,
         }
     }
 }
@@ -141,6 +144,11 @@ impl Options {
     /// clone that folds away.
     pub fn size() -> Self {
         Self { limits: Limits { grows: false, target_percent: 100, ..Limits::default() }, inline: inline::Threshold::default().for_size(), for_size: true, ..Self::default() }
+    }
+
+    /// Whether the allocator tries other shapes of a body and keeps the cheapest.
+    pub fn searches(&self) -> bool {
+        self.search
     }
 
     /// Whether code size outranks speed where they conflict: -Os and -Oz.

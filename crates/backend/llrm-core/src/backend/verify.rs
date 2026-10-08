@@ -27,6 +27,7 @@ pub fn verify(body: &LirBody, in_ssa: bool) -> Vec<String> {
     out.extend(_operands(body));
     out.extend(_values(body, in_ssa));
     out.extend(_slots(body));
+    out.extend(crate::analysis::frequency::Frequency::violations(body));
     out
 }
 

@@ -55,6 +55,11 @@ step = "qcport"
 why = "builds and runs QCport against the all-Borland build: 100 s"
 owners = ["tools/qcport*", "tools/qcport/**", "tools/linkrecipe.py", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-omf/**", "crates/target/llrm-x86/**", "crates/backend/**", "crates/opt/**", "runtime/**"]
 
+[[heavy]]
+step = "compile-cost"
+why = "instructions to compile QCport and the 66 programs at -O1/-O2/-Os against tools/gate/compile-baseline.json"
+owners = ["crates/backend/**", "crates/opt/**", "crates/frontends/llrm-c/**", "crates/target/llrm-x86-m32/**", "crates/target/llrm-x86/**", "tools/compile-cost.py", "bench/**"]
+
 # `run` always runs when code changed, on the languages the diff can affect (all, in a full tier).
 [run_languages]
 qb = ["crates/frontends/llrm-qb/**", "crates/frontends/qbfront/**", "crates/frontends/llrm-qbruntime/**", "tests/run/qb/**"]
