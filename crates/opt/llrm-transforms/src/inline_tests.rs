@@ -38,12 +38,20 @@ fn inline_with(module: &mut Module, caller: &str, call: i64, threshold: Threshol
     let layout = DataLayout::default();
     let available = candidates(module, &layout, &call_counts(module), &private(module), &costs(call), call, threshold);
     let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)), base: 0 };
-    let (context, function) = module.function_mut(caller).unwrap();
     let mut changed = false;
-    while expanded(context, function, &by, &available, None).unwrap() {
+    while expand_once(module, caller, &by, &available) {
         changed = true;
     }
     changed
+}
+
+/// One call of `caller` inlined, where `available` admits it, with the declarations it needed placed.
+fn expand_once(module: &mut Module, caller: &str, by: &Caller, available: &IndexMap<GlobalId, Candidate>) -> bool {
+    let mut declared = llrm_mir::passes::Declared::of(module);
+    let (context, function) = module.function_mut(caller).unwrap();
+    let done = expanded(context, function, by, available, None, &mut declared).unwrap();
+    declared.place(module).unwrap();
+    done
 }
 
 fn run(module: &Module, name: &str, arguments: &[u128]) -> Val {
@@ -700,8 +708,7 @@ fn a_routine_that_frees_a_temporary_is_not_inlined_at_a_call_of_one() {
     assert!(available.contains_key(&id(&module, "first")), "the premise: the body is a candidate");
     for (caller, inlined) in [("temporary", false), ("owned", true)] {
         let by = Caller { layout: &layout, recursive: false, base: 0 };
-        let (context, function) = module.function_mut(caller).unwrap();
-        assert_eq!(expanded(context, function, &by, &available, None).unwrap(), inlined, "{caller}\n{}", printed(&module));
+        assert_eq!(expand_once(&mut module, caller, &by, &available), inlined, "{caller}\n{}", printed(&module));
     }
 }
 
@@ -720,8 +727,7 @@ fn test_the_last_calls_into_a_large_caller_stop_where_it_has_doubled() {
     let original = operations(module.global(id(&module, "main")).function().unwrap());
     let available = candidates(&module, &layout, &call_counts(&module), &private(&module), &costs(8), 8, Threshold::default());
     let by = Caller { layout: &layout, recursive: false, base: original };
-    let (context, function) = module.function_mut("main").unwrap();
-    while expanded(context, function, &by, &available, None).unwrap() {}
+    while expand_once(&mut module, "main", &by, &available) {}
     let after = operations(module.global(id(&module, "main")).function().unwrap());
     let calls_left = module.global(id(&module, "main")).function().unwrap().walk().filter(|&(_, inst)| matches!(module.global(id(&module, "main")).function().unwrap().instruction(inst).opcode, llrm_mir::opcode::Opcode::Call(_))).count();
     assert!(calls_left > 0, "all forty were inlined: {after} operations");
@@ -762,7 +768,7 @@ fn test_the_knee_in_operations_is_the_knee_in_instructions_over_their_rate() {
 }
 
 /// A callee that only reads memory takes a `byval` argument as the caller's own pointer (LLVM's HandleByValArgument): the call is gone.
-/// One that may write it is not inlined: the pointer would be the caller's object, not the callee's copy.
+/// One that may write it gets a copy of the object: the pointer would be the caller's object, not the callee's own.
 #[test]
 fn test_a_byval_argument_inlines_into_a_callee_that_only_reads_and_not_into_one_that_writes() {
     let text = |attrs: &str, body: &str| {
@@ -786,10 +792,14 @@ b1:
     let mut module = parsed(&reads);
     assert!(inline_into(&mut module, "main", 8));
     assert!(!printed(&module).contains("call "), "{}", printed(&module));
+    // One that may write it is inlined on a copy: an alloca the object is memcpy'd into, which the body writes instead.
     let writes = text("", "  store i16 9, ptr %p\n  %v = load i16, ptr %p\n  ret i16 %v");
     let mut module = parsed(&writes);
-    assert!(!inline_into(&mut module, "main", 8), "inlined, a write to the caller's object");
-    assert!(printed(&module).contains("call "), "{}", printed(&module));
+    assert!(inline_into(&mut module, "main", 8));
+    let printed = printed(&module);
+    assert!(!printed.contains("call i16 @peek("), "{printed}");
+    assert!(printed.contains("llvm.memcpy"), "{printed}");
+    assert_eq!(printed.matches("alloca").count(), 2, "the object and its copy: {printed}");
 }
 
 /// The copy a `byval` argument costs is what an inline saves, as LLVM prices it: a reader of a large struct, called twice, is
@@ -825,8 +835,7 @@ b1:
         let priced = OperationCosts { call: 2, argument: 1, add: 3, load: 3, ..OperationCosts::default() };
         let available = candidates(&module, &layout, &call_counts(&module), &private(&module), &priced, 2, Threshold::default());
         let by = Caller { layout: &layout, recursive: false, base: 0 };
-        let (context, function) = module.function_mut("main").unwrap();
-        while expanded(context, function, &by, &available, None).unwrap() {}
+        while expand_once(&mut module, "main", &by, &available) {}
         !printed(&module).contains("call ")
     };
     assert!(!inlined(4), "a 4-byte copy paid for the body");

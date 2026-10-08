@@ -34,7 +34,7 @@ use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::memory::Effects;
 use llrm_mir::module::{GlobalKind, GlobalValue, Linkage, Module};
 use llrm_mir::opcode::{Attribute, Opcode};
-use llrm_mir::passes::{Declarations, ModuleAnalyses, PreservedAnalyses};
+use llrm_mir::passes::{Declarations, Declared, ModuleAnalyses, PreservedAnalyses};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 use llrm_mir::types::Type;
 
