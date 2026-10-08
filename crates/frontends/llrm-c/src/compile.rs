@@ -66,7 +66,7 @@ impl From<std::io::Error> for CompileError {
 /// C through the rich MIR: translated to HIR, then compiled by the driver,
 /// which writes each stage to `dump` or where `LLRM_MIR_STAGES` names.
 pub fn selected(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options) -> Result<masm::Module, CompileError> {
-    selected_checking(text, module, dump, codegen, None)
+    selected_checking(text, module, dump, codegen, None, false)
 }
 
 /// What C's runtime says of its stack on `target`: the `stack.toml` its description names, the OS layer's
@@ -83,9 +83,10 @@ fn stack_check_of(text: &str) -> llrm_core::hir::model::StackCheck {
 }
 
 /// [`selected`], each function checking its stack as `stack_check` says (`-fsanitize=stack`).
-pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options, stack_check: Option<llrm_core::hir::model::StackCheck>) -> Result<masm::Module, CompileError> {
+pub fn selected_checking(text: &str, module: &str, dump: Option<&Path>, codegen: &llrm_core::driver::Options, stack_check: Option<llrm_core::hir::model::StackCheck>, wrapv: bool) -> Result<masm::Module, CompileError> {
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
         let mut unit = hir::unit(&stream::parse(text))?;
+        unit.wrapv = wrapv;
         let profile = Profile::for_abi(&*codegen.arch, codegen.abi.as_deref()).map_err(hir::Unsupported)?;
         let calling = codegen.arch.calling();
         let cc_of = |name: &str| calling.named(name).and_then(|one| one.cc.clone()).ok_or_else(|| hir::Unsupported(format!("calling.toml has no {name} with a cc")));
@@ -329,7 +330,7 @@ pub fn main(argv: &[String]) -> i32 {
             .unwrap_or_default();
         let format = args.flags.format(&*args.codegen.arch)?;
         let spelled = llrm_core::driver::Options { object_format: format.name(), ..args.codegen.clone() };
-        let built = selected_checking(&text, module, args.dump.as_deref(), &spelled, args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)))?;
+        let built = selected_checking(&text, module, args.dump.as_deref(), &spelled, args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)), args.flags.wrapv)?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if !args.flags.assembly && matches!(output.extension().and_then(|one| one.to_str()).map(str::to_lowercase).as_deref(), Some("obj" | "o")) {
             let bytes = objbuild::written_in(&built, name, objbuild::CodeLayout::OneSegment, format)?;
@@ -386,7 +387,7 @@ mod tests {
         assert!(runtime("c/x86-m16/ext.asm").contains(&format!("public {}", check.handler)));
         let text = std::fs::read_to_string(root.join("tests/fixtures/c/anims.cgs")).unwrap();
         let options = llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() });
-        let listing = |check| llrm_core::backend::masm::text(&super::selected_checking(&text, "anims", None, &options, check).unwrap()).unwrap();
+        let listing = |check| llrm_core::backend::masm::text(&super::selected_checking(&text, "anims", None, &options, check, false).unwrap()).unwrap();
         let named = llrm_core::hir::model::StackCheck { limit: "FOO".into(), handler: "BAR".into(), ..check };
         let checked = listing(Some(named));
         assert!(checked.contains("cmp sp, word ptr FOO") && checked.contains("call far ptr BAR") && !checked.contains("_llrm_os_stack_low"), "{checked}");
@@ -1456,7 +1457,7 @@ mod tests {
         let text = std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c32/add.cgs")).unwrap();
         let argv: Vec<String> = ["-m32", "-O2", "x.c"].map(str::to_owned).to_vec();
         let args = super::parse_args(&argv).unwrap();
-        let built = super::selected_checking(&text, "add", None, &args.codegen, Some(super::stack_check(&llrm_x86_m32::M32))).unwrap();
+        let built = super::selected_checking(&text, "add", None, &args.codegen, Some(super::stack_check(&llrm_x86_m32::M32)), false).unwrap();
         let listing = llrm_core::backend::masm::text(&built).unwrap();
         assert!(listing.contains("cmp esp, dword ptr _llrm_os_stack_low") && listing.contains("call __STKOVERFLOW"), "{listing}");
         assert!(!listing.contains("far ptr") && listing.contains("extern __STKOVERFLOW:near"), "{listing}");
