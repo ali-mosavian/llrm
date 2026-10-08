@@ -153,3 +153,18 @@ def test_the_qcport_step_has_no_wall_clock_limit_of_its_own():
     """`timeout 400` around qcport-run killed a run that was still drawing at load: qcport-run stops a stall and caps a hang itself."""
     p = gate.plan(["tools/qcport-run.py"])
     assert "timeout" not in gate.commands(p, gate.load(), gate.packages())["qcport"]
+
+
+def test_a_backend_change_runs_the_compile_cost_step_and_a_doc_or_test_change_does_not():
+    assert "compile-cost" in gate.plan(["crates/backend/llrm-core/src/backend/isel.rs"]).steps
+    assert "compile-cost" in gate.plan(["crates/ir/llrm-mir/src/lib.rs"]).steps  # full
+    assert "compile-cost" not in gate.plan(["tests/run.rs"]).steps
+    assert "compile-cost" not in gate.plan(["crates/frontends/llrm-qb/src/lib.rs"]).steps
+
+
+def test_the_compile_cost_step_has_a_command_and_a_baseline():
+    p = gate.plan(["tools/compile-cost.py"])
+    assert "compile-cost" in p.steps
+    cmds = gate.commands(p, gate.load(), gate.packages())
+    assert "tools/compile-cost.py" in cmds["compile-cost"]
+    assert (ROOT / "tools/gate/compile-baseline.json").exists()
