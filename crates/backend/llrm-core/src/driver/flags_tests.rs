@@ -39,6 +39,14 @@ fn each_level_selects_its_pipeline() {
     assert!(parsed(&["-O4"]).is_err());
 }
 
+/// `-Omax` was no level: "unknown optimization level", so a build that meant "everything on" had to say `-O3`.
+#[test]
+fn test_omax_is_every_pass_on_with_the_widest_budgets() {
+    assert_eq!(pipeline(&["-Omax"]), Options::aggressive());
+    assert!(pipeline(&["-Omax", "-fno-unroll-loops"]).limits == Options::aggressive().limits);
+    assert!(parsed(&["-Omaximum"]).is_err());
+}
+
 /// `-fno-inline-functions` was no inlining at all, the last call of a function included; gcc's leaves
 /// `-finline-functions-called-once` on and so does this, which is the spelling for none.
 #[test]
