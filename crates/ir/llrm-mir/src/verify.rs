@@ -107,6 +107,17 @@ impl Checker<'_> {
                 }
             }
         }
+        for record in function.debug_records() {
+            if function.is_erased(record.before) || function.parent(record.before).is_none() {
+                self.fail(format!("a debug record of !{} stands before instruction {}, which is no longer in the function", record.variable.0, record.before.0));
+            }
+            if let crate::module::DebugWhat::Declare(Operand::Value(value)) | crate::module::DebugWhat::Value(Operand::Value(value)) = record.what
+                && let ValueDef::Instruction(defining) = function.value(value).def
+                && function.is_erased(defining)
+            {
+                self.fail(format!("a debug record of !{} names a value of erased instruction {}", record.variable.0, defining.0));
+            }
+        }
         if function.is_declaration() {
             return;
         }
