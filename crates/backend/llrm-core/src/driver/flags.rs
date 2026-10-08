@@ -48,8 +48,9 @@ impl Level {
         match self {
             Self::O0 => pipeline::Options::none(),
             Self::O1 | Self::Og => pipeline::Options::basic(),
-            Self::O2 => pipeline::Options::default(),
-            Self::O3 | Self::Omax => pipeline::Options::aggressive(),
+            Self::O2 => pipeline::Options::standard(),
+            Self::O3 => pipeline::Options::speed(),
+            Self::Omax => pipeline::Options::aggressive(),
             Self::Os => pipeline::Options::size(),
             Self::Oz => pipeline::Options::min_size(),
         }

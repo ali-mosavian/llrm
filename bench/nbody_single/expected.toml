@@ -1,13 +1,12 @@
-reason = "an integer of 32 bits or more made a float is rounded to a float, as C requires (the x87 register kept the extra bits and a compare against a float read them): a store and a load per conversion"
-blessed = "2026-10-07"
+reason = "-O2 takes gcc's loop-copy rule and budgets (opts.cc 1311-1316; user decision 2026-10-08)"
+blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 919099
-memory_operands = 204072
-code_bytes = 1118
-data_bytes = 165
+instructions = 1037182
+memory_operands = 138105
+code_bytes = 388
+data_bytes = 145
 bss_bytes = 0
-kernel_ms = 12.2716
 
 [bas.Os]
 instructions = 1037188
@@ -18,12 +17,11 @@ bss_bytes = 0
 kernel_ms = 13.8468
 
 [c.O2]
-instructions = 901107
-memory_operands = 146077
-code_bytes = 1069
-data_bytes = 68
+instructions = 1037190
+memory_operands = 138111
+code_bytes = 347
+data_bytes = 24
 bss_bytes = 96
-kernel_ms = 12.0218
 
 [c.Os]
 instructions = 1037190
@@ -33,12 +31,11 @@ data_bytes = 24
 bss_bytes = 96
 
 [nib.O2]
-instructions = 948123
-memory_operands = 186080
-code_bytes = 1048
-data_bytes = 76
+instructions = 1350436
+memory_operands = 230174
+code_bytes = 589
+data_bytes = 32
 bss_bytes = 0
-kernel_ms = 12.648
 
 [nib.Os]
 instructions = 1350472

@@ -4,7 +4,9 @@
 //! Open Watcom's `RegThrash` (`bld/cg/c/scthrash.c`), and it is the inverse of
 //! coalescing. Registers are already chosen, so it takes
 //!
-//!     OP(...) -> Y        ...        mov Z, Y     (and Y dies there)
+//! ```text
+//! OP(...) -> Y        ...        mov Z, Y     (and Y dies there)
+//! ```
 //!
 //! and writes the producer's result into Z instead, which leaves the move
 //! copying Z to itself. Between the definition and the move, Y has to stay

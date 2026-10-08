@@ -130,3 +130,11 @@ none, and registers saved where first needed are all the code's own), with the b
 the compiler's record of the call (`Mark::Pops`). A function whose paths reach one place at two stack depths has no
 rows. DWARF writes them as `.debug_frame`; CodeView and Turbo Debugger have no such table. The return address's
 column is the target's register of class `pc`.
+
+## Register parameters and the format's ranges
+
+A parameter that arrives in a register is there until the function stores it. Whether the debug format can say that is the
+writer's fact (`llrm_dwarf::LOCATION_RANGES`, `llrm_coff::LOCATION_RANGES`, `llrm_omf::LOCATION_RANGES`; `Options::location_ranges`
+picks the writer from the object format and the `-g` flavor). Where it can (DWARF location lists, C13 ranges), the parameter keeps its
+register range and a cell once stored. Where it cannot (CodeView 4, its BASIC-era dialect, Turbo Debugger), instruction selection
+stores each such parameter to a cell of its own at the entry, before the body a debugger stops at begins, and describes the cell.

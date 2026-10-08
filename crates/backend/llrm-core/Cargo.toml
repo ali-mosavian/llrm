@@ -11,6 +11,8 @@ llrm-target = { workspace = true }
 llrm-x86 = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-omf = { workspace = true }
+llrm-dwarf = { workspace = true }
+llrm-coff = { workspace = true }
 llrm-object = { workspace = true }
 llrm-coff32 = { workspace = true }
 llrm-coff64 = { workspace = true }
@@ -20,6 +22,7 @@ llrm-macho = { workspace = true }
 llrm-x86-bcmachine = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-hir = { workspace = true }
+llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-transforms = { workspace = true }
@@ -35,6 +38,7 @@ tempfile = { workspace = true }
 toml = { workspace = true }
 
 [build-dependencies]
+llrm-lir = { workspace = true }
 llrm-peepgen = { workspace = true }
 
 [features]
