@@ -70,3 +70,26 @@ def test_a_compiler_that_succeeds_is_no_failure(tmp_path):
     fine.write_text("#!/bin/sh\nexit 0\n")
     fine.chmod(0o755)
     assert qcport_run.compile_failure(fine, [], Path("a.c"), tmp_path / "a.obj") is None
+
+
+def fake_qcport(tmp_path, body):
+    (tmp_path / "tools").mkdir()
+    script = tmp_path / "tools" / "run.sh"
+    script.write_text("#!/bin/bash\n" + body)
+    script.chmod(0o755)
+    return tmp_path / "src"
+
+
+def test_a_run_that_waits_is_not_one_that_ran_out_of_time(tmp_path):
+    """The limit was 30 s of wall clock and failed the gate on a correct build at load 88: a loaded host makes a run wait for its turn."""
+    qcport = fake_qcport(tmp_path, "sleep 2\n")
+    qcport_run.run(tmp_path / "work", qcport, 1)
+
+
+def test_a_run_that_computes_past_its_limit_is_a_timeout(tmp_path):
+    import subprocess
+    import pytest
+
+    qcport = fake_qcport(tmp_path, "while :; do :; done\n")
+    with pytest.raises(subprocess.TimeoutExpired):
+        qcport_run.run(tmp_path / "work", qcport, 1)

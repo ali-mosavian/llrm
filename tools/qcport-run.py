@@ -12,7 +12,7 @@ used as they are and nothing is compiled, which saves the 40 s of compiling.
 
 Both builds link the same objects but QCport's 65 C modules, which the second compiles with llrm-c -O2, and run headless
 (`start.qmp -ticks 300`) in a work directory of their own. They must draw the same: the frames, the polygons and the
-md5 of BENCH.BMP. Any difference, a run that does not finish in QCPORT_RUN_SECONDS (30), or a build that fails exits 1.
+md5 of BENCH.BMP. Any difference, a run that does not finish in QCPORT_RUN_SECONDS (30) seconds of CPU, or a build that fails exits 1.
 """
 from __future__ import annotations
 
@@ -93,8 +93,17 @@ def verdict(reference: dict[str, str], built: dict[str, str]) -> list[str]:
 
 
 def run(directory: Path, qcport: Path, seconds: int) -> None:
+    """Runs QCport headless; raises TimeoutExpired if it takes more than `seconds` of CPU time.
+
+    CPU time, not the wall clock: the emulated machine is pinned (75000 cycles), so a run needs a fixed amount of host CPU, and on
+    a loaded host the wall time to get it is anything (30 s of wall failed the gate at load 88 on a correct build). A run that
+    waits without computing is bounded by a wall limit of 20 times that, and not less than ten minutes.
+    """
     environment = {**os.environ, "DOSBOX_BIN": os.environ.get("DOSBOX_BIN", str(dosbatch.DOSBOX))}
-    subprocess.run([str(qcport.parent / "tools" / "run.sh"), str(directory), ARGUMENTS], env=environment, capture_output=True, timeout=seconds, check=False)
+    command = ["bash", "-c", 'ulimit -S -t "$0"; exec "$@"', str(seconds), str(qcport.parent / "tools" / "run.sh"), str(directory), ARGUMENTS]
+    done = subprocess.run(command, env=environment, capture_output=True, timeout=max(20 * seconds, 600), check=False)
+    if done.returncode in (-signal.SIGXCPU, 128 + signal.SIGXCPU):
+        raise subprocess.TimeoutExpired(command, seconds)
 
 
 def main() -> int:
@@ -142,7 +151,7 @@ def main() -> int:
         try:
             list(pool.map(lambda side: run(side, qcport, seconds), sides.values()))
         except subprocess.TimeoutExpired:
-            print(f"a run did not finish in {seconds}s ({work})")
+            print(f"a run did not finish in {seconds} s of CPU ({work})")
             return 1
     reference, built = measured(sides["borland"]), measured(sides["llrm"])
     differences = verdict(reference, built)
