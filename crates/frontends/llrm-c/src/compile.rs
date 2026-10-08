@@ -716,6 +716,23 @@ mod tests {
         assert!(body.contains(&"mov ax, word ptr [bp+6]".to_owned()) && body.contains(&"mov ax, word ptr [bp+8]".to_owned()), "{body:?}");
     }
 
+    /// A copy and an add, `mov r,ax; add r,k`, are one `lea r,[eax+k]` where it costs no more: the 486's LEA is one clock (its table
+    /// held the 386's two), so with the address-size prefix it is the two instructions' two clocks in a byte less. Two values off one
+    /// argument took two instructions each.
+    #[test]
+    fn test_m16_regparm3_a_copy_and_an_add_are_one_lea_where_it_costs_no_more() {
+        let body = regparm3("_leas");
+        let leas = body.iter().filter(|line| line.starts_with("lea ") && line.contains("[eax+")).count();
+        assert!(leas == 2 && !body.iter().any(|line| line.starts_with("mov ")), "{body:?}");
+    }
+
+    /// A copy and a unit add stay `mov r,ax; inc r`: the INC makes them three bytes, the LEA is four.
+    #[test]
+    fn test_m16_regparm3_a_copy_and_a_unit_add_stay_when_the_lea_is_longer_than_the_inc() {
+        let body = regparm3("_incs");
+        assert!(body.iter().any(|line| line.starts_with("inc ")) && !body.iter().any(|line| line.starts_with("lea ")), "{body:?}");
+    }
+
     /// A long on the stack is two words: `stack_long`'s fourth, fifth and sixth arguments (a byte, a long, a long) are at [bp+6], [bp+8]
     /// and [bp+12]. The long was a word's worth to the stack's layout, so the sixth was read at [bp+10], from the middle of the fifth.
     #[test]

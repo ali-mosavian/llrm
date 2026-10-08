@@ -28,3 +28,7 @@ long stack_long(short a, short b, long c, unsigned char d, unsigned long e, long
 extern void ext(int a);
 int keep_far(char __far *p, int n) { int s = p[0]; ext(n); s += p[1]; ext(s); return s + p[2]; }
 struct S4 take4(struct S4 s, int a) { return s; }
+extern void use3(int a, int b, int c);
+void leas(int a) { use3(a + 4, a + 7, a + 10); }
+extern void use1(int a, int b);
+void incs(int a) { use1(a + 1, a); }
