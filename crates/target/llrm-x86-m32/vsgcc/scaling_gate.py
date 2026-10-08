@@ -33,7 +33,12 @@ PASS_BUDGET = HERE.parents[3] / "tools/gate/pass-budget.json"
 FLOOR = 0.02  # share of the compile's own work at 2N (net of the empty file): a smaller step's count moves with run order, not growth
 LINEAR = 2.1  # a pass above this at 2N/N is superlinear: it needs an entry in the pass budget (gcc's passes read up to about 2.1)
 LEVELS = ("O1", "O2", "Os")
-SIZES = {"functions": 64, "straight": 512, "branches": 32, "live": 64, "callers": 32, "chain": 32, "mulconst": 128}  # N: 2N compiles in about 2 s at -O2 (scaling.py's timings)
+# N per axis, by one rule: the largest N whose 2N compile costs at most 12 G instructions at -O2 (about 3 s). Measured 2026-10-08
+# on main b0342cdb2, whole-compile 2N/N at N, 2N, 4N, ...: no axis settles to a constant (the exponent drifts up with size, e.g.
+# branches 2.92 2.84 2.75 3.46 over 16..256), so no size is "past the overhead"; the rule keeps the gate's cost flat and each
+# axis as far up as it allows. A step whose ratio is a small-N artifact (branches' recolor reads 2.75 at 32->64, 1.9-2.2 at 64->256:
+# the pairwise scan fills up to its 48-holder limit) is recorded as it reads; its budget says so, not that it is superlinear.
+SIZES = {"functions": 64, "straight": 512, "branches": 32, "live": 64, "callers": 32, "chain": 32, "mulconst": 512}
 PASS_SLACK = 1.05  # a step's own count moves 2.7% at worst between runs (242 steps, 3 runs)
 SLACK = 1.01  # the same build twice differs by 0.0014 at worst (21 ratios)
 

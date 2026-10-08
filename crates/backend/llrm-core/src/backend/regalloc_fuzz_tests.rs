@@ -786,6 +786,32 @@ fn test_an_allocator_that_does_not_search_allocates_a_body_once() {
     assert!(searched > 0, "premise: some body had a shape to try");
 }
 
+/// The search tried every shape its spills suggested, twice each: up to 12 allocations of one body, and 80% of compiling
+/// `d_faces`. Unless it is exhaustive it allocates the shape the spills suggest and the body without splitting: at most 2
+/// more, and never a worse output than the first allocation's.
+#[test]
+fn test_a_search_that_is_not_exhaustive_makes_at_most_two_more_allocations() {
+    use crate::backend::allocate::trials;
+    let shape = Shape { pool: 12, ops: 11 };
+    let mut most_all = 0;
+    for seed in 0..40 {
+        let run = |exhaustive: bool| {
+            let (body, _) = body(seed, &shape);
+            let cpu = crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, exhaustive).expect("a profile");
+            let mut phase = RegAlloc::new(None, None, ProfileOrName::Profile(cpu), &*target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16()).expect("a phase");
+            let before = trials();
+            let out = phase.transform(body).expect("allocated");
+            (trials() - before, out)
+        };
+        let (directed, out) = run(false);
+        let (all, _) = run(true);
+        assert!(directed <= 2, "seed {seed}: {directed} more allocations");
+        assert!(complaints(&out).is_empty(), "seed {seed}: {:?}", complaints(&out));
+        most_all = most_all.max(all);
+    }
+    assert!(most_all > 2, "premise: some body has more than two shapes to try (most: {most_all})");
+}
+
 /// `allocate::live` was built from per-block sorted sets and converted to bit rows for the fixed point:
 /// 24% of compiling QCport's `d_faces` (#559). Dense rows all the way give the same sets.
 #[test]
