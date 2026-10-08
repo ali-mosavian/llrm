@@ -247,6 +247,9 @@ pub fn overriding(base: Register, seg: Register) -> Register {
 }
 
 fn memory_operand(base: Register, index: Register, scale: i64, displ: i64, displ_size: u32, seg: Register) -> MemoryOperand {
+    // A 16-bit effective address is the sum modulo 64 KB, so a register-relative displacement past a signed word is the same
+    // address as its wrap, which is what the two-byte field holds.
+    let displ = if displ_size == 2 && (base != Register::None || index != Register::None) { i64::from(displ as i16) } else { displ };
     MemoryOperand::new(base, index, scale as u32, displ, displ_size, false, overriding(base, seg))
 }
 

@@ -1,4 +1,4 @@
-reason = "the 486's LEA is one clock (the table held the 386's two): a copy and an add are one lea where it costs no more; down only"
+reason = "regparm3 is the default (user decision 2026-10-08), measured on main after #887: AX/DX/CX cannot address, only SI/DI survive a call; the rows here move down"
 blessed = "2026-10-08"
 
 [bas.O2]
@@ -31,16 +31,16 @@ data_bytes = 8
 bss_bytes = 0
 
 [nib.O2]
-instructions = 20156
+instructions = 20162
 memory_operands = 3003
-code_bytes = 495
+code_bytes = 496
 data_bytes = 16
 bss_bytes = 0
 
 [nib.Os]
-instructions = 20169
+instructions = 20175
 memory_operands = 3003
-code_bytes = 489
+code_bytes = 490
 data_bytes = 16
 bss_bytes = 0
 
