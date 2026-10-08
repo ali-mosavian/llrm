@@ -509,10 +509,7 @@ pub fn expanded(
 fn fits(context: &Context, function: &Function, caller: &Caller, call: InstId, candidate: &Candidate) -> bool {
     let callee = &*candidate.body;
     let Opcode::Call(info) = &function.instruction(call).opcode else { return false };
-    // A `byval` parameter is the callee's own copy: the pointer would be the caller's object, which the callee may write. LLVM's
-    // InlineFunction copies it into a fresh alloca first (HandleByValArgument); not here yet, so such a call stays a call.
-    callee.parameter_attrs.iter().all(|attrs| !attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Type(name, _) if name == "byval")))
-        && info.function_type == callee.ty
+    info.function_type == callee.ty
         && !matches!(context.types.get(callee.ty), Type::Function { variadic: true, .. })
         && (candidate.frame == 0 || (!caller.recursive && frame(context, caller.layout, function) + candidate.frame <= FRAME_LIMIT))
         && grows_within_limits(function, caller, callee, candidate.moved)
