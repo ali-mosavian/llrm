@@ -110,7 +110,7 @@
 "live O2 facts widths": 3.846,
 "live O2 lir coalesce": 3.117,
 "live O2 mir gvn": 3.108,
-"live O2 regalloc spill": 3.931,
+"live O2 regalloc spill": 4.175,
 "live O2 siblings interference": 4.046,
 "live O2 spill cleanup": 4.11,
 "live O2 spill color slots": 4.197,
