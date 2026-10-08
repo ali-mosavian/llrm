@@ -68,6 +68,8 @@ pub struct Options {
     pub for_size: bool,
     /// The allocator tries other shapes of a body and keeps the cheapest (`-fallocation-search`).
     pub search: bool,
+    /// With `search`, every shape rather than the one the spills suggest (`-fallocation-search-all`; -Omax).
+    pub exhaustive: bool,
 }
 
 impl Default for Options {
@@ -94,6 +96,7 @@ impl Default for Options {
             unswitch: false,
             for_size: false,
             search: true,
+            exhaustive: false,
         }
     }
 }
@@ -134,7 +137,7 @@ impl Options {
 
     /// -Omax: every pass the default has on, LLVM's -O3 budgets, twice the target's unroll budget and a 250 inline threshold.
     pub fn aggressive() -> Self {
-        Self { limits: Limits { target_percent: 200, ..Limits::default() }, inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) }, ..Self::default() }
+        Self { limits: Limits { target_percent: 200, ..Limits::default() }, inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) }, exhaustive: true, ..Self::default() }
     }
 
     /// -Os: no copy grows the code. Inlining keeps -O2's threshold: the
@@ -149,6 +152,11 @@ impl Options {
     /// Whether the allocator tries other shapes of a body and keeps the cheapest.
     pub fn searches(&self) -> bool {
         self.search
+    }
+
+    /// Whether the search tries every shape of a body.
+    pub fn searches_all(&self) -> bool {
+        self.exhaustive
     }
 
     /// Whether code size outranks speed where they conflict: -Os and -Oz.

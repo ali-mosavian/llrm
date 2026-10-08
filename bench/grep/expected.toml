@@ -1,4 +1,4 @@
-reason = "the queue takes the value fewest registers may hold first (LLVM's register class priority): m16 base/index values before wide ones; 38 instruction rows change, 23 better; QCport bytes -0.34% (-O2), -0.36% (-Os)"
+reason = "regalloc search picks one shape plus the no-split body below -Omax: grep nib code +5 bytes (the unfolded no-split trial is not tried)"
 blessed = "2026-10-08"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 3056
 kernel_ms = 3415.6629
 
 [nib.O2]
-code_bytes = 1482
+code_bytes = 1487
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.5804
 
 [nib.Os]
-code_bytes = 1385
+code_bytes = 1390
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.6052
