@@ -1,48 +1,45 @@
-reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
-blessed = "2026-10-07"
+reason = "jumpthread decides a branch on a compare of a phi of constants on each way into it (gcc's budget, empty copies at -Os): queens c -Os instructions 187348 -> 173090 but memory operands 25997 -> 26548 (a reload on the threaded path); qlight c -O2 +1 instruction, -1 byte"
+blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 125
+instructions = 124
 memory_operands = 28
-code_bytes = 331
+code_bytes = 330
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0199
 
 [bas.Os]
-instructions = 111
+instructions = 110
 memory_operands = 28
-code_bytes = 287
+code_bytes = 286
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0198
 
 [c.O2]
-instructions = 106
+instructions = 107
 memory_operands = 12
-code_bytes = 225
-data_bytes = 0
-bss_bytes = 0
-kernel_ms = 0.0031
-
-[c.Os]
-instructions = 100
-memory_operands = 12
-code_bytes = 172
-data_bytes = 0
-bss_bytes = 0
-
-[nib.O2]
-instructions = 130
-memory_operands = 8
 code_bytes = 224
 data_bytes = 0
 bss_bytes = 0
 
-[nib.Os]
-instructions = 119
+[c.Os]
+instructions = 99
+memory_operands = 12
+code_bytes = 171
+data_bytes = 0
+bss_bytes = 0
+
+[nib.O2]
+instructions = 129
 memory_operands = 8
-code_bytes = 177
+code_bytes = 223
+data_bytes = 0
+bss_bytes = 0
+
+[nib.Os]
+instructions = 118
+memory_operands = 8
+code_bytes = 176
 data_bytes = 0
 bss_bytes = 0
 

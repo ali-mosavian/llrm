@@ -6,7 +6,7 @@
 //! given its own copy of the blocks from the join down to the switch, and the copy of the switch is a jump to the case
 //! its constant picks: the dispatch is gone from that path. The copies cost code, as LLVM's and GCC's do, so a path
 //! is taken only where its blocks hold `MAX_PATH` instructions or fewer and the whole function `MAX_COPIED`, and
-//! never where the build is tuned for size.
+//! never where the build is tuned for size, except the branch whose copies hold nothing.
 //!
 //! Only what this reads: a `switch` on a phi in a block of a loop (`p` in `H`), `H` reaching the switch's block `S`
 //! through blocks each with the one before as its only predecessor, and `p`'s input from the loop being a constant,
@@ -32,9 +32,11 @@ use crate::lcssa::arms;
 
 /// GCC's `max-fsm-thread-path-insns`: instructions one path's copies may hold.
 const MAX_PATH: usize = 100;
-/// Instructions besides phis and the branch that a branch's path may copy: the compare. LLVM's `jump-threading-threshold` is 6 and
-/// GCC's `max-jump-thread-duplication-stmts` 15; at one, the copies are empty once the compare is decided and no code is added.
-const BRANCH_PATH: usize = 1;
+/// GCC's `max-jump-thread-duplication-stmts` (params.opt:589): instructions a branch's path may copy besides the phis and the compare
+/// the threading kills. Tuned for size, GCC threads only where it kills every statement of the block (`tree-ssa-threadupdate.cc:2077`): none.
+const BRANCH_PATH: usize = 15;
+/// GCC's `fsm-scale-path-stmts` (params.opt:165): `profitable_path_p` rejects a path of `n` instructions where `n * 2 >= BRANCH_PATH`.
+const PATH_SCALE: usize = 2;
 /// GCC's `max-fsm-thread-paths`, in instructions rather than paths: what one function may copy in all.
 const MAX_COPIED: usize = 400;
 
@@ -49,11 +51,8 @@ impl FunctionPass for JumpThread {
     }
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        if self.size {
-            return PreservedAnalyses::all();
-        }
         let outer = std::rc::Rc::clone(analyses.outer());
-        if !threaded(unit.context, unit.layout, unit.function, &outer) {
+        if !threaded(unit.context, unit.layout, unit.function, &outer, self.size) {
             return PreservedAnalyses::all();
         }
         // What the copies know of their state: a product by a constant, a compare of one. Only where something was copied.
@@ -73,7 +72,7 @@ struct Path {
 }
 
 /// Every switch's paths that can be threaded, a switch's all at once within the limits; whether any was.
-pub fn threaded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer) -> bool {
+pub fn threaded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, size: bool) -> bool {
     // The common function has nothing to thread: no analysis is made for it.
     let unit = memory::Unit::within(context, layout, function, outer);
     let any = function.walk().any(|(_, inst)| {
@@ -85,7 +84,11 @@ pub fn threaded(context: &mut Context, layout: &DataLayout, function: &mut Funct
     }
     let mut copied = 0;
     let mut changed = false;
-    while let Some(paths) = found(context, layout, function, outer, copied) {
+    // The paths of the branches are those of the function as it came: a branch the copies made is not threaded again, or a loop
+    // would be peeled one trip at a time. GCC registers its threads once and applies them together.
+    let mut rounds = 0;
+    while let Some(paths) = found(context, layout, function, outer, copied, size, rounds == 0) {
+        rounds += 1;
         llrm_support::debug!("jumpthread", "{} paths, {} instructions copied so far", paths.len(), copied);
         // A path of phis and a branch copies no instruction and still spends the budget: or a loop of them never ends.
         copied += copy(context, function, &paths).max(paths.len());
@@ -98,7 +101,7 @@ pub fn threaded(context: &mut Context, layout: &DataLayout, function: &mut Funct
 }
 
 /// The paths of the first switch or branch that has any, within what is left of `MAX_COPIED`.
-fn found(context: &mut Context, layout: &DataLayout, function: &Function, outer: &Outer, copied: usize) -> Option<Vec<Path>> {
+fn found(context: &mut Context, layout: &DataLayout, function: &Function, outer: &Outer, copied: usize, size: bool, branches: bool) -> Option<Vec<Path>> {
     let shape = cfg::Shape::of(function);
     let unit = memory::Unit::within(context, layout, function, outer).with_shape(&shape);
     let blocks: Vec<BlockId> = function.walk().filter(|&(_, inst)| function.instruction(inst).opcode.is_terminator()).map(|(block, _)| block).collect();
@@ -108,49 +111,74 @@ fn found(context: &mut Context, layout: &DataLayout, function: &Function, outer:
         let loop_ = shape.loops.iter().filter(|one| one.body.contains(&cfg::id(block))).min_by_key(|one| one.body.len());
         // A switch is the state machine of a loop; a branch on a constant a path decides is threaded wherever it is.
         let Some((state, decide)) = decided(function, &unit, last) else { continue };
-        if loop_.is_none() && function.instruction(last).opcode == Opcode::Switch {
+        let is_switch = function.instruction(last).opcode == Opcode::Switch;
+        if is_switch && (size || loop_.is_none()) || !is_switch && !branches {
             continue;
         }
         let Some(chain) = chain_to_phi(function, loop_, block, state) else { continue };
         let ValueDef::Instruction(phi) = function.value(state).def else { continue };
-        let is_switch = function.instruction(last).opcode == Opcode::Switch;
-        let limit = if is_switch { MAX_PATH } else { BRANCH_PATH };
+        let limit = match (is_switch, size) {
+            (true, _) => MAX_PATH,
+            (false, false) => (BRANCH_PATH - 1) / PATH_SCALE,
+            (false, true) => 0,
+        };
+        // The compare of the branch is decided by the threading, and is not a copy.
+        let killed = match function.instruction(last).operands.first() {
+            Some(&Operand::Value(condition)) if !is_switch => match function.value(condition).def {
+                ValueDef::Instruction(made) if matches!(function.instruction(made).opcode, Opcode::ICmp(_)) => Some(made),
+                _ => None,
+            },
+            _ => None,
+        };
         let mut paths = Vec::new();
         let mut spent = copied;
-        // Whether every way into the phi was threaded.
-        let mut complete = true;
         for (value, from) in arms(function, phi) {
             // The constant on each way in, and the blocks copied ahead of the chain.
             let ways = resolved(function, &unit, value, from, 4);
-            complete &= !ways.is_empty();
             for (source, prefix, number) in ways {
-                let Some(target) = decide(number) else {
-                    complete = false;
-                    continue;
-                };
+                let Some(target) = decide(number) else { continue };
                 let blocks: Vec<BlockId> = prefix.into_iter().chain(chain.iter().copied()).collect();
-                if blocks.contains(&source) || !blocks.iter().all(|&one| copyable(function, one)) {
-                    complete = false;
+                if blocks.contains(&source) {
                     continue;
                 }
-                let size: usize = if is_switch {
+                if !blocks.iter().all(|&one| copyable(function, one)) {
+                    continue;
+                }
+                // Into a loop through its header from outside is a rotation, which `Rotate` makes where it pays: GCC allows it only
+                // for the idioms of `thread_through_loop_header` (tree-ssa-threadupdate.cc:1712), and not before the loop passes are done.
+                if !is_switch && blocks.iter().any(|&one| shape.loops.iter().any(|l| l.header == cfg::id(one) && !l.body.contains(&cfg::id(source)))) {
+                    continue;
+                }
+                let copies: usize = if is_switch {
                     blocks.iter().map(|&one| function.block(one).instructions().len()).sum()
                 } else {
-                    // Besides the phis and the branch, what the copies hold.
-                    blocks.iter().flat_map(|&one| function.block(one).instructions().iter().copied()).filter(|&inst| function.instruction(inst).opcode != Opcode::Phi && !function.instruction(inst).opcode.is_terminator()).count()
+                    // Besides the phis, the branch and its compare, what the copies hold.
+                    blocks
+                        .iter()
+                        .flat_map(|&one| function.block(one).instructions().iter().copied())
+                        .filter(|&inst| function.instruction(inst).opcode != Opcode::Phi && !function.instruction(inst).opcode.is_terminator() && Some(inst) != killed)
+                        .count()
                 };
-                if size > limit || spent + size > MAX_COPIED {
-                    complete = false;
+                // GCC counts the phis of a block with several predecessors and successors (`tree-ssa-threadbackward.cc`, possibly_profitable_path_p):
+                // each is a phi at the points where the copies rejoin the originals, and a move there. The state's own phi dies.
+                let phis: usize = if is_switch {
+                    0
+                } else {
+                    blocks
+                        .iter()
+                        .filter(|&&one| function.predecessors(one).len() > 1 && function.successors(one).len() > 1)
+                        .map(|&one| function.block(one).instructions().iter().filter(|&&inst| function.instruction(inst).opcode == Opcode::Phi && inst != phi).count())
+                        .sum()
+                };
+                llrm_support::debug!("jumpthread", "path from {:?}: {} copies, {} phis", source, copies, phis);
+                let copies = copies + phis;
+                if copies > limit || spent + copies > MAX_COPIED {
                     continue;
                 }
-                // A path whose copies hold only phis and a branch still costs a block, or the budget would never run out.
-                spent += size.max(1);
+                // A path of phis and a branch still costs a block, or the budget would never run out.
+                spent += copies.max(1);
                 paths.push(Path { from: source, blocks, target });
             }
-        }
-        // A branch is threaded only where no way into it is left: the block is then empty, and the copies are all there is of it.
-        if !is_switch && !complete {
-            continue;
         }
         if !paths.is_empty() {
             return Some(paths);

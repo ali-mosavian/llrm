@@ -1,4 +1,4 @@
-reason = "jumpthread decides a branch on a compare of a phi of constants on each path: queens' inlined safe() no longer tests its own result"
+reason = "jumpthread decides a branch on a compare of a phi of constants on each way into it (gcc's budget, empty copies at -Os): queens c -Os instructions 187348 -> 173090 but memory operands 25997 -> 26548 (a reload on the threaded path); qlight c -O2 +1 instruction, -1 byte"
 blessed = "2026-10-08"
 
 [bas.O2]
@@ -23,9 +23,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 187348
-memory_operands = 25997
-code_bytes = 191
+instructions = 173090
+memory_operands = 26548
+code_bytes = 181
 data_bytes = 0
 bss_bytes = 0
 
