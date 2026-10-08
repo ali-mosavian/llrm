@@ -235,6 +235,8 @@ pub fn report_times() {
     CLOCK.with(|clock| {
         let clock = std::mem::take(&mut *clock.borrow_mut());
         let wall = clock.start.map(|start| start.elapsed()).unwrap_or_default();
+        // Read with the wall clock, before the report's own printing is done.
+        let cpu = clock.cpu_start.map(|start| cpu_now().saturating_sub(start)).unwrap_or_default();
         let top = std::env::var("LLRM_TIME_TOP").ok().and_then(|one| one.parse().ok()).unwrap_or(30);
         let mut flat = clock.flat;
         flat.sort_by(|one, other| other.1.own.cmp(&one.1.own));
@@ -269,7 +271,6 @@ pub fn report_times() {
         }
         eprintln!("[time] wall {:.3} ms, outermost steps {:.3} ms, untimed {:.3} ms ({:.1}%)", ms(wall), ms(clock.top), ms(wall.saturating_sub(clock.top)), 100.0 * wall.saturating_sub(clock.top).as_secs_f64() / wall.as_secs_f64().max(1e-9));
         // The same by the thread's CPU time: a wait between two steps, a thread another process preempted, is not time in no step.
-        let cpu = clock.cpu_start.map(|start| cpu_now().saturating_sub(start)).unwrap_or_default();
         eprintln!("[time] cpu {:.3} ms, outermost steps cpu {:.3} ms, untimed cpu {:.3} ms ({:.1}%)", ms(cpu), ms(clock.cpu_top), ms(cpu.saturating_sub(clock.cpu_top)), 100.0 * cpu.saturating_sub(clock.cpu_top).as_secs_f64() / cpu.as_secs_f64().max(1e-9));
     });
 }
