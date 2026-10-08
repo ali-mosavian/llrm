@@ -168,3 +168,11 @@ def test_the_compile_cost_step_has_a_command_and_a_baseline():
     cmds = gate.commands(p, gate.load(), gate.packages())
     assert "tools/compile-cost.py" in cmds["compile-cost"]
     assert (ROOT / "tools/gate/compile-baseline.json").exists()
+
+
+def test_a_backend_change_runs_the_scaling_step_and_a_frontend_only_change_does_not():
+    assert "scaling" in gate.plan(["crates/opt/llrm-transforms/src/gvn.rs"]).steps
+    assert "scaling" in gate.plan(["crates/ir/llrm-mir/src/lib.rs"]).steps  # full
+    assert "scaling" not in gate.plan(["crates/frontends/llrm-qb/src/lib.rs"]).steps
+    cmds = gate.commands(gate.plan(["crates/opt/llrm-transforms/src/gvn.rs"]), gate.load(), gate.packages())
+    assert "scaling_gate.py" in cmds["scaling"] and (ROOT / "tools/gate/scaling-budget.json").exists()
