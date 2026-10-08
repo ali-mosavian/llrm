@@ -110,19 +110,10 @@ impl Session {
         self.replies.recv_timeout(Duration::from_secs(20)).expect("a reply")
     }
 
-    /// Runs a DOS command line in the shell: asked again until the shell takes it, which on a loaded machine it has not yet
-    /// when the socket is up (it answers "Shell not initialized"), and a command it never ran left a test waiting for a
-    /// program that never started.
+    /// Runs a DOS command line in the shell.
     pub fn dos(&self, line: &str) {
-        let asked = std::time::Instant::now();
-        loop {
-            let answer = self.command(&serde_json::json!({"cmd": "dos_cmd", "command": line}));
-            if answer["status"] != "error" {
-                return;
-            }
-            assert!(asked.elapsed() < Duration::from_secs(120), "the shell never took `{line}`: {answer}");
-            std::thread::sleep(Duration::from_millis(500));
-        }
+        let answer = self.command(&serde_json::json!({"cmd": "dos_cmd", "command": line}));
+        assert_ne!(answer["status"], "error", "the shell refused `{line}`: {answer}");
     }
 
     /// Types `line` and Enter through the keyboard controller, which is how a debugger that hooks the keyboard
