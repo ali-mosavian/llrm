@@ -296,11 +296,12 @@ fn copy(context: &mut Context, function: &mut Function, paths: &[Path]) -> usize
                     if function.instruction(phi).opcode != Opcode::Phi {
                         break;
                     }
-                    if let Some(taken) = arms(function, phi).into_iter().find(|(_, from)| *from == block) {
-                        let mut inputs = function.instruction(phi).operands.clone();
-                        inputs.extend([mapped(taken.0, &map), Operand::Block(clone)]);
-                        function.set_operands(phi, inputs);
+                    // One input for each edge the block has to it.
+                    let mut inputs = function.instruction(phi).operands.clone();
+                    for (value, _) in arms(function, phi).into_iter().filter(|(_, from)| *from == block) {
+                        inputs.extend([mapped(value, &map), Operand::Block(clone)]);
                     }
+                    function.set_operands(phi, inputs);
                 }
             }
         }
@@ -324,7 +325,7 @@ fn copy(context: &mut Context, function: &mut Function, paths: &[Path]) -> usize
     for &block in &originals {
         for inst in function.block(block).instructions().to_vec() {
             let Some(result) = function.instruction(inst).result else { continue };
-            // Read beyond them: by an instruction outside them, or by a phi from a block outside them.
+            // Read anywhere but its own block: an original block is reached from the copies too, and reads what meets there.
             let outside: Vec<_> = function
                 .users(result)
                 .iter()
@@ -335,7 +336,7 @@ fn copy(context: &mut Context, function: &mut Function, paths: &[Path]) -> usize
                         Some(Operand::Block(from)) => Some(from),
                         _ => function.parent(one.user),
                     };
-                    at.is_some_and(|block| !originals.contains(&block))
+                    at.is_some_and(|at| at != block)
                 })
                 .collect();
             if outside.is_empty() {
