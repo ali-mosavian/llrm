@@ -181,7 +181,7 @@ mod tests {
     /// The conventions a program may name are `calling.toml`'s, the language's own first; BASIC's are Pascal's.
     #[test]
     fn test_calling_toml_gives_the_conventions_their_names() {
-        assert_eq!(M16.conventions(), ["cdecl16", "pascal16", "qb45", "pds71", "vbdos", "interrupt16", "watcall16", "ia16"]);
+        assert_eq!(M16.conventions(), ["cdecl16", "pascal16", "qb45", "pds71", "vbdos", "interrupt16", "watcall16", "ia16", "regparm3"]);
         let pascal = CALLING.named("pascal16").unwrap();
         for name in ["qb45", "pds71", "vbdos"] {
             assert_eq!(CALLING.named(name).unwrap().cleanup, llrm_target::calling::Cleanup::Callee);

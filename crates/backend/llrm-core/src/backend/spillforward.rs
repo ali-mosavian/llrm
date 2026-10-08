@@ -19,7 +19,9 @@ use crate::model::lir::{self, Insn, LirBlock, LirBody};
 
 /// Python's `frozenset[tuple[ir.Reg, ir.Mem]]`.  Only membership, overlap and
 /// equality are read; which of two equal cells a meet keeps reaches nothing.
-pub type Facts = HashSet<(Reg, Mem)>;
+/// Each fact says whether the register is what a store wrote the slot from: a register a reload filled may be a dead one, which a
+/// read of it would keep.
+pub type Facts = std::collections::HashMap<(Reg, Mem), bool>;
 
 fn _plain(one: &Insn) -> bool {
     one.what.is_some() && one.clobbers.is_empty() && one.requires.is_empty() && one.delivers.is_empty()
@@ -43,12 +45,12 @@ fn _empty(one: &Insn) -> bool {
 /// bytes. Anything whose register effects cannot be read, or which writes
 /// memory the displacement alone does not name, ends every fact: the write
 /// could be to any slot.
-fn _held(bits: u32, one: &Insn, facts: Facts) -> (Facts, bool) {
+fn _held(bits: u32, one: &Insn, facts: Facts) -> (Facts, bool, Option<(usize, Reg)>) {
     if _empty(one) {
-        return (facts, false);
+        return (facts, false, None);
     }
     let Some(what) = &one.what else {
-        return (Facts::default(), false);
+        return (Facts::default(), false, None);
     };
     if [Operation::Branch, Operation::Jump].contains(&what.op)
         && what.dests.is_empty()
@@ -58,23 +60,23 @@ fn _held(bits: u32, one: &Insn, facts: Facts) -> (Facts, bool) {
         // Its own effects cannot be read -- `_register_effects` answers only for
         // instructions that fall through. It writes no register and no memory,
         // and a block ending in one is otherwise the end of every fact.
-        return (facts, false);
+        return (facts, false, None);
     }
     let Some(effects) = _register_effects(bits, one, false, false) else {
-        return (Facts::default(), false);
+        return (Facts::default(), false, None);
     };
     let writes = effects.1;
     if !writes.is_disjoint(&_lanes(Register::EBP)) {
-        return (Facts::default(), false);
+        return (Facts::default(), false, None);
     }
     if let (Operation::Move, Some("mov"), [Loc::Mem(cell)], [Loc::Reg(register)]) =
         (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
         && _plain(one)
         && !one.volatile
         && one.group.is_none()
-        && facts.contains(&(*register, cell.clone()))
+        && facts.contains_key(&(*register, cell.clone()))
     {
-        return (facts, true);
+        return (facts, true, None);
     }
 
     // `op.stores` is the last word only for an instruction that is its own op.
@@ -86,9 +88,9 @@ fn _held(bits: u32, one: &Insn, facts: Facts) -> (Facts, bool) {
     let mut facts = facts;
     let written = if writing {
         let Some(written) = _frame_written(one) else {
-            return (Facts::default(), false);
+            return (Facts::default(), false, None);
         };
-        facts.retain(|(_register, cell)| !_overlapping(cell, &written));
+        facts.retain(|(_register, cell), _| !_overlapping(cell, &written));
         Some(written)
     } else {
         None
@@ -98,7 +100,7 @@ fn _held(bits: u32, one: &Insn, facts: Facts) -> (Facts, bool) {
         (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice())
     {
         if _frame_cell(cell) && register.width == cell.width {
-            if facts.contains(&(*register, cell.clone())) {
+            if facts.contains_key(&(*register, cell.clone())) {
                 // The program's own load of a local is as redundant as the
                 // allocator's: cycleblobs keeps `x%` in bx across its inner
                 // loop and reloads it in the latch to increment it.
@@ -107,25 +109,46 @@ fn _held(bits: u32, one: &Insn, facts: Facts) -> (Facts, bool) {
                     || !one.delivers.is_empty()
                     || one.group.is_some()
                     || one.symbol == Some(true));
-                return (facts, drop);
+                return (facts, drop, None);
             }
-            facts.retain(|pair| _lanes(pair.0.register).is_disjoint(&writes));
-            facts.insert((*register, cell.clone()));
-            return (facts, false);
+            // Another register of the width holds it: the reload is a copy of that register.
+            let held_in = facts
+                .iter()
+                .filter(|((other, held), stored)| **stored && held == cell && other.width == register.width && other.register != register.register && other.register.is_gpr() && register.register.is_gpr())
+                .map(|((other, _), _)| *other)
+                .min_by_key(|other| other.register as u32)
+                .filter(|_| _plain(one) && !one.volatile && one.group.is_none() && one.symbol != Some(true));
+            facts.retain(|pair, _| _lanes(pair.0.register).is_disjoint(&writes));
+            facts.insert((*register, cell.clone()), false);
+            return (facts, false, held_in.map(|from| (0, from)));
         }
     }
 
-    facts.retain(|pair| _lanes(pair.0.register).is_disjoint(&writes));
+    // An ALU or compare operand read from a slot a register holds is that register.
+    let held_source = (|| {
+        let name = what.name.as_deref()?;
+        if !matches!(name, "add" | "sub" | "and" | "or" | "xor" | "cmp" | "test" | "adc" | "sbb") || !_plain(one) || one.volatile || one.group.is_some() || one.symbol == Some(true) {
+            return None;
+        }
+        let memories: Vec<usize> = what.sources.iter().enumerate().filter(|(_, place)| matches!(place, Loc::Mem(_))).map(|(at, _)| at).collect();
+        let [at] = memories[..] else { return None };
+        let Loc::Mem(cell) = &what.sources[at] else { return None };
+        if !_frame_cell(cell) || what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_))) {
+            return None;
+        }
+        facts.iter().filter(|((other, held), stored)| **stored && held == cell && other.width == cell.width && other.register.is_gpr()).map(|((other, _), _)| *other).min_by_key(|other| other.register as u32).map(|from| (at, from))
+    })();
+    facts.retain(|pair, _| _lanes(pair.0.register).is_disjoint(&writes));
     if let Some(written) = written {
         if what.op == Operation::Move && what.sources.len() == 1 {
             if let Loc::Reg(source) = &what.sources[0] {
                 if source.width == written.width && _lanes(source.register).is_disjoint(&writes) {
-                    facts.insert((*source, written));
+                    facts.insert((*source, written), true);
                 }
             }
         }
     }
-    (facts, false)
+    (facts, false, held_source)
 }
 
 /// The facts true on entry to each block, met over every incoming edge.
@@ -160,7 +183,7 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
         changing = false;
         for (at, facts) in &into {
             if let Some(facts) = facts {
-                let leaving = _transfer(body.bits, blocks[at], facts.clone()).1;
+                let leaving = _transfer(body.bits, blocks[at], facts.clone()).2;
                 if outof.get(at) != Some(&leaving) {
                     outof.insert(*at, leaving);
                     changing = true;
@@ -179,7 +202,7 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
                 };
                 met = Some(match met {
                     None => leaving.clone(),
-                    Some(met) => met.iter().filter(|fact| leaving.contains(fact)).cloned().collect(),
+                    Some(met) => met.iter().filter(|(fact, _)| leaving.contains_key(*fact)).map(|(fact, stored)| (fact.clone(), *stored && leaving[fact])).collect(),
                 });
             }
             if let Some(met) = met {
@@ -194,32 +217,48 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
 }
 
 /// The reloads `facts` makes redundant in `block`, and the facts after it.
-fn _transfer(bits: u32, block: &LirBlock, facts: Facts) -> (Vec<usize>, Facts) {
+fn _transfer(bits: u32, block: &LirBlock, facts: Facts) -> (Vec<usize>, IndexMap<usize, (usize, Reg)>, Facts) {
     let mut facts = facts;
     let mut redundant = Vec::new();
+    let mut copies = IndexMap::default();
     for one in &block.insns {
-        let (after, drop) = _held(bits, one, facts);
+        let (after, drop, copy) = _held(bits, one, facts);
         facts = after;
         if drop {
             redundant.push(id(one));
         }
+        if let Some(from) = copy {
+            copies.insert(id(one), from);
+        }
     }
-    (redundant, facts)
+    (redundant, copies, facts)
 }
 
 pub fn forwarded(body: &LirBody) -> LirBody {
     let into = _available(body);
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let redundant: HashSet<usize> = _transfer(body.bits, block, into[&block.at].clone()).0.into_iter().collect();
-        if redundant.is_empty() {
+        let (redundant, copies, _) = _transfer(body.bits, block, into[&block.at].clone());
+        if redundant.is_empty() && copies.is_empty() {
             blocks.push(block.clone());
             continue;
         }
+        let redundant: HashSet<usize> = redundant.into_iter().collect();
         let insns = block
             .insns
             .iter()
-            .map(|one| if redundant.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
+            .map(|one| {
+                if redundant.contains(&id(one)) {
+                    lir::anchor(Arc::clone(one))
+                } else if let Some(from) = copies.get(&id(one)) {
+                    // A read of a slot a register holds is a read of that register: `mov r, [slot]` is `mov r, from`.
+                    let mut what = one.what.clone().expect("a reload is an instruction");
+                    what.sources[from.0] = Loc::Reg(from.1);
+                    Arc::new(Insn { what: Some(what), spill_reload: false, ..(**one).clone() })
+                } else {
+                    Arc::clone(one)
+                }
+            })
             .collect();
         blocks.push(block.with_insns(insns));
     }

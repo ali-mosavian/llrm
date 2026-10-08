@@ -218,6 +218,8 @@ pub enum Abi {
     Watcall16,
     /// gcc-ia16's convention (calling.toml's `ia16`): `-mabi=ia16` on the real-mode target.
     Ia16,
+    /// gcc's `-mregparm=3` by the size of the argument (calling.toml's `regparm3`): the real-mode target's default.
+    Regparm3,
     /// The i386 System V ABI, gcc's on Linux (calling.toml's `sysv32`): the stack convention of `-mabi=sysv`.
     Sysv32,
     /// Arguments pushed first to last; the callee removes them.
@@ -303,6 +305,7 @@ impl Abi {
             "sysv32" => Some(Self::Sysv32),
             "watcall16" => Some(Self::Watcall16),
             "ia16" => Some(Self::Ia16),
+            "regparm3" => Some(Self::Regparm3),
             "pascal16" => Some(Self::Pascal16),
             "interrupt16" => Some(Self::Interrupt16),
             _ => Basic::ALL.into_iter().find(|one| one.name() == name).map(Self::Basic),
@@ -318,6 +321,7 @@ impl Abi {
             Self::Sysv32 => "sysv32",
             Self::Watcall16 => "watcall16",
             Self::Ia16 => "ia16",
+            Self::Regparm3 => "regparm3",
             Self::Pascal16 => "pascal16",
             Self::Basic(basic) => basic.name(),
             Self::Interrupt16 => "interrupt16",
@@ -329,12 +333,13 @@ impl Abi {
         match self {
             Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Sysv32 | Self::Ia16 | Self::Interrupt16 => format!("_{name}"),
             Self::Watcall32 | Self::Watcall16 => format!("{name}_"),
+            Self::Regparm3 => format!("_{name}@3"),
             Self::Pascal16 | Self::Basic(_) => name.to_ascii_uppercase(),
         }
     }
 
     pub fn callee_cleans(self) -> bool {
-        !matches!(self, Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Sysv32 | Self::Ia16)
+        !matches!(self, Self::C | Self::Cdecl16 | Self::Cdecl32 | Self::Sysv32 | Self::Ia16 | Self::Regparm3)
     }
 
     /// The `cc` of the description's convention this is, where it is not the C one: what HIR names it by.
@@ -343,6 +348,7 @@ impl Abi {
             Self::Watcall32 | Self::Watcall16 => Some("watcall"),
             Self::Sysv32 => Some("sysv"),
             Self::Ia16 => Some("ia16"),
+            Self::Regparm3 => Some("regparm3"),
             _ => None,
         }
     }

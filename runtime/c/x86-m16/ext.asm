@@ -209,4 +209,32 @@ keep32_ proc far
     retf
 keep32_ endp
 
+; And for a program in regparm3 (-mabi=regparm3, the default): a long in EAX, an int or a near pointer in AX, then DX, CX.
+public _report@3
+_report@3 proc far
+    push eax
+    call far ptr _report
+    add sp, 4
+    retf
+_report@3 endp
+
+public _input_read@3
+_input_read@3 proc far
+    push dx
+    push ax
+    call far ptr _input_read
+    add sp, 4
+    retf
+_input_read@3 endp
+
+public _keep@3
+_keep@3 proc far
+    retf
+_keep@3 endp
+
+public _keep32@3
+_keep32@3 proc far
+    retf
+_keep32@3 endp
+
 end

@@ -57,6 +57,17 @@ pub struct Convention {
     pub wide_pairs: Vec<[String; 2]>,
     /// Whether a register an argument skipped is free for a later one.
     pub backfill: bool,
+    /// The most bytes of an integer one argument register holds, where that is more than a stack slot (a long in a 32-bit
+    /// register on a 16-bit target); a slot's worth where the file gives none.
+    pub register_bytes: Option<i64>,
+    /// A register takes the width of the value it holds (AL, AX or EAX for 1, 2 or 4 bytes) rather than its own: the argument
+    /// registers are named by their widest part.
+    pub sized_arguments: bool,
+    /// An argument that travels in memory (a float, an i64, a struct) leaves the registers free for the arguments after it.
+    pub skip_memory: bool,
+    /// A struct passed by value travels in memory whatever its size; else a struct of a size that returns in a register is passed
+    /// as that integer.
+    pub aggregate_arguments_in_memory: bool,
     /// What a call's arguments in registers are the callee's to change; everything else it keeps.
     pub arguments_clobbered: bool,
     /// The same for the registers a result leaves in.
@@ -114,6 +125,10 @@ const KEYS: &[&str] = &[
     "cc",
     "wide_pairs",
     "backfill",
+    "register_bytes",
+    "sized_arguments",
+    "skip_memory",
+    "aggregate_arguments_in_memory",
     "arguments_clobbered",
     "results_clobbered",
     "variadic",
@@ -243,6 +258,8 @@ impl Calling {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
     Word,
+    /// An integer of this many bytes, more than a slot, that one register holds: a long in a 32-bit register on a 16-bit target.
+    Sized(i64),
     Wide,
     Memory(i64),
 }
@@ -347,6 +364,10 @@ impl Convention {
             cc: table.contains_key("cc").then(|| text("cc")).transpose()?,
             wide_pairs,
             backfill: flag("backfill")?,
+            register_bytes: table.contains_key("register_bytes").then(|| integer("register_bytes")).transpose()?,
+            sized_arguments: flag("sized_arguments")?,
+            skip_memory: flag("skip_memory")?,
+            aggregate_arguments_in_memory: flag("aggregate_arguments_in_memory")?,
             arguments_clobbered: flag("arguments_clobbered")?,
             results_clobbered: flag("results_clobbered")?,
             variadic: table.contains_key("variadic").then(|| text("variadic")).transpose()?,
@@ -394,7 +415,8 @@ impl Convention {
 
     /// Where `arguments` go: each takes the first register free, an i64 the first pair with both
     /// free; the first that fits no register, and all after it, go on the stack, each at least a
-    /// slot. Without `backfill`, a register passed over is not free for a later argument.
+    /// slot. Without `backfill`, a register passed over is not free for a later argument. With `skip_memory`, only
+    /// the ones that fit none go on the stack: a later argument still takes a free register.
     pub fn place(&self, arguments: &[Kind]) -> Placement {
         let mut free: Vec<bool> = vec![true; self.argument_registers.len()];
         let at = |name: &String| self.argument_registers.iter().position(|one| one == name);
@@ -406,7 +428,7 @@ impl Convention {
                 None
             } else {
                 match kind {
-                    Kind::Word => free.iter().position(|&one| one).map(|first| vec![first]),
+                    Kind::Word | Kind::Sized(_) => free.iter().position(|&one| one).map(|first| vec![first]),
                     Kind::Wide => self.wide_pairs.iter().find_map(|pair| {
                         let both = pair.iter().map(at).collect::<Option<Vec<_>>>()?;
                         both.iter().all(|&index| free[index]).then_some(both)
@@ -427,10 +449,11 @@ impl Convention {
                     places.push(Place::Registers(registers.into_iter().map(|index| self.argument_registers[index].clone()).collect()));
                 }
                 None => {
-                    spilled = true;
+                    spilled = !self.skip_memory;
                     places.push(Place::Stack(stack));
                     let bytes = match kind {
                         Kind::Word => self.slot_bytes,
+                        Kind::Sized(bytes) => bytes.max(self.slot_bytes),
                         Kind::Wide => self.slot_bytes * self.wide_slots,
                         Kind::Memory(bytes) => bytes.max(self.slot_bytes),
                     };
@@ -554,6 +577,30 @@ mod tests {
         // Six words: four in registers, the fifth lowest on the stack.
         let six = w.place(&[Kind::Word; 6]);
         assert_eq!((six.places[4].clone(), six.places[5].clone(), six.stack_bytes), (Place::Stack(0), Place::Stack(4), 8));
+    }
+
+    /// gcc's regparm(3) puts `(float, int b, double, int d, int e)` in EAX, EDX, ECX (b, d, e) and the float and the double on the
+    /// stack: it counts integers only. With `skip_memory` off the float stopped the rest, as Open Watcom's does (b, d, e to the stack).
+    #[test]
+    fn an_argument_in_memory_leaves_the_registers_to_the_later_ones_where_the_convention_says_so() {
+        let regparm = WATCALL.replace("wide_pairs = [[\"eax\", \"edx\"], [\"ebx\", \"ecx\"]]\n", "").replace("\"ebx\", ", "").replace("backfill = true\n", "skip_memory = true\n");
+        let calling = Calling::parse(&regparm).unwrap();
+        let placed = calling.native().place(&[Kind::Memory(4), Kind::Word, Kind::Memory(8), Kind::Word, Kind::Word, Kind::Word]);
+        assert_eq!(placed.places, [Place::Stack(0), registers(&["eax"]), Place::Stack(4), registers(&["edx"]), registers(&["ecx"]), Place::Stack(12)]);
+        let watcom = Calling::parse(WATCALL).unwrap();
+        let placed = watcom.native().place(&[Kind::Memory(4), Kind::Word]);
+        assert_eq!(placed.places, [Place::Stack(0), Place::Stack(4)]);
+    }
+
+    /// A long that reaches the stack takes its own two words: `(int, int, int, long)` has the long at the stack's start and
+    /// `(long, long, long, long, long)` the fifth four bytes past the fourth. A word's worth put the next one in its middle.
+    #[test]
+    fn a_sized_argument_takes_its_bytes_on_the_stack() {
+        let regparm = WATCALL.replace("wide_pairs = [[\"eax\", \"edx\"], [\"ebx\", \"ecx\"]]\n", "").replace("\"ebx\", ", "").replace("slot_bytes = 4", "slot_bytes = 2");
+        let calling = Calling::parse(&regparm).unwrap();
+        let placed = calling.native().place(&[Kind::Sized(4); 6]);
+        assert_eq!(placed.places[3..], [Place::Stack(0), Place::Stack(4), Place::Stack(8)]);
+        assert_eq!(placed.stack_bytes, 12);
     }
 
     /// A call changes EAX, the registers its arguments went in and EDX for an i64 result, and keeps

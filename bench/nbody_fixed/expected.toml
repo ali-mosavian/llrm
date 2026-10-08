@@ -1,10 +1,10 @@
-reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
+reason = "a read of a frame slot a register still holds reads the register (spillforward), and a far pointer made from a long loads its segment once: memory operands and bytes only fall"
 blessed = "2026-10-07"
 
 [bas.O2]
 instructions = 1335119
-memory_operands = 292047
-code_bytes = 1873
+memory_operands = 287047
+code_bytes = 1872
 data_bytes = 125
 bss_bytes = 0
 kernel_ms = 17.8206
@@ -19,8 +19,8 @@ kernel_ms = 18.928
 
 [c.O2]
 instructions = 1335119
-memory_operands = 292047
-code_bytes = 1809
+memory_operands = 287047
+code_bytes = 1808
 data_bytes = 0
 bss_bytes = 96
 kernel_ms = 17.8109
@@ -41,8 +41,8 @@ bss_bytes = 0
 
 [nib.Os]
 instructions = 3431519
-memory_operands = 741069
-code_bytes = 843
+memory_operands = 735069
+code_bytes = 842
 data_bytes = 96
 bss_bytes = 0
 
