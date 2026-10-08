@@ -139,3 +139,19 @@ def test_a_refresh_rewrites_an_entry_that_moved_whatever_its_share():
     refreshed = gate.refreshed_passes(budget, now)
     assert refreshed == {"a O2 x": 3.668}
     assert gate.compare_passes(refreshed, now)[1] == []
+
+
+def test_a_refresh_always_leaves_the_gate_passing_on_the_same_measurement():
+    """gap32 and regparm16 each edited pass-budget.json by hand: `--refresh` kept an entry the gate failed (a step under FLOOR of the
+    work, or just past the tolerance). Both now ask `judged`; whatever the old budget and the reading, refresh then gate agree."""
+    import random
+
+    chance = random.Random(7)
+    for case in range(400):
+        keys = [f"a O2 s{n}" for n in range(12)]
+        old = {k: round(chance.uniform(2.0, 5.0), 3) for k in keys if chance.random() < 0.6}
+        now = {k: (round(chance.uniform(1.8, 5.5), 3), chance.uniform(0.0, 0.06)) for k in keys if chance.random() < 0.8}
+        now = {k: v for k, v in now.items() if v[1] >= gate.LOW}  # a step under LOW is not read
+        refreshed = gate.refreshed_passes(old, now)
+        assert gate.compare_passes(refreshed, now)[1] == [], (case, old, now, refreshed)
+        assert gate.refreshed_passes(refreshed, now) == refreshed  # and a second refresh moves nothing
