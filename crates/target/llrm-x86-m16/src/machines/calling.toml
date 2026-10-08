@@ -155,6 +155,7 @@ register_bytes = 4
 sized_arguments = true
 skip_memory = true
 aggregate_arguments_in_memory = true
+# far_in_register = true  # a far pointer in one register, offset low (measured: worse, see PR notes); off: it is on the stack
 variadic = "cdecl16"
 pops_as = "regparm3pop"
 

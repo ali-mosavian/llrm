@@ -60,6 +60,9 @@ pub struct Convention {
     /// The most bytes of an integer one argument register holds, where that is more than a stack slot (a long in a 32-bit
     /// register on a 16-bit target); a slot's worth where the file gives none.
     pub register_bytes: Option<i64>,
+    /// A pointer of two slots (a far pointer) takes one such register, its offset the low word and its selector the high; else
+    /// it is on the stack or in a pair.
+    pub far_in_register: bool,
     /// A register takes the width of the value it holds (AL, AX or EAX for 1, 2 or 4 bytes) rather than its own: the argument
     /// registers are named by their widest part.
     pub sized_arguments: bool,
@@ -147,6 +150,7 @@ const KEYS: &[&str] = &[
     "wide_pairs",
     "backfill",
     "register_bytes",
+    "far_in_register",
     "sized_arguments",
     "skip_memory",
     "aggregate_arguments_in_memory",
@@ -312,7 +316,7 @@ impl Convention {
         match () {
             _ if argument.memory || argument.floating => Kind::Memory(argument.bytes),
             _ if argument.bytes <= slot => Kind::Word,
-            _ if argument.bytes <= register && argument.integer => Kind::Sized(argument.bytes),
+            _ if argument.bytes <= register && (argument.integer || (argument.pointer && self.far_in_register)) => Kind::Sized(argument.bytes),
             _ if argument.bytes == 2 * slot && (argument.integer || argument.pointer) => Kind::Wide,
             _ => Kind::Memory(argument.bytes),
         }
@@ -431,6 +435,7 @@ impl Convention {
             wide_pairs,
             backfill: flag("backfill")?,
             register_bytes: table.contains_key("register_bytes").then(|| integer("register_bytes")).transpose()?,
+            far_in_register: flag("far_in_register")?,
             sized_arguments: flag("sized_arguments")?,
             skip_memory: flag("skip_memory")?,
             aggregate_arguments_in_memory: flag("aggregate_arguments_in_memory")?,

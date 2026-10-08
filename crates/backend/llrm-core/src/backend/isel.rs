@@ -915,6 +915,15 @@ impl Selector<'_, '_, '_> {
                 // It arrives in registers: an instruction at entry delivers each value in its register.
                 Parameter::Registers(registers) => {
                     // A pair holds two halves: an i64's dwords, a far pointer's offset and selector, or a long's words.
+                    // A far pointer in one register: the offset its low word, the selector its high.
+                    if let ([register], true) = (&registers[..], self.is_far(ty)) {
+                        let dword = self.fresh_held(4);
+                        arrived.push((dword, crate::backend::target::named(*register, 4)));
+                        let (offset, selector) = self.far_of(dword, block_at[&entry], &mut prologue);
+                        self.fars.insert(parameter, (Some(offset), selector));
+                        self.far_dwords.insert(parameter, dword);
+                        continue;
+                    }
                     let width = if registers.len() == 1 { self.width(ty)? } else { registers[0].size() as u32 };
                     let mut halves = Vec::new();
                     for &register in registers {
@@ -3142,6 +3151,19 @@ impl Selector<'_, '_, '_> {
         (Held { width: 2, ..held }, Held { width: 2, ..top })
     }
 
+    /// The far pointer `operand` as one dword, offset low: the dword it was made of or returned as, else its words joined.
+    fn far_dword(&mut self, operand: Operand, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<Held, Unselected> {
+        if let Operand::Value(id) = operand
+            && let Some(&dword) = self.far_dwords.get(&id)
+        {
+            return Ok(dword);
+        }
+        let (offset, selector) = self.far(operand, at, out)?;
+        let dword = self.fresh_held(4);
+        self.joined(dword, offset, selector, at, out);
+        Ok(dword)
+    }
+
     /// The offset and the selector of the far pointer a dword is: its low word and its high word, which a segment register takes
     /// from a word of its own. The selector as a view of the shifted dword was a second width of one value, which the allocator did
     /// not hoist out of a loop.
@@ -3251,6 +3273,10 @@ impl Selector<'_, '_, '_> {
                         self.words(held, at, out)
                     };
                     requires.extend([(lo, low), (hi, high)]);
+                } else if self.is_far(ty) {
+                    // One register holds the whole pointer, its offset low.
+                    let dword = self.far_dword(argument, at, out)?;
+                    requires.push((dword, crate::backend::target::named(registers[0], 4)));
                 } else {
                     let held = self.held(argument, ty, at, out)?;
                     let signed = matches!(&instruction.opcode, Opcode::Call(info) if info.argument_attrs.get(index).is_some_and(|attrs| llrm_mir::memory::has(attrs, "signext")));
