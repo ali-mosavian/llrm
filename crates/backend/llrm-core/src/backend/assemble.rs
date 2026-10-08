@@ -325,7 +325,9 @@ fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>,
         return Ok(spilled);
     }
     let (allocator_alone, _) = timed("candidate allocator alone", || phased(module, name, abi, pool, target, hole, false, true))?;
-    let (kept, from_spiller) = match timed("candidate cost", || (cost(&spilled.0, target), cost(&allocator_alone.0, target))) {
+    let priced = timed("candidate cost", || (cost(&spilled.0, target), cost(&allocator_alone.0, target)));
+    llrm_support::debug!("candidates", "{name}: spiller {:?}, allocator alone {:?}", priced.0, priced.1);
+    let (kept, from_spiller) = match priced {
         (Some(with), Some(without)) if without < with => (allocator_alone, false),
         _ => (spilled, true),
     };
@@ -464,7 +466,17 @@ fn phased_to(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let selected = timed("isel", || isel::selected_with(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole, target.facts));
     let Selected { body, convention, calls, inline, inline_places, far, pops, depth, extents, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
-    let registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
+    let mut registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
+    // LLVM's `hasFP`, before allocation: a function that can do without its frame register has it as a value register.
+    let framed_classes;
+    let classes: &Rc<RegisterClasses> = if crate::backend::framefree::without_frame_register(&body, &registers, &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(), !inline.is_empty(), false, landing.is_some()) {
+        registers.free = true;
+        registers.saved.push((registers.pointer, registers.pointer));
+        framed_classes = Rc::new(target.classes.with_frame_free());
+        &framed_classes
+    } else {
+        target.classes
+    };
     let mut body = if llrm_support::debug::verifying() { timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)? } else { body };
     let mut frame = timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
@@ -474,7 +486,7 @@ fn phased_to(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>
     let frame = Rc::new(RefCell::new(frame));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, target.classes, spilling.then(|| Rc::clone(&run)), target.selection.rules(), &registers)? {
+    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, classes, spilling.then(|| Rc::clone(&run)), target.selection.rules(), &registers)? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
             continue;
@@ -483,7 +495,7 @@ fn phased_to(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>
             in_ssa = false;
         }
         let kept = (!body.notes.is_empty()).then(|| body.clone());
-        body = flow::checked(body, phase.as_mut(), in_ssa, target.classes).map_err(|error| match error {
+        body = flow::checked(body, phase.as_mut(), in_ssa, classes).map_err(|error| match error {
             flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
             flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;
