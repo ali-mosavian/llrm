@@ -24,6 +24,15 @@ class CauseTests(unittest.TestCase):
 
 
 
+class OptionTests(unittest.TestCase):
+    def test_a_program_that_needs_fwrapv_is_built_with_it(self):
+        """950704-1 checks for signed overflow after the add and says so with dg-additional-options "-fwrapv": built without
+        it the optimiser dropped the check and the program aborted (wrong, at -O2 and -Os)."""
+        self.assertEqual(torture.program_options('/* { dg-additional-options "-fwrapv" } */\nint x;'), ["-fwrapv"])
+        self.assertEqual(torture.program_options('/* { dg-additional-options "-O3 -fwrapv -fno-tree-ccp" } */'), ["-fwrapv"])
+        self.assertEqual(torture.program_options("int x;"), [])
+
+
 class WorkTests(unittest.TestCase):
     def test_two_runs_without_a_work_option_do_not_share_a_directory(self):
         """The default was one fixed directory: a gate running beside a full run deleted its files (`dosbatch.run` clears its

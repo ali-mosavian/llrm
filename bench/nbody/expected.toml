@@ -1,46 +1,45 @@
-reason = "-O2 takes gcc's loop-copy rule and budgets (opts.cc 1311-1316; user decision 2026-10-08)"
+reason = "the 486's LEA is one clock (the table held the 386's two): a copy and an add are one lea where it costs no more; down only"
 blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 56009
+instructions = 55209
 memory_operands = 26031
-code_bytes = 905
+code_bytes = 904
 data_bytes = 31
 bss_bytes = 0
 
 [bas.Os]
-instructions = 56081
+instructions = 55281
 memory_operands = 26085
-code_bytes = 841
+code_bytes = 840
 data_bytes = 31
 bss_bytes = 0
-kernel_ms = 0.7645
 
 [c.O2]
-instructions = 50461
-memory_operands = 20845
-code_bytes = 492
+instructions = 50459
+memory_operands = 20844
+code_bytes = 476
 data_bytes = 16
 bss_bytes = 0
 
 [c.Os]
-instructions = 51261
-memory_operands = 21645
-code_bytes = 496
+instructions = 51259
+memory_operands = 21644
+code_bytes = 483
 data_bytes = 16
 bss_bytes = 0
 
 [nib.O2]
-instructions = 50471
+instructions = 50469
 memory_operands = 20846
-code_bytes = 520
+code_bytes = 508
 data_bytes = 28
 bss_bytes = 0
 
 [nib.Os]
-instructions = 50471
+instructions = 50469
 memory_operands = 20846
-code_bytes = 519
+code_bytes = 508
 data_bytes = 28
 bss_bytes = 0
 

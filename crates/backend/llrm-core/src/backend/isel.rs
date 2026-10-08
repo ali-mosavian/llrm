@@ -103,10 +103,7 @@ struct Passing {
 /// entry names.
 fn entry(arch: &dyn llrm_target::Target, convention: u32, variadic: bool) -> Option<&'static llrm_target::calling::Convention> {
     let calling = arch.calling();
-    let found = match convention {
-        0 | llrm_mir::opcode::FAST => calling.by_cc("cdecl")?,
-        other => calling.by_cc(llrm_mir::opcode::CONVENTIONS.iter().find(|(_, number)| *number == other)?.0.trim_end_matches("cc"))?,
-    };
+    let found = calling.by_number(convention)?;
     match found.variadic.as_deref().filter(|_| variadic) {
         Some(name) => calling.named(name),
         None => Some(found),
@@ -198,7 +195,7 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
             .zip(&sizes)
             .zip(&classes)
             .filter(|(_, class)| **class != Some(llrm_mir::opcode::RESULT_POINTER))
-            .map(|((&one, &size), class)| kind_of(types, function.value(one).ty, size, (arch.stack_slot_bytes(), entry.register_bytes.unwrap_or(arch.stack_slot_bytes())), *class))
+            .map(|((&one, &size), class)| entry.kind(argument_of(types, function.value(one).ty, size, *class), arch.stack_slot_bytes()))
             .collect();
         let placed = entry.place(&kinds);
         let mut places = placed.places.iter();
@@ -256,20 +253,9 @@ fn results(arch: &dyn llrm_target::Target, entry: Option<&llrm_target::calling::
     entry.map_or_else(|| arch.results(width), |one| llrm_x86::calling::results(one, width))
 }
 
-/// How a convention's registers take a value of `ty`, `size` bytes: a word that fits a slot, a pair of registers for an integer
-/// or a pointer of two slots (an i64 in 32 bits, a long or a far pointer in 16), and memory for the rest. `slot` and `register` are the
-/// bytes a stack slot and one argument register hold: where a register is wider than a slot, an integer of that width is a word.
-fn kind_of(types: &llrm_mir::types::Types, ty: TypeId, size: u32, (slot, register): (i64, i64), class: Option<&str>) -> llrm_target::calling::Kind {
-    use llrm_target::calling::Kind;
-    let bytes = i64::from(size);
-    let two_slots_of_integer = types.int_bits(ty).is_some() || matches!(types.get(ty), Type::Pointer(_));
-    match () {
-        _ if class == Some(llrm_mir::opcode::MEMORY) || matches!(types.get(ty), Type::Float(_)) => Kind::Memory(bytes),
-        _ if bytes <= slot => Kind::Word,
-        _ if bytes <= register && types.int_bits(ty).is_some() => Kind::Sized(bytes),
-        _ if bytes == 2 * slot && two_slots_of_integer => Kind::Wide,
-        _ => Kind::Memory(bytes),
-    }
+/// What `ty`, `size` bytes, is to a convention's registers (`class` its `llrm-argument` attribute).
+fn argument_of(types: &llrm_mir::types::Types, ty: TypeId, size: u32, class: Option<&str>) -> llrm_mir::target::Argument {
+    llrm_mir::target::Argument { bytes: i64::from(size), integer: types.int_bits(ty).is_some(), pointer: matches!(types.get(ty), Type::Pointer(_)), floating: matches!(types.get(ty), Type::Float(_)), memory: class == Some(llrm_mir::opcode::MEMORY) }
 }
 
 /// Whether `entry` passes a struct result's address in a stack slot that its callee pops, and one of `classes` is that address.
@@ -548,6 +534,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
         depth: hole,
         extents: Vec::new(),
         allocas: 0,
+        frame_objects: Vec::new(),
         scratch: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
@@ -765,6 +752,8 @@ struct Selector<'m, 'c, 'p> {
     extents: Vec<(i64, i64)>,
     /// Where the allocas end, below which the stack temporaries go.
     allocas: i64,
+    /// Each alloca's frame displacement and size.
+    frame_objects: Vec<(i64, i64)>,
     /// The temporaries' bytes the instruction being selected has taken:
     /// a temporary lives only within the instruction that made it.
     scratch: i64,
@@ -909,6 +898,7 @@ impl Selector<'_, '_, '_> {
                     });
                     let address = function.instruction(inst).result.expect("an address");
                     self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1 });
+                    self.frame_objects.push((disp, size));
                     if llrm_analysis::frameescape::exposes(function, address, |inst| self.marker(inst)) {
                         reach.insert((disp, disp + size));
                     }
@@ -1908,9 +1898,27 @@ impl Selector<'_, '_, '_> {
             return Ok(None);
         }
         let offset = offset as i64;
-        let pointer = self.pointer(instruction.operands[0])?.moved(offset);
+        let base = self.pointer(instruction.operands[0])?;
+        let pointer = self.within_object(base, base.moved(offset), instruction.ty);
         self.pointers.insert(value, pointer);
         Ok(Some(pointer))
+    }
+
+    /// `moved`, a frame address a constant GEP reached from `base`, as the one address of its residue modulo 2^w (w the address space's offset bits, which
+    /// a far pointer's 16-bit offset has too) that lies in the object `base` is in. An index is a signed pointer-width integer: 32798 into a 32,800-byte object on a
+    /// 16-bit target is -32738 in an i16, the same address below the object, where it made the frame twice as big; an index a
+    /// wrap past the object's top is brought back the same way. An offset of 32 bits or more never wraps an object.
+    fn within_object(&self, base: Pointer, moved: Pointer, ty: TypeId) -> Pointer {
+        let (Pointer::Frame { disp: from, .. }, Pointer::Frame { disp: to, index, scale }) = (base, moved) else { return moved };
+        let Type::Pointer(space) = self.types().get(ty) else { return moved };
+        let bits = self.layout.offset_bits(*space);
+        if bits >= 32 {
+            return moved;
+        }
+        let wrap = 1i64 << bits;
+        let Some(&(object, size)) = self.frame_objects.iter().find(|&&(object, size)| (object..=object + size).contains(&from)) else { return moved };
+        let inside = object + (to - object).rem_euclid(wrap);
+        if inside <= object + size { Pointer::Frame { disp: inside, index, scale } } else { moved }
     }
 
     /// A global's address, and a constant displacement from it. A far
@@ -3277,7 +3285,7 @@ impl Selector<'_, '_, '_> {
                     continue;
                 }
                 let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
-                kinds.push(kind_of(self.types(), ty, self.size(ty)?, (self.arch.stack_slot_bytes(), entry.register_bytes.unwrap_or(self.arch.stack_slot_bytes())), class(index)));
+                kinds.push(entry.kind(argument_of(self.types(), ty, self.size(ty)?, class(index)), self.arch.stack_slot_bytes()));
             }
             let mut placement = entry.place(&kinds);
             let mut next = placement.places.clone().into_iter();

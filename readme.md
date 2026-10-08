@@ -139,19 +139,16 @@ long dot(const int *a, const int *b, int n)
 ```
 
 ```asm
-_dot proc far
-    push bp                         ; a is [bp+6], b [bp+8], n [bp+10]; the caller pops them
-    mov bp, sp
-    push si                         ; si and di are callee-saved
+_dot@3 proc far
+    push si                         ; a is in ax, b in dx, n in cx (regparm3); si and di are callee-saved
     push di
 L0_0:
-    mov cx, word ptr [bp+10]        ; cx = n
+    mov si, ax                      ; si = a, an address register: ax cannot address
+    mov di, dx                      ; di = b
     lea ax, [ecx+ecx]               ; ax = 2n, the byte length of each array
     mov bx, ax
     neg bx                          ; [one induction variable] bx = -2n is the counter and the offset
-    mov si, word ptr [bp+6]         ; [load sunk] si = a, read where it is added to
     add si, ax                      ; [biased] a + 2n, so a[i] is at [bx+si]
-    mov di, word ptr [bp+8]         ; [load sunk] di = b
     add di, ax                      ; [biased] b + 2n
     xor eax, eax                    ; total = 0
     or cx, cx
@@ -165,12 +162,10 @@ L0_8:
     add bx, 2                       ; step one int; [flag reuse] its flags end the loop at 0
     jne L0_8
 L0_6:
-    shld edx, eax, 16               ; the long returns in DX:AX
-    pop di
-    pop si
-    pop bp
+    pop di                          ; the long is already in eax: it returns there
+    pop si                          ; no frame: nothing is on the stack
     retf
-_dot endp
+_dot@3 endp
 ```
 
 Nib, `llrm-nib dot.nib --entry dot -march=i486 -S`:
@@ -220,8 +215,7 @@ L0_16:
     add bx, 2                       ; [flag reuse] the step's flags end the loop at 0
     jne L0_16                       ; zip pairs the elements: no index, no bounds check
 L0_29:
-    shld edx, eax, 16               ; the long returns in DX:AX
-    pop di
+    pop di                          ; the long is in eax, where it returns
     pop si
     pop bp
     retf
@@ -281,8 +275,7 @@ L1_12:
     mov cx, dx
     neg cx
     add cx, -2                      ; [one induction variable] cx = -2 * (bound + 1)
-    mov si, ax
-    add si, dx                      ; [biased] a's offset + 2 * bound; the +2 is in the loop's
+    lea si, [eax+edx]               ; [biased] a's offset + 2 * bound, one lea; the +2 is in the loop's
     add di, dx                      ; [biased] b's offset + 2 * bound; displacement
     xor eax, eax                    ; total = 0
     or bx, bx

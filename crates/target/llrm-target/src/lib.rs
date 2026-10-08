@@ -37,6 +37,8 @@ pub struct CpuPrices {
     pub spaces: llrm_mir::spaces::Spaces,
     /// What its description gives a function nothing outside the program reaches.
     pub private: Option<llrm_mir::target::PrivateConvention>,
+    /// The conventions as the description states them.
+    pub calling: Option<&'static calling::Calling>,
 }
 
 /// A cost model that is only what a target describes: its registers, address forms and
@@ -47,7 +49,7 @@ pub fn described(prices: &CpuPrices) -> Rc<dyn llrm_mir::target::Machine> {
 
 /// `described`, with what each operation costs in code bytes where the description states them.
 pub fn described_by_size(prices: &CpuPrices, sizes: Option<OperationCosts>) -> Rc<dyn llrm_mir::target::Machine> {
-    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone(), operations: prices.operations.clone(), sizes, spaces: prices.spaces, private: prices.private.clone() })
+    Rc::new(Described { registers: prices.registers, call_registers: prices.call_registers, address_forms: prices.address_forms.clone(), operations: prices.operations.clone(), sizes, spaces: prices.spaces, private: prices.private.clone(), calling: prices.calling })
 }
 
 struct Described {
@@ -58,11 +60,25 @@ struct Described {
     sizes: Option<OperationCosts>,
     spaces: llrm_mir::spaces::Spaces,
     private: Option<llrm_mir::target::PrivateConvention>,
+    calling: Option<&'static calling::Calling>,
 }
 
 impl llrm_mir::target::Machine for Described {
     fn private_convention(&self) -> Option<llrm_mir::target::PrivateConvention> {
         self.private.clone()
+    }
+
+    fn callee_pop(&self, convention: u32) -> Option<u32> {
+        match self.calling {
+            Some(calling) => calling.callee_pop(convention),
+            None => (convention == 0).then_some(llrm_mir::opcode::FAST),
+        }
+    }
+
+    fn stack_argument_bytes(&self, convention: u32, arguments: &[llrm_mir::target::Argument]) -> Option<i64> {
+        let found = self.calling?.by_number(convention)?;
+        let kinds: Vec<_> = arguments.iter().map(|one| found.kind(*one, found.slot_bytes)).collect();
+        Some(found.place(&kinds).stack_bytes)
     }
 
     fn spaces(&self) -> llrm_mir::spaces::Spaces {

@@ -1,16 +1,16 @@
-reason = "a mask compared with zero is test with the mask as its immediate, not a copy and-ed for its flags (isel pattern and_tested takes a constant mask): parity/control, qbsp, recpow and others fewer instructions"
-blessed = "2026-10-07"
+reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+blessed = "2026-10-08"
 
 [c.O2]
-instructions = 116002
-memory_operands = 14743
-code_bytes = 242
+instructions = 102633
+memory_operands = 3945
+code_bytes = 192
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 116002
-memory_operands = 14743
-code_bytes = 239
+instructions = 102633
+memory_operands = 3945
+code_bytes = 192
 data_bytes = 0
 bss_bytes = 0

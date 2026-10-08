@@ -237,7 +237,7 @@ impl Repr for Phi {
 /// One LIR CFG block.
 ///
 /// Direct port of `qbopt.model.lir:LirBlock`.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct LirBlock {
     pub at: i64,
     pub insns: Vec<Arc<Insn>>,
@@ -245,6 +245,20 @@ pub struct LirBlock {
     pub phis: Vec<Phi>,
     /// Laid out after the hot code: every path from it ends in `unreachable`, isel finds.
     pub cold: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The blocks this thread has cloned: what a pass that copies the body per change shows (#560, #913).
+    pub static BLOCK_CLONES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+impl Clone for LirBlock {
+    fn clone(&self) -> Self {
+        #[cfg(test)]
+        BLOCK_CLONES.with(|count| count.set(count.get() + 1));
+        Self { at: self.at, insns: self.insns.clone(), succ: self.succ.clone(), phis: self.phis.clone(), cold: self.cold }
+    }
 }
 
 impl LirBlock {

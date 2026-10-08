@@ -54,5 +54,13 @@ class LinkRecipeTests(unittest.TestCase):
         self.assertEqual(linkrecipe.coff_machine("x86-m32"), "x86")
 
 
+    def test_a_function_is_spelled_as_the_default_abis_convention_spells_it(self):
+        """tools/loops looked its C functions up as `_name`; under regparm3, m16's default, they are `_name@3`, and every case of the run
+        read as inlined into its driver."""
+        self.assertEqual(linkrecipe.symbol("x86-m16", "f"), "_f@3")
+        self.assertEqual(linkrecipe.symbol("x86-m16", "f", "omf"), "_f@3")
+        self.assertEqual((linkrecipe.undecorated("x86-m16", "_report@3"), linkrecipe.undecorated("x86-m16", "B$PEI4")), ("report", "B$PEI4"))
+
+
 if __name__ == "__main__":
     unittest.main()

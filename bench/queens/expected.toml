@@ -1,5 +1,5 @@
-reason = "a read of a frame slot a register still holds reads the register (spillforward), and a far pointer made from a long loads its segment once: memory operands and bytes only fall"
-blessed = "2026-10-07"
+reason = "jumpthread decides a branch on a compare of a phi of constants on each way into it (gcc's budget, empty copies at -Os): queens c -O2 instructions 148191 -> 137439, -Os 174112 -> 160327; qlight c +1 instruction, -1 byte"
+blessed = "2026-10-08"
 
 [bas.O2]
 instructions = 338429
@@ -16,30 +16,30 @@ data_bytes = 15
 bss_bytes = 0
 
 [c.O2]
-instructions = 149297
-memory_operands = 30158
-code_bytes = 213
+instructions = 137439
+memory_operands = 28501
+code_bytes = 178
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 187348
-memory_operands = 25997
-code_bytes = 191
+instructions = 160327
+memory_operands = 19850
+code_bytes = 159
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 190709
-memory_operands = 30648
-code_bytes = 239
+instructions = 171685
+memory_operands = 19817
+code_bytes = 207
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 269426
-memory_operands = 63007
-code_bytes = 298
+instructions = 272655
+memory_operands = 36222
+code_bytes = 283
 data_bytes = 0
 bss_bytes = 0
 
