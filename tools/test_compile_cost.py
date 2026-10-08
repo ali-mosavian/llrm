@@ -32,10 +32,10 @@ def test_every_file_a_little_dearer_fails_on_the_geomean():
     assert any("geomean" in line for line in bad), bad
 
 
-def test_the_same_counts_pass_and_cheaper_ones_fail_until_the_baseline_is_refreshed():
+def test_the_same_counts_and_cheaper_ones_pass():
     base = counts(a=1000, b=2000)
     assert cc.compare(base, base)[1] == []
-    assert cc.compare(base, {k: v // 2 for k, v in base.items()})[1]
+    assert cc.compare(base, {k: v // 2 for k, v in base.items()})[1] == []
 
 
 def test_a_file_measured_on_one_side_only_fails_not_passes():
@@ -69,34 +69,3 @@ def test_the_counter_counts_work_not_time():
     except cc.NoCounter:
         pytest.skip("no counter")
     assert abs(a / b - 1) < 0.02 and a > 1_000_000
-
-
-def test_a_drop_past_the_noise_fails_and_says_to_refresh():
-    """A PR that cut 5% and left the baseline alone let the next ones give it back unseen."""
-    base = counts(**{f"p{i}": 1000 for i in range(66)})
-    _, bad = cc.compare(base, {k: v - 50 for k, v in base.items()})
-    assert any("faster: refresh the baseline" in line and "geomean" in line for line in bad), bad
-    _, bad = cc.compare(base, dict(base) | {"p0 -O2": 900})
-    assert any("p0 -O2" in line and "faster" in line for line in bad), bad
-
-
-def test_refresh_rewrites_the_files_that_moved_and_then_the_comparison_passes():
-    base = counts(a=1000, b=2000, c=3000)
-    now = counts(a=1000, b=1500, c=3001) | {"d -O2": 7}
-    new = cc.refreshed(base, now)
-    assert new["b -O2"] == 1500 and new["d -O2"] == 7  # moved, added
-    assert new["c -O2"] == 3000 and new["a -O2"] == 1000  # within noise: left, so the diff shows only what moved
-    assert cc.compare(new, now)[1] == []
-
-
-def test_refresh_without_qcport_keeps_its_entries():
-    base = counts(a=1000) | counts(**{"qcport/x": 500})
-    new = cc.refreshed(base, counts(a=900))
-    assert new["qcport/x -O2"] == 500 and new["a -O2"] == 900
-
-
-def test_refresh_moves_everything_when_small_shifts_add_up_past_the_limit():
-    base = counts(**{f"p{i}": 10000 for i in range(66)})
-    now = {k: v + 40 for k, v in base.items()}  # +0.4% each: under MOVED, over the geomean limit
-    assert cc.compare(base, now)[1]
-    assert cc.compare(cc.refreshed(base, now), now)[1] == []
