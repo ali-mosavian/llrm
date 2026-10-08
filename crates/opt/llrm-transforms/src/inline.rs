@@ -492,9 +492,11 @@ const RECURSIVE_PROBABILITY: i64 = 10;
 /// body as it was, breadth first and each copy's own calls in turn, while a call is likelier than `RECURSIVE_PROBABILITY` percent of
 /// the function's calls, is no deeper than `RECURSIVE_DEPTH`, and the function stays under `RECURSIVE_SIZE`; the copies made.
 /// A function that allocates stack is left alone: each level would add its frame.
-pub fn inlined_into_itself(id: GlobalId, function: &mut Function, original: &Function, frequencies: &dyn Fn(&Context, &Function) -> std::collections::BTreeMap<i64, i64>, context: &mut Context) -> usize {
+pub fn inlined_into_itself(id: GlobalId, function: &mut Function, original: &Function, budget: i64, frequencies: &dyn Fn(&Context, &Function) -> std::collections::BTreeMap<i64, i64>, context: &mut Context) -> usize {
     let own = |function: &Function, context: &Context| -> Vec<InstId> { function.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, function, inst) == Some(id)).collect() };
-    if original.walk().any(|(_, inst)| matches!(original.instruction(inst).opcode, Opcode::Alloca { .. })) || !carries(original) {
+    // Only a body the ordinary inline threshold admits (`want_inline_small_function_p` is asked of the recursive edge too), by its growth:
+    // the body less the call it replaces.
+    if semantic_count(original) - 1 > budget || original.walk().any(|(_, inst)| matches!(original.instruction(inst).opcode, Opcode::Alloca { .. })) || !carries(original) {
         return 0;
     }
     let mut depth: IndexMap<InstId, u32> = own(function, context).into_iter().map(|call| (call, 1)).collect();

@@ -1074,3 +1074,37 @@ fn test_another_caller_leaves_the_parameter_unbounded() {
     let text = printed(&module);
     assert!(text.contains("icmp ult i16 %row, 12"), "{text}");
 }
+
+/// A small function that calls itself is given copies of itself (gcc's `recursive_inlining`, `max-inline-recursive-depth-auto` 8 and
+/// `-insns-recursive-auto` 450): `hanoi` at -O2 was one call per move, gcc's is eight levels in one body.
+const COUNT: &str = "define i16 @f(i16 %n) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %rec
+
+rec:
+  %m = sub i16 %n, 1
+  %a = call i16 @f(i16 %m)
+  %b = call i16 @f(i16 %m)
+  %s = add i16 %a, %b
+  %t = add i16 %s, 1
+  ret i16 %t
+
+done:
+  ret i16 0
+}
+";
+
+#[test]
+fn test_a_small_recursive_function_is_inlined_into_itself_to_a_depth() {
+    let inputs: &[&[i128]] = &[&[0], &[1], &[3], &[6]];
+    let calls = |threshold: Threshold| {
+        let mut module = parsed(COUNT);
+        stepped(&mut module, &["f"], 20, threshold);
+        assert_eq!(results(&module, inputs), results(&parsed(COUNT), inputs), "{}", printed(&module));
+        printed(&module).matches("call i16 @f").count()
+    };
+    assert_eq!(calls(Threshold::none()), 2, "no inlining at all: the two calls it began with");
+    assert!(calls(Threshold::default()) > 2, "the body grew by copies of itself");
+    assert_eq!(calls(Threshold::default().for_size()), 2, "not for size: the recursive call is cold there");
+}

@@ -459,7 +459,7 @@ pub fn optimized<E: From<String>>(
 
     // GCC's recursive inlining: a function that calls itself is given copies of itself (`inline::inlined_into_itself`), as -finline-functions
     // does, so not at -O1's none or -Os (the recursive call is cold there).
-    if threshold.budget(reach).is_some() && !threshold.single {
+    if let Some(budget) = threshold.budget(reach).filter(|_| !threshold.single) {
         for at in 0..count {
             for &id in &procedures[at] {
                 let module = &mut program.modules[at];
@@ -469,7 +469,7 @@ pub fn optimized<E: From<String>>(
                 }
                 let mut work = original.clone();
                 let (metadata, globals) = (module.metadata.clone(), module.globals.iter().map(GlobalValue::declaration).collect::<Vec<_>>());
-                let made = inline::inlined_into_itself(id, &mut work, &original, &|context, function| crate::profit::_frequencies(context, &metadata, &globals, function, None).unwrap_or_default(), &mut module.context);
+                let made = inline::inlined_into_itself(id, &mut work, &original, budget, &|context, function| crate::profit::_frequencies(context, &metadata, &globals, function, None).unwrap_or_default(), &mut module.context);
                 if made == 0 {
                     continue;
                 }

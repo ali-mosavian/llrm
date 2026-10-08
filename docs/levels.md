@@ -68,6 +68,9 @@ Sources read:
 | jump threading, branch at -Os | 0 copies `jumpthread.rs` | none copied unless every statement of the block dies (tree-ssa-threadupdate.cc:2077) | 3 at minsize (`JumpThreading.cpp:310`) | gcc's: 0 |
 | jump threading into a loop through its header | not done | `thread_through_loop_header` (tree-ssa-threadupdate.cc:1712) only for two idioms | none | left to `Rotate` |
 | jump threading total | 400 `jumpthread.rs:36` | `max-fsm-thread-paths` (not in 13.4.0's params.opt) | none | stays |
+| recursive inlining depth | 8 `inline.rs` (`RECURSIVE_DEPTH`) | `max-inline-recursive-depth-auto` 8 (params.opt:573) | none | gcc's |
+| recursive inlining size | 450 operations `inline.rs` (`RECURSIVE_SIZE`) | `max-inline-insns-recursive-auto` 450 (:553) | none | gcc's number in our operations |
+| recursive inlining probability | 10% `inline.rs` (`RECURSIVE_PROBABILITY`) | `min-inline-recursive-probability` 10 (:769) | none | gcc's |
 | last chance recoloring | depth 5, interference 8 `allocate.rs:1651` | none | `lcr-max-depth` 5, `lcr-max-interf` 8 `CodeGen/RegAllocGreedy.cpp:95,100` | same |
 | tail duplication | 2 `jumps.rs:91` | none | `tail-dup-size` 2 `CodeGen/TailDuplicator.cpp:60` | same |
 | memset / memcpy expansion | 16 / 8 `isel.rs:419,423` | none | `MaxStoresPerMemset` 16, `MaxStoresPerMemcpy` 8 `Target/X86/X86ISelLowering.cpp:2936,2938` | same |
