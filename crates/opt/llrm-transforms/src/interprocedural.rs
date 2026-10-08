@@ -457,6 +457,29 @@ pub fn optimized<E: From<String>>(
         }
     }
 
+    // GCC's recursive inlining: a function that calls itself is given copies of itself (`inline::inlined_into_itself`), as -finline-functions
+    // does, so not at -O1's none or -Os (the recursive call is cold there).
+    if threshold.budget(reach).is_some() && !threshold.single {
+        for at in 0..count {
+            for &id in &procedures[at] {
+                let module = &mut program.modules[at];
+                let Some(original) = module.global(id).function().cloned() else { continue };
+                if !original.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, &original, inst) == Some(id)) {
+                    continue;
+                }
+                let mut work = original.clone();
+                let (metadata, globals) = (module.metadata.clone(), module.globals.iter().map(GlobalValue::declaration).collect::<Vec<_>>());
+                let made = inline::inlined_into_itself(id, &mut work, &original, &|context, function| crate::profit::_frequencies(context, &metadata, &globals, function, None).unwrap_or_default(), &mut module.context);
+                if made == 0 {
+                    continue;
+                }
+                *function_mut(module, id).1 = work;
+                edited(&mut modules[at], &[id]);
+                reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-recursive.")?;
+            }
+        }
+    }
+
     // A pointer a body only reads through is given as the fields it reads, before what its callers pass
     // is propagated: a length or a segment now crosses the call as a value.
     let (priced, bytes) = match loose {

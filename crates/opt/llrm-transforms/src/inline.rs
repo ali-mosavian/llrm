@@ -95,7 +95,7 @@ impl Default for Threshold {
 
 impl Threshold {
     /// The budget for a call priced `call_cost`; None when nothing inlines.
-    fn budget(self, call_cost: i64) -> Option<i64> {
+    pub(crate) fn budget(self, call_cost: i64) -> Option<i64> {
         (self.limit > 0).then(|| 6.max(24.min(call_cost.div_euclid(2))) * self.limit / Self::default().limit)
     }
 }
@@ -479,3 +479,46 @@ fn owned(context: &Context, function: &Function, operand: Operand, depth: usize)
 #[cfg(test)]
 #[path = "inline_tests.rs"]
 mod tests;
+
+/// GCC's `max-inline-recursive-depth-auto` (params.opt:573).
+const RECURSIVE_DEPTH: u32 = 8;
+/// GCC's `max-inline-insns-recursive-auto` (params.opt:553): what a function may grow to by inlining itself.
+const RECURSIVE_SIZE: i64 = 450;
+/// GCC's `min-inline-recursive-probability` (params.opt:769), percent: a recursive call is inlined into the function only if it runs
+/// more often than this per call of it.
+const RECURSIVE_PROBABILITY: i64 = 10;
+
+/// GCC's `recursive_inlining` (ipa-inline.cc): `function`, the body of `id`, with calls to itself replaced by copies of `original`, its
+/// body as it was, breadth first and each copy's own calls in turn, while a call is likelier than `RECURSIVE_PROBABILITY` percent of
+/// the function's calls, is no deeper than `RECURSIVE_DEPTH`, and the function stays under `RECURSIVE_SIZE`; the copies made.
+/// A function that allocates stack is left alone: each level would add its frame.
+pub fn inlined_into_itself(id: GlobalId, function: &mut Function, original: &Function, frequencies: &dyn Fn(&Context, &Function) -> std::collections::BTreeMap<i64, i64>, context: &mut Context) -> usize {
+    let own = |function: &Function, context: &Context| -> Vec<InstId> { function.walk().map(|(_, inst)| inst).filter(|&inst| callee(context, function, inst) == Some(id)).collect() };
+    if original.walk().any(|(_, inst)| matches!(original.instruction(inst).opcode, Opcode::Alloca { .. })) || !carries(original) {
+        return 0;
+    }
+    let mut depth: IndexMap<InstId, u32> = own(function, context).into_iter().map(|call| (call, 1)).collect();
+    let mut made = 0;
+    loop {
+        let weights = frequencies(context, function);
+        let next = own(function, context)
+            .into_iter()
+            .filter(|call| depth.get(call).copied().unwrap_or(1) <= RECURSIVE_DEPTH)
+            .filter(|&call| function.parent(call).and_then(|block| weights.get(&cfg::id(block))).is_some_and(|&weight| weight * 100 > profit::UNIT * RECURSIVE_PROBABILITY))
+            .min_by_key(|call| depth.get(call).copied().unwrap_or(1));
+        let Some(call) = next else { break };
+        if semantic_count(function) + semantic_count(original) >= RECURSIVE_SIZE {
+            break;
+        }
+        let at = depth.get(&call).copied().unwrap_or(1);
+        let before: BTreeSet<InstId> = own(function, context).into_iter().collect();
+        splice(context, function, call, original);
+        made += 1;
+        for new in own(function, context) {
+            if !before.contains(&new) {
+                depth.insert(new, at + 1);
+            }
+        }
+    }
+    made
+}
