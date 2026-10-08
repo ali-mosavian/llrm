@@ -32,6 +32,13 @@ use crate::profit::{self, OperationCosts};
 const EVAL_THRESHOLD: i64 = 500;
 /// `ipa-cp-max-recursive-depth` (params.opt:225), which `ipa-cp-value-list-size` (:253) also makes the clones one function gets.
 const MAX_CLONES: usize = 8;
+/// Our clocks, at our block frequencies (held to ten trips), per GCC time unit: `place` with `row` known saves 667 here and 245.8 in
+/// GCC's dump (`-fdump-ipa-cp-details`), which also declines quicksort's clone (time 1) that this estimate has at 60 clocks.
+const TIME_SCALE: i64 = 5;
+/// The most a block counts in a callee's time: the trips GCC's loop estimates stop at.
+const MAX_FREQUENCY: i64 = 10;
+/// `ipa-cp-loop-hint-bonus` (params.opt:221): time units added where the known actuals make a loop's bound known.
+const LOOP_HINT_BONUS: i64 = 64;
 /// `ipa-cp-recursion-penalty` (params.opt:237): the percent a recursive function's benefit loses.
 const RECURSION_PENALTY: i64 = 40;
 /// `ipa-cp-unit-growth` (params.opt:245) and `ipa-cp-large-unit-insns` (:249).
@@ -113,17 +120,19 @@ pub fn cloned(module: &mut Module, layout: &DataLayout, procedures: &[GlobalId],
         let size = inline::operations(body);
         // Every call goes to the clone: the function it copies is dead, and the unit does not grow.
         let replaces = private.contains(&name) && !addressed.contains(&name) && counts.get(&name).copied().unwrap_or(0) == sites.len() as i64;
-        let saved = time_saved(module, layout, body, &known, &callees, costs);
+        let (saved, loops) = time_saved(module, layout, body, &known, &callees, costs);
         let frequency: i64 = sites.iter().map(|site| site.2).sum();
-        let mut benefit = saved * frequency / profit::UNIT;
-        if recursive.contains(&name) {
+        let mut benefit = (saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 }) * frequency / profit::UNIT;
+        // GCC's `incorporate_penalties`: a function in a cycle with others, not one that calls itself.
+        let own = body.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, body, inst) == Some(name));
+        if recursive.contains(&name) && !own {
             benefit = benefit * (100 - RECURSION_PENALTY) / 100;
         }
         let cost = if replaces { 0 } else { size };
         let verdict = saved > 0 && (replaces || (benefit * 1000 >= EVAL_THRESHOLD * size && state.grown + size <= unit.max(LARGE_UNIT) * UNIT_GROWTH / 100 + 1));
         llrm_support::debug!(
             "ipa-cp",
-            "{}: {} sites, {} of {} actuals known, saved {saved} clocks, benefit {benefit}, size {size}: {}",
+            "{}: {} sites, {} of {} actuals known, saved {saved} clocks, loops {loops}, benefit {benefit}, size {size}: {}",
             module.global(name).name.as_deref().unwrap_or("?"),
             sites.len(),
             known.iter().flatten().count(),
@@ -165,7 +174,7 @@ pub fn cloned(module: &mut Module, layout: &DataLayout, procedures: &[GlobalId],
 
 /// GCC's `time_benefit`: the clocks a call no longer spends in `body` given its known actuals: what they fold, and what only a branch
 /// they decide reaches, each at its block's frequency (a loop that does not run saves its trips).
-fn time_saved(module: &Module, layout: &DataLayout, body: &Function, known: &[Option<ConstantId>], callees: &Callees, costs: &OperationCosts) -> i64 {
+fn time_saved(module: &Module, layout: &DataLayout, body: &Function, known: &[Option<ConstantId>], callees: &Callees, costs: &OperationCosts) -> (i64, bool) {
     let unit = Unit::of(module, layout, body);
     let mut values = IndexMap::default();
     for (&parameter, constant) in body.parameters().iter().zip(known) {
@@ -173,45 +182,72 @@ fn time_saved(module: &Module, layout: &DataLayout, body: &Function, known: &[Op
             values.insert(parameter, number);
         }
     }
-    // Optimistic constant propagation: a block is reached when a reached block's branch can go there, a phi is the one
-    // constant its reached edges agree on, so a loop whose first test is decided never runs.
+    // Optimistic constant propagation (Wegman and Zadeck): a value is not yet seen, a constant, or varying; a block is reached when a
+    // reached block's branch can go there; a phi is the meet of its reached edges. A loop whose first test is decided never runs.
     let mut folded = BTreeSet::new();
     let mut reached = BTreeSet::new();
     let mut edges: BTreeSet<(llrm_mir::module::BlockId, llrm_mir::module::BlockId)> = BTreeSet::new();
+    let mut varying: BTreeSet<llrm_mir::module::ValueId> = BTreeSet::new();
+    reached.extend(body.entry());
+    // Whether `operand` is a value of the body no block has made yet.
+    let unseen = |operand: &Operand, values: &IndexMap<llrm_mir::module::ValueId, consts::Known>, varying: &BTreeSet<llrm_mir::module::ValueId>| {
+        matches!(operand, Operand::Value(v) if !values.contains_key(v) && !varying.contains(v) && matches!(body.value(*v).def, llrm_mir::module::ValueDef::Instruction(made) if consts::_defined(&unit, made) == Some(*v)))
+    };
     loop {
-        let before = (reached.len(), edges.len(), values.len());
-        let mut pending: Vec<_> = body.entry().into_iter().collect();
-        let mut seen = BTreeSet::new();
-        while let Some(block) = pending.pop() {
-            if !seen.insert(block) {
+        let before = (reached.len(), edges.len(), values.len(), varying.len());
+        for &block in body.layout() {
+            if !reached.contains(&block) {
                 continue;
             }
-            reached.insert(block);
             for &inst in body.block(block).instructions() {
                 let instruction = body.instruction(inst);
-                if instruction.opcode == Opcode::Phi {
-                    let incoming: Vec<_> = crate::lcssa::arms(body, inst).into_iter().filter(|(_, from)| edges.contains(&(*from, block)) || (!reached.contains(from) && false)).collect();
-                    let numbers: Vec<_> = incoming.iter().map(|(value, _)| consts::_operand(&unit, *value, &values, None)).collect();
-                    if !numbers.is_empty() && numbers.iter().all(|one| one.is_some() && one.as_ref().map(|k| &k.n) == numbers[0].as_ref().map(|k| &k.n)) {
-                        if let (Some(value), Some(number)) = (consts::_defined(&unit, inst), numbers[0].clone()) {
-                            values.insert(value, number);
-                            folded.insert(inst);
-                        }
-                    }
+                let Some(defined) = consts::_defined(&unit, inst) else { continue };
+                if varying.contains(&defined) || matches!(instruction.opcode, Opcode::Br | Opcode::Ret) {
                     continue;
                 }
-                if matches!(instruction.opcode, Opcode::Br | Opcode::Ret) {
+                if instruction.opcode == Opcode::Phi {
+                    let mut meet: Option<consts::Known> = None;
+                    let mut vary = false;
+                    for (value, from) in crate::lcssa::arms(body, inst) {
+                        if !edges.contains(&(from, block)) || unseen(&value, &values, &varying) {
+                            continue;
+                        }
+                        match (consts::_operand(&unit, value, &values, None), &meet) {
+                            (Some(one), None) => meet = Some(one),
+                            (Some(one), Some(kept)) if one.n == kept.n => {}
+                            _ => vary = true,
+                        }
+                    }
+                    if vary {
+                        values.swap_remove(&defined);
+                        varying.insert(defined);
+                        folded.remove(&inst);
+                    } else if let Some(one) = meet {
+                        values.insert(defined, one);
+                        folded.insert(inst);
+                    }
                     continue;
                 }
                 if let Some(number) = consts::_result(&unit, inst, &values, None) {
-                    if let Some(value) = consts::_defined(&unit, inst) {
-                        values.insert(value, number);
-                    }
+                    values.insert(defined, number);
                     folded.insert(inst);
+                } else if !instruction.operands.iter().any(|one| unseen(one, &values, &varying)) {
+                    values.swap_remove(&defined);
+                    varying.insert(defined);
+                    folded.remove(&inst);
                 }
+            }
+        }
+        for &block in body.layout() {
+            if !reached.contains(&block) {
+                continue;
             }
             let Some(end) = body.terminator(block) else { continue };
             let terminator = body.instruction(end);
+            // A branch on a value not yet seen goes nowhere yet.
+            if terminator.opcode == Opcode::Br && terminator.operands.len() == 3 && unseen(&terminator.operands[0], &values, &varying) {
+                continue;
+            }
             let decided = (terminator.opcode == Opcode::Br && terminator.operands.len() == 3).then(|| consts::_operand(&unit, terminator.operands[0], &values, None)).flatten();
             let successors = match (decided, &terminator.operands[..]) {
                 (Some(number), [_, Operand::Block(yes), Operand::Block(no)]) => vec![if number.n.sign() == num_bigint::Sign::NoSign { *no } else { *yes }],
@@ -219,15 +255,17 @@ fn time_saved(module: &Module, layout: &DataLayout, body: &Function, known: &[Op
             };
             for to in successors {
                 edges.insert((block, to));
-                pending.push(to);
+                reached.insert(to);
             }
         }
-        if before == (reached.len(), edges.len(), values.len()) {
+        if before == (reached.len(), edges.len(), values.len(), varying.len()) {
             break;
         }
     }
+    llrm_support::debug!("ipa-cp", "reached {} of {} blocks, {} folded, {} varying", reached.len(), body.layout().len(), folded.len(), varying.len());
     let frequency = profit::_frequencies(&module.context, &module.metadata, &module.globals, body, None).unwrap_or_default();
-    let weight = |block| frequency.get(&cfg::id(block)).copied().unwrap_or(profit::UNIT);
+    // A block runs about as often as GCC guesses a loop does (its time estimates stop at ten trips), not as often as the nest multiplies out.
+    let weight = |block| frequency.get(&cfg::id(block)).copied().unwrap_or(profit::UNIT).min(MAX_FREQUENCY * profit::UNIT);
     let (mut unknown, mut kept) = (0, 0);
     for (block, inst) in body.walk() {
         if matches!(body.instruction(inst).opcode, Opcode::Phi) {
@@ -239,7 +277,24 @@ fn time_saved(module: &Module, layout: &DataLayout, body: &Function, known: &[Op
             kept += price;
         }
     }
-    (unknown - kept) / profit::UNIT
+    // `INLINE_HINT_loop_iterations`: a loop's exit tests a value the known actuals make constant against one that varies.
+    let shape = cfg::Shape::of(body);
+    let hint = shape.loops.iter().any(|one| {
+        one.body.iter().any(|&at| {
+            let block = cfg::block(at);
+            let Some(end) = body.terminator(block) else { return false };
+            let terminator = body.instruction(end);
+            let (Opcode::Br, Some(Operand::Value(condition))) = (&terminator.opcode, terminator.operands.first()) else { return false };
+            let llrm_mir::module::ValueDef::Instruction(compare) = body.value(*condition).def else { return false };
+            let compared = body.instruction(compare);
+            matches!(compared.opcode, Opcode::ICmp(_)) && reached.contains(&block) && {
+                let constant = |operand: &Operand| matches!(operand, Operand::Value(v) if values.contains_key(v) && !matches!(body.value(*v).def, llrm_mir::module::ValueDef::Instruction(_)) || matches!(operand, Operand::Value(v) if values.contains_key(v) && body.parameters().contains(v)));
+                let moving = |operand: &Operand| matches!(operand, Operand::Value(v) if varying.contains(v));
+                compared.operands.len() == 2 && ((constant(&compared.operands[0]) && moving(&compared.operands[1])) || (constant(&compared.operands[1]) && moving(&compared.operands[0])))
+            }
+        })
+    });
+    ((unknown - kept) / profit::UNIT, hint)
 }
 
 /// Whether `id` is a function the program runs once: `main`.
