@@ -129,6 +129,13 @@ impl Writer<'_> {
                         at(out);
                         Ok(())
                     })?,
+                    Location::Relative { register, disp } => out.symbol(S_DEFRANGE_REGISTER_REL, |out| {
+                        put16(&mut out.bytes, self.register(register)?);
+                        put16(&mut out.bytes, 0);
+                        put32(&mut out.bytes, i32::try_from(*disp).or_else(|_| refused(format!("a stack offset {disp} does not fit its field")))? as u32);
+                        at(out);
+                        Ok(())
+                    })?,
                     Location::Register(register) => out.symbol(S_DEFRANGE_REGISTER, |out| {
                         put16(&mut out.bytes, self.register(register)?);
                         put16(&mut out.bytes, 0);

@@ -177,10 +177,13 @@ struct Remembered {
     odds: crate::model::lir::BlockOdds,
     trips: Vec<(i64, i64)>,
     answer: Rc<IndexMap<u32, Interval>>,
+    /// The body's numbering, and what each value's references weigh before they are divided by its size.
+    index: Rc<Indexes>,
+    totals: Rc<IndexMap<u32, f64>>,
 }
 
 impl Remembered {
-    fn of(body: &LirBody, answer: &IndexMap<u32, Interval>) -> Self {
+    fn of(body: &LirBody, answer: &IndexMap<u32, Interval>, index: &Indexes, totals: IndexMap<u32, f64>) -> Self {
         Self {
             entry: body.entry,
             blocks: body.blocks.iter().map(|block| (block.at, block.succ.clone(), block.phis.clone(), block.insns.len())).collect(),
@@ -188,6 +191,8 @@ impl Remembered {
             odds: body.odds.clone(),
             trips: body.loop_trip_counts.clone(),
             answer: Rc::new(answer.clone()),
+            index: Rc::new(index.clone()),
+            totals: Rc::new(totals),
         }
     }
 
@@ -202,6 +207,7 @@ impl Remembered {
 }
 
 thread_local! {
+    static EDITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static RECENT: std::cell::RefCell<Vec<Remembered>> = const { std::cell::RefCell::new(Vec::new()) };
     static WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -209,6 +215,16 @@ thread_local! {
 /// How many times this thread has worked out intervals, for a test that asking again of one body does not.
 pub fn worked() -> usize {
     WORKED.with(std::cell::Cell::get)
+}
+
+/// How many answers this thread has made by editing an earlier one, for a test that a body made of another's instructions is.
+pub fn edited() -> usize {
+    EDITED.with(std::cell::Cell::get)
+}
+
+/// `intervals` worked out from the body alone, whatever is remembered: what an edited answer is held to.
+pub fn intervals_afresh(body: &LirBody) -> IndexMap<u32, Interval> {
+    worked_out(body, None, &Frequency::of(body))
 }
 
 /// How many answers are remembered: the allocator's rewrites and its trial candidates alternate
@@ -244,13 +260,151 @@ pub fn intervals_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency)
         return llrm_support::debug::timed("intervals cloned", || (*found).clone());
     }
     llrm_support::debug::counted("intervals remembered", false);
-    let answer = llrm_support::debug::timed("intervals worked out", || worked_out(body, index, busy));
+    let owned;
+    let index = match index {
+        Some(index) => index,
+        None => {
+            owned = indexed(body);
+            &owned
+        }
+    };
+    // A body made of the last one's instructions and a few others: its answer is that one's, moved to the new slots, and
+    // worked out again only for the values the others name (LLVM's `LiveIntervals` edited across a spill).
+    let edited = RECENT.with(|recent| recent.borrow().first().and_then(|held| updated(held, body, index, busy)));
+    let (answer, totals) = match edited {
+        Some(found) => {
+            llrm_support::debug::counted("intervals edited", true);
+            EDITED.with(|count| count.set(count.get() + 1));
+            if std::env::var_os("LLRM_CHECK_INTERVALS").is_some() {
+                let whole = worked_out(body, Some(index), busy);
+                if found.0 != whole {
+                    let mut shown = 0;
+                    for (value, expected) in &whole {
+                        if found.0.get(value) != Some(expected) && shown < 6 {
+                            shown += 1;
+                            eprintln!("value {value}:\n edited {:?}\n whole  {:?}", found.0.get(value).map(|one| one.segments.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>()), expected.segments.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>());
+                        }
+                    }
+                    for value in found.0.keys().filter(|value| !whole.contains_key(*value)) {
+                        eprintln!("value {value}: edited has it, whole does not");
+                    }
+                    panic!("{}: an edited answer differs from working it out", body.name);
+                }
+            }
+            found
+        }
+        None => {
+            llrm_support::debug::counted("intervals edited", false);
+            llrm_support::debug::timed("intervals worked out", || worked_out_with_totals(body, index, busy, &|_| true))
+        }
+    };
     RECENT.with(|recent| {
         let mut recent = recent.borrow_mut();
-        recent.insert(0, Remembered::of(body, &answer));
+        recent.insert(0, Remembered::of(body, &answer, index, totals));
         recent.truncate(REMEMBERED);
     });
     answer
+}
+
+/// The answer for `body` made from `held`'s, where `body` keeps most of the instructions `held` had: those it keeps are
+/// at new slots, and the values the others name are worked out again. None where that is not so.
+fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency) -> Option<(IndexMap<u32, Interval>, IndexMap<u32, f64>)> {
+    let same_blocks = held.entry == body.entry
+        && held.blocks.len() == body.blocks.len()
+        && held.blocks.iter().zip(&body.blocks).all(|((at, succ, phis, _), block)| *at == block.at && *succ == block.succ && *phis == block.phis)
+        && held.odds == body.odds
+        && held.trips == body.loop_trip_counts;
+    if !same_blocks {
+        return None;
+    }
+    // The values the instructions that are not in both name, and those of the parallel copy each is in: a copy's moves are
+    // all read and written at its last, which a change to any of them moves.
+    let mut touched: crate::support::hash::HashSet<u32> = Default::default();
+    let mut changed = 0;
+    let mut names = |run: &[&Arc<Insn>], gone: &dyn Fn(&Arc<Insn>) -> bool| {
+        let mut start = 0;
+        while start < run.len() {
+            let mut end = start + 1;
+            if run[start].group.is_some() {
+                while end < run.len() && run[end].group == run[start].group {
+                    end += 1;
+                }
+            }
+            let hit = run[start..end].iter().filter(|one| gone(one)).count();
+            if hit > 0 {
+                changed += hit;
+                for one in &run[start..end] {
+                    touched.extend(one.defines.iter().chain(&one.uses).copied());
+                }
+            }
+            start = end;
+        }
+    };
+    let mut at = 0;
+    for (_, _, _, count) in &held.blocks {
+        let run: Vec<&Arc<Insn>> = held.insns[at..at + count].iter().collect();
+        names(&run, &|one| !index.at.contains_key(&key(one)));
+        at += count;
+    }
+    for block in &body.blocks {
+        let run: Vec<&Arc<Insn>> = block.insns.iter().collect();
+        names(&run, &|one| !held.index.at.contains_key(&key(one)));
+    }
+    if changed * 4 > held.insns.len() + 16 || touched.len() * 3 > held.answer.len() + 16 {
+        return None;
+    }
+    // Where each slot of the old numbering is in the new one: the block tops, and each instruction both have.
+    let (mut old, mut new): (Vec<i64>, Vec<i64>) = (Vec::new(), Vec::new());
+    let mut tops: crate::support::hash::HashMap<i64, i64> = Default::default();
+    let mut insns = held.insns.iter();
+    for ((at, _, _, count), block) in held.blocks.iter().zip(&body.blocks) {
+        let (before, now) = (held.index.span[at], index.span[&block.at]);
+        old.push(before.0);
+        new.push(now.0);
+        tops.insert(before.0, now.0);
+        tops.insert(before.1, now.1);
+        for one in insns.by_ref().take(*count) {
+            if let Some(slot) = index.at.get(&key(one)) {
+                old.push(held.index.at[&key(one)]);
+                new.push(*slot);
+            }
+        }
+    }
+    let start = |slot: i64| -> i64 {
+        if let Some(top) = tops.get(&slot) {
+            return *top;
+        }
+        let at = old.partition_point(|one| *one <= slot) - 1;
+        new[at] + (slot - old[at])
+    };
+    let end = |slot: i64| -> i64 {
+        if let Some(top) = tops.get(&slot) {
+            return *top;
+        }
+        let at = old.partition_point(|one| *one < slot) - 1;
+        new[at] + (slot - old[at])
+    };
+    let again = worked_out_with_totals(body, index, busy, &|value| touched.contains(&value));
+    let mut answer: IndexMap<u32, Interval> = IndexMap::default();
+    let mut totals: IndexMap<u32, f64> = IndexMap::default();
+    for (value, kept) in held.answer.iter().filter(|(value, _)| !touched.contains(value)) {
+        let segments: Vec<Segment> = kept.segments.iter().map(|segment| Segment { start: start(segment.start), end: end(segment.end) }).collect();
+        let mut moved = Interval::new(*value, segments);
+        moved.weight = match held.totals.get(value) {
+            Some(total) => {
+                totals.insert(*value, *total);
+                *total / (moved.size() + GRACE) as f64
+            }
+            None => 0.0,
+        };
+        answer.insert(*value, moved);
+    }
+    for (value, total) in held.totals.iter().filter(|(value, _)| !touched.contains(value) && !answer.contains_key(*value)) {
+        totals.insert(*value, *total);
+    }
+    answer.extend(again.0);
+    totals.extend(again.1);
+    Some((answer, totals))
 }
 
 fn worked_out(body: &LirBody, index: Option<&Indexes>, busy: &Frequency) -> IndexMap<u32, Interval> {
@@ -271,7 +425,6 @@ pub fn intervals_where(body: &LirBody, index: &Indexes, busy: &Frequency, keep: 
 }
 
 fn worked_out_by(body: &LirBody, index: Option<&Indexes>, busy: &Frequency, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
-    WORKED.with(|worked| worked.set(worked.get() + 1));
     let owned;
     let index = match index {
         Some(index) => index,
@@ -280,15 +433,23 @@ fn worked_out_by(body: &LirBody, index: Option<&Indexes>, busy: &Frequency, keep
             &owned
         }
     };
+    worked_out_with_totals(body, index, busy, keep).0
+}
+
+/// `worked_out_by`, and what each value's references weigh before they are divided by its size.
+fn worked_out_with_totals(body: &LirBody, index: &Indexes, busy: &Frequency, keep: &impl Fn(u32) -> bool) -> (IndexMap<u32, Interval>, IndexMap<u32, f64>) {
+    WORKED.with(|worked| worked.set(worked.get() + 1));
     let ranges = _ranges(body, index, keep);
-    let weight = llrm_support::debug::timed("intervals weights", || _weights(body, busy, &ranges, keep));
-    ranges
+    let totals = llrm_support::debug::timed("intervals weights", || _totals(body, busy, keep));
+    let weight = _divided(&totals, &ranges);
+    let answer = ranges
         .into_iter()
         .map(|(value, one)| {
             let weight = weight.get(&value).copied().unwrap_or(0.0);
             (value, Interval { weight, ..one })
         })
-        .collect()
+        .collect();
+    (answer, totals)
 }
 
 /// The `group` run ending at `position`: where it starts.
@@ -560,7 +721,13 @@ pub fn level(depth: u32) -> f64 {
 pub const GRACE: i64 = 25 * PER_INSN;
 
 /// `references weighted by block frequency / (live slots + grace)`.
+#[allow(dead_code)]
 fn _weights(body: &LirBody, busy: &Frequency, ranges: &IndexMap<u32, Interval>, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, f64> {
+    _divided(&_totals(body, busy, keep), ranges)
+}
+
+/// `references weighted by block frequency`, before the division.
+fn _totals(body: &LirBody, busy: &Frequency, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, f64> {
     let mut total: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = busy.block(block.at);
@@ -571,13 +738,17 @@ fn _weights(body: &LirBody, busy: &Frequency, ranges: &IndexMap<u32, Interval>, 
         }
     }
     total
-        .into_iter()
+}
+
+fn _divided(total: &IndexMap<u32, f64>, ranges: &IndexMap<u32, Interval>) -> IndexMap<u32, f64> {
+    total
+        .iter()
         .map(|(value, found)| {
-            let size = match ranges.get(&value) {
+            let size = match ranges.get(value) {
                 Some(one) => one.size() + GRACE,
                 None => GRACE,
             };
-            (value, found / size as f64)
+            (*value, *found / size as f64)
         })
         .collect()
 }

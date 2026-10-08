@@ -43,9 +43,9 @@ fn name(register: Register) -> String {
 /// pointer (the return address). `frame` is the register the code keeps its frame in, `stack` the stack pointer;
 /// `pops` the bytes a call popped, by the offset the call ends at. Code no path reaches (the targets of an
 /// indirect jump) is given no row, so it has the rule of the code before it.
-pub fn rows(code: &[u8], frame: Register, stack: Register, entry: i64, pops: &[(usize, i64)]) -> Result<Vec<FrameRow>, String> {
+pub fn rows(code: &[u8], bits: u32, frame: Register, stack: Register, entry: i64, pops: &[(usize, i64)]) -> Result<Vec<FrameRow>, String> {
     // Decoded where a path leads, never past a jump table or padding that is not code.
-    let mut decoder = Decoder::with_ip(32, code, 0, DecoderOptions::NONE);
+    let mut decoder = Decoder::with_ip(bits, code, 0, DecoderOptions::NONE);
     let mut decode = |at: usize| -> Result<Instruction, String> {
         decoder.set_position(at).map_err(|_| format!("a branch to {at}, outside the function"))?;
         decoder.set_ip(at as u64);

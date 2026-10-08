@@ -61,6 +61,13 @@ pub(super) fn listing(program: &Program) -> String {
     masm::text(&assembled(program).expect("assembles")).expect("prints")
 }
 
+/// `listing` with nothing optimised: every variable in its cell.
+pub(super) fn listing_unoptimised(program: &Program) -> String {
+    let mut options = codegen();
+    options.pipeline.optimize = false;
+    masm::text(&qb_compile::assembled(program, None, &options).expect("assembles")).expect("prints")
+}
+
 /// `listing` where no function is inlined into its one caller: a test that reads the callee (a handler).
 pub(super) fn listing_calls_kept(program: &Program) -> String {
     let mut options = codegen();
