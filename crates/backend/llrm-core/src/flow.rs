@@ -124,6 +124,17 @@ pub fn checked(body: LirBody, phase: &mut dyn LIRTransform, in_ssa: bool, classe
         let blocks: std::collections::BTreeSet<i64> = found.iter().map(|one| one.block).collect();
         llrm_support::debug!("regclass", "{} after {stage}: {} points do not fit, peak {peak} over, {} blocks", body.name, found.len(), blocks.len());
     }
+    if let Ok(want) = std::env::var("DBG_LIR") {
+        let (name, stages) = want.split_once(':').unwrap_or((&want, ""));
+        if body.name.starts_with(name) && stages.split(',').any(|one| one == stage) {
+            eprintln!("=== {} after {stage}", body.name);
+            for b in &body.blocks {
+                eprintln!("B{:#x} succ {:?}", b.at, b.succ);
+                for phi in &b.phis { eprintln!("   phi {:?} <- {:?}", phi.result, phi.incoming); }
+                for i in &b.insns { if let Some(w) = &i.what { eprintln!("   {} {:?} <- {:?}", w.name.as_deref().unwrap_or("?"), w.dests, w.sources); } }
+            }
+        }
+    }
     if !verifying {
         return Ok(body);
     }

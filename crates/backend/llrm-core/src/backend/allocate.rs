@@ -1261,6 +1261,9 @@ fn _allocated(
     _recolored_hints(&mut r#where, &mut union, &settled, |value| {
         fixed.contains_key(&value) || protected.contains(&value) || preferred.contains_key(&value)
     });
+    _rotated_hints(&mut r#where, &mut union, &settled, |value| {
+        fixed.contains_key(&value) || protected.contains(&value) || preferred.contains_key(&value)
+    });
     Ok((Assignment { r#where, spilled: if rewrite.is_some() { BTreeSet::new() } else { spilled.clone() }, cost, optimal: false, why: "greedy with eviction".to_owned() }, body, spilled))
 }
 
@@ -1322,6 +1325,117 @@ fn _recolored_hints(
                 r#where.insert(value, register);
                 moved = true;
             }
+        }
+    }
+}
+
+/// `_recolored_hints` moves one value at a time into a copy partner's register that is free. A loop's carried values
+/// swapped round (each wants the register another holds at the latch) are blocked by each other: no single move is free,
+/// and the edge is left a cycle of exchanges. This moves the whole ring at once: a value to its partner's register, the one
+/// value that holds it there to its own partner's, and so on, back to the first one's register. It applies when the ring
+/// joins more copy pairs than it split, and each is free over its interval but for the ring's own members.
+fn _rotated_hints(
+    r#where: &mut IndexMap<u32, Register>,
+    union: &mut LiveUnion,
+    settled: &Settled<'_>,
+    pinned: impl Fn(u32) -> bool,
+) {
+    const RING: usize = 6;
+    let joined = |value: u32, register: Register, map: &IndexMap<u32, Register>| {
+        settled.hints[&value].iter().filter(|other| map.get(*other).is_some_and(|theirs| _whole(*theirs) == _whole(register))).count()
+    };
+    // `movers` all hold one register and take `target` together (a web of joined copies is one); whoever holds `target` where
+    // they are live moves on to its partners' register in turn.
+    fn extend(
+        movers: &[u32],
+        target: Register,
+        chain: &mut Vec<(u32, Register)>,
+        r#where: &IndexMap<u32, Register>,
+        union: &LiveUnion,
+        settled: &Settled<'_>,
+        pinned: &dyn Fn(u32) -> bool,
+    ) -> bool {
+        if !settled.data_free && target == settled.segments.data {
+            return false;
+        }
+        let mark = chain.len();
+        let mut blockers: BTreeSet<u32> = BTreeSet::new();
+        for mover in movers {
+            let Some(mine) = settled.live.get(mover) else { chain.truncate(mark); return false };
+            let width = settled.widths.get(mover).copied().unwrap_or(4);
+            let order = target::order(settled.confined.get(mover), settled.segments, settled.classes).into_iter().filter(|one| _whole(*one) == target);
+            let Some(register) = order.into_iter().find(|register| !_clobbered(mine, *register, settled.masks, width)) else { chain.truncate(mark); return false };
+            chain.push((*mover, register));
+            blockers.extend(union.meeting(&target, mine, settled.live));
+        }
+        blockers.retain(|one| !chain.iter().any(|(member, _)| member == one));
+        if std::env::var_os("DBG_ROT").is_some() { eprintln!("EXT {:?} -> {target:?} blockers {:?} chain {:?}", movers, blockers, chain); }
+        if blockers.is_empty() {
+            return true;
+        }
+        if chain.len() < RING && blockers.iter().all(|one| !pinned(*one) && settled.hints.contains_key(one)) {
+            let here: BTreeSet<Register> = blockers.iter().map(|one| _whole(r#where[one])).collect();
+            let blockers: Vec<u32> = blockers.into_iter().collect();
+            if here.len() == 1 {
+                let here = *here.iter().next().expect("one");
+                let mut onward: BTreeSet<Register> = BTreeSet::new();
+                for one in &blockers {
+                    for partner in &settled.hints[one] {
+                        if let Some(theirs) = r#where.get(partner).map(|one| _whole(*one)) {
+                            if theirs != here && !blockers.contains(partner) {
+                                onward.insert(theirs);
+                            }
+                        }
+                    }
+                }
+                for theirs in onward {
+                    if extend(&blockers, theirs, chain, r#where, union, settled, pinned) {
+                        return true;
+                    }
+                }
+            }
+        }
+        chain.truncate(mark);
+        false
+    }
+    let values: Vec<u32> = r#where.keys().copied().filter(|value| settled.hints.contains_key(value) && !pinned(*value)).collect();
+    if std::env::var_os("DBG_ROT").is_some() { for (v, r) in r#where.iter() { if let Some(h) = settled.hints.get(v) { eprintln!("ROT v{v} {r:?} pinned {} hints {:?}", pinned(*v), h.iter().map(|o| (*o, r#where.get(o).copied())).collect::<Vec<_>>()); } } }
+    for value in values {
+        let Some(now) = r#where.get(&value).map(|one| _whole(*one)) else { continue };
+        for partner in settled.hints[&value].clone() {
+            let Some(theirs) = r#where.get(&partner).map(|one| _whole(*one)) else { continue };
+            if theirs == now || joined(value, now, r#where) > 0 {
+                continue;
+            }
+            let mut chain = Vec::new();
+            if !extend(&[value], theirs, &mut chain, r#where, union, settled, &pinned) || chain.len() < 2 {
+                continue;
+            }
+            // Two members taking one register must not be live together.
+            let clash = chain.iter().enumerate().any(|(at, (one, register))| {
+                chain[..at].iter().any(|(other, taken)| _whole(*taken) == _whole(*register) && settled.live.get(one).zip(settled.live.get(other)).is_some_and(|(mine, theirs)| mine.overlaps(theirs)))
+            });
+            if std::env::var_os("DBG_ROT").is_some() { eprintln!("RING {:?} clash {clash}", chain); }
+            if clash {
+                continue;
+            }
+            let mut after = r#where.clone();
+            for (member, register) in &chain {
+                after.insert(*member, *register);
+            }
+            let before: usize = chain.iter().map(|(member, _)| joined(*member, r#where[member], r#where)).sum();
+            let gained: usize = chain.iter().map(|(member, register)| joined(*member, *register, &after)).sum();
+            if gained <= before {
+                continue;
+            }
+            for (member, _) in &chain {
+                union.remove(_whole(r#where[member]), *member, settled.live);
+            }
+            for (member, register) in &chain {
+                union.add(_whole(*register), *member, settled.live);
+                r#where.insert(*member, *register);
+            }
+            break;
         }
     }
 }

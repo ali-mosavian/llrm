@@ -722,6 +722,7 @@ fn simulated_with(
                     .map(|block| weights.edge(block.at, *to))
                     .sum();
                 let drop = first_uses(flow, weights, &within.body, *to, *value);
+                if std::env::var_os("DBG_KEEP").is_some() { eprintln!("KEEP {} header {:#x} v{} keep {:.2} drop {:.2}", body.name, to, value, keep, drop); }
                 // Holding the value costs its register through the trip as well: keep it only when the back edge reloads it rarely.
                 if 2.0 * keep >= drop {
                     more |= dropped.entry(*to).or_default().insert(*value);
@@ -735,7 +736,7 @@ fn simulated_with(
     }
     // Dropping what a loop evicts leaves the loop's registers short of use: a value is let back in
     // where the loop then moves less to and from memory.
-    if machine.file == File::Selector {
+    if machine.file == File::Selector && std::env::var_os("NO_LET").is_none() {
         // The jump a bridge on a loop's back edge takes runs every trip, unless another file's values already bring the bridge;
         // and what a loop that fits its registers does not hold, it need not bridge to hold.
         let critical: BTreeSet<(i64, i64)> = body.critical_edges().into_iter().filter(|edge| place[&edge.0] >= place[&edge.1] && !bridged.contains(edge) && room.get(&edge.1).is_some_and(|peak| *peak > machine.general.len())).collect();

@@ -312,6 +312,9 @@ fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>,
         Ok("allocator") => Candidates::AllocatorOnly,
         _ => CANDIDATES.with(std::cell::Cell::get),
     };
+    if std::env::var("LLRM_CANDIDATES").as_deref() == Ok("plain") {
+        return timed("candidate plain", || phased(module, name, abi, pool, target, hole, true, false)).map(|(made, _)| made);
+    }
     if candidates == Candidates::AllocatorOnly {
         return timed("candidate allocator alone", || phased(module, name, abi, pool, target, hole, false, true)).map(|(made, _)| made);
     }
