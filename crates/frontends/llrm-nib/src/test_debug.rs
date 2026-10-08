@@ -41,7 +41,8 @@ fn compiled(inlined: bool) -> Vec<Rc<omf::Record>> {
     let program = crate::driver::parsed(&path, &frontend, None).expect("parses");
     // Unless asked, not inlined: `scale` is a symbol and its lines are statements to read.
     let threshold = if inlined { llrm_transforms::inline::Threshold::default() } else { llrm_transforms::inline::Threshold::none() };
-    let pipeline = llrm_transforms::pipeline::Options { inline: threshold, ..Default::default() };
+    // Not optimised unless it inlines: a variable the optimiser keeps in no cell is left out of CodeView 4, which is what these read.
+    let pipeline = llrm_transforms::pipeline::Options { inline: threshold, optimize: inlined, ..Default::default() };
     let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("compiles");
     omf::parse(&crate::compile::object(&module, Path::new("probe.nib"), CodeLayout::OneSegment, llrm_target::object::Format::Omf).expect("writes")).expect("parses")
@@ -55,17 +56,16 @@ fn nib_symbols_read_with_their_types() {
         cv4info::shape(&object()),
         [
             "DATA counter: SHORT",
-            // `total` is read and written by nothing, so the optimiser drops it, and `-g` keeps nothing it does not (it kept it, for a debugger).
+            "DATA total: UNSIGNED LONG",
             "LOCAL main.origin: struct point {x +0 SHORT, y +2 LONG}",
             "LOCAL main.ratio: REAL32",
             "LOCAL main.result: LONG",
             "LOCAL main.small: UNSIGNED CHAR",
             "LOCAL main.values: 8 BYTES OF SHORT",
             "LOCAL scale.doubled: LONG",
-            "LOCAL scale.factor: SHORT",
-            // `scale`'s parameters arrive in registers (regparm3), stored to a cell at the entry (#883): locals of the frame. `p` was
-            // the call's constant, which the optimiser (no longer held by `-g`) took out: `factor` is the function's first parameter
-            // now, and the cell is its own, not `p`'s.
+            // `scale`'s second parameter arrives in a register (regparm3), which CodeView 4 cannot say for a whole scope, and `-g` stores
+            // nothing to a cell for it: it is left out. The first is on the stack, an argument.
+            "PARAM scale.p: FAR * struct point {x +0 SHORT, y +2 LONG}",
             "PROC main far () -> SHORT",
             "PROC scale near (FAR * struct point {x +0 SHORT, y +2 LONG}, SHORT) -> LONG",
             "UDT point: struct point {x +0 SHORT, y +2 LONG}",
@@ -86,7 +86,8 @@ fn nib_lines_are_its_statements() {
 fn nib_inlined_code_keeps_its_lines_and_loses_its_symbols() {
     let object = compiled(true);
     let lines: Vec<u16> = object.iter().filter(|one| one.r#type == omf::LINNUM).flat_map(|one| omf::lines(one).1).map(|(line, _)| line).collect();
-    assert_eq!(lines, [13, 14, 15, 16, 17, 9, 10, 18, 19, 20, 21]);
+    // Optimised, a statement whose code is gone has no line (it kept one while `-g` kept the stores): `scale`'s 9, `main`'s locals.
+    assert_eq!(lines, [17, 10, 19, 20, 21]);
     let shape = cv4info::shape(&object);
     assert!(shape.iter().all(|one| !one.contains("scale")), "{shape:?}");
     assert!(shape.contains(&"PROC main far () -> SHORT".to_owned()), "{shape:?}");
@@ -130,8 +131,9 @@ fn main() -> i16:
         let parameter = gcd.variables.iter().find(|one| one.name == name).unwrap_or_else(|| panic!("no parameter {name}: {:?}", gcd.variables));
         assert_eq!((parameter.kind, &parameter.location), (Kind::Parameter, &Location::List(Vec::new())), "{name}");
     }
-    // The locals a, b and t, in cells as before.
-    assert!(["a", "b", "t"].iter().all(|name| gcd.variables.iter().any(|one| one.name == *name && matches!(one.location, Location::Frame { .. }))));
+    // The locals a, b and t were kept in cells for a debugger; the optimiser keeps them in registers, which CodeView 4 cannot say, so
+    // they are left out.
+    assert!(["a", "b", "t"].iter().all(|name| !gcd.variables.iter().any(|one| one.name == *name && matches!(one.location, Location::Frame { .. }))));
 }
 
 const TWO: &str = "fn add(a: i16, b: i32) -> i32:\n    return i32(a) + b\n\nfn main() -> i16:\n    print(add(2, 3) + add(4, 5))\n    return 0\n";
@@ -188,21 +190,19 @@ fn regparm_model(format: llrm_object::debug::Format) -> (llrm_object::debug::Inf
 }
 
 /// Under `-mabi=regparm3` a parameter arrives in a register, and CodeView 4's BASIC-era records (and Turbo Debugger's) name one place for
-/// a whole scope: `add`'s `a` and `b` were in no CodeView at all. The backend stores each to a cell at the entry and describes the
-/// cell, so the debugger stopped at the first line reads the value there; the first line starts after the stores.
+/// a whole scope: `add`'s `a` and `b` are in no CodeView. The backend stored each to a cell at the entry to give the format one; `-g`
+/// changes no code, so it stores nothing, and the model says only that each is in its register until the body starts.
 #[test]
-fn a_register_parameter_is_stored_to_a_cell_at_the_entry_where_the_format_names_one_place() {
+fn a_register_parameter_is_not_stored_to_a_cell_for_a_format_that_names_one_place() {
     use llrm_object::debug::{Kind, Location};
     let (info, code) = regparm_model(llrm_object::debug::Format::Default);
     let add = info.functions.iter().find(|one| one.name == "add").expect("add");
-    let cells: Vec<(&str, Kind, &Location)> = add.variables.iter().map(|one| (one.name.as_str(), one.kind, &one.location)).collect();
-    assert_eq!(cells, [("a", Kind::Parameter, &Location::Frame { disp: -2 }), ("b", Kind::Parameter, &Location::Frame { disp: -6 })], "{cells:?}");
-    // `mov [bp-2], ax` is 89 46 FE: it ends before the body begins.
-    let at = code.windows(3).position(|bytes| bytes == [0x89, 0x46, 0xFE]).expect("the store of a");
-    assert!(at + 3 <= add.body.expect("a body").0, "the store at {at} comes before the body at {:?}", add.body);
-    // The reader sees both, as locals: it tells a parameter from a local by the sign of the offset from BP, and the cells are below it.
+    let places: Vec<(&str, Kind, &Location)> = add.variables.iter().map(|one| (one.name.as_str(), one.kind, &one.location)).collect();
+    assert!(matches!(&places[..], [("a", Kind::Parameter, Location::List(a)), ("b", Kind::Parameter, Location::List(b))] if matches!(&a[..], [(_, Location::Register(_))]) && matches!(&b[..], [(_, Location::Register(_))])), "{places:?}");
+    // `mov [bp-2], ax` is 89 46 FE: nothing stores it.
+    assert!(!code.windows(3).any(|bytes| bytes == [0x89, 0x46, 0xFE]), "the store of a is in the code");
     let shape = cv4info::shape(&compiled_regparm());
-    assert!(shape.contains(&"LOCAL add.a: SHORT".to_owned()) && shape.contains(&"LOCAL add.b: LONG".to_owned()), "{shape:#?}");
+    assert!(!shape.iter().any(|one| one.contains("add.a") || one.contains("add.b")), "{shape:#?}");
 }
 
 fn compiled_regparm() -> Vec<Rc<omf::Record>> {

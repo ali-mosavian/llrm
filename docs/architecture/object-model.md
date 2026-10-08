@@ -64,8 +64,10 @@ A `Location::Frame` is relative to the frame register as the code would set it. 
 (`#dbg_declare`, `#dbg_value`, `#dbg_piece`, `#dbg_gone`), a side table kept true by the edit points, not instructions; no
 global or store is kept for a debugger. On a `CFA_LOCATIONS` format the backend finds where each value is by following the
 final code (`backend/valuetrack.rs`: LLVM's instruction-referencing LiveDebugValues) and writes ranges. A record a pass could not
-keep true says nothing, never a wrong thing: a variable is `<optimized out>` where it is not known. `tools/g-identical.sh`
-and `g_leaves_the_code_of_the_bench_programs_alone_to_the_floor` hold the rule.
+keep true says nothing, never a wrong thing: a variable is `<optimized out>` where it is not known. A format with one place per scope (CodeView 4, Turbo Debugger) says a variable only where a cell holds it
+for the scope: a register parameter, or a local the allocator keeps in a register, is left out, and no store is added to make one
+sayable. `tools/g-identical.sh` and `g_leaves_the_code_of_the_bench_programs_alone` (C on ELF, COFF and OMF, 16- and 32-bit;
+BASIC and Nib) hold the rule.
 
 ## Moves
 

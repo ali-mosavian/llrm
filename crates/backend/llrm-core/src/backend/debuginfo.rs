@@ -38,6 +38,8 @@ pub struct Debug {
     pub dialect: model::Dialect,
     pub producer: model::Producer,
     pub frame_register: String,
+    /// The format finds a frame cell from the canonical frame address (`FrameBase::Cfa`); set where the format is.
+    pub cfa: bool,
     /// The target's register file, as described: which registers are views of which, and which hold values.
     pub file: Vec<llrm_target::registers::Register>,
     /// What the target calls a call's return address in call frame information; empty where it numbers none.
@@ -171,7 +173,7 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
         di::Dialect::Bc => model::Dialect::Bc,
         di::Dialect::Cv4 => model::Dialect::Cv4,
     };
-    Ok(Some(Debug { format: model::Format::Default, language, dialect, producer, frame_register, file: file_copy, return_register, frame, registers, types, nodes, procedures, globals: out }))
+    Ok(Some(Debug { format: model::Format::Default, language, dialect, producer, frame_register, cfa: false, file: file_copy, return_register, frame, registers, types, nodes, procedures, globals: out }))
 }
 
 /// Where one value is, as the model says it.
@@ -235,7 +237,7 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
     starts.sort_unstable();
     let mut info = Info { format: debug.format, language: debug.language, dialect: debug.dialect, producer: debug.producer, frame_register: debug.frame_register.clone(), return_register: debug.return_register.clone(), registers: debug.registers.clone(), files: vec![model::File { name: source.to_owned(), checksum: None }], types: debug.types.clone(), ..Info::default() };
     // The register the code would address a cell by is the one pushed below the return address: a frame address away.
-    if let Some((.., entry)) = debug.frame.filter(|_| module.procedures.iter().any(|one| one.body.cfa_variables)) {
+    if let Some((.., entry)) = debug.frame.filter(|_| debug.cfa) {
         info.frame_base = model::FrameBase::Cfa { bias: 2 * entry[0] };
     }
     info.globals = debug.globals.iter().filter(|one| one.scope.is_none() && defined(&one.symbol)).map(|one| variable(&one.name, one.r#type, Kind::Local, &one.symbol, one.displacement)).collect();
@@ -320,6 +322,16 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                     variables.push(variable(&one.name, r#type, kind, symbol, addr.disp));
                 }
             }
+        }
+        // A format that finds a cell by the frame register says nothing of one in a function that keeps none (the code is not changed
+        // for `-g` to keep it), nor of a place that is in a cell of a list: it is left out.
+        if matches!(info.frame_base, model::FrameBase::Register) && frame.as_ref().is_some_and(|rows| !rows.iter().any(|row| row.cfa_register == debug.frame_register)) {
+            let framed = |location: &Location| match location {
+                Location::Frame { .. } => true,
+                Location::List(entries) => entries.iter().any(|(_, place)| matches!(place, Location::Frame { .. })),
+                _ => false,
+            };
+            variables.retain(|one| !framed(&one.location));
         }
         info.functions.push(model::Function {
             name: described.name.clone(),

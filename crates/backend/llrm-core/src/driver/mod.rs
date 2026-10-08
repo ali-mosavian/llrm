@@ -102,9 +102,10 @@ pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm:
     let segments = Segments::of(&options.machine);
     let mut out = Vec::new();
     for ((module, hir), placed) in mir.modules.iter().zip(&program.modules).zip(&placed) {
-        let mut assembled = timed("assemble", || assemble::assembled_by(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments, options.selection, &*options.arch, options.location_ranges(), options.cfa_locations()))?;
+        let mut assembled = timed("assemble", || assemble::assembled_by(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments, options.selection, &*options.arch))?;
         if let Some(debug) = assembled.debug.as_mut() {
             debug.format = options.debug_format;
+            debug.cfa = options.cfa_locations();
         }
         timed("data layout", || placed.lay_out(&mut assembled, module, mir.segments.data_space, program.constant_segment.as_deref(), options.machine.far_bss, options.arch.layout().segment_bytes()))?;
         if let Some(directory) = &options.dump {
@@ -190,15 +191,9 @@ pub fn linked(modules: Vec<Module>, runtime: Module, target: std::rc::Rc<dyn llr
 /// module verified after.
 pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String> {
     let applied = llrm_transforms::pipeline::Applied { options: options.pipeline.clone(), dump: options.dump.clone(), ..Default::default() };
-    // The debug format finds a variable from what the notes say, so its stores need not be kept for a debugger that reads its cell.
-    if options.cfa_locations() {
-        program.modules.iter_mut().for_each(lifted);
-    }
+    // No format needs a variable's stores kept for a debugger: `-g` changes no code.
+    program.modules.iter_mut().for_each(lifted);
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
-    // Nothing optimises at -O0, so nothing needs a variable's stores kept for a debugger that reads its cell.
-    if !options.pipeline.optimize && options.cfa_locations() {
-        program.modules.iter_mut().for_each(lifted);
-    }
     timed("mir assumptions", || program.modules.iter_mut().for_each(llrm_transforms::dead::assumptions_dropped));
     timed("mir ehprepare", || program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared))?;
     if options.arch.expands("fptoui.i64") {

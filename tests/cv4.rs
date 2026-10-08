@@ -224,7 +224,10 @@ fn codeview_debugs_a_nib_program_as_it_does_a_c_one() {
         std::thread::sleep(Duration::from_secs(1));
     }
     let screen = locals(&session, &["bp add", "g", "p"]).join("\n");
-    for expected in ["short a = 2", "long b = 3", "long s = 2"] {
+    // `add`'s parameters arrive in registers (regparm3), which a CodeView 4 record cannot say for a scope, and `-g` stores them to no
+    // cell (it changes no code): they are left out, and the local, which is in a cell, is read.
+    for expected in ["long s = 2"] {
         assert!(screen.contains(expected), "no {expected:?} in CodeView's screen:\n{screen}");
     }
+    assert!(!screen.contains("short a =") && !screen.contains("long b ="), "a register parameter is in CodeView's screen:\n{screen}");
 }

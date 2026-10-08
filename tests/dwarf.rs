@@ -228,26 +228,6 @@ fn a_variable_reads_the_same_at_o2_as_at_o0_on_every_line_both_stop_at() {
 /// How many (line, variable) values of `observed.c` -O2 says, and -O0 has: raised as the optimiser keeps more of them.
 const COMPARED_FLOOR: usize = 30;
 
-/// A `Location::Frame` is relative to the frame register, which the backend keeps for any function that has
-/// debug variables (`masm::stack_addressed` refuses a procedure with some): the same function without `-g`
-/// is addressed through the stack pointer and has no frame register at all, so the writers need no frame base
-/// of their own per function. This is what holds that up.
-#[test]
-fn a_function_with_debug_variables_keeps_its_frame_register_at_o2() {
-    let scratch = tempfile::tempdir().unwrap();
-    let source = scratch.path().join("sq.c");
-    std::fs::write(&source, "int sq(int a, int b)\n{\n    int t = a * b;\n    return t + a;\n}\n").unwrap();
-    let listing = |flags: &[&str]| {
-        let out = scratch.path().join("sq.asm");
-        let made = Command::new(llrm_c()).args(["-m32", "-O2", "-S"]).args(flags).arg(&source).arg("-o").arg(&out).output().unwrap();
-        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-        std::fs::read_to_string(&out).unwrap()
-    };
-    assert!(!listing(&[]).contains("ebp"), "premise: without -g the function has no frame register");
-    let debugged = listing(&["-g"]);
-    assert!(debugged.contains("push ebp") && debugged.contains("mov ebp, esp") && debugged.contains("[ebp-4]"), "{debugged}");
-}
-
 /// `struct node { struct node *next; int v; }`: a struct that holds a pointer to itself kept only `v`
 /// in the debug information, whichever format wrote it: asked for while it was being built, it
 /// answered "none" and the member naming it was dropped. gdb follows the list; CodeView keeps the field.
@@ -415,32 +395,37 @@ fn an_elf_function_with_variables_has_the_code_it_has_without_g() {
     }
 }
 
-/// The programs, per level, whose code `-g` must leave alone, at least: raised as the ranges land (#755). `None` is every
-/// bench program. A level not listed has no floor yet.
-const IDENTICAL_FLOOR: &[(&str, Option<usize>)] = &[("O0", None), ("O1", None), ("O2", None), ("Os", None)];
+/// The targets and levels whose bench programs' code `-g` must leave alone, all of them: DWARF on ELF at every level, and the other
+/// formats (CodeView on COFF and OMF, 16-bit OMF) at the two ends of the optimiser.
+const IDENTICAL: &[(&str, &str, &[&str])] = &[
+    ("-m32", "elf", &["-O0", "-O1", "-O2", "-Os"]),
+    ("-m32", "coff", &["-O0", "-O2"]),
+    ("-m32", "omf", &["-O0", "-O2"]),
+    ("-m16", "omf", &["-O0", "-O2"]),
+];
 
-/// `-g` changed the code of every bench program: a frame register kept for its variables and a volatile on their stores.
-/// The count of bench programs whose assembly is the same with and without `-g` may not fall below the floor.
+/// `-g` changed the code of every bench program: a frame register kept for its variables, a volatile on their stores, an entry store
+/// for a register parameter, a global kept. No bench program's assembly differs with and without `-g`.
 #[test]
-fn g_leaves_the_code_of_the_bench_programs_alone_to_the_floor() {
+fn g_leaves_the_code_of_the_bench_programs_alone() {
     let scratch = tempfile::tempdir().unwrap();
     let programs = bench_programs();
-    for &(level, floor) in IDENTICAL_FLOOR {
-        let flag = format!("-{level}");
-        let assembly = |source: &Path, debug: bool| {
-            let out = scratch.path().join("x.s");
-            let mut flags = vec!["-m32", "-fobject-format=elf", flag.as_str(), "-S"];
-            if debug {
-                flags.push("-g");
-            }
-            let made = compile(source, &flags, &out);
-            assert!(made.status.success(), "{}: {}", source.display(), String::from_utf8_lossy(&made.stderr));
-            std::fs::read_to_string(&out).unwrap()
-        };
-        let differing: Vec<String> = programs.iter().filter(|source| assembly(source, false) != assembly(source, true)).map(|source| source.file_name().unwrap().to_string_lossy().into_owned()).collect();
-        let identical = programs.len() - differing.len();
-        let floor = floor.unwrap_or(programs.len());
-        assert!(identical >= floor, "{level}: -g changed the code of {differing:?}: {identical} of {} identical, the floor is {floor}", programs.len());
+    for &(machine, format, levels) in IDENTICAL {
+        for &level in levels {
+            let format_flag = format!("-fobject-format={format}");
+            let assembly = |source: &Path, debug: bool| {
+                let out = scratch.path().join("x.s");
+                let mut flags = vec![machine, format_flag.as_str(), level, "-S"];
+                if debug {
+                    flags.push("-g");
+                }
+                let made = compile(source, &flags, &out);
+                assert!(made.status.success(), "{}: {}", source.display(), String::from_utf8_lossy(&made.stderr));
+                std::fs::read_to_string(&out).unwrap()
+            };
+            let differing: Vec<String> = programs.iter().filter(|source| assembly(source, false) != assembly(source, true)).map(|source| source.file_name().unwrap().to_string_lossy().into_owned()).collect();
+            assert!(differing.is_empty(), "{machine} {format} {level}: -g changed the code of {differing:?}");
+        }
     }
 }
 
@@ -462,4 +447,35 @@ fn a_global_the_optimiser_drops_is_dropped_with_g_too() {
     let plain = assembly(false);
     assert!(!plain.contains("unused"), "the instrument: without -g the unused static is dropped\n{plain}");
     assert_eq!(plain, assembly(true));
+}
+
+/// The same for the BASIC and Nib bench programs, whose compilers share the backend.
+#[test]
+fn g_leaves_the_code_of_the_basic_and_nib_bench_programs_alone() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench");
+    let qb = PathBuf::from(env!("CARGO_BIN_EXE_llrm-qb"));
+    let nib = qb.parent().unwrap().join("llrm-nib");
+    let mut differing = Vec::new();
+    for entry in std::fs::read_dir(&root).unwrap() {
+        let directory = entry.unwrap().path();
+        for (compiler, extension) in [(&qb, "bas"), (&nib, "nib")] {
+            let source = directory.join(format!("{}.{extension}", directory.file_name().unwrap().to_string_lossy()));
+            if !source.exists() {
+                continue;
+            }
+            for level in ["-O0", "-O2"] {
+                let assembly = |debug: bool| {
+                    let out = scratch.path().join("x.s");
+                    let flags: Vec<&str> = [level, "-S"].into_iter().chain(debug.then_some("-g")).collect();
+                    let made = Command::new(compiler).args(&flags).arg(&source).arg("-o").arg(&out).output().unwrap();
+                    made.status.success().then(|| std::fs::read_to_string(&out).unwrap())
+                };
+                if assembly(false) != assembly(true) {
+                    differing.push(format!("{} {level}", source.display()));
+                }
+            }
+        }
+    }
+    assert!(differing.is_empty(), "-g changed the code of {differing:?}");
 }

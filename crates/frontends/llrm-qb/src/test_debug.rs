@@ -96,11 +96,12 @@ fn a_local_is_where_its_code_keeps_it() {
         let path = written(&directory, "local.bas", source.as_bytes());
         let frontend = qb_driver::Frontend { debug: true, runtime_frames, ..qb_driver::Frontend::new("vbdos", "vbdos") };
         let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
-        let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+        // Not optimised: `k` is in its cell (promoted to a register it is left out of CodeView 4, which names a cell).
+        let codegen = llrm_core::driver::Options { pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() }, ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()) };
         let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
         let info = cvinfo::parse(&omf::parse(&bytes).expect("parses"));
         let local = info.procedures.iter().flat_map(|one| &one.locals).find(|one| one.name == "k").expect("k is described");
-        let listing = super::test_hir::listing(&program);
+        let listing = super::test_hir::listing_unoptimised(&program);
         let store = format!("mov word ptr [bp{:+}], 12345", local.bp_offset);
         assert!(listing.contains(&store), "runtime frames {runtime_frames}: no {store:?} in\n{listing}");
     }
