@@ -1,6 +1,8 @@
 //! Port of `qbopt/backend/arithmetic.py`: target-dependent ranking of
 //! constant arithmetic, not MIR semantics.
 
+use std::collections::BTreeMap;
+
 use crate::backend::cpu::{self as targets, ProfileOrName};
 
 pub fn cost<'a>(cpu: impl Into<ProfileOrName<'a>>, operation: &str) -> Result<i64, String> {
@@ -123,6 +125,10 @@ fn chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea: bool) ->
                     out.push(("lea", 1 << count));
                     index += 2;
                 }
+                (("fadd", count), _) if (1..=3).contains(&count) && lea(1 << count).is_some() => {
+                    out.push(("flea", 1 << count));
+                    index += 1;
+                }
                 (part, _) => {
                     out.push(part);
                     index += 1;
@@ -150,6 +156,9 @@ fn chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea: bool) ->
             total += match *name {
                 "shl" => shift(target, *count)?,
                 "lea" => lea(*count).expect("a lea part has its form"),
+                // `cur + cur*scale` is one `lea`; `cur<<count` +- `cur` is a shifted copy and an add.
+                "flea" => lea(*count).expect("a lea part has its form"),
+                "fadd" | "fsub" => cost(target, "mov_rr")? + shift(target, *count)? + cost(target, "alu_rr")?,
                 _ => cost(target, "alu_rr")?,
             };
         }
@@ -158,12 +167,82 @@ fn chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea: bool) ->
 
     // `min(..., key=clocks)`: the first of equal keys wins.
     let mut best: Option<(Vec<(&'static str, i64)>, i64)> = None;
-    for parts in [chain(false), chain(true)].into_iter().flat_map(|parts| [parts.clone(), fused(parts)]) {
+    let synthesized = synth(number, &mut BTreeMap::new(), &|parts| clocks(parts), &fused);
+    let synthesized = synthesized?.map(|(parts, _)| parts);
+    for parts in [chain(false), chain(true)].into_iter().flat_map(|parts| [parts.clone(), fused(parts)]).chain(synthesized) {
         let price = clocks(&parts)?;
         if best.as_ref().is_none_or(|(_, kept)| price < *kept) {
             best = Some((parts, price));
         }
     }
+    Ok(best)
+}
+
+type Chain = Vec<(&'static str, i64)>;
+
+/// GCC's `synth_mult` (expmed.cc): the chain of `t`, by the cheaper of what the lower bits allow. Even `t` is a shift of `t >> m`; odd `t` is
+/// `t - 1` or `t + 1` (the one a run of ones points to) plus or minus the source, a shift and a source added to `(t - 1) >> m` or
+/// `(t + 1) >> m`, or `q * (2^m +- 1)` for a factor of that form: `q`'s chain, then `cur + cur<<m` or `cur<<m - cur`. `fused` turns a shift
+/// and an add into a `lea`; `price` is the clocks of a chain (with its seed copy), memoised by `t`.
+fn synth(t: i64, memo: &mut BTreeMap<i64, Option<(Chain, i64)>>, price: &dyn Fn(&[(&'static str, i64)]) -> Result<i64, String>, fused: &dyn Fn(Chain) -> Chain) -> Result<Option<(Chain, i64)>, String> {
+    if t == 1 {
+        return Ok(Some((Vec::new(), 0)));
+    }
+    if t < 1 {
+        return Ok(None);
+    }
+    if let Some(known) = memo.get(&t) {
+        return Ok(known.clone());
+    }
+    let mut options: Vec<(i64, Chain)> = Vec::new();
+    if t & 1 == 0 {
+        let m = i64::from(t.trailing_zeros());
+        options.push((t >> m, vec![("shl", m)]));
+    } else {
+        // A run of ones at the bottom (but not 3) is `(t + 1) - 1`; otherwise `(t - 1) + 1`.
+        let w = (t + 1) & !t;
+        if w > 2 && t != 3 {
+            options.push((t + 1, vec![("sub", 0)]));
+        } else {
+            options.push((t - 1, vec![("add", 0)]));
+        }
+        for m in (2..=(63 - i64::from((t - 1).leading_zeros()))).rev() {
+            let up = (1i64 << m) + 1;
+            let down = (1i64 << m) - 1;
+            if t % up == 0 && t > up {
+                options.push((t / up, vec![("fadd", m)]));
+                break;
+            }
+            if t % down == 0 && t > down {
+                options.push((t / down, vec![("fsub", m)]));
+                break;
+            }
+        }
+        for (q, op) in [(t - 1, "add"), (t + 1, "sub")] {
+            let m = i64::from(q.trailing_zeros());
+            if m > 0 && q >> m > 1 {
+                options.push((q >> m, vec![("shl", m), (op, 0)]));
+            }
+        }
+    }
+    let mut best: Option<(Chain, i64)> = None;
+    for (q, tail) in options {
+        if q >= t {
+            // `t + 1` shifts down below `t` only when it is even, as it is for odd `t`; a larger `q` is no progress.
+            let reduced = q >> q.trailing_zeros();
+            if reduced >= t {
+                continue;
+            }
+        }
+        let Some((mut parts, _)) = synth(q, memo, price, fused)? else { continue };
+        parts.extend(tail);
+        let parts = fused(parts);
+        let clocks = price(&parts)?;
+        if best.as_ref().is_none_or(|(_, kept)| clocks < *kept) {
+            best = Some((parts, clocks));
+        }
+    }
+    memo.insert(t, best.clone());
     Ok(best)
 }
 
@@ -194,6 +273,41 @@ mod tests {
         assert!(scale(1103515245, m32).unwrap().is_some(), "the chain is below the imul");
     }
 
+    /// GCC's `synth_mult` factors `q * (2^m +- 1)` and tries `t - 1` and `t + 1`; the chains here were Horner chains only, 17 operations
+    /// and 29 clocks for x_switch's `r * 1103515245` against gcc's 13. Every chain is the product, in 32 and in 16 bits.
+    #[test]
+    fn test_synthesized_chains_are_the_product_and_shorter_than_horner() {
+        let m32 = targets::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
+        let eval = |chain: &[(&str, i64)], source: i128| {
+            let mut value = source;
+            for &(name, count) in chain {
+                match name {
+                    "lea" => value = source + value * i128::from(count),
+                    "flea" => value += value * i128::from(count),
+                    "fadd" => value += value << count,
+                    "fsub" => value = (value << count) - value,
+                    "shl" => value <<= count,
+                    "add" => value += source,
+                    "sub" => value -= source,
+                    other => panic!("{other}"),
+                }
+            }
+            value
+        };
+        let mut factors: Vec<i64> = (2..2000).collect();
+        factors.extend([1103515245, 214013, 69069, 1664525, 22695477, 1000003, 40503, 2654435761, 0x7fff_ffff, 0xffff_fffe]);
+        for factor in factors {
+            for (name, chain) in [("dword", cheapest_chain(factor, m32).unwrap()), ("word", cheapest_narrow_chain(factor, m32).unwrap())] {
+                let Some((chain, _)) = chain else { continue };
+                for source in [0i128, 1, -1, 7, -32768, 32767, -2147483648, 2147483647] {
+                    assert_eq!(eval(&chain, source), source * i128::from(factor), "{name} x{factor}: {chain:?}");
+                }
+            }
+        }
+        let (chain, clocks) = cheapest_chain(1103515245, m32).unwrap().unwrap();
+        assert!(chain.len() <= 12 && clocks < 29, "{chain:?} {clocks}");
+    }
+
     #[test]
     fn test_constant_chains_preserve_product() {
         for cpu in ["386", "486", "P5", "P6"] {
@@ -206,6 +320,9 @@ mod tests {
                     for (name, count) in &chain {
                         match *name {
                             "lea" => value = source + value * count,
+                            "flea" => value += value * count,
+                            "fadd" => value += value << count,
+                            "fsub" => value = (value << count) - value,
                             "shl" => value <<= count,
                             "add" => value += source,
                             "sub" => value -= source,
