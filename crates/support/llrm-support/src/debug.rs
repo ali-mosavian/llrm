@@ -44,6 +44,16 @@ struct Open {
     name: &'static str,
     start: Instant,
     children: Duration,
+    /// The thread's CPU time when it opened, for an outermost step only.
+    cpu: Duration,
+}
+
+/// The calling thread's CPU time: what a preempted or waiting thread does not spend.
+fn cpu_now() -> Duration {
+    let mut found = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: `found` is a valid timespec for the call to fill.
+    let done = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut found) };
+    if done == 0 { Duration::new(found.tv_sec as u64, found.tv_nsec as u32) } else { Duration::ZERO }
 }
 
 #[derive(Default)]
@@ -56,6 +66,10 @@ struct Clock {
     tree: Vec<(Vec<&'static str>, Stat)>,
     /// Time in spans with nothing open around them.
     top: Duration,
+    /// The same on the thread's CPU clock, which a loaded machine does not stretch: the thread's CPU time when the clock started,
+    /// and in the outermost steps.
+    cpu_start: Option<Duration>,
+    cpu_top: Duration,
     /// Per counted event: (hits, misses).
     counts: Vec<(&'static str, usize, usize)>,
     /// The function being worked on, and its steps' own time, by function.
@@ -79,7 +93,9 @@ fn add<K: PartialEq>(rows: &mut Vec<(K, Stat)>, key: K, calls: usize, own: Durat
 /// Starts the wall clock the report's `untimed` line is measured against.
 pub fn start() {
     CLOCK.with(|clock| {
-        clock.borrow_mut().start.get_or_insert_with(Instant::now);
+        let mut clock = clock.borrow_mut();
+        clock.start.get_or_insert_with(Instant::now);
+        clock.cpu_start.get_or_insert_with(cpu_now);
     });
 }
 
@@ -96,7 +112,9 @@ pub fn span(name: &'static str) -> Span {
         let mut clock = clock.borrow_mut();
         let now = Instant::now();
         clock.start.get_or_insert(now);
-        clock.open.push(Open { name, start: now, children: Duration::ZERO });
+        let cpu = cpu_now();
+        clock.cpu_start.get_or_insert(cpu);
+        clock.open.push(Open { name, start: now, children: Duration::ZERO, cpu });
     });
     Span(true)
 }
@@ -108,7 +126,7 @@ impl Drop for Span {
         }
         CLOCK.with(|clock| {
             let mut clock = clock.borrow_mut();
-            let Open { name, start, children } = clock.open.pop().expect("a span is open");
+            let Open { name, start, children, cpu } = clock.open.pop().expect("a span is open");
             let spent = start.elapsed();
             let own = spent.saturating_sub(children);
             // A name inside itself counts its outer span's time once.
@@ -118,7 +136,10 @@ impl Drop for Span {
             add(&mut clock.tree, path, 1, own, spent);
             match clock.open.last_mut() {
                 Some(parent) => parent.children += spent,
-                None => clock.top += spent,
+                None => {
+                    clock.top += spent;
+                    clock.cpu_top += cpu_now().saturating_sub(cpu);
+                }
             }
             if let Some(function) = clock.function.clone() {
                 let steps = match clock.functions.iter().position(|(one, _)| *one == function) {
@@ -247,6 +268,9 @@ pub fn report_times() {
             eprintln!("[time] fn {function}: {:.1} ms ({})", ms(all), worst.join(", "));
         }
         eprintln!("[time] wall {:.3} ms, outermost steps {:.3} ms, untimed {:.3} ms ({:.1}%)", ms(wall), ms(clock.top), ms(wall.saturating_sub(clock.top)), 100.0 * wall.saturating_sub(clock.top).as_secs_f64() / wall.as_secs_f64().max(1e-9));
+        // The same by the thread's CPU time: a wait between two steps, a thread another process preempted, is not time in no step.
+        let cpu = clock.cpu_start.map(|start| cpu_now().saturating_sub(start)).unwrap_or_default();
+        eprintln!("[time] cpu {:.3} ms, outermost steps cpu {:.3} ms, untimed cpu {:.3} ms ({:.1}%)", ms(cpu), ms(clock.cpu_top), ms(cpu.saturating_sub(clock.cpu_top)), 100.0 * cpu.saturating_sub(clock.cpu_top).as_secs_f64() / cpu.as_secs_f64().max(1e-9));
     });
 }
 

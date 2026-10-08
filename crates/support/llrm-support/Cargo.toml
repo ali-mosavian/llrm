@@ -9,6 +9,7 @@ description = "Support code shared by every llrm crate"
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }
 rustc-hash = { workspace = true }
+libc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 num-bigint = { workspace = true }
