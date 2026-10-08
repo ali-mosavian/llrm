@@ -195,9 +195,18 @@ pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String>
         program.modules.iter_mut().for_each(lifted);
     }
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
+    // Nothing optimises at -O0, so nothing needs a variable's stores kept for a debugger that reads its cell.
+    if !options.pipeline.optimize && options.cfa_locations() {
+        program.modules.iter_mut().for_each(lifted);
+    }
     timed("mir assumptions", || program.modules.iter_mut().for_each(llrm_transforms::dead::assumptions_dropped));
     timed("mir ehprepare", || program.modules.iter_mut().try_for_each(crate::backend::ehprepare::prepared))?;
-    timed("mir selects", || program.modules.iter_mut().try_for_each(crate::backend::selects::lowered))?;
+    if options.arch.expands("fptoui.i64") {
+        timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
+    }
+    if options.arch.expands("select") {
+        timed("mir selects", || program.modules.iter_mut().try_for_each(crate::backend::selects::lowered))?;
+    }
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {
         timed("mir spill model", || spill_model(program));
     }

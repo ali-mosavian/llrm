@@ -24,6 +24,7 @@ pub mod cpu;
 pub mod datagroup;
 pub mod division;
 pub mod ehprepare;
+pub mod fpconvert;
 pub mod selects;
 pub mod farcall;
 pub mod farload;

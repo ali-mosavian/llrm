@@ -1,10 +1,10 @@
-reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+reason = "synth_mult: a constant multiply is the cheaper of the Horner chain and gcc's (factors 2^m +- 1, t - 1 and t + 1); four parity c rows are one instruction longer and one byte smaller, chosen by clocks"
 blessed = "2026-10-08"
 
 [bas.O2]
 instructions = 146294
 memory_operands = 62573
-code_bytes = 715
+code_bytes = 714
 data_bytes = 17
 bss_bytes = 0
 kernel_ms = 1.9719
@@ -34,7 +34,7 @@ bss_bytes = 0
 [nib.O2]
 instructions = 95071
 memory_operands = 13028
-code_bytes = 404
+code_bytes = 403
 data_bytes = 0
 bss_bytes = 0
 
