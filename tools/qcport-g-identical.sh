@@ -2,7 +2,7 @@
 # qcport-g-identical.sh [llrm-c]: every QCport module at -O0, -O2 and -Os, assembly with and without -g; lists the ones that differ.
 # Data labels are Watcom's handle numbers, which -g's debug records shift: they are compared without their numbers.
 #   QCPORT=~/scratch/qcport/src QCPORT_INC=~/scratch/qctc/inc tools/qcport-g-identical.sh [llrm-c]
-C=${1:-target/release/llrm-c}; Q=${QCPORT:?QCPORT names the QCport src directory}; INC=${QCPORT_INC:?QCPORT_INC names its Borland include directory}; T=$(mktemp -d)
+C=${1:-$(python3 "$(dirname "$0")/llrmbin.py" bin)/llrm-c}; Q=${QCPORT:?QCPORT names the QCport src directory}; INC=${QCPORT_INC:?QCPORT_INC names its Borland include directory}; T=$(mktemp -d)
 inc=(); for d in host render model game sound ui qgl; do inc+=(-I "$Q/$d"); done; inc+=(-I "$INC")
 same=0; differ=0; refused=0
 for f in "$Q"/{host,render,model,game,sound,ui}/*.c; do n=$(basename "$f" .c)

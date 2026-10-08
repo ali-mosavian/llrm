@@ -40,6 +40,8 @@ pub struct Debug {
     pub frame_register: String,
     /// The format finds a frame cell from the canonical frame address (`FrameBase::Cfa`); set where the format is.
     pub cfa: bool,
+    /// The format says where a value is over a range of code: a cell reached through the stack pointer is told range by range.
+    pub ranges: bool,
     /// The target's register file, as described: which registers are views of which, and which hold values.
     pub file: Vec<llrm_target::registers::Register>,
     /// What the target calls a call's return address in call frame information; empty where it numbers none.
@@ -173,7 +175,7 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
         di::Dialect::Bc => model::Dialect::Bc,
         di::Dialect::Cv4 => model::Dialect::Cv4,
     };
-    Ok(Some(Debug { format: model::Format::Default, language, dialect, producer, frame_register, cfa: false, file: file_copy, return_register, frame, registers, types, nodes, procedures, globals: out }))
+    Ok(Some(Debug { format: model::Format::Default, language, dialect, producer, frame_register, cfa: false, ranges: false, file: file_copy, return_register, frame, registers, types, nodes, procedures, globals: out }))
 }
 
 /// Where one value is, as the model says it.
@@ -366,7 +368,29 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                 Location::List(entries) => entries.iter().any(|(_, place)| matches!(place, Location::Frame { .. })),
                 _ => false,
             };
-            variables.retain(|one| !framed(&one.location));
+            // Through the stack pointer, a format with ranges says it over each stretch the pointer is as far from the frame address: the
+            // cell is `disp - bias` from the address, and the address is the register plus the row's offset.
+            let bias = debug.frame.map(|(.., entry)| entry[usize::from(procedure.far)] + entry[0]);
+            let rows = frame.as_deref().filter(|_| debug.ranges);
+            variables = variables
+                .into_iter()
+                .filter_map(|one| match (&one.location, rows, bias) {
+                    (Location::Frame { disp }, Some(rows), Some(bias)) => {
+                        let entries: Vec<(model::Range, Location)> = rows
+                            .iter()
+                            .enumerate()
+                            .map(|(at, row)| {
+                                let to = rows.get(at + 1).map_or(end - start, |next| next.offset);
+                                (model::Range { section, offset: start + row.offset, length: to - row.offset }, Location::Relative { register: row.cfa_register.clone(), disp: disp - bias + row.cfa_offset })
+                            })
+                            .filter(|(range, _)| range.length > 0)
+                            .collect();
+                        Some(Variable { location: Location::List(entries), ..one })
+                    }
+                    (location, ..) if framed(location) => None,
+                    _ => Some(one),
+                })
+                .collect();
         }
         info.functions.push(model::Function {
             name: described.name.clone(),

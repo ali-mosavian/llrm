@@ -106,6 +106,7 @@ pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm:
         if let Some(debug) = assembled.debug.as_mut() {
             debug.format = options.debug_format;
             debug.cfa = options.cfa_locations();
+            debug.ranges = options.location_ranges();
         }
         timed("data layout", || placed.lay_out(&mut assembled, module, mir.segments.data_space, program.constant_segment.as_deref(), options.machine.far_bss, options.arch.layout().segment_bytes()))?;
         if let Some(directory) = &options.dump {

@@ -720,6 +720,7 @@ pub fn assembled(module: &Module, object: &Object, runtime: model::RuntimeProfil
     if let Some(debug) = debug.as_mut() {
         debug.format = options.debug_format;
         debug.cfa = options.cfa_locations();
+        debug.ranges = options.location_ranges();
     }
     Ok(masm::Module {
         code: object.code.clone(),
