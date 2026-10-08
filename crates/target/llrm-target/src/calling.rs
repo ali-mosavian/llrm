@@ -74,6 +74,9 @@ pub struct Convention {
     pub results_clobbered: bool,
     /// The convention a variadic call uses in place of this one: it moves the arguments, not the symbol.
     pub variadic: Option<String>,
+    /// The convention a function of this one's takes when the callee, not the caller, removes its stack arguments (`calleepop`),
+    /// where that is no convention MIR already names (`fastcc` is C's).
+    pub pops_as: Option<String>,
     /// How a symbol is written in each object format, `*` standing for its name and `^*` for its name in capitals (`spell`).
     pub symbol: BTreeMap<String, String>,
     pub return_address_bytes: i64,
@@ -108,6 +111,24 @@ pub struct Convention {
     pub interrupt_frame: Vec<(String, i64)>,
 }
 
+/// A target's description of its conventions, by its address: one per target, so what a profile that holds it is keyed by.
+#[derive(Clone, Copy, Debug)]
+pub struct Stated(pub &'static Calling);
+
+impl PartialEq for Stated {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+
+impl Eq for Stated {}
+
+impl std::hash::Hash for Stated {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self.0, state);
+    }
+}
+
 /// A target's conventions, in file order.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Calling {
@@ -132,6 +153,7 @@ const KEYS: &[&str] = &[
     "arguments_clobbered",
     "results_clobbered",
     "variadic",
+    "pops_as",
     "symbol",
     "aggregate_pointer_register",
     "aggregate_pointer_far",
@@ -250,6 +272,50 @@ impl Calling {
     /// The convention MIR's `cc` names: the file's first answers `ccc`, whose `cc` is 0.
     pub fn by_cc(&self, cc: &str) -> Option<&Convention> {
         self.conventions.iter().find(|one| one.cc.as_deref() == Some(cc))
+    }
+
+    /// The convention a MIR calling-convention number names: `ccc` and `fastcc` the one stating `cc = "cdecl"`, any other
+    /// the one whose `cc` is the number's name without its `cc`.
+    pub fn by_number(&self, number: u32) -> Option<&Convention> {
+        match number {
+            0 | llrm_mir::opcode::FAST => self.by_cc("cdecl"),
+            other => self.by_cc(llrm_mir::opcode::CONVENTIONS.iter().find(|(_, one)| *one == other)?.0.trim_end_matches("cc")),
+        }
+    }
+
+    /// MIR's number for the convention a description's `cc` names: C's is `ccc`, the others `<cc>cc`.
+    pub fn number_of(cc: Option<&str>) -> Option<u32> {
+        match cc? {
+            "cdecl" => Some(0),
+            other => llrm_mir::opcode::CONVENTIONS.iter().find(|(name, _)| name.strip_suffix("cc") == Some(other)).map(|(_, number)| *number),
+        }
+    }
+
+    /// The convention a function in MIR convention `number` takes when its callee removes the stack arguments: the one it
+    /// names (`pops_as`), else MIR's `fastcc` for C's own.
+    pub fn callee_pop(&self, number: u32) -> Option<u32> {
+        let from = self.by_number(number)?;
+        // The convention that removes them itself has none to take: `like` carried `pops_as` to it.
+        match &from.pops_as {
+            Some(name) => Self::number_of(self.named(name)?.cc.as_deref()).filter(|twin| *twin != number),
+            None => (number == 0).then_some(llrm_mir::opcode::FAST),
+        }
+    }
+}
+
+impl Convention {
+    /// What `argument` is to this convention's registers, with `slot` bytes in a stack slot: a word that fits a slot, an integer
+    /// that fits a register wider than a slot (a long in a 32-bit register on a 16-bit target), a pair for an integer or a pointer of
+    /// two slots (an i64 in 32 bits, a long or a far pointer in 16), and memory for the rest.
+    pub fn kind(&self, argument: llrm_mir::target::Argument, slot: i64) -> Kind {
+        let register = self.register_bytes.unwrap_or(slot);
+        match () {
+            _ if argument.memory || argument.floating => Kind::Memory(argument.bytes),
+            _ if argument.bytes <= slot => Kind::Word,
+            _ if argument.bytes <= register && argument.integer => Kind::Sized(argument.bytes),
+            _ if argument.bytes == 2 * slot && (argument.integer || argument.pointer) => Kind::Wide,
+            _ => Kind::Memory(argument.bytes),
+        }
     }
 }
 
@@ -371,6 +437,7 @@ impl Convention {
             arguments_clobbered: flag("arguments_clobbered")?,
             results_clobbered: flag("results_clobbered")?,
             variadic: table.contains_key("variadic").then(|| text("variadic")).transpose()?,
+            pops_as: table.contains_key("pops_as").then(|| text("pops_as")).transpose()?,
             symbol,
             slot_bytes: integer("slot_bytes")?,
             order,
@@ -601,6 +668,18 @@ mod tests {
         let placed = calling.native().place(&[Kind::Sized(4); 6]);
         assert_eq!(placed.places[3..], [Place::Stack(0), Place::Stack(4), Place::Stack(8)]);
         assert_eq!(placed.stack_bytes, 12);
+    }
+
+    /// A function whose callers remove its stack arguments takes, when the callee is to, the convention its description names
+    /// (`pops_as`), or MIR's `fastcc` where it is C's own and names none.
+    #[test]
+    fn a_convention_names_the_one_it_takes_when_its_callee_pops() {
+        let text = format!("{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\ncleanup = \"caller\"\n[r]\nlike = \"w\"\ncc = \"regparm3\"\ncleanup = \"caller\"\npops_as = \"rp\"\n[rp]\nlike = \"r\"\ncc = \"regparm3pop\"\ncleanup = \"callee\"\n");
+        let calling = Calling::parse(&text).unwrap();
+        assert_eq!(calling.callee_pop(0), Some(llrm_mir::opcode::FAST));
+        assert_eq!(calling.callee_pop(llrm_mir::opcode::REGPARM3), Some(llrm_mir::opcode::REGPARM3POP));
+        assert_eq!(calling.callee_pop(llrm_mir::opcode::REGPARM3POP), None);
+        assert_eq!(calling.callee_pop(llrm_mir::opcode::WATCALL), None);
     }
 
     /// A call changes EAX, the registers its arguments went in and EDX for an i64 result, and keeps

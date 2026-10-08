@@ -19,6 +19,13 @@ pub fn assembler() -> &'static str {
     }
 }
 
+/// `name` as the default target's object spells a function of its default ABI: what a listing and the linker call it.
+pub fn symbol(name: &str) -> String {
+    let target = llrm_driver::all().into_iter().find(|one| one.name() == llrm_driver::DEFAULT).expect("the default target is built in");
+    let format = recipe()["default"].as_str().expect("a default format").to_owned();
+    target.calling().native().decorated(&format, name).unwrap_or_else(|| name.to_owned())
+}
+
 /// The lines a listing opens with, as the target says: the memory model and the instruction set.
 pub fn header() -> String {
     recipe()["header"].as_array().expect("a header").iter().map(|line| format!("{}\n", line.as_str().expect("a line"))).collect()

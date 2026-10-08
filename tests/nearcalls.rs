@@ -4,6 +4,8 @@
 use std::path::Path;
 use std::process::Command;
 
+mod common;
+
 fn compiled(tool: &str, name: &str, source: &str, arguments: &[&str]) -> String {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
@@ -30,7 +32,7 @@ fn near_down(asm: &str, down: &str, up: &str) {
 #[test]
 fn test_c_enters_a_static_function_near() {
     let asm = compiled("llrm-c", "near.c", "static int down(int n) { return n ? n - down(n - 1) : 0; }\nint up(int n) { return down(n); }\n", &[]);
-    near_down(&asm, "_down", "_up");
+    near_down(&asm, &common::symbol("down"), &common::symbol("up"));
 }
 
 #[test]
@@ -54,9 +56,10 @@ fn test_basic_enters_a_module_internal_procedure_near() {
 fn test_c_passes_the_field_a_static_function_reads_through_its_struct_pointer() {
     let source = "struct P { int *data; int len; };\nstatic int sum(const struct P *p, int n) { int len = p->len; return n ? len - sum(p, n - 1) : len; }\nint up(struct P *p) { return sum(p, 3); }\n";
     let asm = compiled("llrm-c", "promote.c", source, &[]);
-    let body = procedure(&asm, "_sum");
-    assert!(!body.contains("ptr [bx+") && !body.contains("ptr [si+") && body.contains("ret 4"), "{asm}");
-    assert!(procedure(&asm, "_up").contains("push word ptr [bx+2]") || procedure(&asm, "_up").contains("[bx+2]"), "{asm}");
+    let body = procedure(&asm, &common::symbol("sum"));
+    // The fields arrive in registers: nothing is read through the pointer or from the stack.
+    assert!(!body.contains("ptr [bx+") && !body.contains("ptr [si+") && !body.contains("[bp+"), "{asm}");
+    assert!(procedure(&asm, &common::symbol("up")).contains("[bx+2]"), "{asm}");
 }
 
 #[test]
@@ -84,7 +87,7 @@ fn test_nib_passes_a_global_array_slice_as_its_offset() {
     let source = "var table: i16[16] = [0] * 16\n\nfn total(a: &[i16], i: i16) -> i16:\n    if i == 0:\n        return a[0]\n    return total(a, i - 1) + a[i]\n\nfn main() -> i16:\n    table[3] = 5\n    print(total(table, 3))\n    return 0\n";
     let asm = compiled("llrm-nib", "table.nib", source, &["-fno-inline-functions", "-fno-inline-functions-called-once"]);
     let body = procedure(&asm, "_total");
-    assert!(!body.contains("les ") && !body.contains("es:[") && body.contains("ret 4"), "{asm}");
+    assert!(!body.contains("les ") && !body.contains("es:[") && !body.contains("[bp+"), "{asm}");
 }
 
 /// Queens' `q` is a local array, so its far pointer is SS:offset: a callee given only that reads it

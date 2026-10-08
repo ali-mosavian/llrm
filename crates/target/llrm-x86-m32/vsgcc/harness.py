@@ -22,6 +22,12 @@ from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC
 REPO = Path(__file__).resolve().parents[4]
 OUT = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))   # build products and results, never in the tree
 BENCH = REPO / "bench"
+KERNELS = Path(__file__).resolve().parent / "kernels"
+
+
+def source_dir(prog):
+    """`bench/PROG`, or `kernels/PROG` for the x_ kernels written for this comparison."""
+    return KERNELS / prog if (KERNELS / prog).is_dir() else BENCH / prog
 sys.path.insert(0, str(REPO / "tools"))
 import llrmbin  # noqa: E402
 
@@ -400,7 +406,7 @@ def code_bytes(prog, variant):
 def main():
     prog, variant = sys.argv[1], sys.argv[2]
     r = run(prog, variant)
-    expect = [int(x) for x in (BENCH / prog / f"{prog}.out").read_text().split()]
+    expect = [int(x) for x in (source_dir(prog) / f"{prog}.out").read_text().split()]
     print(json.dumps(dict(prog=prog, variant=variant, ins=r["ins"], mem=r["mem"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
 
 

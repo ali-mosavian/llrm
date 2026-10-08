@@ -354,7 +354,7 @@ pub struct CallInfo {
 }
 
 /// The calling conventions LLVM names, by number; any other is `ccN`.
-pub const CONVENTIONS: [(&str, u32); 10] = [("ccc", 0), ("fastcc", 8), ("coldcc", 9), ("x86_stdcallcc", 64), ("x86_fastcallcc", 65), ("x86_intrcc", 83), ("watcallcc", WATCALL), ("sysvcc", SYSV), ("ia16cc", IA16), ("regparm3cc", REGPARM3)];
+pub const CONVENTIONS: [(&str, u32); 11] = [("ccc", 0), ("fastcc", 8), ("coldcc", 9), ("x86_stdcallcc", 64), ("x86_fastcallcc", 65), ("x86_intrcc", 83), ("watcallcc", WATCALL), ("sysvcc", SYSV), ("ia16cc", IA16), ("regparm3cc", REGPARM3), ("regparm3popcc", REGPARM3POP)];
 
 /// The calling conventions a target names by the `cc` of its description (calling.toml): `ccc` is the
 /// one stating `cc = "cdecl"`, and each other is asked for as `<cc>cc`.
@@ -374,6 +374,9 @@ pub fn argument_class(attrs: &[Attribute]) -> Option<&str> {
 
 /// `regparm3cc`: gcc's `-mregparm=3`, by the size of the argument.
 pub const REGPARM3: u32 = 1005;
+
+/// `regparm3popcc`: `regparm3cc` whose callee removes the stack arguments.
+pub const REGPARM3POP: u32 = 1006;
 
 /// `ia16cc`: gcc-ia16's convention.
 pub const IA16: u32 = 1004;

@@ -197,6 +197,12 @@ pub(crate) fn O2() -> Options {
     level("O2")
 }
 
+/// -O3, where a complete copy of a loop may grow the code (gcc's `flag_cunroll_grow_size`); at -O2 it may not.
+#[allow(non_snake_case)]
+pub(crate) fn O3() -> Options {
+    level("O3")
+}
+
 /// -O2 where the function under test stays a function: the last call of a private function is inlined, and
 /// these tests read the callee.
 #[allow(non_snake_case)]
@@ -252,7 +258,7 @@ fn test_frontend_document_crosses_the_strict_common_hir_boundary() {
 fn test_frontend_lowers_control_flow_and_calls_to_existing_mir() {
     let text = emitted_text(&program());
     let count = defined(&text, "count");
-    for one in ["call addrspace(1) i16 @step(", "br i1 ", " = load ", "store "] {
+    for one in ["addrspace(1) i16 @step(", "br i1 ", " = load ", "store "] {
         assert!(count.contains(one), "{one}\n{count}");
     }
     assert!(defined(&text, "step").contains(" = add "), "{text}");
@@ -415,7 +421,7 @@ fn test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() {
     assert!(module.functions[0].calls.iter().filter(|call| call.callee == Some(fixed_id)).all(|call| call.order == [1, 0]));
 
     let nbody = nbody_emitted();
-    for one in ["getelementptr", "br i1 ", "call addrspace(1) void @N$", "@llvm.sdiv.fix.i32(", "@llvm.smul.fix.i32(", " = load ", "store "] {
+    for one in ["getelementptr", "br i1 ", "addrspace(1) void @N$", "@llvm.sdiv.fix.i32(", "@llvm.smul.fix.i32(", " = load ", "store "] {
         assert!(nbody.contains(one), "{one}\n{nbody}");
     }
 
@@ -446,7 +452,7 @@ fn test_nbody_string_places_point_after_the_descriptor() {
 #[test]
 fn test_nbody_native_loops_eliminate_redundant_index_arithmetic() {
     // Nib nbody emitted 52 `sub index,0; shl index,4` address chains.
-    let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &O2());
+    let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &O3());
 
     assert!(!assembly.contains("sub si, 0"));
     assert!(!assembly.contains("sub di, 0"));
@@ -580,7 +586,7 @@ fn main() -> i16:
         object_of(&parsed(&source), "main", &source, options, llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").len()
     };
     let uncopied = unrolled_or_peeled_none();
-    assert_ne!(listing(&parsed(&source), "main", &level("O2")), listing(&parsed(&source), "main", &uncopied), "premise: -O2 copies the loop");
+    assert_ne!(listing(&parsed(&source), "main", &level("O3")), listing(&parsed(&source), "main", &uncopied), "premise: -O3 copies the loop");
     assert!(bytes(&level("Os")) <= bytes(&uncopied));
 }
 
@@ -643,8 +649,10 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     assert!(Regex::new(&format!(r"    mov word ptr \[bp-\d+\], {payload}\n")).unwrap().is_match(main), "{main}");
     assert!(Regex::new(r"    mov [a-z]+, ss\n").unwrap().is_match(main));
     assert!(main.contains("call _bump"));
-    // `bump` is internal and called directly: it pops its own view, a stack pointer of one word, `ret 2`.
-    assert!(!main.contains("add sp, 2") && bump.contains("ret 2"), "{main}{bump}");
+    // `bump` is internal and called directly: the view, a stack pointer of one word, is its first argument, in AX, and nothing is
+    // pushed or popped.
+    assert!(!main.contains("add sp, 2") && !bump.contains("ret 2"), "{main}{bump}");
+    assert!(Regex::new(r"    lea ax, \[bp-\d+\]\n    call _bump").unwrap().is_match(main), "{main}");
     assert!(bump.contains("es:["));
     assert!(!object_of(&program, "main", &source, &O2_calls_kept(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
 }
@@ -862,7 +870,7 @@ fn test_a_fill_leaves_the_rest_of_its_function_priceable() {
         "priced_fill.nib",
         "fn value(v: &[i16]) -> i32:\n    let mut a: i32[64] = [0] * 64\n    let mut total: i16 = 0\n    unsafe:\n        for i in 0..4:\n            total += v[i]\n        a[total] = 5\n    return a[1]\nfn main() -> i16:\n    let v: i16[4] = [1, 2, 3, 4]\n    return i16(value(&v))\n",
     );
-    let assembly = listing(&parsed(&source), "main", &O2());
+    let assembly = listing(&parsed(&source), "main", &O3());
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
 
     assert!(body.contains("rep stosd"));
@@ -1045,15 +1053,15 @@ fn test_ranked_arrays_reject_the_wrong_rank_or_shape() {
 #[test]
 fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
     // Copies were built for any trip count the simulation priced as folding: deedlines'
-    // 16384-trip loops became 360K operations. LLVM analyses at most 10 iterations; past that nothing is copied.
+    // 16384-trip loops became 360K operations. gcc's max-completely-peel-times is 16; past that nothing is copied.
     let directory = tempfile::tempdir().expect("a directory");
     let rolled = |trips: i16| {
         // `total * 3 + i` has no closed form, so only peeling removes the loop.
         let text = format!("@export(\"cdecl16\")\nfn value(k: i16) -> i16:\n    let mut total: i16 = k\n    for i in 0..{trips}:\n        total = total * 3 + i\n    return total\n");
-        optimized_mir(&parsed(&written(&directory, "settled.nib", &text)), &O2()).contains(" = phi ")
+        optimized_mir(&parsed(&written(&directory, "settled.nib", &text)), &O3()).contains(" = phi ")
     };
-    assert!(!rolled(10), "within the cap the loop is copied out");
-    assert!(rolled(11));
+    assert!(!rolled(16), "within the cap the loop is copied out");
+    assert!(rolled(17));
 }
 
 /// `_sum_three proc near` .. `endp` for the 486.
@@ -1669,7 +1677,7 @@ fn test_inline_assembly_is_its_bytes_between_its_register_constraints() {
     );
     let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
     let mix = between(&assembly, "_mix proc near", "_mix endp");
-    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n    mov ax, bx\n    shr cx, 8\n";
+    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n(?:    mov ax, bx\n)?    shr cx, 8\n";
     let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
     assert_eq!(found[1], found[2], "{mix}");
     assert!(!["ax", "bx", "cx", "dx"].contains(&&found[1]), "a is kept where the block leaves it: {mix}");
@@ -1751,7 +1759,7 @@ fn test_the_rich_mir_lays_an_inline_block_between_its_register_constraints() {
     assert!(source.contains("asm("), "the shape that was refused");
     let assembly = rich(&directory, "blocks.nib", source);
     let mix = between(&assembly, "_mix proc near", "_mix endp");
-    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n    mov ax, bx\n    shr cx, 8\n";
+    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n(?:    mov ax, bx\n)?    shr cx, 8\n";
     let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
     assert_eq!(found[1], found[2], "{mix}");
     assert!(!["ax", "bx", "cx", "dx"].contains(&&found[1]), "a is kept where the block leaves it: {mix}");

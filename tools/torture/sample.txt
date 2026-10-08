@@ -155,3 +155,6 @@ strlen-1
 struct-ini-3
 vrp-2
 vrp-6
+pr103417
+bf64-1
+991118-1
