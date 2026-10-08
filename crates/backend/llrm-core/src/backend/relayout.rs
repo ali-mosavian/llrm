@@ -173,7 +173,8 @@ impl Moves<'_> {
         if reach.iter().any(|(start, end)| *start <= low || *end >= high) {
             return None;
         }
-        Some(outside(&reach.iter().map(|(start, end)| (start - self.hole, end - self.hole)).collect()))
+        // An incoming argument's range (from BP up) stays; what the selector laid out below BP moves.
+        Some(outside(&reach.iter().map(|(start, end)| if *start >= 0 { (*start, *end) } else { (start - self.hole, end - self.hole) }).collect()))
     }
 
     fn variable(&self, one: &DebugVariable) -> Option<DebugVariable> {
@@ -244,5 +245,17 @@ mod tests {
         // An incoming argument's place is fixed: it keeps its displacement.
         let incoming = |disp| length(Addr::new(Space::Frame, disp).in_slot(0));
         assert_ne!(incoming(8), incoming(2000));
+    }
+
+    /// A byval argument's incoming range is escaped like a local, but it does not move with the hole.
+    #[test]
+    fn test_an_escaped_incoming_range_stays_where_it_is_when_the_slots_move() {
+        use super::Moves;
+        use crate::backend::frame::Frame;
+        let frame = Frame::new(0);
+        let homes = crate::support::hash::IndexMap::default();
+        let moves = Moves { frame: &frame, homes: &homes, hole: 6 };
+        let reach = |ranges: &[(i64, i64)]| crate::model::lir::outside(&ranges.iter().copied().collect());
+        assert_eq!(moves.private(&reach(&[(-40, -8), (4, 12)])), Some(reach(&[(-46, -14), (4, 12)])));
     }
 }
