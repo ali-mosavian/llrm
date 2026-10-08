@@ -14,6 +14,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import dos
 from build import BIN
 
 MAIN = {"c": "_main", "bas": "__main", "nib": "main"}
@@ -73,7 +74,7 @@ def _zero(kind: str) -> str:
 def _stub(name: str, ret: str, args: list[str], post: str) -> str:
     """A definition doing what the external does."""
     plain = name.strip('"').removeprefix("llrm.qb.")
-    bare = plain.lstrip("_")
+    bare = dos.dosbatch.linkrecipe.undecorated(dos.dosbatch.REAL_MODE, plain).lstrip("_")
     types = [re.sub(r"\s+(noundef|nocapture|readonly|writeonly|signext|zeroext|noalias)\b", "", one).strip() for one in args]
     params = ", ".join(f"{kind} %a{at}" for at, kind in enumerate(types))
     space = re.search(r"addrspace\(\d\)", post)

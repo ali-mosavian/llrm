@@ -252,7 +252,7 @@ fn test_frontend_document_crosses_the_strict_common_hir_boundary() {
 fn test_frontend_lowers_control_flow_and_calls_to_existing_mir() {
     let text = emitted_text(&program());
     let count = defined(&text, "count");
-    for one in ["call addrspace(1) i16 @step(", "br i1 ", " = load ", "store "] {
+    for one in ["addrspace(1) i16 @step(", "br i1 ", " = load ", "store "] {
         assert!(count.contains(one), "{one}\n{count}");
     }
     assert!(defined(&text, "step").contains(" = add "), "{text}");
@@ -415,7 +415,7 @@ fn test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() {
     assert!(module.functions[0].calls.iter().filter(|call| call.callee == Some(fixed_id)).all(|call| call.order == [1, 0]));
 
     let nbody = nbody_emitted();
-    for one in ["getelementptr", "br i1 ", "call addrspace(1) void @N$", "@llvm.sdiv.fix.i32(", "@llvm.smul.fix.i32(", " = load ", "store "] {
+    for one in ["getelementptr", "br i1 ", "addrspace(1) void @N$", "@llvm.sdiv.fix.i32(", "@llvm.smul.fix.i32(", " = load ", "store "] {
         assert!(nbody.contains(one), "{one}\n{nbody}");
     }
 
@@ -643,8 +643,10 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     assert!(Regex::new(&format!(r"    mov word ptr \[bp-\d+\], {payload}\n")).unwrap().is_match(main), "{main}");
     assert!(Regex::new(r"    mov [a-z]+, ss\n").unwrap().is_match(main));
     assert!(main.contains("call _bump"));
-    // `bump` is internal and called directly: it pops its own view, a stack pointer of one word, `ret 2`.
-    assert!(!main.contains("add sp, 2") && bump.contains("ret 2"), "{main}{bump}");
+    // `bump` is internal and called directly: the view, a stack pointer of one word, is its first argument, in AX, and nothing is
+    // pushed or popped.
+    assert!(!main.contains("add sp, 2") && !bump.contains("ret 2"), "{main}{bump}");
+    assert!(Regex::new(r"    lea ax, \[bp-\d+\]\n    call _bump").unwrap().is_match(main), "{main}");
     assert!(bump.contains("es:["));
     assert!(!object_of(&program, "main", &source, &O2_calls_kept(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
 }
@@ -1669,7 +1671,7 @@ fn test_inline_assembly_is_its_bytes_between_its_register_constraints() {
     );
     let assembly = listing_on(&parsed(&source), "main", &O2(), "486");
     let mix = between(&assembly, "_mix proc near", "_mix endp");
-    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n    mov ax, bx\n    shr cx, 8\n";
+    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n(?:    mov ax, bx\n)?    shr cx, 8\n";
     let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
     assert_eq!(found[1], found[2], "{mix}");
     assert!(!["ax", "bx", "cx", "dx"].contains(&&found[1]), "a is kept where the block leaves it: {mix}");
@@ -1751,7 +1753,7 @@ fn test_the_rich_mir_lays_an_inline_block_between_its_register_constraints() {
     assert!(source.contains("asm("), "the shape that was refused");
     let assembly = rich(&directory, "blocks.nib", source);
     let mix = between(&assembly, "_mix proc near", "_mix endp");
-    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n    mov ax, bx\n    shr cx, 8\n";
+    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n(?:    mov ax, bx\n)?    shr cx, 8\n";
     let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
     assert_eq!(found[1], found[2], "{mix}");
     assert!(!["ax", "bx", "cx", "dx"].contains(&&found[1]), "a is kept where the block leaves it: {mix}");
