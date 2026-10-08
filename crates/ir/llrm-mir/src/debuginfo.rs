@@ -176,6 +176,15 @@ pub struct Variable {
     pub argument: Option<i64>,
 }
 
+/// Kind of the metadata that says a store or a `memcpy` is volatile only so the optimiser leaves it for a debugger to read the
+/// variable it writes (`-g`): a build that does not run the optimiser, or finds the variable another way, lifts it.
+pub const OBSERVED: &str = "llrm.observed";
+
+/// The node [`OBSERVED`] attaches.
+pub fn observed_node(module: &mut Module) -> MetadataId {
+    node(module, Vec::new())
+}
+
 fn node(module: &mut Module, operands: Vec<MetadataOperand>) -> MetadataId {
     module.metadata.push(MetadataNode { distinct: false, operands });
     MetadataId(module.metadata.len() as u32 - 1)

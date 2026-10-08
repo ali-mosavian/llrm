@@ -62,6 +62,18 @@ pub enum Dialect {
     Cv4,
 }
 
+/// What a [`Location::Frame`]'s displacement is measured from.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FrameBase {
+    /// The frame register, which the code keeps for it.
+    #[default]
+    Register,
+    /// The frame register as the code would set it: `bias` bytes below the canonical frame address (the return address and
+    /// the saved register). The code keeps none; a debugger finds the cell from the caller's frame, which call frame
+    /// information gives at every address.
+    Cfa { bias: i64 },
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Info {
     pub format: Format,
@@ -71,6 +83,8 @@ pub struct Info {
     pub producer: Producer,
     /// The register a [`Location::Frame`] is relative to.
     pub frame_register: String,
+    /// What a [`Location::Frame`] is measured from: that register, or the canonical frame address.
+    pub frame_base: FrameBase,
     /// The register that stands for the return address in call frame information (the target's `pc`
     /// class); empty where the target numbers none.
     pub return_register: String,

@@ -20,6 +20,7 @@ import hashlib
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -43,6 +44,17 @@ def required(name: str) -> Path:
     if not value:
         sys.exit(f"{name} is not set; see the top of {Path(__file__).name}")
     return Path(value).expanduser()
+
+
+def compile_failure(compiler: Path, flags: list[str], source: Path, out: Path) -> str | None:
+    """Why `compiler` failed on `source`, or None: its exit status (a negative one is a signal) and what it printed."""
+    done = subprocess.run([str(compiler), "-O2", *flags, str(source), "-o", str(out)], capture_output=True, text=True)
+    if done.returncode == 0:
+        return None
+    status = f"exit {done.returncode}"
+    if done.returncode < 0:
+        status += f" ({signal.Signals(-done.returncode).name})"
+    return f"{source.stem}: {status} {(done.stderr or done.stdout).strip()[-300:]}"
 
 
 def linked(listing: str, objects: Path, extra: list[str]) -> str:
@@ -101,8 +113,7 @@ def main() -> int:
     flags = [flag for part in (*MODULES, "qgl") for flag in ("-I", str(qcport / part))] + ["-I", str(include)]
 
     def compile_one(source: Path):
-        done = subprocess.run([str(compiler), "-O2", *flags, str(source), "-o", str(sides["llrm"] / f"{source.stem}.obj")], capture_output=True, text=True)
-        return None if done.returncode == 0 else f"{source.stem}: {(done.stderr or done.stdout).strip()[-300:]}"
+        return compile_failure(compiler, flags, source, sides["llrm"] / f"{source.stem}.obj")
 
     if built_already:
         missing = [source.stem for source in sources if not (built_already / f"{source.stem}.obj").exists()]

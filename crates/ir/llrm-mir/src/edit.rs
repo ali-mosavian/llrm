@@ -205,6 +205,16 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// Makes the store `inst` not volatile.
+    pub fn make_store_plain(&mut self, inst: InstId) {
+        if let Opcode::Store { volatile, .. } = &mut self.instructions[inst.0 as usize].opcode
+            && *volatile
+        {
+            *volatile = false;
+            self.log(Change::Rewritten(inst));
+        }
+    }
+
     /// Makes the store `inst` volatile.
     pub fn make_store_volatile(&mut self, inst: InstId) {
         if let Opcode::Store { volatile, .. } = &mut self.instructions[inst.0 as usize].opcode
