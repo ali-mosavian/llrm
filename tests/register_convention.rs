@@ -5,12 +5,14 @@
 use std::process::Command;
 
 /// The listing of `source` for -m32.
+/// `-fno-inline-functions`: these tests read one function's prologue and arguments; recursive inlining (#948) copies a recursive one
+/// into itself.
 fn listing(source: &str) -> String {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("t.nib");
     std::fs::write(&path, format!("{source}\nfn main() -> i32:\n    return 0\n")).unwrap();
     let out = directory.path().join("t.asm");
-    let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).args(["-m32", "-O2", "-S"]).arg(&path).arg("-o").arg(&out).output().unwrap();
+    let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib")).args(["-m32", "-O2", "-fno-inline-functions", "-S"]).arg(&path).arg("-o").arg(&out).output().unwrap();
     assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
     std::fs::read_to_string(out).unwrap()
 }

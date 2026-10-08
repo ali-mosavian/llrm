@@ -75,19 +75,26 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
     let mut widths = allocate::_widest(body);
     let where_of = regclass::classes(body, &BTreeSet::new(), segments, classes);
     let everything: BTreeSet<Register> = classes.available.iter().copied().collect();
+    let mut webs = Webs::new(everything);
     let mut may: IndexMap<u32, BTreeSet<Register>> = live
         .keys()
         .map(|one| (*one, target::order(where_of.get(one), segments, classes).into_iter().collect()))
         .collect();
     for (value, register) in &pinned {
-        if !everything.contains(register) && !where_of.contains_key(value) {
+        if !webs.everything.contains(register) && !where_of.contains_key(value) {
             may.insert(*value, BTreeSet::from([*register]));
         }
     }
+    for (value, palette) in may {
+        let id = webs.intern(&palette);
+        webs.palette_of.insert(value, id);
+    }
     let mut held: IndexMap<u32, Register> = pinned.clone();
-    let mut near = _interference(body);
     let mut parent: IndexMap<u32, u32> = IndexMap::default();
-    let empty = BTreeSet::new();
+    // The web a root's values are kept as: the larger of the two joined, so a join costs the smaller's neighbours.
+    let mut node_of: IndexMap<u32, u32> = IndexMap::default();
+    webs.begin(_interference(body), &held);
+    let checking = std::env::var_os("LLRM_CHECK_COALESCE").is_some();
 
     for block in &body.blocks {
         for one in &block.insns {
@@ -98,34 +105,30 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
             if here == there {
                 continue;
             }
+            let (mut mine_node, mut theirs_node) = (node_of.get(&here).copied().unwrap_or(here), node_of.get(&there).copied().unwrap_or(there));
             // Two pinned to different registers are two registers.
-            let (mine_pin, theirs_pin) = (held.get(&here).copied(), held.get(&there).copied());
+            let (mine_pin, theirs_pin) = (held.get(&mine_node).copied(), held.get(&theirs_node).copied());
             if let (Some(mine), Some(theirs)) = (mine_pin, theirs_pin) {
                 if mine != theirs {
                     continue;
                 }
             }
-            let (Some(mine), Some(theirs)) = (live.get(&here), live.get(&there)) else {
+            let (Some(mine), Some(theirs)) = (live.get(&mine_node), live.get(&theirs_node)) else {
                 continue;
             };
-            if near.get(&here).is_some_and(|found| found.contains(&there)) {
+            if webs.near.get(&mine_node).is_some_and(|found| found.contains(&theirs_node)) {
                 continue;
             }
-            let allowed: BTreeSet<Register> = may
-                .get(&here)
-                .unwrap_or(&everything)
-                .intersection(may.get(&there).unwrap_or(&everything))
-                .copied()
-                .collect();
+            let allowed: BTreeSet<Register> = webs.palette(mine_node).intersection(webs.palette(theirs_node)).copied().collect();
             if allowed.is_empty() {
                 continue;
             }
             let merged = _merged(mine, theirs);
             let width = widths
-                .get(&here)
+                .get(&mine_node)
                 .copied()
                 .unwrap_or(0)
-                .max(widths.get(&there).copied().unwrap_or(0))
+                .max(widths.get(&theirs_node).copied().unwrap_or(0))
                 .max(1);
             let allowed: BTreeSet<Register> = allowed
                 .into_iter()
@@ -137,55 +140,45 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
             if [mine_pin, theirs_pin].into_iter().flatten().any(|pin| !allowed.contains(&pin)) {
                 continue;
             }
-            let mut neighbours: BTreeSet<u32> = near
-                .get(&here)
-                .unwrap_or(&empty)
-                .union(near.get(&there).unwrap_or(&empty))
-                .copied()
-                .filter(|one| *one != here && *one != there)
-                .collect();
             let k = allowed.len();
-            let constrained = neighbours.iter().chain([&here, &there]).any(|value| held.contains_key(value));
-            let significant = neighbours
-                .iter()
-                .filter(|o| {
-                    let palette = may.get(*o).unwrap_or(&everything);
-                    palette.intersection(&allowed).next().is_some()
-                        && near.get(*o).map_or(0, BTreeSet::len) >= if constrained { k } else { palette.len() }
-                })
-                .count();
+            let significant = webs.significant(mine_node, theirs_node, &allowed);
+            if checking {
+                assert_eq!(significant, webs.significant_by_scan(mine_node, theirs_node, &allowed), "Briggs count of {mine_node} and {theirs_node}");
+            }
+            if checking {
+                for (gone, kept) in [(mine_node, theirs_node), (theirs_node, mine_node)] {
+                    assert_eq!(webs.george(gone, kept, &allowed), webs.george_by_scan(gone, kept, &allowed), "George's test of {gone} into {kept}");
+                }
+            }
             if significant >= k
-                && (held.contains_key(&here)
-                    || held.contains_key(&there)
-                    || !(_george(here, there, &allowed, &near, &may, &held, &everything)
-                        || _george(there, here, &allowed, &near, &may, &held, &everything)))
+                && (held.contains_key(&mine_node)
+                    || held.contains_key(&theirs_node)
+                    || !webs.either_george(mine_node, theirs_node, &allowed))
             {
                 continue; // Briggs and George: the merged class would not be colourable
             }
             if mine_pin.is_some() && theirs_pin.is_none() {
                 std::mem::swap(&mut here, &mut there);
+                std::mem::swap(&mut mine_node, &mut theirs_node);
             }
+            // The root that stays is `there`; the web kept is the one with more neighbours.
+            let (kept, gone) = if webs.degree(mine_node) > webs.degree(theirs_node) { (mine_node, theirs_node) } else { (theirs_node, mine_node) };
             parent.insert(here, there);
-            live.insert(there, merged);
-            live.shift_remove(&here);
-            may.insert(there, allowed);
-            may.shift_remove(&here);
-            widths.insert(there, width);
-            widths.shift_remove(&here);
-            if mine_pin.is_some() || theirs_pin.is_some() {
-                held.insert(there, mine_pin.or(theirs_pin).expect("one is pinned"));
+            node_of.insert(there, kept);
+            node_of.swap_remove(&here);
+            live.insert(kept, merged);
+            live.swap_remove(&gone);
+            widths.insert(kept, width);
+            widths.swap_remove(&gone);
+            held.swap_remove(&gone);
+            let pin = mine_pin.or(theirs_pin);
+            if let Some(register) = pin {
+                held.insert(kept, register);
             }
-            held.shift_remove(&here);
-            for other in near.shift_remove(&here).unwrap_or_default() {
-                if let Some(found) = near.get_mut(&other) {
-                    found.remove(&here);
-                }
-                if other != there {
-                    near.entry(other).or_default().insert(there);
-                    neighbours.insert(other);
-                }
+            webs.join(gone, kept, &allowed, pin.is_some());
+            if checking {
+                assert!(webs.consistent(), "the counts after joining {gone} into {kept}");
             }
-            near.insert(there, neighbours);
         }
     }
 
@@ -220,26 +213,283 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
             .collect()) }
 }
 
-/// Whether `gone` can join `kept` without making `kept` harder to colour.
-fn _george(
-    gone: u32,
-    kept: u32,
-    allowed: &BTreeSet<Register>,
-    near: &Graph,
-    may: &IndexMap<u32, BTreeSet<Register>>,
-    held: &IndexMap<u32, Register>,
-    everything: &BTreeSet<Register>,
-) -> bool {
-    if allowed != may.get(&kept).unwrap_or(everything) {
-        return false;
+/// What a web is to its neighbours' counts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Attr {
+    /// Its degree reaches its palette's size: Briggs's significant neighbour, where nothing is pinned.
+    significant: bool,
+    palette: u32,
+    pinned: bool,
+}
+
+/// The interference webs the coalescer joins, and for each web what Briggs's test asks of its neighbours as a count kept
+/// as webs join, so a join costs the smaller web's neighbours and not the larger's (LLVM keeps no graph: the live ranges
+/// of the two answer, in the size of the smaller).
+struct Webs {
+    everything: BTreeSet<Register>,
+    palettes: Vec<BTreeSet<Register>>,
+    ids: IndexMap<BTreeSet<Register>, u32>,
+    palette_of: IndexMap<u32, u32>,
+    near: Graph,
+    attr: IndexMap<u32, Attr>,
+    /// Per web: its neighbours that are significant, by palette; and how many are pinned.
+    counts: IndexMap<u32, IndexMap<u32, u32>>,
+    /// The same for the neighbours that are significant or pinned: the ones George's test refuses.
+    hots: IndexMap<u32, IndexMap<u32, u32>>,
+    pinned_near: IndexMap<u32, u32>,
+}
+
+impl Webs {
+    fn new(everything: BTreeSet<Register>) -> Self {
+        let mut webs = Self {
+            everything: everything.clone(),
+            palettes: Vec::new(),
+            ids: IndexMap::default(),
+            palette_of: IndexMap::default(),
+            near: Graph::default(),
+            attr: IndexMap::default(),
+            counts: IndexMap::default(),
+            hots: IndexMap::default(),
+            pinned_near: IndexMap::default(),
+        };
+        webs.intern(&everything);
+        webs
     }
-    let empty = BTreeSet::new();
-    near.get(&gone).unwrap_or(&empty).iter().filter(|other| **other != gone && **other != kept).all(|other| {
-        let palette = may.get(other).unwrap_or(&everything);
-        near.get(&kept).is_some_and(|found| found.contains(other))
-            || palette.intersection(allowed).next().is_none()
-            || (!held.contains_key(other) && near.get(other).map_or(0, BTreeSet::len) < palette.len())
-    })
+
+    fn intern(&mut self, set: &BTreeSet<Register>) -> u32 {
+        if let Some(found) = self.ids.get(set) {
+            return *found;
+        }
+        let id = self.palettes.len() as u32;
+        self.palettes.push(set.clone());
+        self.ids.insert(set.clone(), id);
+        id
+    }
+
+    /// The registers a web may take: all, where nothing narrowed it.
+    fn palette(&self, node: u32) -> &BTreeSet<Register> {
+        &self.palettes[self.palette_of.get(&node).copied().unwrap_or(0) as usize]
+    }
+
+    fn degree(&self, node: u32) -> usize {
+        self.near.get(&node).map_or(0, BTreeSet::len)
+    }
+
+    fn make_attr(&self, node: u32, pinned: bool) -> Attr {
+        let palette = self.palette_of.get(&node).copied().unwrap_or(0);
+        Attr { significant: self.degree(node) >= self.palettes[palette as usize].len(), palette, pinned }
+    }
+
+    fn begin(&mut self, near: Graph, held: &IndexMap<u32, Register>) {
+        self.near = near;
+        let nodes: BTreeSet<u32> = self.near.keys().chain(self.palette_of.keys()).chain(held.keys()).copied().collect();
+        for node in nodes {
+            let attr = self.make_attr(node, held.contains_key(&node));
+            self.attr.insert(node, attr);
+        }
+        for (node, neighbours) in self.near.clone() {
+            for other in neighbours {
+                self.add(node, self.attr[&other]);
+            }
+        }
+    }
+
+    fn attr_of(&self, node: u32) -> Attr {
+        self.attr.get(&node).copied().unwrap_or_else(|| self.make_attr(node, false))
+    }
+
+    /// `node` gains a neighbour that is `attr`.
+    fn add(&mut self, node: u32, attr: Attr) {
+        if attr.significant {
+            *self.counts.entry(node).or_default().entry(attr.palette).or_default() += 1;
+        }
+        if attr.significant || attr.pinned {
+            *self.hots.entry(node).or_default().entry(attr.palette).or_default() += 1;
+        }
+        if attr.pinned {
+            *self.pinned_near.entry(node).or_default() += 1;
+        }
+    }
+
+    /// `node` loses a neighbour that was `attr`.
+    fn remove(&mut self, node: u32, attr: Attr) {
+        if attr.significant {
+            *self.counts.get_mut(&node).and_then(|counts| counts.get_mut(&attr.palette)).expect("a counted neighbour") -= 1;
+        }
+        if attr.significant || attr.pinned {
+            *self.hots.get_mut(&node).and_then(|counts| counts.get_mut(&attr.palette)).expect("a counted hot neighbour") -= 1;
+        }
+        if attr.pinned {
+            *self.pinned_near.get_mut(&node).expect("a counted pinned neighbour") -= 1;
+        }
+    }
+
+    fn meets(&self, palette: u32, allowed: &BTreeSet<Register>) -> bool {
+        self.palettes[palette as usize].intersection(allowed).next().is_some()
+    }
+
+    /// How many neighbours of the join of `here` and `there` Briggs counts as significant for `allowed`.
+    fn significant(&self, here: u32, there: u32, allowed: &BTreeSet<Register>) -> usize {
+        let (a, b) = (self.attr_of(here), self.attr_of(there));
+        let constrained = a.pinned || b.pinned || self.pinned_near.get(&here).is_some_and(|n| *n > 0) || self.pinned_near.get(&there).is_some_and(|n| *n > 0);
+        if constrained {
+            return self.significant_by_scan(here, there, allowed);
+        }
+        let (big, small) = if self.degree(here) >= self.degree(there) { (here, there) } else { (there, here) };
+        let mut count: usize = self.counts.get(&big).into_iter().flatten().filter(|(palette, _)| self.meets(**palette, allowed)).map(|(_, n)| *n as usize).sum();
+        let empty = BTreeSet::new();
+        let beside = self.near.get(&big).unwrap_or(&empty);
+        count += self.near.get(&small).unwrap_or(&empty).iter().filter(|other| !beside.contains(*other)).filter(|other| {
+            let attr = self.attr_of(**other);
+            attr.significant && self.meets(attr.palette, allowed)
+        }).count();
+        count
+    }
+
+    /// `significant` by looking at every neighbour: Briggs as the test is stated.
+    fn significant_by_scan(&self, here: u32, there: u32, allowed: &BTreeSet<Register>) -> usize {
+        let empty = BTreeSet::new();
+        let neighbours: BTreeSet<u32> = self
+            .near
+            .get(&here)
+            .unwrap_or(&empty)
+            .union(self.near.get(&there).unwrap_or(&empty))
+            .copied()
+            .filter(|one| *one != here && *one != there)
+            .collect();
+        let k = allowed.len();
+        let constrained = neighbours.iter().chain([&here, &there]).any(|value| self.attr_of(*value).pinned);
+        neighbours
+            .iter()
+            .filter(|o| {
+                let palette = self.palette(**o);
+                palette.intersection(allowed).next().is_some() && self.degree(**o) >= if constrained { k } else { palette.len() }
+            })
+            .count()
+    }
+
+    /// Whether `gone` can join `kept` without making `kept` harder to colour: each neighbour of `gone` is one of `kept`'s, or
+    /// shares no register with the join, or is neither pinned nor significant. Counted, when `gone` has the more neighbours,
+    /// as the hot ones that meet the join less those `kept` also has.
+    fn george(&self, gone: u32, kept: u32, allowed: &BTreeSet<Register>) -> bool {
+        if allowed != self.palette(kept) {
+            return false;
+        }
+        let empty = BTreeSet::new();
+        let (beside, own) = (self.near.get(&kept).unwrap_or(&empty), self.near.get(&gone).unwrap_or(&empty));
+        if own.len() <= beside.len() {
+            return own.iter().filter(|other| **other != gone && **other != kept).all(|other| {
+                let attr = self.attr_of(*other);
+                beside.contains(other) || !self.meets(attr.palette, allowed) || !(attr.significant || attr.pinned)
+            });
+        }
+        let hot: usize = self.hots.get(&gone).into_iter().flatten().filter(|(palette, _)| self.meets(**palette, allowed)).map(|(_, n)| *n as usize).sum();
+        let shared = beside.iter().filter(|other| own.contains(*other)).filter(|other| {
+            let attr = self.attr_of(**other);
+            self.meets(attr.palette, allowed) && (attr.significant || attr.pinned)
+        }).count();
+        hot == shared
+    }
+
+    /// `george` by looking at every neighbour of `gone`: the test as it is stated.
+    fn george_by_scan(&self, gone: u32, kept: u32, allowed: &BTreeSet<Register>) -> bool {
+        if allowed != self.palette(kept) {
+            return false;
+        }
+        let empty = BTreeSet::new();
+        self.near.get(&gone).unwrap_or(&empty).iter().filter(|other| **other != gone && **other != kept).all(|other| {
+            let palette = self.palette(*other);
+            self.near.get(&kept).is_some_and(|found| found.contains(other))
+                || palette.intersection(allowed).next().is_none()
+                || (!self.attr_of(*other).pinned && self.degree(*other) < palette.len())
+        })
+    }
+
+    /// Whether either joins the other under George's test: the one that looks at the fewer neighbours first, as the answer is the same.
+    fn either_george(&self, one: u32, other: u32, allowed: &BTreeSet<Register>) -> bool {
+        let (small, big) = if self.degree(one) <= self.degree(other) { (one, other) } else { (other, one) };
+        self.george(small, big, allowed) || self.george(big, small, allowed)
+    }
+
+    /// `gone` joined into `kept`, `allowed` what the web may take now and `pin` whether it is pinned. Costs `gone`'s
+    /// neighbours, and `kept`'s when its own count of itself to them changes: its palette, its being pinned, or its
+    /// reaching its palette's size, each at most as often as the palette is large.
+    fn join(&mut self, gone: u32, kept: u32, allowed: &BTreeSet<Register>, pin: bool) {
+        let (old_gone, old_kept) = (self.attr_of(gone), self.attr_of(kept));
+        let gone_near: Vec<u32> = self.near.get(&gone).map(|set| set.iter().copied().collect()).unwrap_or_default();
+        let (common, only): (Vec<u32>, Vec<u32>) = gone_near.iter().copied().partition(|other| self.near.get(&kept).is_some_and(|set| set.contains(other)));
+        // A neighbour of both loses one: it may stop being significant, and its neighbours' counts follow.
+        for &other in &common {
+            let old = self.attr_of(other);
+            let significant = self.degree(other) - 1 >= self.palettes[old.palette as usize].len();
+            if significant != old.significant {
+                for neighbour in self.near.get(&other).map(|set| set.iter().copied().collect::<Vec<_>>()).unwrap_or_default() {
+                    if neighbour != gone {
+                        self.remove(neighbour, old);
+                        self.add(neighbour, Attr { significant, ..old });
+                    }
+                }
+                self.attr.insert(other, Attr { significant, ..old });
+            }
+        }
+        for &other in &gone_near {
+            self.near.get_mut(&other).expect("a neighbour lists its neighbours").remove(&gone);
+            self.remove(other, old_gone);
+        }
+        let palette = self.intern(allowed);
+        let degree = self.degree(kept) + only.len();
+        let new_kept = Attr { significant: degree >= allowed.len(), palette, pinned: old_kept.pinned || pin };
+        if new_kept != old_kept {
+            for neighbour in self.near.get(&kept).map(|set| set.iter().copied().collect::<Vec<_>>()).unwrap_or_default() {
+                self.remove(neighbour, old_kept);
+                self.add(neighbour, new_kept);
+            }
+        }
+        for &other in &only {
+            self.near.entry(kept).or_default().insert(other);
+            self.near.get_mut(&other).expect("a neighbour lists its neighbours").insert(kept);
+            self.add(other, new_kept);
+            self.add(kept, self.attr_of(other));
+        }
+        self.attr.insert(kept, new_kept);
+        self.palette_of.insert(kept, palette);
+        self.near.entry(kept).or_default();
+        self.near.swap_remove(&gone);
+        self.attr.swap_remove(&gone);
+        self.counts.swap_remove(&gone);
+        self.hots.swap_remove(&gone);
+        self.pinned_near.swap_remove(&gone);
+        self.palette_of.swap_remove(&gone);
+    }
+
+    /// Every count kept, against the counts as `begin` makes them: a check for tests.
+    fn consistent(&self) -> bool {
+        let mut fresh = self.clone_shape();
+        for (node, neighbours) in fresh.near.clone() {
+            for other in neighbours {
+                let attr = fresh.attr[&other];
+                fresh.add(node, attr);
+            }
+        }
+        let live = |map: &IndexMap<u32, IndexMap<u32, u32>>| -> BTreeSet<(u32, u32, u32)> { map.iter().flat_map(|(n, counts)| counts.iter().filter(|(_, c)| **c > 0).map(move |(p, c)| (*n, *p, *c))).collect() };
+        let pins = |map: &IndexMap<u32, u32>| -> BTreeSet<(u32, u32)> { map.iter().filter(|(_, c)| **c > 0).map(|(n, c)| (*n, *c)).collect() };
+        let degrees_hold = self.attr.iter().all(|(node, attr)| attr.significant == (self.degree(*node) >= self.palettes[attr.palette as usize].len()));
+        degrees_hold && live(&self.counts) == live(&fresh.counts) && live(&self.hots) == live(&fresh.hots) && pins(&self.pinned_near) == pins(&fresh.pinned_near)
+    }
+
+    fn clone_shape(&self) -> Self {
+        Self {
+            everything: self.everything.clone(),
+            palettes: self.palettes.clone(),
+            ids: self.ids.clone(),
+            palette_of: self.palette_of.clone(),
+            near: self.near.clone(),
+            attr: self.attr.clone(),
+            counts: IndexMap::default(),
+            hots: IndexMap::default(),
+            pinned_near: IndexMap::default(),
+        }
+    }
 }
 
 thread_local! {

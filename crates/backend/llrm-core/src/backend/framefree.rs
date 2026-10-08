@@ -58,7 +58,10 @@ pub fn without_frame_register(body: &LirBody, registers: &llrm_target::FrameRegi
                     }
                     depth += sign * width;
                 }
-                Operation::Leave | Operation::Escape => return false,
+                // As `masm::stack_addressed`: an exchange of x87 or general registers and the x87 and port instructions leave the stack pointer alone.
+                Operation::Exchange if what.dests.iter().chain(&what.sources).all(|place| matches!(place, Loc::St(_)) || matches!(place, Loc::Reg(reg) if crate::model::ir::root(reg.register) != crate::model::ir::root(registers.stack))) => {}
+                Operation::Barrier if matches!(what.name.as_deref(), Some("fnstcw" | "fldcw" | "fnstsw" | "in" | "out")) => {}
+                Operation::Leave | Operation::Exchange | Operation::Escape | Operation::Barrier => return false,
                 Operation::Nothing if what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")) => return false,
                 Operation::Call => {
                     if what.indirect {

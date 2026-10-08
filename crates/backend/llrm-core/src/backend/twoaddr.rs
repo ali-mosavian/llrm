@@ -98,6 +98,24 @@ fn _reused(body: &LirBody) -> LirBody {
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.clone();
         let out = &leaving[&block.at];
+        // Where each value is read and written in the block, in order: what the scans below ask, in a log of the block's length.
+        let mut reads: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
+        let mut writes: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
+        let index = |reads: &mut IndexMap<u32, BTreeSet<usize>>, writes: &mut IndexMap<u32, BTreeSet<usize>>, at: usize, one: &Insn, add: bool| {
+            for (places, values) in [(&mut *reads, &one.uses), (&mut *writes, &one.defines)] {
+                for value in values {
+                    if add {
+                        places.entry(*value).or_default().insert(at);
+                    } else if let Some(found) = places.get_mut(value) {
+                        found.remove(&at);
+                    }
+                }
+            }
+        };
+        for (at, one) in insns.iter().enumerate() {
+            index(&mut reads, &mut writes, at, one, true);
+        }
+        let none = BTreeSet::new();
         for at in 0..insns.len() {
             let Some(what) = insns[at].what.as_ref().filter(|what| ties(what)) else { continue };
             let (Some(Loc::Held(into)), Some(Loc::Held(first))) = (what.dests.first(), what.sources.first()) else { continue };
@@ -106,17 +124,16 @@ fn _reused(body: &LirBody) -> LirBody {
             if what.dests.len() != 1 || into.value == first.value || into.width != first.width || pinned(into.value) || pinned(first.value) || insns[at].group.is_some() {
                 continue;
             }
-            if defined.get(&into.value) != Some(&1) || out.contains(&into.value) || insns[..at].iter().any(|one| one.uses.contains(&into.value)) {
+            if defined.get(&into.value) != Some(&1) || out.contains(&into.value) || reads.get(&into.value).unwrap_or(&none).range(..at).next().is_some() {
                 continue;
             }
             // `first` dies here: nothing after reads it, not even a parallel
             // copy beside the one that writes it, which reads the old value.
-            let later = &insns[at + 1..];
-            if later.iter().any(|one| one.uses.contains(&first.value)) {
+            if reads.get(&first.value).unwrap_or(&none).range(at + 1..).next().is_some() {
                 continue;
             }
             // Only `first := into` reads it: the copy back of an update in place.
-            let readers: Vec<usize> = later.iter().enumerate().filter(|(_, one)| one.uses.contains(&into.value)).map(|(index, _)| at + 1 + index).collect();
+            let readers: Vec<usize> = reads.get(&into.value).unwrap_or(&none).range(at + 1..).copied().collect();
             let [last] = readers[..] else { continue };
             let back = insns[last].what.as_ref().is_some_and(|what| {
                 what.op == Operation::Move && matches!((what.dests.as_slice(), what.sources.as_slice()), ([Loc::Held(to)], [Loc::Held(from)]) if to.value == first.value && from.value == into.value && to.width == from.width)
@@ -124,12 +141,14 @@ fn _reused(body: &LirBody) -> LirBody {
             if !back {
                 continue;
             }
-            if insns[at + 1..last].iter().any(|one| one.defines.contains(&first.value)) {
+            if writes.get(&first.value).unwrap_or(&none).range(at + 1..last).next().is_some() {
                 continue;
             }
             let swap = |value: u32| if value == into.value { first.value } else { value };
-            for one in &mut insns[at..=last] {
-                *one = coalesce::_renamed(one, &swap);
+            for place in at..=last {
+                index(&mut reads, &mut writes, place, &insns[place], false);
+                insns[place] = coalesce::_renamed(&insns[place], &swap);
+                index(&mut reads, &mut writes, place, &insns[place], true);
             }
             changed = true;
         }

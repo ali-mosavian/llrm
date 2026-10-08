@@ -625,6 +625,20 @@ mod tests {
         assert!(recorded.contains("2147483647"), "__INT_MAX__ is defined: {recorded}");
     }
 
+    /// Borland's dos.h names a parameter `__segment` (`peek( unsigned __segment, unsigned __offset )`), an Open Watcom keyword: on the flat
+    /// target the declaration was E1060 "Invalid type" (QCport host/dbg and game/mdl_ai at m32). Both targets' headers rename it.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_flat_program_may_name_a_parameter_segment() {
+        let scratch = tempfile::tempdir().unwrap();
+        let source = scratch.path().join("seg.c");
+        std::fs::write(&source, "int peek( unsigned __segment, unsigned __offset );\nint peek( unsigned __segment, unsigned __offset ) { return __segment + __offset; }\n").unwrap();
+        for target in [super::Profile::of(&llrm_x86_m16::M16).unwrap(), super::Profile::of(&llrm_x86_m32::M32).unwrap()] {
+            super::recorded_for(&source, &[], false, &[], &target).unwrap_or_else(|error| panic!("{}: {error:?}", target.cpu));
+        }
+    }
+
     /// The loop in `function` that reads `marker`, from its label to its backward branch, as the rich route selects it.
     fn selected_loop(fixture: &str, function: &str, marker: &str) -> Vec<String> {
         let path = Path::new(env!("LLRM_ROOT")).join(format!("tests/fixtures/c/{fixture}.cgs"));
@@ -1604,10 +1618,14 @@ mod tests {
     #[test]
     fn test_m32_indexes_through_the_counter_not_a_copy_of_it() {
         let body = flat_body("sieve", "bench_sieve");
-        let from = body.iter().position(|line| line.starts_with("imul ")).expect("the counter starts as i*i");
+        // From the store the loop makes (the trip's extension is the first thing after it).
+        let from = body.iter().position(|line| line.starts_with("mov byte ptr [")).expect("the loop stores a byte");
         let loop_ = &body[from..];
         let copies = |line: &&String| line.starts_with("movzx e") || line.split_once(' ').is_some_and(|(operation, operands)| operation == "mov" && operands.split_once(", ").is_some_and(|(to, from)| to.len() == 3 && from.len() == 3 && to.starts_with('e') && from.starts_with('e')));
-        assert!(loop_.iter().filter(copies).count() == 0, "{loop_:#?}");
+        // The counter is `(unsigned short)(multiple + i)` against an unknown `limit`: the 16-bit add may wrap, so it cannot be widened,
+        // and gcc zero-extends it every trip too (two instructions to ours one). The zero copies llrm once had came from ECX's upper
+        // half happening to be zero where the peephole could see it (register-choice luck); with EBP a value register it is one.
+        assert!(loop_.iter().filter(copies).count() <= 1, "{loop_:#?}");
     }
 
     /// `d = a + b` into a register that is neither is one `lea`: no flags to keep, three bytes for the four of

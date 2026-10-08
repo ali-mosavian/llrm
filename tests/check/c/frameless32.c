@@ -1,6 +1,7 @@
-// RUN: llrm-c %s -m32 {-O2 | -Os} -march=i486 -fno-inline-functions -S -o /dev/stdout
+// RUN: llrm-c %s -m32 -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
 // `push ebp; mov ebp,esp ... leave` was three instructions a call, and ebp held no value (bench/fib).
 // A function whose cells the stack pointer can name keeps no frame register.
+// Not tuned for size, where the frame register stays if the cells it names are shorter than the stack pointer's (frame_size32.c).
 // CHECK-LABEL: args_ proc
 // CHECK-NOT: ebp
 // CHECK: args_ endp
