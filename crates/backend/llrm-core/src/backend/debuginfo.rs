@@ -34,6 +34,7 @@ pub struct Global {
 pub struct Debug {
     pub format: model::Format,
     pub language: model::Language,
+    pub dialect: model::Dialect,
     pub producer: model::Producer,
     pub frame_register: String,
     /// What the target calls a call's return address in call frame information; empty where it numbers none.
@@ -162,24 +163,28 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
         Some(di::Language::Nib) => model::Language::Nib,
         None => model::Language::Unknown,
     };
-    Ok(Some(Debug { format: model::Format::Default, language, producer, frame_register, return_register, frame, registers, types, nodes, procedures, globals: out }))
+    let dialect = match di::dialect(module) {
+        di::Dialect::Bc => model::Dialect::Bc,
+        di::Dialect::Cv4 => model::Dialect::Cv4,
+    };
+    Ok(Some(Debug { format: model::Format::Default, language, dialect, producer, frame_register, return_register, frame, registers, types, nodes, procedures, globals: out }))
 }
 
-/// `module`'s debug information for the object `source`, its code laid out in `segments` (the
-/// first is the code) at `symbols`, each symbol at its index in `ids`; only what a symbol still
+/// `module`'s debug information for the object `source`, its code laid out in `segments` (a procedure's
+/// is the one `symbols` puts it in) at `symbols`, each symbol at its index in `ids`; only what a symbol still
 /// defines is named.
 pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[Segment], symbols: &IndexMap<String, (usize, usize)>, ids: &IndexMap<String, usize>) -> Result<Info, String> {
-    let code = &segments[0];
     let defined = |name: &str| symbols.contains_key(name);
     let type_of = |node: MetadataId| debug.nodes.get(&node).copied().ok_or_else(|| format!("debug type !{} unread", node.0));
     let variable = |name: &str, r#type: model::TypeId, kind: Kind, symbol: &str, disp: i64| Variable { name: name.to_owned(), r#type, kind, location: Location::Static { symbol: ids[symbol], disp } };
-    let mut starts: Vec<usize> = module.procedures.iter().filter_map(|one| symbols.get(&one.name).map(|&(_, at)| at)).collect();
+    let mut starts: Vec<(usize, usize)> = module.procedures.iter().filter_map(|one| symbols.get(&one.name).copied()).collect();
     starts.sort_unstable();
-    let mut info = Info { format: debug.format, language: debug.language, producer: debug.producer, frame_register: debug.frame_register.clone(), return_register: debug.return_register.clone(), registers: debug.registers.clone(), files: vec![model::File { name: source.to_owned(), checksum: None }], types: debug.types.clone(), ..Info::default() };
+    let mut info = Info { format: debug.format, language: debug.language, dialect: debug.dialect, producer: debug.producer, frame_register: debug.frame_register.clone(), return_register: debug.return_register.clone(), registers: debug.registers.clone(), files: vec![model::File { name: source.to_owned(), checksum: None }], types: debug.types.clone(), ..Info::default() };
     info.globals = debug.globals.iter().filter(|one| one.scope.is_none() && defined(&one.symbol)).map(|one| variable(&one.name, one.r#type, Kind::Local, &one.symbol, one.displacement)).collect();
     for procedure in &module.procedures {
-        let (Some(described), Some(&(_, start))) = (debug.procedures.get(&procedure.name), symbols.get(&procedure.name)) else { continue };
-        let end = starts.iter().copied().find(|&one| one > start).unwrap_or(code.image.len());
+        let (Some(described), Some(&(section, start))) = (debug.procedures.get(&procedure.name), symbols.get(&procedure.name)) else { continue };
+        let code = &segments[section];
+        let end = starts.iter().find(|&&(at, one)| at == section && one > start).map_or(code.image.len(), |&(_, one)| one);
         // Its own statics, then each variable of its body.
         let mut variables: Vec<Variable> = debug
             .globals
@@ -198,7 +203,7 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                 // A parameter that arrives in a register is there until the body starts, and no longer said:
                 // the register is the allocator's from then on. The range takes in the body's first instruction.
                 DebugPlace::Register(register) => {
-                    let entry = model::Range { section: 0, offset: start, length: body.0 + 1 };
+                    let entry = model::Range { section, offset: start, length: body.0 + 1 };
                     let location = Location::List(vec![(entry, Location::Register(format!("{register:?}").to_lowercase()))]);
                     variables.push(Variable { name: one.name.clone(), r#type, kind, location });
                     continue;
@@ -216,8 +221,8 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                     let stored = one.arrives.zip(debug.frame).and_then(|(register, (frame, ..))| super::arrival::stored(&code.image[start..end], frame, addr.disp, register).map(|at| (register, at)));
                     let location = match stored {
                         Some((register, at)) if at < end - start => {
-                            let section = |offset, length| model::Range { section: 0, offset, length };
-                            Location::List(vec![(section(start, at), Location::Register(format!("{register:?}").to_lowercase())), (section(start + at, end - start - at), home)])
+                            let range = |offset, length| model::Range { section, offset, length };
+                            Location::List(vec![(range(start, at), Location::Register(format!("{register:?}").to_lowercase())), (range(start + at, end - start - at), home)])
                         }
                         _ => home,
                     };
@@ -241,7 +246,7 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
             name: described.name.clone(),
             symbol: ids[&procedure.name],
             r#type: described.r#type,
-            ranges: vec![model::Range { section: 0, offset: start, length: end - start }],
+            ranges: vec![model::Range { section, offset: start, length: end - start }],
             body: Some(body),
             far: procedure.far,
             module: described.module,
@@ -250,8 +255,11 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
             frame: frame.unwrap_or_default(),
         });
     }
-    let first = starts.first().copied().unwrap_or(0);
-    info.code = vec![model::Range { section: 0, offset: first, length: code.image.len() - first }];
+    // The code of each segment that has a procedure: from the first to its last byte.
+    for section in starts.iter().map(|&(section, _)| section).collect::<std::collections::BTreeSet<_>>() {
+        let first = starts.iter().find(|&&(at, _)| at == section).map_or(0, |&(_, one)| one);
+        info.code.push(model::Range { section, offset: first, length: segments[section].image.len() - first });
+    }
     for (section, segment) in segments.iter().enumerate() {
         info.lines.extend(segment.lines.iter().map(|&(line, offset)| model::Line { section, offset, file: 0, line, column: 0 }));
     }
