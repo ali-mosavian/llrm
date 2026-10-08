@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn test_m32_prices_code_size_in_bytes() {
         use llrm_mir::target::Machine;
-        let prices = llrm_target::CpuPrices { costs: vec![("mov_rm".into(), 1)], prefix: 1, address_stall: 0, registers: 6, call_registers: 3, address_forms: Vec::new(), operations: OperationCosts { load: 1, ..Default::default() }, spaces: layout().spaces.roles, private: None };
+        let prices = llrm_target::CpuPrices { costs: vec![("mov_rm".into(), 1)], prefix: 1, address_stall: 0, registers: 6, call_registers: 3, address_forms: Vec::new(), operations: OperationCosts { load: 1, ..Default::default() }, spaces: layout().spaces.roles, private: None, calling: None };
         let model = (M32.cost_model())(&prices);
         let sizes = model.size_costs();
         assert_eq!((sizes.load, sizes.float_release, sizes.call, sizes.r#move), (6, 2, 5, 4));
@@ -209,7 +209,7 @@ mod tests {
         let forms = M32.address_forms(&OperationCosts::default(), 0);
         assert_eq!(forms.len(), 1);
         assert!(!forms[0].secondary && forms[0].index_width == 4 && forms[0].scales == std::collections::BTreeSet::from([1, 2, 4, 8]));
-        let model = (M32.cost_model())(&llrm_target::CpuPrices { costs: Vec::new(), prefix: 1, address_stall: 0, registers: M32.register_capacity(), call_registers: M32.callee_saved().len() as i64, address_forms: forms.clone(), operations: OperationCosts::default(), spaces: layout().spaces.roles, private: None });
+        let model = (M32.cost_model())(&llrm_target::CpuPrices { costs: Vec::new(), prefix: 1, address_stall: 0, registers: M32.register_capacity(), call_registers: M32.callee_saved().len() as i64, address_forms: forms.clone(), operations: OperationCosts::default(), spaces: layout().spaces.roles, private: None, calling: None });
         assert_eq!((model.registers(), model.call_registers()), (6, 5));
         assert_eq!(model.address_forms(), forms);
     }

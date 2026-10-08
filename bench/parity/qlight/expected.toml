@@ -1,45 +1,47 @@
-reason = "jumpthread decides a branch on a compare of a phi of constants on each way into it (gcc's budget, empty copies at -Os): queens c -Os instructions 187348 -> 173090 but memory operands 25997 -> 26548 (a reload on the threaded path); qlight c -O2 +1 instruction, -1 byte"
+reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
 blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 124
+instructions = 125
 memory_operands = 28
-code_bytes = 330
+code_bytes = 331
 data_bytes = 13
 bss_bytes = 0
+kernel_ms = 0.0199
 
 [bas.Os]
-instructions = 110
+instructions = 111
 memory_operands = 28
-code_bytes = 286
+code_bytes = 287
 data_bytes = 13
 bss_bytes = 0
+kernel_ms = 0.0198
 
 [c.O2]
-instructions = 107
-memory_operands = 12
-code_bytes = 224
+instructions = 93
+memory_operands = 4
+code_bytes = 193
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 99
-memory_operands = 12
-code_bytes = 171
+instructions = 79
+memory_operands = 4
+code_bytes = 151
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 129
-memory_operands = 8
-code_bytes = 223
+instructions = 120
+memory_operands = 0
+code_bytes = 202
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 118
-memory_operands = 8
-code_bytes = 176
+instructions = 106
+memory_operands = 0
+code_bytes = 160
 data_bytes = 0
 bss_bytes = 0
 

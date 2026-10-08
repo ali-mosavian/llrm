@@ -95,7 +95,12 @@ impl Session {
         let this = Session { child, stream, owners, replies };
         this.command(&serde_json::json!({"cmd": "continue"}));
         std::thread::sleep(Duration::from_secs(1));
-        this.command(&serde_json::json!({"cmd": "wait_for_shell", "timeoutMs": 5000}));
+        // The shell is up before anything is armed or run: a breakpoint on the next program's load, set while the shell is
+        // still starting, stops it at the shell's own load, and no command is taken after that.
+        let waiting = std::time::Instant::now();
+        while this.command(&serde_json::json!({"cmd": "wait_for_shell", "timeoutMs": 5000}))["status"] == "error" {
+            assert!(waiting.elapsed() < Duration::from_secs(120), "the shell did not come up");
+        }
         this
     }
 
@@ -107,7 +112,8 @@ impl Session {
 
     /// Runs a DOS command line in the shell.
     pub fn dos(&self, line: &str) {
-        self.command(&serde_json::json!({"cmd": "dos_cmd", "command": line}));
+        let answer = self.command(&serde_json::json!({"cmd": "dos_cmd", "command": line}));
+        assert_ne!(answer["status"], "error", "the shell refused `{line}`: {answer}");
     }
 
     /// Types `line` and Enter through the keyboard controller, which is how a debugger that hooks the keyboard
