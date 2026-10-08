@@ -164,7 +164,7 @@ pub fn admitted(unit: &Unit, loop_: &Loop, count: &BigInt, facts: &IndexMap<Valu
     };
     llrm_support::debug!(
         "unroll",
-        "loop b{} x{count}: {size} ops -> {} unrolled ({} rolled, boost {boost}%, {} branches), {}",
+        "loop b{} x{count}: {size} ops -> {} unrolled ({} rolled, boost {boost}%, {} branches), scaled {estimate}, budget {budget}, {}",
         loop_.header,
         unrolled.size,
         unrolled.rolled,
