@@ -195,3 +195,35 @@ fn an_unpriced_function_is_left_alone() {
     let text = diamond("4").replace("  %m = mul i16 %acc, 3\n", "  %f = sitofp i16 %acc to double\n  %g = frem double %f, 3.000000e+00\n  %m = fptosi double %g to i16\n");
     assert!(!through(&text, Peel::default()).0);
 }
+
+/// Where code may not grow GCC still copies a loop whose copies come to two thirds of it or less (`estimated_unrolled_size`): the
+/// three trips of x_life's neighbour sum were a rolled loop at -O2 (11 operations, 15 copied) and 1.9x gcc's clocks.
+#[test]
+fn a_copy_of_two_thirds_the_size_is_peeled_where_code_may_not_grow() {
+    let sum = "define i16 @f(i16 %x, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %acc = phi i16 [ %x, %b0 ], [ %s, %b2 ]
+  %go = icmp slt i16 %i, 3
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %p = getelementptr i8, ptr @g, i16 %i
+  %v = load i8, ptr %p
+  %w = zext i8 %v to i16
+  %s = add i16 %acc, %w
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %acc
+}
+
+@g = global [4 x i8] c\"\\01\\02\\03\\04\"
+";
+    let flat = Peel { limits: Limits { grows: false, ..Limits::default() }, ..Peel::default() };
+    assert!(through(sum, flat).0);
+}
