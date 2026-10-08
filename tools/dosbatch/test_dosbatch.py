@@ -78,6 +78,18 @@ class NibCutTests(unittest.TestCase):
             named = [command[i + 1] for i, word in enumerate(command) if word == "--used-by"]
             self.assertEqual(named, ["p.obj", "f.obj", *map(str, layer.values())])
 
+    @unittest.skipUnless((dosbatch.BIN / "jwlink").exists() and (dosbatch.BIN / "llrm-nib").exists(), "needs jwlink and llrm-nib")
+    def test_a_program_that_divides_nothing_links_with_the_hooks_division_fault_handler(self):
+        """init.asm's divide-fault handler calls N$EDIV, which the cut left out when only the program was named:
+        jwlink E2028 on `fn main() -> i16: print("hook")`."""
+        with tempfile.TemporaryDirectory() as work:
+            work = Path(work)
+            source = work / "h.nib"
+            source.write_text('fn main() -> i16:\n    print("hook")\n    return 0\n')
+            dosbatch._host([str(dosbatch.BIN / "llrm-nib"), str(source), "-m16", "-O2", "--procedure-segments", "-o", str(work / "P.OBJ")])
+            dosbatch.link_nib(dosbatch.REAL_MODE, source, work / "P.OBJ", work / "P.EXE", work, "-O2", ())
+            self.assertTrue((work / "P.EXE").stat().st_size > 0)
+
 
 class OutputCapTests(unittest.TestCase):
     """A program that printed without end made T292 and T294 write 931 MB each and the event log 22 GB: a gate hung for hours."""
