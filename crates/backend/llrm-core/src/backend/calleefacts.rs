@@ -32,6 +32,8 @@ pub struct Written {
 /// The functions of one module that take part in interprocedural register use, and what each was found to write.
 #[derive(Default)]
 pub struct CalleeFacts {
+    /// What each function of the module does to memory, worked out once for every function selected from it.
+    callees: Option<std::rc::Rc<llrm_mir::memory::Callees>>,
     eligible: BTreeSet<String>,
     written: RefCell<BTreeMap<String, Written>>,
 }
@@ -47,7 +49,12 @@ impl CalleeFacts {
         let graph = CallGraph::new(module);
         let private = direct_only(module);
         let eligible = private.iter().filter(|&&id| !graph.recursive(id)).filter_map(|&id| module.global(id).name.clone()).collect();
-        (Self { eligible, written: RefCell::default() }, graph.bottom_up())
+        (Self { callees: Some(std::rc::Rc::new(llrm_mir::memory::callees(module))), eligible, written: RefCell::default() }, graph.bottom_up())
+    }
+
+    /// What each function of the module does to memory, where the facts were made of it (`of`).
+    pub fn callees(&self) -> Option<std::rc::Rc<llrm_mir::memory::Callees>> {
+        self.callees.clone()
     }
 
     /// Whether `name` saves nothing for its caller and tells its callers what it wrote.
