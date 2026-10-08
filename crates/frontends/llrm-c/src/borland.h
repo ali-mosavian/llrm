@@ -9,8 +9,6 @@
 #ifndef __BORLANDC__
 #define __BORLANDC__ 0x0410
 #endif
-/* The one Open Watcom keyword Borland's headers use as a plain name: dos.h's
-   parameters. Borland's own sources never mean Open Watcom's segment type. */
-#define __segment __borland_segment
+#include "owkeywords.h"
 /* bcc without -A: its headers show dos.h's FP_OFF and the rest only then. */
 #undef __STDC__
