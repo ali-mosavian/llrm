@@ -61,6 +61,18 @@ impl Options {
         Self::new(machine, std::rc::Rc::new(llrm_x86_m16::M16), crate::backend::isel::m16())
     }
 
+    /// Whether the debug writer this object format and `-g` flavor pick says where a value is over a range of code.
+    pub fn location_ranges(&self) -> bool {
+        use llrm_object::debug::Format;
+        match (self.object_format, self.debug_format) {
+            (_, Format::TurboDebugger) => llrm_omf::LOCATION_RANGES,
+            (_, Format::Dwarf { .. }) => llrm_dwarf::LOCATION_RANGES,
+            ("omf", _) => llrm_omf::LOCATION_RANGES,
+            ("coff", _) => llrm_coff::LOCATION_RANGES,
+            _ => llrm_dwarf::LOCATION_RANGES,
+        }
+    }
+
     pub fn cpu(&self) -> Result<&'static Profile, String> {
         cpu::tuned_for(&*self.arch, &self.machine.cpu, self.pipeline.prefers_size())
     }
@@ -78,7 +90,7 @@ pub fn compiled(program: &model::Program, options: &Options) -> Result<Vec<masm:
     let segments = Segments::of(&options.machine);
     let mut out = Vec::new();
     for ((module, hir), placed) in mir.modules.iter().zip(&program.modules).zip(&placed) {
-        let mut assembled = timed("assemble", || assemble::assembled_by(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments, options.selection, &*options.arch))?;
+        let mut assembled = timed("assemble", || assemble::assembled_by(module, &abi, &format!("{}_TEXT", hir.name.to_uppercase()), ProfileOrName::Profile(options.cpu()?), &segments, options.selection, &*options.arch, options.location_ranges()))?;
         if let Some(debug) = assembled.debug.as_mut() {
             debug.format = options.debug_format;
         }
@@ -242,3 +254,21 @@ pub fn statement_table(rows: &[(i64, i64, String, i64)], registers: llrm_target:
 
 #[cfg(test)]
 mod lifetimes_tests;
+
+#[cfg(test)]
+mod location_ranges_tests {
+    use llrm_object::debug::Format;
+
+    use super::Options;
+
+    /// Whether a debug format says where a value is over a range of code is the writer's fact: location lists in DWARF and C13's ranges
+    /// do; CodeView 4, its BASIC-era dialect and Turbo Debugger's records name one place for a scope. OMF is the last, ELF and Mach-O the
+    /// first, whatever `-g` flavor is asked where one can be written.
+    #[test]
+    fn a_debug_format_says_ranges_as_its_writer_does() {
+        let of = |object_format, debug_format| Options { object_format, debug_format, ..Options::m16(llrm_x86_m16::machine::BUILT_IN.clone()) }.location_ranges();
+        assert!(!of("omf", Format::Default) && !of("omf", Format::CodeView) && !of("omf", Format::TurboDebugger));
+        assert!(of("elf", Format::Default) && of("macho", Format::Default) && of("elf", Format::Dwarf { version: 4 }));
+        assert!(of("coff", Format::Default) && of("coff", Format::CodeView));
+    }
+}

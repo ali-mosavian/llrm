@@ -7,6 +7,7 @@ description = "The 16-bit x86 target: instruction costs and the machine descript
 
 [dependencies]
 llrm-mir = { workspace = true }
+llrm-lir = { workspace = true }
 llrm-target = { workspace = true }
 llrm-x86 = { workspace = true }
 llrm-support = { workspace = true }

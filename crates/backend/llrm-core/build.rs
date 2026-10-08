@@ -12,7 +12,9 @@ fn main() {
     let family_forms = "../../target/llrm-x86/src/instructions/x86.instr";
     let family_patterns = "../../target/llrm-x86/src/isel/family.isel";
     let family_peephole = "../../target/llrm-x86/src/isel/peephole.peep";
-    for path in ["src/backend/isel/generator", "../../target", family_forms, family_patterns, family_peephole] {
+    // Files, not `crates/target`: cargo scans a watched directory for the newest mtime in it, and tools leave files
+    // there. A new target is a new workspace member, so Cargo.lock says so.
+    for path in ["src/backend/isel/generator", "../../../Cargo.lock", family_forms, family_patterns, family_peephole] {
         println!("cargo:rerun-if-changed={path}");
     }
     let read = |path: &std::path::Path| std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));

@@ -28,6 +28,10 @@ program = "pr32244-1"
 reason = "GNU C does arithmetic on a bit-field in the field's own precision (an `unsigned long long : 40` shifts and rotates in 40 bits: GCC PR middle-end/32244, expr.c ChangeLog 2008-01-25; implement-c.texi, 'Structures, Unions, Enumerations, and Bit-Fields'). ISO C11 6.3.1.1p2 leaves a bit-field wider than int in its declared type (64 bits), so `x.b << 32` is not 0: llrm, on Open Watcom's front end, follows ISO."
 
 [[differs]]
+program = "bitfld-3"
+reason = "The same: `unsigned long long u33 : 33` times itself is the declared type's 64-bit product in ISO C (6.3.1.1p2 promotes only fields narrower than int), GNU C reduces it to the field's 33 bits."
+
+[[differs]]
 program = "pr34971"
 reason = "The same: GNU C's bit-field precision (GCC PR middle-end/34971, expr.c ChangeLog 2008-02-27) against ISO C11 6.3.1.1p2, which llrm follows."
 

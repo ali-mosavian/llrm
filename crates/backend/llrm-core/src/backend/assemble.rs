@@ -54,11 +54,11 @@ pub struct Registers {
 /// selector: what the tests of this crate are written for.
 #[cfg(test)]
 pub fn assembled(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments) -> Result<masm::Module, String> {
-    assembled_by(module, abi, code, cpu, segments, isel::m16(), &llrm_x86_m16::M16)
+    assembled_by(module, abi, code, cpu, segments, isel::m16(), &llrm_x86_m16::M16, true)
 }
 
 /// `module` as masm, its code in the segment `code`, selected by `selection`.
-pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments, selection: &'static isel::Compiled, arch: &dyn llrm_target::Target) -> Result<masm::Module, String> {
+pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrName<'_>, segments: &Segments, selection: &'static isel::Compiled, arch: &dyn llrm_target::Target, ranges: bool) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
     let module = &*timed("mir near code", || crate::backend::nearcode::placed(module));
     let mut names = timed("global names", || globals::names(module, &|name| abi.linked(name)))?;
@@ -69,7 +69,7 @@ pub fn assembled_by(module: &Module, abi: &dyn Abi, code: &str, cpu: ProfileOrNa
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
     let (facts, order) = calleefacts::CalleeFacts::of(module);
-    let target = Target { facts: &facts, cpu, segments, selection, arch, classes: &classes, runtime: "", basic: false, zeroed: false };
+    let target = Target { facts: &facts, cpu, segments, selection, arch, classes: &classes, runtime: "", basic: false, zeroed: false, ranges };
     // Callees first, so what a function that takes part writes is known when its callers are selected.
     let mut done: IndexMap<GlobalId, Machined> = IndexMap::default();
     for id in order {
@@ -196,6 +196,10 @@ pub struct Target<'t> {
     pub basic: bool,
     /// A framed function's locals start zeroed: B$ENRA zero-fills them.
     pub zeroed: bool,
+    /// The debug format the object is written in can say where a value is over a range of code: a parameter in the
+    /// register it arrived in until the function stores it. Where it cannot, `-g` stores such a parameter to a cell at the
+    /// entry and describes the cell.
+    pub ranges: bool,
 }
 
 /// A function selected and through the machine phases, as llc's
@@ -371,7 +375,7 @@ fn far_frame(body: &LirBody) -> usize {
 fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64, spilling: bool, admission: bool) -> Result<((Machined, frame::Frame), Rc<ssaspill::Run>), String> {
     let run = ssaspill::Run::new(admission);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
-    let selected = timed("isel", || isel::selected_with(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole, target.facts));
+    let selected = timed("isel", || isel::selected_with(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole, target.facts, target.ranges));
     let Selected { body, convention, calls, inline, far, pops, depth, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     let mut body = timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)?;

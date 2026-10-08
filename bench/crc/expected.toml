@@ -1,13 +1,12 @@
-reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
-blessed = "2026-10-07"
+reason = "-O2 takes gcc's loop-copy rule and budgets (opts.cc 1311-1316; user decision 2026-10-08)"
+blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 1055
+instructions = 1207
 memory_operands = 71
-code_bytes = 527
+code_bytes = 222
 data_bytes = 31
 bss_bytes = 0
-kernel_ms = 0.0343
 
 [bas.Os]
 instructions = 1207
@@ -18,12 +17,11 @@ bss_bytes = 0
 kernel_ms = 0.0363
 
 [c.O2]
-instructions = 477
+instructions = 630
 memory_operands = 10
-code_bytes = 246
+code_bytes = 89
 data_bytes = 10
 bss_bytes = 0
-kernel_ms = 0.0083
 
 [c.Os]
 instructions = 630
@@ -34,12 +32,11 @@ bss_bytes = 0
 kernel_ms = 0.0103
 
 [nib.O2]
-instructions = 488
+instructions = 641
 memory_operands = 18
-code_bytes = 281
+code_bytes = 124
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.0097
 
 [nib.Os]
 instructions = 641

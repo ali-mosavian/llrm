@@ -30,7 +30,7 @@ use crate::induction::{self, AffineOperand};
 use crate::memory::{self, Unit};
 
 /// GCC's `--param max-peel-branches`: undecided branches a copied sequence may hold.
-const MAX_PEEL_BRANCHES: i64 = 16;
+const MAX_PEEL_BRANCHES: i64 = 32;
 
 /// GCC's `optimize_loop_nest_for_speed_p`: a loop entered less often than this, in percent of its
 /// function's entries, is cold, and no copy of it grows the code.
@@ -65,7 +65,7 @@ const MAX_PERCENT_THRESHOLD_BOOST: i64 = 400;
 /// `UL_NO_GROWTH`: a copy is taken only when it is no larger.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Limits {
-    /// LLVM's `-unroll-max-iteration-count-to-analyze` (10), where GCC's `max-completely-peel-times` is 16; 0 is unbounded.
+    /// GCC's `max-completely-peel-times` (16; LLVM's `-unroll-max-iteration-count-to-analyze` is 10); 0 is unbounded.
     pub max_unroll_iterations: i64,
     /// `--param max-completely-peeled-insns`; 0 is unbounded. Where `target_percent` is set, the target's own
     /// (`OperationCosts::unroll_budget`) in that percent replaces it.
@@ -87,7 +87,7 @@ impl Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_unroll_iterations: 10, max_unrolled_operations: 200, target_percent: 0, grows: true, milliclocks_per_byte: 16_000 }
+        Self { max_unroll_iterations: 16, max_unrolled_operations: 200, target_percent: 0, grows: true, milliclocks_per_byte: 16_000 }
     }
 }
 
