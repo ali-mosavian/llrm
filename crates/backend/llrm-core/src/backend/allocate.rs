@@ -717,9 +717,40 @@ fn _wanted(hints: &IndexMap<u32, Vec<u32>>, fixed: &IndexMap<u32, Register>) -> 
     wanted.into_iter().filter(|(value, _)| !fixed.contains_key(value)).collect()
 }
 
-/// Where the values that want a register are live, to be asked which meet an interval.
-fn _wanted_at(wanted: &IndexMap<u32, Register>, live: &IndexMap<u32, Interval>) -> Overlaps {
-    Overlaps::new(wanted.keys().filter_map(|value| live.get(value).map(|found| (*value, found))).flat_map(|(value, found)| found.segments.iter().map(move |segment| (segment.start, segment.end, value))).collect())
+/// The registers wanted by the values that want one and have none yet, where they are live: found by looking at every such value
+/// until enough is asked since the intervals last moved, then by a tree over where they are live.
+#[derive(Default)]
+struct Claims {
+    tree: Option<Overlaps>,
+    asked: u32,
+}
+
+impl Claims {
+    /// The registers `wanted` for the values live where `mine` is, other than `value` and those placed.
+    fn by(&mut self, wanted: &IndexMap<u32, Register>, live: &IndexMap<u32, Interval>, value: u32, mine: &Interval, placed: &IndexMap<u32, Register>) -> BTreeSet<Register> {
+        if self.tree.is_none() {
+            self.asked += 1;
+            if self.asked < 16 || wanted.len() < 64 {
+                return wanted
+                    .iter()
+                    .filter(|(other, _)| **other != value && !placed.contains_key(*other) && live.get(*other).is_some_and(|theirs| theirs.overlaps(mine)))
+                    .map(|(_, register)| *register)
+                    .collect();
+            }
+            self.tree = Some(Overlaps::new(
+                wanted.keys().filter_map(|value| live.get(value).map(|found| (*value, found))).flat_map(|(value, found)| found.segments.iter().map(move |segment| (segment.start, segment.end, value))).collect(),
+            ));
+        }
+        let mut claimed = BTreeSet::new();
+        for segment in &mine.segments {
+            self.tree.as_ref().expect("built").meeting(segment.start, segment.end, &mut |other| {
+                if other != value && !placed.contains_key(&other) {
+                    claimed.insert(wanted[&other]);
+                }
+            });
+        }
+        claimed
+    }
 }
 
 /// A register for every value, by LLVM's `RegAllocGreedy`.
@@ -905,7 +936,7 @@ fn _allocated(
         *waiting.entry(*one).or_insert(0) += 1;
     }
     let mut wanted = _wanted(&facts.hints, &fixed);
-    let mut wanted_at = _wanted_at(&wanted, &facts.live);
+    let mut claims = Claims::default();
     let mut fenced: BTreeSet<u32> = fixed.keys().copied().chain(protected.iter().copied()).collect();
     let mut seen = 0;
     while !queue.is_empty() && seen < BUDGET {
@@ -947,14 +978,7 @@ fn _allocated(
                     *votes.entry(*register).or_insert(0) += 1;
                 }
             }
-            let mut claimed: BTreeSet<Register> = BTreeSet::new();
-            for segment in &mine.segments {
-                wanted_at.meeting(segment.start, segment.end, &mut |other| {
-                    if other != value && !r#where.contains_key(&other) {
-                        claimed.insert(wanted[&other]);
-                    }
-                });
-            }
+            let claimed = claims.by(&wanted, &facts.live, value, &mine, &r#where);
             order.sort_by_key(|register| {
                 (-votes.get(&_whole(*register)).copied().unwrap_or(0), claimed.contains(&_whole(*register)))
             });
@@ -973,7 +997,7 @@ fn _allocated(
         // a value there costs a restore and a prefix on every data access.
         order.sort_by_key(|one| _whole(*one) == segments.data);
         let width = facts.widths.get(&value).copied().unwrap_or(4);
-        if let Some(got) = _free(&mine, &order, &union, &facts.masks, width) {
+        if let Some(got) = _free(&mine, &order, &union, &facts.live, &facts.masks, width) {
             r#where.insert(value, got);
             union.add(_whole(got), value, &facts.live);
             stage.insert(value, Stage::Done);
@@ -991,7 +1015,7 @@ fn _allocated(
                     .filter(|one| _whole(*one) != _whole(register))
                     .filter(|one| data_free || _whole(*one) != segments.data)
                     .collect();
-                _free(&facts.live[&other], &elsewhere, &union, &facts.masks, facts.widths.get(&other).copied().unwrap_or(4)).is_some()
+                _free(&facts.live[&other], &elsewhere, &union, &facts.live, &facts.masks, facts.widths.get(&other).copied().unwrap_or(4)).is_some()
             };
             let evicted = llrm_support::debug::timed("regalloc evict", || _evict(
                 &mine,
@@ -1125,7 +1149,7 @@ fn _allocated(
                 let hard = |other: u32| fixed.contains_key(&other) || unspillable.contains(&other);
                 let Some((got, victims)) = _forced(&mine, &order, &union, &facts.live, &facts.masks, &hard, width) else {
                     for register in &order {
-                        let holders: Vec<(u32, bool)> = union.meeting(&_whole(*register), &mine).into_iter().map(|other| (other, hard(other))).collect();
+                        let holders: Vec<(u32, bool)> = union.meeting(&_whole(*register), &mine, &facts.live).into_iter().map(|other| (other, hard(other))).collect();
                         llrm_support::debug!("regalloc", "{}: value#{value} {:?} {}: clobbered {}, held by {holders:?}", body.name, mine.segments, register.repr(), _clobbered(&mine, *register, &facts.masks, width));
                     }
                     // `unallocatable` refused every body that could land here.
@@ -1200,8 +1224,8 @@ fn _allocated(
             }
         });
         wanted = llrm_support::debug::timed("after wanted", || _wanted(&facts.hints, &fixed));
-        wanted_at = _wanted_at(&wanted, &facts.live);
-        union.refresh(&facts.live);
+        claims = Claims::default();
+        union.refresh();
         fenced = fixed.keys().copied().chain(protected.iter().copied()).collect();
         let gone: Vec<u32> = r#where.keys().copied().filter(|one| !facts.live.contains_key(one)).collect();
         let clashing = llrm_support::debug::timed("after overlapping", || _overlapping(&union, &r#where, &facts));
@@ -1288,7 +1312,7 @@ fn _recolored_hints(
                 }
                 let order: Vec<Register> =
                     target::order(settled.confined.get(&value), settled.segments, settled.classes).into_iter().filter(|one| _whole(*one) == theirs).collect();
-                if let Some(register) = _free(mine, &order, union, settled.masks, width) {
+                if let Some(register) = _free(mine, &order, union, settled.live, settled.masks, width) {
                     best = Some((gained, register));
                 }
             }
@@ -1505,6 +1529,7 @@ fn _free(
     one: &Interval,
     order: &[Register],
     union: &LiveUnion,
+    live: &IndexMap<u32, Interval>,
     masks: &Masks,
     width: u32,
 ) -> Option<Register> {
@@ -1512,7 +1537,7 @@ fn _free(
         if _clobbered(one, *register, masks, width) {
             continue;
         }
-        if !union.busy(&_whole(*register), one) {
+        if !union.busy(&_whole(*register), one, live) {
             return Some(*register);
         }
     }
@@ -1538,7 +1563,7 @@ fn _evict(
         if _clobbered(one, *register, masks, width) {
             continue;
         }
-        let victims: Vec<u32> = union.meeting(&_whole(*register), one);
+        let victims: Vec<u32> = union.meeting(&_whole(*register), one, live);
         if victims.is_empty() {
             continue;
         }
@@ -1589,7 +1614,7 @@ fn _forced(
         if _clobbered(one, *register, masks, width) {
             continue;
         }
-        let victims: Vec<u32> = union.meeting(&_whole(*register), one);
+        let victims: Vec<u32> = union.meeting(&_whole(*register), one, live);
         if victims.iter().any(|other| hard(*other)) {
             continue;
         }
@@ -1665,7 +1690,7 @@ impl Coloring<'_> {
             if _clobbered(mine, register, self.masks, width) {
                 continue;
             }
-            let mut holders: Vec<u32> = self.union.meeting(&_whole(register), mine);
+            let mut holders: Vec<u32> = self.union.meeting(&_whole(register), mine, self.live);
             if holders.len() >= Self::INTERFERENCES
                 || holders.iter().any(|other| self.fenced.contains(other) || recolored.contains(other))
             {
@@ -1681,7 +1706,7 @@ impl Coloring<'_> {
             }
             self.take(value, register);
             let all = holders.iter().all(|other| {
-                match _free(&self.live[other], &(self.order)(*other), self.union, self.masks, (self.width)(*other)) {
+                match _free(&self.live[other], &(self.order)(*other), self.union, self.live, self.masks, (self.width)(*other)) {
                     Some(found) => {
                         self.take(*other, found);
                         recolored.insert(*other);
