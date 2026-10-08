@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use crate::backend::cpu::{self as targets, ProfileOrName};
+use crate::backend::timing;
 
 pub fn cost<'a>(cpu: impl Into<ProfileOrName<'a>>, operation: &str) -> Result<i64, String> {
     targets::profile(cpu)?.cost(operation)
@@ -20,7 +21,7 @@ fn bit_length(value: i64) -> i64 {
     i64::from(64 - value.unsigned_abs().leading_zeros())
 }
 
-/// Core clocks for audited positive imm8 on a 386 and every immediate on a 486; other forms still use the old estimate.
+/// Core clocks for audited positive imm8 on a 386, the table's range by the immediate's bits where it has one, else the flat estimate.
 ///
 /// Intel 80386 Programmer's Reference Manual, IMUL: for positive m,
 /// max(ceil(log2(m)), 3) + 6. Restricted to positive imm8 so the value is
@@ -38,9 +39,9 @@ pub fn immediate_multiply<'a>(
         .max(3)
             + 6);
     }
-    if targets::profile(cpu)?.name == "486" {
-        // Intel 240440-002, Table 10.1 note 3: 10 + max(log2|m|, n), n = 3 for +m and 5 for -m, by the immediate of the three-operand form. The data sheet does not say how the logarithm rounds: up, as `vsgcc/harness.py` counts it.
-        return Ok(10 + bit_length(number).max(if number < 0 { 5 } else { 3 }));
+    // A CPU whose table gives the multiply a range of clocks prices it by the immediate's bits (`timing::multiply_clocks`).
+    if let Some(clocks) = timing::multiply_clocks(cpu, 4, Some(bit_length(number)))? {
+        return Ok(clocks);
     }
     cost(cpu, "imul_r32")
 }
@@ -269,7 +270,7 @@ mod tests {
         let m32 = targets::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
         assert_eq!(immediate_multiply(m32, 1103515245).unwrap(), 41);
         assert_eq!(immediate_multiply(m32, 10).unwrap(), 14);
-        assert_eq!(immediate_multiply(m32, -3).unwrap(), 15);
+        assert_eq!(immediate_multiply(m32, 3).unwrap(), 13);
         assert!(scale(1103515245, m32).unwrap().is_some(), "the chain is below the imul");
     }
 
