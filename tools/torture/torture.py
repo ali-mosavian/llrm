@@ -131,12 +131,21 @@ def main() -> int:
     parser.add_argument("--stage", choices=["compile", "run"], default="run")
     parser.add_argument("--sample", type=int, default=0, help="the first N programs only")
     parser.add_argument("--gate", action="store_true", help="the fixed sample of sample.txt, all levels; exits 1 on any build, link or wrong result that is not named")
-    parser.add_argument("--work", type=Path, default=Path.home() / "scratch/torture-work")
+    parser.add_argument("--work", type=Path, help="keep the work here (default: a private directory under target/, removed at the end)")
     parser.add_argument("--out", type=Path, help="write each program's result here as JSON")
     args = parser.parse_args()
-    target = dosbatch.linkrecipe.named(args.bits)
-    work = args.work
+    # One shared default directory made two runs (a gate beside a full run) delete each other's files: crashes and
+    # every program "wrong". `dosbatch.run` clears its work directory.
+    work = args.work or dosbatch.private_work("torture")
     work.mkdir(parents=True, exist_ok=True)
+    code = run(args, work)
+    if code == 0 and args.work is None:
+        dosbatch.discard(work)  # a run with findings keeps its work to look at
+    return code
+
+
+def run(args, work: Path) -> int:
+    target = dosbatch.linkrecipe.named(args.bits)
     rules = expected()
     names_wanted = args.names
     if args.gate:

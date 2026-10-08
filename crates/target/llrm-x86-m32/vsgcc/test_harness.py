@@ -104,3 +104,12 @@ def test_enter_costs_what_the_486_charges_for_it():
     from iced_x86 import Decoder
     enter = next(iter(Decoder(32, bytes([0xC8, 0x08, 0x00, 0x00]))))
     assert harness.cost(enter, True, True, None) == 14
+
+
+def test_every_x_kernel_has_its_source_and_its_self_check():
+    """The kernels live beside the harness, not in bench/: a lookup in bench/ alone found neither file."""
+    names = sorted(p.name for p in harness.KERNELS.iterdir())
+    assert len(names) == 37 and all(n.startswith("x_") for n in names)
+    for n in names:
+        assert (harness.source_dir(n) / f"{n}.c").is_file() and harness.source_dir(n) == harness.KERNELS / n
+        assert harness.source_dir(n).joinpath(f"{n}.out").read_text().split()

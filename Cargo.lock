@@ -278,6 +278,7 @@ dependencies = [
  "llrm-elf32",
  "llrm-elf64",
  "llrm-hir",
+ "llrm-lir",
  "llrm-macho",
  "llrm-mir",
  "llrm-object",
@@ -428,6 +429,7 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "llrm-lir",
  "serde",
  "toml",
 ]
@@ -544,6 +546,7 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "llrm-lir",
  "llrm-mir",
  "llrm-support",
  "llrm-target",

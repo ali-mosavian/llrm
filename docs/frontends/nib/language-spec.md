@@ -728,9 +728,10 @@ returns as any other enum does.
 
 ### 9.1 Calling convention
 
-- Every call is `call far`. Arguments are pushed right to left, each at least
-  one word, and the caller removes them. With a frame, the first argument is
-  at `[bp+6]`.
+- Every call is `call far`. Under the default convention (regparm3, `docs/targets.md`) the first three
+  integer or pointer arguments, left to right, are in EAX, EDX, ECX (AL, AX or EAX by size); every other
+  argument is pushed right to left, each at least one word, and the caller removes them (`-mabi=cdecl`
+  pushes them all; with a frame the first is then at `[bp+6]`).
 - An `f32` or `f64` is passed in its stored form, 4 or 8 bytes. The x87
   evaluates in extended precision and rounds only when it stores.
 - An owned `string` or `vec` is passed as its near pointer, one word. The
@@ -750,9 +751,9 @@ returns as any other enum does.
 | `void` | nothing |
 | `bool`, `char`, 8-bit integer | `al` (`bool`: `0` or `0FFh`) |
 | 16-bit integer, owned `string`, owned `vec` | `ax` (a `string` or `vec` is its near pointer) |
-| 32-bit integer, `&T`, `&T[N]`, far pointer | `dx:ax` (a pointer is `segment:offset`) |
+| 32-bit integer, `&T`, `&T[N]`, far pointer | `eax` (a far pointer's offset low, its segment high; `dx:ax` under `-mabi=cdecl`) |
 | `f32`, `f64` | `st(0)` |
-| struct, enum, `T[N]`, proposed `string[N]`, of 4 bytes or less and holding no pointer | `al`, `ax` or `dx:ax`, as the integer its bytes spell |
+| struct, enum, `T[N]`, proposed `string[N]`, of 4 bytes or less and holding no pointer | `al`, `ax` or `eax`, as the integer its bytes spell |
 | the same, larger or holding a pointer | the slot |
 | `&[T]`, `&string` | the slot, as an 8-byte descriptor |
 | tuple `(A, B, ...)` | as a struct of its elements; 4 bytes or less in registers, first element lowest (`ax`, then `dx`) |
@@ -769,8 +770,8 @@ failing or partial write can never damage a value that is still visible.
 
 | # | Declared result | Data comes from | Callee does | Caller does | Allocates | Frees |
 |---|---|---|---|---|---|---|
-| 1 | scalar | anything | leaves it in `al`/`ax`/`dx:ax` | reads the register | nothing | nothing |
-| 2 | fixed size, 4 bytes or less, no pointer | anything | loads it into `al`/`ax`/`dx:ax` | stores the registers | nothing | nothing |
+| 1 | scalar | anything | leaves it in `al`/`ax`/`eax` | reads the register | nothing | nothing |
+| 2 | fixed size, 4 bytes or less, no pointer | anything | loads it into `al`/`ax`/`eax` | stores the registers | nothing | nothing |
 | 3 | fixed size, larger or holding a pointer | built in the callee | builds it directly in the slot | passes the slot | nothing | caller's drop, for owned fields |
 | 4 | fixed size, larger or holding a pointer | a callee local built before it is known to be the result | copies it to the slot | passes the slot | nothing | caller's drop, for owned fields |
 | 5 | fixed size, larger or holding a pointer | an owned parameter | copies it from its argument words to the slot | passes the slot | nothing | caller's drop, for owned fields |
@@ -783,7 +784,7 @@ failing or partial write can never damage a value that is still visible.
 | 12 | `string`, `vec` | a bare C pointer | compile error: take a view or copy | | | |
 | 13 | `string`, `vec` | a borrowed parameter | compile error: copy it explicitly | | | |
 | 14 | `string`, `vec` | a buffer in the callee's frame | compile error: return `string[N]` or copy | | | |
-| 15 | `&T`, `&T[N]` | a borrowed parameter or static data | returns the far pointer | stores `dx:ax` | nothing | nothing |
+| 15 | `&T`, `&T[N]` | a borrowed parameter or static data | returns the far pointer | stores `eax` | nothing | nothing |
 | 16 | `&[T]`, `&string` | a borrowed parameter or static data | writes the descriptor to the slot | passes the slot | nothing | nothing |
 | 17 | any view | a callee local, an owned parameter, or a buffer the callee frees | compile error: dangling | | | |
 | 18 | `Option`, `Result`, both sides 4 bytes or less | as rows 1-17 per side | payload in registers, carry flag set on `err`/`none` | branches on carry | per side | per side |
@@ -1810,12 +1811,13 @@ Native `vec`, `dict`, `string`, closures, generators, protocols, and generic
 functions never cross an ABI boundary implicitly.
 
 `"c"` is the convention of an unmarked C function on the target: its default (the ABI `calling.toml` names
-by `default`), cdecl16 on m16 and watcall32 on m32; `-mabi=sysv` on m32 makes it sysv32. A profile named
+by `default`), regparm3 on m16 and watcall32 on m32; `-mabi=sysv` on m32 makes it sysv32. A profile named
 `cdecl32` is the stack convention there, and `watcall32` the default by name.
 
 The initial ABI profiles are:
 
 ```text
+regparm3
 cdecl16
 cdecl32
 watcall32

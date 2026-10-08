@@ -13,3 +13,7 @@ findings: [docs/vs-gcc.md](../../../../docs/vs-gcc.md).
 unicorn and counts `bench_NAME` from entry to its own return. Variants: `llrm`, `gccO2`, `clangO2`, and the
 `Os` ones. A rerun with another llrm shows a fix's gain in the table's llrm columns; gcc and clang do not
 move.
+
+`kernels/x_*` are 37 more kernels (`bench/` has no copy of them), each with its `.out` self-check from gcc -O0 on the host; every variant
+must report the same values or `table.py` refuses. The table prints the bench programs and the kernels as separate summaries, the
+worst program beside each geomean.

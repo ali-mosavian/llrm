@@ -3,11 +3,11 @@
 dot nib ivs-ideal #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 dot nib mir-ivs-ideal #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 alias bas invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-alias bas ivs #98 486-O2 486-O3 Core-O2 Core-O3
+alias bas ivs #98 486-O3 Core-O2 Core-O3
 alias bas ivs-ideal #203 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os
 alias bas mir-ivs #98 386-O2 386-O3 486-O2 486-O3 Core-O2 Core-O3 P5-O2 P5-O3
 alias bas mir-ivs-ideal #203 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-alias bas shape #98 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os
+alias bas shape #98 486-O3 486-Os Core-O2 Core-O3 Core-Os
 bp3_frame c invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 bp3_frame c ivs #98 386-O2 386-O3 486-O2 486-O3 Core-O2 Core-O3 P5-O2 P5-O3
 bp3_frame c ivs-ideal #98 386-Os 486-Os Core-Os P5-Os
@@ -1582,11 +1582,11 @@ matmul_ikj bas invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Cor
 memset nib invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 memset nib shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 prefix bas invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-prefix bas ivs #98 486-O2 486-O3 Core-O2 Core-O3
+prefix bas ivs #98 486-O3 Core-O2 Core-O3
 prefix bas ivs-ideal #203 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os
 prefix bas mir-ivs #98 386-O2 386-O3 486-O2 486-O3 Core-O2 Core-O3 P5-O2 P5-O3
 prefix bas mir-ivs-ideal #203 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-prefix bas shape #98 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os
+prefix bas shape #98 486-O3 486-Os Core-O2 Core-O3 Core-Os
 prefix nib ivs-ideal #98 386-O2 386-O3 486-O2 486-O3 Core-O2 Core-O3 P5-O2 P5-O3
 prefix nib mir-ivs-ideal #98 386-O2 386-O3 486-O2 486-O3 Core-O2 Core-O3 P5-O2 P5-O3
 reverse bas invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
@@ -3659,8 +3659,8 @@ x_counteru8_usemod c invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-
 x_counteru8_usemod nib invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_counteru8_usescale2 c shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_counteru8_usescale2 nib shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-x_counteru8_usescale3 c shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-x_counteru8_usescale3 c size-vs-ref #98 386-O2 386-O3 486-O2 486-O3 P5-O2 P5-O3
+x_counteru8_usescale3 c shape #98 386-O2 386-O3 386-Os 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
+x_counteru8_usescale3 c size-vs-ref #98 386-O2 386-O3 486-O3 P5-O2 P5-O3
 x_counteru8_usescale3 nib shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_counteru8_usescale5 c shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_counteru8_usescale5 nib shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
@@ -6542,7 +6542,7 @@ x_stepsym_usescale2 nib shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core
 x_stepsym_usescale3 bas invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_stepsym_usescale3 bas mir-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_stepsym_usescale3 bas shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-x_stepsym_usescale3 c invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
+x_stepsym_usescale3 c invariant-loads #98 386-O2 386-O3 386-Os 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_stepsym_usescale3 c mir-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_stepsym_usescale3 c shape #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_stepsym_usescale3 nib invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
@@ -8594,7 +8594,7 @@ x_usehalf_pairjpe2 c size-vs-ref #98 386-O2 386-O3 486-O2 486-O3 Core-O2 Core-O3
 x_usehalf_pairjpe2 nib invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_usehalf_pairjpe2 nib ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_usehalf_pairjpe2 nib mir-ivs #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
-x_usehalf_pairoffset c invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
+x_usehalf_pairoffset c invariant-loads #98 386-O2 386-O3 386-Os 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_usehalf_pairoffset nib invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_usehalf_shapebreak nib invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os
 x_usehalf_shapechanged nib invariant-loads #98 386-O2 386-O3 386-Os 486-O2 486-O3 486-Os Core-O2 Core-O3 Core-Os P5-O2 P5-O3 P5-Os

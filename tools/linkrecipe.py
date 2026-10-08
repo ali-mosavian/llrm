@@ -6,6 +6,7 @@
     linkrecipe.py TARGET FIELD       one `[link]` field (`first`, `last`, `final`, `options`, `loader`), words
     linkrecipe.py TARGET ld-emulation  GNU ld's -m for the target's ELF objects
     linkrecipe.py TARGET coff-machine  lld-link's /machine: for the target's COFF objects
+    linkrecipe.py TARGET symbol NAME   how the target's object spells the C function NAME under its default ABI
 """
 
 import sys
@@ -42,6 +43,27 @@ def assembler(target: str) -> str:
     return ASSEMBLER[recipe(target)["default"]]
 
 
+def symbol(target: str, name: str, form: str | None = None) -> str:
+    """`name` as the target's object spells a function of the default ABI's convention: `calling.toml`'s symbol pattern, `*` the name.
+    A convention states what it differs in from the one it is `like`; `form` is the object format, the target's own by default."""
+    with open(ROOT / "crates" / "target" / f"llrm-{target}" / "src" / "machines" / "calling.toml", "rb") as text:
+        table = tomllib.load(text)
+    convention = table["abi"][table["default"]]["convention"]
+    while "symbol" not in table[convention]:
+        convention = table[convention]["like"]
+    pattern = table[convention]["symbol"][form or recipe(target)["default"]]
+    return pattern.replace("^*", name.upper()).replace("*", name)
+
+
+def undecorated(target: str, spelled: str) -> str:
+    """The function name a default-ABI symbol `spelled` is: `symbol` the other way round; `spelled` itself where it is not that shape."""
+    probe = symbol(target, "\0")
+    head, tail = probe.split("\0")
+    if spelled.startswith(head) and spelled.endswith(tail) and len(spelled) > len(head) + len(tail):
+        return spelled[len(head) : len(spelled) - len(tail)]
+    return spelled
+
+
 def link(target: str, field: str) -> list[str]:
     """One field of `target`'s `[link]`, as the words a linker command takes."""
     value = recipe(target)["link"][field]
@@ -60,4 +82,6 @@ def coff_machine(target: str) -> str:
 
 if __name__ == "__main__":
     target, field = sys.argv[1], sys.argv[2]
+    if field == "symbol":
+        sys.exit(print(symbol(target, sys.argv[3])))
     print({"assembler": lambda: assembler(target), "ld-emulation": lambda: ld_emulation(target), "coff-machine": lambda: coff_machine(target)}.get(field, lambda: " ".join(link(target, field)))())
