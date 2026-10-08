@@ -760,3 +760,75 @@ fn test_the_knee_in_operations_is_the_knee_in_instructions_over_their_rate() {
     assert!((ALLOCATION_KNEE * INSTRUCTIONS_PER_OPERATION / 100 - KNEE_INSTRUCTIONS).abs() <= 2);
     assert!(ALLOCATION_KNEE < KNEE_INSTRUCTIONS);
 }
+
+/// A callee that only reads memory takes a `byval` argument as the caller's own pointer (LLVM's HandleByValArgument): the call is gone.
+/// One that may write it is not inlined: the pointer would be the caller's object, not the callee's copy.
+#[test]
+fn test_a_byval_argument_inlines_into_a_callee_that_only_reads_and_not_into_one_that_writes() {
+    let text = |attrs: &str, body: &str| {
+        format!(
+            "define internal i16 @peek(ptr byval([4 x i8]) %p) {attrs} {{
+b1:
+{body}
+}}
+
+define i16 @main() {{
+b1:
+  %cell = alloca [4 x i8]
+  store i16 3, ptr %cell
+  %r = call i16 @peek(ptr byval([4 x i8]) %cell)
+  ret i16 %r
+}}
+"
+        )
+    };
+    let reads = text("memory(read)", "  %v = load i16, ptr %p\n  ret i16 %v");
+    let mut module = parsed(&reads);
+    assert!(inline_into(&mut module, "main", 8));
+    assert!(!printed(&module).contains("call "), "{}", printed(&module));
+    let writes = text("", "  store i16 9, ptr %p\n  %v = load i16, ptr %p\n  ret i16 %v");
+    let mut module = parsed(&writes);
+    assert!(!inline_into(&mut module, "main", 8), "inlined, a write to the caller's object");
+    assert!(printed(&module).contains("call "), "{}", printed(&module));
+}
+
+/// The copy a `byval` argument costs is what an inline saves, as LLVM prices it: a reader of a large struct, called twice, is
+/// worth a copy of its body where the same body over a small struct is not.
+#[test]
+fn test_a_byval_copy_is_part_of_what_an_inline_saves() {
+    let text = |bytes: u32| {
+        format!(
+            "define internal i16 @peek(ptr byval([{bytes} x i8]) %p) memory(read) {{
+b1:
+  %v = load i16, ptr %p
+  %w = add i16 %v, 1
+  %x = add i16 %w, %v
+  %y = add i16 %x, %w
+  ret i16 %y
+}}
+
+define i16 @main() {{
+b1:
+  %cell = alloca [{bytes} x i8]
+  store i16 3, ptr %cell
+  %a = call i16 @peek(ptr byval([{bytes} x i8]) %cell)
+  %b = call i16 @peek(ptr byval([{bytes} x i8]) %cell)
+  %r = add i16 %a, %b
+  ret i16 %r
+}}
+"
+        )
+    };
+    let inlined = |bytes: u32| {
+        let mut module = parsed(&text(bytes));
+        let layout = DataLayout::default();
+        let priced = OperationCosts { call: 2, argument: 1, add: 3, load: 3, ..OperationCosts::default() };
+        let available = candidates(&module, &layout, &call_counts(&module), &private(&module), &priced, 2, Threshold::default());
+        let by = Caller { layout: &layout, recursive: false, base: 0 };
+        let (context, function) = module.function_mut("main").unwrap();
+        while expanded(context, function, &by, &available, None).unwrap() {}
+        !printed(&module).contains("call ")
+    };
+    assert!(!inlined(4), "a 4-byte copy paid for the body");
+    assert!(inlined(2000), "a 2,000-byte copy was not counted");
+}

@@ -295,7 +295,12 @@ pub fn candidates(module: &Module, layout: &DataLayout, calls: &Counter, private
         // A hint is worth a larger body, and a larger duplication, by LLVM's ratio.
         let scale = |n: i64| if stated(body) == Some(Inlining::Hint) { n * threshold.hint.0 / threshold.hint.1 } else { n };
         // What a call removes: it, and where code size is what counts, its arguments' pushes and cleanup.
-        let saved = call_cost + if threshold.single { module.signature(body.ty).1.len() as i64 * costs.argument } else { 0 };
+        // A `byval` argument's copy goes too, as LLVM counts it (InlineCost: the bytes copied): a push's price per word.
+        let copied: i64 = body.parameter_attrs.iter().flatten().filter_map(|one| match one {
+            llrm_mir::Attribute::Type(kind, ty) if kind == "byval" => Some(layout.alloc_size(&module.context.types, *ty) as i64 / 4),
+            _ => None,
+        }).sum();
+        let saved = call_cost + copied * costs.argument + if threshold.single { module.signature(body.ty).1.len() as i64 * costs.argument } else { 0 };
         let copies = if private.contains(&name) && !addressed.contains(&name) { count - 1 } else { count };
         // The last call of a function nothing else reaches moves its body: no copy, and the call,
         // its arguments and the return gone (LLVM's last-call-to-static bonus).
@@ -438,8 +443,10 @@ fn fits(context: &Context, function: &Function, caller: &Caller, call: InstId, c
     let callee = &*candidate.body;
     let Opcode::Call(info) = &function.instruction(call).opcode else { return false };
     // A `byval` parameter is the callee's own copy: the pointer would be the caller's object, which the callee may write. LLVM's
-    // InlineFunction copies it into a fresh alloca first (HandleByValArgument); not here yet, so such a call stays a call.
-    callee.parameter_attrs.iter().all(|attrs| !attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Type(name, _) if name == "byval")))
+    // InlineFunction (HandleByValArgument) passes the pointer on when the callee only reads memory, and copies it into an alloca
+    // otherwise; the copy is not made here yet, so such a call stays a call.
+    let byval = |attrs: &Vec<llrm_mir::Attribute>| attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Type(name, _) if name == "byval"));
+    (!callee.parameter_attrs.iter().any(byval) || !llrm_mir::memory::stated(&callee.attrs).writes)
         && info.function_type == callee.ty
         && !matches!(context.types.get(callee.ty), Type::Function { variadic: true, .. })
         && (candidate.frame == 0 || (!caller.recursive && frame(context, caller.layout, function) + candidate.frame <= FRAME_LIMIT))
