@@ -2039,7 +2039,8 @@ fn _address_source(one: &Insn, value: u32, address: &Address) -> Option<Arc<Insn
         let displacement = addr.disp + cell.addr.expect("checked").disp;
         changed = true;
         Loc::Mem(Mem {
-            addr: Some(Addr::new(Space::Frame, displacement)),
+            // The folded address's slot: the cell is that frame address plus a constant.
+            addr: Some(Addr { index: addr.index, ..Addr::new(Space::Frame, displacement) }),
             through: Register::BP,
             offset: displacement,
             disp_width: 0,

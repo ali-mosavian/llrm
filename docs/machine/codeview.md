@@ -322,3 +322,12 @@ left out: CodeView 4 names one place per scope.
 CodeView stopped in `f` of `tests/fixtures/codeview/m.c`, its locals window from the object's records:
 
 ![C as CodeView 4](codeview/c-cv4-c7.png)
+
+## Which dialect a unit gets
+
+The frontend states it (`Info.dialect`, the MIR `!llrm.dbg.language` node's second operand): BASIC the dialect BC writes, which its
+records match; C and Nib CodeView 4 as C7 writes it, since neither has a BC to match. Nib was BC's dialect until #892: a Nib program
+linked by MS LINK /CO could not be debugged (CodeView took the module's addresses for the start-up's segment and found no `add`), and
+`-g` with a code segment per procedure was refused, since the dialect's records name an address by its offset alone. CodeView 4
+has the segment in each address, so both work: `tests/cv4.rs` drives CodeView on a Nib program (`bp add`, the parameters and a local
+with their values).

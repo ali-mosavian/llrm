@@ -1,0 +1,8 @@
+fn add(a: i16, b: i32) -> i32:
+    let s = i32(a)
+    let t = s + b
+    return t + s
+
+fn main() -> i16:
+    print(add(2, 3) + add(4, 5))
+    return 0

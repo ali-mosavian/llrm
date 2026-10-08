@@ -11,7 +11,7 @@ gcc -m32 -c $H/stub.s -o $VSGCC_WORK/stub.o && ld -m $(python3 $R/tools/linkreci
 sha256sum $H/stub.s | cut -d" " -f1 | tr -d "\n" > $VSGCC_WORK/stub.elf.src
 for p in $PROGS; do $H/build.sh $p; done
 : > $VSGCC_WORK/results.jsonl
-for p in $PROGS; do for v in llrm llrmOs gccO2 gccOs clangO2 clangOs; do
+for p in $PROGS; do for v in llrmO1 llrm llrmO3 llrmOs gccO1 gccO2 gccO3 gccOs clangO1 clangO2 clangO3 clangOs; do
   uv run --project $R/tools python $H/harness.py $p $v | tail -1 >> $VSGCC_WORK/results.jsonl
 done; done
 uv run --project $R/tools python $H/table.py

@@ -107,3 +107,20 @@ fn test_the_compiler_that_made_an_object_is_read_off_it() {
         assert_eq!(got, want, "{name} reads as {got}");
     }
 }
+
+/// A frame cell is the same place whichever slot tags it, and a literal address with a symbol's `index` is not a frame cell:
+/// ignoring the index of those made two globals one place (nbody_fixed read `_pos_y` for `_pos_x`).
+#[test]
+fn test_a_slot_tag_decides_nothing_for_a_frame_cell_and_everything_for_another_address() {
+    use std::collections::HashSet;
+    let cell = Addr::new(Space::Frame, -4);
+    assert_eq!(cell.in_slot(-8), cell.in_slot(-4));
+    assert_eq!(cell.in_slot(-8), cell);
+    assert_eq!(HashSet::from([cell.in_slot(-8)]).len(), HashSet::from([cell.in_slot(-8), cell]).len());
+    assert_eq!(cell.in_slot(-8).slot_home(), Some(-8));
+    assert_eq!(cell.slot_home(), None);
+    assert_eq!(cell.in_slot(-8).plus(2).slot_home(), Some(-8));
+    let (x, y) = (Addr { index: 3, ..Addr::new(Space::Literal, 0) }, Addr { index: 5, ..Addr::new(Space::Literal, 0) });
+    assert_ne!(x, y);
+    assert_eq!(x.slot_home(), None);
+}

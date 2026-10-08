@@ -275,8 +275,7 @@ L1_12:
     mov cx, dx
     neg cx
     add cx, -2                      ; [one induction variable] cx = -2 * (bound + 1)
-    mov si, ax
-    add si, dx                      ; [biased] a's offset + 2 * bound; the +2 is in the loop's
+    lea si, [eax+edx]               ; [biased] a's offset + 2 * bound, one lea; the +2 is in the loop's
     add di, dx                      ; [biased] b's offset + 2 * bound; displacement
     xor eax, eax                    ; total = 0
     or bx, bx
