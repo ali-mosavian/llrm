@@ -266,8 +266,13 @@ fn semantics(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> S
 }
 
 /// Every return of `body` as `retf bytes`, for a callee that removes its
-/// arguments.
-pub fn cleaned_returns(body: &lir::LirBody, bytes: i64) -> Result<lir::LirBody, String> {
+/// arguments. `ret imm16` cannot remove 64 KB or more: then the return address is moved up over the arguments and
+/// returned from there (`pop [esp + n]; add esp, n; ret`, as LLVM's X86FrameLowering does), where `stack` is the stack pointer and
+/// a return address is `address` bytes.
+pub fn cleaned_returns(body: &lir::LirBody, bytes: i64, stack: Register, address: i64) -> Result<lir::LirBody, String> {
+    if bytes > 0xFFFF && address == 4 {
+        return Ok(moved_returns(body, bytes, stack, address));
+    }
     if !(0..=0xFFFF).contains(&bytes) {
         return Err("far-return cleanup exceeds 16 bits".into());
     }
@@ -297,6 +302,42 @@ pub fn cleaned_returns(body: &lir::LirBody, bytes: i64) -> Result<lir::LirBody, 
         })
         .collect();
     Ok(body.with_blocks(blocks))
+}
+
+/// Each return of `body` as the three instructions that remove `bytes` of arguments past a 16-bit `ret`: the return address
+/// popped into the last slot of the area, the stack raised to it, and a plain return.
+fn moved_returns(body: &lir::LirBody, bytes: i64, stack: Register, address: i64) -> lir::LirBody {
+    let up = bytes - address;
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut insns = Vec::with_capacity(block.insns.len());
+            for one in &block.insns {
+                if !one.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
+                    insns.push(Arc::clone(one));
+                    continue;
+                }
+                let step = |what: Semantics| {
+                    let mut made = (**one).clone();
+                    made.what = Some(what);
+                    made.defines = vec![];
+                    made.uses = vec![];
+                    Arc::new(made)
+                };
+                let above = ir::Mem { through: stack, offset: up, disp_width: 4, ..ir::Mem::new(None, address as u32) };
+                let esp = Loc::Reg(ir::Reg { register: stack, width: address as u32 });
+                let raise = Loc::Imm(ir::Imm { value: up, width: 4, address: None });
+                insns.push(step(semantics(Operation::Pop, "pop", vec![Loc::Mem(above)], vec![])));
+                insns.push(step(semantics(Operation::Binary, "add", vec![esp.clone()], vec![esp, raise])));
+                let mut back = (**one).clone();
+                back.what = Some(Semantics { sources: vec![], ..one.what.clone().expect("a return") });
+                insns.push(Arc::new(back));
+            }
+            block.with_insns(insns)
+        })
+        .collect();
+    body.with_blocks(blocks)
 }
 
 /// Names the limit each procedure's stack check compares with, and the externs those checks
