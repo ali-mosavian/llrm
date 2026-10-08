@@ -87,27 +87,83 @@ impl Frequency {
                 taken.insert((block.at, to), body.odds.chance(block.at, &block.succ, to));
             }
         }
-        let successors: IndexMap<i64, Vec<i64>> = blocks.iter().map(|block| (block.at, block.succ.clone())).collect();
-        let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
-        for block in blocks {
-            for to in &block.succ {
-                predecessors.entry(*to).or_default().push(block.at);
+        // A block that only jumps on says nothing about the loops, and a loop is not another loop for one put on an
+        // edge: the estimate is made without it (`_part_frame` read 268 without its bridges and 2786 with them, and 5
+        // trips read 6 with one on a back edge). A block with work in it stays: a body is not a bridge.
+        let entry = body.entry;
+        let by_at: IndexMap<i64, &LirBlock> = blocks.iter().map(|block| (block.at, block)).collect();
+        let bridge = |at: i64| -> Option<i64> {
+            let one = by_at.get(&at)?;
+            let idle = one.insns.iter().all(|one| !crate::backend::masm::prints(one) || one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Jump));
+            (at != entry && idle && one.succ.len() == 1 && one.succ[0] != at).then(|| one.succ[0])
+        };
+        // Past the bridges, and the share of the edge that reaches there.
+        let beyond = |mut at: i64| -> i64 {
+            let mut hops = 0;
+            while let Some(next) = bridge(at) {
+                at = next;
+                hops += 1;
+                if hops > blocks.len() {
+                    break;
+                }
+            }
+            at
+        };
+        let mut successors: IndexMap<i64, Vec<i64>> = IndexMap::default();
+        let mut shared: IndexMap<(i64, i64), f64> = IndexMap::default();
+        for block in blocks.iter().filter(|block| bridge(block.at).is_none() || block.at == entry) {
+            let list = successors.entry(block.at).or_default();
+            for to in block.succ.iter().copied().collect::<BTreeSet<_>>() {
+                let past = beyond(to);
+                *shared.entry((block.at, past)).or_default() += taken[&(block.at, to)];
+                if !list.contains(&past) {
+                    list.push(past);
+                }
             }
         }
-        let natural = loops::loops(&blocks, Some(body.entry));
+        let kept: Vec<LirBlock> = blocks.iter().filter(|block| successors.contains_key(&block.at)).map(|block| LirBlock { succ: successors[&block.at].clone(), ..LirBlock::new(block.at, Vec::new()) }).collect();
+        let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
+        for (from, list) in &successors {
+            for to in list {
+                predecessors.entry(*to).or_default().push(*from);
+            }
+        }
+        let natural = loops::loops(&kept, Some(body.entry));
         let trips: IndexMap<i64, i64> = body.loop_trip_counts.iter().copied().collect();
         let cycles: Vec<branchprob::Cycle> = natural
             .iter()
             .map(|one| branchprob::Cycle { header: one.header, latches: &one.latches, body: &one.body, trips: trips.get(&one.header).copied() })
             .collect();
         let order = branchprob::reverse_postorder_of(body.entry, &|at| successors.get(&at).cloned().unwrap_or_default());
-        let block = branchprob::propagated(
+        let (mut block, edges) = branchprob::propagated_edges(
             &order,
             &|at| predecessors.get(&at).cloned().unwrap_or_default(),
             &|at| successors.get(&at).cloned().unwrap_or_default(),
             &cycles,
-            &|from, to| taken.get(&(from, to)).copied().unwrap_or(0.0),
+            &|from, to| shared.get(&(from, to)).copied().unwrap_or(0.0),
         );
+        // A bridge runs as often as the edges into it are taken; a chain of them is settled from its first.
+        let mut pending: Vec<i64> = blocks.iter().map(|one| one.at).filter(|at| bridge(*at).is_some()).collect();
+        while !pending.is_empty() {
+            let before = pending.len();
+            pending.retain(|at| {
+                let mut runs = 0.0;
+                for from in blocks.iter().filter(|from| from.succ.contains(at)) {
+                    let Some(found) = block.get(&from.at).copied() else { return true };
+                    runs += if bridge(from.at).is_some() {
+                        found
+                    } else {
+                        let past = beyond(*at);
+                        found * edges.get(&(from.at, past)).copied().unwrap_or(0.0) * taken[&(from.at, *at)] / shared[&(from.at, past)].max(f64::MIN_POSITIVE)
+                    };
+                }
+                block.insert(*at, runs);
+                false
+            });
+            if pending.len() == before {
+                break;
+            }
+        }
         Self { block: block.into_iter().collect(), taken }
     }
 
@@ -198,5 +254,32 @@ mod tests {
         }
         let busy = Frequency::of(&body);
         assert!(busy.block(2) < 1e-5 && busy.block(3) > 0.99, "{} {}", busy.block(2), busy.block(3));
+    }
+
+    /// A block put on an edge (phielim's and the spiller's edge code) must leave the frequencies as they were: `d_faces`-sized
+    /// `_part_frame` was estimated 268 on the blocks isel made, 2786 with the bridges, and 268 again once `jumps` removed them,
+    /// and the route choice compared two bodies at different points of that.
+    #[test]
+    fn test_a_block_on_an_edge_leaves_the_frequencies_as_they_were() {
+        for trips in [None, Some(5)] {
+            for (from, old) in [(2, 3), (2, 2)] {
+                let body = counted(trips, 124.0 / 128.0);
+                let before = Frequency::of(&body);
+                let mut split = body.clone();
+                let bridge = 9;
+                let succ: Vec<i64> = split.blocks.iter().find(|one| one.at == from).expect("a block").succ.clone();
+                split.odds.rerouted(from, &succ, old, &[(bridge, 1.0)]);
+                for one in &mut split.blocks {
+                    if one.at == from {
+                        one.succ = one.succ.iter().map(|to| if *to == old { bridge } else { *to }).collect();
+                    }
+                }
+                split.blocks.push(block(bridge, "jmp", Operation::Jump, vec![old]));
+                let after = Frequency::of(&split);
+                for at in [1, 2, 3] {
+                    assert!((before.block(at) - after.block(at)).abs() < 1e-6 * before.block(at).max(1.0), "block {at} trips {trips:?} split {from}->{old}: {} against {}", before.block(at), after.block(at));
+                }
+            }
+        }
     }
 }
