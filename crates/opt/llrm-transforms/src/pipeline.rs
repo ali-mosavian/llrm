@@ -519,11 +519,13 @@ impl Run {
         if !self.promotes && matches!(pass.name(), "sroa" | "promote") {
             return false;
         }
-        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses));
+        let before = unit.function.mark();
+        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
         if preserved.are_all_preserved() {
             return false;
         }
         llrm_mir::passes::spanned("invalidate", || analyses.invalidate(&preserved));
+        analyses.check_kept(pass.name(), unit.context, unit.layout, unit.function);
         self.changed(stage, unit, analyses);
         true
     }

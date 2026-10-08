@@ -114,7 +114,7 @@ fn deleting_a_body_leaves_a_declaration() {
 }
 
 /// A result derived at a mark is brought up to date from what changed after it, only while that is on record and of the
-/// same function: a mark of the log a pass has taken, or of a copy's original, names changes no one can list.
+/// same function: a mark of a copy's original names changes no one can list.
 #[test]
 fn a_mark_names_the_changes_since_while_they_are_on_record_of_that_function() {
     let mut module = module(TEXT);
@@ -132,7 +132,7 @@ fn a_mark_names_the_changes_since_while_they_are_on_record_of_that_function() {
     f.erase(x).expect("unused now");
     assert_eq!(f.changes_since(mark).map(<[Change]>::len), Some(2));
     f.take_changes();
-    assert_eq!(f.changes_since(mark), None, "taken from the log");
+    assert_eq!(f.changes_since(mark).map(<[Change]>::len), Some(2), "taken, and still on the log");
     assert_eq!(f.changes_since(f.mark()), Some(&[][..]));
     let _ = &mut copy;
 }
@@ -268,4 +268,21 @@ fn removing_a_parameter_leaves_the_records_that_named_it_gone() {
     f.remove_parameter(context, 1);
     let text = print::module(&parsed);
     assert!(text.contains("#dbg_gone(!0)") && !text.contains("#dbg_value"), "{text}");
+}
+
+/// An analysis computed before the last `take_changes` could not be brought up to date: the log was emptied, so five in six
+/// of them, asked again after another pass, were derived afresh.
+#[test]
+fn taken_changes_stay_for_an_analysis_computed_before_them() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let before = f.mark();
+    let (x, _) = named(f, "x");
+    let (y, value) = named(f, "y");
+    let a = f.parameters()[0];
+    f.replace_all_uses_with(value, Operand::Value(a));
+    assert_eq!(f.take_changes().len(), 1);
+    let _ = (x, y);
+    assert_eq!(f.changes_since(before).map(<[Change]>::len), Some(1), "the taken change is gone from the log");
+    assert!(f.take_changes().is_empty(), "a change was handed out twice");
 }

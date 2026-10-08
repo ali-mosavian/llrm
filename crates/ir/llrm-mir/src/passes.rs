@@ -146,6 +146,17 @@ pub trait Analysis: 'static {
     /// invalidation, with the point in the function's history it was true at.
     const INCREMENTAL: bool = false;
 
+    /// Whether `unaffected` can tell a result still true after `changes`: such a result is kept past an invalidation, and
+    /// stands again when `changes` leave it as it was (and, if it reads the outer facts, those are the ones it read).
+    const SKIPS: bool = false;
+
+    /// Whether `changes` leave `previous`, true of the function before them, true of it now. Must never say so wrongly,
+    /// as `LLRM_CHECK_REPLAY` asserts; saying no derives the result afresh.
+    #[allow(unused_variables)]
+    fn unaffected(changes: &[crate::module::Change], context: &Context, function: &Function) -> bool {
+        false
+    }
+
     /// `previous`, which was true of the function before `changes`, made true of it now; none where it would be
     /// derived afresh. Must give what `run` gives, as `LLRM_CHECK_REPLAY` asserts.
     #[allow(unused_variables)]
@@ -310,6 +321,13 @@ impl PreservedAnalyses {
         self
     }
 
+    /// `self`, or everything where `function` logged no change since `before`: a pass that edited nothing left every
+    /// analysis true, whatever it says.
+    #[must_use]
+    pub fn unless_unchanged(self, function: &Function, before: crate::module::Mark) -> Self {
+        if function.changes_since(before).is_some_and(<[crate::module::Change]>::is_empty) { Self::all() } else { self }
+    }
+
     /// Whether the pass changed nothing: LLVM's `areAllPreserved`.
     pub fn are_all_preserved(&self) -> bool {
         self.all
@@ -411,6 +429,8 @@ trait Cached {
 
 struct Entry<A: Analysis> {
     result: Rc<A::Result>,
+    /// What the result may have read of the module.
+    outer: Rc<Outer>,
     /// The function's history when the result was derived.
     mark: crate::module::Mark,
 }
@@ -433,7 +453,7 @@ impl<A: Analysis> Cached for Entry<A> {
     }
 
     fn incremental(&self) -> bool {
-        A::INCREMENTAL
+        A::INCREMENTAL || A::SKIPS
     }
 }
 
@@ -481,19 +501,36 @@ impl Analyses {
         let updated = self.kept.remove(&key).and_then(|old| {
             let old = old.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
             let changes = function.changes_since(old.mark)?;
+            // Asking of a long log again and again is more than the run it saves.
+            if A::SKIPS && changes.len() <= 256 && (!A::READS_OUTER || Rc::ptr_eq(&old.outer, &self.outer)) && A::unaffected(changes, context, function) {
+                if check_replay() {
+                    let whole = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
+                    assert!(*old.result == whole, "{}: the result kept past {} changes is not what deriving it afresh gives: {:?}", A::NAME, changes.len(), changes.iter().map(|c| match *c { crate::module::Change::Inserted { inst, .. } | crate::module::Change::Erased { inst, .. } | crate::module::Change::Moved { inst, .. } | crate::module::Change::Rewritten(inst) | crate::module::Change::Cloned { to: inst, .. } => format!("{:?}:{}", c, function.instruction(inst).opcode.mnemonic()), _ => format!("{c:?}") }).collect::<Vec<_>>());
+                }
+                return Some(Rc::clone(&old.result));
+            }
             let made = spanned_as("analysis", A::NAME, || A::update(&old.result, changes, context, layout, function, self))?;
             if check_replay() {
                 let whole = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
                 assert!(made == whole, "{}: the result brought up to date is not what deriving it afresh gives", A::NAME);
             }
-            Some(made)
+            Some(Rc::new(made))
         });
-        let result = Rc::new(match updated {
+        let result = match updated {
             Some(made) => made,
-            None => spanned_as("analysis", A::NAME, || A::run(context, layout, function, self)),
-        });
-        self.cache.insert(key, Box::new(Entry::<A> { result: Rc::clone(&result), mark: function.mark() }));
+            None => Rc::new(spanned_as("analysis", A::NAME, || A::run(context, layout, function, self))),
+        };
+        self.cache.insert(key, Box::new(Entry::<A> { result: Rc::clone(&result), outer: Rc::clone(&self.outer), mark: function.mark() }));
         result
+    }
+
+    /// `LLRM_CHECK_PRESERVED`: every analysis still held after `pass` is what a fresh run gives.
+    pub fn check_kept(&self, pass: &str, context: &Context, layout: &DataLayout, function: &Function) {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_PRESERVED").is_some()) {
+            let stale = self.stale(context, layout, function);
+            assert!(stale.is_empty(), "{pass} left {} held but stale", stale.join(", "));
+        }
     }
 
     /// Drops what `preserved` does not keep: LLVM's
@@ -892,9 +929,12 @@ impl PassManager {
                     continue;
                 }
                 let cache = analyses.manager(id, &outer);
+                let before = function.mark();
                 let preserved = in_function(global.name.as_deref().unwrap_or_default(), || spanned(name, || pass.run(&mut Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared }, cache)));
+                let preserved = preserved.unless_unchanged(function, before);
                 kept.retain(|one| preserved.keeps(*one));
                 spanned("invalidate", || cache.invalidate(&preserved));
+                cache.check_kept(name, context, &layout, function);
                 if self.verify_invalidation {
                     let stale = cache.stale(context, &layout, function);
                     if !stale.is_empty() {
