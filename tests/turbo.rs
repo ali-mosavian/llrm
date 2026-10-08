@@ -123,7 +123,8 @@ fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
     };
     let scratch = tempfile::tempdir().unwrap();
     std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/fnptr.c"), scratch.path().join("fnp.c")).unwrap();
-    let made = Command::new(llrm_c()).args(["-m16", "-gtd", "-O0"]).arg(scratch.path().join("fnp.c")).arg("-o").arg(scratch.path().join("lfnp.obj")).output().unwrap();
+    // Turbo C++'s own convention, whose symbols the table is compared by: cdecl.
+    let made = Command::new(llrm_c()).args(["-m16", "-mabi=cdecl", "-gtd", "-O0"]).arg(scratch.path().join("fnp.c")).arg("-o").arg(scratch.path().join("lfnp.obj")).output().unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let mut commands = vec!["tcc -v -r- -c -ml fnp.c".to_owned()];
     for (prefix, object) in [("t", "fnp.obj"), ("l", "lfnp.obj")] {
