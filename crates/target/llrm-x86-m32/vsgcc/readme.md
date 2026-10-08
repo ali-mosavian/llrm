@@ -17,3 +17,9 @@ move.
 `kernels/x_*` are 37 more kernels (`bench/` has no copy of them), each with its `.out` self-check from gcc -O0 on the host; every variant
 must report the same values or `table.py` refuses. The table prints the bench programs and the kernels as separate summaries, the
 worst program beside each geomean.
+
+## Compile-time scaling
+
+`scaling.py` measures how the compile cost of llrm, gcc and clang (`levels_time.py`'s commands, `perf stat instructions:u` and task-clock) grows with program size: six generated axes (functions, straight-line statements, branches, live values, callers, call-chain depth; N doubling until a compile takes 10 s) and QCport's 65 modules against llrm's MIR size (`LLRM_DEBUG=mir`). `run` writes `$VSGCC_WORK/scaling.json`, `report` prints the tables and one PNG per axis. `check` runs each axis' program on gcc, clang and llrm (emulator) and requires one value. Results: [scaling.md](scaling.md). Test: `pytest test_scaling.py` (a stand-in compiler of known quadratic cost must read as slope 2).
+
+    uv run --project tools --with matplotlib python crates/target/llrm-x86-m32/vsgcc/scaling.py run --programs
