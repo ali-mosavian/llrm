@@ -36,6 +36,7 @@ import corpus  # noqa: E402
 import dosbatch  # noqa: E402
 llrmbin = dosbatch.llrmbin
 from dosbatch import BIN, ROOT, Job  # noqa: E402
+os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
 
 RUN = ROOT / "tests" / "run"
 EXAMPLES = ROOT / "examples"

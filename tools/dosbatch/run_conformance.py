@@ -26,6 +26,8 @@ import dosbatch  # noqa: E402
 llrmbin = dosbatch.llrmbin
 from dosbatch import BIN, ROOT, Job  # noqa: E402
 from run_tests import first_difference, lines  # noqa: E402
+import os
+os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
 
 SUITES = ROOT / "tests" / "differential" / "conformance"
 PROFILES = {"qb45": dosbatch.QB45_TOOLS, "pds71": dosbatch.PDS71_TOOLS, "vbdos": dosbatch.VBDOS_TOOLS}

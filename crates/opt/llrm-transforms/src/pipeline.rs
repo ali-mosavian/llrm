@@ -257,7 +257,7 @@ pub fn applied(program: &mut Program, applied: &Applied) -> Result<(), String> {
 pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, String> {
     timed();
     let mut manager = PassManager::default();
-    manager.verify_each = true;
+    manager.verify_each = llrm_support::debug::verifying();
     manager.dump = applied.dump.clone();
     if !applied.options.optimize {
         manager.add_program(availableexternally::EliminateAvailableExternally);
