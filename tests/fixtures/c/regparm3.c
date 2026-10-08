@@ -31,3 +31,6 @@ struct S4 take4(struct S4 s, int a) { return s; }
 extern int opaque(int a);
 static int many(int a, int b, int c, int d, int e) { return a * b + c * d + e + opaque(a); }
 int call_many(int x, int y) { return many(x, y, x + y, x * y, y - x) + many(y, x, x - y, x + 3, y * y); }
+int __cdecl declared(int a, int b);
+int declared(int a, int b) { return a - b; }
+int plain(int a, int b) { return a + b; }
