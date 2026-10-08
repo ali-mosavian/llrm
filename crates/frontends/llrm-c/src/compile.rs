@@ -729,7 +729,7 @@ mod tests {
     /// A copy and a unit add stay `mov r,ax; inc r`: the INC makes them three bytes, the LEA is four.
     #[test]
     fn test_m16_regparm3_a_copy_and_a_unit_add_stay_when_the_lea_is_longer_than_the_inc() {
-        let body = regparm3("_incs");
+        let body = regparm3_at("_incs", llrm_core::driver::flags::Level::Os);
         assert!(body.iter().any(|line| line.starts_with("inc ")) && !body.iter().any(|line| line.starts_with("lea ")), "{body:?}");
     }
 

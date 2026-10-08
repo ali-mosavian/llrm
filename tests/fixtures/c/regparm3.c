@@ -31,4 +31,4 @@ struct S4 take4(struct S4 s, int a) { return s; }
 extern void use3(int a, int b, int c);
 void leas(int a) { use3(a + 4, a + 7, a + 10); }
 extern void use1(int a, int b);
-void incs(int a) { use1(a + 1, a); }
+int incs(int a) { int p = a + 1; use1(0, 0); return p + a; }
