@@ -68,6 +68,17 @@ pub trait Machine {
         None
     }
 
+    /// The convention a function in `convention` takes when its callers' cleanup of the stack arguments moves to the function:
+    /// C's own, `fastcc`, by default; a target whose description states more says which.
+    fn callee_pop(&self, convention: u32) -> Option<u32> {
+        (convention == 0).then_some(crate::opcode::FAST)
+    }
+
+    /// The bytes of stack the `arguments` take under `convention`, where the target knows; else every argument is on it.
+    fn stack_argument_bytes(&self, _convention: u32, _arguments: &[Argument]) -> Option<i64> {
+        None
+    }
+
     /// What multiplying by the constant `factor`, above one, costs: a
     /// multiply, or the shifts and adds the target makes it of.
     fn multiply_by(&self, _factor: i64) -> i64 {
@@ -300,6 +311,17 @@ impl AddressForm {
                 <= costs.shift + costs.address + costs.r#move + costs.store;
         !self.secondary || direct || amortized
     }
+}
+
+/// What an argument is, for where a convention puts it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Argument {
+    pub bytes: i64,
+    pub integer: bool,
+    pub pointer: bool,
+    pub floating: bool,
+    /// The front end passes it in memory whatever it is (a struct by value).
+    pub memory: bool,
 }
 
 /// The convention the target gives a private function, and those a function must have for it to take it: a marked function
