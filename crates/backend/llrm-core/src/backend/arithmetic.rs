@@ -74,7 +74,37 @@ pub fn cheapest_narrow_chain<'a>(
     chains(number, cpu, false)
 }
 
-fn chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea: bool) -> Result<Option<(Vec<(&'static str, i64)>, i64)>, String> {
+/// The chain of `number`: of its magnitude negated, or, as GCC's `synth_mult` has it for a negative `t` (`a * -7` is `a - a*8`), of
+/// `1 - number` shifted and taken from the source.
+fn chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea: bool) -> Result<Option<(Chain, i64)>, String> {
+    if number >= -1 || number == i64::MIN {
+        return positive_chains(number, cpu, with_lea);
+    }
+    let target = targets::profile(cpu)?;
+    let alu = cost(target, "alu_rr")?;
+    let mut best: Option<(Chain, i64)> = None;
+    let mut consider = |parts: Chain, price: i64| {
+        if best.as_ref().is_none_or(|(_, kept)| price < *kept) {
+            best = Some((parts, price));
+        }
+    };
+    if let Some((mut parts, price)) = positive_chains(-number, target, with_lea)? {
+        parts.push(("neg", 0));
+        consider(parts, price + alu);
+    }
+    // `1 - number = q << m`: the product `source - (source * q << m)`.
+    let up = 1 - number;
+    let m = i64::from(up.trailing_zeros());
+    let q = up >> m;
+    let shifted = if q == 1 { Some((Vec::new(), cost(target, "mov_rr")?)) } else { positive_chains(q, target, with_lea)? };
+    if let Some((mut parts, price)) = shifted {
+        parts.extend([("shl", m), ("rsub", 0)]);
+        consider(parts, price + shift(target, m)? + alu);
+    }
+    Ok(best)
+}
+
+fn positive_chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea: bool) -> Result<Option<(Chain, i64)>, String> {
     let target = targets::profile(cpu)?;
     if number <= 1 {
         return Ok(None);
@@ -287,6 +317,8 @@ mod tests {
                 match name {
                     "lea" => value = source + value * i128::from(count),
                     "flea" => value += value * i128::from(count),
+                    "neg" => value = -value,
+                    "rsub" => value = source - value,
                     "fadd" => value += value << count,
                     "fsub" => value = (value << count) - value,
                     "shl" => value <<= count,
@@ -297,8 +329,8 @@ mod tests {
             }
             value
         };
-        let mut factors: Vec<i64> = (2..2000).collect();
-        factors.extend([1103515245, 214013, 69069, 1664525, 22695477, 1000003, 40503, 2654435761, 0x7fff_ffff, 0xffff_fffe]);
+        let mut factors: Vec<i64> = (-2000i64..2000).filter(|n| n.abs() > 1).collect();
+        factors.extend([1103515245, 214013, 69069, 1664525, 22695477, 1000003, 40503, 2654435761, 0x7fff_ffff, 0xffff_fffe, -1103515245, -7, -15, -2147483647]);
         for factor in factors {
             for (name, chain) in [("dword", cheapest_chain(factor, m32).unwrap()), ("word", cheapest_narrow_chain(factor, m32).unwrap())] {
                 let Some((chain, _)) = chain else { continue };
@@ -307,6 +339,8 @@ mod tests {
                 }
             }
         }
+        // `a * -15` is `a - a*16` (synth_mult's negative `t`), not the product by 15 and a negation.
+        assert_eq!(cheapest_narrow_chain(-15, m32).unwrap().unwrap().0, [("shl", 4), ("rsub", 0)]);
         let (chain, clocks) = cheapest_chain(1103515245, m32).unwrap().unwrap();
         assert!(clocks < 29, "{chain:?} {clocks}");
     }
@@ -324,6 +358,8 @@ mod tests {
                         match *name {
                             "lea" => value = source + value * count,
                             "flea" => value += value * count,
+                            "neg" => value = -value,
+                            "rsub" => value = source - value,
                             "fadd" => value += value << count,
                             "fsub" => value = (value << count) - value,
                             "shl" => value <<= count,

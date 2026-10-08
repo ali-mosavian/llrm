@@ -393,7 +393,7 @@ impl Selector<'_, '_, '_> {
 
     fn chain(&self, m: &Match, factor: Operand) -> Option<(Vec<(&'static str, i64)>, i64)> {
         let width = self.width(self.function.instruction(m.inst).ty).ok()?;
-        let n = self.constant(factor, width).filter(|&n| matches!(width, 2 | 4) && 1 < n)?;
+        let n = self.constant(factor, width).filter(|&n| matches!(width, 2 | 4) && (1 < n || n < -1))?;
         if width == 4 { arithmetic::cheapest_chain(n, self.cpu) } else { arithmetic::cheapest_narrow_chain(n, self.cpu) }.ok().flatten()
     }
 
@@ -453,6 +453,11 @@ impl Selector<'_, '_, '_> {
                 let (Loc::Held(base), Loc::Held(scaled)) = (a.clone(), current.clone()) else { unreachable!("a chain works on registers") };
                 let cell = crate::model::ir::Mem { base: Some(base), index: Some(scaled), scale: count, ..crate::model::ir::Mem::new(None, result.width) };
                 out.push(insn(m.at, semantics(Operation::Address, "lea", vec![Loc::Held(into)], vec![Loc::Mem(cell)])));
+            } else if name == "neg" {
+                out.push(insn(m.at, semantics(Operation::Unary, "neg", vec![Loc::Held(into)], vec![current])));
+            } else if name == "rsub" {
+                // `into = source - current`.
+                out.push(insn(m.at, semantics(Operation::Binary, "sub", vec![Loc::Held(into)], vec![a.clone(), current])));
             } else if name == "fadd" || name == "fsub" {
                 // `current*(2^count +- 1)`: the shifted copy, then the sum or difference with `current`.
                 let Loc::Held(width_of) = current.clone() else { unreachable!("a chain works on registers") };
