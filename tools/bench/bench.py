@@ -39,6 +39,7 @@ import dosbatch  # noqa: E402
 llrmbin = dosbatch.llrmbin
 import run_tests  # noqa: E402
 from dosbatch import BIN, ROOT, Job  # noqa: E402
+os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
 
 def physical_defines() -> list[str]:
     """`-DPHYSICAL_<NAME>=0x..UL` for each physical address the platform description names, as llrm-c passes them: the

@@ -138,14 +138,56 @@ impl Function {
         list.iter().position(|one| *one == inst).and_then(|at| list.get(at + 1).copied())
     }
 
-    fn detach(&mut self, inst: InstId) -> Option<(BlockId, Option<InstId>)> {
+    /// What stood before `from` now stands before `to`, ahead of what stood there: it was said earlier in the program, and where
+    /// two records of a variable stand together the last one is what the variable is.
+    fn reanchor_records(&mut self, from: InstId, to: InstId) {
+        let (moved, mut kept): (Vec<DebugRecord>, Vec<DebugRecord>) = std::mem::take(&mut self.debug_records).into_iter().partition(|one| one.before == from);
+        let at = kept.iter().position(|one| one.before == to).unwrap_or(kept.len());
+        kept.splice(at..at, moved.into_iter().map(|one| DebugRecord { before: to, ..one }));
+        self.debug_records = kept;
+    }
+
+    /// The first instruction after the phis of the block that the unconditional branch `inst` alone enters.
+    fn sole_successor_start(&self, inst: InstId) -> Option<InstId> {
+        if self.instruction(inst).opcode != Opcode::Br {
+            return None;
+        }
+        let [Operand::Block(target)] = self.instruction(inst).operands[..] else { return None };
+        // A phi that names the block as where its value comes from is a use of it too, but no way in.
+        // (An erase has already taken its own use of the block away.)
+        let entries: Vec<InstId> = self.block_users(target).iter().map(|one| one.user).filter(|&one| self.instruction(one).opcode != Opcode::Phi).collect();
+        if !entries.is_empty() && entries != [inst] {
+            return None;
+        }
+        self.block(target).instructions().iter().copied().find(|&one| self.instruction(one).opcode != Opcode::Phi)
+    }
+
+    /// Takes `inst` out of its block. What was said before it is said before what followed it; with none after it, it goes with the
+    /// instruction where that is moved (`moving`: a block moved whole takes its last instruction along), else with the code, when
+    /// it is erased.
+    fn detach(&mut self, inst: InstId, moving: bool) -> Option<(BlockId, Option<InstId>)> {
         let block = self.parent(inst)?;
         let next = self.next_of(block, inst);
         // What stood before it stays where the source says it was: before what followed it. A last instruction has none to
         // hand them to (a block is erased with its terminator): they go with it.
         match next {
-            Some(next) => self.debug_records.iter_mut().filter(|one| one.before == inst).for_each(|one| one.before = next),
-            None => self.debug_records.retain(|one| one.before != inst),
+            Some(next) => self.reanchor_records(inst, next),
+            // An unconditional branch to a block nothing else enters is the end of one block and the start of the other: what was said
+            // before it is said before what the other block starts with, once the two are one.
+            None if moving => {}
+            None if self.sole_successor_start(inst).is_some() => {
+                let start = self.sole_successor_start(inst).expect("checked");
+                self.reanchor_records(inst, start);
+            }
+            None => {
+                let (gone, kept): (Vec<DebugRecord>, Vec<DebugRecord>) = std::mem::take(&mut self.debug_records).into_iter().partition(|one| one.before == inst);
+                self.debug_records = kept;
+                for one in gone {
+                    if !self.debug_dropped.contains(&one.variable) {
+                        self.debug_dropped.push(one.variable);
+                    }
+                }
+            }
         }
         self.blocks[block.0 as usize].instructions.retain(|one| *one != inst);
         self.parent[inst.0 as usize] = None;
@@ -177,7 +219,7 @@ impl Function {
         if position == Position::Before(inst) {
             return Ok(());
         }
-        let (from, _) = self.detach(inst).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
+        let (from, _) = self.detach(inst, true).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
         let (block, next) = self.attach(inst, position)?;
         self.log(Change::Moved { inst, block, next, from });
         Ok(())
@@ -237,20 +279,42 @@ impl Function {
         }
     }
 
-    /// Every use of `value` now reads `with`.
+    /// Every use of `value` now reads `with`. A record that names `value` still does: a pass that rewrites the uses of a value (to
+    /// rebuild a loop around it, say) is not saying that the variable it was made of is another value, and a record is no use.
     pub fn replace_all_uses_with(&mut self, value: ValueId, with: Operand) {
+        if with != Operand::Value(value) {
+            self.replace_uses(self.users(value).to_vec(), with);
+        }
+    }
+
+    /// As [`replace_all_uses_with`](Self::replace_all_uses_with) where `with` is `value` itself, found again (common subexpression,
+    /// a load's stored value, a constant folded to): the records that named `value` name `with`.
+    pub fn replace_value(&mut self, value: ValueId, with: Operand) {
         if with != Operand::Value(value) {
             self.retarget_debug_records(value, with);
             self.replace_uses(self.users(value).to_vec(), with);
         }
     }
 
-    /// What `-g` says of the variables, in the order it was said.
+    /// The variables a record of which went with deleted code.
+    pub fn debug_dropped(&self) -> &[MetadataId] {
+        &self.debug_dropped
+    }
+
+    /// What `-g` says of the variables, in the order of the program.
     pub fn debug_records(&self) -> &[DebugRecord] {
         &self.debug_records
     }
 
-    /// Says what `variable` is from just before `before` on. Nothing but the debug writers read it.
+    /// As [`add_debug_record`](Self::add_debug_record), ahead of the records already standing before `before`: a pass that says what
+    /// the instruction before `before` made says it earlier than what the code was already told to say there.
+    pub fn add_debug_record_first(&mut self, before: InstId, variable: MetadataId, what: DebugWhat) {
+        let at = self.debug_records.iter().position(|one| one.before == before).unwrap_or(self.debug_records.len());
+        self.debug_records.insert(at, DebugRecord { before, variable, what });
+    }
+
+    /// Says what `variable` is from just before `before` on, after the records already standing there. Nothing but the debug writers
+    /// read it.
     pub fn add_debug_record(&mut self, before: InstId, variable: MetadataId, what: DebugWhat) {
         self.debug_records.push(DebugRecord { before, variable, what });
     }
@@ -258,10 +322,23 @@ impl Function {
     /// The records of what `value` was now say `with`.
     fn retarget_debug_records(&mut self, value: ValueId, with: Operand) {
         for record in &mut self.debug_records {
-            if let DebugWhat::Declare(at) | DebugWhat::Value(at) = &mut record.what
+            if let DebugWhat::Declare(at) | DebugWhat::Value(at) | DebugWhat::Piece { value: at, .. } = &mut record.what
                 && *at == Operand::Value(value)
             {
                 *at = with;
+            }
+        }
+    }
+
+    /// What named `value` says nothing now (a use of it in a record is no use, so it can go while the records stand).
+    fn forget_debug_value(&mut self, value: ValueId) {
+        // The memory a variable lived in is gone, and nothing is said of what it was: only what the variable was set to says that.
+        self.debug_records.retain(|one| !matches!(one.what, DebugWhat::Declare(at) if at == Operand::Value(value)));
+        for record in &mut self.debug_records {
+            match record.what {
+                DebugWhat::Value(at) if at == Operand::Value(value) => record.what = DebugWhat::Gone,
+                DebugWhat::Piece { value: at, offset, bytes } if at == Operand::Value(value) => record.what = DebugWhat::GonePiece { offset, bytes },
+                _ => {}
             }
         }
     }
@@ -289,16 +366,9 @@ impl Function {
             self.remove_use(operand, Use { user: inst, index: index as u32 });
         }
         if let Some(result) = self.instruction(inst).result {
-            // What named the value says nothing now (a use of it is no use).
-            for record in &mut self.debug_records {
-                if let DebugWhat::Declare(at) | DebugWhat::Value(at) = record.what
-                    && at == Operand::Value(result)
-                {
-                    record.what = DebugWhat::Gone;
-                }
-            }
+            self.forget_debug_value(result);
         }
-        if let Some((block, next)) = self.detach(inst) {
+        if let Some((block, next)) = self.detach(inst, false) {
             self.log(Change::Erased { inst, block, next });
         }
         self.erased[inst.0 as usize] = true;
@@ -352,6 +422,7 @@ impl Function {
     /// Parameter `at`, which nothing uses, is gone; the function's type follows.
     pub fn remove_parameter(&mut self, context: &mut crate::context::Context, at: usize) {
         assert!(self.users(self.parameters[at]).is_empty(), "a parameter removed is unused");
+        self.forget_debug_value(self.parameters[at]);
         self.track_parameters();
         self.parameter_origins.remove(at);
         self.parameters.remove(at);
@@ -409,10 +480,47 @@ impl Function {
         self.instructions[inst.0 as usize].metadata.push((kind.to_owned(), node));
     }
 
+    /// Every metadata node the function names (on an instruction, or in a debug record) is the one `map` says it is: nodes made last
+    /// are numbered last, and the code that named them before they were made named them by a number it chose.
+    pub fn renumber_metadata(&mut self, map: &dyn Fn(MetadataId) -> MetadataId) {
+        for inst in &mut self.instructions {
+            for (_, node) in &mut inst.metadata {
+                *node = map(*node);
+            }
+        }
+        for record in &mut self.debug_records {
+            record.variable = map(record.variable);
+        }
+        for node in &mut self.debug_dropped {
+            *node = map(*node);
+        }
+    }
+
+    /// Takes the metadata of `kind` off `inst`.
+    pub fn unannotate(&mut self, inst: InstId, kind: &str) {
+        self.instructions[inst.0 as usize].metadata.retain(|(one, _)| one != kind);
+    }
+
     /// A copy of `inst`, placed nowhere, its result unnamed.
     pub fn clone_instruction(&mut self, inst: InstId) -> InstId {
         let original = self.instruction(inst).clone();
         let copy = self.create_instruction(original.opcode, original.ty, original.operands, original.flags, None);
+        // What was said before the original is said before the copy, but of the copy's own values, which are not the original's: the
+        // copy is on a path of its own, where the variable has what the copy computes, not what the original did. A constant, or
+        // an argument, is the same on every path.
+        let said: Vec<DebugRecord> = self.debug_records.iter().filter(|one| one.before == inst).copied().collect();
+        let same_everywhere = |this: &Self, operand: Operand| match operand {
+            Operand::Value(value) => matches!(this.value(value).def, ValueDef::Argument(_)),
+            _ => true,
+        };
+        for one in said {
+            let what = match one.what {
+                DebugWhat::Value(operand) if !same_everywhere(self, operand) => DebugWhat::Gone,
+                DebugWhat::Piece { value, offset, bytes } if !same_everywhere(self, value) => DebugWhat::GonePiece { offset, bytes },
+                other => other,
+            };
+            self.debug_records.push(DebugRecord { before: copy, variable: one.variable, what });
+        }
         self.instructions[copy.0 as usize].metadata = original.metadata;
         self.log(Change::Cloned { from: inst, to: copy });
         copy
@@ -446,7 +554,7 @@ impl Function {
     pub fn delete_body(&mut self) {
         for block in self.layout.clone() {
             for inst in self.block(block).instructions.clone() {
-                let (block, next) = self.detach(inst).expect("a placed instruction");
+                let (block, next) = self.detach(inst, false).expect("a placed instruction");
                 self.log(Change::Erased { inst, block, next });
             }
             self.blocks[block.0 as usize].erased = true;

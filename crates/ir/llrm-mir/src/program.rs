@@ -64,8 +64,6 @@ pub struct Exports {
     /// than any other: what the object's layout places, as LLVM's
     /// `llvm.compiler.used`.
     pub kept: BTreeSet<String>,
-    /// The globals a debugger reads at any time: `-g`'s variables.
-    pub observed: BTreeSet<String>,
 }
 
 impl Exports {
@@ -78,7 +76,7 @@ impl Exports {
     pub fn exported(&self, global: &GlobalValue) -> bool {
         let named = |names: &BTreeSet<String>| global.name.as_ref().is_some_and(|name| names.contains(name));
         match &self.linked {
-            _ if named(&self.entries) || named(&self.observed) => true,
+            _ if named(&self.entries) => true,
             _ if matches!(global.linkage, Linkage::Internal | Linkage::Private) => false,
             None => true,
             Some(names) => named(names),
@@ -111,8 +109,7 @@ impl Program {
             None => DataLayout::default(),
         };
         let segments = SegmentLayout::of(&layout);
-        let observed = modules.iter().flat_map(|one| crate::debuginfo::globals(one).into_iter().map(|global| global.global)).collect();
-        Ok(Self { modules, layout, target, segments, exports: Exports { observed, ..Exports::default() }, runtime: Rc::default() })
+        Ok(Self { modules, layout, target, segments, exports: Exports::default(), runtime: Rc::default() })
     }
 
     /// The program linked against `runtime`: each module's declaration of
@@ -137,11 +134,9 @@ impl Program {
         Ok(self)
     }
 
-    /// The program with only `exports` named from outside, and what a
-    /// debugger reads.
+    /// The program with only `exports` named from outside.
     pub fn exporting(self, exports: Exports) -> Self {
-        let observed = self.exports.observed.clone();
-        Self { exports: Exports { observed, ..exports }, ..self }
+        Self { exports, ..self }
     }
 
     /// `f` over `module` as a program of its own, handed back after.

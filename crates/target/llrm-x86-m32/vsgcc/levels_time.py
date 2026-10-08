@@ -52,6 +52,8 @@ def geomean(values: list[float]) -> float:
 
 
 def main() -> None:
+    # What a user's compile does: no check of each pass and phase (the cargo environment of a test run would turn it on).
+    os.environ["LLRM_VERIFY"] = "0"
     parser = argparse.ArgumentParser()
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--extra", nargs="*", default=[])
