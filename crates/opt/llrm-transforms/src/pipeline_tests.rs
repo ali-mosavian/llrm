@@ -1,4 +1,5 @@
-use llrm_analysis::testing::corpus;
+use llrm_analysis::testing::{corpus_files, parse_corpus_entry};
+use llrm_mir::module::Module;
 use llrm_mir::interpret;
 use llrm_mir::program::Program;
 
@@ -7,27 +8,51 @@ use crate::pipeline::{self, Applied};
 // Enough for every corpus entry that finishes at all.
 const FUEL: u64 = 2_000_000;
 
+/// The entries are independent, so they run on threads, largest first (one entry takes longer than all the others together).
+/// Run one after another they were a single 95 s test, the longest of the library tests by 20x, and set the gate's lib step.
 #[test]
 fn the_pipeline_keeps_every_corpus_module_verifying_and_computing_the_same() {
-    let applied = Applied::default();
-    let mut ran = 0;
-    for (name, mut module) in corpus() {
-        let entry = module.named("main").filter(|&id| module.global(id).function().is_some_and(|one| !one.is_declaration() && one.parameters().is_empty()));
-        let before = entry.map(|_| interpret::run(&module, "main", Vec::new(), FUEL));
-        // @main is run below, so it is the program's entry, internal or not.
-        let entered = |program: &mut Program| {
-            program.exports.entries.insert("main".to_owned());
-            pipeline::applied(program, &applied)
-        };
-        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), entered)
-            .and_then(|done| done)
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
-        if let Some(Ok(before)) = before {
-            assert_eq!(interpret::run(&module, "main", Vec::new(), FUEL), Ok(before), "{name}");
-            ran += 1;
+    let mut files = corpus_files();
+    files.sort_by_key(|(_, path)| std::cmp::Reverse(std::fs::metadata(path).map(|one| one.len()).unwrap_or(0)));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let ran = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    while let Some((name, path)) = files.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                        if keeps_verifying_and_computing_the_same(name, parse_corpus_entry(name, path)) {
+                            ran.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                })
+            })
+            .collect();
+        for worker in workers {
+            if let Err(panic) = worker.join() {
+                std::panic::resume_unwind(panic);
+            }
         }
-    }
-    assert!(ran > 0, "no corpus entry runs");
+    });
+    assert!(ran.into_inner() > 0, "no corpus entry runs");
+}
+
+/// Whether the entry ran to a result that survived the pipeline unchanged.
+fn keeps_verifying_and_computing_the_same(name: &str, mut module: Module) -> bool {
+    let applied = Applied::default();
+    let entry = module.named("main").filter(|&id| module.global(id).function().is_some_and(|one| !one.is_declaration() && one.parameters().is_empty()));
+    let before = entry.map(|_| interpret::run(&module, "main", Vec::new(), FUEL));
+    // @main is run below, so it is the program's entry, internal or not.
+    let entered = |program: &mut Program| {
+        program.exports.entries.insert("main".to_owned());
+        pipeline::applied(program, &applied)
+    };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), entered)
+        .and_then(|done| done)
+        .unwrap_or_else(|error| panic!("{name}: {error}"));
+    let Some(Ok(before)) = before else { return false };
+    assert_eq!(interpret::run(&module, "main", Vec::new(), FUEL), Ok(before), "{name}");
+    true
 }
 
 /// Commutes @f's add so that its constant comes first or last.
