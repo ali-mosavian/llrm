@@ -312,6 +312,21 @@ fn machined_once(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<P
 /// the allocator's pressure is elsewhere (segment registers, x87 and fixed-register glue) its
 /// spill code can be on top of what the allocator does anyway.
 fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64) -> Result<(Machined, frame::Frame), String> {
+    let freed = cheaper_with_registers(module, name, abi, pool, target, hole)?;
+    // A register more is not always a cheaper allocation (the allocator's order, its spill choice and its coalescing all move with
+    // the register file), so where the frame register was given to a value and a value took it, the framed body is the other candidate.
+    let used = freed.0.registers.free && masm::_roots_of_values(&freed.0.body, freed.0.registers.pointer).contains(&crate::model::ir::root(freed.0.registers.pointer));
+    if !used {
+        return Ok(freed);
+    }
+    let framed = crate::backend::framefree::framed(|| cheaper_with_registers(module, name, abi, pool, target, hole))?;
+    Ok(match (cost(&freed.0, target), cost(&framed.0, target)) {
+        (Some(with), Some(without)) if without < with => framed,
+        _ => freed,
+    })
+}
+
+fn cheaper_with_registers(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, hole: i64) -> Result<(Machined, frame::Frame), String> {
     // `LLRM_CANDIDATES=spiller|allocator` tries one route alone, to see what each makes.
     let candidates = match std::env::var("LLRM_CANDIDATES").as_deref() {
         Ok("spiller") => Candidates::SpillerOnly,
@@ -326,7 +341,9 @@ fn cheaper(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>,
         return Ok(spilled);
     }
     let (allocator_alone, _) = timed("candidate allocator alone", || phased(module, name, abi, pool, target, hole, false, true))?;
-    let (kept, from_spiller) = match timed("candidate cost", || (cost(&spilled.0, target), cost(&allocator_alone.0, target))) {
+    let priced = timed("candidate cost", || (cost(&spilled.0, target), cost(&allocator_alone.0, target)));
+    llrm_support::debug!("candidates", "{name}: spiller {:?}, allocator alone {:?}", priced.0, priced.1);
+    let (kept, from_spiller) = match priced {
         (Some(with), Some(without)) if without < with => (allocator_alone, false),
         _ => (spilled, true),
     };
