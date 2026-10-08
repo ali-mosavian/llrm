@@ -1,13 +1,12 @@
-reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+reason = "-O2 takes gcc's loop-copy rule and budgets (opts.cc 1311-1316; user decision 2026-10-08)"
 blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 1055
+instructions = 1207
 memory_operands = 71
-code_bytes = 527
+code_bytes = 222
 data_bytes = 31
 bss_bytes = 0
-kernel_ms = 0.0343
 
 [bas.Os]
 instructions = 1207
@@ -18,30 +17,31 @@ bss_bytes = 0
 kernel_ms = 0.0363
 
 [c.O2]
-instructions = 472
-memory_operands = 9
-code_bytes = 225
+instructions = 630
+memory_operands = 10
+code_bytes = 89
 data_bytes = 10
 bss_bytes = 0
 
 [c.Os]
-instructions = 625
-memory_operands = 9
-code_bytes = 68
+instructions = 630
+memory_operands = 10
+code_bytes = 87
 data_bytes = 10
 bss_bytes = 0
+kernel_ms = 0.0103
 
 [nib.O2]
-instructions = 487
+instructions = 641
 memory_operands = 18
-code_bytes = 271
+code_bytes = 124
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 640
+instructions = 641
 memory_operands = 18
-code_bytes = 114
+code_bytes = 123
 data_bytes = 0
 bss_bytes = 0
 

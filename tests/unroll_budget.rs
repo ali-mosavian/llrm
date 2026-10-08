@@ -32,7 +32,8 @@ fn jumps(flags: &[&str]) -> usize {
 /// unrolled to 2633 B where clang's is 1789 and gcc's 402.
 #[test]
 fn test_each_target_unrolls_to_the_budget_its_description_states() {
-    assert_eq!(jumps(&["-m32", "-O2", "-march=i486"]), 1, "x86-m32 states 150: the loop stays");
-    assert_eq!(jumps(&["-m32", "-O3", "-march=i486"]), 0, "-O3 is twice the target's budget");
-    assert_eq!(jumps(&["-O2"]), 0, "x86-m16 states 200: the loop is copied");
+    assert_eq!(jumps(&["-m32", "-O3", "-march=i486"]), 1, "x86-m32 states 150: the loop stays");
+    assert_eq!(jumps(&["-m32", "-Omax", "-march=i486"]), 0, "-Omax is twice the target's budget");
+    assert_eq!(jumps(&["-O3"]), 0, "x86-m16 states 200: the loop is copied");
+    assert_eq!(jumps(&["-O2"]), 1, "gcc's -O2 copies a loop out only where the code does not grow");
 }
