@@ -11,7 +11,7 @@ use llrm_transforms::pipeline;
 use crate::abi::machine::Machine;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,6 +20,8 @@ pub enum Level {
     O1,
     O2,
     O3,
+    /// Every pass on, every budget as the compiler has them: what -O3 was before it meant gcc's.
+    Omax,
     Os,
     Oz,
     /// gcc's -Og, which is -O1 here: no pass removes what a debugger reads.
@@ -34,10 +36,11 @@ impl Level {
             "" | "1" => Self::O1,
             "2" => Self::O2,
             "3" => Self::O3,
+            "max" => Self::Omax,
             "s" => Self::Os,
             "z" => Self::Oz,
             "g" => Self::Og,
-            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Os, -Oz or -Og")),
+            _ => return Err(format!("unknown optimization level -O{text}; choose -O0, -O1, -O2, -O3, -Omax, -Os, -Oz or -Og")),
         })
     }
 
@@ -46,7 +49,7 @@ impl Level {
             Self::O0 => pipeline::Options::none(),
             Self::O1 | Self::Og => pipeline::Options::basic(),
             Self::O2 => pipeline::Options::default(),
-            Self::O3 => pipeline::Options::aggressive(),
+            Self::O3 | Self::Omax => pipeline::Options::aggressive(),
             Self::Os => pipeline::Options::size(),
             Self::Oz => pipeline::Options::min_size(),
         }
