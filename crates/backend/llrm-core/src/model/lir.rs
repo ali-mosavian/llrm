@@ -678,6 +678,15 @@ impl LirBody {
     /// Python's `replace(body, blocks=blocks)`: the old blocks are never copied.
     #[must_use]
     pub fn with_blocks(&self, blocks: Vec<LirBlock>) -> Self {
+        let frequencies = self.frequencies.as_ref().map(|kept| {
+            // A block removed leaves the table with it.
+            let present: BTreeSet<i64> = blocks.iter().map(|one| one.at).collect();
+            if kept.0.keys().all(|at| present.contains(at)) {
+                Arc::clone(kept)
+            } else {
+                Arc::new(BlockFrequencies(kept.0.iter().filter(|(at, _)| present.contains(at)).map(|(at, runs)| (*at, *runs)).collect()))
+            }
+        });
         Self {
             name: self.name.clone(),
             entry: self.entry,
@@ -692,7 +701,7 @@ impl LirBody {
             sealed_arguments: self.sealed_arguments,
             variables: self.variables.clone(),
             odds: self.odds.clone(),
-            frequencies: self.frequencies.clone(),
+            frequencies,
             returns_twice: self.returns_twice,
             spares: Arc::clone(&self.spares),
             float_stack: self.float_stack,

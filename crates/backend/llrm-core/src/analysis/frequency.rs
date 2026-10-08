@@ -107,10 +107,58 @@ impl Frequency {
                 false
             });
             if missing.len() == before {
-                return None;
+                // A loop made since: its shape is worked out alone and scaled to the flow the table sends into it.
+                let whole = Self::over(body, &body.blocks);
+                let region: std::collections::BTreeSet<i64> = missing.iter().copied().collect();
+                let (mut sent, mut guessed) = (0.0, 0.0);
+                for (from, to) in taken.keys().filter(|(from, to)| region.contains(to) && !region.contains(from)) {
+                    sent += block.get(from).copied().unwrap_or(0.0) * taken[&(*from, *to)];
+                    guessed += whole.block(*from) * taken[&(*from, *to)];
+                }
+                let scale = if guessed > 0.0 { sent / guessed } else { 1.0 };
+                for at in region {
+                    block.insert(at, whole.block(at) * scale);
+                }
+                break;
             }
         }
         Some(Self { block, taken })
+    }
+
+    /// What no honest table breaks, whatever shape the blocks have: an entry for every block and none for others, no block
+    /// running more often than the flow into it (each predecessor sends at most its own runs), and a block behind a
+    /// predecessor that goes nowhere else running as often as it. A table left stale by an edge that moved breaks one.
+    pub fn violations(body: &LirBody) -> Vec<String> {
+        let Some(kept) = body.frequencies.as_deref() else { return Vec::new() };
+        let mut out = Vec::new();
+        let present: std::collections::BTreeSet<i64> = body.blocks.iter().map(|one| one.at).collect();
+        for at in kept.0.keys().filter(|at| !present.contains(at)) {
+            out.push(format!("frequency kept for block {at:#x}, which is gone"));
+        }
+        let Some(now) = Self::carried(body, &kept.0) else { return out };
+        let mut inflow: IndexMap<i64, (f64, usize, Option<i64>)> = IndexMap::default();
+        for one in &body.blocks {
+            let list: std::collections::BTreeSet<i64> = one.succ.iter().copied().collect();
+            for to in &list {
+                let entry = inflow.entry(*to).or_insert((0.0, 0, None));
+                entry.0 += now.block(one.at);
+                entry.1 += 1;
+                entry.2 = Some(one.at).filter(|_| list.len() == 1);
+            }
+        }
+        for one in body.blocks.iter().filter(|one| one.at != body.entry) {
+            let Some((sum, count, only)) = inflow.get(&one.at).copied() else { continue };
+            let runs = now.block(one.at);
+            // The estimate lets a loop's proven trips fix its header's runs and the odds fix the block before its latch: up to
+            // 5% of the flow does not balance there (QCport and bench read 4.4% at most). A stale entry is off by factors.
+            let slack = 0.1 * sum + 1e-9;
+            if runs > sum + slack {
+                out.push(format!("block {:#x} runs {runs:.3} times, its predecessors {sum:.3}", one.at));
+            } else if count == 1 && only.is_some() && (runs - sum).abs() > slack {
+                out.push(format!("block {:#x} runs {runs:.3} times, its only predecessor, which goes nowhere else, {sum:.3}", one.at));
+            }
+        }
+        out
     }
 
     /// Every block's frequency, to keep on the body.
@@ -340,5 +388,50 @@ mod tests {
             assert_eq!(before.block(at), after.block(at), "block {at}");
         }
         assert!((after.block(9) - 5.0 * 124.0 / 128.0).abs() < 1e-9, "the copies run {}", after.block(9));
+    }
+
+    /// A table left as it was after an edge moved (block 3 reached only through a rare edge now) ran the block as often as
+    /// before: nothing said so. The invariant every honest table keeps catches it under LLRM_VERIFY.
+    #[test]
+    fn test_a_table_left_stale_by_a_moved_edge_is_caught() {
+        let mut body = counted(Some(5), 124.0 / 128.0);
+        body.frequencies = Some(Frequency::of(&body).table());
+        assert!(Frequency::violations(&body).is_empty(), "{:?}", Frequency::violations(&body));
+        // 2 -> 3 is replaced by 2 -> 9 -> 3, 9 taking 1 in 32 from 2: block 3 now runs a thirty-second as often.
+        let mut moved = body.clone();
+        moved.blocks.push(LirBlock { succ: vec![3], ..LirBlock::new(9, vec![insn(9, Operation::Jump, "jmp")]) });
+        moved.blocks[1].succ = vec![2, 9];
+        moved.odds.taken.insert((2, 9), (BlockOdds::CERTAIN / 32.0).round() as u32);
+        moved.odds.taken.insert((2, 2), (BlockOdds::CERTAIN * 31.0 / 32.0).round() as u32);
+        moved.blocks[2].succ = vec![];
+        let said = Frequency::violations(&moved);
+        assert!(said.iter().any(|one| one.contains("block 0x3 runs")), "{said:?}");
+        let mut gone = body.clone();
+        gone.blocks.retain(|one| one.at != 3);
+        gone.blocks[1].succ = vec![2];
+        gone.frequencies = body.frequencies.clone();
+        assert!(Frequency::violations(&gone).iter().any(|one| one.contains("gone")));
+        assert!(Frequency::violations(&gone.with_blocks(gone.blocks.clone())).is_empty());
+    }
+
+    /// A loop made after the table, with no entries and only a cycle reaching it, was worked out with the whole body's
+    /// shape again. Its region alone is: scaled to what the table sends in.
+    #[test]
+    fn test_a_loop_made_since_is_worked_out_alone_and_scaled_to_its_entering_flow() {
+        let mut body = counted(Some(5), 124.0 / 128.0);
+        body.frequencies = Some(Frequency::of(&body).table());
+        let mut more = body.clone();
+        // 2 -> 3 now goes through a new self loop 9.
+        more.blocks[1].succ = vec![2, 8];
+        more.blocks.push(LirBlock { succ: vec![9], ..LirBlock::new(8, vec![insn(8, Operation::Jump, "jmp")]) });
+        more.blocks.push(LirBlock { succ: vec![9, 3], ..LirBlock::new(9, vec![insn(9, Operation::Branch, "jne")]) });
+        more.blocks[2].succ = vec![];
+        for (from, to, probability) in [(2, 8, 1.0 / 32.0), (2, 2, 31.0 / 32.0), (9, 9, 31.0 / 32.0), (9, 3, 1.0 / 32.0)] {
+            more.odds.taken.insert((from, to), (probability * BlockOdds::CERTAIN).round() as u32);
+        }
+        let busy = Frequency::of(&more);
+        let entering = busy.block(2) * (1.0 / 32.0);
+        assert!((busy.block(8) - entering).abs() < 1e-6, "{} {}", busy.block(8), entering);
+        assert!((busy.block(9) - entering * 32.0).abs() < 1e-3 * entering * 32.0, "the new loop runs {} for {entering} sent in", busy.block(9));
     }
 }
