@@ -397,7 +397,9 @@ fn parts(procedure: &Procedure, omit: bool) -> (Vec<Semantics>, Vec<Semantics>) 
     // no sign to say whether it lies above that cell or below it, so every one keeps its distance from it.
     let reserve = if omit && reserve != 0 { reserve + slot } else { reserve };
     // Inline code is bytes this printer cannot read, so it may address the frame.
+    // A frame the runtime's entry built (B$ENRA, B$ENRD) is not built again by a shell of ours.
     let framed = !omit
+        && procedure.entry == 0
         && (reserve != 0
             || roots.contains(&ir::root(procedure.registers.pointer))
             || procedure.callees.values().any(|one| !one.code.is_empty()));
