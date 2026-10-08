@@ -335,6 +335,9 @@ pub struct LirBody {
     pub homes: Arc<std::collections::BTreeMap<u32, crate::model::ir::Mem>>,
     /// 16 or 32: the mode the target's code runs in, which decides how an instruction encodes and what it touches.
     pub bits: u32,
+    /// Every frame cell names the slot it lies in (`Addr::slot_home`): set once instruction selection has tagged them, and
+    /// then a rule of the verifier.
+    pub slotted: bool,
 }
 
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
@@ -436,6 +439,7 @@ impl LirBody {
             float_stack: 0,
             homes: Arc::default(),
             bits: crate::frontends::bc::declen::BITNESS,
+            slotted: false,
         }
     }
 
@@ -461,6 +465,7 @@ impl LirBody {
             float_stack: self.float_stack,
             homes: Arc::clone(&self.homes),
             bits: self.bits,
+            slotted: self.slotted,
         }
     }
 

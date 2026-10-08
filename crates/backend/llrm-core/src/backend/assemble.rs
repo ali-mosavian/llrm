@@ -376,12 +376,14 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let run = ssaspill::Run::new(admission);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let selected = timed("isel", || isel::selected_with(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole, target.facts, target.ranges));
-    let Selected { body, convention, calls, inline, far, pops, depth, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
+    let Selected { body, convention, calls, inline, far, pops, depth, extents, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     let mut body = timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)?;
     let mut frame = timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
     frame.hole = hole;
+    frame.extents = extents;
+    let mut body = frame.tagged(&body).map_err(|error| error.0)?;
     let frame = Rc::new(RefCell::new(frame));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
