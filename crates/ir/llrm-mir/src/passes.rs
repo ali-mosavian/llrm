@@ -649,7 +649,17 @@ fn unchanged<M: ModuleAnalysis>(module: &Module, analyses: &mut ModuleAnalyses, 
     previous.downcast_ref::<M::Result>().is_some_and(|previous| M::unchanged(module, analyses, previous))
 }
 
+thread_local! {
+    static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many module analyses this thread has run (not counting those kept as they were), for a test that an unchanged one is not.
+pub fn module_runs() -> usize {
+    RUNS.with(std::cell::Cell::get)
+}
+
 fn computed<M: ModuleAnalysis>(module: &Module, analyses: &mut ModuleAnalyses) -> Rc<dyn Any> {
+    RUNS.with(|runs| runs.set(runs.get() + 1));
     Rc::new(spanned_as("analysis", M::NAME, || M::run(module, analyses)))
 }
 
@@ -674,15 +684,23 @@ pub struct ModuleAnalyses {
     functions: HashMap<GlobalId, Analyses>,
     /// What an analysis keeps for its next run, by its type: the working of an update that reuses the last.
     memos: HashMap<TypeId, Box<dyn Any>>,
+    /// `LLRM_CHECK_MODULES`: an analysis being run again to check what it brought up to date works everything out afresh.
+    scratch: bool,
 }
 
 impl ModuleAnalyses {
     pub fn new(program: Rc<ProgramProxy>) -> Self {
-        Self { program, required: Vec::new(), results: HashMap::new(), dropped: HashMap::new(), outer: None, functions: HashMap::new(), memos: HashMap::new() }
+        Self { program, required: Vec::new(), results: HashMap::new(), dropped: HashMap::new(), outer: None, functions: HashMap::new(), memos: HashMap::new(), scratch: false }
     }
 
     /// The `T` an analysis left for its next run, made empty the first time: what survives `invalidate`, for an analysis that
     /// brings its last result up to date instead of working it out again.
+    /// Whether an analysis is to work everything out afresh and keep nothing of its last run (`LLRM_CHECK_MODULES` runs it so, to
+    /// check what it brought up to date).
+    pub fn from_scratch(&self) -> bool {
+        self.scratch
+    }
+
     pub fn memo<T: Default + 'static>(&mut self) -> &mut T {
         self.memos.entry(TypeId::of::<T>()).or_insert_with(|| Box::new(T::default())).downcast_mut::<T>().expect("keyed by its type")
     }
@@ -733,6 +751,12 @@ impl ModuleAnalyses {
         }
         counted(kind.name, false);
         let fresh = (kind.run)(module, self);
+        if std::env::var_os("LLRM_CHECK_MODULES").is_some() {
+            self.scratch = true;
+            let again = (kind.run)(module, self);
+            self.scratch = false;
+            assert!((kind.agree)(&*fresh, &*again), "{}: brought up to date, it is not what working it out afresh gives", kind.name);
+        }
         let result = self.dropped.remove(&kind.id).filter(|old| (kind.agree)(&**old, &*fresh)).unwrap_or(fresh);
         self.results.insert(kind.id, (kind, Rc::clone(&result)));
         result
