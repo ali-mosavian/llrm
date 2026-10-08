@@ -1,5 +1,5 @@
-//! `x86.instr`'s reader. No dependencies, so a build script can include it
-//! with `#[path]`.
+//! `x86.instr`'s reader. Its only dependency is `llrm-lir`, which a build script
+//! has too, so it can include this with `#[path]`.
 
 /// Condition codes, in iced's spelling, that `{cc}` expands to.
 pub const CONDITIONS: [&str; 16] = ["o", "no", "b", "ae", "e", "ne", "be", "a", "s", "ns", "p", "np", "l", "ge", "le", "g"];
@@ -54,11 +54,6 @@ impl Form {
         }
     }
 }
-
-const OPERATIONS: [&str; 29] = [
-    "move", "xchg", "addr", "binary", "mul", "div", "cmp", "unary", "funnel", "extend", "push", "pop", "leave", "fill", "jump", "branch", "escape", "call",
-    "ret", "nothing", "restore", "data", "fload", "fstore", "farith", "farithp", "funary", "barrier", "copy",
-];
 
 const REGISTERS: [&str; 12] = ["ax", "bx", "cx", "dx", "si", "di", "bp", "sp", "es", "ds", "fs", "gs"];
 
@@ -115,7 +110,7 @@ pub fn parse(text: &str) -> Result<Vec<Form>, String> {
         let [name, operation, shape, widths, cost, pinned, iced] = columns[..] else {
             return Err(format!("x86.instr:{line}: {} columns, not 7", columns.len()));
         };
-        if !OPERATIONS.contains(&operation) {
+        if llrm_lir::Operation::named(operation).is_none() {
             return Err(format!("x86.instr:{line}: no operation `{operation}`"));
         }
         let (dests, sources) = shape.split_once('/').ok_or_else(|| format!("x86.instr:{line}: shape `{shape}` has no `/`"))?;
