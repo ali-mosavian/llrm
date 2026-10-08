@@ -1,4 +1,5 @@
-# RUN: llrm-nib %s -O2 -fsanitize=stack -S -o /dev/stdout
+# RUN: llrm-nib %s -O2 -fno-inline-functions -fsanitize=stack -S -o /dev/stdout
+# -fno-inline-functions: with recursive inlining and the parameter range (0..3) from its one caller, `deep` folds to a frameless leaf.
 # -fsanitize=stack: a function compares SP with the runtime's _llrm_os_stack_low once its frame is allocated
 # and calls the panic N$ESTK out of line, last. No other function of the module is a leaf with a
 # frame within the red zone, so every one checks.
