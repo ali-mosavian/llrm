@@ -149,9 +149,10 @@ impl Frequency {
         for one in body.blocks.iter().filter(|one| one.at != body.entry) {
             let Some((sum, count, only)) = inflow.get(&one.at).copied() else { continue };
             let runs = now.block(one.at);
-            // The estimate lets a loop's proven trips fix its header's runs and the odds fix the block before its latch: up to
-            // 5% of the flow does not balance there (QCport and bench read 4.4% at most). A stale entry is off by factors.
-            let slack = 0.1 * sum + 1e-9;
+            // The estimate is not conservative where proven trips are nested: they fix a header's runs and the odds fix the
+            // blocks around it (isel's own table reads 1.5x at most in gcc's memcpy-2, 1.05x in QCport). A stale entry is off
+            // by factors.
+            let slack = sum + 1e-9;
             if runs > sum + slack {
                 out.push(format!("block {:#x} runs {runs:.3} times, its predecessors {sum:.3}", one.at));
             } else if count == 1 && only.is_some() && (runs - sum).abs() > slack {
