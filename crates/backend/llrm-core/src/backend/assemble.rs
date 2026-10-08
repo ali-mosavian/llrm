@@ -212,6 +212,8 @@ pub struct Machined {
     pub calls: IndexMap<i64, String>,
     /// The code laid down in place of each call to an inline helper.
     pub inline: IndexMap<i64, Vec<u8>>,
+    /// Where the frame places the inline code names were patched in, by site: (byte, displacement, addend).
+    pub inline_places: IndexMap<i64, Vec<(usize, i64, i64)>>,
     pub far: BTreeSet<i64>,
     /// The argument bytes each direct call's callee pops.
     pub pops: IndexMap<i64, i64>,
@@ -283,22 +285,24 @@ fn machined_once(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<P
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(first);
     }
+    // The second layout is made from the first run's frame, not by running the backend again; `LLRM_CHECK_FRAME=1` runs it again
+    // beside, and the two must be the same function. A frame that cannot be moved keeps its first layout.
     let laid = timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled));
-    let checking = std::env::var_os("LLRM_CHECK_FRAME").is_some();
-    let second = match laid {
-        Some((laid, _)) if !checking => laid,
-        laid => {
-            let (second, _) = timed("candidate second frame", || cheaper(module, name, abi, pool, target, spilled))?;
-            if let Some((laid, _)) = laid {
-                if let Some(difference) = crate::backend::relayout::difference(&laid, &second) {
-                    let at = first.body.insns().iter().find(|one| difference.contains(&format!("at {:#06x}", one.at))).map(|one| format!("{one:?}")).unwrap_or_default();
-                    panic!("@{name} (hole {spilled}): the frame laid again differs from the backend run again: {difference}\n  first run:\n  {at}");
+    if std::env::var_os("LLRM_CHECK_FRAME").is_some() {
+        let (again, _) = cheaper(module, name, abi, pool, target, spilled)?;
+        match &laid {
+            Some((laid, _)) => {
+                if let Some(difference) = crate::backend::relayout::difference(laid, &again) {
+                    panic!("@{name} (hole {spilled}): the frame laid again differs from the backend run again: {difference}");
                 }
             }
-            second
+            None => panic!("@{name} (hole {spilled}): the frame could not be laid again"),
         }
-    };
-    Ok(if far_frame(&second.body) < far { second } else { first })
+    }
+    Ok(match laid {
+        Some((second, _)) if far_frame(&second.body) < far => second,
+        _ => first,
+    })
 }
 
 /// `phased`, with the spiller; and, where the spiller changed the body, without it too: the
@@ -390,7 +394,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let run = ssaspill::Run::new(admission);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let selected = timed("isel", || isel::selected_with(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole, target.facts, target.ranges));
-    let Selected { body, convention, calls, inline, far, pops, depth, extents, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
+    let Selected { body, convention, calls, inline, inline_places, far, pops, depth, extents, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     let mut body = timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)?;
     let mut frame = timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
@@ -426,7 +430,7 @@ fn phased(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
         }
         None => (body, None),
     };
-    Ok(((Machined { body, reserve, calls, inline, far, pops, popped: convention.popped, registers, landing }, frame), run))
+    Ok(((Machined { body, reserve, calls, inline, inline_places, far, pops, popped: convention.popped, registers, landing }, frame), run))
 }
 
 /// `body` with its landing pad, the block `marker` starts, laid out last:

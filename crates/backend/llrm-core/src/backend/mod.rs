@@ -76,26 +76,22 @@ pub mod select {
     /// displacement would be wrong the moment the layout moved. Incoming arguments, whose place is fixed, keep theirs.
     #[allow(clippy::too_many_arguments)]
     pub fn priced_in(bits: u32, what: &crate::model::ir::Semantics, at: u64, r#where: Option<Where<'_>>, short: bool, relocated: bool, held: Option<&HeldMap>) -> Option<Emitted> {
-        use crate::model::ir::{Addr, Loc, Space};
-        use iced_x86::Register;
+        use crate::model::ir::{Addr, Loc};
         /// Where a frame cell is priced.
         const NEAR: i64 = -8;
-        let placed = |addr: &Option<Addr>, through: Register| match addr {
-            Some(addr) if addr.space == Space::Frame => addr.disp < 0 && addr.slot_home() != Some(0),
-            Some(addr) if addr.space == Space::Literal => addr.disp < 0 && matches!(through, Register::BP | Register::EBP),
-            _ => false,
-        };
+        // A frame cell below BP whose place is not fixed: not an incoming argument.
+        let placed = |addr: &Option<Addr>, in_frame: bool| addr.is_some_and(|addr| in_frame && addr.disp < 0 && addr.slot_home() != Some(0));
         let moves = |place: &Loc| match place {
-            Loc::Mem(cell) => placed(&cell.addr, cell.through),
-            Loc::Address(cell) => placed(&cell.addr, cell.through),
+            Loc::Mem(cell) => placed(&cell.addr, cell.in_frame()),
+            Loc::Address(cell) => placed(&cell.addr, cell.in_frame()),
             _ => false,
         };
         if !what.dests.iter().chain(&what.sources).any(moves) {
             return emit_in(bits, what, at, r#where, short, relocated, held);
         }
         let near = |place: &Loc| match place {
-            Loc::Mem(cell) if placed(&cell.addr, cell.through) => Loc::Mem(crate::model::ir::Mem { addr: cell.addr.map(|addr| Addr { disp: NEAR, ..addr }), ..cell.clone() }),
-            Loc::Address(cell) if placed(&cell.addr, cell.through) => Loc::Address(crate::model::ir::Address { addr: cell.addr.map(|addr| Addr { disp: NEAR, ..addr }), ..cell.clone() }),
+            Loc::Mem(cell) if placed(&cell.addr, cell.in_frame()) => Loc::Mem(crate::model::ir::Mem { addr: cell.addr.map(|addr| Addr { disp: NEAR, ..addr }), ..cell.clone() }),
+            Loc::Address(cell) if placed(&cell.addr, cell.in_frame()) => Loc::Address(crate::model::ir::Address { addr: cell.addr.map(|addr| Addr { disp: NEAR, ..addr }), ..cell.clone() }),
             other => other.clone(),
         };
         let priced = crate::model::ir::Semantics { dests: what.dests.iter().map(&near).collect(), sources: what.sources.iter().map(&near).collect(), ..what.clone() };

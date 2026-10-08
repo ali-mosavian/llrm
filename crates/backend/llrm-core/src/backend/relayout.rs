@@ -10,8 +10,6 @@
 
 use std::sync::Arc;
 
-use iced_x86::Register;
-
 use crate::backend::assemble::Machined;
 use crate::backend::frame::Frame;
 use crate::model::ir::{Addr, Address, Loc, Mem, Semantics, Space};
@@ -21,7 +19,7 @@ use crate::support::hash::IndexMap;
 /// `first`, which was laid out under `frame` (no hole), laid out with `hole` bytes above the allocas for spill slots; and its
 /// frame. None where it cannot be moved by its slots alone.
 pub fn laid_again(first: &Machined, frame: &Frame, hole: i64) -> Option<(Machined, Frame)> {
-    if !first.inline.is_empty() || frame.native.is_some() || frame.hole != 0 {
+    if frame.native.is_some() || frame.hole != 0 {
         return None;
     }
     let (again, homes) = replayed(frame, hole)?;
@@ -38,7 +36,15 @@ pub fn laid_again(first: &Machined, frame: &Frame, hole: i64) -> Option<(Machine
     body.homes = Arc::new(first.body.homes.iter().map(|(value, cell)| Some((*value, moved.mem(cell)?))).collect::<Option<std::collections::BTreeMap<_, _>>>()?);
     body.variables = first.body.variables.iter().map(|one| moved.variable(one)).collect::<Option<Vec<_>>>()?;
     let reserve = -std::cmp::min(again.slots.values().copied().min().unwrap_or(0), again.floor);
-    let machined = Machined { body, reserve, calls: first.calls.clone(), inline: first.inline.clone(), far: first.far.clone(), pops: first.pops.clone(), popped: first.popped, registers: first.registers.clone(), landing: first.landing };
+    let mut inline = first.inline.clone();
+    for (at, places) in &first.inline_places {
+        let bytes = inline.get_mut(at)?;
+        for (offset, disp, addend) in places {
+            let new = moved.disp(frame.home_of(*disp)?, *disp)? + addend;
+            bytes.get_mut(*offset..*offset + 2)?.copy_from_slice(&(new as u16).to_le_bytes());
+        }
+    }
+    let machined = Machined { body, reserve, calls: first.calls.clone(), inline, inline_places: first.inline_places.iter().map(|(at, places)| Some((*at, places.iter().map(|(offset, disp, addend)| Some((*offset, moved.disp(frame.home_of(*disp)?, *disp)?, *addend))).collect::<Option<Vec<_>>>()?))).collect::<Option<_>>()?, far: first.far.clone(), pops: first.pops.clone(), popped: first.popped, registers: first.registers.clone(), landing: first.landing };
     Some((machined, again))
 }
 
@@ -91,12 +97,12 @@ impl Moves<'_> {
         None
     }
 
-    fn addr(&self, addr: Addr, offset: i64, through: Register) -> Option<(Addr, i64)> {
+    fn addr(&self, addr: Addr, offset: i64, in_frame: bool) -> Option<(Addr, i64)> {
         let new = match (addr.space, addr.slot_home()) {
             (Space::Frame, Some(home)) => self.disp(home, addr.disp)?,
             (Space::Frame, None) => return None,
             // An indexed array: a literal displacement through BP, the selector's.
-            (Space::Literal, _) if matches!(through, Register::BP | Register::EBP) => addr.disp - self.hole,
+            (Space::Literal, _) if in_frame => addr.disp - self.hole,
             _ => return Some((addr, offset)),
         };
         // `offset` repeats the displacement on a cell the spiller made from a folded frame address.
@@ -106,13 +112,13 @@ impl Moves<'_> {
 
     fn mem(&self, cell: &Mem) -> Option<Mem> {
         let Some(addr) = cell.addr else { return Some(cell.clone()) };
-        let (addr, offset) = self.addr(addr, cell.offset, cell.through)?;
+        let (addr, offset) = self.addr(addr, cell.offset, cell.in_frame())?;
         Some(Mem { addr: Some(addr), offset, ..cell.clone() })
     }
 
     fn address(&self, cell: &Address) -> Option<Address> {
         let Some(addr) = cell.addr else { return Some(cell.clone()) };
-        let (addr, offset) = self.addr(addr, cell.offset, cell.through)?;
+        let (addr, offset) = self.addr(addr, cell.offset, cell.in_frame())?;
         Some(Address { addr: Some(addr), offset, ..cell.clone() })
     }
 
@@ -186,6 +192,9 @@ pub fn difference(left: &Machined, right: &Machined) -> Option<String> {
     if left.reserve != right.reserve {
         return Some(format!("reserve {} against {}", left.reserve, right.reserve));
     }
+    if left.inline_places != right.inline_places {
+        return Some(format!("inline places {:?} against {:?}", left.inline_places, right.inline_places));
+    }
     if left.calls != right.calls || left.inline != right.inline || left.far != right.far || left.pops != right.pops || left.popped != right.popped || left.landing != right.landing {
         return Some("calls, inline code, far calls, pops or landing".to_owned());
     }
@@ -208,4 +217,32 @@ pub fn difference(left: &Machined, right: &Machined) -> Option<String> {
         return Some("blocks".to_owned());
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::backend::select::{emit_in, priced_in};
+    use crate::model::ir::{Addr, Loc, Mem, Operation, Reg, Semantics, Space};
+    use iced_x86::Register;
+
+    fn load(addr: Addr) -> Semantics {
+        let cell = Mem { through: Register::EBP, ..Mem::new(Some(addr), 4) };
+        Semantics { name: Some("mov".to_owned()), dests: vec![Loc::Reg(Reg { register: Register::EAX, width: 4 })], sources: vec![Loc::Mem(cell)], ..Semantics::new(Operation::Move) }
+    }
+
+    /// A frame cell was priced by the displacement its slot happened to have under the first layout, so the second layout (which puts
+    /// the spill slots near) decided differently, and the second backend run could not be replaced by moving the cells: sieve at -m32
+    /// -O2 allocated `add [slot], 1` in one and a reload, add and store in the other.
+    #[test]
+    fn test_a_frame_cell_is_priced_the_same_wherever_its_slot_is() {
+        let length = |addr| priced_in(32, &load(addr), 0, None, false, false, None).expect("encodes").code.len();
+        let near = Addr::new(Space::Frame, -8).in_slot(-8);
+        let far = Addr::new(Space::Frame, -2000).in_slot(-2000);
+        assert_eq!(length(near), length(far));
+        let (a, b) = (emit_in(32, &load(near), 0, None, false, false, None).expect("encodes"), emit_in(32, &load(far), 0, None, false, false, None).expect("encodes"));
+        assert_ne!(a.code.len(), b.code.len(), "premise: encoded, the two displacements differ");
+        // An incoming argument's place is fixed: it keeps its displacement.
+        let incoming = |disp| length(Addr::new(Space::Frame, disp).in_slot(0));
+        assert_ne!(incoming(8), incoming(2000));
+    }
 }

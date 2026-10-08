@@ -288,6 +288,8 @@ pub struct Selected {
     pub calls: IndexMap<i64, String>,
     /// The code laid down in place of each call to an inline helper.
     pub inline: IndexMap<i64, Vec<u8>>,
+    /// Where the frame places an inline site's code names were patched in, by site: (byte, displacement, addend).
+    pub inline_places: IndexMap<i64, Vec<(usize, i64, i64)>>,
     pub far: BTreeSet<i64>,
     /// The argument bytes each direct call's callee pops as it returns, where it does.
     pub pops: IndexMap<i64, i64>,
@@ -574,6 +576,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
         abi,
         calls: IndexMap::default(),
         inline: IndexMap::default(),
+        inline_places: IndexMap::default(),
         far: BTreeSet::new(),
         pops: IndexMap::default(),
         landing: None,
@@ -614,7 +617,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
             };
         }
     }
-    Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, far: selector.far, pops: selector.pops, depth: selector.depth, extents: selector.extents, landing: selector.landing })
+    Ok(Selected { body, convention, calls: selector.calls, inline: selector.inline, inline_places: selector.inline_places, far: selector.far, pops: selector.pops, depth: selector.depth, extents: selector.extents, landing: selector.landing })
 }
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes them in.
@@ -836,6 +839,7 @@ struct Selector<'m, 'c, 'p> {
     calls: IndexMap<i64, String>,
     /// The code laid down in place of each call to an inline helper.
     inline: IndexMap<i64, Vec<u8>>,
+    inline_places: IndexMap<i64, Vec<(usize, i64, i64)>>,
     far: BTreeSet<i64>,
     pops: IndexMap<i64, i64>,
     /// The `at` of what starts the landing pad.
@@ -3196,10 +3200,13 @@ impl Selector<'_, '_, '_> {
     /// its arguments name patched in as a displacement from BP.
     fn inline_code(&mut self, inst: InstId, convention: u32, name: String, arguments: &[Operand], at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
         let Some((mut bytes, places)) = llrm_mir::intrinsics::code(&name) else { return refuse(format!("@{name} does not parse")) };
+        let mut patched = Vec::new();
         for (&argument, (offset, addend)) in arguments.iter().zip(places) {
             let Pointer::Frame { disp, index: None, .. } = self.pointer(argument)? else { return refuse("inline code naming other than a frame place") };
             bytes[offset..offset + 2].copy_from_slice(&((disp + addend) as u16).to_le_bytes());
+            patched.push((offset, disp, addend));
         }
+        self.inline_places.insert(at, patched);
         self.called(inst, convention, Callee::Inline(name, bytes), &[], at, out)
     }
 
