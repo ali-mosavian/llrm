@@ -397,3 +397,32 @@ fn an_elf_function_with_variables_has_the_code_it_has_without_g() {
         assert_eq!(assembly(&source, &[]), assembly(&source, &["-g"]), "{}", source.display());
     }
 }
+
+/// The programs, per level, whose code `-g` must leave alone, at least: raised as the ranges land (#755). `None` is every
+/// bench program. A level not listed has no floor yet.
+const IDENTICAL_FLOOR: &[(&str, Option<usize>)] = &[("O0", None)];
+
+/// `-g` changed the code of every bench program: a frame register kept for its variables and a volatile on their stores.
+/// The count of bench programs whose assembly is the same with and without `-g` may not fall below the floor.
+#[test]
+fn g_leaves_the_code_of_the_bench_programs_alone_to_the_floor() {
+    let scratch = tempfile::tempdir().unwrap();
+    let programs = bench_programs();
+    for &(level, floor) in IDENTICAL_FLOOR {
+        let flag = format!("-{level}");
+        let assembly = |source: &Path, debug: bool| {
+            let out = scratch.path().join("x.s");
+            let mut flags = vec!["-m32", "-fobject-format=elf", flag.as_str(), "-S"];
+            if debug {
+                flags.push("-g");
+            }
+            let made = compile(source, &flags, &out);
+            assert!(made.status.success(), "{}: {}", source.display(), String::from_utf8_lossy(&made.stderr));
+            std::fs::read_to_string(&out).unwrap()
+        };
+        let differing: Vec<String> = programs.iter().filter(|source| assembly(source, false) != assembly(source, true)).map(|source| source.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        let identical = programs.len() - differing.len();
+        let floor = floor.unwrap_or(programs.len());
+        assert!(identical >= floor, "{level}: -g changed the code of {differing:?}: {identical} of {} identical, the floor is {floor}", programs.len());
+    }
+}
