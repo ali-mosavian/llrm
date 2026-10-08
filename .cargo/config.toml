@@ -2,3 +2,5 @@
 # the Nib runtime, whichever crate they are in.
 [env]
 LLRM_ROOT = { value = "", relative = true }
+# Tests check each pass and each machine phase (llrm_support::debug::verifying); a user's compile checks its input only.
+LLRM_VERIFY = "1"
