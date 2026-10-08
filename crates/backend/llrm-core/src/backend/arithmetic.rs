@@ -18,7 +18,7 @@ fn bit_length(value: i64) -> i64 {
     i64::from(64 - value.unsigned_abs().leading_zeros())
 }
 
-/// Core clocks for audited positive imm8; other forms still use the old estimate.
+/// Core clocks for audited positive imm8 on a 386 and every immediate on a 486; other forms still use the old estimate.
 ///
 /// Intel 80386 Programmer's Reference Manual, IMUL: for positive m,
 /// max(ceil(log2(m)), 3) + 6. Restricted to positive imm8 so the value is
@@ -35,6 +35,10 @@ pub fn immediate_multiply<'a>(
         })
         .max(3)
             + 6);
+    }
+    if targets::profile(cpu)?.name == "486" {
+        // Intel 240440-002, Table 10.1 note 3: 10 + max(log2|m|, n), n = 3 for +m and 5 for -m, by the immediate of the three-operand form. The data sheet does not say how the logarithm rounds: up, as `vsgcc/harness.py` counts it.
+        return Ok(10 + bit_length(number).max(if number < 0 { 5 } else { 3 }));
     }
     cost(cpu, "imul_r32")
 }
@@ -177,6 +181,17 @@ mod tests {
             assert_eq!(chain, [("lea", factor - 1)], "x{factor}");
         }
         assert!(cheapest_narrow_chain(3, m32).unwrap().unwrap().0.iter().all(|part| part.0 != "lea"), "a word has no lea");
+    }
+
+    /// An `imul` by a 31-bit constant took 41 clocks on a 486 (Table 10.1 note 3: 10 + log2 of the multiplier) and was priced as the flat
+    /// 26, so the 29-clock chain lost to it: x_switch's `r * 1103515245` cost 20 clocks a trip over gcc's shifts and adds.
+    #[test]
+    fn test_a_multiply_by_a_wide_constant_is_priced_by_its_multiplier_on_a_486() {
+        let m32 = targets::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
+        assert_eq!(immediate_multiply(m32, 1103515245).unwrap(), 41);
+        assert_eq!(immediate_multiply(m32, 10).unwrap(), 14);
+        assert_eq!(immediate_multiply(m32, -3).unwrap(), 15);
+        assert!(scale(1103515245, m32).unwrap().is_some(), "the chain is below the imul");
     }
 
     #[test]
