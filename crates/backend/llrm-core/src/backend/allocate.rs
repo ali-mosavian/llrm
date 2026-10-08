@@ -1344,7 +1344,7 @@ fn _values(body: &LirBody) -> Vec<u32> {
 /// Where a range sits in the queue: first by how few registers may hold it (LLVM's register class `AllocationPriority`, which
 /// `RegClassPriorityTrumpsGlobalness` puts before anything else), then `_priority`. The wide values fit around the narrow ones.
 fn _queue_priority(one: Option<&Interval>, at: Stage, class: Option<usize>, wide: usize) -> f64 {
-    let narrow = if CLASS_PRIORITY.with(std::cell::Cell::get) { class.map_or(0, |registers| wide.saturating_sub(registers)) } else { 0 };
+    let narrow = class.map_or(0, |registers| wide.saturating_sub(registers));
     _priority(one, at) + narrow as f64 * 1e9
 }
 
@@ -1633,20 +1633,6 @@ fn _forced(
         }
     }
     best.map(|(_bill, register, victims)| (register, victims))
-}
-
-thread_local! {
-    static CLASS_PRIORITY: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
-}
-
-/// `run` with the queue ordered by size alone, as it was before the register class came first: for a test whose input is
-/// what that order made (a body the allocator no longer makes) and must stay what it was.
-#[cfg(test)]
-pub fn without_class_priority<R>(run: impl FnOnce() -> R) -> R {
-    let before = CLASS_PRIORITY.with(|one| one.replace(false));
-    let out = run();
-    CLASS_PRIORITY.with(|one| one.set(before));
-    out
 }
 
 thread_local! {
