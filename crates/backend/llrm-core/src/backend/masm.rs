@@ -669,6 +669,9 @@ fn stack_addressed(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
                             _ => return refused(procedure, &format!("{what:?}")),
                         }
                     }
+                    // An x87 register exchange and the x87 and port instructions that name no stack effect leave the stack pointer alone.
+                    Operation::Exchange if what.dests.iter().chain(&what.sources).all(|place| matches!(place, Loc::St(_))) => {}
+                    Operation::Barrier if matches!(what.name.as_deref(), Some("fnstcw" | "fldcw" | "fnstsw" | "in" | "out")) => {}
                     Operation::Leave | Operation::Exchange | Operation::Escape | Operation::Barrier | Operation::Call => return refused(procedure, &format!("{what:?}")),
                     // `pushf` and its kind move the stack and carry no operand to read the amount from.
                     Operation::Nothing if what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")) => return refused(procedure, &format!("{what:?}")),
