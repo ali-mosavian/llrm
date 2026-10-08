@@ -384,7 +384,7 @@ fn registrable(m: u32, bits: u32, home: Register, one: &Arc<Insn>, at: i64) -> b
         return true;
     }
     let homes = BTreeMap::from([(at, word(m, home))]);
-    rewritten(m, one, &homes).what.as_ref().is_some_and(|what| select::emit_in(bits, what, 0, None, false, false, None).is_some())
+    rewritten(m, one, &homes).what.as_ref().is_some_and(|what| select::priced_in(bits, what, 0, None, false, false, None).is_some())
 }
 
 /// What holding a slot in a register saves each trip: a reload whose

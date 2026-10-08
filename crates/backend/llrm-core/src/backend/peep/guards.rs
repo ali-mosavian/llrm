@@ -99,7 +99,7 @@ pub fn disjoint(_: &Cx, one: Lanes, other: Lanes) -> bool {
 }
 
 fn emitted(bits: u32, one: &Insn) -> Option<select::Emitted> {
-    select::emit_in(bits, one.what.as_ref()?, 0, None, false, false, None)
+    select::priced_in(bits, one.what.as_ref()?, 0, None, false, false, None)
 }
 
 pub fn encodable(cx: &Cx, one: &Arc<Insn>) -> bool {
@@ -124,7 +124,7 @@ pub fn split_push_smaller(bits: u32, value: i64) -> bool {
             sources: vec![Loc::Imm(Imm { value, width, address: None })],
             ..ir::Semantics::new(Operation::Push)
         };
-        select::emit_in(bits, &what, 0, None, false, false, None).map(|code| code.code.len())
+        select::priced_in(bits, &what, 0, None, false, false, None).map(|code| code.code.len())
     };
     matches!(
         (push(4, value), push(2, (value >> 16) & 0xFFFF), push(2, value & 0xFFFF)),
