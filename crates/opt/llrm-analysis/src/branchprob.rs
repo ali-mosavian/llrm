@@ -490,6 +490,11 @@ fn frequencies(function: &Function, shape: &Shape, odds: &Odds, trips: &BTreeMap
 /// out, `tested` being 1 when the test follows a trip and 0 when it precedes
 /// one. Only here, so that MIR and LIR estimates agree.
 pub fn propagated(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, successors: &dyn Fn(i64) -> Vec<i64>, cycles: &[Cycle], given: &dyn Fn(i64, i64) -> f64) -> BTreeMap<i64, f64> {
+    propagated_edges(order, predecessors, successors, cycles, given).0
+}
+
+/// `propagated`, and each edge's probability as the trips left it.
+pub fn propagated_edges(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, successors: &dyn Fn(i64) -> Vec<i64>, cycles: &[Cycle], given: &dyn Fn(i64, i64) -> f64) -> (BTreeMap<i64, f64>, BTreeMap<(i64, i64), f64>) {
     // How often a trip of each loop reaches its exiting blocks together, which its exit test runs: more than once where
     // one is in a loop nested in it, and each visit then takes that much less of the exit, so that the trips stay.
     let visits: std::cell::RefCell<BTreeMap<i64, f64>> = std::cell::RefCell::new(BTreeMap::new());
@@ -576,7 +581,8 @@ pub fn propagated(order: &[i64], predecessors: &dyn Fn(i64) -> Vec<i64>, success
         };
         frequency.insert(at, entering * scale.get(&at).copied().unwrap_or(1.0));
     }
-    frequency
+    let edges = order.iter().flat_map(|&from| successors(from).into_iter().map(move |to| (from, to))).map(|(from, to)| ((from, to), edge(from, to))).collect();
+    (frequency, edges)
 }
 
 /// Blocks in reverse postorder from `entry`, by `successors`.

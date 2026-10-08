@@ -1330,6 +1330,7 @@ impl Selector<'_, '_, '_> {
         body.ordered = true;
         body.loop_trip_counts = self.trip_counts(&block_at);
         body.odds = odds;
+        body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
         Ok(body)
     }
 
