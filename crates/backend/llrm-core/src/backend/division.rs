@@ -46,6 +46,20 @@ fn chain_product(parts: &mut Vec<ir::Semantics>, chain: &[(&'static str, i64)], 
     let mut product = quotient;
     for &(name, amount) in chain {
         let into = ir::Held { value: fresh(), width };
+        if name == "flea" {
+            let cell = ir::Mem { base: Some(product), index: Some(product), scale: amount, ..ir::Mem::new(None, width) };
+            parts.push(ir::Semantics { name: Some("lea".to_owned()), dests: vec![ir::Loc::Held(into)], sources: vec![ir::Loc::Mem(cell)], ..ir::Semantics::new(ir::Operation::Address) });
+            product = into;
+            continue;
+        }
+        if name == "fadd" || name == "fsub" {
+            let shifted = ir::Held { value: fresh(), width };
+            parts.push(ir::Semantics { name: Some("shl".to_owned()), dests: vec![ir::Loc::Held(shifted)], sources: vec![ir::Loc::Held(product), ir::Loc::Imm(ir::Imm { value: amount, width: 1, address: None })], ..ir::Semantics::new(ir::Operation::Binary) });
+            let op = if name == "fadd" { "add" } else { "sub" };
+            parts.push(ir::Semantics { name: Some(op.to_owned()), dests: vec![ir::Loc::Held(into)], sources: vec![ir::Loc::Held(shifted), ir::Loc::Held(product)], ..ir::Semantics::new(ir::Operation::Binary) });
+            product = into;
+            continue;
+        }
         parts.push(if name == "lea" {
             let cell = ir::Mem { base: Some(quotient), index: Some(product), scale: amount, ..ir::Mem::new(None, width) };
             ir::Semantics { name: Some("lea".to_owned()), dests: vec![ir::Loc::Held(into)], sources: vec![ir::Loc::Mem(cell)], ..ir::Semantics::new(ir::Operation::Address) }
@@ -117,7 +131,12 @@ fn positive_reciprocal<'a>(
         Some(chain) => {
             let mut total = 0;
             for (name, count) in chain {
-                total += if *name == "shl" { arithmetic::shift(cpu, *count)? } else { cost("alu_rr")? };
+                total += match *name {
+                    "shl" => arithmetic::shift(cpu, *count)?,
+                    "fadd" | "fsub" => arithmetic::shift(cpu, *count)? + cost("alu_rr")?,
+                    "flea" => cost("lea")?,
+                    _ => cost("alu_rr")?,
+                };
             }
             total
         }
@@ -340,7 +359,12 @@ pub fn unsigned_reciprocal<'a>(
             Some(chain) => {
                 let mut total = 0;
                 for (name, count) in chain {
-                    total += if *name == "shl" { arithmetic::shift(cpu, *count)? } else { cost("alu_rr")? };
+                    total += match *name {
+                    "shl" => arithmetic::shift(cpu, *count)?,
+                    "fadd" | "fsub" => arithmetic::shift(cpu, *count)? + cost("alu_rr")?,
+                    "flea" => cost("lea")?,
+                    _ => cost("alu_rr")?,
+                };
                 }
                 total
             }

@@ -1,10 +1,10 @@
-reason = "jumpthread decides a branch on a compare of a phi of constants on each way into it (gcc's budget, empty copies at -Os): queens c -O2 instructions 148191 -> 137439, -Os 174112 -> 160327; qlight c +1 instruction, -1 byte"
+reason = "synth_mult: a constant multiply is the cheaper of the Horner chain and gcc's (factors 2^m +- 1, t - 1, t + 1): quicksort c -O2 163104 -> 162079 instructions, qlight -5 bytes"
 blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 124
+instructions = 123
 memory_operands = 28
-code_bytes = 330
+code_bytes = 325
 data_bytes = 13
 bss_bytes = 0
 
@@ -16,9 +16,9 @@ data_bytes = 13
 bss_bytes = 0
 
 [c.O2]
-instructions = 94
+instructions = 93
 memory_operands = 4
-code_bytes = 192
+code_bytes = 187
 data_bytes = 0
 bss_bytes = 0
 
@@ -30,9 +30,9 @@ data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 119
+instructions = 118
 memory_operands = 0
-code_bytes = 201
+code_bytes = 196
 data_bytes = 0
 bss_bytes = 0
 
