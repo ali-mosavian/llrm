@@ -4109,3 +4109,29 @@ fn test_selecting_a_function_scans_for_exposed_allocas_once_not_once_per_alloca(
         assert!(scans <= 1, "{scans} scans for {locals} locals");
     }
 }
+
+/// Selecting a function asked for what every function of the module does to memory by scanning the module: n functions made
+/// n scans of n functions (a quarter of the compile of 1024 functions). The module is scanned once, for every function.
+#[test]
+fn test_the_callees_of_a_module_are_scanned_once_for_all_its_functions_not_for_each() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static SCANS: AtomicUsize = AtomicUsize::new(0);
+    llrm_mir::passes::observe(llrm_mir::passes::Observer {
+        span: |_, _, run| run(),
+        function: |_, run| run(),
+        count: |what, _| {
+            if what == "callees" {
+                SCANS.fetch_add(1, Ordering::Relaxed);
+            }
+        },
+    });
+    let scans = |functions: usize| {
+        let text: String = (0..functions).map(|n| format!("define i16 @f{n}(i16 %x) {{\nb:\n  %y = add i16 %x, {n}\n  ret i16 %y\n}}\n\n")).collect();
+        SCANS.store(0, Ordering::Relaxed);
+        assembled_on("486", &text);
+        SCANS.load(Ordering::Relaxed)
+    };
+    assert!(scans(4) > 0, "the observer saw no scan: another test installed its own");
+    let (few, many) = (scans(4), scans(24));
+    assert_eq!(few, many, "{few} scans for 4 functions, {many} for 24");
+}

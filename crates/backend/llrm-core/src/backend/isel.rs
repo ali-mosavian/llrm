@@ -520,6 +520,12 @@ enum Pointer {
     Absolute { offset: i64 },
 }
 
+/// `LLRM_CHECK_CALLEES=1`: the callees' effects selection was given are what a scan of the module gives.
+fn checking_callees() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CALLEES").is_some())
+}
+
 /// `hole` bytes below BP are left free, above the allocas, for spill slots.
 pub fn selected<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &mut Pool, cpu: &'c Profile, segments: &'c Segments, compiled: &'static Compiled, arch: &'c dyn llrm_target::Target, zeroed: bool, hole: i64) -> Result<Selected, Unselected> {
     selected_with(module, name, abi, pool, cpu, segments, compiled, arch, zeroed, hole, &CalleeFacts::none())
@@ -583,7 +589,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
         joins: IndexMap::default(),
         consumed: BTreeSet::new(),
         paired: IndexMap::default(),
-        callees: llrm_mir::memory::callees(module),
+        callees: callee_facts.callees().filter(|held| !checking_callees() || **held == llrm_mir::memory::callees(module)).unwrap_or_else(|| std::rc::Rc::new(llrm_mir::memory::callees(module))),
         private: Vec::new(),
         cpu,
         compiled,
@@ -936,7 +942,7 @@ struct Selector<'m, 'c, 'p> {
     /// instruction of its block is: that instruction's value.
     paired: IndexMap<InstId, ValueId>,
     /// What each callee does to memory.
-    callees: llrm_mir::memory::Callees,
+    callees: std::rc::Rc<llrm_mir::memory::Callees>,
     /// The frame bytes no exposed alloca occupies, which no call reaches.
     private: Vec<(crate::model::ir::Addr, u32)>,
     /// What each instruction costs, where a choice depends on it.
