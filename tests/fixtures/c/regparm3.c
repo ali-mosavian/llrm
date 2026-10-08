@@ -32,3 +32,6 @@ extern void use3(int a, int b, int c);
 void leas(int a) { use3(a + 4, a + 7, a + 10); }
 extern void use1(int a, int b);
 int incs(int a) { int p = a + 1; use1(0, 0); return p + a; }
+extern int opaque(int a);
+static int many(int a, int b, int c, int d, int e) { return a * b + c * d + e + opaque(a); }
+int call_many(int x, int y) { return many(x, y, x + y, x * y, y - x) + many(y, x, x - y, x + 3, y * y); }

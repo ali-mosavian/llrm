@@ -125,7 +125,13 @@ i16 pairs), not a refactor, and is not part of this task.
 
 - **m16**: real mode. Segments, selectors, far calls, 16-bit addressing
   (`bx/bp/si/di`), dword ops under a 66h prefix.
-  Its default convention is `cdecl16`, Borland's. `-mabi=watcom` makes it Open Watcom's register
+  Its default convention is `regparm3` (gcc's `-mregparm=3`, by size): the first three integer or pointer
+  arguments, left to right, in EAX, EDX, ECX as AL/AX/EAX; the rest, floats, an i64, structs and far pointers on the stack
+  as cdecl16 has them, which the caller removes (`calleepop` has an internal function remove them, `regparm3pop`);
+  a result in AL, AX or EAX (a far pointer too, offset low), an i64 in EDX:EAX, a float in st(0). Its symbols are
+  `_name@3` (3 argument registers), so a routine of another convention fails to link. A function or declaration
+  that names a convention (`cdecl`, `pascal`, `__interrupt`) keeps it: a C definition that stands in for a Borland library
+  routine says `__cdecl`. `-mabi=cdecl` makes the default `cdecl16`, Borland's. `-mabi=watcom` makes it Open Watcom's register
   convention (`wcc -ecw`, `watcall16`): arguments in AX, DX, BX, CX, a long or a far pointer in DX:AX or CX:BX,
   the first that fits no register and all after it on the stack, which the callee pops (`retf n`); a struct
   result larger than a dword through the near address in SI, returned in AX. `-mabi=ia16` makes it

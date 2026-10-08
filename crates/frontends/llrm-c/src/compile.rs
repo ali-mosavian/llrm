@@ -544,7 +544,8 @@ mod tests {
         let root = Path::new(env!("LLRM_ROOT"));
         let source = root.join("tests/fixtures/c/halve.c");
         let without_path = |text: &str| text.lines().filter(|line| !line.contains("DBSrcFile")).collect::<Vec<_>>().join("\n");
-        let recorded = super::recorded(&source, &[], false, &[]).expect("wccq records halve.c");
+        // The committed streams are Borland's, every function cdecl.
+        let recorded = super::recorded_for(&source, &[], false, &[], &super::Profile::for_abi(&llrm_x86_m16::M16, Some("cdecl")).unwrap()).expect("wccq records halve.c");
         let committed = std::fs::read_to_string(root.join("tests/fixtures/c/halve.cgs")).unwrap();
         assert_eq!(without_path(&recorded), without_path(&committed));
     }
@@ -561,7 +562,8 @@ mod tests {
         let machine = llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         let built = super::selected(&text, "farcast", None, &llrm_driver::m16_options(machine)).unwrap();
         let asm = llrm_core::backend::masm::text(&built).unwrap();
-        let from = asm.find("_fill proc").expect("the function");
+        let name = llrm_target::Target::calling(&llrm_x86_m16::M16).native().decorated("omf", "fill").expect("the default convention spells its symbols");
+        let from = asm.find(&format!("{name} proc")).expect("the function");
         let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
         let loop_at = body.iter().position(|line| line.ends_with(':') && line.starts_with('L') && body.iter().any(|one| one.starts_with("jne") && line.starts_with(&one[4..]))).expect("the loop");
         assert!(body.iter().filter(|line| line.starts_with("mov es,")).count() == 1 && !body[loop_at..].iter().any(|line| line.starts_with("mov es,")), "{body:?}");
@@ -731,6 +733,16 @@ mod tests {
     fn test_m16_regparm3_a_copy_and_a_unit_add_stay_when_the_lea_is_longer_than_the_inc() {
         let body = regparm3_at("_incs", llrm_core::driver::flags::Level::Os);
         assert!(body.iter().any(|line| line.starts_with("inc ")) && !body.iter().any(|line| line.starts_with("lea ")), "{body:?}");
+    }
+
+    /// `calleepop` serves a regparm3 function as it does a cdecl16 one: `many`'s fourth and fifth arguments are the only ones on the
+    /// stack, and its callee removes them (`ret 4`), its callers nothing.
+    #[test]
+    fn test_m16_regparm3_calleepop_removes_the_stack_arguments_in_the_callee() {
+        let body = regparm3("_many");
+        assert_eq!(body.last().map(String::as_str), Some("ret 4"), "{body:?}");
+        let caller = regparm3("_call_many");
+        assert!(!caller.iter().any(|line| line.starts_with("add sp")), "{caller:?}");
     }
 
     /// A long on the stack is two words: `stack_long`'s fourth, fifth and sixth arguments (a byte, a long, a long) are at [bp+6], [bp+8]
@@ -921,8 +933,10 @@ mod tests {
     fn test_arrays_of_several_strides_keep_their_indexes_in_registers() {
         for function in ["_bench_strides3", "_bench_strides4"] {
             let body = selected_loop("strides", function, "xor");
+            // An access's address registers; a `lea` reaches no memory, its operands are arithmetic.
             let registers: std::collections::BTreeSet<String> = body
                 .iter()
+                .filter(|one| !one.starts_with("lea "))
                 .filter_map(|one| Some(one.split_once('[')?.1.split_once(']')?.0.to_owned()))
                 .flat_map(|inside| inside.split(['+', '-', '*']).map(str::trim).map(str::to_owned).collect::<Vec<_>>())
                 .filter(|part| part.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && !matches!(part.as_str(), "bp" | "ebp"))

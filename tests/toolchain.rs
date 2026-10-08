@@ -176,14 +176,15 @@ fn test_c_parity_fixtures_compute_their_expected_values() {
     assemble(format!("{}/{}", layer.directory, layer.string("implementation").unwrap()), "layer_os.obj");
     assemble(format!("{}/{}", c.directory, c.string("init_file").unwrap()), "c_init.obj");
     std::fs::write(dir.join("os.h"), layer.c_header().unwrap()).unwrap();
-    // Each fixture's entry, run by a C `main` that writes its value to VALUE.BIN and ends by the layer's exit.
+    // Each fixture's entry, run by a C `main` that writes its value to VALUE.BIN and ends by the layer's exit. The fixtures are streams
+    // Open Watcom recorded with every function cdecl, so the entry is declared as it is.
     let entries = [("algebra", "parity_algebra_demo"), ("branch", "parity_branch_demo"), ("control", "parity_control_demo"), ("loop", "parity_loop_demo"), ("memory", "parity_memory_demo"), ("parity", "parity_kernel"), ("qbsp", "quake_bsp_demo"), ("qlight", "quake_light_demo"), ("qmove", "quake_move_demo"), ("scalar", "parity_scalar")];
     assert_eq!(entries.len(), names.len(), "premise: every fixture has an entry: {names:?}");
     let mut autoexec = format!("[autoexec]\nmount c {}\nc:\n", dir.display());
     let mut runs = Vec::new();
     for (number, name) in names.iter().enumerate() {
         let entry = entries.iter().find(|(one, _)| one == name).unwrap_or_else(|| panic!("no entry for {name}")).1;
-        let main = format!("#include \"os.h\"\nextern long {entry}(void);\nint main(void)\n{{\n    long value = {entry}();\n    short handle = llrm_os_create(\"VALUE.BIN\");\n    if (handle < 0 || llrm_os_write_file(handle, (const unsigned char *)&value, 4) != 4) return 1;\n    llrm_os_close(handle);\n    return 0;\n}}\n");
+        let main = format!("#include \"os.h\"\nextern long __cdecl {entry}(void);\nint main(void)\n{{\n    long value = {entry}();\n    short handle = llrm_os_create(\"VALUE.BIN\");\n    if (handle < 0 || llrm_os_write_file(handle, (const unsigned char *)&value, 4) != 4) return 1;\n    llrm_os_close(handle);\n    return 0;\n}}\n");
         std::fs::write(dir.join(format!("{name}_main.c")), main).unwrap();
         run("llrm-c", &[dir.join(format!("{name}_main.c")).to_str().unwrap(), "-I", dir.to_str().unwrap(), "-o", &format!("{name}_m.obj")]);
         let program = format!("P{number}");
@@ -372,7 +373,9 @@ fn test_the_generated_header_is_far_only_where_far_code_is() {
         assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
         String::from_utf8_lossy(&done.stdout).into_owned()
     };
-    assert!(header(&[]).contains("extern short __far __cdecl weight(short value);"));
+    // An unmarked declaration is the target's default convention; a named ABI says its own.
+    assert!(header(&[]).contains("extern short __far weight(short value);"));
+    assert!(header(&["-mabi=cdecl"]).contains("extern short __far __cdecl weight(short value);"));
     let flat = header(&["-m32"]);
     assert!(flat.contains("extern short __watcall weight(short value);") && !flat.contains("__far"), "{flat}");
 }

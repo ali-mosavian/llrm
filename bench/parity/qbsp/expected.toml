@@ -1,5 +1,5 @@
-reason = "interprocedural register use on top of #854: qbsp's callers keep values in the registers its private callees leave: instructions 320 -> 316, memory operands 118 -> 96, code bytes 462 -> 442 at -O2 (324 -> 320, 123 -> 93, 410 -> 392 at -Os)"
-blessed = "2026-10-07"
+reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+blessed = "2026-10-08"
 
 [bas.O2]
 instructions = 1056
@@ -16,30 +16,30 @@ data_bytes = 13
 bss_bytes = 0
 
 [c.O2]
-instructions = 329
-memory_operands = 87
-code_bytes = 407
+instructions = 291
+memory_operands = 80
+code_bytes = 373
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 326
-memory_operands = 87
-code_bytes = 355
+instructions = 297
+memory_operands = 80
+code_bytes = 327
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 316
-memory_operands = 96
-code_bytes = 442
+instructions = 314
+memory_operands = 85
+code_bytes = 430
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 320
-memory_operands = 93
-code_bytes = 392
+instructions = 319
+memory_operands = 85
+code_bytes = 385
 data_bytes = 0
 bss_bytes = 0
 

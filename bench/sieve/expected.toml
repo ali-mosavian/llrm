@@ -1,5 +1,5 @@
-reason = "ranges: a counter that steps by a constant without wrapping (nsw) from a known start does not go below it, and an nsw product of non-negative values is non-negative (sieve bas: the index is zero-extended: -5.5% instructions, +2 bytes code). A non-negative dividend by a constant is the unsigned division in a 32-bit segment, tuned for speed."
-blessed = "2026-10-07"
+reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+blessed = "2026-10-08"
 
 [bas.O2]
 instructions = 17641
@@ -16,32 +16,30 @@ data_bytes = 15
 bss_bytes = 0
 
 [c.O2]
-instructions = 12107
-memory_operands = 2728
-code_bytes = 149
-data_bytes = 0
-bss_bytes = 0
-kernel_ms = 0.1638
-
-[c.Os]
-instructions = 12883
-memory_operands = 3496
-code_bytes = 124
-data_bytes = 0
-bss_bytes = 0
-
-[nib.O2]
-instructions = 12087
+instructions = 12106
 memory_operands = 2727
 code_bytes = 135
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.1648
+
+[c.Os]
+instructions = 12882
+memory_operands = 3495
+code_bytes = 113
+data_bytes = 0
+bss_bytes = 0
+
+[nib.O2]
+instructions = 12086
+memory_operands = 2727
+code_bytes = 125
+data_bytes = 0
+bss_bytes = 0
 
 [nib.Os]
-instructions = 12877
+instructions = 12876
 memory_operands = 3495
-code_bytes = 119
+code_bytes = 110
 data_bytes = 0
 bss_bytes = 0
 

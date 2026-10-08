@@ -20,7 +20,7 @@ jobs=""
 for k in cf cn pf pn; do
     K=${k^^}
     for m in callee caller aggee agger; do
-        "$BIN/llrm-c" "$k$m.c" -o "$k$m.llrm.obj" 2> "$K${m^^}.ERR" || rm -f "$k$m.llrm.obj"
+        "$BIN/llrm-c" -mabi=cdecl "$k$m.c" -o "$k$m.llrm.obj" 2> "$K${m^^}.ERR" || rm -f "$k$m.llrm.obj"
     done
     # llrm's module, or BCC's where llrm refuses it: a callee in the llrm
     # caller's segment where the call is near.

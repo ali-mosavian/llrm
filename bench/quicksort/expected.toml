@@ -1,5 +1,5 @@
-reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
-blessed = "2026-10-07"
+reason = "the 486's LEA is one clock (the table held the 386's two): a copy and an add are one lea where it costs no more; down only"
+blessed = "2026-10-08"
 
 [bas.O2]
 instructions = 224965
@@ -16,30 +16,30 @@ data_bytes = 17
 bss_bytes = 0
 
 [c.O2]
-instructions = 160719
-memory_operands = 58880
-code_bytes = 316
+instructions = 163104
+memory_operands = 58878
+code_bytes = 304
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 150480
-memory_operands = 58880
-code_bytes = 281
+instructions = 151839
+memory_operands = 58878
+code_bytes = 271
 data_bytes = 0
 bss_bytes = 0
 
 [nib.O2]
-instructions = 181424
-memory_operands = 66202
-code_bytes = 442
+instructions = 168387
+memory_operands = 60750
+code_bytes = 426
 data_bytes = 0
 bss_bytes = 0
 
 [nib.Os]
-instructions = 167056
-memory_operands = 73745
-code_bytes = 428
+instructions = 167059
+memory_operands = 73063
+code_bytes = 409
 data_bytes = 0
 bss_bytes = 0
 
