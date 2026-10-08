@@ -1,0 +1,54 @@
+# Borrows the checker accepts though each looks like a conflict. Each holds
+# because a borrow ends at its last use or covers only the place it names.
+
+struct Pair:
+    mut a: i16
+    mut b: i16
+
+struct Bag:
+    items: vec[i16]
+    mut total: i16
+
+fn longer(a: &string, b: &string) -> &string:
+    if a.len >= b.len:
+        return a
+    return b
+
+fn add_into(dst: &mut i16, src: &i16) -> void:
+    dst += src
+
+# `self.items` is walked while `self.total` changes: two places, no overlap.
+fn Bag.tally(self: &mut Bag) -> void:
+    for x in &self.items:
+        self.total += x
+
+fn evens(v: &vec[i16]) -> iter[i16]:
+    for x in v:
+        if x % 2 == 0:
+            yield x
+
+fn main() -> i16:
+    # The result borrows from all three; none changes while it lives.
+    let x = "north"
+    let y = "east"
+    let z = "southwest"
+    print(longer(longer(x, y), z))
+
+    # One field lent `&mut`, its sibling `&`, in one call.
+    let mut p = Pair(a=1, b=2)
+    add_into(p.a, p.b)
+    print(p.a)
+
+    let mut bag = Bag(items=[1, 2, 3], total=0)
+    bag.tally()
+    print(bag.total)
+
+    # The generator borrows `v` for the loop only; the push comes after.
+    let mut v: vec[i16] = [1, 2, 3, 4]
+    let mut sum: i16 = 0
+    for e in evens(v):
+        sum += e
+    v.push(sum)
+    print(v[4])
+
+    return 0
