@@ -81,3 +81,55 @@ cv4 = "cv4"
 # compares the tree before and after, and cargo's lock serialises the rest. They run alone, after the other steps.
 [exclusive]
 build-script-reruns = "build_script_reruns"
+
+# CI job groups (.github/workflows/ci.yml runs one job per group that has a step to run, in parallel, after the build).
+# Every step the planner can produce is in exactly one group (a test checks).
+[groups]
+unit = ["lib", "doc", "crate-tests"]
+integration = ["integration", "build-script-reruns"]
+run = ["run"]
+python = ["pytest", "pytest-programs"]
+tools = ["bench", "torture"]
+identity = ["identity"]
+reference = ["turbo", "cv4", "qcport"]
+
+# Tools that are not in the repository and not free to fetch. A host without one has the capability missing:
+# its [requires] steps are SKIPPED with the reason, and the LLRM_REQUIRE_* variables in `require` are unset so the
+# tests in other steps that use it skip too (they print "SKIPPED: why"). A caller that sets one of them wants the
+# tool required: nothing is skipped and a missing tool fails, as before. needs: env var (or default path) + a file in it.
+[capability.turbo]
+require = ["LLRM_REQUIRE_TURBO"]
+needs = [
+  { env = "TCPP30_DIR", default = "~/scratch/toolchains/tcpp30", marker = "bin/TCC.EXE" },
+  { env = "TD_DIR", default = "~/scratch/toolchains/td", marker = "Td.exe" },
+]
+
+[capability.codeview]
+require = ["LLRM_REQUIRE_CODEVIEW"]
+needs = [
+  { env = "VBDOS_DIR", default = "~/work/other/d32x/toolchains/vbdos", marker = "BIN/CV.EXE" },
+  { env = "TCPP30_DIR", default = "~/scratch/toolchains/tcpp30", marker = "lib/C0M.OBJ" },
+]
+
+[capability.qcport]
+require = []
+needs = [
+  { env = "QCPORT", default = "~/scratch/qcport/src", marker = "." },
+  { env = "QCPORT_BORLAND", default = "~/scratch/qcbcc", marker = "." },
+]
+
+# What each item needs, one table. A key is a step (`turbo`), a `run` language (`lang:qb`) or a cheap test binary (`bin:differential`).
+# A step is skipped whole; a language or binary is left out of the step that runs it, and the step is skipped if none is left.
+[requires]
+turbo = ["turbo"]
+cv4 = ["codeview"]
+qcport = ["qcport"]
+bench = ["qb45"]
+"lang:qb" = ["qb45"]
+"bin:differential" = ["qb45"]
+
+# Microsoft QuickBASIC 4.5's LINK and BC: the qb programs link with them, and the BC differential and the bench's BASIC rows run them.
+[capability.qb45]
+require = []
+needs = [{ env = "QB45_DIR", default = "~/work/42-labs/mini-qb/dosbox/qb45", marker = "LINK.EXE" }]
+

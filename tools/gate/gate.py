@@ -2,6 +2,10 @@
 
     gate.py plan [--base REF] [--files F...] [--tier auto|fast|full]
     gate.py run  [same]            needs CARGO_TARGET_DIR; JOBS=N sets the concurrency (default 4)
+    gate.py plan --json            the plan as JSON: tier, the CI job groups with something to run, the skipped steps
+    gate.py run --group G          only the steps of group G (tiers.toml [groups]), after the build; G=build: the build alone
+                                   With GATE_ALLOW_MISSING=1 (CI) a step whose [capability] is missing on this host is SKIPPED with its reason, never run;
+                                   without it a missing tool fails as it always did.
     gate.py bisect GOOD BAD STEP...  first commit on main (first-parent) where the named steps fail
     gate.py main [--force]       the scheduled full tier over origin/main: runs when 5 merges or 2 hours have passed since
                                  the last green; red -> bisects since that green. Needs CARGO_TARGET_DIR, a tree of its own.
@@ -153,13 +157,13 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
 
 
 # Commands. Each runs under bash in the repo root with CARGO_TARGET_DIR set.
-def commands(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, str]:
+def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str] = frozenset()) -> dict[str, str]:
     scope = "--workspace" if p.packages is None else " ".join(f"-p {n}" for n in p.packages)
     cargo = "cargo test --release -q --no-fail-fast"
     split = cfg["split"]
     whole = set(cfg["whole"].values()) | set(cfg["exclusive"].values())
     skips = " ".join(f"--skip {s['filter']}" for s in split)
-    cheap_bins = " ".join(f"--test {t}" for t in root_tests() if t != "timing" and t not in whole)
+    cheap_bins = " ".join(f"--test {t}" for t in root_tests() if t != "timing" and t not in whole and t not in skip_bins)
     selected = set(p.packages or pkgs)
     ct = " ".join(f"-p {n} --test {t}" for n, t in crate_tests(pkgs) if n in selected)
     bench = (
@@ -201,14 +205,14 @@ def incomplete(text: str, binaries: int | None, filtered: bool) -> str | None:
     return None
 
 
-def expected(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, tuple[int | None, bool]]:
+def expected(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str] = frozenset()) -> dict[str, tuple[int | None, bool]]:
     """(test binaries that must report, whether a filter must match a test) per cargo test step."""
     whole = set(cfg["whole"].values()) | set(cfg["exclusive"].values())
     selected = set(p.packages or pkgs)
     out = {
         "lib": (None, False),
         "doc": (None, False),
-        "integration": (sum(1 for t in root_tests() if t != "timing" and t not in whole), False),
+        "integration": (sum(1 for t in root_tests() if t != "timing" and t not in whole and t not in skip_bins), False),
         "run": (1, True),
     }
     ct = sum(1 for n, _ in crate_tests(pkgs) if n in selected)
@@ -220,9 +224,50 @@ def expected(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, tuple[int |
     return out
 
 
-def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None) -> tuple[str, int, float]:
+def missing_capabilities(environ: dict | None = None) -> dict[str, str]:
+    """capability -> why this host lacks it: a directory its [capability] table names is not there.
+    Only where GATE_ALLOW_MISSING is set (the CI workflow): elsewhere a moved tool directory must turn the gate red, not skip.
+    One whose LLRM_REQUIRE_* variable the caller set is never missing: its tests fail, as they always did."""
+    environ = os.environ if environ is None else environ
+    out = {}
+    if not environ.get("GATE_ALLOW_MISSING"):
+        return out
+    for name, cap in load().get("capability", {}).items():
+        if any(environ.get(v) for v in cap["require"]):
+            continue
+        for need in cap["needs"]:
+            where = Path((environ.get(need["env"]) or need["default"]).replace("~", environ.get("HOME", "~"), 1))
+            if not (where / need["marker"]).exists():
+                out[name] = f"{name}: {where / need['marker']} not found (set {need['env']})"
+                break
+    return out
+
+
+def skipped_steps(steps: list[str], missing: dict[str, str], languages: list[str] | None = None) -> dict[str, str]:
+    """step -> reason, for each step that needs a capability this host lacks. `run` also when none of its `languages` can run."""
+    needs = load().get("requires", {})
+    out = {s: "; ".join(missing[c] for c in needs[s] if c in missing) for s in steps if any(c in missing for c in needs.get(s, []))}
+    if "run" in steps and languages and not [l for l in languages if l not in unusable(missing)[0]]:
+        out["run"] = "no run language can run here: " + "; ".join(missing.values())
+    return out
+
+
+def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
+    """(run languages, cheap test binaries) that need a capability this host lacks."""
+    out = {k: [c for c in needs if c in missing] for k, needs in load().get("requires", {}).items()}
+    langs = [k[5:] for k, hit in out.items() if hit and k.startswith("lang:")]
+    return langs, frozenset(k[4:] for k, hit in out.items() if hit and k.startswith("bin:"))
+
+
+def groups_of(p: Plan, skipped: dict[str, str]) -> dict[str, list[str]]:
+    """The CI job groups that have a step to run: group -> its steps in the plan, minus the skipped."""
+    return {g: run for g, members in load()["groups"].items() if (run := [s for s in members if s in p.steps and s not in skipped])}
+
+
+def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None, unset: tuple[str, ...] = ()) -> tuple[str, int, float]:
     start = time.time()
-    prelude = ". tools/debug-gate.env 2>/dev/null; set -o pipefail; "
+    # debug-gate.env makes every tool a requirement; a capability this host lacks is not one.
+    prelude = ". tools/debug-gate.env 2>/dev/null; " + "".join(f"unset {v}; " for v in unset) + "set -o pipefail; "
     with open(logs / f"{name}.log", "w") as log:
         code = subprocess.call(["bash", "-c", prelude + command], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
     if code == 0 and check and (why := incomplete((logs / f"{name}.log").read_text(), *check)):
@@ -231,16 +276,24 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
     return name, code, time.time() - start
 
 
-def execute(p: Plan) -> tuple[int, list[str]]:
+def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     target = os.environ.get("CARGO_TARGET_DIR")
     if not target:
         sys.exit("gate: CARGO_TARGET_DIR is not set")
     # The run test compares the tree before and after; a tool writing a .pyc into it meanwhile is not a leak.
     env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")}
     logs = Path(target) / "gate-logs"
-    logs.mkdir(exist_ok=True)
+    logs.mkdir(parents=True, exist_ok=True)
     pkgs = packages()
-    cmds, checks = commands(p, load(), pkgs), expected(p, load(), pkgs)
+    missing = missing_capabilities()
+    no_langs, skip_bins = unusable(missing)
+    languages, p.languages = p.languages, [l for l in p.languages if l not in no_langs]
+    cmds, checks = commands(p, load(), pkgs, skip_bins), expected(p, load(), pkgs, skip_bins)
+    unset = tuple(v for c in missing for v in load()["capability"][c]["require"])
+    skipped = skipped_steps(p.steps, missing, languages)
+    if group:
+        members = [] if group == "build" else load()["groups"][group]  # "build": the build alone, for the job that makes what the others share
+        p = Plan(p.tier, p.reason, [s for s in p.steps if s == "build" or s in members], p.packages, p.languages)
     start = time.time()
     results: dict[str, tuple[int, float]] = {}
 
@@ -252,8 +305,18 @@ def execute(p: Plan) -> tuple[int, list[str]]:
             tail = (logs / f"{name}.log").read_text().splitlines()[-30:]
             print("\n".join("    " + line for line in tail), flush=True)
 
+    for name, why in skipped.items():
+        if name in p.steps:
+            (logs / f"{name}.log").write_text(f"SKIPPED: {why}\n")
+            report(name, 77, 0)
+    p.steps = [s for s in p.steps if s not in skipped]
+    for key, needs in load().get("requires", {}).items():
+        if key.startswith(("lang:", "bin:")) and (hit := [missing[c] for c in needs if c in missing]):
+            print(f"[dropped] {key}: {'; '.join(hit)}", flush=True)
+    for name, why in missing.items():
+        print(f"[unavailable] {why}: its tests in other steps skip; run languages {no_langs}, test binaries {sorted(skip_bins)} left out", flush=True)
     if "build" in p.steps:
-        report(*run_step("build", cmds["build"], logs, env))
+        report(*run_step("build", cmds["build"], logs, env, unset=unset))
         if results["build"][0]:
             print(f"GATE {p.tier} FAIL: build")
             return 1, ["build"]
@@ -263,10 +326,10 @@ def execute(p: Plan) -> tuple[int, list[str]]:
     with ThreadPoolExecutor(jobs) as pool:
         # The longest steps start first.
         order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "pytest-programs", "turbo", "bench"))
-        for future in as_completed([pool.submit(run_step, s, cmds[s], logs, env, checks.get(s)) for s in order]):
+        for future in as_completed([pool.submit(run_step, s, cmds[s], logs, env, checks.get(s), unset) for s in order]):
             report(*future.result())
     for name in alone:
-        report(*run_step(name, cmds[name], logs, env, checks.get(name)))
+        report(*run_step(name, cmds[name], logs, env, checks.get(name), unset))
     failed = [n for n, (c, _) in results.items() if c not in (0, 77)]
     skipped = [n for n, (c, _) in results.items() if c == 77]
     cut = [n for n in failed if results[n][0] == 78]
@@ -336,6 +399,8 @@ def main() -> int:
     ap.add_argument("--base", default="origin/main")
     ap.add_argument("--files", nargs="*")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--group")
+    ap.add_argument("--json", action="store_true")
     ap.add_argument("--tier", default="auto", choices=["auto", "fast", "full"])
     args = ap.parse_args()
     if args.command == "main":
@@ -343,11 +408,17 @@ def main() -> int:
     if args.command == "bisect":
         return bisect(args.rest[0], args.rest[1], args.rest[2:])
     p = plan(args.files if args.files is not None else changed_files(args.base), args.tier)
+    skipped = skipped_steps(p.steps, missing_capabilities(), p.languages)
+    if args.json:
+        print(json.dumps({"tier": p.tier, "steps": p.steps, "groups": groups_of(p, skipped), "skipped": skipped}))
+        return 0
     print(f"tier {p.tier}: {p.reason}")
+    for step, why in skipped.items():
+        print(f"SKIPPED {step}: {why}")
     print("steps:", " ".join(p.steps), "| run languages:", " ".join(p.languages), "| crates:", "all" if p.packages is None else f"{len(p.packages)}")
     if args.command == "plan" or p.tier == "none":
         return 0
-    return execute(p)[0]
+    return execute(p, args.group)[0]
 
 
 if __name__ == "__main__":

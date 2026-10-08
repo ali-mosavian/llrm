@@ -153,3 +153,115 @@ def test_the_qcport_step_has_no_wall_clock_limit_of_its_own():
     """`timeout 400` around qcport-run killed a run that was still drawing at load: qcport-run stops a stall and caps a hang itself."""
     p = gate.plan(["tools/qcport-run.py"])
     assert "timeout" not in gate.commands(p, gate.load(), gate.packages())["qcport"]
+
+def test_every_step_the_planner_can_produce_is_in_exactly_one_ci_group():
+    """A step in no group would never run in CI, silently: the matrix is built from the groups."""
+    everything = [s for s in gate.plan(["crates/ir/llrm-mir/src/lib.rs"]).steps if s != "build"]  # the build is its own job
+    grouped = [s for members in gate.load()["groups"].values() for s in members]
+    assert sorted(grouped) == sorted(set(grouped)), "a step is in two groups"
+    assert set(everything) <= set(grouped), set(everything) - set(grouped)
+    assert set(grouped) <= set(everything), set(grouped) - set(everything)
+
+
+def test_a_step_whose_tool_is_missing_is_skipped_with_the_tool_named_not_run_and_not_passed(tmp_path):
+    """On a runner without Turbo C++ the turbo step passed by skipping inside the test binary: green, having proved nothing."""
+    env = {"HOME": str(tmp_path), "TCPP30_DIR": str(tmp_path / "none"), "GATE_ALLOW_MISSING": "1"}
+    missing = gate.missing_capabilities(env)
+    assert "TCPP30_DIR" in missing["turbo"] and "codeview" in missing
+    skipped = gate.skipped_steps(["turbo", "cv4", "qcport", "run"], missing)
+    assert set(skipped) == {"turbo", "cv4", "qcport"}
+    assert "TCPP30_DIR" in skipped["turbo"]
+
+
+def test_a_tool_the_caller_requires_is_never_skipped(tmp_path):
+    """LLRM_REQUIRE_TURBO set means a gate that cannot find Turbo must fail, not skip."""
+    env = {"HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "1", "GATE_ALLOW_MISSING": "1"}
+    assert "turbo" not in gate.missing_capabilities(env)
+
+
+def test_a_tool_that_is_present_is_not_missing(tmp_path):
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin/TCC.EXE").touch()
+    (tmp_path / "Td.exe").touch()
+    env = {"HOME": str(tmp_path), "TCPP30_DIR": str(tmp_path), "TD_DIR": str(tmp_path), "GATE_ALLOW_MISSING": "1"}
+    assert "turbo" not in gate.missing_capabilities(env)
+
+
+def test_ci_groups_hold_only_the_steps_that_can_run_here():
+    p = gate.plan(["crates/ir/llrm-mir/src/lib.rs"])
+    skipped = {"turbo": "x", "cv4": "x", "qcport": "x"}
+    groups = gate.groups_of(p, skipped)
+    assert "reference" not in groups and "turbo" not in sum(groups.values(), [])
+
+
+def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path):
+    env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
+    out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
+    got = __import__("json").loads(out)
+    assert set(got["skipped"]) == {"turbo", "cv4", "qcport", "bench"} and "reference" not in got["groups"]
+    assert "run" in got["groups"]["run"]
+
+
+def test_a_gate_run_makes_a_target_dir_that_does_not_exist_yet(tmp_path, monkeypatch):
+    """On a fresh CI runner CARGO_TARGET_DIR is not there: `run` died FileNotFoundError on target/gate-logs before any step."""
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "fresh" / "target"))
+    code, failed = gate.execute(gate.Plan("fast", "test", steps=[]))
+    assert code == 0 and (tmp_path / "fresh/target/gate-logs").is_dir()
+
+
+def test_a_moved_tool_directory_is_not_skipped_unless_the_caller_allows_it(tmp_path):
+    """Skipping on any absent tool turned a red gate (TD_DIR moved) into SKIPPED and PASS on the host that has the tools."""
+    env = {"HOME": str(tmp_path), "TCPP30_DIR": str(tmp_path / "moved")}
+    assert gate.missing_capabilities(env) == {}
+    assert "turbo" in gate.missing_capabilities({**env, "GATE_ALLOW_MISSING": "1"})
+
+
+def test_without_quickbasic_the_qb_programs_and_the_differential_binary_are_left_out_not_failed(tmp_path):
+    """Every qb program died 'Bad command or filename V:\\LINK' on a runner without QuickBASIC: run and integration red for a missing tool."""
+    env = {"HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1"}
+    missing = gate.missing_capabilities(env)
+    langs, bins = gate.unusable(missing)
+    assert langs == ["qb"] and "differential" in bins
+    p = gate.plan(["crates/ir/llrm-mir/src/lib.rs"])
+    cmds = gate.commands(p, gate.load(), gate.packages(), bins)
+    assert "--test differential " not in cmds["integration"] + " " and "--test farbss" in cmds["integration"]
+    assert gate.skipped_steps(["run", "bench"], missing, ["qb"]).keys() == {"run", "bench"}
+    assert "run" not in gate.skipped_steps(["run"], missing, ["qb", "c"])
+
+
+def test_a_step_run_by_the_gate_does_not_see_a_requirement_for_a_tool_the_host_lacks(tmp_path, monkeypatch):
+    """The unset reached the build but not the pool: tests/turbo.rs failed 'LLRM_REQUIRE_TURBO is set' on a runner with no Turbo C++."""
+    for name, value in {"CARGO_TARGET_DIR": str(tmp_path / "t"), "HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1", "TCPP30_DIR": "", "TD_DIR": ""}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("LLRM_REQUIRE_TURBO", raising=False)
+    monkeypatch.setattr(gate, "commands", lambda *a: {"probe": 'echo "[$LLRM_REQUIRE_TURBO]"'})
+    assert gate.execute(gate.Plan("fast", "test", steps=["probe"]))[0] == 0
+    assert (tmp_path / "t/gate-logs/probe.log").read_text().strip() == "[]"
+
+
+def test_a_dropped_test_binary_is_named_in_the_run_and_does_not_make_the_step_incomplete(tmp_path):
+    """The step reports one binary fewer: the expected count must follow, and the output must say which was left out."""
+    cfg, pkgs = gate.load(), gate.packages()
+    p = gate.plan(["crates/ir/llrm-mir/src/lib.rs"])
+    full = gate.expected(p, cfg, pkgs)["integration"][0]
+    cut = gate.expected(p, cfg, pkgs, frozenset({"differential"}))["integration"][0]
+    assert cut == full - 1
+    one = "running 1 test\n.\ntest result: ok. 1 passed; 0 failed\n"
+    assert gate.incomplete(one * cut, cut, False) is None
+    assert "results of" in gate.incomplete(one * cut, full, False)
+    env = {**__import__("os").environ, "HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1", "CARGO_TARGET_DIR": str(tmp_path / "t"), "QB45_DIR": ""}
+    code = "import sys; sys.path.insert(0, 'tools/gate'); import gate; gate.execute(gate.Plan('fast', 'x', steps=[]))"
+    out = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, env=env).stdout
+    assert "[dropped] bin:differential" in out and "[dropped] lang:qb" in out, out
+
+
+def test_without_the_opt_in_the_plan_and_the_commands_are_what_they_were(tmp_path):
+    """Skipping is CI's: on a host that did not ask, nothing is skipped, dropped or reworded."""
+    env = {"HOME": str(tmp_path)}
+    assert gate.missing_capabilities(env) == {}
+    assert gate.unusable({}) == ([], frozenset())
+    p = gate.plan(["crates/ir/llrm-mir/src/lib.rs"])
+    cfg, pkgs = gate.load(), gate.packages()
+    assert gate.commands(p, cfg, pkgs) == gate.commands(p, cfg, pkgs, frozenset())
+    assert gate.skipped_steps(p.steps, gate.missing_capabilities(env), p.languages) == {}
+    assert "--test differential " in gate.commands(p, cfg, pkgs)["integration"] + " "
