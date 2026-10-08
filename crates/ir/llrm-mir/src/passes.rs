@@ -501,7 +501,8 @@ impl Analyses {
         let updated = self.kept.remove(&key).and_then(|old| {
             let old = old.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
             let changes = function.changes_since(old.mark)?;
-            if A::SKIPS && (!A::READS_OUTER || Rc::ptr_eq(&old.outer, &self.outer)) && A::unaffected(changes, context, function) {
+            // Asking of a long log again and again is more than the run it saves.
+            if A::SKIPS && changes.len() <= 256 && (!A::READS_OUTER || Rc::ptr_eq(&old.outer, &self.outer)) && A::unaffected(changes, context, function) {
                 if check_replay() {
                     let whole = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
                     assert!(*old.result == whole, "{}: the result kept past {} changes is not what deriving it afresh gives: {:?}", A::NAME, changes.len(), changes.iter().map(|c| match *c { crate::module::Change::Inserted { inst, .. } | crate::module::Change::Erased { inst, .. } | crate::module::Change::Moved { inst, .. } | crate::module::Change::Rewritten(inst) | crate::module::Change::Cloned { to: inst, .. } => format!("{:?}:{}", c, function.instruction(inst).opcode.mnemonic()), _ => format!("{c:?}") }).collect::<Vec<_>>());
