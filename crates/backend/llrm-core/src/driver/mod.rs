@@ -190,6 +190,10 @@ pub fn linked(modules: Vec<Module>, runtime: Module, target: std::rc::Rc<dyn llr
 /// module verified after.
 pub fn optimized(program: &mut Program, options: &Options) -> Result<(), String> {
     let applied = llrm_transforms::pipeline::Applied { options: options.pipeline.clone(), dump: options.dump.clone(), ..Default::default() };
+    // The debug format finds a variable from what the notes say, so its stores need not be kept for a debugger that reads its cell.
+    if options.cfa_locations() {
+        program.modules.iter_mut().for_each(lifted);
+    }
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
     // Nothing optimises at -O0, so nothing needs a variable's stores kept for a debugger that reads its cell.
     if !options.pipeline.optimize && options.cfa_locations() {
@@ -223,6 +227,8 @@ fn lifted(module: &mut Module) {
                 llrm_mir::Opcode::Call(_) => function.set_operand(inst, 3, llrm_mir::Operand::Constant(no)),
                 _ => {}
             }
+            // The mark has done its work; metadata on an instruction is something a pass tells it from another by.
+            function.unannotate(inst, llrm_mir::debuginfo::OBSERVED);
         }
     }
 }
