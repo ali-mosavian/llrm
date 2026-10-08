@@ -92,13 +92,14 @@ const COPY_BB_INSNS: usize = 8;
 
 /// A block that only returns: plain operations then a `ret`, no way on, within `limit` bytes and none of it source-owned.
 fn _return_tail(bits: u32, block: &LirBlock, limit: usize) -> bool {
-    if !block.phis.is_empty() || !block.succ.is_empty() || block.insns.iter().any(|one| one.group.is_some() || one.symbol == Some(true) || !one.spread.is_empty()) {
+    if !block.phis.is_empty() || !block.succ.is_empty() || block.insns.iter().any(|one| one.call.is_some() || one.group.is_some() || one.symbol == Some(true) || !one.spread.is_empty()) {
         return false;
     }
     let real = _real(block);
     let Some((last, rest)) = real.split_last() else { return false };
-    if last.what.as_ref().is_none_or(|what| what.op != Operation::Return)
-        || rest.iter().any(|one| one.what.as_ref().is_none_or(|what| matches!(what.op, Operation::Barrier | Operation::Branch | Operation::Call | Operation::Data | Operation::Jump | Operation::Return)))
+    // A return that covers source bytes is the program's own (a BASIC module's end spells a runtime call at it): not copied.
+    if last.what.as_ref().is_none_or(|what| what.op != Operation::Return) || !last.inserted()
+        || rest.iter().any(|one| one.call.is_some() || one.what.as_ref().is_none_or(|what| matches!(what.op, Operation::Barrier | Operation::Branch | Operation::Call | Operation::Data | Operation::Jump | Operation::Return)))
     {
         return false;
     }
