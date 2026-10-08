@@ -948,7 +948,7 @@ b:
     let bytes = OperationCosts { call: 3, add: 6, ..OperationCosts::default() };
     let (mix, f) = (module.named("mix").unwrap(), module.named("f").unwrap());
     let counts = inline::call_counts(&module);
-    let candidates = inline::candidates(&module, &layout, &counts, &BTreeSet::from([mix]), &clocks, 20, Threshold::default());
+    let candidates = inline::candidates(&module, &llrm_mir::memory::callees(&module), &layout, &counts, &BTreeSet::from([mix]), &clocks, 20, Threshold::default());
     let calls: Vec<_> = module.global(f).function().unwrap().walk().map(|(_, inst)| inst).filter(|&inst| llrm_mir::memory::callee(&module.context, module.global(f).function().unwrap(), inst).is_some()).collect();
     let sites: llrm_support::hash::IndexMap<_, _> = calls.iter().map(|&call| (call, candidates[&mix].clone())).collect();
     let mut analyses = ModuleAnalyses::of(&module, std::rc::Rc::new(llrm_mir::target::Neutral));
