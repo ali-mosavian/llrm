@@ -1,17 +1,17 @@
-reason = "jumpthread decides a branch on a compare of a phi of constants on each way into it (gcc's budget, empty copies at -Os): queens c -O2 instructions 148191 -> 137439, -Os 174112 -> 160327; qlight c +1 instruction, -1 byte"
+reason = "the queue takes the value fewest registers may hold first (LLVM's register class priority): m16 base/index values before wide ones; 38 instruction rows change, 23 better; QCport bytes -0.34% (-O2), -0.36% (-Os)"
 blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 338429
+instructions = 338981
 memory_operands = 103461
-code_bytes = 443
+code_bytes = 445
 data_bytes = 15
 bss_bytes = 0
 
 [bas.Os]
-instructions = 319614
+instructions = 320166
 memory_operands = 91158
-code_bytes = 401
+code_bytes = 403
 data_bytes = 15
 bss_bytes = 0
 

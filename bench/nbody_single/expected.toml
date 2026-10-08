@@ -1,32 +1,31 @@
-reason = "x/16.0f is x*0.0625f (#938): the constant is an fmul memory operand (11 clocks, read twice a step) in place of a register copy fdiv'd (73); m32 clocks 9321367 -> 8643367, instructions equal, memory operands +4.3%, code +2 bytes"
+reason = "the queue takes the value fewest registers may hold first (LLVM's register class priority): m16 base/index values before wide ones; 38 instruction rows change, 23 better; QCport bytes -0.34% (-O2), -0.36% (-Os)"
 blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 1037182
+instructions = 1037180
 memory_operands = 144105
-code_bytes = 390
+code_bytes = 388
 data_bytes = 145
 bss_bytes = 0
 
 [bas.Os]
-instructions = 1037188
+instructions = 1037186
 memory_operands = 144105
-code_bytes = 385
+code_bytes = 383
 data_bytes = 145
 bss_bytes = 0
-kernel_ms = 13.8468
 
 [c.O2]
-instructions = 1037188
+instructions = 1037186
 memory_operands = 144111
-code_bytes = 337
+code_bytes = 335
 data_bytes = 24
 bss_bytes = 96
 
 [c.Os]
-instructions = 1037188
+instructions = 1037186
 memory_operands = 144111
-code_bytes = 337
+code_bytes = 335
 data_bytes = 24
 bss_bytes = 96
 

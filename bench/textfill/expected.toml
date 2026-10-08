@@ -1,21 +1,19 @@
-reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+reason = "the queue takes the value fewest registers may hold first (LLVM's register class priority): m16 base/index values before wide ones; 38 instruction rows change, 23 better; QCport bytes -0.34% (-O2), -0.36% (-Os)"
 blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 30047
+instructions = 30045
 memory_operands = 8013
-code_bytes = 234
+code_bytes = 232
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.4138
 
 [bas.Os]
-instructions = 30047
+instructions = 30045
 memory_operands = 8013
-code_bytes = 234
+code_bytes = 232
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.4138
 
 [c.O2]
 instructions = 30009

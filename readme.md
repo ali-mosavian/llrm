@@ -186,22 +186,22 @@ _dot proc far
     push di
 L0_0:
     les bx, dword ptr [bp+6]        ; es:bx = a's slice: length, then data pointer
-    lfs di, dword ptr [bp+10]       ; fs:di = b's slice
-    mov ax, word ptr es:[bx]        ; len(a)
-    mov cx, word ptr fs:[di]        ; len(b)
-    les si, dword ptr es:[bx+4]     ; [hoisted] es:si = a's data
-    lfs di, dword ptr fs:[di+4]     ; [hoisted] fs:di = b's data
-    cmp ax, cx
-    mov bx, cx
+    lfs si, dword ptr [bp+10]       ; fs:si = b's slice
+    mov cx, word ptr es:[bx]        ; len(a)
+    mov dx, word ptr fs:[si]        ; len(b)
+    les ax, dword ptr es:[bx+4]     ; [hoisted] es:ax = a's data
+    lfs di, dword ptr fs:[si+4]     ; [hoisted] fs:di = b's data
+    cmp cx, dx
+    mov bx, dx
     jae L0_9
 L0_8:
-    mov bx, ax
+    mov bx, cx
 L0_9:                               ; bx = min(len(a), len(b)): zip ends with the shorter slice,
-    lea ax, [ebx+ebx]               ; decided once, not tested in the loop
-    mov cx, ax
+    lea dx, [ebx+ebx]               ; decided once, not tested in the loop
+    mov cx, dx
     neg cx                          ; [one induction variable] cx = -2*count
-    add si, ax                      ; [biased] a's data + 2*count
-    add di, ax                      ; [biased] b's data + 2*count
+    lea si, [eax+edx]               ; [biased] a's data + 2*count
+    add di, dx                      ; [biased] b's data + 2*count
     xor eax, eax                    ; total = 0
     or bx, bx
     je L0_29                        ; [loop rotation] no elements: skip the loop
@@ -256,32 +256,30 @@ DOT proc near
     push si
     push di
 L1_0:
-    mov di, word ptr [bp+6]         ; a() descriptor: the arguments were pushed left to right
-    mov si, word ptr [bp+4]         ; b() descriptor
-    mov bx, word ptr [di+14]        ; UBOUND(a): one dimension, so its slot is fixed, from 0,
-    dec bx                          ; so the bound is its count less 1; no allocated test
-    mov ax, word ptr [si+14]
+    mov si, word ptr [bp+6]         ; a() descriptor: the arguments were pushed left to right
+    mov bx, word ptr [bp+4]         ; b() descriptor
+    mov cx, word ptr [si+14]        ; UBOUND(a): one dimension, so its slot is fixed, from 0,
+    dec cx                          ; so the bound is its count less 1; no allocated test
+    mov ax, word ptr [bx+14]
     dec ax                          ; UBOUND(b)
-    cmp bx, ax                      ; [inlined] Min%: no call, bx = the smaller bound
+    cmp cx, ax                      ; [inlined] Min%: no call, cx = the smaller bound
     jl L1_12
 L1_11:
-    mov bx, ax
+    mov cx, ax
 L1_12:
-    mov es, word ptr [di+2]         ; [hoisted] es = a's data segment
-    mov ax, word ptr [di+10]        ; [hoisted] a's data offset
-    mov fs, word ptr [si+2]         ; [hoisted] fs = b's data segment
-    mov di, word ptr [si+10]        ; [hoisted] di = b's data offset
-    lea dx, [ebx+ebx]               ; dx = 2 * bound
-    mov cx, dx
-    neg cx
-    add cx, -2                      ; [one induction variable] cx = -2 * (bound + 1)
-    lea si, [eax+edx]               ; [biased] a's offset + 2 * bound, one lea; the +2 is in the loop's
-    add di, dx                      ; [biased] b's offset + 2 * bound; displacement
+    mov es, word ptr [si+2]         ; [hoisted] es = a's data segment
+    mov si, word ptr [si+10]        ; [hoisted] a's data offset
+    mov fs, word ptr [bx+2]         ; [hoisted] fs = b's data segment
+    mov di, word ptr [bx+10]        ; [hoisted] di = b's data offset
+    lea ax, [ecx+ecx]               ; ax = 2 * bound
+    mov bx, ax
+    neg bx
+    add bx, -2                      ; [one induction variable] bx = -2 * (bound + 1)
+    add si, ax                      ; [biased] a's offset + 2 * bound; the +2 is in the loop's
+    add di, ax                      ; [biased] b's offset + 2 * bound; displacement
     xor eax, eax                    ; total = 0
-    or bx, bx
+    or cx, cx
     jl L1_49                        ; [loop rotation] bound < 0: no iterations
-L1_51:
-    mov bx, cx
 L1_34:
     movsx ecx, word ptr es:[bx+si+2] ; a(i), sign-extended
     movsx edx, word ptr fs:[bx+di+2] ; b(i)

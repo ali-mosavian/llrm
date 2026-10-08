@@ -1,4 +1,4 @@
-reason = "synth_mult: a constant multiply is the cheaper of the Horner chain and gcc's (factors 2^m +- 1, t - 1, t + 1): quicksort c -O2 163104 -> 162079 instructions, qlight -5 bytes"
+reason = "the queue takes the value fewest registers may hold first (LLVM's register class priority): m16 base/index values before wide ones; 38 instruction rows change, 23 better; QCport bytes -0.34% (-O2), -0.36% (-Os)"
 blessed = "2026-10-08"
 
 [bas.O2]

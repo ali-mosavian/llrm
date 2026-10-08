@@ -92,20 +92,23 @@ fn far_pointer_slot_also_read_as_words(body: &LirBody) -> bool {
 #[test]
 fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_words_in_registers() {
     // Without the spiller: the selector class it now holds in registers no longer leaves this far pointer reloaded as words.
-    let (body, phases) = crate::backend::regalloc_input::before_phase_skipping(Calls::Everything, "conc9_les.ll", "f_conc9_s2_xi_bgnlnpfpn_index_n_st1_sum", "Core", "RegAlloc", &["SsaSpill"]);
-    let mut body = body;
-    let mut phases = phases.into_iter();
-    for mut phase in phases.by_ref() {
-        if phase.class_name() == "LoopSlots" {
-            assert!(far_pointer_slot_also_read_as_words(&body), "premise: a far pointer's slot is read as words too");
-            body = phase.transform(body).expect("loop slots");
-            break;
+    // The queue ordered by size alone is what left it so; the register class first no longer does, on any CPU.
+    crate::backend::allocate::without_class_priority(|| {
+        let (body, phases) = crate::backend::regalloc_input::before_phase_skipping(Calls::Everything, "conc9_les.ll", "f_conc9_s2_xi_bgnlnpfpn_index_n_st1_sum", "Core", "RegAlloc", &["SsaSpill"]);
+        let mut body = body;
+        let mut phases = phases.into_iter();
+        for mut phase in phases.by_ref() {
+            if phase.class_name() == "LoopSlots" {
+                assert!(far_pointer_slot_also_read_as_words(&body), "premise: a far pointer's slot is read as words too");
+                body = phase.transform(body).expect("loop slots");
+                break;
+            }
+            body = phase.transform(body).expect("phase");
         }
-        body = phase.transform(body).expect("phase");
-    }
-    for one in body.insns().iter().filter_map(|one| one.what.as_ref()).filter(|what| target::far_load(what)) {
-        assert!(matches!(one.sources.as_slice(), [Loc::Mem(_)]), "a far pointer load reads memory only: {one:?}");
-    }
+        for one in body.insns().iter().filter_map(|one| one.what.as_ref()).filter(|what| target::far_load(what)) {
+            assert!(matches!(one.sources.as_slice(), [Loc::Mem(_)]), "a far pointer load reads memory only: {one:?}");
+        }
+    });
 }
 
 /// Seven pointers walking 24-byte records at `-march=core2`: the loop's
