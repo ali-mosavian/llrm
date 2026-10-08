@@ -77,25 +77,14 @@ pub fn cheapest_narrow_chain<'a>(
 /// The chain of `number`: of its magnitude negated, or, as GCC's `synth_mult` has it for a negative `t` (`a * -7` is `a - a*8`), of
 /// `1 - number` shifted and taken from the source.
 fn chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea: bool) -> Result<Option<(Chain, i64)>, String> {
-    // Asked again and again for one multiply (is it scalable, what does it cost, what is it): the answer is a function of the
-    // number and of the target's prices, remembered per thread.
-    thread_local! {
-        static REMEMBERED: std::cell::RefCell<std::collections::HashMap<(i64, bool, String, u64), Option<(Chain, i64)>>> = Default::default();
-    }
+    // Asked again and again for one multiply (is it scalable, what does it cost, what is it): the answer is a function of the number
+    // and of the profile's prices, so the profile remembers it.
     let target = targets::profile(cpu)?;
-    let prices = {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        target._costs.hash(&mut hasher);
-        target.address_scales.hash(&mut hasher);
-        hasher.finish()
-    };
-    let key = (number, with_lea, target.name.clone(), prices);
-    if let Some(known) = REMEMBERED.with(|known| known.borrow().get(&key).cloned()) {
+    if let Some(known) = target.multiplies.get(number, with_lea) {
         return Ok(known);
     }
     let found = unremembered_chains(number, target, with_lea)?;
-    REMEMBERED.with(|known| known.borrow_mut().insert(key, found.clone()));
+    target.multiplies.put(number, with_lea, found.clone());
     Ok(found)
 }
 
