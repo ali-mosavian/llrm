@@ -260,3 +260,56 @@ fn test_a_copied_block_with_three_edges_to_a_block_gives_its_phi_three_inputs() 
     let printed = managed(&mut after, JumpThread { size: false });
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{printed}");
 }
+
+/// An inlined `safe()`: its result is a phi of constants, tested by the branch after it, in a loop.
+const TESTED_RESULT: &str = "define i16 @f(i16 %n, i16 %k) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %step ]
+  %acc = phi i16 [ 0, %b0 ], [ %acc1, %step ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %test, label %done
+
+test:
+  %c = icmp sgt i16 %k, %i
+  br i1 %c, label %yes, label %no
+
+yes:
+  br label %join
+
+no:
+  br label %join
+
+join:
+  %r = phi i16 [ 1, %yes ], [ 0, %no ]
+  %t = icmp ne i16 %r, 0
+  br i1 %t, label %hit, label %step
+
+hit:
+  %h = add i16 %acc, %i
+  br label %step
+
+step:
+  %acc1 = phi i16 [ %acc, %join ], [ %h, %hit ]
+  %i1 = add nsw i16 %i, 1
+  br label %head
+
+done:
+  ret i16 %acc
+}
+";
+
+/// `r = phi(1, 0); if (r != 0)` after a call inlined: the test of a constant each path decides was run on every trip
+/// (queens: `xor eax, eax; cmp eax, 0; je`, 13% of its -O2 clocks over gcc).
+#[test]
+fn test_a_branch_on_a_compare_of_a_phi_of_constants_is_decided_on_each_path() {
+    let pairs: Vec<Vec<i128>> = [(0, 0), (1, 5), (7, 3), (10, -4), (13, 9), (30, 2)].iter().map(|&(n, k)| vec![n, k]).collect();
+    let inputs: Vec<&[i128]> = pairs.iter().map(Vec::as_slice).collect();
+    let before = parsed(&format!("{DOS}{TESTED_RESULT}"));
+    let mut after = before.clone();
+    let printed = managed(&mut after, JumpThread { size: false });
+    assert_eq!(results(&after, &inputs), results(&before, &inputs), "{printed}");
+    assert_eq!(printed.matches("icmp ne").count(), 0, "{printed}");
+}
