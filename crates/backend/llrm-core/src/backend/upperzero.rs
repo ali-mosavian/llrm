@@ -77,8 +77,25 @@ fn disturbed(bits: u32, one: &Insn) -> Roots {
 
 /// What `one` makes of `zero`, the roots known zero before it.
 pub fn after(bits: u32, one: &Insn, zero: Roots) -> Roots {
+    if let Some(swapped) = exchanged(one, zero) {
+        return swapped;
+    }
     let zeroed = zeroing(one) | copied(one, zero);
     (zero & !disturbed(bits, one)) | zeroed
+}
+
+/// `zero` after `xchg a, b` of two whole registers: each now holds the other's upper half.
+fn exchanged(one: &Insn, zero: Roots) -> Option<Roots> {
+    let Some(Semantics { op: Operation::Exchange, dests, .. }) = &one.what else {
+        return None;
+    };
+    let [Loc::Reg(Reg { register: left, width: 4 }), Loc::Reg(Reg { register: right, width: 4 })] = dests.as_slice() else {
+        return None;
+    };
+    let (left, right) = (bit(*left)?, bit(*right)?);
+    let (had_left, had_right) = (zero & left != 0, zero & right != 0);
+    let rest = zero & !(left | right);
+    Some(rest | if had_right { left } else { 0 } | if had_left { right } else { 0 })
 }
 
 /// The root a whole-register copy writes, where the root it copies from has a zero upper half.
@@ -325,5 +342,25 @@ mod tests {
                 assert_ne!(zero[&crate::backend::peephole::id(insn)] & ebx, 0, "{:?}", insn.what);
             }
         }
+    }
+
+    /// `xchg esi, ecx` lost both registers' zero upper halves, so a counter that began as `mov ecx, 2` was copied by `movzx` before
+    /// it indexed (bench/sieve with EBP free: one more instruction a trip).
+    #[test]
+    fn test_an_exchange_swaps_the_zero_upper_halves() {
+        let (ecx, esi) = (Loc::Reg(Reg { register: Register::ECX, width: 4 }), Loc::Reg(Reg { register: Register::ESI, width: 4 }));
+        let two = Loc::Imm(Imm { value: 2, width: 4, address: None });
+        let entry = LirBlock::new(0, vec![
+            one(0, Operation::Move, "mov", vec![ecx.clone()], vec![two], None),
+            one(1, Operation::Exchange, "xchg", vec![esi.clone(), ecx.clone()], vec![ecx.clone(), esi.clone()], None),
+            one(2, Operation::Nothing, "nop", vec![], vec![], None),
+        ]);
+        let body = LirBody::new("swap", 0, vec![entry], IndexMap::default(), IndexMap::default());
+
+        let zero = before(&body);
+
+        let id = |at: usize| crate::backend::peephole::id(&body.blocks[0].insns[at]);
+        assert_ne!(zero[&id(2)] & bit(Register::ESI).unwrap(), 0);
+        assert_eq!(zero[&id(2)] & bit(Register::ECX).unwrap(), 0);
     }
 }

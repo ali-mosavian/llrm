@@ -15,7 +15,7 @@ use crate::model::lir::LirBody;
 
 /// The registers that are the frame register as LIR names it.
 fn is_frame(register: Register, pointer: Register) -> bool {
-    register != Register::None && (register == Register::BP || register == pointer || crate::model::ir::root(register) == crate::model::ir::root(pointer))
+    register != Register::None && crate::model::ir::root(register) == crate::model::ir::root(pointer)
 }
 
 /// Whether the function described by `body` (its calls' popped bytes in `pops`) can have no frame register.
@@ -68,7 +68,7 @@ pub fn without_frame_register(body: &LirBody, registers: &llrm_target::FrameRegi
                 }
                 Operation::Jump | Operation::Branch if what.indirect => return false,
                 Operation::Return => leaves.insert(block.at, depth).map_or((), |_| ()),
-                _ if what.dests.iter().any(|place| matches!(place, Loc::Reg(reg) if reg.register == registers.stack || reg.register == Register::SP)) => {
+                _ if what.dests.iter().any(|place| matches!(place, Loc::Reg(reg) if crate::model::ir::root(reg.register) == crate::model::ir::root(registers.stack))) => {
                     // Only `add sp, n` and `sub sp, n` are understood.
                     let amount = match (&what.dests[..], &what.sources[..]) {
                         ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Imm(imm)]) if dest.register == source.register && imm.address.is_none() => imm.value,
