@@ -24,6 +24,29 @@ the Python tests, the compile-everything test: 2-2.5 minutes); the tiers cut the
 skips ~190 s of debugger and identity steps) and the load it puts on the host. Replaying the 45 red steps in the 194
 gate logs, the fast tier selects the failing step every time. Of the last 80 merges, 61 pick fast, 17 full, 2 nothing.
 
+
+### Compile cost
+
+`tools/compile-cost.py` (step `compile-cost`, run when the backend, transforms, front end or x86 targets change) counts the
+user-space instructions `llrm-c` retires (`perf stat -e instructions:u`) compiling the 66 vsgcc programs and QCport's 65
+modules at -O1, -O2 and -Os, and compares each with `tools/gate/compile-baseline.json`. Instructions count work, so host load
+does not move them. It fails when a level's geomean moves past 1.003 or any file past 1.02, up or down; the same build
+measured twice differs by 0.0001 in geomean and 0.0047 at worst (`--noise`). The baseline is main: a change that raises
+the cost on purpose, or lowers it, runs `python3 tools/compile-cost.py --refresh` in the same commit (it rewrites the entries
+that moved past noise; `--update` rewrites all), so the cost is in the diff and a gain is not given back unseen. Baseline: main 167ad0dde. The QCport files
+need `QCPORT` and `QCPORT_INC` (`~/scratch/qcport-env.sh`); without them they are reported as not measured. Without a working
+counter the step exits 77 (SKIPPED).
+
+### Scaling
+
+`crates/target/*/vsgcc/scaling_gate.py` (step `scaling`, same owners as compile-cost) compiles each of scaling.py's generated
+programs at N and 2N (llrm-c -O1, -O2, -Os) and compares the ratio of instructions, net of the empty file, with
+`tools/gate/scaling-budget.json`. Linear work reads 2.0; a pass gone quadratic pulls its axis towards 4. The same build
+twice differs by 0.0014 at worst; it fails past 1% either way, so a fix that lowers an axis refreshes the budget in the same
+commit: `python3 crates/target/*/vsgcc/scaling_gate.py --refresh`. The gcc-like target is about 2.1 on every axis; the budget
+is main today (branches, live, chain and callers at -Os read 2.8 to 4.6: #924 and #941). Wall time per pass is not usable
+here (a linear pass read 4-6x at 2N under load); a per-pass gate waits for per-pass instruction counts in `LLRM_DEBUG=time`.
+
 ## What belongs in the suite
 
 Tests assert program behavior, representation invariants, or a named regression.

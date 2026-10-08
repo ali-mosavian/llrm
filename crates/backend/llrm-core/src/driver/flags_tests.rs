@@ -19,6 +19,15 @@ fn pipeline(arguments: &[&str]) -> Options {
     parsed(arguments).unwrap().pipeline()
 }
 
+/// The allocator's search of other shapes of a body is on at every level and `-fno-allocation-search` turns it off.
+#[test]
+fn test_allocation_search_is_a_pass_every_level_has_on() {
+    for level in ["-O1", "-O2", "-O3", "-Os", "-Omax"] {
+        assert!(pipeline(&[level]).searches(), "{level}");
+        assert!(!pipeline(&[level, "-fno-allocation-search"]).searches(), "{level}");
+    }
+}
+
 /// The passes a level runs are gcc 13.4.0's `default_options_table` (opts.cc 573-694) for the passes this compiler has:
 /// -O1 the scalar ones and the last call inlined, -O2 adds inlining, gcse, sibling calls and pattern fill, -O3 peeling,
 /// unswitching, complete copies of loops that grow the code, and the larger inline threshold. Before, -O1 and -O2 differed

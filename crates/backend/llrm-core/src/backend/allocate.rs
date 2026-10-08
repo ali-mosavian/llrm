@@ -1627,6 +1627,15 @@ fn _forced(
 }
 
 thread_local! {
+    static TRIALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many allocations this thread has made to try another shape of a body than the one it was given.
+pub fn trials() -> usize {
+    TRIALS.with(std::cell::Cell::get)
+}
+
+thread_local! {
     static LAST_RESORTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -1910,7 +1919,7 @@ impl RegAlloc {
         let mut best = run("regalloc base", &body, &reloads, &BTreeSet::new(), true)?;
         llrm_support::debug!("regalloc", "{}: {} insns, {} spilled, cost {}, {} forced", body.name, best.out.insns().len(), best.spilled.len(), best.cost, best.forced);
         let spilled = best.spilled.clone();
-        if !spilled.is_empty() {
+        if !spilled.is_empty() && cpu.search {
             // Other shapes of the same body, which the base allocation's spills
             // suggest: each is kept only if its output is cheaper.
             let building = llrm_support::debug::span("regalloc candidates");
@@ -1948,6 +1957,7 @@ impl RegAlloc {
                         continue;
                     }
                     frame.borrow_mut().restore(&start);
+                    TRIALS.with(|count| count.set(count.get() + 1));
                     let trial = match run("regalloc trial", &candidate, &unspillable, &protected, splitting) {
                         Ok(trial) => trial,
                         Err(other) => return Err(other),
