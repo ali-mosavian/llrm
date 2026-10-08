@@ -3,6 +3,8 @@
 
 use std::process::Command;
 
+mod common;
+
 /// The listing of C `source` and the facts the compiler found (`LLRM_DEBUG=facts`), under `flags`.
 fn compiled(flags: &[&str], source: &str) -> (String, String) {
     let directory = tempfile::tempdir().unwrap();
@@ -26,8 +28,8 @@ const SYSV: &[&str] = &["-m32", "-mabi=sysv"];
 #[test]
 fn a_caller_keeps_a_value_in_a_register_a_private_callee_does_not_write() {
     let (text, facts) = compiled(&[], "static int twice(int x) { return x + x; }\nint g(int a, int b)\n{\n    int k = a * b;\n    int t = twice(a);\n    return t + k;\n}\n");
-    assert!(facts.contains("_twice writes {EAX}"), "{facts}");
-    let lines = procedure(&text, "_g");
+    assert!(facts.contains(&format!("{} writes {{EAX}}", common::symbol("twice"))), "{facts}");
+    let lines = procedure(&text, &common::symbol("g"));
     assert!(!lines.iter().any(|one| one == "push si" || one == "pop si"), "{lines:?}");
 }
 
@@ -55,8 +57,8 @@ fn a_function_that_may_be_reached_another_way_tells_nothing() {
 #[test]
 fn a_segment_register_is_written_where_the_callee_loads_it() {
     let (_, facts) = compiled(&[], "char __far *far_cursor;\nchar *near_cursor;\nstatic int far_get(void) { return *far_cursor; }\nstatic int near_get(void) { return *near_cursor; }\nint h(void) { return far_get() + near_get() + far_get(); }\n");
-    let far = facts.lines().find(|one| one.contains("_far_get writes")).unwrap_or_else(|| panic!("{facts}"));
-    let near = facts.lines().find(|one| one.contains("_near_get writes")).unwrap_or_else(|| panic!("{facts}"));
+    let far = facts.lines().find(|one| one.contains(&format!("{} writes", common::symbol("far_get")))).unwrap_or_else(|| panic!("{facts}"));
+    let near = facts.lines().find(|one| one.contains(&format!("{} writes", common::symbol("near_get")))).unwrap_or_else(|| panic!("{facts}"));
     assert!(far.contains("ES") && !near.contains("ES"), "{far} / {near}");
 }
 
@@ -65,6 +67,6 @@ fn a_segment_register_is_written_where_the_callee_loads_it() {
 #[test]
 fn a_caller_keeps_es_across_a_call_that_does_not_write_it() {
     let (text, _) = compiled(&[], "char *near_cursor;\nstatic int near_get(void) { return *near_cursor; }\nint h(char __far *a) { int x = *a; int y = near_get(); return x + y + a[1]; }\n");
-    let lines = procedure(&text, "_h");
+    let lines = procedure(&text, &common::symbol("h"));
     assert!(!lines.iter().any(|one| one.starts_with("mov es,")), "{lines:?}");
 }

@@ -28,4 +28,4 @@ int main(void)
 {
     return sum(&head) + f(1, 2);
 }
-int isatty(int h) { return 0; }
+int __cdecl isatty(int h) { return 0; }

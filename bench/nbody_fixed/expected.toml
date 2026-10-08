@@ -1,4 +1,4 @@
-reason = "-O2 takes gcc's loop-copy rule and budgets (opts.cc 1311-1316; user decision 2026-10-08)"
+reason = "regparm3 is the default (user decision 2026-10-08), measured on main after #887: AX/DX/CX cannot address, only SI/DI survive a call; the rows here move down"
 blessed = "2026-10-08"
 
 [bas.O2]
@@ -17,30 +17,30 @@ bss_bytes = 0
 kernel_ms = 18.928
 
 [c.O2]
-instructions = 1488168
+instructions = 1488167
 memory_operands = 326049
-code_bytes = 499
+code_bytes = 489
 data_bytes = 0
 bss_bytes = 96
 
 [c.Os]
-instructions = 1488162
+instructions = 1488161
 memory_operands = 326049
-code_bytes = 485
+code_bytes = 476
 data_bytes = 0
 bss_bytes = 96
 
 [nib.O2]
-instructions = 3431507
-memory_operands = 735069
-code_bytes = 845
+instructions = 2945108
+memory_operands = 710068
+code_bytes = 786
 data_bytes = 96
 bss_bytes = 0
 
 [nib.Os]
-instructions = 3431519
-memory_operands = 735069
-code_bytes = 842
+instructions = 2945120
+memory_operands = 710068
+code_bytes = 784
 data_bytes = 96
 bss_bytes = 0
 

@@ -42,6 +42,8 @@ pub struct Dos {
     pub far_access: i64,
     /// What the description gives a function nothing outside the program reaches.
     pub private: Option<llrm_mir::target::PrivateConvention>,
+    /// The conventions as the description states them: where arguments go and who removes them.
+    pub calling: Option<&'static llrm_target::calling::Calling>,
 }
 
 /// The segment registers a selector is held in: ES, FS and GS, and DS where
@@ -57,13 +59,18 @@ impl Default for Dos {
     fn default() -> Self {
         let costs = costs("486");
         let address_forms = address_forms(&costs, 0);
-        Self { costs, registers: GENERAL.len() as i64, call_registers: PRESERVED.len() as i64, address_forms, far_access: FAR_ACCESS, private: None }
+        Self { costs, registers: GENERAL.len() as i64, call_registers: PRESERVED.len() as i64, address_forms, far_access: FAR_ACCESS, private: None, calling: None }
     }
 }
 
 impl Dos {
     pub fn private(self, private: Option<llrm_mir::target::PrivateConvention>) -> Self {
         Self { private, ..self }
+    }
+
+    /// With the conventions the description states.
+    pub fn calling(self, calling: Option<&'static llrm_target::calling::Calling>) -> Self {
+        Self { calling, ..self }
     }
 
     /// On the CPU whose instruction forms cost `table` clocks, with
@@ -73,13 +80,26 @@ impl Dos {
         let cost = |kind: &str| table.iter().find(|(one, _)| one == kind).unwrap_or_else(|| panic!("no price for {kind}")).1;
         let costs = DESCRIPTION.operations(&cost, prefix);
         let address_forms = address_forms(&costs, address_stall);
-        Self { costs, registers, call_registers, address_forms, far_access: FAR_ACCESS, private: None }
+        Self { costs, registers, call_registers, address_forms, far_access: FAR_ACCESS, private: None, calling: None }
     }
 }
 
 impl Machine for Dos {
     fn private_convention(&self) -> Option<llrm_mir::target::PrivateConvention> {
         self.private.clone()
+    }
+
+    fn callee_pop(&self, convention: u32) -> Option<u32> {
+        match self.calling {
+            Some(calling) => calling.callee_pop(convention),
+            None => (convention == 0).then_some(llrm_mir::opcode::FAST),
+        }
+    }
+
+    fn stack_argument_bytes(&self, convention: u32, arguments: &[llrm_mir::target::Argument]) -> Option<i64> {
+        let found = self.calling?.by_number(convention)?;
+        let kinds: Vec<_> = arguments.iter().map(|one| found.kind(*one, found.slot_bytes)).collect();
+        Some(found.place(&kinds).stack_bytes)
     }
 
     fn spaces(&self) -> llrm_mir::spaces::Spaces {
