@@ -1,4 +1,4 @@
-reason = "frequency kept from isel: huge -O2 memory operands -200 (-0.12..-0.24%), instructions +1..2, code +2..7 B"
+reason = "the queue takes the value fewest registers may hold first (LLVM's register class priority): m16 base/index values before wide ones; 38 instruction rows change, 23 better; QCport bytes -0.34% (-O2), -0.36% (-Os)"
 blessed = "2026-10-08"
 
 [bas.O2]

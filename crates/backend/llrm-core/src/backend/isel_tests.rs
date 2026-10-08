@@ -455,16 +455,16 @@ no:
             "movzx ax, bl",
             "neg ax",
             "cmp cx, 3",
-            "sete dl",
-            "movzx cx, dl",
-            "and bl, dl",
+            "sete cl",
+            "movzx dx, cl",
+            "and bl, cl",
             "jne L0_6",
             "L0_8:",
             "xor ax, ax",
             "pop bp",
             "retf",
             "L0_6:",
-            "add ax, cx",
+            "add ax, dx",
             "pop bp",
             "retf",
         ]
@@ -2051,9 +2051,9 @@ done:
         )
     };
     let element = |text: &str| inner(text).into_iter().find(|line| line.contains("a[")).expect("the element's read");
-    assert_eq!(element(&sum("inbounds")), "add ax, word ptr a[esi+esi]");
+    assert_eq!(element(&sum("inbounds")), "add ax, word ptr a[ebx+ebx]");
     // Without `inbounds` nothing places the start: the offset may wrap.
-    assert_eq!(element(&sum("")), "add ax, word ptr a[si]");
+    assert_eq!(element(&sum("")), "add ax, word ptr a[bx]");
 }
 
 /// A word product only cells read is the 67h form's scaled index on the
@@ -2197,7 +2197,7 @@ done:
     let body = got.iter().position(|line| line == "L0_2:").expect("the loop");
     let mut steps = got[body + 3..body + 5].to_vec();
     steps.sort();
-    assert_eq!((&got[body + 1..body + 3], steps, &got[body + 5..body + 7]), (&["mov cl, byte ptr es:[si]".to_owned(), "mov byte ptr [bx], cl".to_owned()][..], vec!["inc bx".to_owned(), "inc si".to_owned()], &["dec ax".to_owned(), "jne L0_2".to_owned()][..]), "{got:?}");
+    assert_eq!((&got[body + 1..body + 3], steps, &got[body + 5..body + 7]), (&["mov al, byte ptr es:[si]".to_owned(), "mov byte ptr [bx], al".to_owned()][..], vec!["inc bx".to_owned(), "inc si".to_owned()], &["dec cx".to_owned(), "jne L0_2".to_owned()][..]), "{got:?}");
 }
 
 /// An unsigned integer converts as the signed one twice its width it

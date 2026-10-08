@@ -1,20 +1,19 @@
-reason = "the 486's LEA is one clock (the table held the 386's two): a copy and an add are one lea where it costs no more; down only"
+reason = "the queue takes the value fewest registers may hold first (LLVM's register class priority): m16 base/index values before wide ones; 38 instruction rows change, 23 better; QCport bytes -0.34% (-O2), -0.36% (-Os)"
 blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 21693
+instructions = 21694
 memory_operands = 5066
-code_bytes = 715
+code_bytes = 720
 data_bytes = 23
 bss_bytes = 0
 
 [bas.Os]
-instructions = 21763
+instructions = 21764
 memory_operands = 5120
-code_bytes = 707
+code_bytes = 712
 data_bytes = 23
 bss_bytes = 0
-kernel_ms = 0.3015
 
 [c.O2]
 instructions = 20008
@@ -33,14 +32,14 @@ bss_bytes = 0
 [nib.O2]
 instructions = 20156
 memory_operands = 3003
-code_bytes = 495
+code_bytes = 494
 data_bytes = 16
 bss_bytes = 0
 
 [nib.Os]
 instructions = 20169
 memory_operands = 3003
-code_bytes = 489
+code_bytes = 488
 data_bytes = 16
 bss_bytes = 0
 
