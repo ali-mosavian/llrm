@@ -11,6 +11,7 @@ none is ever skipped quietly. The corpus is `TORTURE_CORPUS` or ~/work/personal/
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -81,6 +82,44 @@ def program_options(text: str) -> list[str]:
     asked = [word for line in re.findall(r'dg-additional-options\s+"([^"]*)"', text) for word in line.split()]
     return [word for word in dict.fromkeys(asked) if word in PROGRAM_OPTIONS]
 
+# What a test is promised below what the start-up, `report` and the libc take of the stack.
+STACK_SLACK = 4096
+
+
+def stack_needed(text: str) -> int | None:
+    """The bytes of `{ dg-require-stack-size "EXPR" }` (a hex size, or `128 * 128 * 4 + 1024`), none if the test does not say."""
+    found = re.search(r'dg-require-stack-size\s+"([^"]*)"', text)
+    if not found:
+        return None
+
+    def value(node: ast.AST) -> int:
+        match node:
+            case ast.Constant(value=int() as number):
+                return number
+            case ast.BinOp(left=left, op=ast.Add(), right=right):
+                return value(left) + value(right)
+            case ast.BinOp(left=left, op=ast.Sub(), right=right):
+                return value(left) - value(right)
+            case ast.BinOp(left=left, op=ast.Mult(), right=right):
+                return value(left) * value(right)
+            case ast.BinOp(left=left, op=ast.Div() | ast.FloorDiv(), right=right):
+                return value(left) // value(right)
+        raise ValueError(found.group(1))
+
+    return value(ast.parse(found.group(1).strip(), mode="eval").body)
+
+
+def stack_plan(text: str, default: int, bits: int) -> tuple[int, int | None]:
+    """(stack bytes to link with, STACK_SIZE to define or none) for a program. GCC's testsuite asks twice: `dg-require-stack-size`
+    says the least the test needs (in bytes of a 32-bit int target: a 16-bit one needs less, so the stack is asked for as far as its
+    segment gives it and the test fails if it was not enough), `dg-add-options stack_size` defines STACK_SIZE as the stack the test
+    may use, for a test that sizes itself to it."""
+    needed = stack_needed(text)
+    ceiling = (1 << bits) - 2 * STACK_SLACK
+    stack = default if needed is None else max(default, min(needed + STACK_SLACK, ceiling))
+    return stack, (stack - STACK_SLACK if "dg-add-options stack_size" in text else None)
+
+
 def spellings(symbol: str) -> list[str]:
     """What a linker's undefined symbol is called in C: the Watcom convention adds a trailing underscore (`sprintf_`), cdecl a leading
     one (`_sprintf`, `___builtin_ffs`), regparm3 a `@3` (`___builtin_ffs@3`), and the target decides which."""
@@ -96,8 +135,16 @@ def build(source: Path, level: str, target: str, work: Path, support: Path, stem
         needs = re.search(r"dg-require-effective-target\s+(int32plus|size32plus|ptr32plus)", source.read_text(errors="replace"))
         if needs:
             return "refused", f"the program requires {needs.group(1)} (dg-require-effective-target): the real-mode target's int is 16 bits", None
+    text = source.read_text(errors="replace")
+    defines = dosbatch.os_defines(target, "c")
+    default = next(int(one.partition("=")[2]) for one in defines if one.startswith("STACK_BYTES="))
+    stack, sized = stack_plan(text, default, dosbatch.target_bits(target))
+    compiled = source
+    if sized is not None:
+        compiled = work / f"{stem}.c"
+        compiled.write_text(f"#define STACK_SIZE {sized}\n{text}")
     try:
-        done = subprocess.run([str(BIN / "llrm-c"), str(source), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), LEVELS[level], *program_options(source.read_text(errors="replace")), "-o", str(obj)],
+        done = subprocess.run([str(BIN / "llrm-c"), str(compiled), "-I", str(source.parent), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), LEVELS[level], *program_options(text), "-o", str(obj)],
                               capture_output=True, text=True, timeout=COMPILE_SECONDS)
     except subprocess.TimeoutExpired:
         return "compile", f"did not finish in {COMPILE_SECONDS} s", None
@@ -107,7 +154,12 @@ def build(source: Path, level: str, target: str, work: Path, support: Path, stem
         return ("refused", why, None) if why else ("compile", found, None)
     exe = work / f"{stem}.exe"
     try:
-        loaders = dosbatch.link_target(target, obj, exe, work, objects_after=(support,))
+        linked = tuple(f"STACK_BYTES={stack}" if one.startswith("STACK_BYTES=") else one for one in defines)
+        # The start-up object depends on the stack asked for, and is made once per directory under one name: a stack of its own
+        # has a directory of its own, or a link in another thread reads the object of the stack that came after it.
+        beside = work if stack == default else work / f"stack-{stack}"
+        beside.mkdir(exist_ok=True)
+        loaders = dosbatch.link_target(target, obj, exe, beside, objects_after=(support,), defines=None if stack == default else linked)
         dosbatch.check_loads(exe)
     except (dosbatch.BuildError, dosbatch.TooBig) as error:
         text = str(error)
