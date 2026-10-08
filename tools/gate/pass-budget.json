@@ -28,7 +28,7 @@
 "callers O2 analysis registers": 3.553,
 "callers O2 analysis summaries": 3.74,
 "callers O2 analysis through-memory": 3.598,
-"callers O2 isel": 2.325,
+"callers O2 isel": 2.194,
 "callers O2 mir decide": 3.493,
 "callers O2 mir gvn": 3.47,
 "callers O2 mir interprocedural": 3.164,
