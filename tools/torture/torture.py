@@ -71,6 +71,12 @@ def refusal(text: str, rules: list[dict]) -> str | None:
     return None
 
 
+def spellings(symbol: str) -> list[str]:
+    """What a linker's undefined symbol is called in C: the Watcom convention adds a trailing underscore (`sprintf_`), cdecl a leading
+    one (`_sprintf`, `___builtin_ffs`), and the target decides which."""
+    return list(dict.fromkeys([symbol.rstrip("_"), symbol[1:] if symbol.startswith("_") else symbol, symbol]))
+
+
 def build(source: Path, level: str, target: str, work: Path, support: Path, stem: str, rules: list[dict]) -> tuple[str, str, Path | None]:
     """(class, why, exe): class is built, refused, compile or link."""
     obj = work / f"{stem}.obj"
@@ -95,9 +101,9 @@ def build(source: Path, level: str, target: str, work: Path, support: Path, stem
     except (dosbatch.BuildError, dosbatch.TooBig) as error:
         text = str(error)
         missing = re.search(r"undefined symbol (\S+)", text)
-        text = f"undefined symbol {missing.group(1).rstrip('_')}" if missing else text
-        why = refusal(text, rules)
-        return ("refused", why, None) if why else ("link", text if missing else cause(text), None)
+        named = [f"undefined symbol {one}" for one in spellings(missing.group(1))] if missing else [text]
+        why = next(filter(None, (refusal(one, rules) for one in named)), None)
+        return ("refused", why, None) if why else ("link", named[0] if missing else cause(text), None)
     return "built", "", exe
 
 
