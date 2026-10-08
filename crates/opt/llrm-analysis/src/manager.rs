@@ -12,9 +12,10 @@ use std::rc::Rc;
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::opcode::Opcode;
-use llrm_mir::module::{BlockId, Change, Function, InstId, Linkage, Module, ValueId};
-use llrm_mir::passes::{Analyses, Analysis, ModuleAnalyses, ModuleAnalysis, Outer};
+use llrm_mir::module::{BlockId, Change, Function, GlobalValue, InstId, Linkage, Mark, Module, ValueId};
+use llrm_mir::passes::{Analyses, Analysis, Declarations, ModuleAnalyses, ModuleAnalysis, Outer};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy};
+use llrm_support::debug::counted;
 use llrm_support::hash::IndexMap;
 
 use crate::cfg::Shape;
@@ -56,17 +57,66 @@ impl ModuleAnalysis for Summaries {
     type Result = Result<IndexMap<String, Summary>, String>;
     const NAME: &'static str = "summaries";
     fn run(module: &Module, analyses: &mut ModuleAnalyses) -> Self::Result {
-        let globals = analyses.get::<GlobalsAA>(module);
-        let globals = Result::as_ref(&*globals).map_err(String::clone)?;
+        let globals_held = analyses.get::<GlobalsAA>(module);
+        let globals = Result::as_ref(&*globals_held).map_err(String::clone)?;
         let program = Rc::clone(analyses.program());
         let known = match program.cached::<ProgramSummaries>() {
             Some(all) => Some(Result::as_ref(&*all).map_err(String::clone)?[program.module].clone()),
             None => None,
         };
+        let declarations = analyses.get::<Declarations>(module);
         let shapes = bodies(module).map(|(id, _)| (id, analyses.function::<Shape>(module, id))).collect();
         let exposures = exposures(module, &program.layout, program.target.spaces());
-        alias::summaries(&procedures(module, &program, globals, &shapes, &exposures), known.as_ref())
+        let procedures = procedures(module, &program, globals, &shapes, &exposures);
+        // Bodies edited since the last run: those whose history is not where the last run left it. What else the summaries read, the
+        // globals' facts and the declarations, either is the same result as then or the whole is worked out again.
+        let memo = analyses.memo::<SummariesMemo>();
+        let marks: IndexMap<GlobalId, Mark> = bodies(module).map(|(id, function)| (id, function.mark())).collect();
+        let dirty = memo.globals.as_ref().zip(memo.declarations.as_ref()).filter(|(then, _)| Rc::ptr_eq(then, &globals_held)).and_then(|(_, then)| {
+            // A declaration that differs is the function's own to answer for, and its callers' (the closure does that); a variable
+            // that differs, a global added or removed, is the whole's.
+            let mut names: BTreeSet<String> = BTreeSet::new();
+            if !Rc::ptr_eq(then, &declarations) {
+                if then.len() != declarations.len() {
+                    return None;
+                }
+                for (before, now) in then.iter().zip(declarations.iter()).filter(|(before, now)| before != now) {
+                    if before.function().is_none() || now.function().is_none() {
+                        return None;
+                    }
+                    names.insert(now.name.clone()?);
+                }
+            }
+            names.extend(bodies(module).filter(|(id, function)| memo.marks.get(id) != Some(&function.mark())).filter_map(|(id, _)| module.global(id).name.clone()));
+            Some(names)
+        });
+        counted("summaries updated", dirty.is_some());
+        let found = alias::summaries_updating(&procedures, known.as_ref(), &mut memo.summaries, dirty.as_ref());
+        memo.marks = marks;
+        memo.globals = Some(Rc::clone(&globals_held));
+        memo.declarations = Some(declarations);
+        if std::env::var_os("LLRM_CHECK_MODULES").is_some() {
+            let fresh = alias::summaries(&procedures, known.as_ref());
+            if found != fresh {
+                let (now, then) = (found.as_ref().ok(), fresh.as_ref().ok());
+                let names: Vec<String> = match (now, then) {
+                    (Some(now), Some(then)) => now.iter().filter(|(name, one)| then.get(*name) != Some(one)).map(|(name, _)| name.clone()).chain(then.keys().filter(|name| !now.contains_key(*name)).cloned()).collect(),
+                    _ => Vec::new(),
+                };
+                panic!("summaries brought up to date differ from summaries worked out again: {names:?} (dirty {dirty:?})");
+            }
+        }
+        found
     }
+}
+
+/// What `Summaries` keeps for its next run.
+#[derive(Default)]
+struct SummariesMemo {
+    summaries: alias::SummaryMemo,
+    marks: IndexMap<GlobalId, Mark>,
+    globals: Option<Rc<Result<Globals, String>>>,
+    declarations: Option<Rc<Vec<GlobalValue>>>,
 }
 
 /// `module`'s defined functions, each with its id.
