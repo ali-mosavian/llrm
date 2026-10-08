@@ -98,3 +98,23 @@ reason = "x86-m16 only: three arrays of 2055 longs on the stack (the test sizes 
 [[differs]]
 program = "960521-1"
 reason = "x86-m16 only: two blocks of 32768 ints (BLOCK_SIZE without STACK_SIZE), larger than a real-mode segment's heap."
+
+[[refused]]
+match = "^wccq: Cannot use typedef '_' as a variable"
+reason = "C99 mixed declarations (`u64 x = ...;` after a statement): Open Watcom's C front end has none."
+
+[[refused]]
+match = "^wccq: Incomplete enum declaration"
+reason = "GNU C: a typedef of an enum that is defined later (`typedef enum foo E; enum foo { ... };`)."
+
+[[refused]]
+match = "^wccq: Type cast must be a scalar type"
+reason = "GNU C: a cast of a scalar to a union type (`(t_be) 0x100000000ULL`)."
+
+[[refused]]
+match = "^wccq: Assembler error"
+reason = "GNU inline assembly (`__asm__ (\"fpatan\" : \"=t\" (v) : ...)`): Open Watcom's `#pragma aux` is its own syntax."
+
+[[refused]]
+match = "^wccq: Expression for '_' must be a '_' or '_'"
+reason = "C99 hexadecimal floating constants (`0x1.fp1`), which Open Watcom's scanner does not take."
