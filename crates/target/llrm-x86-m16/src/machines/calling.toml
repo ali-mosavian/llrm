@@ -30,6 +30,8 @@ first_argument_offset = 4
 first_argument_offset_far = 6
 # The frame register: a cell is addressed through it, and no value is held in it.
 frame = "bp"
+# Not `frame_optional`: 16-bit addressing has no [sp+disp], so a frame cell is addressed through BP (or BX/SI/DI, a register taken from the
+# values to free one), and the register stays the frame's. Only a 32-bit address size (m32) can name SP as the base.
 stack = "sp"
 # A Borland caller keeps SI and DI, not their upper halves: each by its full register and the one a
 # prologue pushes.

@@ -157,6 +157,11 @@ pub struct LiveRows {
 }
 
 impl LiveRows {
+    /// How many values the rows number.
+    pub fn numbered(&self) -> usize {
+        self.numbered.len()
+    }
+
     /// The values live at the entry of the block at `at`, in order.
     pub fn entering(&self, at: i64) -> impl Iterator<Item = u32> + '_ {
         self.values(&self.into, self.position[&at])
@@ -1675,8 +1680,10 @@ impl Coloring<'_> {
     /// LLVM's `lcr-max-depth` and `lcr-max-interf`.
     pub const DEPTH: usize = 5;
     pub const INTERFERENCES: usize = 8;
-    /// Registers tried per recoloring session.
-    pub const BUDGET: usize = 2000;
+    /// Registers tried per recoloring session. A search that fails tries every register at every level, so it grows with the
+    /// class (x_ll_arith: 7 registers instead of 6 took 8 of 25 sessions to the old 2000, 3x the time). Of 19.6k sessions on
+    /// QCport and the 66 programs, 178 succeed and 176 of those within 256 tries.
+    pub const BUDGET: usize = 256;
 
     fn take(&mut self, value: u32, register: Register) {
         self.r#where.insert(value, register);
@@ -3149,6 +3156,30 @@ mod tests {
         assert_eq!(placed.get(&3), Some(&Register::AX));
         assert_eq!(placed.get(&1), Some(&Register::BX));
         assert_eq!(placed.get(&2), Some(&Register::CX));
+    }
+
+    /// A failing recolor tries every register at every level: with a class one register larger it took 2000 tries, three times
+    /// the compile time of x_ll_arith, for a search that nearly never succeeds (3 of 366 sessions on the 66 programs).
+    #[test]
+    fn test_a_recolor_that_fails_over_a_full_class_stays_within_its_budget() {
+        let registers = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP];
+        let live: IndexMap<u32, Interval> = (0..=registers.len() as u32).map(|value| (value, Interval { weight: 1.0, ..Interval::new(value, vec![Segment { start: 0, end: 10 }]) })).collect();
+        let choices = |_: u32| registers.to_vec();
+        let mut union = LiveUnion::of(registers.iter().enumerate().map(|(at, register)| (_whole(*register), vec![at as u32 + 1])), &live);
+        let mut placed: IndexMap<u32, Register> = registers.iter().enumerate().map(|(at, register)| (at as u32 + 1, *register)).collect();
+        let mut coloring = Coloring {
+            union: &mut union,
+            r#where: &mut placed,
+            live: &live,
+            masks: &Masks::default(),
+            order: &choices,
+            width: &|_| 4,
+            fenced: &BTreeSet::new(),
+            budget: Coloring::BUDGET,
+            stack: Vec::new(),
+        };
+        assert!(!coloring.recolor(0, 0, &mut BTreeSet::new()));
+        assert!(Coloring::BUDGET - coloring.budget <= 256, "{} tries", Coloring::BUDGET - coloring.budget);
     }
 
     /// A rewrite can leave a value's class narrower than the register it

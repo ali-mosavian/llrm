@@ -331,7 +331,9 @@ fn cheaper(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Pool>
         return Ok(spilled);
     }
     let (allocator_alone, _) = timed("candidate allocator alone", || phased(staged, module, name, pool, target, false, true))?;
-    let (kept, from_spiller) = match timed("candidate cost", || (cost(&spilled.0, target), cost(&allocator_alone.0, target))) {
+    let priced = timed("candidate cost", || (cost(&spilled.0, target), cost(&allocator_alone.0, target)));
+    llrm_support::debug!("candidates", "{name}: spiller {:?}, allocator alone {:?}", priced.0, priced.1);
+    let (kept, from_spiller) = match priced {
         (Some(with), Some(without)) if without < with => (allocator_alone, false),
         _ => (spilled, true),
     };
@@ -484,6 +486,8 @@ struct Staged {
     pops: IndexMap<i64, i64>,
     landing: Option<i64>,
     registers: llrm_target::FrameRegisters,
+    /// The register classes the routes allocate from: the target's, with the frame register a value register where the function needs none.
+    classes: Rc<RegisterClasses>,
 }
 
 impl Staged {
@@ -498,6 +502,7 @@ impl Staged {
             && self.far == other.far
             && self.pops == other.pops
             && self.landing == other.landing
+            && format!("{:?}", self.registers) == format!("{:?}", other.registers)
     }
 }
 
@@ -507,14 +512,22 @@ fn staged(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let selected = timed("isel", || isel::selected_with(module, name, abi, &mut pool.borrow_mut(), target.cpu, target.segments, target.selection, target.arch, zeroed, hole, target.facts));
     let Selected { body, convention, calls, inline, inline_places, far, pops, depth, extents, landing } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
-    let registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
+    let mut registers = llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
+    // LLVM's `hasFP`, before allocation: a function that can do without its frame register has it as a value register.
+    let classes: Rc<RegisterClasses> = if crate::backend::framefree::without_frame_register(&body, &registers, &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(), !inline.is_empty(), false, landing.is_some()) {
+        registers.free = true;
+        registers.saved.push((registers.pointer, registers.pointer));
+        Rc::new(target.classes.with_frame_free())
+    } else {
+        Rc::clone(target.classes)
+    };
     let body = if llrm_support::debug::verifying() { timed("lir verify", || flow::verified(body, "isel", true)).map_err(|error| error.0)? } else { body };
     let mut frame = timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
     frame.hole = hole;
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;
-    Ok(Staged { body, frame, convention, calls, inline, inline_places, far, pops, landing, registers })
+    Ok(Staged { body, frame, convention, calls, inline, inline_places, far, pops, landing, registers, classes })
 }
 
 /// `phased`; or, where `until_changed`, none if the spiller left the body as it was: the rest of that route is the
@@ -523,12 +536,13 @@ fn staged(module: &Module, name: &str, abi: &dyn Abi, pool: &Rc<RefCell<Pool>>, 
 fn phased_to(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Pool>>, target: &Target<'_>, spilling: bool, admission: bool, until_changed: bool) -> Result<Option<((Machined, frame::Frame), Rc<ssaspill::Run>)>, String> {
     PHASED.with(|count| count.set(count.get() + 1));
     let run = ssaspill::Run::new(admission);
-    let Staged { calls, inline, inline_places, far, pops, landing, registers, convention, .. } = staged.clone();
+    let Staged { calls, inline, inline_places, far, pops, landing, registers, convention, classes, .. } = staged.clone();
+    let classes = &classes;
     let mut body = staged.body.clone();
     let frame = Rc::new(RefCell::new(staged.frame.clone()));
     let pinned = body.pins.clone();
     let mut in_ssa = true;
-    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, target.classes, spilling.then(|| Rc::clone(&run)), target.selection.rules(), &registers)? {
+    for mut phase in flow::machine_with(&pinned, Some(Rc::clone(&frame)), Some(Rc::clone(pool)), Some(&calls), target.basic, ProfileOrName::Profile(target.cpu), target.segments, classes, spilling.then(|| Rc::clone(&run)), target.selection.rules(), &registers)? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
             continue;
@@ -537,7 +551,7 @@ fn phased_to(staged: &Staged, module: &Module, name: &str, pool: &Rc<RefCell<Poo
             in_ssa = false;
         }
         let kept = (!body.notes.is_empty()).then(|| body.clone());
-        body = flow::checked(body, phase.as_mut(), in_ssa, target.classes).map_err(|error| match error {
+        body = flow::checked(body, phase.as_mut(), in_ssa, classes).map_err(|error| match error {
             flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
             flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;

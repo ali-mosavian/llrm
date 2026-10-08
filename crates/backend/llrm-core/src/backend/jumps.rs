@@ -84,7 +84,37 @@ pub fn optimized(body: &LirBody, size: bool) -> Result<LirBody, masm::Unprintabl
         }
     }
     let placed = preferred(&baseline, &threaded(&candidate)).clone();
-    Ok(if size { placed } else { duplicated_tails(&placed) })
+    Ok(if size { placed } else { duplicated(&duplicated_tails(&placed), true) })
+}
+
+/// gcc's `max-grow-copy-bb-insns`: a block is copied while it is at most this many unconditional jumps long.
+const COPY_BB_INSNS: usize = 8;
+
+/// gcc's `get_uncond_jump_length`: what the target prices one unconditional jump at, in its long form.
+pub(crate) fn uncond_jump_bytes(bits: u32) -> usize {
+    let jump = Semantics { name: Some("jmp".into()), target: Some(2), ..Semantics::new(Operation::Jump) };
+    select::priced_in(bits, &jump, 0, None, false, false, None).map_or(2, |made| made.code.len())
+}
+
+/// The bytes a block may be and still be copied (`copy_bb_p`): `COPY_BB_INSNS` jumps of code.
+fn copy_limit(bits: u32) -> usize {
+    COPY_BB_INSNS * uncond_jump_bytes(bits)
+}
+
+/// A block that only returns: plain operations then a `ret`, no way on, within `limit` bytes and none of it source-owned.
+fn _return_tail(bits: u32, block: &LirBlock) -> bool {
+    if !block.phis.is_empty() || !block.succ.is_empty() || block.insns.iter().any(|one| one.call.is_some() || one.group.is_some() || one.symbol == Some(true) || !one.spread.is_empty()) {
+        return false;
+    }
+    let real = _real(block);
+    let Some((last, rest)) = real.split_last() else { return false };
+    // A return that covers source bytes is the program's own (a BASIC module's end spells a runtime call at it): not copied.
+    if last.what.as_ref().is_none_or(|what| what.op != Operation::Return) || !last.inserted()
+        || rest.iter().any(|one| one.call.is_some() || one.what.as_ref().is_none_or(|what| matches!(what.op, Operation::Barrier | Operation::Branch | Operation::Call | Operation::Data | Operation::Jump | Operation::Return)))
+    {
+        return false;
+    }
+    real.iter().try_fold(0usize, |bytes, one| select::priced_in(bits, one.what.as_ref()?, 0, None, false, false, None).map(|made| bytes + made.code.len())).is_some_and(|bytes| bytes <= copy_limit(bits))
 }
 
 /// LLVM's `TailDupSize` at -O2: the instructions a tail may hold besides its jumps.
@@ -97,6 +127,11 @@ const TAIL_DUPLICATION: usize = 2;
 /// less often than the jump it removes. A copy claims none of the
 /// original's bytes, which the tail keeps.
 pub fn duplicated_tails(body: &LirBody) -> LirBody {
+    duplicated(body, false)
+}
+
+/// `duplicated_tails`, or only the tails that return: the jump a copied tail ended in may reach one.
+fn duplicated(body: &LirBody, returns: bool) -> LirBody {
     let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let after: IndexMap<i64, i64> = body.blocks.windows(2).map(|pair| (pair[0].at, pair[1].at)).collect();
     let frequency = Frequency::of(body);
@@ -114,7 +149,7 @@ pub fn duplicated_tails(body: &LirBody) -> LirBody {
             let Some(tail) = last.target.filter(|at| *at != parent.at && *at != body.entry).and_then(|at| by_at.get(&at)) else {
                 return None;
             };
-            let Some((copied, falls)) = _duplicable(tail, after.get(&tail.at).copied()) else {
+            let Some((copied, falls)) = _duplicable(body.bits, tail, after.get(&tail.at).copied()).filter(|(_, falls)| !returns || falls.is_none()).filter(|_| !returns || _return_tail(body.bits, tail)) else {
                 return None;
             };
             // Per run of the jump: the fall-through's jump runs as often as the tail falls through.
@@ -159,9 +194,13 @@ pub fn duplicated_tails(body: &LirBody) -> LirBody {
 /// A tail's printed instructions where it may be copied, and the block it
 /// falls through to: at most `TAIL_DUPLICATION` besides the branches it ends
 /// in, every one a plain operation.
-fn _duplicable(tail: &LirBlock, next: Option<i64>) -> Option<(Vec<Arc<Insn>>, Option<i64>)> {
+fn _duplicable(bits: u32, tail: &LirBlock, next: Option<i64>) -> Option<(Vec<Arc<Insn>>, Option<i64>)> {
     if !tail.phis.is_empty() {
         return None;
+    }
+    // gcc's bb-reorder `copy_bb_p` for a block that only returns: copied up to `max-grow-copy-bb-insns` jumps of code.
+    if _return_tail(bits, tail) {
+        return Some((_real(tail), None));
     }
     let real = _real(tail);
     let ops: Vec<Semantics> = real.iter().map(|one| one.what.clone()).collect::<Option<_>>()?;
