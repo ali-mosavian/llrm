@@ -39,7 +39,7 @@ impl<'a> FunctionCompiler<'a> {
             .into_iter()
             .collect();
         let instruction = self.emit("call", results.clone(), operands, Some(name.into()));
-        self.calls.push(hir::CallSite::new(instruction, callee, count as u32, Abi::Cdecl16));
+        self.calls.push(hir::CallSite::new(instruction, callee, count as u32, self.types.native));
         results.first().map(|one| hir::Operand::Value(*one))
     }
 
@@ -94,7 +94,7 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     pub(super) fn place(&mut self, name: &str, type_name: TypeName, mutable: bool) -> u32 {
-        self.local_place(name, type_id(type_name), width(type_name), mutable)
+        self.local_place(name, type_id(type_name), width(self.types.sizes, type_name), mutable)
     }
 
     pub(super) fn local_place(&mut self, name: &str, type_id: u32, extent: u32, mutable: bool) -> u32 {
@@ -124,7 +124,7 @@ impl<'a> FunctionCompiler<'a> {
         mutable: bool,
     ) -> u32 {
         let extent = self.types.width(element.id()) * shape.len();
-        self.next_frame_offset -= (extent + descriptor::size(shape.rank)) as i32;
+        self.next_frame_offset -= (extent + descriptor::size(shape.rank, self.word_bytes())) as i32;
         let descriptor_offset = self.next_frame_offset;
         self.array_place_at(descriptor_offset, name, type_id, element, shape, mutable)
     }
@@ -140,18 +140,19 @@ impl<'a> FunctionCompiler<'a> {
         mutable: bool,
     ) -> u32 {
         let extent = self.types.width(element.id()) * shape.len();
-        let size = descriptor::size(shape.rank);
+        let size = descriptor::size(shape.rank, self.word_bytes());
         let descriptor = shape.descriptor();
+        let (word_bytes, word_id) = (self.word_bytes(), self.word_id());
         for (word, (label, value)) in descriptor.into_iter().enumerate() {
             let place = self.next_place;
             self.next_place += 1;
             self.places.push(hir::Place {
                 id: place,
                 name: format!("${name}.{label}"),
-                type_id: U16,
+                type_id: word_id,
                 mutable: false,
-                offset: descriptor_offset + 2 * word as i32,
-                extent: 2,
+                offset: descriptor_offset + (word_bytes * word as u32) as i32,
+                extent: word_bytes,
                 storage: "local",
                 symbol: 0,
                 volatile: false,
@@ -161,7 +162,7 @@ impl<'a> FunctionCompiler<'a> {
                 Vec::new(),
                 vec![
                     hir::Operand::Place(place),
-                    hir::Operand::Constant(U16, i64::from(value)),
+                    hir::Operand::Constant(word_id, i64::from(value)),
                 ],
                 None,
             );
@@ -191,7 +192,7 @@ impl<'a> FunctionCompiler<'a> {
             type_id: type_id(type_name),
             mutable: false,
             offset: 0,
-            extent: width(type_name),
+            extent: width(self.types.sizes, type_name),
             storage: "module",
             symbol,
             volatile: false,
@@ -208,8 +209,8 @@ impl<'a> FunctionCompiler<'a> {
             type_id: CHAR,
             mutable: false,
             // The exported string address is the byte payload. Its flags, pad,
-            // length, and capacity occupy the six bytes immediately before it.
-            offset: 6,
+            // length, and capacity occupy the three words immediately before it.
+            offset: 3 * self.word_bytes() as i32,
             extent,
             storage: "module",
             symbol,
@@ -228,6 +229,9 @@ impl<'a> FunctionCompiler<'a> {
         let id = self.next_instruction;
         self.next_instruction += 1;
         let line = self.line;
+        if op == "load" && matches!(operands.first(), Some(hir::Operand::DescriptorPlace { .. })) {
+            self.lengths.extend(results.iter().copied());
+        }
         if op == "address" && operands.first().is_some_and(|one| self.in_huge(one)) {
             self.huge_address = true;
         }

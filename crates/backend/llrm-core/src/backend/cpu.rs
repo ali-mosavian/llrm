@@ -9,7 +9,8 @@ use std::sync::LazyLock;
 
 use crate::support::hash::IndexMap;
 
-use llrm_x86_code16::timings;
+use llrm_target::Target;
+
 use crate::model::passes::{
     AddressForm, DEFAULT_MAX_UNROLL_ITERATIONS, DEFAULT_MAX_UNROLLED_OPERATIONS, OperationCosts,
 };
@@ -22,6 +23,12 @@ pub struct Profile {
     pub prefix_cost: i64,
     pub partial_register_stall: i64,
     pub register_capacity: i64,
+    /// The target's address spaces by role.
+    pub spaces: llrm_mir::spaces::Spaces,
+    /// The convention its description gives a function nothing outside the program reaches.
+    pub private: Option<llrm_mir::target::PrivateConvention>,
+    /// The operand size an instruction has without a prefix, in bytes.
+    pub operand_bytes: i64,
     pub call_register_capacity: i64,
     // Preferred forms only; the complete legal set is `address_forms`.
     pub address_scales: BTreeSet<i64>,
@@ -43,16 +50,42 @@ pub struct Profile {
     pub address_prefix_stall: i64,
     // -Os: where the costs tie on nothing else, the shorter encoding.
     pub size: bool,
+    /// How the target this profile is for builds its cost model from the CPU's prices.
+    pub model: llrm_target::CostModel,
 }
 
 impl Profile {
-    /// The MIR target this profile prices: real-mode DOS on its CPU.
-    pub fn target(&self) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
-        std::rc::Rc::new(llrm_x86_code16::Dos::priced(&self._costs, self.prefix_cost, self.address_prefix_stall, self.register_capacity, self.call_register_capacity))
+    /// What the CPU prices, as a target builds its cost model from.
+    pub fn cpu_prices(&self) -> llrm_target::CpuPrices {
+        llrm_target::CpuPrices {
+            costs: self._costs.clone(),
+            prefix: self.prefix_cost,
+            address_stall: self.address_prefix_stall,
+            registers: self.register_capacity,
+            call_registers: self.call_register_capacity,
+            address_forms: self.address_forms.clone(),
+            operations: self.operations.clone(),
+            spaces: self.spaces,
+            private: self.private.clone(),
+        }
     }
 
-    /// The dataclass constructor with every defaulted field at its default.
+    /// The MIR target this profile prices: its target's cost model on its CPU.
+    pub fn target(&self) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
+        (self.model)(&self.cpu_prices())
+    }
+
+    /// The form that indexes by a dword register: where a target has one, a
+    /// 16-bit target's behind the address-size prefix (`secondary`), a flat one's
+    /// native.
+    pub fn dword_address_form(&self) -> Option<&AddressForm> {
+        self.address_forms.iter().find(|form| form.index_width == 4)
+    }
+
+    /// The dataclass constructor with every defaulted field at its default, and the
+    /// registers and cost model of the target `arch`.
     pub fn new(
+        arch: &dyn Target,
         name: &str,
         issue_width: i64,
         in_order: bool,
@@ -65,8 +98,11 @@ impl Profile {
             in_order,
             prefix_cost,
             partial_register_stall,
-            register_capacity: llrm_x86_code16::GENERAL.len() as i64,
-            call_register_capacity: llrm_x86_code16::PRESERVED.len() as i64,
+            register_capacity: arch.register_capacity(),
+            spaces: arch.layout().spaces.roles,
+            private: private_convention(arch),
+            operand_bytes: arch.operand_bytes(),
+            call_register_capacity: arch.callee_saved().len() as i64,
             address_scales: BTreeSet::from([1]),
             _costs: Vec::new(),
             _latencies: Vec::new(),
@@ -77,6 +113,7 @@ impl Profile {
             max_unrolled_operations: DEFAULT_MAX_UNROLLED_OPERATIONS,
             address_prefix_stall: 0,
             size: false,
+            model: arch.cost_model(),
         }
     }
 
@@ -133,10 +170,13 @@ impl Profile {
 /// `str | Profile`, the argument every public function here accepts.
 #[derive(Clone, Copy, Debug)]
 pub enum ProfileOrName<'a> {
+    /// A name on 16-bit x86, which the tests of this crate are written for.
+    #[cfg(test)]
     Name(&'a str),
     Profile(&'a Profile),
 }
 
+#[cfg(test)]
 impl<'a> From<&'a str> for ProfileOrName<'a> {
     fn from(value: &'a str) -> Self {
         Self::Name(value)
@@ -149,200 +189,68 @@ impl<'a> From<&'a Profile> for ProfileOrName<'a> {
     }
 }
 
-static _I386_COSTS: LazyLock<IndexMap<&'static str, i64>> = LazyLock::new(|| {
-    IndexMap::from_iter([
-        ("alu_rr", 2),
-        ("alu_ri", 2),
-        ("alu_rm", 6),
-        ("alu_mr", 8),
-        ("mov_rr", 2),
-        ("mov_rm", 4),
-        ("mov_mr", 2),
-        ("mov_ri", 2),
-        ("shift_ri", 3),
-        ("shift_r1", 3),
-        ("movzx", 4),
-        ("imul_r32", 22),
-        ("imul_m32", 26),
-        ("mul_r16", 22),
-        ("mul_r32", 38),
-        ("div_r16", 27),
-        ("idiv_r32", 43),
-        ("idiv_m32", 47),
-        ("cdq", 2),
-        ("push_r", 2),
-        ("push_m", 6),
-        ("push_i", 2),
-        ("pop_r", 4),
-        // Intel's 80386 table: POP m16/m32 is five clocks, not the
-        // four-unit register form.
-        ("pop_m", 5),
-        ("pop_seg", 8),
-        ("mov_seg_r", 8),
-        ("les", 8),
-        ("nop", 3),
-        ("jmp_short", 7),
-        ("jcc", 7),
-        // Intel's 80386 table: Jcc is 7+m taken, 3 not.
-        ("jcc_not_taken", 3),
-        ("call_far", 37),
-        ("ret_far", 18),
-        ("ret_pop", 18),
-        ("lahf", 2),
-        ("sahf", 3),
-        ("lea", 2),
-        ("leave", 6),
-        ("rep_stos", 5),
-        ("rep_stos_cell", 5),
-        // GCC's i386 table: x87 loads/stores eight units, arithmetic
-        // 23/27/88. Memory arithmetic includes both components.
-        ("x87_load", 8),
-        // 80387 register exchange is eighteen clocks.
-        ("x87_exchange", 18),
-        ("x87_store", 8),
-        ("x87_convert_store", 35),
-        ("x87_add", 23),
-        ("x87_add_m", 31),
-        ("x87_mul", 27),
-        ("x87_mul_m", 35),
-        ("x87_div", 88),
-        ("x87_div_m", 96),
-        ("x87_control_load", 8),
-        ("x87_control_store", 8),
-    ])
-});
-
-/// Translate backend instruction forms into MIR's semantic vocabulary.
-fn _operation_costs(costs: &IndexMap<&str, i64>, prefix: i64) -> OperationCosts {
-    OperationCosts {
-        add: costs["alu_rr"],
-        multiply: costs["mul_r16"],
-        divide: costs["div_r16"],
-        shift: costs["shift_ri"],
-        address: costs["lea"],
-        carry: llrm_mir::target::carry_cost(costs["movzx"], costs["alu_rr"], costs["shift_ri"], costs["mov_rr"]),
-        carry_step: llrm_mir::target::step_cost(costs["alu_rr"]),
-        load: costs["mov_rm"],
-        store: costs["mov_mr"],
-        memory_update: costs["alu_mr"],
-        branch: costs["jcc"],
-        prefix,
-        r#move: costs["mov_rr"],
-        call: costs["call_far"],
-        return_: costs["ret_far"],
-        pop: costs["pop_r"],
-        adjust: costs["alu_ri"],
-        return_pops: costs["ret_pop"] - costs["ret_far"],
-        float_add: costs["x87_add"],
-        float_multiply: costs["x87_mul"],
-        float_divide: costs["x87_div"],
-        float_load: costs["x87_load"],
-        float_store: costs["x87_store"],
-        extend: costs["movzx"],
-        // The expansion saves ES, loads it from the cells' segment, and sets
-        // the value and count before `rep stos`; then restores ES.
-        fill: costs["rep_stos"] + 2 * costs["push_r"] + 2 * costs["pop_seg"] + 2 * costs["mov_ri"],
-        fill_cell: costs["rep_stos_cell"],
-    }
-}
-
 /// Native medium-model addressing, then the legal secondary 67h form.
 /// The target's address forms, priced by `costs` and `prefix`: the 386's
 /// table has no prefix column, so its own is passed.
-fn _address_forms(costs: &OperationCosts, prefix: i64, address_stall: i64) -> Vec<AddressForm> {
-    llrm_x86_code16::target::address_forms(&OperationCosts { prefix, ..costs.clone() }, address_stall)
+fn _address_forms(arch: &dyn Target, costs: &OperationCosts, prefix: i64, address_stall: i64) -> Vec<AddressForm> {
+    arch.address_forms(&OperationCosts { prefix, ..costs.clone() }, address_stall)
 }
 
-fn _profile(name: &str) -> Result<Profile, String> {
-    if name == "386" {
-        let costs = _I386_COSTS.clone();
-        let operations = _operation_costs(&costs, 0);
-        return Ok(Profile {
-            address_forms: _address_forms(&operations, 0, 0),
-            operations,
-            _costs: costs
-                .iter()
-                .map(|(key, value)| ((*key).to_owned(), *value))
-                .collect(),
-            _latencies: costs
-                .iter()
-                .map(|(key, value)| ((*key).to_owned(), *value))
-                .collect(),
-            ..Profile::new(name, 1, true, 0, 0)
-        });
-    }
-    let at = timings::ARCHS
-        .iter()
-        .position(|one| *one == name)
-        .ok_or_else(|| "tuple.index(x): x not in tuple".to_owned())?;
-    let costs: IndexMap<&str, i64> = timings::COST
-        .iter()
-        .map(|(operation, values)| (*operation, values[at]))
-        .collect();
-    let operations = _operation_costs(&costs, timings::PREFIX[at]);
+fn _profile(arch: &dyn Target, name: &str) -> Result<Profile, String> {
+    let table = arch.cpu_table(name).ok_or_else(|| format!("unknown CPU target: {name}"))?;
+    let costs: IndexMap<&str, i64> = table.clocks.iter().map(|(form, clocks)| (form.as_str(), *clocks)).collect();
+    let operations = arch.operation_costs(&|form| costs[form], table.prefix);
     Ok(Profile {
-        pentium_pairing: name == "P5",
-        address_forms: _address_forms(&operations, timings::PREFIX[at], timings::LCP_STALL[at]),
+        pentium_pairing: table.pairing,
+        address_forms: _address_forms(arch, &operations, table.prefix, table.lcp_stall),
         operations,
-        _costs: costs
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), *value))
-            .collect(),
-        _latencies: timings::LATENCY
-            .iter()
-            .map(|(operation, values)| ((*operation).to_owned(), values[at]))
-            .collect(),
-        address_prefix_stall: timings::LCP_STALL[at],
-        ..Profile::new(
-            name,
-            timings::ISSUE[at],
-            timings::INORDER[at] != 0,
-            timings::PREFIX[at],
-            timings::PARTIAL_STALL[at],
-        )
+        _costs: table.clocks.clone(),
+        _latencies: table.latency.clone(),
+        address_prefix_stall: table.lcp_stall,
+        ..Profile::new(arch, name, table.issue, table.in_order, table.prefix, table.partial_stall)
     })
 }
 
-/// A profile per CPU the machine layer lists.
-static _PROFILES: LazyLock<Vec<Profile>> = LazyLock::new(|| {
-    crate::abi::machine::CPUS
-        .iter()
-        .map(|name| _profile(name).expect("every listed CPU has a profile"))
-        .collect()
-});
+/// The profiles made so far, by target, CPU and size: each made once, as the passes hold them.
+static _MADE: LazyLock<std::sync::Mutex<std::collections::HashMap<(&'static str, String, bool), &'static Profile>>> = LazyLock::new(Default::default);
 
-static _BY_NAME: LazyLock<IndexMap<&'static str, &'static Profile>> = LazyLock::new(|| {
-    _PROFILES
-        .iter()
-        .map(|one| (one.name.as_str(), one))
-        .collect()
-});
-
-/// Each profile again, tuned for size.
-static _SIZED: LazyLock<IndexMap<&'static str, Profile>> =
-    LazyLock::new(|| _PROFILES.iter().map(|one| (one.name.as_str(), Profile { size: true, ..one.clone() })).collect());
-
-/// `name`'s profile, tuned for size where `size`.
-pub fn tuned(name: &str, size: bool) -> Result<&'static Profile, String> {
-    if !size {
-        return named(name);
+/// `name`'s profile on the target `arch`, tuned for size where `size`.
+pub fn tuned_for(arch: &dyn Target, name: &str, size: bool) -> Result<&'static Profile, String> {
+    if !arch.cpus().contains(&name) {
+        return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
     }
-    _SIZED.get(name).ok_or_else(|| format!("unknown CPU target: {name}"))
+    let mut made = _MADE.lock().expect("the profiles are not poisoned");
+    let key = (arch.name(), name.to_owned(), size);
+    if let Some(&one) = made.get(&key) {
+        return Ok(one);
+    }
+    let one: &'static Profile = Box::leak(Box::new(Profile { size, ..(_profile(arch, name)).expect("every listed CPU has a profile") }));
+    made.insert(key, one);
+    Ok(one)
 }
 
+/// `name`'s profile on 16-bit x86, tuned for size where `size`.
+#[cfg(test)]
+pub fn tuned(name: &str, size: bool) -> Result<&'static Profile, String> {
+    tuned_for(&llrm_x86_m16::M16, name, size)
+}
+
+#[cfg(test)]
 pub fn names() -> Vec<&'static str> {
-    _BY_NAME.keys().copied().collect()
+    llrm_target::Target::cpus(&llrm_x86_m16::M16).to_vec()
 }
 
 pub fn profile<'a>(value: impl Into<ProfileOrName<'a>>) -> Result<&'a Profile, String> {
     match value.into() {
         ProfileOrName::Profile(value) => Ok(value),
+        #[cfg(test)]
         ProfileOrName::Name(value) => named(value),
     }
 }
 
+#[cfg(test)]
 pub fn named(name: &str) -> Result<&'static Profile, String> {
-    _BY_NAME.get(name).copied().ok_or_else(|| format!("unknown CPU target: {name}"))
+    tuned(name, false)
 }
 
 #[cfg(test)]
@@ -408,7 +316,7 @@ mod tests {
             address_scales: BTreeSet::from([1]),
             _costs: Vec::new(),
             _latencies: Vec::new(),
-            ..Profile::new("test", 1, true, 0, 0)
+            ..Profile::new(&llrm_x86_m16::M16, "test", 1, true, 0, 0)
         };
 
         assert_eq!(target.register_capacity, 3);
@@ -471,4 +379,49 @@ mod tests {
 
         assert_eq!(selected, BTreeSet::from(["386", "K5", "K6", "K7", "Core"]));
     }
+
+    /// The target every frontend lowers to prices a call at its clocks and, tuned for size, at its
+    /// bytes: `size_costs` was not forwarded, so it was `costs`, and every MIR decision made "for
+    /// size" (the inliner, the callee-pop convention) weighed clocks.
+    #[test]
+    fn test_the_lowered_target_forwards_its_size_costs() {
+        use llrm_mir::target::Machine;
+        let abi = crate::abi::qb::HirAbi { runtime: crate::hir::model::RuntimeProfile::Freestanding, objects: Default::default(), preserved: Default::default(), stack_check: None };
+        let target = crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi);
+        assert_eq!((target.costs().call, target.size_costs().call), (18, 5));
+    }
+
+    /// Real mode indexes by a dword behind the address-size prefix; a flat target's form is
+    /// native. Both are the form that takes a dword index, and the word form is not.
+    #[test]
+    fn test_the_dword_address_form_is_the_one_that_indexes_by_dwords() {
+        let real = profile("486").unwrap();
+        let form = real.dword_address_form().expect("real mode has one");
+        assert!(form.secondary && form.index_width == 4 && form.scales.contains(&4));
+        let mut flat = real.clone();
+        flat.address_forms = vec![AddressForm::new(4, BTreeSet::from([1, 2, 4, 8]), 0, 0, 0, false, None).unwrap()];
+        let form = flat.dword_address_form().expect("a flat target has one");
+        assert!(!form.secondary && form.index_width == 4);
+        flat.address_forms = vec![real.address_forms[0].clone()];
+        assert!(flat.dword_address_form().is_none());
+    }
+}
+
+
+/// MIR's number for the convention a description's `cc` names: C's is `ccc`, the others `<cc>cc`.
+fn cc_number(cc: Option<&str>) -> Option<u32> {
+    match cc? {
+        "cdecl" => Some(0),
+        other => llrm_mir::opcode::CONVENTIONS.iter().find(|(name, _)| name.strip_suffix("cc") == Some(other)).map(|(_, number)| *number),
+    }
+}
+
+/// The convention `arch`'s description gives a private function, and the ones that may take it.
+fn private_convention(arch: &dyn Target) -> Option<llrm_mir::target::PrivateConvention> {
+    let calling = arch.calling();
+    let to = cc_number(calling.private()?.cc.as_deref())?;
+    let mut from: Vec<u32> = calling.conventions.iter().filter(|one| calling.replaceable(one)).filter_map(|one| cc_number(one.cc.as_deref())).collect();
+    from.sort_unstable();
+    from.dedup();
+    Some(llrm_mir::target::PrivateConvention { to, from })
 }

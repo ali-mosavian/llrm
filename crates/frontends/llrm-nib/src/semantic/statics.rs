@@ -93,14 +93,19 @@ impl TypeRegistry {
             if declared.huge && dims.is_empty() {
                 return Err(Diagnostic::new(declared.span, "only an array is 'huge var'"));
             }
-            if !declared.huge && extent > 0xFFFF {
-                return Err(Diagnostic::new(declared.span, format!("{} takes {extent} bytes, past DGROUP's 64K: declare it 'huge var'", declared.name)));
+            if !declared.huge && u64::from(extent) > self.sizes.max_object {
+                return Err(Diagnostic::new(declared.span, format!("{} takes {extent} bytes, past DGROUP's {} bytes: declare it 'huge var'", declared.name, self.sizes.max_object + 1)));
             }
-            let segment = declared.huge.then(|| format!("{}_{}_HUGE", identifier(module_name), declared.name));
+            // Where far is near a huge object is in the one space: no segment of its own.
+            let huge = declared.huge && self.sizes.segmented;
+            if declared.huge {
+                self.warn_target_width("huge", declared.span);
+            }
+            let segment = huge.then(|| format!("{}_{}_HUGE", identifier(module_name), declared.name));
             let symbol = literals.object(&format!("$var_{}", declared.name), bytes, false, segment);
             let volatile = shared.contains(&declared.name);
             let align = self.alignment_of(element);
-            self.statics.insert(declared.name.clone(), StaticLayout { symbol, binding, type_id, extent, volatile, align, huge: declared.huge });
+            self.statics.insert(declared.name.clone(), StaticLayout { symbol, binding, type_id, extent, volatile, align, huge });
         }
         Ok(())
     }

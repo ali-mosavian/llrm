@@ -21,6 +21,11 @@ pub fn say(text: &string) -> void:
 fn divide() -> void:
     panic("division by zero or overflow")
 
+# A checked function found SP below the stack's limit (`-fsanitize=stack`).
+@export(name="N$ESTK")
+fn stack() -> void:
+    panic("stack overflow")
+
 @export(name="N$ECNV")
 fn convert() -> void:
     panic("float outside the integer type")

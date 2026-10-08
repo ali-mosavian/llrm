@@ -317,7 +317,7 @@ now has every body layable**; it was 42 when this was written.
       targets resolved, and all 4,846 fixups in the span carried. 34 of 125
       objects; the rest refuse on an op `select.py` cannot emit, or on data
       BC put inline
-- [x] turn that image into a fresh object — `crates/backend/llrm-core/src/backend/omfwrite.rs`, shared
+- [x] turn that image into a fresh object — `crates/backend/llrm-core/src/backend/objbuild.rs`, shared
       with the C frontend. BC's OBJ supplies decoded declarations, data and
       relocation semantics; none of its record stream is reused as an output
       template. EXTDEFs are emitted before all LEDATA/FIXUPP records.

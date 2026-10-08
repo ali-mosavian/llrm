@@ -285,7 +285,7 @@ fn test_timer_emits_for_each_microsoft_runtime() {
 /// SYS_TICK_HZ left its SINGLE on x87, while BC callers passed and read a hidden result slot.
 #[test]
 fn test_qb_float_function_uses_hidden_near_result_pointer() {
-    let source = parsed(&fixture("float-function.bas"));
+    let source = parsed_runtime_frames(&fixture("float-function.bas"));
     let function = named(&source.modules[0], "ADDHALF");
     let abi = function.abi.as_ref().expect("an ABI");
     assert_eq!(abi.parameter_bytes, 6);
@@ -598,7 +598,7 @@ fn test_dynamic_directive_makes_a_bounded_numeric_array_runtime_owned() {
 /// COM_TOKENIZE passed a huge-pointer element to SASS, which reported string-space corruption.
 #[test]
 fn test_dynamic_string_array_formal_uses_adjusted_near_descriptor_base() {
-    let source = parsed(&fixture("string-array-parameter.bas"));
+    let source = parsed_runtime_frames(&fixture("string-array-parameter.bas"));
     let listing = listing(&source);
     let procedure = between(&listing, "APPENDONE proc far", "APPENDONE endp");
 
@@ -820,7 +820,7 @@ fn test_resume_next_retains_runtime_statement_entries() {
     let main = &source.modules[0].functions[0];
     assert!(!main.external_entries.is_empty());
 
-    let listing = listing(&source);
+    let listing = listing_calls_kept(&source);
     let body = between(&listing, "$QB$MAIN proc far", "$QB$MAIN endp");
     // RESUME NEXT returns to the statement after ERROR 11.
     let lines: Vec<&str> = body.lines().collect();

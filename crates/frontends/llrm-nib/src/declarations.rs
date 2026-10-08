@@ -29,10 +29,16 @@ impl Language {
 /// The declarations of `module`'s exports and the represented structs they
 /// name, for callers written in `language`.
 pub fn declarations(module: &Module, name: &str, language: Language) -> Result<String, Diagnostic> {
+    declarations_on(module, name, language, crate::Sizes { near: 2, far: 4, segmented: true, slot: 2, max_object: 65535 }, Abi::Cdecl16)
+}
+
+/// `declarations`, for a target whose pointers, slot and far code are `sizes`, and whose own convention is `native`.
+pub fn declarations_on(module: &Module, name: &str, language: Language, sizes: crate::Sizes, native: Abi) -> Result<String, Diagnostic> {
+    let (segmented, slot) = (sizes.segmented, sizes.slot);
     let exports: Vec<(&Function, Abi)> = module
         .functions
         .iter()
-        .filter_map(|function| module.exports.get(&function.name).and_then(|export| Some((function, export.abi?))))
+        .filter_map(|function| module.exports.get(&function.name).and_then(|export| Some((function, export.abi?.resolved(native)))))
         .collect();
     // The compiler's own modules declare theirs for the compiler.
     let structs: Vec<&Struct> = module.structs.iter().filter(|one| one.pack.is_some() && !standard::supplied(&one.name)).collect();
@@ -50,13 +56,13 @@ pub fn declarations(module: &Module, name: &str, language: Language) -> Result<S
     }
     for one in &structs {
         out.push('\n');
-        out.push_str(&structure(one, language)?);
+        out.push_str(&structure(one, language, sizes)?);
     }
     if !exports.is_empty() {
         out.push('\n');
     }
     for (function, abi) in exports {
-        writeln!(out, "{}", declaration(function, abi, language)?).unwrap();
+        writeln!(out, "{}", declaration(function, abi, language, segmented)?).unwrap();
     }
     if language == Language::C {
         writeln!(out, "\n#endif").unwrap();
@@ -64,12 +70,18 @@ pub fn declarations(module: &Module, name: &str, language: Language) -> Result<S
     Ok(out)
 }
 
-fn structure(one: &Struct, language: Language) -> Result<String, Diagnostic> {
+fn structure(one: &Struct, language: Language, sizes: crate::Sizes) -> Result<String, Diagnostic> {
+    let slot = sizes.slot;
     let name = symbol(&one.name);
     let mut out = String::new();
     match language {
         Language::C => {
-            writeln!(out, "#pragma pack({})\ntypedef struct {{", one.pack.expect("represented")).unwrap();
+            // `@repr("c")` without a pack is the target's.
+            let pack = match one.pack.expect("represented") {
+                crate::parser::TARGET_PACK => slot,
+                pack => pack,
+            };
+            writeln!(out, "#pragma pack({pack})\ntypedef struct {{").unwrap();
             for field in &one.fields {
                 let dims: String = field.dims.iter().map(|dim| format!("[{dim}]")).collect();
                 writeln!(out, "    {}{dims};", c_declarator(&field.type_spec, &field.name, one.span)?).unwrap();
@@ -92,7 +104,7 @@ fn structure(one: &Struct, language: Language) -> Result<String, Diagnostic> {
             for field in &one.fields {
                 let (type_, initial) = match &field.type_spec {
                     TypeSpec::Named(inner) => (symbol(inner), "<>"),
-                    spec => (data_directive(width(spec).ok_or_else(|| unsupported(&field.name, "assembler", field.span))?).to_owned(), "?"),
+                    spec => (data_directive(field_width(spec, sizes).ok_or_else(|| unsupported(&field.name, "assembler", field.span))?).to_owned(), "?"),
                 };
                 let count: u32 = field.dims.iter().product();
                 let directive = if field.dims.is_empty() { format!("{type_} {initial}") } else { format!("{type_} {count} dup ({initial})") };
@@ -104,7 +116,8 @@ fn structure(one: &Struct, language: Language) -> Result<String, Diagnostic> {
     Ok(out)
 }
 
-fn declaration(function: &Function, abi: Abi, language: Language) -> Result<String, Diagnostic> {
+fn declaration(function: &Function, abi: Abi, language: Language, segmented: bool) -> Result<String, Diagnostic> {
+    let distance = if segmented { "far" } else { "near" };
     // The name its source gives it, not the one it is linked under.
     let name = function.name.rsplit('.').next().expect("a name");
     let parameters: Vec<(&str, &TypeSpec)> = function
@@ -131,8 +144,11 @@ fn declaration(function: &Function, abi: Abi, language: Language) -> Result<Stri
                 return Err(unsupported(&function.name, "C; BASIC calls it", span));
             }
             let convention = match abi {
-                Abi::Cdecl16 => "__cdecl",
+                Abi::C | Abi::Cdecl16 | Abi::Cdecl32 | Abi::Sysv32 | Abi::Ia16 => "__cdecl",
+                Abi::Watcall32 | Abi::Watcall16 => "__watcall",
                 Abi::Interrupt16 => "__interrupt",
+                // What an unmarked declaration is under -mabi=regparm3.
+                Abi::Regparm3 => "",
                 Abi::Pascal16 | Abi::Basic(_) => "__pascal",
             };
             let arguments = parameters
@@ -140,7 +156,8 @@ fn declaration(function: &Function, abi: Abi, language: Language) -> Result<Stri
                 .map(|(name, spec)| c_declarator(spec, name, span))
                 .collect::<Result<Vec<_>, _>>()?;
             let arguments = if arguments.is_empty() { "void".to_owned() } else { arguments.join(", ") };
-            Ok(format!("extern {} __far {convention} {}({arguments});", c_type(result, span)?, name))
+            let far = if segmented { "__far " } else { "" };
+            Ok(format!("extern {} {far}{convention}{}{}({arguments});", c_type(result, span)?, if convention.is_empty() { "" } else { " " }, name))
         }
         // BASIC cannot name a handler's address: there is nothing to declare.
         Language::Basic if abi.interrupt() => Ok(format!("' {name}: an interrupt16 handler")),
@@ -149,7 +166,10 @@ fn declaration(function: &Function, abi: Abi, language: Language) -> Result<Stri
                 .iter()
                 .map(|(name, spec)| basic_parameter(name, spec).ok_or_else(|| unsupported(name, "BASIC", span)))
                 .collect::<Result<Vec<_>, _>>()?;
-            let convention = if abi == Abi::Cdecl16 { " CDECL" } else { "" };
+            if matches!(abi, Abi::Watcall32 | Abi::Watcall16 | Abi::Regparm3) {
+                return Err(unsupported(name, "BASIC", span));
+            }
+            let convention = if matches!(abi, Abi::C | Abi::Cdecl16 | Abi::Cdecl32) { " CDECL" } else { "" };
             // BASIC names hold letters, digits and periods; any other takes its symbol as an alias.
             let (name, alias) = if name.chars().all(|one| one.is_ascii_alphanumeric() || one == '.') {
                 (name.to_owned(), String::new())
@@ -174,12 +194,13 @@ fn declaration(function: &Function, abi: Abi, language: Language) -> Result<Stri
                 .collect::<Vec<_>>()
                 .join(", ");
             let cleanup = match abi {
-                Abi::Cdecl16 => "caller removes the arguments".to_owned(),
+                Abi::C | Abi::Cdecl16 | Abi::Cdecl32 | Abi::Sysv32 | Abi::Ia16 | Abi::Regparm3 => "caller removes the arguments".to_owned(),
                 Abi::Interrupt16 => "iret".to_owned(),
+                Abi::Watcall32 | Abi::Watcall16 => "the callee removes the stack arguments".to_owned(),
                 _ => format!("retf {words}"),
             };
             Ok(format!(
-                "extrn {}:far    ; {}({signature}) -> {}, {cleanup}",
+                "extrn {}:{distance}    ; {}({signature}) -> {}, {cleanup}",
                 abi.symbol(name),
                 abi.name(),
                 result.text()
@@ -215,6 +236,14 @@ fn pointer(spec: &TypeSpec) -> Option<(bool, bool, &TypeSpec)> {
     };
     let far = name.starts_with("*far");
     (far || name.starts_with("*near")).then_some((far, name.ends_with(" mut"), target))
+}
+
+/// The bytes a field of `spec` takes in a struct on the target: a pointer is its pointers' width.
+fn field_width(spec: &TypeSpec, sizes: crate::Sizes) -> Option<u32> {
+    match pointer(spec) {
+        Some((far, _, _)) => Some(if far { sizes.far } else { sizes.near }),
+        None => width(spec),
+    }
 }
 
 fn width(spec: &TypeSpec) -> Option<u32> {

@@ -333,6 +333,15 @@ d:
     assert_eq!((counted("f"), counted("g")), (2, 1), "a counter and a walked pointer, then a counter and a pointer that stays");
 }
 
+/// `releases` read and written back, stated of a parameter: a copy of a routine that frees its
+/// argument has to know it.
+#[test]
+fn releases_is_a_parameter_attribute_that_round_trips() {
+    let text = format!("{DATALAYOUT}\ndeclare void @free(ptr releases)\n");
+    let once = crate::print::module(&crate::parse::module(&text).unwrap());
+    assert!(once.contains("declare void @free(ptr releases)"), "{once}");
+}
+
 /// `noretain` read and written back, stated of a parameter and of a call's
 /// argument; before it existed the parser refused the attribute.
 #[test]
@@ -341,4 +350,24 @@ fn noretain_is_a_parameter_attribute_that_round_trips() {
     let once = round(&text);
     assert!(once.contains("declare void @erase(ptr nocapture noretain)") && once.contains("call void @erase(ptr noretain %p)"), "{once}");
     assert_eq!(round(&once), once);
+}
+
+/// Each use asked `instruction_dominates` of its definition, which scanned the block for both: the
+/// verifier was 12% of compiling 800 BASIC statements (#560). The positions are made once.
+#[test]
+fn test_verifying_a_block_does_not_scan_it_for_each_use() {
+    let chain: String = (1..300).map(|at| format!("  %v{at} = add i16 %v{}, 1\n", at - 1)).collect();
+    let text = format!("{DATALAYOUT}define i16 @f(i16 %v0) {{\nentry:\n{chain}  ret i16 %v299\n}}\n");
+    let module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+    let before = crate::dominators::scans();
+    assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
+    assert_eq!(crate::dominators::scans() - before, 0, "a use scanned its block");
+}
+
+/// A use before its definition in one block is still refused, by position.
+#[test]
+fn test_a_use_before_its_definition_in_one_block_is_refused() {
+    let text = format!("{DATALAYOUT}define i16 @f(i16 %a) {{\nentry:\n  %y = add i16 %x, 1\n  %x = add i16 %a, 1\n  ret i16 %y\n}}\n");
+    let problems = crate::verify::verify(&parse::module(&text).unwrap_or_else(|error| panic!("{error}")));
+    assert!(problems.iter().any(|one| one.contains("does not dominate")), "{problems:?}");
 }

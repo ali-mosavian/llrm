@@ -21,7 +21,7 @@ use crate::support::hash::{HashMap, IndexMap};
 
 /// The roots a general register names, one bit each.
 pub const ROOTS: [Register; 7] =
-    [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI, Register::EBP];
+    llrm_x86::registers::ROOTS;
 
 /// A set of roots, one bit per `ROOTS` entry.
 pub type Roots = u8;
@@ -59,12 +59,12 @@ fn zeroing(one: &Insn) -> Roots {
 }
 
 /// The roots whose upper half `one` may leave other than it found it.
-fn disturbed(one: &Insn) -> Roots {
+fn disturbed(bits: u32, one: &Insn) -> Roots {
     // A jump or branch writes no register; no decoder answers for it.
     if liveness::_terminator(one.what.as_ref()) {
         return 0;
     }
-    let effects = _register_effects(one, true, false).or_else(|| liveness::_declared(one));
+    let effects = _register_effects(bits, one, true, false).or_else(|| liveness::_declared(one));
     let Some((_, writes)) = effects else {
         return ALL;
     };
@@ -76,9 +76,23 @@ fn disturbed(one: &Insn) -> Roots {
 }
 
 /// What `one` makes of `zero`, the roots known zero before it.
-pub fn after(one: &Insn, zero: Roots) -> Roots {
-    let zeroed = zeroing(one);
-    (zero & !disturbed(one)) | zeroed
+pub fn after(bits: u32, one: &Insn, zero: Roots) -> Roots {
+    let zeroed = zeroing(one) | copied(one, zero);
+    (zero & !disturbed(bits, one)) | zeroed
+}
+
+/// The root a whole-register copy writes, where the root it copies from has a zero upper half.
+fn copied(one: &Insn, zero: Roots) -> Roots {
+    let Some(Semantics { op: Operation::Move, dests, sources, .. }) = &one.what else {
+        return 0;
+    };
+    match (dests.as_slice(), sources.as_slice()) {
+        ([Loc::Reg(Reg { register: into, width: 4 })], [Loc::Reg(Reg { register: from, width: 4 })]) => match (bit(*into), bit(*from)) {
+            (Some(into), Some(from)) if zero & from != 0 => into,
+            _ => 0,
+        },
+        _ => 0,
+    }
 }
 
 /// Before each instruction, by `id`, the roots whose upper half is zero.
@@ -98,7 +112,7 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
                 zero &= out[from];
             }
             into.insert(block.at, zero);
-            let leaving = block.insns.iter().fold(zero, |zero, one| after(one, zero));
+            let leaving = block.insns.iter().fold(zero, |zero, one| after(body.bits, one, zero));
             if leaving != out[&block.at] {
                 out.insert(block.at, leaving);
                 changing = true;
@@ -110,7 +124,7 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
         let mut zero = into[&block.at];
         for one in &block.insns {
             result.insert(id(one), zero);
-            zero = after(one, zero);
+            zero = after(body.bits, one, zero);
         }
     }
     result
@@ -208,7 +222,7 @@ pub fn established(body: &LirBody) -> LirBody {
     let graph = &body.blocks;
     let natural = loops::loops(&graph, Some(body.entry));
     let untouched = |inside: &BTreeSet<i64>, roots: Roots| {
-        body.blocks.iter().filter(|block| inside.contains(&block.at)).all(|block| block.insns.iter().all(|one| disturbed(one) & roots == 0))
+        body.blocks.iter().filter(|block| inside.contains(&block.at)).all(|block| block.insns.iter().all(|one| disturbed(body.bits, one) & roots == 0))
     };
     let outermost = |at: i64, roots: Roots| {
         let around = natural.iter().filter(|one| one.body.contains(&at));

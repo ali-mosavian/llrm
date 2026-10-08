@@ -22,6 +22,13 @@ read from the directories beside the edited file, from the editor's buffer
 when it has one open. Modules the compiler supplies (`std.*`, `abi.*`) are
 copied under `$TMPDIR/nib-lsp/` so that a definition can open them.
 
+## The project's target
+
+The server checks for real mode (m16) unless the editor names the project's target in
+`initialize`: `"initializationOptions": {"target": "x86-m32"}`. That target's layout, calling
+conventions and OS layer (`std.os`) then decide what is an error and what a hover or definition
+shows. An unknown target fails `initialize`. Zed passes the `lsp.nib-lsp.initialization_options` setting (see `editors/zed/README.md`).
+
 ## Features
 
 - Diagnostics on open, change and save: the frontend's first error, through

@@ -1,0 +1,71 @@
+INIT sw=0x808000 target=0x458 size=50 rev=0x23 flat=1
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=4
+SEG 3 attr=0xc name="CONST2" align=4
+SEG 4 attr=0x6 name="_DATA" align=4
+START
+TYPE T25 size=28 align=1
+f1 DBSrcFile "/home/alim/scratch/m32/tests/fixtures/c32/lea.c" main=1
+- DBSrcCue f1 1 1
+SYM y1 name="lea_sum" base="lea_sum" pattern="_*" attr=0x7 seg=1
+CALLCONV y1 class=0x80 target=0x602 parms=[] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="a" base="a" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_INTEGER
+SYM y3 name="b" base="b" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_INTEGER
+SYM y4 name="n" base="n" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y4 TY_INTEGER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+SYM y5 name="s" base="s" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y5 TY_INTEGER
+SYM y6 name="t" base="t" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y6 TY_INTEGER
+l4 BENewLabel
+l5 BENewLabel
+n6 CGFEName y5 TY_INTEGER
+n7 CGFEName y2 TY_INTEGER
+n8 CGUnary O_POINTS n7 TY_INTEGER
+n9 CGFEName y3 TY_INTEGER
+n10 CGUnary O_POINTS n9 TY_INTEGER
+n11 CGBinary O_PLUS n8 n10 TY_INTEGER
+n12 CGAssign n6 n11 TY_INTEGER
+- CGDone n12
+n13 CGFEName y6 TY_INTEGER
+n14 CGFEName y2 TY_INTEGER
+n15 CGUnary O_POINTS n14 TY_INTEGER
+n16 CGFEName y3 TY_INTEGER
+n17 CGUnary O_POINTS n16 TY_INTEGER
+n18 CGBinary O_MINUS n15 n17 TY_INTEGER
+n19 CGAssign n13 n18 TY_INTEGER
+- CGDone n19
+n20 CGFEName y5 TY_INTEGER
+n21 CGUnary O_POINTS n20 TY_INTEGER
+n22 CGFEName y4 TY_INTEGER
+n23 CGUnary O_POINTS n22 TY_INTEGER
+n24 CGCompare O_LT n21 n23 TY_INTEGER
+- CGControl O_IF_FALSE n24 l4
+n25 CGFEName y6 TY_INTEGER
+n26 CGUnary O_POINTS n25 TY_INTEGER
+n27 CGUnary O_CONVERT n26 TY_INTEGER
+n28 CGTempName t3 TY_INTEGER
+n29 CGAssign n28 n27 TY_INTEGER
+- CGDone n29
+- CGControl O_GOTO n0 l5
+- CGControl O_LABEL n0 l4
+n30 CGFEName y5 TY_INTEGER
+n31 CGUnary O_POINTS n30 TY_INTEGER
+n32 CGFEName y6 TY_INTEGER
+n33 CGUnary O_POINTS n32 TY_INTEGER
+n34 CGBinary O_PLUS n31 n33 TY_INTEGER
+n35 CGUnary O_CONVERT n34 TY_INTEGER
+n36 CGTempName t3 TY_INTEGER
+n37 CGAssign n36 n35 TY_INTEGER
+- CGDone n37
+- CGControl O_LABEL n0 l5
+n38 CGTempName t3 TY_INTEGER
+n39 CGUnary O_POINTS n38 TY_INTEGER
+- CGReturn n39 TY_INTEGER
+STOP
+FINI

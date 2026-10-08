@@ -380,7 +380,22 @@ impl<'m> Machine<'m> {
                 self.poison[range].fill(poison);
                 void
             }
-            Intrinsic::MemCpy => {
+            Intrinsic::MemSetPattern => {
+                let (Val::Ptr(address), Val::Int { bits: count, .. }) = (argument(0), argument(2)) else { return undefined("a pattern fill of a poison address or count") };
+                let Val::Int { bits, width } = argument(1) else { return undefined("a pattern fill of a poison cell") };
+                let bytes = u64::from(width / 8);
+                let length = count as u64 * bytes;
+                if length > 0 {
+                    self.check_bounds(address, length)?;
+                }
+                for at in 0..length {
+                    let to = (address + at) as usize;
+                    self.memory[to] = (bits >> (8 * (at % bytes))) as u8;
+                    self.poison[to] = false;
+                }
+                void
+            }
+            Intrinsic::MemCpy | Intrinsic::MemMove => {
                 let (Val::Ptr(to), Val::Ptr(from), Val::Int { bits: length, .. }) = (argument(0), argument(1), argument(2)) else { return undefined("a memcpy of a poison address or length") };
                 let length = length as u64;
                 if length > 0 {

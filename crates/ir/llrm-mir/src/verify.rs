@@ -33,7 +33,7 @@ pub fn verify(module: &Module) -> Vec<String> {
                     out.push(format!("@{name}: {problem}"));
                 }
             }
-            let mut checker = Checker { module, context: &module.context, function, errors: Vec::new() };
+            let mut checker = Checker { module, context: &module.context, function, positions: function.positions(), errors: Vec::new() };
             checker.function();
             out.extend(checker.errors.into_iter().map(|one| format!("@{name}: {one}")));
         }
@@ -45,6 +45,8 @@ struct Checker<'a> {
     module: &'a Module,
     context: &'a Context,
     function: &'a Function,
+    /// `Function::positions`, for ordering two instructions of a block.
+    positions: Vec<u32>,
     errors: Vec<String>,
 }
 
@@ -209,7 +211,7 @@ impl Checker<'_> {
                 let Some(Operand::Block(from)) = instruction.operands.get(index + 1) else { continue };
                 self.function.parent(def).is_some_and(|block| tree.dominates(block, *from))
             } else {
-                def != inst && tree.instruction_dominates(self.function, def, inst) || !self.function.parent(inst).is_some_and(|one| tree.is_reachable(one))
+                def != inst && tree.instruction_dominates_at(self.function, def, inst, &self.positions) || !self.function.parent(inst).is_some_and(|one| tree.is_reachable(one))
             };
             if !dominated {
                 self.fail(format!("{} uses a value whose definition does not dominate it", self.at(inst)));

@@ -25,7 +25,11 @@ pub fn parsed(source: &Path, frontend: &super::Frontend, dump: Option<&Path>) ->
     if let Some(dump) = dump {
         std::fs::write(dump, &text).map_err(|error| FrontendError(error.to_string()))?;
     }
-    codec::decode(&text).map_err(|error| FrontendError(format!("the Nib frontend emitted invalid HIR: {error}")))
+    let mut program = codec::decode(&text).map_err(|error| FrontendError(format!("the Nib frontend emitted invalid HIR: {error}")))?;
+    if frontend.checked_stack {
+        program.stack_check = Some(frontend.os.stack.clone());
+    }
+    Ok(program)
 }
 
 /// A diagnostic at `path`, as `nibfront` reports it.

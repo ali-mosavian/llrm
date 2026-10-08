@@ -25,7 +25,7 @@ impl Parsed {
     }
 
     fn unit(&self) -> Unit<'_> {
-        Unit::of(&self.module, &self.layout, function(&self.module, "f"))
+        crate::testing::with_registers(Unit::of(&self.module, &self.layout, function(&self.module, "f")))
     }
 }
 
@@ -545,7 +545,7 @@ b0:
 "
     ));
     let unit = parsed.unit();
-    let seth = Procedure::of(Unit::of(&parsed.module, &parsed.layout, function(&parsed.module, "seth")));
+    let seth = Procedure::of(crate::testing::with_registers(Unit::of(&parsed.module, &parsed.layout, function(&parsed.module, "seth"))));
     let known = alias::summaries(&IndexMap::from_iter([("seth".to_owned(), seth)]), None).unwrap();
     let (first, second, call, load) = (site(&unit, "b0", 0), site(&unit, "b0", 1), site(&unit, "b0", 2), site(&unit, "b0", 3));
     for (accesses, clobber) in [
@@ -591,4 +591,22 @@ b0:
         let unmodeled = (crate::effects::unmodeled_read(context, &declarations, unit.function, inst), crate::effects::unmodeled_write(context, &declarations, unit.function, inst));
         assert_eq!(unmodeled, (false, false), "effects::unmodeled, access {index}");
     }
+}
+
+/// Each load of one address walked back over every store between it and the first, asking each store's
+/// clobbers afresh: `mir gvn` was 10 s of compiling 1600 BASIC statements (#560). A (cell, store) pair is
+/// worked out once.
+#[test]
+fn test_loads_of_one_address_ask_each_store_whether_it_clobbers_once() {
+    let steps: String = (0..30).map(|at| format!("  store i16 {at}, ptr {OTHER}\n  %y{at} = load i16, ptr {CELL}\n")).collect();
+    let parsed = Parsed::new(&format!("define void @f() {{\nb0:\n  %x = load i16, ptr {CELL}\n{steps}  ret void\n}}\n"));
+    let unit = parsed.unit();
+    let graph = graph(&unit);
+    let first = site(&unit, "b0", 0);
+    let before = clobber_runs();
+    for at in 0..30 {
+        let later = site(&unit, "b0", 2 + 2 * at);
+        assert!(graph.unchanged(first, later, &cell(&unit, later)));
+    }
+    assert!(clobber_runs() - before <= 30, "{} clobber questions for 30 stores", clobber_runs() - before);
 }

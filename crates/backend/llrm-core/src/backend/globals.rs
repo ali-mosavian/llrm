@@ -72,11 +72,12 @@ pub const DGROUP: &str = "DGROUP";
 /// a single POINTER fixup would take the target segment's own selector,
 /// which code pairing it with a near offset (a BASIC array descriptor's
 /// AD_fhd and AD_oAdjusted) reads the wrong cells through.
-pub fn far_pointer(name: String, offset: i64, near: bool) -> Vec<Datum> {
+pub fn far_pointer(name: String, offset: i64, near: bool, layout: &DataLayout, space: u32) -> Vec<Datum> {
+    let bytes = layout.pointer(space).bits / 8;
     if near {
-        vec![Datum::Pointer(Pointer { name, offset, far: false }), Datum::SegmentWord(DGROUP.to_owned())]
+        vec![Datum::Pointer(Pointer { name, offset, far: false, bytes: layout.offset_bits(space) / 8 }), Datum::SegmentWord(DGROUP.to_owned())]
     } else {
-        vec![Datum::Pointer(Pointer { name, offset, far: true })]
+        vec![Datum::Pointer(Pointer { name, offset, far: true, bytes })]
     }
 }
 
@@ -160,21 +161,21 @@ impl Initializer<'_> {
         let datum = match (&constant.kind, context.types.get(constant.ty)) {
             (_, Type::Pointer(0)) => {
                 let (global, offset) = target(self.module, self.layout, id)?;
-                Datum::Pointer(Pointer { name: self.symbol(global), offset, far: false })
+                Datum::Pointer(Pointer { name: self.symbol(global), offset, far: false, bytes: self.layout.pointer(0).bits / 8 })
             }
             (_, Type::Pointer(space)) if self.layout.is_pair(*space) => {
                 let (global, offset) = target(self.module, self.layout, id)?;
                 let near = self.module.global(global).address_space == 0 && matches!(self.module.global(global).kind, GlobalKind::Variable(_));
-                self.out.extend(far_pointer(self.symbol(global), offset, near));
+                self.out.extend(far_pointer(self.symbol(global), offset, near, self.layout, *space));
                 return Ok(());
             }
             (ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }), Type::Pointer(2)) => {
                 let (global, _) = target(self.module, self.layout, *value)?;
                 Datum::SegmentWord(self.symbol(global))
             }
-            (ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value }), Type::Int(16)) => {
+            (ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value }), Type::Int(bits @ (16 | 32))) => {
                 let (global, offset) = target(self.module, self.layout, *value)?;
-                Datum::Pointer(Pointer { name: self.symbol(global), offset, far: false })
+                Datum::Pointer(Pointer { name: self.symbol(global), offset, far: false, bytes: bits / 8 })
             }
             _ => return Err(format!("an initializer of {}", context.types.display(constant.ty))),
         };

@@ -31,7 +31,7 @@ fn facts(text: &str) -> (Module, Option<Known>, Option<Known>) {
     let module = parsed(&format!("{DOS}{text}"));
     let dl = layout(&module);
     let f = function(&module, "f");
-    let found = known(&Unit::of(&module, &dl, f), None, None, None);
+    let found = known(&crate::testing::with_registers(Unit::of(&module, &dl, f)), None, None, None);
     let (joined, carried) = (found.get(&value(f, "joined")).cloned(), found.get(&value(f, "carried")).cloned());
     (module, joined, carried)
 }

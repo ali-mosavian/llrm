@@ -17,11 +17,11 @@ use crate::syntax::{Clause, Struct, StructField};
 /// Finds `KEY`'s slot in `SLOTS`: its own when `FOUND`, else the free one it
 /// would take. `KEY` hashes and compares by its `Hashable` methods.
 const PROBE: &str = "\
-let HASH: u16 = KEY.hash() | 1
-let mut AT: u16 = 0
+let HASH: usize = KEY.hash() | 1
+let mut AT: usize = 0
 let mut FOUND = false
 if SLOTS.len != 0:
-    let MASK: u16 = SLOTS.len - 1
+    let MASK: usize = SLOTS.len - 1
     AT = HASH & MASK
     while SLOTS[AT].hash != 0:
         if SLOTS[AT].hash == HASH && SLOTS[AT].key.eq(KEY):
@@ -48,7 +48,7 @@ impl TypeRegistry {
         let text = |one: ElementType| self.types[(one.id() - 1) as usize].name.clone();
         let name = format!("dict[{}, {}]", text(key), text(value));
         let entry_name = format!("{name}.entry");
-        let fields = [("hash", ElementType::Scalar(TypeName::U16)), ("key", key), ("value", value)]
+        let fields = [("hash", ElementType::Scalar(self.word())), ("key", key), ("value", value)]
             .into_iter()
             .map(|(field, element)| StructField { name: field.into(), mutable: true, type_spec: self.spec_of(element), dims: Vec::new(), span })
             .collect();
@@ -59,7 +59,7 @@ impl TypeRegistry {
             id: type_id,
             name,
             kind: "pointer",
-            width: 2,
+            width: self.sizes.near,
             signed: None,
             evaluation: "none",
             element: Some(entry),
@@ -184,7 +184,7 @@ impl FunctionCompiler<'_> {
         };
         let key = single_key(indices, span)?;
         let (_, _, entry) = self.types.dictionary_parts(type_name).expect("a dict");
-        let size = hir::Operand::Constant(U16, i64::from(self.types.width(entry)));
+        let size = hir::Operand::Constant(self.word_id(), i64::from(self.types.width(entry)));
         let place = self.sequence_place(&Expr::Name(dictionary.into(), span), span)?;
         let table = self.value(type_name);
         self.emit("load", vec![table], vec![place.clone()], None);
@@ -200,11 +200,11 @@ impl FunctionCompiler<'_> {
         let (count, done) = (self.block(), self.block());
         self.terminate(hir::Terminator { kind: "branch", operands: vec![found], targets: vec![done, count] });
         self.current = count;
-        let entries = hir::Operand::DescriptorPlace { base: grown, field: "capacity", type_id: U16 };
-        let before = self.value(TypeName::U16);
+        let entries = hir::Operand::DescriptorPlace { base: grown, field: "capacity", type_id: self.word_id() };
+        let before = self.value(self.word());
         self.emit("load", vec![before], vec![entries.clone()], None);
-        let after = self.value(TypeName::U16);
-        self.emit("add", vec![after], vec![hir::Operand::Value(before), hir::Operand::Constant(U16, 1)], None);
+        let after = self.value(self.word());
+        self.emit("add", vec![after], vec![hir::Operand::Value(before), hir::Operand::Constant(self.word_id(), 1)], None);
         self.emit("store", Vec::new(), vec![entries, hir::Operand::Value(after)], None);
         self.terminate(jump(done));
         self.current = done;
@@ -224,9 +224,9 @@ impl FunctionCompiler<'_> {
         let table = self.dictionary_table(receiver, type_name, span)?;
         match (name, arguments) {
             ("len", []) => {
-                let count = self.value(TypeName::U16);
-                self.emit("load", vec![count], vec![hir::Operand::DescriptorPlace { base: table, field: "capacity", type_id: U16 }], None);
-                self.implicit(TypedOperand { operand: Some(hir::Operand::Value(count)), type_name: TypeName::U16 }, expected.unwrap_or(TypeName::U16), span)
+                let count = self.value(self.word());
+                self.emit("load", vec![count], vec![hir::Operand::DescriptorPlace { base: table, field: "capacity", type_id: self.word_id() }], None);
+                self.implicit(TypedOperand { operand: Some(hir::Operand::Value(count)), type_name: self.word() }, expected.unwrap_or(self.word()), span)
             }
             ("contains", [key]) => {
                 let probe = self.probe(table, type_name, key, true, span)?;
@@ -282,7 +282,7 @@ impl FunctionCompiler<'_> {
     /// renamed to what `probe` binds it to.
     fn generated(&self, source: &str, probe: &Probe) -> Result<Vec<Statement>, Diagnostic> {
         let indented: String = source.lines().map(|line| format!("    {line}\n")).collect();
-        let module = parse(lex(&format!("fn generated() -> void:\n{indented}"))?)?;
+        let module = crate::parser::parse_for(lex(&format!("fn generated() -> void:\n{indented}"))?, self.types.sizes.near)?;
         let mut body = module.functions.into_iter().next().expect("one function").body;
         let rename = |name: &mut String| {
             if let Some(renamed) = probe.names.get(name.as_str()) {

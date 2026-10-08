@@ -52,9 +52,14 @@ b0:
 
 /// `module` through `pass` under the pass manager, printed.
 pub fn managed(module: &mut Module, pass: impl llrm_mir::passes::FunctionPass + 'static) -> String {
+    managed_on(module, pass, Tuned::default())
+}
+
+/// `managed` for `machine`.
+pub fn managed_on(module: &mut Module, pass: impl llrm_mir::passes::FunctionPass + 'static, machine: Tuned) -> String {
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(pass);
-    manager.run_module(module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    manager.run_module(module, std::rc::Rc::new(machine)).unwrap();
     printed(module)
 }
 
@@ -108,9 +113,21 @@ pub struct Tuned {
     pub multiplies: std::collections::BTreeMap<i64, i64>,
     /// `Machine::huge_window`.
     pub window: Option<(u32, i64)>,
+    /// The address spaces, where not real mode's.
+    pub spaces: Option<llrm_mir::spaces::Spaces>,
+    /// `Machine::two_address`.
+    pub two_address: bool,
 }
 
 impl llrm_mir::target::Machine for Tuned {
+    fn two_address(&self) -> bool {
+        self.two_address
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.spaces.unwrap_or_else(llrm_x86_m16::spaces)
+    }
+
     fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
         None
     }

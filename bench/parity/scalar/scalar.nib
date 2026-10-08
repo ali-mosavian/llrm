@@ -1,5 +1,5 @@
-# link: ../../../tools/loops/runtime/ext.asm
-@extern("cdecl16")
+# link: @c-runtime
+@extern("c")
 fn keep(x: i16) -> i16  # opaque: the compiler cannot fold the kernel away
 
 fn bench_scalar(seed: i16) -> i32:

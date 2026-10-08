@@ -41,7 +41,7 @@ impl Parsed {
     }
 
     pub fn unit(&self) -> Unit<'_> {
-        Unit::of(&self.module, &self.layout, self.function())
+        crate::testing::with_registers(Unit::of(&self.module, &self.layout, self.function()))
     }
 
     pub fn value(&self, name: &str) -> ValueId {
@@ -850,6 +850,71 @@ fn test_an_extension_of_a_counter_that_cannot_wrap_is_a_wide_recurrence() {
     }
 }
 
+/// C's `for (unsigned char i = 0; i < 9; ++i) a[i]`: the header reads `zext i`
+/// too, once more than the body, on the trip that leaves. It was refused
+/// whatever the count, so the address was no recurrence and a counted loop
+/// kept a conversion per trip on m32 (crc, 832 executed against 496).
+#[test]
+fn test_an_extension_in_the_header_is_a_recurrence_where_the_last_trip_fits() {
+    for (start, bound, cast, fits) in [(0, 9, "zext", true), (0, 255, "zext", true), (1, 0, "zext", false)] {
+        let test = if bound == 0 { "ne" } else { "ult" };
+        let parsed = Parsed::new(&format!(
+            "define void @f() {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i8 [ {start}, %b0 ], [ %next, %b2 ]
+  %h = {cast} i8 %i to i16
+  %m = mul i16 %h, 3
+  %c = icmp {test} i8 %i, {bound}
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %next = add i8 %i, 1
+  br label %b1
+
+b3:
+  ret void
+}}
+"
+        ));
+        assert_eq!(parsed.recurrence("h").map(|of| (of.start, of.step)), fits.then(|| (Scev::constant(start, 16), Scev::constant(1, 16))), "{start} {bound}");
+    }
+}
+
+/// `for (unsigned short i = 0; i < n; ++i)`: no count is known, but the test
+/// ends the loop before the counter passes the width's largest, so its
+/// zero extension is a wide counter. A signed test or a larger step does
+/// not say so.
+#[test]
+fn test_a_symbolic_ult_counter_extends_to_a_wide_recurrence() {
+    for (test, step, cast, wide) in [("ult", 1, "zext", true), ("ult", 2, "zext", false), ("slt", 1, "zext", false), ("ult", 1, "sext", false)] {
+        let parsed = Parsed::new(&format!(
+            "define void @f(i8 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i8 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp {test} i8 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %w = {cast} i8 %i to i16
+  %m = mul i16 %w, 3
+  %next = add i8 %i, {step}
+  br label %b1
+
+b3:
+  ret void
+}}
+"
+        ));
+        assert_eq!(parsed.recurrence("w").is_some(), wide, "{test} {step} {cast}");
+    }
+}
+
 #[test]
 fn test_an_exact_quotient_of_a_counter_is_a_recurrence() {
     for (step, divisor, expected) in [(4, 2, Some(2)), (4, -2, Some(-2)), (3, 2, None), (4, 0, None)] {
@@ -953,7 +1018,7 @@ fn test_every_corpus_count_is_where_its_test_first_fails() {
             if function.entry().is_none() {
                 continue;
             }
-            let unit = Unit::of(&module, &layout, function);
+            let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
             let facts = consts::known(&unit, None, None, None);
             for loop_ in loops::loops(&cfg::graph(function), None) {
                 for proof in counted_unless_stopped(&unit, &loop_, Some(&facts), false) {
@@ -990,7 +1055,7 @@ fn test_every_corpus_recurrence_is_computed_inside_its_loop() {
     for (name, module) in corpus() {
         let layout = layout(&module);
         for (_, _, function) in module.functions().filter(|(_, _, one)| one.entry().is_some()) {
-            let unit = Unit::of(&module, &layout, function);
+            let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
             for loop_ in unit.shape().loops.iter() {
                 let counters = basics(&unit, loop_);
                 for inst in recurrences(&unit, loop_, &counters).web {
@@ -1734,7 +1799,7 @@ fn loop_count_table() {
         let layout = layout(&module);
         for (_, global, function) in module.functions().filter(|(_, _, one)| one.entry().is_some()) {
             let gname = global.name.clone();
-            let unit = Unit::of(&module, &layout, function);
+            let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
             for loop_ in unit.shape().loops.iter() {
                 let proofs = counted_unless_stopped(&unit, loop_, None, false);
                 let placed = |proof: &CountedLoop| proof.count.is_some() || trips(proof, &mut |_, args| args[0].clone()).is_some();
@@ -1962,4 +2027,54 @@ b3:
     );
     let maxima = parsed.counted(false).into_iter().map(|proof| proof.maximum).collect::<Vec<_>>();
     assert_eq!(maxima, vec![Some(BigInt::from(3))]);
+}
+
+/// quicksort's partition: `i` starts where the counter `j` does and goes
+/// up by one on the ways that swap (`step`), by `by` there.
+fn partition(by: u32, flags: &str) -> Parsed {
+    Parsed::new(&format!(
+        "define i16 @f(i16 %lo, i16 %hi, i16 %pivot) {{
+entry:
+  br label %head
+head:
+  %j = phi i16 [ %lo, %entry ], [ %next, %join ]
+  %i = phi i16 [ %lo, %entry ], [ %kept, %join ]
+  %more = icmp slt i16 %j, %hi
+  br i1 %more, label %body, label %done
+body:
+  %small = icmp slt i16 %j, %pivot
+  br i1 %small, label %step, label %keep
+step:
+  %up = add i16 %i, {by}
+  br label %join
+keep:
+  br label %join
+join:
+  %kept = phi i16 [ %up, %step ], [ %i, %keep ]
+  %next = add {flags} i16 %j, 1
+  br label %head
+done:
+  ret i16 %i
+}}
+"
+    ))
+}
+
+/// The follower `i` of the counter `j`, which starts at `lo` too, stays
+/// between them: the check `a[i]` after `a[j]` had was kept for it.
+#[test]
+fn test_a_phi_that_follows_the_counter_stays_between_its_start_and_it() {
+    let parsed = partition(1, "nsw");
+    let found = followers(&parsed.unit(), &parsed.only_loop());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!((found[0].0, found[0].1), (parsed.value("i"), parsed.value("j")));
+}
+
+/// A counter that may wrap, or a follower that may pass it, proves no order.
+#[test]
+fn test_a_follower_that_may_pass_its_counter_proves_nothing() {
+    let wrapping = partition(1, "");
+    assert!(followers(&wrapping.unit(), &wrapping.only_loop()).is_empty(), "j + 1 may wrap");
+    let fast = partition(2, "nsw");
+    assert!(followers(&fast.unit(), &fast.only_loop()).is_empty(), "i + 2 may pass j + 1");
 }

@@ -284,7 +284,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 40] = [
+pub const FLAG_ATTRIBUTES: [&str; 41] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -316,6 +316,7 @@ pub const FLAG_ATTRIBUTES: [&str; 40] = [
     "optsize",
     "readnone",
     "readonly",
+    "releases",
     "returned",
     "returns_twice",
     "signext",
@@ -353,53 +354,43 @@ pub struct CallInfo {
 }
 
 /// The calling conventions LLVM names, by number; any other is `ccN`.
-pub const CONVENTIONS: [(&str, u32); 6] = [("ccc", 0), ("fastcc", 8), ("coldcc", 9), ("x86_stdcallcc", 64), ("x86_fastcallcc", 65), ("x86_intrcc", 83)];
+pub const CONVENTIONS: [(&str, u32); 10] = [("ccc", 0), ("fastcc", 8), ("coldcc", 9), ("x86_stdcallcc", 64), ("x86_fastcallcc", 65), ("x86_intrcc", 83), ("watcallcc", WATCALL), ("sysvcc", SYSV), ("ia16cc", IA16), ("regparm3cc", REGPARM3)];
+
+/// The calling conventions a target names by the `cc` of its description (calling.toml): `ccc` is the
+/// one stating `cc = "cdecl"`, and each other is asked for as `<cc>cc`.
+/// The string attribute that says how an argument is passed where its convention's registers do not: `memory`
+/// (a struct's words, in memory with everything after) or `result-pointer` (where a struct result is written).
+pub const ARGUMENT: &str = "llrm-argument";
+pub const MEMORY: &str = "memory";
+pub const RESULT_POINTER: &str = "result-pointer";
+
+/// What `attrs` say of how its argument is passed: `MEMORY` or `RESULT_POINTER`.
+pub fn argument_class(attrs: &[Attribute]) -> Option<&str> {
+    attrs.iter().find_map(|one| match one {
+        Attribute::Str(key, Some(value)) if key == ARGUMENT => Some(value.as_str()),
+        _ => None,
+    })
+}
+
+/// `regparm3cc`: gcc's `-mregparm=3`, by the size of the argument.
+pub const REGPARM3: u32 = 1005;
+
+/// `ia16cc`: gcc-ia16's convention.
+pub const IA16: u32 = 1004;
+
+/// `sysvcc`: the i386 System V ABI, gcc's on Linux.
+pub const SYSV: u32 = 1003;
+
+/// `watcallcc`: Open Watcom's register convention.
+pub const WATCALL: u32 = 1002;
 
 /// BASIC's own: arguments pushed left to right, popped by the callee.
 pub const BASIC: u32 = 1000;
 
 /// LLVM's `x86_intrcc`: an interrupt handler, entered with the flags pushed
 /// and left by `iret`. Unlike LLVM's, its one parameter points at the frame
-/// the handler saved, `X86_INTR_FRAME`, not at the IP, CS and flags alone.
+/// the handler saved (the target's `interrupt_frame` in its calling.toml), not at the IP, CS and flags alone.
 pub const X86_INTR: u32 = 83;
-
-/// What an `X86_INTR` handler's frame pointer addresses, lowest address
-/// first, each slot's name and bytes: the segments it saved, PUSHAD's image
-/// (EDI lowest), then what the interrupt pushed. A handler writing a slot
-/// writes what POPAD, a pop or `iret` restores. The one statement of the
-/// layout: the backend pushes in this order and frontends name registers
-/// through `x86_intr_slot`.
-pub const X86_INTR_FRAME: [(&str, i64); 15] = [
-    ("gs", 2),
-    ("fs", 2),
-    ("es", 2),
-    ("ds", 2),
-    ("edi", 4),
-    ("esi", 4),
-    ("ebp", 4),
-    ("esp", 4),
-    ("ebx", 4),
-    ("edx", 4),
-    ("ecx", 4),
-    ("eax", 4),
-    ("ip", 2),
-    ("cs", 2),
-    ("flags", 2),
-];
-
-/// Where register `name`'s low word is in the frame, from its pointer; a
-/// 16-bit name (`ax`) is the low word of its 32-bit slot (`eax`).
-pub fn x86_intr_slot(name: &str) -> Option<i64> {
-    let wide = format!("e{name}");
-    let mut at = 0;
-    for (slot, size) in X86_INTR_FRAME {
-        if slot == name || (slot == wide && matches!(name, "ax" | "bx" | "cx" | "dx" | "si" | "di" | "bp" | "sp")) {
-            return Some(at);
-        }
-        at += size;
-    }
-    None
-}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Clause {

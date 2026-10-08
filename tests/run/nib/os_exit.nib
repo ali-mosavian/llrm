@@ -1,0 +1,10 @@
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32
+# The OS layer's exit ends the program at once, with the output before it flushed and none after it.
+import os
+
+fn main() -> i16:
+    print("before")
+    unsafe:
+        os.exit(0)
+    print("after")
+    return 1

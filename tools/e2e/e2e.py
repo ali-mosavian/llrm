@@ -28,6 +28,8 @@ from collections.abc import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import llrmbin  # noqa: E402
 from dosbox import Run
 from configs import Config
 from configs import CONFIGS
@@ -193,7 +195,7 @@ def judge(
 
 def rewriter_command() -> list[str]:
     subprocess.run(["cargo", "build", "--quiet", "--release", "--bin", "llrm-omf"], cwd=ROOT, check=True)
-    return [str(ROOT / "target" / "release" / "llrm-omf")]
+    return [str(llrmbin.bin_dir() / "llrm-omf")]
 
 
 def driver(command: list[str], cfg: Config, *options: str) -> Callable[[bytes], bytes]:
@@ -282,14 +284,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="e2e")
     ap.add_argument("config", choices=list(CONFIGS))
     ap.add_argument("--prog")
-    ap.add_argument("--cpu", default="386")
+    ap.add_argument("--march", default=None, help="gcc's -march name of the CPU (default: the target's)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--timeout", type=int, default=300)
     args = ap.parse_args(argv)
 
     command = rewriter_command()
     print(f"rewriter: {' '.join(command)}")
-    options = ["--cpu", args.cpu] + (["--dry-run"] if args.dry_run else [])
+    options = ([f"-march={args.march}"] if args.march else []) + (["--dry-run"] if args.dry_run else [])
     change = driver(command, CONFIGS[args.config], *options)
     result = run(args.config, args.prog, timeout=args.timeout, transform=change)
     for v in result.verdicts:

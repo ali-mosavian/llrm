@@ -15,10 +15,10 @@ pub fn checked(documents: &mut Documents, path: &Path) -> Vec<(PathBuf, Diagnost
     let Ok(source) = documents.text(path) else {
         return Vec::new();
     };
-    let checked = check(&source, &mut |name| documents.text(&module_path(path, name)));
+    let checked = check(&source, &mut |name| documents.text(&module_path(path, name)), &documents.frontend.clone());
     let mut found = Vec::new();
     if let Some((module, error)) = checked.error {
-        let file = module_file(path, &module);
+        let file = module_file(path, &module, &documents.frontend.os.module);
         let text = documents.source(path, &module).unwrap_or_default();
         found.push((file, diagnostic(text::range(&text, error.span), error.message.clone())));
         if !module.is_empty() {

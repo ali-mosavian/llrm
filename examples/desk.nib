@@ -1,0 +1,74 @@
+# Owned values moving through containers: a help desk's tickets are pushed
+# into a vec, popped out, set aside, matched out of an Option and returned in
+# a Result. Each ticket has one owner at every point, so none leaks.
+
+struct Ticket:
+    title: string
+    steps: vec[string]
+
+struct Desk:
+    mut waiting: vec[Ticket]
+    mut closed: vec[Ticket]
+
+# Built field by field, then moved into the struct.
+fn Ticket.new(title: &string, first: &string, second: &string) -> Ticket:
+    let name = title.copy()
+    let mut steps: vec[string] = []
+    steps.push(first.copy())
+    steps.push(second.copy())
+    return Ticket(title=name, steps=steps)
+
+fn Desk.open(self: &mut Desk, ticket: Ticket) -> void:
+    self.waiting.push(ticket)
+
+fn Desk.next(self: &mut Desk) -> Option[Ticket]:
+    if self.waiting.len == 0:
+        return .none
+    return .some(self.waiting.pop())
+
+# Pops every ticket: the match goes to `found`, the rest wait in `aside` and
+# go back. Each ticket moves on one branch or the other.
+fn Desk.claim(self: &mut Desk, title: &string) -> Option[Ticket]:
+    let mut found: Option[Ticket] = .none
+    let mut aside: vec[Ticket] = []
+    while self.waiting.len > 0:
+        let ticket = self.waiting.pop()
+        if ticket.title == title:
+            found = .some(ticket)
+        else:
+            aside.push(ticket)
+    while aside.len > 0:
+        self.waiting.push(aside.pop())
+    return found
+
+fn Desk.close(self: &mut Desk, ticket: Ticket) -> void:
+    print(f"closed {ticket.title} after {ticket.steps.len} steps")
+    self.closed.push(ticket)
+
+fn main() -> i16:
+    let mut desk = Desk(waiting=[], closed=[])
+    desk.open(Ticket.new("printer", "unplug", "replug"))
+    desk.open(Ticket.new("login", "reset", "retry"))
+    desk.open(Ticket.new("wifi", "reboot", "call isp"))
+
+    match desk.claim("login"):
+        .some(ticket):
+            desk.close(ticket)
+        .none:
+            print("no login ticket")
+    match desk.claim("email"):
+        .some(ticket):
+            desk.close(ticket)
+        .none:
+            print("no email ticket")
+
+    while true:
+        match desk.next():
+            .some(ticket):
+                desk.close(ticket)
+            .none:
+                break
+    print(f"{desk.waiting.len} waiting, {desk.closed.len} closed")
+    for ticket in &desk.closed:
+        print(f"  {ticket.title}")
+    return 0

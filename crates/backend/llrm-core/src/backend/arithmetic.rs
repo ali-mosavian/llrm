@@ -56,6 +56,18 @@ pub fn cheapest_chain<'a>(
     number: i64,
     cpu: impl Into<ProfileOrName<'a>>,
 ) -> Result<Option<(Vec<(&'static str, i64)>, i64)>, String> {
+    chains(number, cpu, true)
+}
+
+/// `cheapest_chain` for a value narrower than the dword a `lea` makes: shifts, adds and subtracts only.
+pub fn cheapest_narrow_chain<'a>(
+    number: i64,
+    cpu: impl Into<ProfileOrName<'a>>,
+) -> Result<Option<(Vec<(&'static str, i64)>, i64)>, String> {
+    chains(number, cpu, false)
+}
+
+fn chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea: bool) -> Result<Option<(Vec<(&'static str, i64)>, i64)>, String> {
     let target = targets::profile(cpu)?;
     if number <= 1 {
         return Ok(None);
@@ -92,6 +104,29 @@ pub fn cheapest_chain<'a>(
         parts
     };
 
+    // `lea r,[a+cur*scale]` where the target has the form: the shift and add it replaces in one non-destructive instruction.
+    // Only a form with no address-size prefix: behind one a dword `lea` carries two prefixes the shift and add do not.
+    let lea = |scale: i64| {
+        let native = target.address_forms.iter().any(|form| form.index_width == 4 && form.scales.contains(&scale) && !form.secondary);
+        (with_lea && native).then(|| llrm_mir::target::three_operand(&target.operations, &target.address_forms, 4, i64::from(target.operand_bytes), scale, false)).flatten()
+    };
+    let fused = |parts: Vec<(&'static str, i64)>| -> Vec<(&'static str, i64)> {
+        let mut out = Vec::new();
+        let mut index = 0;
+        while index < parts.len() {
+            match (parts[index], parts.get(index + 1)) {
+                (("shl", count), Some(&("add", 0))) if (1..=3).contains(&count) && lea(1 << count).is_some() => {
+                    out.push(("lea", 1 << count));
+                    index += 2;
+                }
+                (part, _) => {
+                    out.push(part);
+                    index += 1;
+                }
+            }
+        }
+        out
+    };
     let clocks = |parts: &[(&str, i64)]| -> Result<i64, String> {
         if ["386", "P6"].contains(&target.name.as_str())
             && parts.len() == 3
@@ -105,23 +140,44 @@ pub fn cheapest_chain<'a>(
             // LEA at one unit, like a shift, versus four for multiply.
             return Ok((if target.name == "386" { 2 } else { 1 }) + cost(target, "shift_ri")?);
         }
-        // One copy seeds the accumulator without destroying the source.
-        let mut total = cost(target, "mov_rr")?;
+        // One copy seeds the accumulator without destroying the source, unless a `lea` makes the first step's result.
+        let mut total = if parts.first().is_some_and(|part| part.0 == "lea") { 0 } else { cost(target, "mov_rr")? };
         for (name, count) in parts {
-            total += if *name == "shl" { shift(target, *count)? } else { cost(target, "alu_rr")? };
+            total += match *name {
+                "shl" => shift(target, *count)?,
+                "lea" => lea(*count).expect("a lea part has its form"),
+                _ => cost(target, "alu_rr")?,
+            };
         }
         Ok(total)
     };
 
     // `min(..., key=clocks)`: the first of equal keys wins.
-    let (unsigned, signed) = (chain(false), chain(true));
-    let (first, second) = (clocks(&unsigned)?, clocks(&signed)?);
-    Ok(Some(if second < first { (signed, second) } else { (unsigned, first) }))
+    let mut best: Option<(Vec<(&'static str, i64)>, i64)> = None;
+    for parts in [chain(false), chain(true)].into_iter().flat_map(|parts| [parts.clone(), fused(parts)]) {
+        let price = clocks(&parts)?;
+        if best.as_ref().is_none_or(|(_, kept)| price < *kept) {
+            best = Some((parts, price));
+        }
+    }
+    Ok(best)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// x3, x5 and x9 were `shl`, `add` and a copy (or an `imul` at -Os) where the address unit makes them in one
+    /// instruction: the chain of a factor `base + base*scale` is that one `lea`.
+    #[test]
+    fn test_a_factor_of_one_more_than_a_scale_is_one_lea() {
+        let m32 = targets::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
+        for factor in [3, 5, 9] {
+            let (chain, _) = cheapest_chain(factor, m32).unwrap().unwrap();
+            assert_eq!(chain, [("lea", factor - 1)], "x{factor}");
+        }
+        assert!(cheapest_narrow_chain(3, m32).unwrap().unwrap().0.iter().all(|part| part.0 != "lea"), "a word has no lea");
+    }
 
     #[test]
     fn test_constant_chains_preserve_product() {
@@ -134,6 +190,7 @@ mod tests {
                     let mut value = source;
                     for (name, count) in &chain {
                         match *name {
+                            "lea" => value = source + value * count,
                             "shl" => value <<= count,
                             "add" => value += source,
                             "sub" => value -= source,

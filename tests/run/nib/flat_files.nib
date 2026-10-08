@@ -1,0 +1,26 @@
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32
+# File calls through std.os: a file created, written, read back and closed; a missing one refused.
+import os
+
+var buffer: u8[32] = [0] * 32
+var data: u8[5] = [72, 101, 108, 108, 111]
+
+fn main() -> i16:
+    let name = "FLATFILE.TMP\0"
+    let missing = "NOSUCH.FIL\0"
+    unsafe:
+        let path: *far char = &name
+        let absent: *far char = &missing
+        let out = os.create(path)
+        print(out >= 0)
+        let wrote = os.write_file(out, &data, 5)
+        print(wrote)
+        print(os.close(out) >= 0)
+        let handle = os.open(path, 0)
+        let got = os.read(handle, &mut buffer, 32)
+        print(got)
+        print(buffer[0])
+        print(buffer[4])
+        print(os.close(handle) >= 0)
+        print(os.open(absent, 0) < 0)
+    return 0

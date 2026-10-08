@@ -11,8 +11,18 @@ pub struct Tbaa {
     lineages: Vec<Vec<String>>,
 }
 
+thread_local! {
+    static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many type trees this thread has built, for a test that none is built per access.
+pub fn built() -> usize {
+    BUILT.with(std::cell::Cell::get)
+}
+
 impl Tbaa {
     pub fn of(metadata: &[MetadataNode]) -> Self {
+        BUILT.with(|built| built.set(built.get() + 1));
         let mut lineages: Vec<Option<Vec<String>>> = vec![None; metadata.len()];
         for at in 0..metadata.len() {
             Self::lineage_of(metadata, at, &mut lineages, 0);
@@ -45,6 +55,22 @@ impl Tbaa {
         };
         lineages[at] = Some(lineage.clone());
         lineage
+    }
+
+    /// `of_tag` where there is no tree: the ancestors of the type `tag` names, walked up from it, so
+    /// that asking costs its depth and not the module's metadata (the tree is built from all of it).
+    pub fn chain(metadata: &[MetadataNode], tag: MetadataId) -> Vec<String> {
+        let Some(MetadataOperand::Node(ty)) = metadata.get(tag.0 as usize).and_then(|node| node.operands.first()) else { return Vec::new() };
+        let (mut names, mut at) = (Vec::new(), ty.0 as usize);
+        // A type has no more ancestors than the module has nodes.
+        while names.len() <= metadata.len() {
+            let Some(MetadataOperand::Node(parent)) = metadata.get(at).and_then(|node| node.operands.get(1)) else { break };
+            let parent = parent.0 as usize;
+            let Some(MetadataOperand::String(name)) = metadata.get(parent).and_then(|node| node.operands.first()) else { break };
+            names.push(name.clone());
+            at = parent;
+        }
+        names
     }
 
     /// The ancestors of the access type tag `tag` names, nearest first, the root last.

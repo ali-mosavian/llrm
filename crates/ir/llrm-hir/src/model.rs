@@ -157,6 +157,8 @@ str_enum!(FloatReturn {
 str_enum!(CallDistance {
     Near("NEAR") = "near",
     Far("FAR") = "far",
+    // No caller outside its module and no runtime enters it: near where every call of it is direct.
+    Any("ANY") = "any",
     // Entered by INT or an IRQ, left by `iret`.
     Interrupt("INTERRUPT") = "interrupt",
 });
@@ -335,16 +337,29 @@ pub struct DescriptorPlace {
 }
 
 impl DescriptorPlace {
+    /// The bytes of a heap buffer's header before its data, each of its three fields (the flags,
+    /// the length, the capacity) a word of `width` bytes.
+    pub fn header_bytes(width: i64) -> i64 {
+        3 * width
+    }
+
+    /// `field`'s offset in a heap buffer whose words are `width` bytes: the one place the layout
+    /// is stated, for the code generator and the interpreter alike.
+    pub fn heap_offset(field: DescriptorField, width: i64) -> i64 {
+        Self { base: 0, field, r#type: 0 }.offset(None, width)
+    }
+
     /// The field's offset from the base pointer, whose pointee is
-    /// `pointee`: a scoped view (`$slice[..]`) holds its length then its
-    /// capacity, and a heap string's header, the same two, precedes its data.
-    pub fn offset(&self, pointee: Option<&Type>) -> i64 {
+    /// `pointee`, the fields `width` bytes wide each (the type of the place): a scoped view
+    /// (`$slice[..]`) holds its length then its capacity, and a heap string's header, the same
+    /// two, precedes its data.
+    pub fn offset(&self, pointee: Option<&Type>, width: i64) -> i64 {
         let view = pointee.is_some_and(|one| one.kind == TypeKind::Opaque && one.name.starts_with("$slice["));
         match (view, self.field) {
             (true, DescriptorField::Length) => 0,
-            (true, DescriptorField::Capacity) => 2,
-            (false, DescriptorField::Length) => -4,
-            (false, DescriptorField::Capacity) => -2,
+            (true, DescriptorField::Capacity) => width,
+            (false, DescriptorField::Length) => -2 * width,
+            (false, DescriptorField::Capacity) => -width,
         }
     }
 }
@@ -549,6 +564,12 @@ pub struct CallAbi {
     pub distance: CallDistance,
     pub callee: Option<i64>,
     pub float_return: FloatReturn,
+    /// The `cc` of the target's convention it follows (its `calling.toml`), where `cleanup` does not say.
+    pub convention: Option<String>,
+    /// The arguments, by position, that travel in memory whatever the convention has free: a struct's words.
+    pub memory: Vec<i64>,
+    /// The argument that is the address a struct result is written to.
+    pub result_pointer: Option<i64>,
 }
 
 /// One resolved language procedure symbol; calls refer to its stable id.
@@ -577,6 +598,12 @@ pub struct ProcedureAbi {
     pub float_return: FloatReturn,
     /// It takes arguments past its parameters, as C's `...` does.
     pub variadic: bool,
+    /// The `cc` of the target's convention it follows (its `calling.toml`), where `cleanup` does not say.
+    pub convention: Option<String>,
+    /// The parameters, by position, that travel in memory whatever the convention has free: a struct's words.
+    pub memory: Vec<i64>,
+    /// The parameter that is the address a struct result is written to.
+    pub result_pointer: Option<i64>,
 }
 
 impl ProcedureAbi {
@@ -631,7 +658,7 @@ pub struct Function {
 }
 
 /// The debug vocabulary, as MIR's metadata spells it.
-pub use llrm_mir::debuginfo::{Kind as DebugKind, Reach as DebugReach, Scalar as DebugScalar};
+pub use llrm_mir::debuginfo::{Kind as DebugKind, Language as DebugLanguage, Reach as DebugReach, Scalar as DebugScalar};
 
 /// A source type, as a debugger shows it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -643,6 +670,8 @@ pub struct DebugType {
     pub size: i64,
     pub reach: DebugReach,
     pub members: Vec<DebugMember>,
+    /// A scalar's name in the source, where it has one.
+    pub spelling: Option<String>,
 }
 
 /// A structure's field, or a procedure's parameter by its type alone.
@@ -670,6 +699,10 @@ pub struct DebugVariable {
     pub place: i64,
     pub name: String,
     pub r#type: i64,
+    /// The place is where a parameter's value is kept, not a variable the body declares.
+    pub parameter: bool,
+    /// Of a parameter's home: the argument it was passed as, where the convention says how it arrives.
+    pub argument: Option<i64>,
 }
 
 /// A function as a debugger names it: its procedure type, its source
@@ -698,6 +731,8 @@ pub struct DebugGlobal {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Debug {
+    /// The source language, where the frontend says.
+    pub language: Option<DebugLanguage>,
     pub types: Vec<DebugType>,
     pub functions: Vec<DebugFunction>,
     pub globals: Vec<DebugGlobal>,
@@ -833,6 +868,24 @@ impl Module {
     pub fn lands_errors(&self, function: &Function) -> bool {
         function.error_handler.is_some() || self.functions.iter().any(|one| one.error_handler.is_some() && !one.error_handler_local)
     }
+
+    /// The local STRING descriptors `function` owns, each of which asks
+    /// B$ENRA for a handle. Runtime-produced temporaries are not counted.
+    pub fn local_strings(&self, function: &Function) -> i64 {
+        let string = |place: &&Place| self.types.iter().any(|one| one.id == place.r#type && one.name == "string");
+        function.places.iter().filter(|place| place.storage == Storage::Local).filter(string).count() as i64
+    }
+
+    /// Whether `function` frames itself under `frames`: the runtime needs no
+    /// frame of its own for it. No error lands in it (the runtime reaches a
+    /// handler or RESUME target through its frame chain), and no local
+    /// STRING asks B$ENRA for a handle. The runtime frame zeroes its locals;
+    /// a frame of its own does not.
+    // Event handlers (ON TIMER/KEY, not parsed today) will need the runtime frame:
+    // B$EXSA polls events on exit.
+    pub fn frames_itself(&self, frames: Frames, function: &Function) -> bool {
+        frames == Frames::Own && !self.lands_errors(function) && function.external_entries.is_empty() && self.local_strings(function) == 0
+    }
 }
 
 /// The internal data object whose rows are where RESUME may continue.
@@ -875,6 +928,14 @@ pub struct RuntimePromises {
     /// The routines that never come back to their caller: END, SYSTEM, the
     /// error funnel. Their calls end their block.
     pub no_return: Vec<String>,
+    /// How the runtime reads a string descriptor; none where it cannot be
+    /// said, and every routine of `routines` then keeps its call.
+    pub descriptor: Option<crate::meaning::Descriptor>,
+    /// What each routine of the runtime computes, as it states it.
+    pub routines: Vec<crate::meaning::Meaning>,
+    /// Whether a routine raises its error: the program asks for run-time
+    /// checks, or handles errors.
+    pub checked: bool,
 }
 
 impl RuntimePromises {
@@ -893,6 +954,9 @@ impl RuntimePromises {
             reads_arguments: Vec::new(),
             no_retain: Vec::new(),
             no_return: Vec::new(),
+            descriptor: None,
+            routines: Vec::new(),
+            checked: false,
         }
     }
 
@@ -903,6 +967,36 @@ impl RuntimePromises {
             return None;
         }
         Some(self.writers.iter().filter(|one| one.routines.iter().any(|writer| writer == routine)).map(|one| one.cell.clone()).collect())
+    }
+}
+
+/// What a runtime says of its stack, for code that checks it on entry
+/// (`-fsanitize=stack`): where its lower limit is, what to call when SP falls
+/// below it, and the bytes below the limit an unchecked leaf may use.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StackCheck {
+    /// The data-group word holding the lowest SP the runtime allows.
+    pub limit: String,
+    /// The routine entered on overflow; it does not return.
+    pub handler: String,
+    /// Whether it is entered by a far call: a real-mode runtime's is, a flat one's is near.
+    pub far: bool,
+    /// Bytes below `limit` that the handler, interrupts and an unchecked
+    /// leaf's frame share.
+    pub red_zone: i64,
+    /// The runtime's own frame entry that checks, where it frames a
+    /// procedure: BC's /D calls it in place of the plain one.
+    pub entry: Option<String>,
+}
+
+impl StackCheck {
+    /// The check a runtime's description row states: `limit`, `handler`, `red_zone`, whether the
+    /// handler is `far` (it is unless the row says not) and, where its frame entry checks, `entry`.
+    pub fn from_toml(row: &toml::Value) -> Result<Self, String> {
+        let text = |key: &str| row.get(key).and_then(toml::Value::as_str).map(str::to_owned);
+        let need = |key: &str| text(key).ok_or_else(|| format!("stack {key} is not a string"));
+        let red_zone = row.get("red_zone").and_then(toml::Value::as_integer).ok_or("stack red_zone is not an integer")?;
+        Ok(Self { limit: need("limit")?, handler: need("handler")?, far: row.get("far").and_then(toml::Value::as_bool).unwrap_or(true), red_zone, entry: text("entry") })
     }
 }
 
@@ -919,6 +1013,10 @@ pub struct Program {
     /// A frame's locals start zeroed; false where the language leaves them
     /// indeterminate.
     pub zeroed_locals: bool,
+    /// The bytes of each word of a buffer's or view's descriptor (its flags, length and capacity): the
+    /// language's promise, which the descriptor places' field type states too. 2 for every language
+    /// but Nib on a target whose near pointer is wider.
+    pub descriptor_word: i64,
     pub frames: Frames,
     pub promises: RuntimePromises,
     /// The functions code outside the program calls whatever their
@@ -930,6 +1028,9 @@ pub struct Program {
     /// The segment of the constants the compiler makes; None: the default
     /// data segment.
     pub constant_segment: Option<String>,
+    /// Each procedure compares SP with the runtime's limit on entry: where
+    /// `-fsanitize=stack` asks, never otherwise.
+    pub stack_check: Option<StackCheck>,
 }
 
 impl Program {
@@ -944,11 +1045,13 @@ impl Program {
             float_mode: FloatMode::Inline,
             float_semantics: FloatSemantics::Declared,
             zeroed_locals: true,
+            descriptor_word: 2,
             frames: Frames::Runtime,
             promises: RuntimePromises::default(),
             entries: Vec::new(),
             preserved: Vec::new(),
             constant_segment: None,
+            stack_check: None,
         }
     }
 }

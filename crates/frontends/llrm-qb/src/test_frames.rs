@@ -1,5 +1,5 @@
-//! `--own-frames`: a procedure frames itself, not through B$ENRA/B$EXSA,
-//! where the runtime needs no frame of its own.
+//! A procedure frames itself, not through B$ENRA/B$EXSA, where the runtime
+//! needs no frame of its own; `--runtime-frames` gives every one the runtime's.
 
 use llrm_core::hir::execute;
 use llrm_core::hir::model::Program;
@@ -7,13 +7,13 @@ use llrm_core::hir::model::Program;
 use super::driver as qb_driver;
 use super::test_hir::{between, listing, written};
 
-/// Each dialect, on its runtime, that keeps the runtime's frame by default.
+/// Each dialect, on its runtime.
 const DIALECTS: [(&str, &str); 4] = [("qbasic11", "qb45"), ("qb45", "qb45"), ("pds71", "pds71"), ("vbdos", "vbdos")];
 
 fn program(source: &str, dialect: &str, runtime: &str, own_frames: bool) -> Program {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "frames.bas", source.as_bytes());
-    let frontend = qb_driver::Frontend { own_frames, ..qb_driver::Frontend::new(dialect, runtime) };
+    let frontend = qb_driver::Frontend { runtime_frames: !own_frames, ..qb_driver::Frontend::new(dialect, runtime) };
     qb_driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{dialect}: {error}"))
 }
 
@@ -28,10 +28,12 @@ fn runtime_framed(listing: &str) -> bool {
 }
 
 #[test]
-fn own_frames_drop_the_runtime_frame_in_every_dialect() {
+/// QB 4.5, PDS 7.1 and VBDOS called B$ENRA in every procedure by default: fib took
+/// 14.9 ms against 5.0 and each call 95 instructions more.
+fn own_frames_are_the_default_in_every_dialect() {
     let source = "SUB s (x AS INTEGER)\nDIM a AS LONG, b AS DOUBLE\na = x\nb = a\nx = b\nEND SUB\n";
     for (dialect, runtime) in DIALECTS {
-        assert!(runtime_framed(&procedure(source, dialect, runtime, false, "S")), "{dialect} without the switch");
+        assert!(runtime_framed(&procedure(source, dialect, runtime, false, "S")), "{dialect} with --runtime-frames");
         let own = procedure(source, dialect, runtime, true, "S");
         assert!(!runtime_framed(&own), "{dialect}: {own}");
     }
@@ -116,5 +118,32 @@ fn indexed_frame_cells_move_with_the_runtime_frame() {
         assert!(runtime_framed(&framed), "{dialect}");
         let own = procedure(source, dialect, runtime, true, "ARRS");
         assert_eq!(indexed_from_descriptor(&framed), indexed_from_descriptor(&own), "{dialect}:\n{framed}\n{own}");
+    }
+}
+
+/// Scripts passed `--own-frames`, which became the default: it must still parse
+/// and change nothing, and `--runtime-frames` must reach the frontend.
+#[test]
+fn the_frame_switches_parse() {
+    let parse = |flag: &str| super::cli::parse_args(&["a.bas".to_owned(), flag.to_owned()]).expect("parses").frontend.runtime_frames;
+    assert!(!parse("--own-frames"));
+    assert!(parse("--runtime-frames"));
+}
+
+/// Under own frames, a procedure that keeps B$ENRA (here a local STRING) had its
+/// frame emitted as holding garbage, so a local read before it was written was no
+/// longer zero to the optimizer: deedlines' INITCROSFADEPICS went from 263 071
+/// to 4.5 million estimated instructions. Its frame is zeroed; a self-framed one is not.
+#[test]
+fn a_runtime_framed_procedure_still_zeroes_its_frame_in_mir() {
+    let source = "SUB kept (n AS INTEGER)\nDIM k AS INTEGER, t AS STRING\nt = \"x\"\nPRINT k + n; t\nEND SUB\n\
+        SUB own (n AS INTEGER)\nDIM k AS INTEGER\nPRINT k + n\nEND SUB\n";
+    for (dialect, runtime) in DIALECTS {
+        let text = llrm_mir::print::module(&llrm_core::hir::mir::emit(&program(source, dialect, runtime, true), &llrm_x86_m16::layout()).swap_remove(0).module);
+        let entry = |name: &str| text.split(&format!("@{name}(")).nth(1).and_then(|rest| rest.split("\n}").next()).unwrap_or_else(|| panic!("{name} in {text}")).to_owned();
+        // The emitter's own zeroing carries no metadata; the frontend's stores do.
+        let zeroes = |name: &str| entry(name).lines().any(|line| line.trim().starts_with("store i16 0, ptr %") && !line.contains('!'));
+        assert!(zeroes("KEPT"), "{dialect}: {}", entry("KEPT"));
+        assert!(!zeroes("OWN"), "{dialect}: {}", entry("OWN"));
     }
 }

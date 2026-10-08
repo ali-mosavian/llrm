@@ -1,0 +1,28 @@
+# 40000 i16s (80000 bytes) in huge memory, past 64K: copied, scrolled up and scrolled down.
+huge var a: i16[40000] = [0] * 40000
+huge var b: i16[40000] = [0] * 40000
+
+fn weigh() -> i32:
+    let mut t: i32 = 0
+    for i in 0..40000:
+        t += i32(b[i]) * i32((i & 15) + 1)
+    return t
+
+fn bench_copyw() -> i32:
+    for i in 0..40000:
+        a[i] = i16(i * 3 + 1)
+    for i in 0..40000:
+        b[i] = a[i]
+    let mut t: i32 = weigh()
+    for i in 0..39000:
+        b[i] = b[i + 1000]
+    t += weigh()
+    let mut j: i32 = 38999
+    while j >= 0:
+        b[j + 1000] = b[j]
+        j -= 1
+    return t + weigh()
+
+fn main() -> i16:
+    print(bench_copyw())
+    return 0

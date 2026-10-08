@@ -1,3 +1,4 @@
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 /* Dynamic far-struct fields from qc-port's cache-list update. */
 extern void report(long value);
 typedef struct {

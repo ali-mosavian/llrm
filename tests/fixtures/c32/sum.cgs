@@ -1,0 +1,71 @@
+INIT sw=0x808000 target=0x458 size=50 rev=0x23 flat=1
+SEG 1 attr=0x7 name="_TEXT" align=1
+SEG 2 attr=0x1c name="CONST" align=4
+SEG 3 attr=0xc name="CONST2" align=4
+SEG 4 attr=0x6 name="_DATA" align=4
+START
+TYPE T25 size=28 align=1
+f1 DBSrcFile "/home/alim/scratch/abi32/tests/fixtures/c32/sum.c" main=1
+- DBSrcCue f1 1 1
+SYM y1 name="sum" base="sum" pattern="*_" attr=0x7 seg=1
+CALLCONV y1 class=0x0 target=0x0 parms=[f0000ff:0] ret=0:0
+- CGProcDecl y1 TY_INTEGER
+SYM y2 name="p" base="p" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y2 TY_POINTER
+SYM y3 name="n" base="n" pattern="_*" attr=0x0 seg=2
+- CGParmDecl y3 TY_INTEGER
+l2 CGLastParm
+t3 CGTemp TY_INTEGER
+SYM y4 name="s" base="s" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y4 TY_INTEGER
+SYM y5 name="i" base="i" pattern="_*" attr=0x0 seg=2
+- CGAutoDecl y5 TY_INTEGER
+l4 BENewLabel
+l5 BENewLabel
+- DBSrcCue f1 2 1
+n6 CGFEName y4 TY_INTEGER
+n7 CGInteger 0 TY_INTEGER
+n8 CGAssign n6 n7 TY_INTEGER
+- CGDone n8
+- DBSrcCue f1 3 1
+n9 CGFEName y5 TY_INTEGER
+n10 CGInteger 0 TY_INTEGER
+n11 CGAssign n9 n10 TY_INTEGER
+- CGDone n11
+- CGControl O_LABEL n0 l4
+n12 CGFEName y5 TY_INTEGER
+n13 CGUnary O_POINTS n12 TY_INTEGER
+n14 CGFEName y3 TY_INTEGER
+n15 CGUnary O_POINTS n14 TY_INTEGER
+n16 CGCompare O_LT n13 n15 TY_INTEGER
+- CGControl O_IF_FALSE n16 l5
+n17 CGFEName y4 TY_INTEGER
+n18 CGFEName y2 TY_POINTER
+n19 CGUnary O_POINTS n18 TY_POINTER
+n20 CGFEName y5 TY_INTEGER
+n21 CGUnary O_POINTS n20 TY_INTEGER
+n22 CGInteger 4 TY_INTEGER
+n23 CGBinary O_TIMES n21 n22 TY_INTEGER
+n24 CGBinary O_PLUS n19 n23 TY_POINTER
+n25 CGUnary O_POINTS n24 TY_INTEGER
+n26 CGPreGets O_PLUS n17 n25 TY_INTEGER
+- CGDone n26
+n27 CGFEName y5 TY_INTEGER
+n28 CGInteger 1 TY_INTEGER
+n29 CGPostGets O_PLUS n27 n28 TY_INTEGER
+- CGDone n29
+- CGControl O_GOTO n0 l4
+- CGControl O_LABEL n0 l5
+- DBSrcCue f1 4 1
+n30 CGFEName y4 TY_INTEGER
+n31 CGUnary O_POINTS n30 TY_INTEGER
+n32 CGUnary O_CONVERT n31 TY_INTEGER
+n33 CGTempName t3 TY_INTEGER
+n34 CGAssign n33 n32 TY_INTEGER
+- CGDone n34
+- DBSrcCue f1 5 1
+n35 CGTempName t3 TY_INTEGER
+n36 CGUnary O_POINTS n35 TY_INTEGER
+- CGReturn n36 TY_INTEGER
+STOP
+FINI

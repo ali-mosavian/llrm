@@ -1,26 +1,136 @@
-reason = "-Os opens a frame with locals with enter N,0 (one instruction for three; 14 clocks for 3 on the 486, so -Os only); -O2 unchanged"
-blessed = "2026-10-03"
+reason = "an integer of 32 bits or more made a float is rounded to a float, as C requires (the x87 register kept the extra bits and a compare against a float read them): a store and a load per conversion"
+blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 978202
-memory_operands = 217153
+instructions = 919099
+memory_operands = 204072
+code_bytes = 1118
+data_bytes = 165
+bss_bytes = 0
+kernel_ms = 12.2716
 
 [bas.Os]
-instructions = 1187222
-memory_operands = 138118
+instructions = 1037188
+memory_operands = 138105
+code_bytes = 383
+data_bytes = 145
+bss_bytes = 0
+kernel_ms = 13.8468
 
 [c.O2]
-instructions = 1116131
-memory_operands = 164102
+instructions = 901107
+memory_operands = 146077
+code_bytes = 1069
+data_bytes = 68
+bss_bytes = 96
+kernel_ms = 12.0218
 
 [c.Os]
-instructions = 1187194
+instructions = 1037190
 memory_operands = 138111
+code_bytes = 346
+data_bytes = 24
+bss_bytes = 96
 
 [nib.O2]
-instructions = 972148
-memory_operands = 199100
+instructions = 948123
+memory_operands = 186080
+code_bytes = 1048
+data_bytes = 76
+bss_bytes = 0
+kernel_ms = 12.648
 
 [nib.Os]
-instructions = 1350440
-memory_operands = 230138
+instructions = 1350472
+memory_operands = 230174
+code_bytes = 582
+data_bytes = 32
+bss_bytes = 0
+
+[ow.O2]
+instructions = 1088249
+memory_operands = 386130
+code_bytes = 396
+data_bytes = 24
+bss_bytes = 96
+kernel_ms = 14.5304
+
+[ow.Os]
+instructions = 1236234
+memory_operands = 644129
+code_bytes = 421
+data_bytes = 24
+bss_bytes = 96
+kernel_ms = 16.5043
+
+[bcc.O2]
+instructions = 2432392
+memory_operands = 838128
+code_bytes = 534
+data_bytes = 24
+bss_bytes = 96
+kernel_ms = 32.4536
+
+[bcc.Os]
+instructions = 2741499
+memory_operands = 762127
+code_bytes = 621
+data_bytes = 24
+bss_bytes = 96
+kernel_ms = 36.5768
+
+[tc.O2]
+instructions = 3498649
+memory_operands = 866123
+code_bytes = 723
+data_bytes = 56
+bss_bytes = 96
+kernel_ms = 46.6759
+
+[tc.Os]
+instructions = 3498647
+memory_operands = 866123
+code_bytes = 720
+data_bytes = 56
+bss_bytes = 96
+kernel_ms = 46.6758
+
+[tcpp.O2]
+instructions = 2820566
+memory_operands = 764129
+code_bytes = 653
+data_bytes = 24
+bss_bytes = 96
+kernel_ms = 37.6316
+
+[tcpp.Os]
+instructions = 2820552
+memory_operands = 764129
+code_bytes = 647
+data_bytes = 24
+bss_bytes = 96
+kernel_ms = 37.6314
+
+[bc.O2]
+instructions = 3403781
+memory_operands = 1036725
+code_bytes = 697
+data_bytes = 35
+bss_bytes = 122
+kernel_ms = 45.4248
+
+[pds71.O2]
+instructions = 3331328
+memory_operands = 1036656
+code_bytes = 695
+data_bytes = 31
+bss_bytes = 122
+kernel_ms = 44.4564
+
+[vbdos.O2]
+instructions = 3331345
+memory_operands = 1036661
+code_bytes = 699
+data_bytes = 31
+bss_bytes = 122
+kernel_ms = 44.4529

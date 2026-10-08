@@ -8,7 +8,15 @@ fn main() -> ExitCode {
     let mut syntax_only = false;
     let mut input = None;
     let mut declare = None;
-    let mut arguments = env::args().skip(1);
+    let mut rest: Vec<String> = env::args().skip(1).collect();
+    let frontend = match llrm_nib::cli::frontend_with_mode(&mut rest) {
+        Ok(frontend) => frontend,
+        Err(why) => {
+            eprintln!("nibfront: {why}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut arguments = rest.into_iter();
     while let Some(argument) = arguments.next() {
         if argument == "--declare" {
             let Some(language) = arguments.next().as_deref().and_then(llrm_nib::declarations::Language::named)
@@ -37,7 +45,7 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     }
     let Some(input) = input else {
-        eprintln!("usage: nibfront [--tokens|--syntax|--declare h|bi|inc] FILE");
+        eprintln!("usage: nibfront [-m16|-m32] [--tokens|--syntax|--declare h|bi|inc] FILE");
         return ExitCode::from(2);
     };
     let source = match fs::read_to_string(&input) {
@@ -62,7 +70,7 @@ fn main() -> ExitCode {
         };
     }
     if let Some(language) = declare {
-        return match llrm_nib::declare_file(Path::new(&input), language) {
+        return match llrm_nib::declare_file(Path::new(&input), language, &frontend) {
             Ok(text) => {
                 print!("{text}");
                 ExitCode::SUCCESS
@@ -70,7 +78,7 @@ fn main() -> ExitCode {
             Err((path, error)) => report(&path.display().to_string(), error),
         };
     }
-    match llrm_nib::compile_file(Path::new(&input), &Default::default()) {
+    match llrm_nib::compile_file(Path::new(&input), &frontend) {
         Ok(hir) => {
             print!("{hir}");
             ExitCode::SUCCESS

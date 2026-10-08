@@ -21,12 +21,59 @@ use crate::module::{Change, Function, GlobalKind, GlobalValue, MetadataNode, Mod
 use crate::program::{Program, ProgramAnalyses, ProgramPass, ProgramProxy, interface};
 use crate::target::{Machine, Neutral};
 
+/// Where a timer is plugged in: MIR depends on nothing, so whoever times the pipeline
+/// (`llrm-transforms`, when `LLRM_DEBUG=time` is on) installs these once.
+pub struct Observer {
+    /// Runs the closure as a step of kind `.0` (`mir`, `analysis`) named `.1`.
+    pub span: fn(&'static str, &'static str, &mut dyn FnMut()),
+    /// Runs the closure with the steps in it charged to the function named `.0`.
+    pub function: fn(&str, &mut dyn FnMut()),
+    /// A cached analysis `.0` looked up: found when `.1`, else computed.
+    pub count: fn(&'static str, bool),
+}
+
+static OBSERVER: std::sync::OnceLock<Observer> = std::sync::OnceLock::new();
+
+/// Installs `observer`; the first install stands.
+pub fn observe(observer: Observer) {
+    let _ = OBSERVER.set(observer);
+}
+
+/// `run` as the MIR step `name`, timed if an observer is installed.
+pub fn spanned<T>(name: &'static str, run: impl FnOnce() -> T) -> T {
+    spanned_as("mir", name, run)
+}
+
+fn spanned_as<T>(kind: &'static str, name: &'static str, run: impl FnOnce() -> T) -> T {
+    let Some(observer) = OBSERVER.get() else { return run() };
+    let (mut run, mut out) = (Some(run), None);
+    (observer.span)(kind, name, &mut || out = run.take().map(|run| run()));
+    out.expect("the observer ran the step")
+}
+
+/// `run` with the steps in it charged to `function`, if an observer is installed.
+pub fn in_function<T>(function: &str, run: impl FnOnce() -> T) -> T {
+    let Some(observer) = OBSERVER.get() else { return run() };
+    let (mut run, mut out) = (Some(run), None);
+    (observer.function)(function, &mut || out = run.take().map(|run| run()));
+    out.expect("the observer ran the step")
+}
+
+fn counted(what: &'static str, hit: bool) {
+    if let Some(observer) = OBSERVER.get() {
+        (observer.count)(what, hit);
+    }
+}
+
 /// What a function pass works on: its function, the context its types and
 /// constants live in, and the program's datalayout.
 pub struct Unit<'a> {
     pub context: &'a mut Context,
     pub layout: &'a DataLayout,
     pub function: &'a mut Function,
+    /// The function's own id in its module, where it is one the module names: a pass that must
+    /// tell a call to itself asks for it.
+    pub id: Option<GlobalId>,
     /// The module's metadata nodes.
     pub metadata: &'a [crate::module::MetadataNode],
     /// Functions the pass declares in the module.
@@ -94,6 +141,17 @@ pub trait Analysis: 'static {
     /// Whether the result reads `analyses.outer()`, itself or through what
     /// it builds on. One that does not outlives a change to the module.
     const READS_OUTER: bool = true;
+
+    /// Whether `update` can bring a result the function has since changed up to date: such a result is kept past an
+    /// invalidation, with the point in the function's history it was true at.
+    const INCREMENTAL: bool = false;
+
+    /// `previous`, which was true of the function before `changes`, made true of it now; none where it would be
+    /// derived afresh. Must give what `run` gives, as `LLRM_CHECK_REPLAY` asserts.
+    #[allow(unused_variables)]
+    fn update(previous: &Self::Result, changes: &[crate::module::Change], context: &Context, layout: &DataLayout, function: &Function, analyses: &mut Analyses) -> Option<Self::Result> {
+        None
+    }
 
     /// Whether a pass returning `preserved` left the result true: when it
     /// names this analysis, or keeps the function and the result reads
@@ -348,9 +406,14 @@ trait Cached {
     fn as_any(&self) -> &dyn Any;
     fn still_true(&self, context: &Context, layout: &DataLayout, function: &Function, outer: &Rc<Outer>) -> bool;
     fn preserved(&self, preserved: &PreservedAnalyses) -> bool;
+    fn incremental(&self) -> bool;
 }
 
-struct Entry<A: Analysis>(Rc<A::Result>);
+struct Entry<A: Analysis> {
+    result: Rc<A::Result>,
+    /// The function's history when the result was derived.
+    mark: crate::module::Mark,
+}
 
 impl<A: Analysis> Cached for Entry<A> {
     fn name(&self) -> &'static str {
@@ -362,23 +425,34 @@ impl<A: Analysis> Cached for Entry<A> {
     }
 
     fn still_true(&self, context: &Context, layout: &DataLayout, function: &Function, outer: &Rc<Outer>) -> bool {
-        *self.0 == A::run(context, layout, function, &mut Analyses::new(Rc::clone(outer)))
+        *self.result == A::run(context, layout, function, &mut Analyses::new(Rc::clone(outer)))
     }
 
     fn preserved(&self, preserved: &PreservedAnalyses) -> bool {
         A::preserved(preserved)
+    }
+
+    fn incremental(&self) -> bool {
+        A::INCREMENTAL
     }
 }
 
 /// One function's cached analyses, and what they may read of its module.
 pub struct Analyses {
     cache: HashMap<TypeId, Box<dyn Cached>>,
+    /// Results invalidated that `update` may bring up to date.
+    kept: HashMap<TypeId, Box<dyn Cached>>,
     outer: Rc<Outer>,
+}
+
+fn check_replay() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_REPLAY").is_some())
 }
 
 impl Analyses {
     pub fn new(outer: Rc<Outer>) -> Self {
-        Self { cache: HashMap::new(), outer }
+        Self { cache: HashMap::new(), kept: HashMap::new(), outer }
     }
 
     /// An empty cache over the same module and target, for another body.
@@ -392,7 +466,7 @@ impl Analyses {
 
     /// `A`'s result, if computed: LLVM's `getCachedResult`.
     pub fn cached<A: Analysis>(&self) -> Option<Rc<A::Result>> {
-        self.cache.get(&TypeId::of::<A>()).map(|entry| Rc::clone(&entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").0))
+        self.cache.get(&TypeId::of::<A>()).map(|entry| Rc::clone(&entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result))
     }
 
     /// `A`'s result for `function`, computed once until invalidated.
@@ -400,17 +474,38 @@ impl Analyses {
         let key = TypeId::of::<A>();
         if let Some(entry) = self.cache.get(&key) {
             let entry = entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
-            return Rc::clone(&entry.0);
+            counted(A::NAME, true);
+            return Rc::clone(&entry.result);
         }
-        let result = Rc::new(A::run(context, layout, function, self));
-        self.cache.insert(key, Box::new(Entry::<A>(Rc::clone(&result))));
+        counted(A::NAME, false);
+        let updated = self.kept.remove(&key).and_then(|old| {
+            let old = old.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+            let changes = function.changes_since(old.mark)?;
+            let made = spanned_as("analysis", A::NAME, || A::update(&old.result, changes, context, layout, function, self))?;
+            if check_replay() {
+                let whole = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
+                assert!(made == whole, "{}: the result brought up to date is not what deriving it afresh gives", A::NAME);
+            }
+            Some(made)
+        });
+        let result = Rc::new(match updated {
+            Some(made) => made,
+            None => spanned_as("analysis", A::NAME, || A::run(context, layout, function, self)),
+        });
+        self.cache.insert(key, Box::new(Entry::<A> { result: Rc::clone(&result), mark: function.mark() }));
         result
     }
 
     /// Drops what `preserved` does not keep: LLVM's
     /// `FunctionAnalysisManager::invalidate`, for a pass running others.
     pub fn invalidate(&mut self, preserved: &PreservedAnalyses) {
-        self.cache.retain(|_, entry| entry.preserved(preserved));
+        let gone: Vec<TypeId> = self.cache.iter().filter(|(_, entry)| !entry.preserved(preserved)).map(|(key, _)| *key).collect();
+        for key in gone {
+            let entry = self.cache.remove(&key).expect("held");
+            if entry.incremental() {
+                self.kept.insert(key, entry);
+            }
+        }
     }
 
     /// The cached analyses a fresh computation disagrees with.
@@ -438,7 +533,7 @@ impl Kind {
 }
 
 fn computed<M: ModuleAnalysis>(module: &Module, analyses: &mut ModuleAnalyses) -> Rc<dyn Any> {
-    Rc::new(M::run(module, analyses))
+    Rc::new(spanned_as("analysis", M::NAME, || M::run(module, analyses)))
 }
 
 fn agree<M: ModuleAnalysis>(one: &dyn Any, other: &dyn Any) -> bool {
@@ -496,8 +591,10 @@ impl ModuleAnalyses {
 
     fn computed(&mut self, kind: Kind, module: &Module) -> Rc<dyn Any> {
         if let Some((_, one)) = self.results.get(&kind.id) {
+            counted(kind.name, true);
             return Rc::clone(one);
         }
+        counted(kind.name, false);
         let fresh = (kind.run)(module, self);
         let result = self.dropped.remove(&kind.id).filter(|old| (kind.agree)(&**old, &*fresh)).unwrap_or(fresh);
         self.results.insert(kind.id, (kind, Rc::clone(&result)));
@@ -687,7 +784,7 @@ impl PassManager {
         // A module a frontend made wrong is its maker's, not the first pass's.
         for module in &program.modules {
             if self.verify_each {
-                let problems = crate::verify::verify(module);
+                let problems = spanned("verify", || crate::verify::verify(module));
                 if !problems.is_empty() {
                     return Err(format!("before the first pass: {}", problems.join("; ")));
                 }
@@ -703,7 +800,7 @@ impl PassManager {
                     eprintln!("BISECT: {}running pass ({}) {name} on the program", if running { "" } else { "NOT " }, self.runs);
                     running
                 }) {
-                    pass.run(program, analyses)?;
+                    spanned(name, || pass.run(program, analyses))?;
                 }
                 for (at, module) in program.modules.iter_mut().enumerate() {
                     for (index, global) in module.globals.iter_mut().enumerate() {
@@ -728,7 +825,7 @@ impl PassManager {
                 let before = interface(&program.modules[at]);
                 let mut modules = ModuleAnalyses { required: self.required.clone(), ..ModuleAnalyses::new(analyses.proxy(program, at)) };
                 let made = self.over(at, &mut program.modules[at], &mut modules, start..end, &dumps[at])?;
-                if made.iter().any(|one| !one.changes.is_empty()) || interface(&program.modules[at]) != before {
+                if made.iter().any(|one| !one.changes.is_empty()) || spanned("interface", || interface(&program.modules[at])) != before {
                     analyses.invalidate();
                 }
                 stages.extend(made);
@@ -754,7 +851,7 @@ impl PassManager {
             let name = pass.name();
             // A function's analyses read the outer facts, so a change to
             // them drops every function's.
-            let outer = analyses.outer(module);
+            let outer = spanned("outer analyses", || analyses.outer(module));
             let pass = match pass {
                 Pass::Function(pass) => pass,
                 Pass::Program(_) => unreachable!("a program pass runs over every module"),
@@ -762,7 +859,7 @@ impl PassManager {
                     if !bisected(name, "the module") {
                         continue;
                     }
-                    let changed = pass.run(module, analyses);
+                    let changed = spanned(name, || pass.run(module, analyses));
                     if !changed.is_empty() {
                         analyses.invalidate(&PreservedAnalyses::none());
                     }
@@ -787,9 +884,9 @@ impl PassManager {
                     continue;
                 }
                 let cache = analyses.manager(id, &outer);
-                let preserved = pass.run(&mut Unit { context, layout: &layout, function, metadata, declared: &mut declared }, cache);
+                let preserved = in_function(global.name.as_deref().unwrap_or_default(), || spanned(name, || pass.run(&mut Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared }, cache)));
                 kept.retain(|one| preserved.keeps(*one));
-                cache.invalidate(&preserved);
+                spanned("invalidate", || cache.invalidate(&preserved));
                 if self.verify_invalidation {
                     let stale = cache.stale(context, &layout, function);
                     if !stale.is_empty() {
@@ -797,7 +894,7 @@ impl PassManager {
                     }
                 }
                 stages.push(Stage { pass: name, module: index, function: id, changes: function.take_changes() });
-                declared.place(module)?;
+                spanned("declared", || declared.place(module))?;
             }
             if self.verify_invalidation {
                 let stale = analyses.stale(module, &kept);
@@ -827,6 +924,10 @@ impl ProgramPass for PassManager {
 
 /// The dump and the verifier after pass `number`.
 fn after(dump: &Option<std::path::PathBuf>, verify_each: bool, number: usize, name: &str, module: &Module) -> Result<(), String> {
+    spanned("verify after pass", || after_pass(dump, verify_each, number, name, module))
+}
+
+fn after_pass(dump: &Option<std::path::PathBuf>, verify_each: bool, number: usize, name: &str, module: &Module) -> Result<(), String> {
         if let Some(directory) = dump {
             let file = directory.join(format!("{:02}-{name}.ll", number + 1));
             std::fs::create_dir_all(directory).and_then(|()| std::fs::write(file, crate::print::module(module))).map_err(|error| error.to_string())?;

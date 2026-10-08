@@ -442,7 +442,7 @@ fn a_constant_division_expanded_to_shifts_folds() {
     for (dividend, quotient) in [(1073741831, 1048576), (-1073741831, -1048576)] {
         let mut module = parsed(&format!("define i32 @f(i32 %x) {{\nb0:\n  %q = sdiv i32 {dividend}, 1024\n  ret i32 %q\n}}\n"));
         let before = results(&module, &[&[0]]);
-        managed(&mut module, crate::algebraic::Algebraic);
+        managed(&mut module, crate::algebraic::Algebraic::default());
         let expanded = managed(&mut module, Fold);
         assert!(expanded.contains(&format!("ret i32 {quotient}")), "{expanded}");
         assert_eq!(results(&module, &[&[0]]), before);
@@ -462,4 +462,14 @@ fn comparing_constant_pointers_folds() {
     for folded in ["%x = zext i1 false to i16", "%y = zext i1 true to i16", "%z = zext i1 true to i16"] {
         assert!(after.contains(folded), "{after}");
     }
+}
+
+/// `fold` asked what is known of the body through memory for its integers and again, in `floatfold`, for the float solve
+/// under it: two derivations of one fact (#560). One serves both where nothing was changed between them.
+#[test]
+fn what_is_known_through_memory_is_derived_once_for_the_integers_and_the_floats() {
+    let mut module = parsed(&format!("{DOS}define float @f() {{\nb0:\n  %p = alloca float\n  store float 1.500000e+00, ptr %p\n  %v = load float, ptr %p\n  %w = fadd float %v, 2.000000e+00\n  ret float %w\n}}\n"));
+    let before = llrm_analysis::consts::memory_derivations();
+    assert!(fold(&mut module), "the floats are folded");
+    assert!(llrm_analysis::consts::memory_derivations() - before <= 1, "{} derivations", llrm_analysis::consts::memory_derivations() - before);
 }

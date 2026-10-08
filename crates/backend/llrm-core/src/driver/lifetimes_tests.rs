@@ -4,7 +4,8 @@
 use llrm_hir::model::{Block, Dialect, Function, Instruction, Module, Op, Operand, Place, Program, RuntimeProfile, Storage, Terminator, TerminatorKind, Type, TypeKind, Value};
 
 use super::{Options, compiled};
-use crate::abi::machine::{BUILT_IN, Machine};
+use crate::abi::machine::Machine;
+use llrm_x86_m16::machine::BUILT_IN;
 use crate::backend::masm;
 
 /// `F%(a)`: two arms, each with a local of its own, held in memory (volatile) so promotion
@@ -46,7 +47,7 @@ fn program(markers: bool) -> Program {
 /// The bytes `F%` reserves below BP.
 fn frame(markers: bool) -> i64 {
     let machine = Machine { cpu: "486".to_owned(), ..BUILT_IN.clone() };
-    let built = compiled(&program(markers), &Options::of(machine)).expect("compiles");
+    let built = compiled(&program(markers), &Options::m16(machine)).expect("compiles");
     let text = masm::text(&built[0]).expect("prints");
     text.lines().find_map(|line| line.trim().strip_prefix("sub sp, ")?.parse().ok()).unwrap_or(0)
 }

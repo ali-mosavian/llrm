@@ -18,7 +18,7 @@ pub(super) struct Consumer {
     item: Option<TypeAnnotation>,
     body: Vec<Statement>,
     /// How many scopes the loop's own code sees; the generator's are above.
-    depth: usize,
+    pub(super) depth: usize,
     exit: u32,
 }
 

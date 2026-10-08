@@ -10,14 +10,20 @@ use super::*;
 
 impl FunctionCompiler<'_> {
     /// Checks each of `indices` against the view `descriptor`'s dimensions.
-    pub(super) fn check_view_bounds(&mut self, descriptor: u32, indices: &[hir::Operand], span: Span) -> Result<(), Diagnostic> {
+    /// A view is within one segment, so a dimension of `element_width`-byte
+    /// elements is at most the segment's last offset / `element_width`: stated of its load.
+    pub(super) fn check_view_bounds(&mut self, descriptor: u32, indices: &[hir::Operand], element_width: u32, span: Span) -> Result<(), Diagnostic> {
         if self.unsafe_depth > 0 || self.unchecked_bounds {
             return Ok(());
         }
         for (axis, index) in indices.iter().enumerate() {
-            let dim = self.value(TypeName::U16);
-            let place = hir::Operand::IndirectPlace { base: descriptor, offset: descriptor::dim(axis as u8), type_id: U16, inbounds: false, member: None };
-            self.emit("load", vec![dim], vec![place], None);
+            let dim = self.value(self.word());
+            let place = hir::Operand::IndirectPlace { base: descriptor, offset: descriptor::dim(axis as u8, self.word_bytes()), type_id: self.word_id(), inbounds: false, member: None };
+            let load = self.emit("load", vec![dim], vec![place], None);
+            if element_width > 1 {
+                let most = (self.types.sizes.max_object / u64::from(element_width)) as i64;
+                self.stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(self.signature.id), id: i64::from(load) }, llrm_mir::facts::Fact::Range(llrm_mir::facts::Bounds { lo: 0, hi: most }));
+            }
             self.check_bounds(index, hir::Operand::Value(dim), span)?;
         }
         Ok(())
@@ -55,7 +61,7 @@ impl FunctionCompiler<'_> {
             return Ok(());
         }
         let wide = [value, &limit].iter().any(|one| matches!(one, hir::Operand::Value(id) if self.types.width(self.type_of(*id)) == 4));
-        let unsigned = if wide { TypeName::U32 } else { TypeName::U16 };
+        let unsigned = if wide { TypeName::U32 } else { self.word() };
         let [value, limit] = [value.clone(), limit].map(|one| self.unsigned(one, unsigned));
         let below = self.value(TypeName::Bool);
         self.emit(if inclusive { "beloweq" } else { "below" }, vec![below], vec![value, limit], None);
@@ -66,7 +72,7 @@ impl FunctionCompiler<'_> {
     /// Panics unless the float `value` truncates into the integer `target`:
     /// strictly between its minimum less one and its maximum plus one.
     pub(super) fn check_truncation(&mut self, value: &hir::Operand, source: TypeName, target: TypeName, span: Span) -> Result<(), Diagnostic> {
-        let bits = 8 * width(target);
+        let bits = 8 * width(self.types.sizes, target);
         let signed = matches!(target, TypeName::I8 | TypeName::I16 | TypeName::I32);
         let (minimum, maximum) = if signed { (-(1i64 << (bits - 1)), (1i64 << (bits - 1)) - 1) } else { (0, (1i64 << bits) - 1) };
         // An f32 holds no value strictly between -2^31 - 1 and -2^31.

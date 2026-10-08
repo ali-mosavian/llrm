@@ -5,7 +5,7 @@
 #
 #   QCPORT=~/scratch/qcport/src QCPORT_INC=~/scratch/qctc/inc tools/qcport-compile.sh [llrm-c]
 set -u
-LLRM_C="${1:-$(cd "$(dirname "$0")/.." && pwd)/target/release/llrm-c}"
+LLRM_C="${1:-$(python3 "$(dirname "$0")/llrmbin.py" bin)/llrm-c}"
 QCPORT="${QCPORT:?QCPORT names the QCport src directory}"
 QCPORT_INC="${QCPORT_INC:?QCPORT_INC names its Borland include directory}"
 OUT="$(mktemp -d)"; trap 'rm -rf "$OUT"' EXIT

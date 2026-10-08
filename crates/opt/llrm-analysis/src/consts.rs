@@ -321,11 +321,11 @@ pub fn _fragments(reference: &MemRef, fact: &Known) -> Cells {
 
 /// A far store's selector, where nothing yet says which segment it is
 /// and it is still one this run may take on faith.
-fn _selector(reference: &MemRef, known: &IndexMap<ValueId, Known>, allowed: Option<&BTreeSet<ValueId>>) -> Option<ValueId> {
+fn _selector(unit: &Unit, reference: &MemRef, known: &IndexMap<ValueId, Known>, allowed: Option<&BTreeSet<ValueId>>) -> Option<ValueId> {
     let Some(Operand::Value(segment)) = reference.segment else {
         return None;
     };
-    if reference.space != 1 || known.contains_key(&segment) || allowed.is_some_and(|allowed| !allowed.contains(&segment)) {
+    if reference.space != unit.spaces().far || known.contains_key(&segment) || allowed.is_some_and(|allowed| !allowed.contains(&segment)) {
         return None;
     }
     Some(segment)
@@ -424,7 +424,7 @@ fn _killed(
     for reference in &stores {
         let reference = queries.resolve(reference);
         if let Some(assume) = assume.as_deref_mut() {
-            if let Some(selector) = _selector(&reference, known, allowed) {
+            if let Some(selector) = _selector(&unit, &reference, known, allowed) {
                 // A cell in `here` is always in a program object, so an
                 // absolute segment reaches none of them.
                 assume.insert(selector);
@@ -463,6 +463,8 @@ pub fn cells(
     mut assume: Option<&mut BTreeSet<ValueId>>,
     allowed: Option<&BTreeSet<ValueId>>,
 ) -> HeldCells {
+    let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
+    let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else {
         return HeldCells::default();
@@ -750,6 +752,18 @@ pub fn holds(predicate: IntPredicate, left: &Known, right: &Known) -> bool {
 /// know is some absolute segment; the ones that came out numbers keep the
 /// assumption and the rest lose it, until every one still assumed resolved.
 pub fn known(unit: &Unit, calls: Option<&Calls>, edges: Option<&IndexMap<(i64, i64), Cells>>, initial: Option<&Cells>) -> IndexMap<ValueId, Known> {
+    if calls.is_none() {
+        REGISTER_DERIVATIONS.with(|count| count.set(count.get() + 1));
+    } else {
+        MEMORY_DERIVATIONS.with(|count| count.set(count.get() + 1));
+    }
+    // Each access asks whether its frame object is exposed: found once for the body, if no caller has.
+    let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
+    let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
+    // What alias annotates a store with reads what is known without memory: found here, with the memory's, where the
+    // unit carries none.
+    let registers = (calls.is_some() && unit.registers.is_none()).then(|| known(unit, None, None, None));
+    let unit = &registers.as_ref().map_or(*unit, |found| unit.with_registers(found));
     // A store kills the cells alias's provenance leaves it able to reach.
     let annotated = (calls.is_some() && unit.references.is_none()).then(|| unit.annotated().ok()).flatten();
     let unit = &annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
@@ -764,6 +778,23 @@ pub fn known(unit: &Unit, calls: Option<&Calls>, edges: Option<&IndexMap<(i64, i
         }
         allowed = Some(resolved);
     }
+}
+
+thread_local! {
+    static REGISTER_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MEMORY_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has derived what is known of a body through memory, for a test that two passes that ask
+/// of one body share the answer.
+pub fn memory_derivations() -> usize {
+    MEMORY_DERIVATIONS.with(std::cell::Cell::get)
+}
+
+/// How many times this thread has derived what is known of a body without memory, for a test that a pass asks of the
+/// manager, or of itself once for each state of the body, and not once for each loop.
+pub fn register_derivations() -> usize {
+    REGISTER_DERIVATIONS.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]

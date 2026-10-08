@@ -47,7 +47,7 @@ FUNCTION divmod (a AS INTEGER, b AS INTEGER) AS (INTEGER, INTEGER)
 END FUNCTION
 ```
 
-The compilers and `llrm-omf` tune with `--cpu`, 386 through Core. Floating point is native x87, so a
+The compilers and `llrm-omf` tune with `-march`, 386 through Core. Floating point is native x87, so a
 coprocessor is required.
 
 ## Use
@@ -68,7 +68,7 @@ cargo build --release
 target/release/llrm-qb PROGRAM.BAS --dialect qb45 --runtime qb45 -o PROGRAM.OBJ
 target/release/llrm-c program.c -o PROGRAM.OBJ
 target/release/llrm-nib program.nib -o PROGRAM.OBJ
-target/release/llrm-omf PROGRAM.OBJ -o PROGRAMQ.OBJ --cpu 486
+target/release/llrm-omf PROGRAM.OBJ -o PROGRAMQ.OBJ -march=i486
 ```
 
 `llrm-qb`, `llrm-c` and `llrm-nib` share their options:
@@ -76,15 +76,17 @@ target/release/llrm-omf PROGRAM.OBJ -o PROGRAMQ.OBJ --cpu 486
 | Option | Does |
 | --- | --- |
 | `-O0` `-O1` `-O2` `-O3` `-Os` `-Oz` `-Og` | Optimization level; `-O2` is the default |
-| `-f[no-]PASS` | One pass on or off, by gcc's name: `unroll-loops`, `peel-loops`, `inline-functions`, `strength-reduce`, `unswitch-loops`, `gcse`, `tree-dse`, `tree-dce`, `tree-sra`, `move-loop-invariants`, `tree-loop-distribute-patterns` |
-| `--cpu CPU`, `-march`, `-mtune` | The processor, `386` through `Core` |
+| `-f[no-]PASS` | One pass on or off, by gcc's name: `unroll-loops`, `peel-loops`, `inline-functions`, `strength-reduce`, `unswitch-loops`, `gcse`, `tree-dse`, `tree-dce`, `tree-sra`, `move-loop-invariants`, `tree-loop-distribute-patterns`, `optimize-sibling-calls` |
+| `-march=CPU`, `-mtune=CPU` | The processor, gcc's name for it (`i386` through `core2`); `-m16`, `-m32` choose the target |
 | `-fsanitize=bounds,integer-divide-by-zero,signed-integer-overflow,undefined`, `-ftrapv` | The run-time checks BC's `/D` makes, as gcc names them |
+| `-fsanitize=stack` | Each function compares SP with its runtime's stack limit once its frame is allocated and calls the runtime's overflow routine out of line (BASIC: `b$pendchk`, `B$ERR_OSS`, as BC `/D`; C: Open Watcom's `_STACKLOW`, `__STKOVERFLOW`; Nib: `_llrm_os_stack_low`, `N$ESTK`). Not part of `undefined`. +8 bytes and 3 instructions per call, +5 bytes cold; a small leaf the runtime's red zone covers goes unchecked |
 | `-g` | CodeView line numbers, symbols and types, for `LINK /CO` and CodeView |
 | `-S` | Writes the assembly listing instead of an object |
 | `--dump DIR` | Writes every stage to `DIR`, for diffing |
 
-`llrm-qb` also takes `--own-frames`, which frames procedures without the runtime's
-`B$ENRA`/`B$EXSA` wherever the runtime needs no frame of its own.
+`llrm-qb` frames each procedure itself, without the runtime's `B$ENRA`/`B$EXSA`,
+wherever the runtime needs no frame of its own. `--runtime-frames` ([Debug](#debug))
+keeps the runtime's in every procedure.
 
 `llrm-omf` takes every object and library in LINK order when a program spans
 modules, and writes nothing unless all of them succeed:
@@ -121,9 +123,9 @@ LONG register pairs, runtime arithmetic calls and array descriptors; see
 
 One loop in three languages: a dot product of two `int` arrays, returned as a
 `long`. The sources are in [examples/dot](examples/dot); each listing is what `-S`
-prints with `--cpu 486`, and the comments are added by hand. C is in the medium model.
+prints with `-march=i486`, and the comments are added by hand. C is in the medium model.
 
-C, `llrm-c dot.c --cpu 486 -S`:
+C, `llrm-c dot.c -march=i486 -S`:
 
 ```c
 long dot(const int *a, const int *b, int n)
@@ -143,13 +145,13 @@ _dot proc far
     push si                         ; si and di are callee-saved
     push di
 L0_0:
-    mov si, word ptr [bp+6]         ; [hoisted] si = a
-    mov di, word ptr [bp+8]         ; [hoisted] di = b
     mov cx, word ptr [bp+10]        ; cx = n
     lea ax, [ecx+ecx]               ; ax = 2n, the byte length of each array
     mov bx, ax
     neg bx                          ; [one induction variable] bx = -2n is the counter and the offset
+    mov si, word ptr [bp+6]         ; [load sunk] si = a, read where it is added to
     add si, ax                      ; [biased] a + 2n, so a[i] is at [bx+si]
+    mov di, word ptr [bp+8]         ; [load sunk] di = b
     add di, ax                      ; [biased] b + 2n
     xor eax, eax                    ; total = 0
     or cx, cx
@@ -171,7 +173,7 @@ L0_6:
 _dot endp
 ```
 
-Nib, `llrm-nib dot.nib --entry dot --cpu 486 -S`:
+Nib, `llrm-nib dot.nib --entry dot -march=i486 -S`:
 
 ```
 fn dot(a: &[i16], b: &[i16]) -> i32:
@@ -230,7 +232,7 @@ A Nib slice is a far pointer to its length and data pointer. `zip` pairs the
 elements until the shorter slice ends, so there is no `n`, and no index to check.
 Indexing, `a[i]`, checks every access and calls `N$EBND` on a bad one.
 
-BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 --cpu 486 --own-frames -O3 --whole-program -S`:
+BASIC, `llrm-qb dot.bas --dialect qb45 --runtime qb45 -march=i486 -O3 --whole-program -fno-inline-functions-called-once -S` (DOT is called once, and would go into its caller):
 
 ```basic
 DECLARE FUNCTION Min% (BYVAL x AS INTEGER, BYVAL y AS INTEGER)
@@ -255,7 +257,7 @@ END FUNCTION
 
 ```asm
 DOT proc near
-    push bp                         ; --own-frames: a plain frame, not B$ENRA; near, as --whole-program
+    push bp                         ; a plain frame, not B$ENRA; near, as --whole-program
     mov bp, sp                      ; sees every caller. a() is [bp+6], b() [bp+4]
     push si
     push di
@@ -309,7 +311,7 @@ slot is fixed, and nothing tests that the array is allocated, as BC does not wit
 `/D`. `-fsanitize=bounds` brings the test and the cold `B$UBND` call back, except
 where every caller passes an array a `DIM` or `REDIM` dominates, as here. Where a
 procedure's own `DIM` or `REDIM` states a bound, `UBOUND` is that value and reads nothing.
-`--own-frames` replaces the runtime's `B$ENRA` and `B$EXSA` frame with a plain one.
+The frame is a plain one, not the runtime's `B$ENRA` and `B$EXSA`.
 `Min%` takes its arguments `BYVAL` and the build is `--whole-program`, which is what
 lets the inliner take it; by reference it stays a call
 ([#114](https://github.com/ali-mosavian/llrm/issues/114)).
@@ -326,6 +328,11 @@ loop. The product is a 32-bit `imul` in `eax`, without a runtime call.
 and CVPACK accept it, and CodeView shows the source, locals, parameters and
 `TYPE`s. [debugging.md](docs/debugging.md) finds a miscompile in a running DOS
 program with dosrun: break on write, stack traces and map-file symbols.
+
+`llrm-qb --runtime-frames` calls the runtime's frame entry and exit in every
+procedure, so its frame chain, stack check and event poll are there to debug
+against. `-g` does not imply it: CodeView's local offsets match either frame.
+`--own-frames` is accepted and does nothing.
 
 ## Validate
 

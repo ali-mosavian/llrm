@@ -6,17 +6,18 @@
 set -u
 bin=${LLVM20:-/usr/lib/llvm-20/bin}
 root=$(cd "$(dirname "$0")/.." && pwd)
-out=${1:-$root/target/hir-mir}
+llrm_bin=$(python3 "$root/tools/llrmbin.py" bin)
+out=${1:-$(python3 "$root/tools/llrmbin.py" target)/hir-mir}
 cargo build -q --release -p llrm-qb -p llrm-nib -p llrm-hir --manifest-path "$root/Cargo.toml" 2>/dev/null || { echo "hir-mir-corpus: build fails" >&2; exit 2; }
 rm -rf "$out" && mkdir -p "$out"
 failed=0
 emit() {
-  "$root/target/release/hir-mir" "$out/$1.json" >"$out/$1.ll" 2>"$out/$1.err" || { echo "FAIL $1: $(grep -m1 -e "^invalid" -e "^poison" "$out/$1.err")"; failed=1; }
+  "$llrm_bin/hir-mir" "$out/$1.json" >"$out/$1.ll" 2>"$out/$1.err" || { echo "FAIL $1: $(grep -m1 -e "^invalid" -e "^poison" "$out/$1.err")"; failed=1; }
   "$bin/opt" -passes=verify -disable-output "$out/$1.ll" 2>"$out/$1.opt" || { echo "FAIL $1: opt rejects it: $(head -1 "$out/$1.opt")"; failed=1; }
 }
 for source in "$root"/tests/run/qb/*.bas; do
   name=qb-$(basename "$source" .bas)
-  if "$root/target/release/llrm-qb" "$source" --dump-hir "$out/$name.json" >/dev/null 2>"$out/$name.frontend"; then
+  if "$llrm_bin/llrm-qb" "$source" --dump-hir "$out/$name.json" >/dev/null 2>"$out/$name.frontend"; then
     emit "$name"
   else
     echo "frontend fails: $name"
@@ -25,7 +26,7 @@ done
 for source in $(find "$root/tests/fixtures/nib" -name '*.nib' | sort); do
   name=nib-$(echo "${source#"$root"/tests/fixtures/nib/}" | tr / - | sed 's/\.nib$//')
   # The HIR is written before code is made; a backend failure is not the frontend's.
-  "$root/target/release/llrm-nib" "$source" --dump "$out/$name.d" >/dev/null 2>"$out/$name.frontend"
+  "$llrm_bin/llrm-nib" "$source" --dump "$out/$name.d" >/dev/null 2>"$out/$name.frontend"
   if [ -f "$out/$name.d/03-hir.json" ]; then
     cp "$out/$name.d/03-hir.json" "$out/$name.json"
     emit "$name"

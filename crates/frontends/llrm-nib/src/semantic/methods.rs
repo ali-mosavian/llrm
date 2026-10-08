@@ -9,6 +9,9 @@ impl FunctionCompiler<'_> {
         if let Ok(Some(id)) = self.struct_expression_type(receiver, receiver.span()) {
             return self.types.structure(id).map(|one| one.name.clone());
         }
+        if let Some(id) = self.struct_type_hint(receiver, receiver.span()) {
+            return self.types.structure(id).map(|one| one.name.clone());
+        }
         if self.is_char_view(receiver) {
             return Some("string".into());
         }

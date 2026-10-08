@@ -1,0 +1,55 @@
+# Lifetimes that span calls. A Scanner holds a borrow of the Source it reads.
+# It is built from the borrow, passed down and handed back; the words it
+# returns are views of the source, and stay valid while other calls run.
+
+struct Source:
+    text: string
+
+struct Scanner:
+    src: &Source
+    mut at: usize
+
+struct Tally:
+    mut words: usize
+    mut letters: usize
+
+# The first index from `at` where blank-ness is not `blank`.
+fn run(self: &Source, at: usize, blank: bool) -> usize:
+    let mut end = at
+    while end < self.text.len && (self.text[end] == ' ') == blank:
+        end += 1
+    return end
+
+fn view(self: &Source, start: usize, end: usize) -> &string:
+    return &self.text[start:end]
+
+fn scan(src: &Source) -> Scanner:
+    return Scanner(src=src, at=0)
+
+# Takes the scanner and gives it back, still borrowing the same source.
+fn skip(s: Scanner, count: usize) -> Scanner:
+    let mut moved = s
+    moved.at += count
+    return moved
+
+fn Scanner.word(self: &mut Scanner) -> &string:
+    let start = run(self.src, self.at, true)
+    self.at = run(self.src, start, false)
+    return view(self.src, start, self.at)
+
+fn count(t: &mut Tally, word: &string) -> void:
+    t.words += 1
+    t.letters += word.len
+
+fn main() -> i16:
+    let src = Source(text="move  north then east")
+    let head = view(src, 0, 4)
+    let mut tally = Tally(words=0, letters=0)
+    let mut s = skip(scan(src), 4)
+    for _ in 0..3:
+        let w = s.word()
+        count(tally, w)
+        print(f"[{w}]")
+    count(tally, head)
+    print(f"{tally.words} words, {tally.letters} letters, head {head}")
+    return 0

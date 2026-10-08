@@ -48,7 +48,7 @@ fn _once(body: &LirBody) -> Option<LirBody> {
     let mut blocks = body.blocks.clone();
     let mut changed = false;
     for block in &mut blocks {
-        if let Some(done) = _block(block, exits[&block.at].clone()) {
+        if let Some(done) = _block(body.bits, block, exits[&block.at].clone()) {
             *block = done;
             changed = true;
         }
@@ -57,19 +57,19 @@ fn _once(body: &LirBody) -> Option<LirBody> {
 }
 
 /// Per instruction, the register lanes dead once it has run.
-pub fn _dead_after(block: &LirBlock, dead: Lanes) -> DeadAfter {
+pub fn _dead_after(bits: u32, block: &LirBlock, dead: Lanes) -> DeadAfter {
     let mut dead = dead;
     let mut out = DeadAfter::default();
     for one in block.insns.iter().rev() {
         out.insert(id(one), dead);
-        dead = liveness::effect(one).map_or_else(Lanes::new, |effect| effect.dead_before(&dead));
+        dead = liveness::effect(bits, one).map_or_else(Lanes::new, |effect| effect.dead_before(&dead));
     }
     out
 }
 
 /// This block with one copy thrashed away, or None where none can be.
-fn _block(block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
-    let after = _dead_after(block, dead);
+fn _block(bits: u32, block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
+    let after = _dead_after(bits, block, dead);
     for (position, one) in block.insns.iter().enumerate() {
         let Some((into, out_of)) = _plain_copy(one) else {
             continue;
@@ -80,10 +80,10 @@ fn _block(block: &LirBlock, dead: Lanes) -> Option<LirBlock> {
         if !_lanes(out_of.register).is_subset(&after[&id(one)]) {
             continue;
         }
-        let Some((at, tied)) = _producer(block, position, &out_of, &into, &after) else {
+        let Some((at, tied)) = _producer(bits, block, position, &out_of, &into, &after) else {
             continue;
         };
-        let Some(rewritten) = _renamed(&block.insns[at], out_of.register, into.register, !tied) else {
+        let Some(rewritten) = _renamed(bits, &block.insns[at], out_of.register, into.register, !tied) else {
             continue;
         };
         if !tied {
@@ -153,7 +153,7 @@ fn _plain_copy(one: &Insn) -> Option<(Reg, Reg)> {
 /// otherwise the definition found is not the one the move reads -- and has
 /// to leave Z dead, or renaming into it destroys a value something else
 /// still wants.
-fn _producer(block: &LirBlock, position: usize, out_of: &Reg, into: &Reg, after: &DeadAfter) -> Option<(usize, bool)> {
+fn _producer(bits: u32, block: &LirBlock, position: usize, out_of: &Reg, into: &Reg, after: &DeadAfter) -> Option<(usize, bool)> {
     let (mine, theirs) = (_lanes(out_of.register), _lanes(into.register));
     for at in (0..position).rev() {
         let one = &block.insns[at];
@@ -164,7 +164,7 @@ fn _producer(block: &LirBlock, position: usize, out_of: &Reg, into: &Reg, after:
         if liveness::_terminator(Some(what)) || what.op == Operation::Barrier {
             return None;
         }
-        let (reads, writes) = _register_effects(one, false, true)?;
+        let (reads, writes) = _register_effects(bits, one, false, true)?;
         // Z dead here, or the rename overwrites a live value.
         if !theirs.is_subset(&after[&id(one)]) {
             return None;
@@ -209,7 +209,7 @@ fn _writes(what: &Semantics, lanes: &Lanes) -> bool {
 /// substitution can name an operand the machine has no form for, and
 /// `select.emit` answering None is exactly `FindGenEntry` returning
 /// `G_UNKNOWN` there.
-fn _renamed(one: &Insn, before: Register, after: Register, result_only: bool) -> Option<Arc<Insn>> {
+fn _renamed(bits: u32, one: &Insn, before: Register, after: Register, result_only: bool) -> Option<Arc<Insn>> {
     let what = one.what.as_ref().expect("a producer has semantics");
     let changed = Semantics {
         dests: what.dests.iter().map(|dest| _register_operand(dest, before, after)).collect(),
@@ -223,12 +223,12 @@ fn _renamed(one: &Insn, before: Register, after: Register, result_only: bool) ->
     if changed == *what {
         return None;
     }
-    select::emit(&changed, 0, None, false, false, None)?;
+    select::emit_in(bits, &changed, 0, None, false, false, None)?;
     // Encodable is not renamed: an operand the instruction fixes -- `idiv`'s
     // EDX -- emits the same bytes under any name. The decoded effects have to
     // move from `before` to `after`, or the rename exists only in the LIR.
     let renamed = Insn { what: Some(changed), ..one.clone() };
-    let (was, now) = (_register_effects(one, false, false), _register_effects(&renamed, false, false));
+    let (was, now) = (_register_effects(bits, one, false, false), _register_effects(bits, &renamed, false, false));
     let (Some(was), Some(now)) = (was, now) else {
         return None;
     };

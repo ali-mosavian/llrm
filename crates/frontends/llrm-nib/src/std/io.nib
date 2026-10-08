@@ -24,12 +24,11 @@ pub struct File:
 
 # DOS's error `code`, as the program sees it.
 fn error(code: i16) -> IoError:
-    let number = u16(-code)
-    if number == 2 || number == 3:
+    if code == -os.NOT_FOUND || code == -os.PATH_NOT_FOUND:
         return .not_found
-    if number == 5:
+    if code == -os.DENIED:
         return .denied
-    return .failed(number)
+    return .failed(u16(-code))
 
 # `path` into `name`, with the NUL DOS reads it up to.
 fn named(path: &string, name: &mut char[LONGEST_NAME]) -> void:

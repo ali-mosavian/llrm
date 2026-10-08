@@ -1,0 +1,14 @@
+# flags: -O2 -fsanitize=stack
+# Not a tail call (`n - deep(n - 1)`): `1 + deep(n - 1)` is a loop, and runs off nothing.
+# Unbounded recursion under -fsanitize=stack panics where it would run off the stack into the
+# heap and the program's data.
+fn deep(n: i16) -> i16:
+    if n == 0:
+        return 0
+    return n - deep(n - 1)
+
+fn main() -> i16:
+    print("start")
+    print(deep(30000))
+    print("unreachable")
+    return 0

@@ -30,6 +30,11 @@ impl<'a> FunctionCompiler<'a> {
                 let field = self.types.structure(parent)?.fields.get(field)?;
                 match (field.type_, field.shape) {
                     (ElementType::Struct(id), None) => id,
+                    // A reference to a struct is seen as the struct it refers to.
+                    (ElementType::Scalar(reference), None) => match self.types.referent(reference)? {
+                        ElementType::Struct(id) if self.types.array_of(id).is_none() => id,
+                        _ => return None,
+                    },
                     _ => return None,
                 }
             }
@@ -44,7 +49,7 @@ impl<'a> FunctionCompiler<'a> {
 
     pub(super) fn expression_type_hint(&self, expression: &Expr) -> Option<TypeName> {
         if self.sequence_property(expression).is_some() {
-            return Some(TypeName::U16);
+            return Some(self.word());
         }
         match expression {
             Expr::Lambda { .. } => None,
@@ -83,7 +88,7 @@ impl<'a> FunctionCompiler<'a> {
             Expr::MethodCall { receiver, name, type_arguments, .. } if self.pointer_method_type(receiver, name, type_arguments).is_some() => {
                 self.pointer_method_type(receiver, name, type_arguments)
             }
-            Expr::MethodCall { .. } => Some(TypeName::U16),
+            Expr::MethodCall { .. } => Some(self.word()),
             Expr::Unary {
                 op: UnaryOp::Not, ..
             } => Some(TypeName::Bool),

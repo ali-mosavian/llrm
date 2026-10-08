@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::backend::cpu::Profile;
 use crate::backend::lanes::Lanes;
 use crate::backend::peephole::{self, Counter, DeadAfter, id};
-use crate::backend::{liveness, regthrash};
+use crate::backend::{liveness, regthrash, upperzero};
 use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::support::hash::{HashMap, IndexMap};
@@ -214,16 +214,19 @@ pub struct Facts<'a> {
     exits: OnceCell<IndexMap<i64, Lanes>>,
     flags_out: OnceCell<HashMap<i64, Lanes>>,
     users: OnceCell<Counter>,
+    zero: OnceCell<HashMap<usize, upperzero::Roots>>,
+    /// The mode the code runs in: how an instruction encodes, and what it touches.
+    bits: u32,
 }
 
 impl<'a> Facts<'a> {
     pub fn new(body: &'a LirBody, cpu: Option<&'a Profile>) -> Self {
-        Self { body: Some(body), cpu, counts: None, exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new() }
+        Self { body: Some(body), cpu, counts: None, exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new(), zero: OnceCell::new(), bits: body.bits }
     }
 
     /// For instructions outside a body, with the caller's read counts.
-    pub fn counted(counts: &'a Counter) -> Self {
-        Self { body: None, cpu: None, counts: Some(counts), exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new() }
+    pub fn counted(counts: &'a Counter, bits: u32) -> Self {
+        Self { body: None, cpu: None, counts: Some(counts), exits: OnceCell::new(), flags_out: OnceCell::new(), users: OnceCell::new(), zero: OnceCell::new(), bits }
     }
 
     /// The same, pricing for `cpu`.
@@ -231,7 +234,7 @@ impl<'a> Facts<'a> {
         Self { cpu: Some(cpu), ..self }
     }
 
-    fn body(&self) -> &'a LirBody {
+    pub fn body(&self) -> &'a LirBody {
         self.body.expect("a group reading the body runs on one")
     }
 
@@ -283,7 +286,7 @@ impl<'a> Cx<'a> {
     pub fn dead_after(&self, one: &Arc<Insn>) -> Lanes {
         let dead = self.dead.get_or_init(|| {
             let exits = self.facts.exits.get_or_init(|| liveness::dead_at_exit(self.facts.body()));
-            regthrash::_dead_after(self.block(), exits[&self.block().at])
+            regthrash::_dead_after(self.facts.bits, self.block(), exits[&self.block().at])
         });
         dead[&id(one)]
     }
@@ -291,6 +294,15 @@ impl<'a> Cx<'a> {
     /// The flag lanes something may read after the block.
     pub fn flags_out(&self) -> Lanes {
         self.facts.flags_out.get_or_init(|| peephole::_flags_live_out(self.facts.body()))[&self.block().at]
+    }
+
+    /// The roots whose upper half is zero before `one`.
+    pub fn upper_zero(&self, one: &Arc<Insn>) -> upperzero::Roots {
+        self.facts.zero.get_or_init(|| upperzero::before(self.facts.body()))[&id(one)]
+    }
+
+    pub fn bits(&self) -> u32 {
+        self.facts.bits
     }
 
     pub fn cpu(&self) -> &Profile {

@@ -2,6 +2,7 @@
 # Free blocks wait in one list per power-of-two size class and merge with
 # free neighbours when freed, so the heap does not fragment into slivers.
 #
+# A word is the target's near pointer wide (usize): 2 bytes on m16, 4 on m32.
 # A block is a header word, then its payload. The header is the block's
 # size, a multiple of 4 counting the header, with two flags in its low
 # bits: USED, and BEFORE_USED when the block in front is in use. A free
@@ -12,35 +13,42 @@
 import errors
 import os
 
-const USED: u16 = 1
-const BEFORE_USED: u16 = 2
-const FLAGS: u16 = 3
-const SMALLEST: u16 = 8
-const CLASSES = 13
+const USED: usize = 1
+const BEFORE_USED: usize = 2
+const FLAGS: usize = 3
+const HEADER: usize = NEAR_BYTES
+# The list links are as wide as the target's pointers.
+const POINTER: usize = NEAR_BYTES
+# Header, two links and the size's last word, rounded to the block's multiple of 4.
+const SMALLEST: usize = (HEADER + 2 * POINTER + HEADER + 3) & ~3
+# One list for each power of two a size can reach: 13 for 16 bits, 8 to 15 bytes being class 0.
+const CLASSES = NEAR_BYTES * 8 - 3
+# The most a block may hold, and the size a request is refused at.
+const MAX_BLOCK: usize = (1 << (NEAR_BYTES * 8)) - 16
 # Growth below this many bytes asks DOS again too often.
-const GROWTH: u16 = 1024
+const GROWTH: usize = 1024
 
 var heads: *near mut u8[CLASSES] = [0] * CLASSES
 # Bit c is set while list c holds a block.
-var occupied: u16 = 0
+var occupied: usize = 0
 var end: *near mut u8 = 0
 
-fn header(block: *near mut u8) -> *near mut u16:
-    return block.cast[u16]()
+fn header(block: *near mut u8) -> *near mut usize:
+    return block.cast[usize]()
 
-fn size_of(block: *near mut u8) -> u16:
+fn block_size(block: *near mut u8) -> usize:
     unsafe:
         return *header(block) & ~FLAGS
 
 fn next(block: *near mut u8) -> *near mut *near mut u8:
-    return block.offset(2).cast[*near mut u8]()
+    return block.offset(HEADER).cast[*near mut u8]()
 
 fn previous(block: *near mut u8) -> *near mut *near mut u8:
-    return block.offset(4).cast[*near mut u8]()
+    return block.offset(HEADER + POINTER).cast[*near mut u8]()
 
 # floor(log2(size)) - 3: 8 to 15 bytes are class 0.
-fn class_of(size: u16) -> u16:
-    let mut class: u16 = 0
+fn class_of(size: usize) -> usize:
+    let mut class: usize = 0
     let mut rest = size >> 4
     while rest != 0:
         class += 1
@@ -48,10 +56,10 @@ fn class_of(size: u16) -> u16:
     return class
 
 # A block of `bytes` payload, and its header.
-fn rounded(bytes: u16) -> u16:
-    if bytes > 0xFFF0:
+fn rounded(bytes: usize) -> usize:
+    if bytes > MAX_BLOCK:
         errors.panic("out of memory")
-    let size = (bytes + 5) & ~FLAGS
+    let size = (bytes + HEADER + 3) & ~FLAGS
     return size > SMALLEST ? size : SMALLEST
 
 fn unlink(block: *near mut u8) -> void:
@@ -59,10 +67,10 @@ fn unlink(block: *near mut u8) -> void:
         let after = *next(block)
         let before = *previous(block)
         if before.is_null():
-            let class = class_of(size_of(block))
+            let class = class_of(block_size(block))
             heads[class] = after
             if after.is_null():
-                occupied &= ~(u16(1) << class)
+                occupied &= ~(usize(1) << class)
         else:
             *next(before) = after
         if !after.is_null():
@@ -70,10 +78,10 @@ fn unlink(block: *near mut u8) -> void:
 
 # `block` free with `size` bytes: listed, its size in its last word, and
 # the block after it told.
-fn insert(block: *near mut u8, size: u16) -> void:
+fn insert(block: *near mut u8, size: usize) -> void:
     unsafe:
         *header(block) = size | (*header(block) & BEFORE_USED)
-        *header(block.offset(size - 2)) = size
+        *header(block.offset(size - HEADER)) = size
         *header(block.offset(size)) &= ~BEFORE_USED
         let class = class_of(size)
         let first = heads[class]
@@ -82,20 +90,20 @@ fn insert(block: *near mut u8, size: u16) -> void:
         if !first.is_null():
             *previous(first) = block
         heads[class] = block
-        occupied |= u16(1) << class
+        occupied |= usize(1) << class
 
 # A free block of at least `size` bytes, or null: the first that fits in
 # its own class, else the first of the next class that holds one, where
 # any fits.
-fn fit(size: u16) -> *near mut u8:
+fn fit(size: usize) -> *near mut u8:
     let mut class = class_of(size)
     unsafe:
         let mut block = heads[class]
         while !block.is_null():
-            if size_of(block) >= size:
+            if block_size(block) >= size:
                 return block
             block = *next(block)
-    let mut larger = occupied & ~((u16(2) << class) - 1)
+    let mut larger = occupied & ~((usize(2) << class) - 1)
     if larger == 0:
         return 0
     class = 0
@@ -104,40 +112,47 @@ fn fit(size: u16) -> *near mut u8:
         class += 1
     return heads[class]
 
-# The heap `size` bytes longer, or not when DOS or DGROUP has no more.
-fn grow(size: u16) -> void:
-    let mut wanted = size > GROWTH ? size : GROWTH
+# The heap `size` bytes longer, or not when DOS or DGROUP has no more. A grant that follows the last
+# one extends the heap; any other (the extender's next arena) starts a new run of blocks, which no
+# block of the old one merges with: the old run keeps its end block.
+fn grow(size: usize) -> void:
+    # An arena's own end block takes the last 4 bytes of its grant (a multiple of 4, as sizes are).
+    let mut wanted = size + 4 > GROWTH ? size + 4 : GROWTH
     unsafe:
         # The first grant also holds the end block; later ones reuse it.
         let first = end.is_null()
-        let extra: u16 = first ? 2 : 0
+        let extra: usize = first ? HEADER : 0
         let mut more = os.more(wanted + extra)
         if more.is_null():
-            wanted = size
+            wanted = size + 4
             more = os.more(wanted + extra)
             if more.is_null():
                 return
-        let block = first ? more : end
-        if first:
+        let chained = !first && more != end.offset(isize(HEADER))
+        let block = (first || chained) ? more : end
+        let mut length = wanted
+        if first || chained:
             *header(block) = BEFORE_USED
-        end = block.offset(wanted)
+        if chained:
+            length = wanted - 4
+        end = block.offset(isize(length))
         *header(end) = USED | BEFORE_USED
-        *header(block) = wanted | USED | (*header(block) & BEFORE_USED)
-        release(block.offset(2))
+        *header(block) = length | USED | (*header(block) & BEFORE_USED)
+        release(block.offset(isize(HEADER)))
 
 # Frees all of `block` past `size` bytes, when that is a block's worth.
-fn trim(block: *near mut u8, size: u16) -> void:
-    let total = size_of(block)
+fn trim(block: *near mut u8, size: usize) -> void:
+    let total = block_size(block)
     if total - size < SMALLEST:
         return
     unsafe:
         let rest = block.offset(size)
         *header(rest) = (total - size) | USED | BEFORE_USED
         *header(block) = size | (*header(block) & FLAGS)
-        release(rest.offset(2))
+        release(rest.offset(HEADER))
 
 # `bytes` of payload, word aligned.
-pub fn allocate(bytes: u16) -> *near mut u8:
+pub fn allocate(bytes: usize) -> *near mut u8:
     let size = rounded(bytes)
     let mut block = fit(size)
     if block.is_null():
@@ -147,24 +162,24 @@ pub fn allocate(bytes: u16) -> *near mut u8:
             errors.panic("out of memory")
     unlink(block)
     unsafe:
-        let whole = size_of(block)
+        let whole = block_size(block)
         *header(block) = whole | USED | (*header(block) & BEFORE_USED)
         *header(block.offset(whole)) |= BEFORE_USED
     trim(block, size)
-    return block.offset(2)
+    return block.offset(HEADER)
 
 pub fn release(payload: *near mut u8) -> void:
     if payload.is_null():
         return
-    let mut block = payload.offset(-2)
-    let mut size = size_of(block)
+    let mut block = payload.offset(-isize(HEADER))
+    let mut size = block_size(block)
     unsafe:
         let after = block.offset(size)
         if *header(after) & USED == 0:
             unlink(after)
-            size += size_of(after)
+            size += block_size(after)
         if *header(block) & BEFORE_USED == 0:
-            let before = *header(block.offset(-2))
+            let before = *header(block.offset(-isize(HEADER)))
             block = block.offset(-before)
             unlink(block)
             size += before
@@ -172,17 +187,17 @@ pub fn release(payload: *near mut u8) -> void:
 
 # Whether `payload` now holds `bytes`, without moving: it shrinks, or grows
 # into the free block after it.
-pub fn resize(payload: *near mut u8, bytes: u16) -> bool:
-    let block = payload.offset(-2)
+pub fn resize(payload: *near mut u8, bytes: usize) -> bool:
+    let block = payload.offset(-isize(HEADER))
     let size = rounded(bytes)
-    let mut whole = size_of(block)
+    let mut whole = block_size(block)
     if whole < size:
         unsafe:
             let after = block.offset(whole)
-            if *header(after) & USED != 0 || whole + size_of(after) < size:
+            if *header(after) & USED != 0 || whole + block_size(after) < size:
                 return false
             unlink(after)
-            whole += size_of(after)
+            whole += block_size(after)
             *header(block) = whole | (*header(block) & FLAGS)
             *header(block.offset(whole)) |= BEFORE_USED
     trim(block, size)

@@ -485,7 +485,7 @@ impl Body<'_, '_, '_> {
         let number = self.b.int(16, 11);
         let (void, word) = (self.b.context.types.void(), self.b.context.types.int(16));
         let ty = super::function_type(&mut self.b.context.types, void, vec![word]);
-        let (convention, _) = super::convention(model::StackCleanup::Callee, model::CallDistance::Far)?;
+        let (convention, _) = super::convention(&self.tables.spaces, model::StackCleanup::Callee, model::CallDistance::Far, None)?;
         let callee = Value::Constant(self.tables.callees[RAISE]);
         self.raising_call(instruction, true, convention, ty, callee, &[number], &[])?;
         self.b.unreachable();

@@ -1,0 +1,89 @@
+# RUN: llrm-nib %s -O2 -march=i486 -fno-inline-functions -fno-inline-functions-called-once -S -o /dev/stdout
+# Loops people write that are one string move, and look-alikes that are not. Bounds are
+# constants: a loop to a variable keeps its bounds check (#470).
+# CHECK-LABEL: _copy proc
+# CHECK: rep movsd
+# CHECK-NOT: std
+# CHECK: _copy endp
+# CHECK-LABEL: _scroll_up proc
+# CHECK: rep movsd
+# CHECK: _scroll_up endp
+# CHECK-LABEL: _scroll_down proc
+# CHECK: std
+# CHECK: rep movsd
+# CHECK: cld
+# CHECK: _scroll_down endp
+# CHECK-LABEL: _palette proc
+# CHECK: rep stosw
+# CHECK: _palette endp
+# CHECK-LABEL: _smear proc
+# CHECK-NOT: rep
+# CHECK: _smear endp
+# CHECK-LABEL: _changed proc
+# CHECK-NOT: rep
+# CHECK: _changed endp
+# CHECK-LABEL: _two_stores proc
+# CHECK-NOT: rep
+# CHECK: _two_stores endp
+# CHECK-LABEL: _strides proc
+# CHECK-NOT: rep
+# CHECK: _strides endp
+var a: i16[160] = [0] * 160
+var b: i16[160] = [0] * 160
+var c: i16[160] = [0] * 160
+var pal: i16[64] = [0] * 64
+
+fn copy() -> i16:
+    for i in 0..100:
+        a[i] = b[i]
+    return 0
+
+fn scroll_up() -> i16:
+    for i in 0..100:
+        a[i] = a[i + 16]
+    return 0
+
+fn scroll_down() -> i16:
+    let mut i: i16 = 99
+    while i >= 0:
+        a[i + 16] = a[i]
+        i -= 1
+    return 0
+
+fn palette(w: i16) -> i16:
+    for i in 0..64:
+        pal[i] = w
+    return 0
+
+fn smear() -> i16:
+    for i in 0..100:
+        a[i + 1] = a[i]
+    return 0
+
+fn changed() -> i16:
+    for i in 0..100:
+        a[i] = b[i] + 1
+    return 0
+
+fn two_stores() -> i16:
+    for i in 0..100:
+        a[i] = b[i]
+        c[i] = 0
+    return 0
+
+fn strides() -> i16:
+    for i in 0..50:
+        a[2 * i] = b[i]
+    return 0
+
+fn main() -> i16:
+    let mut x: i16 = copy()
+    x = scroll_up()
+    x = scroll_down()
+    x = palette(0x1234)
+    x = smear()
+    x = changed()
+    x = two_stores()
+    x = strides()
+    print(a[3])
+    return 0

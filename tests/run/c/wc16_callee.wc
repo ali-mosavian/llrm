@@ -1,0 +1,23 @@
+/* Compiled by Open Watcom's own wcc (-mm -ecw, its register convention): llrm's code calls these and these call llrm's. No library
+   call is made (no long multiply or shift, no float conversion), as nothing links Open Watcom's runtime. */
+struct S { int a, b, c; };
+struct T { char x; };
+struct W { int lo, hi; };
+
+extern int llrm_six(int a, int b, int c, int d, int e, int f);
+extern long llrm_mixed(int a, long b, int c);
+extern int llrm_far(char __far *p, int a, int b);
+extern struct S llrm_result(int a, int b);
+
+int wc_six(int a, int b, int c, int d, int e, int f) { return a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6; }
+long wc_mixed(int a, long b, int c) { return b + b + a + c; }
+int wc_far(char __far *p, int a, int b) { return *p + a * 2 + b * 3; }
+struct S wc_result(int a, int b) { struct S s; s.a = a; s.b = b; s.c = a + b; return s; }
+int wc_small(struct T t, int a) { return t.x * 10 + a; }
+int wc_by_value(struct S s, int a) { return s.a + s.b * 2 + s.c * 3 + a * 4; }
+long wc_long(long a, long b) { return a + b; }
+
+int wc_calls_six(void) { return llrm_six(1, 2, 3, 4, 5, 6); }
+long wc_calls_mixed(void) { return llrm_mixed(1, 0x20003L, 4); }
+int wc_calls_far(char __far *p) { return llrm_far(p, 2, 3); }
+int wc_calls_result(void) { struct S s = llrm_result(4, 5); return s.a * 100 + s.b * 10 + s.c; }

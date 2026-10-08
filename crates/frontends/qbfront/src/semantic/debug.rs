@@ -50,7 +50,7 @@ impl Compiler {
             LONG => DebugScalar::Int32,
             SINGLE => DebugScalar::Float32,
             DOUBLE => DebugScalar::Float64,
-            STRING if self.runtime == "vbdos" => DebugScalar::FarString,
+            STRING if llrm_qbruntime::semantics::form(&self.runtime) == Some(llrm_hir::meaning::Form::Far) => DebugScalar::FarString,
             STRING => DebugScalar::String,
             _ => return self.string_width(type_id).map(|width| self.debug.fixed_string(width as i64)),
         };
@@ -124,7 +124,7 @@ impl Compiler {
         let Some(r#type) = self.debug_type_of(type_id, array) else { return };
         let name = self.debug_name(source, span, type_id);
         match held {
-            Held::Place(place) => self.debug.variable(place.into(), &name, r#type),
+            Held::Place(place) => self.debug.variable(place.into(), &name, r#type, false),
             Held::Data(object, offset) => self.debug.global(object.into(), offset as i64, &name, r#type),
         }
     }

@@ -280,3 +280,37 @@ fn test_the_entry_value_is_asked_once_per_block_not_per_path() {
     std::thread::spawn(move || done.send(sunk(&text, TRIPS)).unwrap());
     assert!(finished.recv_timeout(std::time::Duration::from_secs(20)).is_ok(), "loopmotion ran past 20 s");
 }
+
+/// Each loop sunk made the next ask of Annotated prove every loop's trips again, and work the edges' facts of every
+/// block again: 20 loops proved 420 times, 1,220 blocks and 400 loops worked: 59, 118 and 39 now. A change reaches the loops and blocks
+/// that read what it touched, so the others keep what they had.
+#[test]
+fn test_sinking_a_loops_store_proves_only_that_loop_again() {
+    // The check derives them afresh to compare, and is counted.
+    if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+        return;
+    }
+    let loops = 20;
+    let mut text = String::from("define i16 @f(i16 %k) {\nb0:\n  br label %h0\n\n");
+    for at in 0..loops {
+        let from = if at == 0 { "b0".to_owned() } else { format!("p{at}") };
+        let exit = if at + 1 == loops { "end".to_owned() } else { format!("p{}", at + 1) };
+        text += &format!("@n{at} = global i16 0\n");
+        text += &format!("h{at}:\n  %i{at} = phi i16 [ 0, %{from} ], [ %x{at}, %l{at} ]\n  store i16 %i{at}, ptr @n{at}\n  %c{at} = icmp slt i16 %i{at}, 9\n  br i1 %c{at}, label %l{at}, label %{exit}\n\nl{at}:\n  %x{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n");
+        if at + 1 < loops {
+            text += &format!("p{}:\n  br label %h{}\n\n", at + 1, at + 1);
+        }
+    }
+    text += "end:\n  ret i16 %k\n}\n";
+    let globals: String = (0..loops).map(|at| format!("@n{at} = global i16 0\n")).collect();
+    let text = text.lines().filter(|line| !line.starts_with('@')).collect::<Vec<_>>().join("\n");
+    let before = (llrm_analysis::induction::proved(), llrm_analysis::ranges::blocks_solved(), llrm_analysis::ranges::loops_solved());
+    let (after, changed) = sunk(&format!("{globals}{text}\n"), TRIPS);
+    assert!(changed, "{after}");
+    let proved = llrm_analysis::induction::proved() - before.0;
+    let solved = llrm_analysis::ranges::blocks_solved() - before.1;
+    let worked = llrm_analysis::ranges::loops_solved() - before.2;
+    assert!(proved <= 4 * loops, "{proved} loops proved for {loops} loops sunk one after another");
+    assert!(worked <= 4 * loops, "{worked} loops worked for the bounds of {loops} loops sunk one after another");
+        assert!(solved <= 200, "{solved} blocks worked for the edges of a body of {} blocks, {loops} sunk one after another", 2 * loops + loops);
+}

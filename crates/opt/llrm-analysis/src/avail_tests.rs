@@ -30,7 +30,7 @@ declare void @setter() memory(write)
     }
 
     fn unit(&self) -> Unit<'_> {
-        Unit::of(&self.module, &self.layout, function(&self.module, "f"))
+        crate::testing::with_registers(Unit::of(&self.module, &self.layout, function(&self.module, "f")))
     }
 }
 
@@ -479,4 +479,33 @@ pad:
         let removed = dead_stores(&unit, &Accesses::plain(&unit, &Calls::from_iter([(invoke, vec![])])), Some(&private));
         assert_eq!(removed.contains(&site(&unit, "b0", 1)), dead, "{handler}");
     }
+}
+
+/// Each load the loop lost was compared with every earlier load, one by one, though most are of one
+/// address (#560). Loads of one address are compared once.
+#[test]
+fn test_loads_of_one_address_are_compared_with_a_missing_one_once() {
+    let before_loop: String = (0..20).map(|at| format!("  %a{at} = load i16, ptr {CELL}\n")).collect();
+    let in_loop: String = (0..20).map(|at| format!("  %b{at} = load i16, ptr {CELL}\n")).collect();
+    let parsed = Parsed::new(&format!("define i16 @f(i1 %c) {{\nb0:\n{before_loop}  br label %b1\n\nb1:\n{in_loop}  store i16 0, ptr {OTHER}\n  br i1 %c, label %b1, label %b2\n\nb2:\n  ret i16 %b0\n}}\n"));
+    let unit = parsed.unit();
+    let before = same_runs();
+    let found = forwarded(&unit, &Calls::default());
+    assert_eq!(found.len(), 39, "every load but the first is served");
+    assert!(same_runs() - before <= 20, "{} comparisons for 20 loads of one address", same_runs() - before);
+}
+
+/// 200 stores to 200 different cells of one array asked every cell held of each write: 19,900 clobber questions
+/// where the bytes a write meets hold one cell.
+#[test]
+fn test_a_store_asks_only_the_cells_it_can_reach() {
+    let stores: String = (0..200).map(|at| format!("  store i16 %v, ptr getelementptr (i8, ptr @big, i16 {})\n", at * 2)).collect();
+    let parsed = Parsed::new(&format!("@big = global [400 x i8] zeroinitializer\n\ndefine void @f(i16 %v) {{\nb0:\n{stores}  ret void\n}}\n"));
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &Calls::default());
+    let before = clobber_asks();
+    let held = holders(&unit, &accesses);
+    let asked = clobber_asks() - before;
+    assert_eq!(held.outof.values().map(|cells| cells.len()).max(), Some(200));
+    assert!(asked <= 1_000, "{asked} clobber questions for 200 stores to disjoint cells");
 }

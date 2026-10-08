@@ -85,11 +85,11 @@ impl<'a> FunctionCompiler<'a> {
                 type_name: TypeName::Addr,
             });
         }
-        if expected.is_some_and(|one| one != TypeName::U16) {
+        if expected.is_some_and(|one| one != self.word()) {
             return Err(type_mismatch(
                 span,
                 expected.expect("checked"),
-                TypeName::U16,
+                self.word(),
             ));
         }
         // A dimension, or past them all the capacity. A ranked array's length
@@ -138,19 +138,19 @@ impl<'a> FunctionCompiler<'a> {
             } else {
                 shape.len()
             };
-            hir::Operand::Constant(U16, i64::from(value))
+            hir::Operand::Constant(self.word_id(), i64::from(value))
         } else if rank > 1 {
             let Storage::Slice(pointer) = binding.storage else {
                 return Err(Diagnostic::new(receiver.span(), "view has no descriptor"));
             };
-            let value = self.value(TypeName::U16);
+            let value = self.value(self.word());
             self.emit(
                 "load",
                 vec![value],
                 vec![hir::Operand::IndirectPlace {
                     base: pointer,
-                    offset: descriptor::dim(word),
-                    type_id: U16,
+                    offset: descriptor::dim(word, self.word_bytes()),
+                    type_id: self.word_id(),
                     inbounds: false, member: None,
                 }],
                 None,
@@ -164,14 +164,14 @@ impl<'a> FunctionCompiler<'a> {
             } else {
                 return Err(Diagnostic::new(receiver.span(), "slice has no descriptor"));
             };
-            let value = self.value(TypeName::U16);
+            let value = self.value(self.word());
             self.emit(
                 "load",
                 vec![value],
                 vec![hir::Operand::DescriptorPlace {
                     base: pointer,
                     field: if word == 0 { "length" } else { "capacity" },
-                    type_id: U16,
+                    type_id: self.word_id(),
                 }],
                 None,
             );
@@ -179,7 +179,7 @@ impl<'a> FunctionCompiler<'a> {
         };
         Ok(TypedOperand {
             operand: Some(operand),
-            type_name: TypeName::U16,
+            type_name: self.word(),
         })
     }
 }

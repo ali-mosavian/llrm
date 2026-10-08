@@ -1,3 +1,4 @@
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32 | -Os -march=i486 -m32
 /* Ten floats rotate in a loop: a 10-wide cycle of spilled phi copies (#358). */
 extern void report(long value);
 long rot(short n, float seed)

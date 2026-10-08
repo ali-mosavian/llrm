@@ -1,0 +1,132 @@
+reason = "a read of a frame slot a register still holds reads the register (spillforward), and a far pointer made from a long loads its segment once: memory operands and bytes only fall"
+blessed = "2026-10-07"
+
+[bas.O2]
+instructions = 338429
+memory_operands = 103461
+code_bytes = 443
+data_bytes = 15
+bss_bytes = 0
+
+[bas.Os]
+instructions = 319614
+memory_operands = 91158
+code_bytes = 401
+data_bytes = 15
+bss_bytes = 0
+
+[c.O2]
+instructions = 149297
+memory_operands = 30158
+code_bytes = 213
+data_bytes = 0
+bss_bytes = 0
+
+[c.Os]
+instructions = 187348
+memory_operands = 25997
+code_bytes = 191
+data_bytes = 0
+bss_bytes = 0
+
+[nib.O2]
+instructions = 190709
+memory_operands = 30648
+code_bytes = 239
+data_bytes = 0
+bss_bytes = 0
+
+[nib.Os]
+instructions = 269426
+memory_operands = 63007
+code_bytes = 298
+data_bytes = 0
+bss_bytes = 0
+
+[ow.O2]
+instructions = 217955
+memory_operands = 52782
+code_bytes = 214
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 2.9073
+
+[ow.Os]
+instructions = 208028
+memory_operands = 49238
+code_bytes = 191
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 2.7749
+
+[bcc.O2]
+instructions = 225082
+memory_operands = 68631
+code_bytes = 219
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.0023
+
+[bcc.Os]
+instructions = 242571
+memory_operands = 44079
+code_bytes = 198
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.2355
+
+[tc.O2]
+instructions = 248676
+memory_operands = 65034
+code_bytes = 194
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.3169
+
+[tc.Os]
+instructions = 247570
+memory_operands = 65034
+code_bytes = 188
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.3021
+
+[tcpp.O2]
+instructions = 274989
+memory_operands = 38366
+code_bytes = 207
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.6677
+
+[tcpp.Os]
+instructions = 270299
+memory_operands = 44079
+code_bytes = 199
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 3.6052
+
+[bc.O2]
+instructions = 589677
+memory_operands = 271277
+code_bytes = 496
+data_bytes = 7
+bss_bytes = 12
+kernel_ms = 7.9828
+
+[pds71.O2]
+instructions = 500216
+memory_operands = 246152
+code_bytes = 461
+data_bytes = 7
+bss_bytes = 12
+kernel_ms = 6.7418
+
+[vbdos.O2]
+instructions = 567022
+memory_operands = 266858
+code_bytes = 469
+data_bytes = 7
+bss_bytes = 12
+kernel_ms = 7.6302

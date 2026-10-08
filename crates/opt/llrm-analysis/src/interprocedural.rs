@@ -61,11 +61,13 @@ pub type Parameters = IndexMap<GlobalId, Vec<Option<ConstantId>>>;
 /// A call whose actual becomes constant only after another private return
 /// is summarized counts once `propagate_returns` has rewritten it.
 pub fn constant_parameters(module: &Module, eligible: &BTreeSet<GlobalId>) -> Parameters {
-    let mut actuals: IndexMap<GlobalId, Vec<Vec<Option<ConstantId>>>> = eligible.iter().map(|&id| (id, Vec::new())).collect();
-    for (_, _, function) in module.functions() {
+    let mut actuals: Actuals = eligible.iter().map(|&id| (id, Vec::new())).collect();
+    for (own, _, function) in module.functions() {
         for (at, values) in current_call_constants(&module.context, function) {
-            if let Some(sites) = effects::callee(&module.context, function, at).and_then(|target| actuals.get_mut(&target)) {
-                sites.push(values);
+            let target = effects::callee(&module.context, function, at);
+            let same = _passed_on(function, at, target == Some(own));
+            if let Some(sites) = target.and_then(|target| actuals.get_mut(&target)) {
+                sites.push((values, same));
             }
         }
     }
@@ -77,13 +79,14 @@ pub fn constant_parameters(module: &Module, eligible: &BTreeSet<GlobalId>) -> Pa
 /// module to an `eligible` body, imported into its module, each module's
 /// agreed parameters.
 pub fn program_parameters(program: &mut Program, eligible: &BTreeSet<Defined>) -> Vec<Parameters> {
-    let mut actuals: BTreeMap<Defined, Vec<Vec<Option<(usize, ConstantId)>>>> = eligible.iter().map(|&one| (one, Vec::new())).collect();
+    let mut actuals: BTreeMap<Defined, Vec<(Vec<Option<(usize, ConstantId)>>, Vec<bool>)>> = eligible.iter().map(|&one| (one, Vec::new())).collect();
     for (at, module) in program.modules.iter().enumerate() {
-        for (_, _, function) in module.functions() {
+        for (own, _, function) in module.functions() {
             for (call, values) in current_call_constants(&module.context, function) {
                 let target = effects::callee(&module.context, function, call).and_then(|target| program.definition(at, target));
+                let same = _passed_on(function, call, target == Some((at, own)));
                 if let Some(sites) = target.and_then(|target| actuals.get_mut(&target)) {
-                    sites.push(values.into_iter().map(|one| one.map(|constant| (at, constant))).collect());
+                    sites.push((values.into_iter().map(|one| one.map(|constant| (at, constant))).collect(), same));
                 }
             }
         }
@@ -95,7 +98,7 @@ pub fn program_parameters(program: &mut Program, eligible: &BTreeSet<Defined>) -
             if defined != at {
                 continue;
             }
-            let sites = sites.iter().map(|site| site.iter().map(|one| one.and_then(|(from, constant)| program.imported(from, constant, at))).collect()).collect();
+            let sites = sites.iter().map(|(site, same)| (site.iter().map(|one| one.and_then(|(from, constant)| program.imported(from, constant, at))).collect(), same.clone())).collect();
             mine.insert(id, sites);
         }
         *local = _agreed_parameters(&mine);
@@ -149,16 +152,29 @@ fn _constant_argument(context: &Context, argument: Operand) -> Option<ConstantId
     }
 }
 
-/// Facts shared by every call in an already-normalized actual map.
-fn _agreed_parameters(actuals: &IndexMap<GlobalId, Vec<Vec<Option<ConstantId>>>>) -> Parameters {
+/// Each body's calls: the constant actuals of each, and which actuals are the
+/// body's own parameter, at the same position, passed on by a call to itself.
+type Actuals = IndexMap<GlobalId, Vec<(Vec<Option<ConstantId>>, Vec<bool>)>>;
+
+/// Which actuals of `call`, a call `recursive`ly of the function it is in,
+/// are that function's own parameter at the same position: unchanged by the
+/// call, so no new value for it.
+fn _passed_on(function: &Function, call: InstId, recursive: bool) -> Vec<bool> {
+    let operands = &function.instruction(call).operands;
+    function.parameters().iter().enumerate().map(|(at, &parameter)| recursive && operands.get(at) == Some(&Operand::Value(parameter))).collect()
+}
+
+/// Facts shared by every call in an already-normalized actual map: those a
+/// call that passes the parameter on does not change are not counted.
+fn _agreed_parameters(actuals: &Actuals) -> Parameters {
     let mut out = Parameters::default();
     for (&name, sites) in actuals {
-        if sites.is_empty() || sites.iter().map(Vec::len).collect::<BTreeSet<_>>().len() != 1 {
+        if sites.is_empty() || sites.iter().map(|(site, _)| site.len()).collect::<BTreeSet<_>>().len() != 1 {
             continue;
         }
         let mut agreed = Vec::new();
-        for index in 0..sites[0].len() {
-            let values = sites.iter().map(|site| site[index]).collect::<BTreeSet<_>>();
+        for index in 0..sites[0].0.len() {
+            let values = sites.iter().filter(|(_, same)| !same.get(index).copied().unwrap_or(false)).map(|(site, _)| site[index]).collect::<BTreeSet<_>>();
             agreed.push(if values.len() == 1 && !values.contains(&None) { values.into_iter().next().flatten() } else { None });
         }
         if agreed.iter().any(Option::is_some) {
@@ -304,7 +320,7 @@ fn _access(function: &Function, inst: InstId) -> Option<(Operand, bool, bool)> {
 /// its frame (`frameescape::framed`) or a constant offset
 /// (`pointerfacts`) from a near global variable this module defines. A
 /// pointer, an external or far selector may name memory that is not there.
-pub fn cannot_fault(module: &Module, layout: &DataLayout, function: &Function) -> bool {
+pub fn cannot_fault(module: &Module, layout: &DataLayout, spaces: llrm_mir::spaces::Spaces, function: &Function) -> bool {
     let context = &module.context;
     let framed = frameescape::framed(function);
     let offsets = pointerfacts::offsets(context, layout, function);
@@ -313,7 +329,7 @@ pub fn cannot_fault(module: &Module, layout: &DataLayout, function: &Function) -
         let Some((Operand::Constant(base), _)) = offsets.relative(pointer) else { return false };
         let ConstantKind::Global(global) = context.get(base).kind else { return false };
         let global = module.global(global);
-        global.address_space == 0 && matches!(&global.kind, GlobalKind::Variable(variable) if variable.initializer.is_some())
+        global.address_space == spaces.near && matches!(&global.kind, GlobalKind::Variable(variable) if variable.initializer.is_some())
     };
     function.walk().all(|(_, inst)| _access(function, inst).is_none_or(|(pointer, volatile, _)| !volatile && (is_local(pointer) || is_static(pointer))))
 }

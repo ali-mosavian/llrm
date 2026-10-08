@@ -38,6 +38,36 @@ impl Executed {
     }
 }
 
+/// What the MIR spill model forecast for a function (`driver::spill_model`), per entry, priced by the
+/// target's opcosts: the other side of the `pressure` channel's comparison with `executed`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Predicted {
+    pub peak: i64,
+    pub spilled: usize,
+    pub price: f64,
+    /// What the target charges a reload and a spill store, the units of `price`.
+    pub load: i64,
+    pub store: i64,
+}
+
+static PREDICTED: std::sync::Mutex<Vec<(String, Predicted)>> = std::sync::Mutex::new(Vec::new());
+
+/// Remember `forecast` for the function `name`; the model runs before selection.
+pub fn predict(name: &str, forecast: Predicted) {
+    PREDICTED.lock().expect("the forecasts").push((name.to_owned(), forecast));
+}
+
+/// The `pressure` channel's row: the forecast for `body` beside the spill code the allocator left in it.
+pub fn pressure(body: &LirBody) -> Option<String> {
+    let forecast = PREDICTED.lock().expect("the forecasts").iter().rev().find(|(name, _)| *name == body.name).map(|(_, one)| *one)?;
+    let done = executed(body)?;
+    let actual = done.reloads * forecast.load as f64 + done.stores * forecast.store as f64;
+    Some(format!(
+        "{} forecast peak {} spilled {} price {:.0}; allocator {:.0} reloads, {:.0} stores, {:.0} remats, price {:.0}",
+        body.name, forecast.peak, forecast.spilled, forecast.price, done.reloads, done.stores, done.remats, actual
+    ))
+}
+
 /// `executed` as one line, for the `cost` channel and dump, its jumps priced on `cpu`.
 pub fn summary(body: &LirBody, cpu: &Profile) -> String {
     match executed(body) {
@@ -56,6 +86,12 @@ pub fn summary(body: &LirBody, cpu: &Profile) -> String {
         ),
         None => format!("{} executes an unbounded amount", body.name),
     }
+}
+
+/// What a body costs to run, one unit for an instruction and one for a memory operand: what `executed` counts, as the
+/// number the allocator and the route choice compare alternatives by. `None` where there is no finite estimate.
+pub fn work(body: &LirBody) -> Option<f64> {
+    executed(body).map(|done| done.instructions + done.memory)
 }
 
 /// `None` for control flow with no finite profile-free estimate.
@@ -80,6 +116,10 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
     let reads_slot = |one: &Insn| {
         one.what.as_ref().is_some_and(|what| what.sources.iter().any(|at| matches!(at, Loc::Mem(cell) if cell.addr.is_some_and(|addr| slots.contains(&addr)))))
     };
+    // An argument's incoming home is above the frame: read where it runs more often than the function does,
+    // it is a register's one load made again.
+    let incoming = |one: &Insn| one.what.as_ref().is_some_and(|what| what.sources.iter().any(|at| matches!(at, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0))));
+    let entry = frequency.block(body.entry);
     let mut out = Executed::default();
     for block in &body.blocks {
         // What reaches each instruction: the block's runs less those an
@@ -100,7 +140,7 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
             let spill = match () {
                 _ if x87(one) => None,
                 _ if one.rematerialized => Some(&mut out.remats),
-                _ if one.spill_reload || reads_slot(one) => Some(&mut out.reloads),
+                _ if one.spill_reload || reads_slot(one) || (incoming(one) && runs > entry) => Some(&mut out.reloads),
                 _ if one.spill_store => Some(&mut out.stores),
                 _ => None,
             };
@@ -183,6 +223,25 @@ mod tests {
         let body = LirBody::new("folded", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
         let done = executed(&body).expect("straight-line");
         assert_eq!((done.stores, done.reloads), (1.0, 1.0));
+    }
+
+    /// An argument passed on the stack is read from its incoming home, a memory operand in the loop that
+    /// reads it (`sub esi,[esp+32]`): the work a register holds once, per trip. It carried no spill flag and
+    /// showed 0 reloads beside a forecast that put the value in a register (queens `safe`).
+    #[test]
+    fn test_a_loop_reading_an_incoming_argument_home_reloads_it_each_trip() {
+        let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
+        let home = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, 8)), 2));
+        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let blocks = vec![
+            block(1, vec![insn(1, Operation::Move, "mov", vec![ax.clone()], vec![home.clone()]), insn(2, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
+            block(2, vec![insn(3, Operation::Multiply, "imul", vec![ax.clone()], vec![ax, home]), insn(4, Operation::Branch, "jne", vec![], vec![])], vec![2, 3]),
+            block(3, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
+        ];
+        let mut body = LirBody::new("args", 1, blocks, IndexMap::default(), IndexMap::default());
+        body.loop_trip_counts = vec![(2, 5)];
+        // The entry's own read is the load every path makes; the loop's five trips are the reloads.
+        assert_eq!(executed(&body).expect("a counted loop").reloads.round(), 5.0);
     }
 
     /// A loop tested at its header runs its body as many times as its trip

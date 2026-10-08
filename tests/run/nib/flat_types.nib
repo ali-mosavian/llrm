@@ -1,0 +1,35 @@
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32
+# Structs, enums with payloads, matches and borrows on both targets.
+struct Point:
+    mut x: i16
+    mut y: i32
+
+enum Shape:
+    circle(radius: i16)
+    rect(w: i16, h: i16)
+
+fn area(shape: &Shape) -> i32:
+    match shape:
+        .circle(r):
+            return i32(r) * i32(r) * 3
+        .rect(w, h):
+            return i32(w) * i32(h)
+
+fn bump(p: &mut Point) -> void:
+    p.x += 1
+    p.y += 100000
+
+fn longer(a: &string, b: &string) -> i16:
+    return a.len > b.len ? i16(a.len) : i16(b.len)
+
+fn main() -> i16:
+    let mut p = Point(x=1, y=2)
+    bump(&mut p)
+    bump(&mut p)
+    print(p.x)
+    print(p.y)
+    let shapes: vec[Shape] = [Shape.circle(radius=5), Shape.rect(w=3, h=4)]
+    for s in shapes:
+        print(area(s))
+    print(longer("abc", "de"))
+    return 0

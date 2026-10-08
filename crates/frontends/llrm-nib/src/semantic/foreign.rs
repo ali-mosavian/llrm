@@ -127,14 +127,18 @@ pub(super) fn foreign_signature(
 ) -> Result<Signature, Diagnostic> {
     let mut signature = signature(types, &declared.function, id)?;
     signature.foreign = true;
-    signature.abi = declared.abi;
+    let abi = declared.abi.resolved(types.native);
+    if !types.conventions.iter().any(|one| one == abi.name()) {
+        return Err(Diagnostic::new(declared.function.span, format!("this target defines no \"{}\" calling convention: it has {}", declared.abi.name(), types.conventions.join(", "))));
+    }
+    signature.abi = abi;
     check_foreign(
         types,
         &mut signature,
         &declared.function.name,
         declared.function.span,
     )?;
-    signature.name = declared.symbol.clone();
+    signature.name = declared.symbol.clone().unwrap_or_else(|| types.symbol(abi, &declared.function.name));
     Ok(signature)
 }
 
@@ -147,10 +151,22 @@ fn interrupt_shape(abi: Abi, takes_nothing_returns_void: bool, span: Span) -> Re
 }
 
 impl TypeRegistry {
+    /// The object symbol of `name` under `abi`: its convention's pattern in the object format, else `Abi::symbol`'s.
+    pub(super) fn symbol(&self, abi: Abi, name: &str) -> String {
+        match self.symbols.get(abi.name()) {
+            Some(pattern) => llrm_target::calling::spell(pattern, name),
+            None => abi.symbol(name),
+        }
+    }
+
     /// `extern "abi" fn(A) -> R`: the far address of a function of that ABI
     /// whose type is `function`. Nothing reads or calls through it here; a
     /// foreign function does.
     pub(super) fn foreign_function(&mut self, abi: Abi, function: TypeName, span: Span) -> Result<TypeName, Diagnostic> {
+        let abi = abi.resolved(self.native);
+        if !self.conventions.iter().any(|one| one == abi.name()) {
+            return Err(Diagnostic::new(span, format!("this target defines no \"{}\" calling convention: it has {}", abi.name(), self.conventions.join(", "))));
+        }
         interrupt_shape(abi, self.types[(type_id(function) - 1) as usize].name == "fn() -> void", span)?;
         if let Some(found) = self.foreign_function_of(abi, function) {
             return Ok(found);
@@ -158,13 +174,13 @@ impl TypeRegistry {
         let name = self.foreign_name(abi, function);
         let id = self.pointer_type(name.clone(), type_id(function), 0, true);
         self.foreign_functions.insert(name, id);
-        Ok(TypeName::Pointer { type_id: id, width: 4, mutable: false })
+        Ok(TypeName::Pointer { type_id: id, far: true, width: self.pointer_width(true), mutable: false })
     }
 
     /// `extern "abi" fn(A) -> R`, when it is registered.
     pub(super) fn foreign_function_of(&self, abi: Abi, function: TypeName) -> Option<TypeName> {
         let type_id = *self.foreign_functions.get(&self.foreign_name(abi, function))?;
-        Some(TypeName::Pointer { type_id, width: 4, mutable: false })
+        Some(TypeName::Pointer { type_id, far: true, width: self.pointer_width(true), mutable: false })
     }
 
     fn foreign_name(&self, abi: Abi, function: TypeName) -> String {

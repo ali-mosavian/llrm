@@ -1,3 +1,4 @@
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 /* Six-body integrator in float (the fixed-point nbody_fixed state as floats), 1000 steps. */
 /* Overdamped: the bodies settle at their centre of mass whatever the intermediate precision (a lighter damping was chaotic: #360). */
 extern void report(long value);

@@ -1,0 +1,6 @@
+[package]
+name = "llrm-object"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "llrm's format-neutral object model: what the backend lays out and each object writer writes"

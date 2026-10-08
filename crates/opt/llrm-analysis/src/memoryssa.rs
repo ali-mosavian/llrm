@@ -84,7 +84,8 @@ impl Analysis for Accesses {
         let references = Result::as_ref(&*references).map_err(String::clone)?;
         let effects = Result::as_ref(&*effects).map_err(String::clone)?;
         let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
-        Ok(Rc::new(Self::of(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape), references.clone(), effects)))
+        let exposed = analyses.get::<crate::manager::ExposedFrames>(context, layout, function);
+        Ok(Rc::new(Self::of(&Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed), references.clone(), effects)))
     }
 }
 
@@ -169,6 +170,13 @@ pub fn changes(cell: &MemRef, invariant: bool, writes: Option<&[MemRef]>, clobbe
     !invariant && !cell.unwritable() && writes.is_none_or(|stores| stores.iter().any(clobbers))
 }
 
+/// Whether running `write` leaves the bytes `read` reads as they were: it writes none of them, as `accesses` says
+/// and `regions::overlapping` decides on `program`; an answer it cannot give overlaps.
+pub fn spares(accesses: &Accesses, program: Option<&llrm_mir::program::ProgramProxy>, read: &MemRef, write: InstId) -> bool {
+    let overlaps = |wrote: &MemRef| overlapping(read, wrote, None, None, program).unwrap_or(true);
+    !changes(read, false, accesses.writes(write), overlaps)
+}
+
 /// Whether writing `store` may change a byte of `cell`: `regions` leaves
 /// it open and `pointerfacts` cannot place them apart.
 pub fn may_clobber(unit: &Unit, known: Option<&BTreeMap<ValueId, Interval>>, cell: &MemRef, store: &MemRef) -> bool {
@@ -222,6 +230,21 @@ pub fn same_bytes(unit: &Unit, one: &MemRef, other: &MemRef) -> bool {
     covers(unit, one, other) && covers(unit, other, one)
 }
 
+thread_local! {
+    static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has asked whether a def's writes may clobber a cell, rather than been
+/// answered from memory.
+pub fn clobber_runs() -> usize {
+    RUNS.with(std::cell::Cell::get)
+}
+
+fn check_clobbers() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CLOBBERS").is_some())
+}
+
 #[derive(Clone)]
 pub struct MemorySSA<'a> {
     pub live: Access,
@@ -231,6 +254,9 @@ pub struct MemorySSA<'a> {
     /// What each def writes, as `Accesses::writes` says.
     written: IndexMap<InstId, Option<Vec<MemRef>>>,
     unit: Unit<'a>,
+    /// Whether a def's writes may clobber a cell, once for each pair: the loads of one address ask it of
+    /// the same defs again and again.
+    clobbers: std::cell::RefCell<llrm_support::hash::HashMap<MemRef, llrm_support::hash::HashMap<InstId, bool>>>,
 }
 
 impl MemorySSA<'_> {
@@ -262,6 +288,25 @@ impl MemorySSA<'_> {
     pub fn unchanged(&self, earlier: InstId, later: InstId, memory: &MemRef) -> bool {
         let boundary = self.at(earlier).defining;
         boundary.is_some_and(|boundary| self.frontier(later, memory, Some(boundary), None, None) == BTreeSet::from([boundary]))
+    }
+
+    /// Whether any write of the def at `site` may change a byte of `cell`, remembered.
+    fn clobbered(&self, cell: &MemRef, site: InstId) -> bool {
+        if let Some(&known) = self.clobbers.borrow().get(cell).and_then(|sites| sites.get(&site)) {
+            if !check_clobbers() {
+                return known;
+            }
+        }
+        let stores = self.written[&site].as_deref().unwrap_or(&[]);
+        let found = stores.iter().any(|store| may_clobber(&self.unit, None, cell, store));
+        RUNS.with(|runs| runs.set(runs.get() + 1));
+        let mut memo = self.clobbers.borrow_mut();
+        let sites = memo.entry(cell.clone()).or_default();
+        if let Some(&known) = sites.get(&site) {
+            assert_eq!(known, found, "LLRM_CHECK_CLOBBERS: a remembered answer differs from the one worked out");
+        }
+        sites.insert(site, found);
+        found
     }
 
     fn frontier(&self, site: InstId, memory: &MemRef, boundary: Option<usize>, edge: Option<i64>, edge_memory: Option<&MemRef>) -> BTreeSet<usize> {
@@ -300,7 +345,8 @@ impl MemorySSA<'_> {
                         _ => memory,
                     };
                     let written = &self.written[&access.site.expect("a def has a site")];
-                    if changes(queried, invariant, written.as_deref(), |store| may_clobber(&self.unit, None, queried, store)) {
+                    let site = access.site.expect("a def has a site");
+                    if changes(queried, invariant, written.as_deref(), |_| self.clobbered(queried, site)) {
                         found.insert(current);
                     } else {
                         pending.push(access.defining);
@@ -415,7 +461,7 @@ pub fn built<'a>(unit: &Unit<'a>, accesses: &Accesses) -> MemorySSA<'a> {
         .collect();
     let mut accesses: Vec<Access> = std::iter::once(live.clone()).chain(phis.values().cloned()).chain(sites.values().cloned()).collect();
     accesses.sort_by_key(|access| access.id);
-    MemorySSA { live, accesses, sites, phis, written, unit: *unit }
+    MemorySSA { live, accesses, sites, phis, written, unit: *unit, clobbers: Default::default() }
 }
 
 #[cfg(test)]

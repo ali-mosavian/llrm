@@ -620,7 +620,7 @@ fn allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), String> {
     let (body, notes) = body(seed, shape);
     let generated = body.clone();
     let segments = &*target::BUILT_IN;
-    let mut phases: Vec<Box<dyn LIRTransform>> = vec![Box::new(RegAlloc::new(None, None, ProfileOrName::Name(cpu), segments)?)];
+    let mut phases: Vec<Box<dyn LIRTransform>> = vec![Box::new(RegAlloc::new(None, None, ProfileOrName::Name(cpu), segments, &crate::backend::classes::RegisterClasses::m16())?)];
     if std::env::var_os("FUZZ_NO_PARCOPY").is_none() {
         phases.push(Box::new(ParallelCopy));
     }
@@ -652,11 +652,11 @@ fn spilled_and_allocated(seed: u64, shape: &Shape, cpu: &str) -> Result<(), Stri
     let segments = &*target::BUILT_IN;
     let frame = std::rc::Rc::new(std::cell::RefCell::new(crate::backend::frame::Frame::new(0)));
     let mut phases: Vec<Box<dyn LIRTransform>> = vec![
-        Box::new(SsaSpill { frame: frame.clone(), segments: segments.clone() }),
+        Box::new(SsaSpill { frame: frame.clone(), segments: segments.clone(), classes: crate::backend::classes::RegisterClasses::m16(), prices: crate::backend::ssaspill::Prices::clocks(), run: Default::default() }),
         Box::new(PhiElimination),
         Box::new(TwoAddress),
-        Box::new(Coalescer::new(None, segments)),
-        Box::new(RegAlloc::new(None, Some(frame), ProfileOrName::Name(cpu), segments)?),
+        Box::new(Coalescer::new(None, segments, &crate::backend::classes::RegisterClasses::m16())),
+        Box::new(RegAlloc::new(None, Some(frame), ProfileOrName::Name(cpu), segments, &crate::backend::classes::RegisterClasses::m16())?),
         Box::new(ParallelCopy),
     ];
     if std::env::var_os("FUZZ_NO_PARCOPY").is_some() {
@@ -758,4 +758,332 @@ fn test_a_value_that_cannot_be_spilled_takes_a_register_by_force() {
     let done = allocated(4, &shape, "386");
     assert!(done.is_ok(), "{done:?}");
     assert!(crate::backend::allocate::last_resorts() > before, "premise: the allocation needed the last resort");
+}
+
+/// `allocate::live` was built from per-block sorted sets and converted to bit rows for the fixed point:
+/// 24% of compiling QCport's `d_faces` (#559). Dense rows all the way give the same sets.
+#[test]
+fn test_dense_liveness_is_what_the_sorted_sets_gave() {
+    for seed in 0..200 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            assert_eq!(crate::backend::allocate::live(&body), crate::backend::allocate::live_reference(&body), "seed {seed}");
+            let (entering, leaving) = crate::backend::allocate::live_reference(&body);
+            let rows = crate::backend::allocate::live_rows(&body);
+            for block in &body.blocks {
+                assert_eq!(rows.entering(block.at).collect::<Vec<_>>(), entering[&block.at].iter().copied().collect::<Vec<_>>(), "seed {seed} entering {}", block.at);
+                assert_eq!(rows.leaving(block.at).collect::<Vec<_>>(), leaving[&block.at].iter().copied().collect::<Vec<_>>(), "seed {seed} leaving {}", block.at);
+            }
+        }
+    }
+}
+
+/// Every question of a body's intervals was worked out afresh: a spill was followed by the allocator's
+/// facts of the body it made, the spiller's steps and the class check, each asking the same (58% of the
+/// asks of compiling `d_faces`, #559). The same instructions are answered from memory; others are not.
+#[test]
+fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
+    use crate::analysis::intervals::{intervals, worked};
+    let (generated, _) = body(3, &Shape { pool: 8, ops: 10 });
+    let before = worked();
+    let first = intervals(&generated, None);
+    let again = intervals(&generated, None);
+    assert_eq!(worked() - before, 1, "the same body was worked out twice");
+    assert_eq!(first, again);
+    // A body with one instruction made afresh is another question.
+    let mut other = generated.clone();
+    let block = other.blocks.iter_mut().find(|block| !block.insns.is_empty()).expect("a block with instructions");
+    let copy = std::sync::Arc::new((*block.insns[0]).clone());
+    block.insns[0] = copy;
+    intervals(&other, None);
+    assert_eq!(worked() - before, 2, "another body was answered from the first");
+}
+
+/// `spiller::siblings` built the interference of every value live together (13.8% of compiling
+/// `d_faces`, #559) to ask of the pairs among the values a plain move relates. The graph of those
+/// values alone has the edges among them that the whole graph has.
+#[test]
+fn test_interference_among_some_values_is_the_whole_graphs_among_them() {
+    use crate::backend::coalesce::{_interference, _interference_among};
+    for seed in 0..120 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            let whole = _interference(&body);
+            let mut some: std::collections::BTreeSet<u32> = whole.keys().copied().filter(|one| (one + seed as u32) % 3 != 0).collect();
+            some.insert(1);
+            let among = _interference_among(&body, Some(&some));
+            for value in &some {
+                let expected: std::collections::BTreeSet<u32> = whole.get(value).map(|near| near.intersection(&some).copied().collect()).unwrap_or_default();
+                let found = among.get(value).cloned().unwrap_or_default();
+                assert_eq!(found, expected, "seed {seed} value {value}");
+            }
+            assert!(among.keys().all(|one| some.contains(one)), "seed {seed}: a value outside the set has an entry");
+        }
+    }
+}
+
+/// The class of every value was found with the body numbered, its intervals found and the clobber masks
+/// built for the `[word+word]` roles, in bodies with none: 3.8 s of compiling `d_faces` (#559).
+#[test]
+fn test_a_body_with_no_word_address_pairs_is_not_numbered_to_find_classes() {
+    let (generated, _) = body(5, &Shape { pool: 8, ops: 6 });
+    let before = crate::analysis::intervals::worked();
+    crate::backend::regclass::classes(&generated, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &crate::backend::classes::RegisterClasses::m16());
+    assert_eq!(crate::analysis::intervals::worked() - before, 0, "intervals were worked out for a body with no word pairs");
+}
+
+/// The interval walk looked each instruction's slot up in a map hashed by its address, built a set per group
+/// and shifted its live map on every removal: 7.6 s of compiling `d_faces` (#559). Slots counted in place, a
+/// live list with gaps: the same intervals in the same order.
+#[test]
+fn test_the_interval_walk_is_the_references_in_every_order() {
+    use crate::analysis::intervals::{_ranges_reference, _walked, indexed};
+    for seed in 0..200 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            let index = indexed(&body);
+            let all = |_: u32| true;
+            assert!(_walked(&body, &index, &all).iter().eq(_ranges_reference(&body, &index, &all).iter()), "seed {seed}");
+            let some = |value: u32| value % 3 != 0;
+            assert!(_walked(&body, &index, &some).iter().eq(_ranges_reference(&body, &index, &some).iter()), "seed {seed} among some");
+        }
+    }
+}
+
+/// Values live into a block come out of its walk in the order they were first read, last read first: two
+/// values read and never made in the block. The order of the intervals is part of what is the same.
+#[test]
+fn test_values_read_and_never_made_in_a_block_come_out_in_the_order_they_were_first_walked() {
+    use crate::analysis::intervals::{_ranges_reference, _walked, indexed};
+    let read = |at: i64, into: u32, from: u32| Insn::new(at, Some((at, 1)), Some(Semantics { name: Some("mov".to_owned()), dests: vec![held(into)], sources: vec![held(from)], ..Semantics::new(Operation::Move) }), vec![into], vec![from]);
+    let blocks = vec![LirBlock::new(1, vec![Arc::new(read(1, 3, 1)), Arc::new(read(2, 4, 2))])];
+    let body = LirBody::new("f", 1, blocks, Default::default(), Default::default());
+    let index = indexed(&body);
+    let walked = _walked(&body, &index, &|_| true);
+    assert_eq!(walked.keys().copied().collect::<Vec<_>>(), vec![4, 3, 2, 1]);
+    assert!(walked.iter().eq(_ranges_reference(&body, &index, &|_| true).iter()));
+}
+
+/// A spilled read's saving was looked up in the profile by form name, four times, for every instruction, at
+/// every rebuild of the allocator's facts, and each use asked the instruction's pattern afresh (5.6 s of
+/// compiling `d_faces`, #559). The saving is found once per form and the pattern once per instruction: the
+/// same weights.
+#[test]
+fn test_fold_prices_are_what_the_per_instruction_lookup_gave() {
+    use crate::analysis::frequency::Frequency;
+    use crate::analysis::intervals::intervals;
+    use crate::backend::allocate::{_fold_discount, _fold_priced};
+    use crate::backend::cpu::ProfileOrName;
+    use crate::backend::spiller::folded_source;
+    for cpu in ["386", "486", "Core", "P5"] {
+        let profile = crate::backend::cpu::profile(ProfileOrName::from(cpu)).expect("a profile");
+        for seed in 0..150 {
+            let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+            let (plain, _) = body(seed, &shape);
+            for body in [in_ssa(&plain), plain] {
+                let busy = Frequency::of(&body);
+                let live = intervals(&body, None);
+                let mut free: crate::support::hash::IndexMap<u32, f64> = Default::default();
+                for block in &body.blocks {
+                    let each = busy.block(block.at);
+                    for one in &block.insns {
+                        let discount = _fold_discount(one, profile);
+                        if discount == 0.0 {
+                            continue;
+                        }
+                        for value in &one.uses {
+                            if folded_source(one, &std::collections::BTreeSet::from([*value])).is_some() {
+                                *free.entry(*value).or_insert(0.0) += each * discount;
+                            }
+                        }
+                    }
+                }
+                let mut expected = live.clone();
+                for (value, found) in &free {
+                    if let Some(one) = expected.get_mut(value).filter(|one| one.weight != f64::INFINITY) {
+                        one.weight = (one.weight - found / (one.size() + crate::analysis::intervals::GRACE) as f64).max(0.0);
+                    }
+                }
+                let priced = _fold_priced(&body, live, profile, &busy);
+                assert!(priced.iter().eq(expected.iter()), "seed {seed} on {cpu}");
+            }
+        }
+    }
+}
+
+/// The last reads of a body were found from the sets of every block's entry and exit, of which only the
+/// exits are read (5.7% of compiling `d_faces`, #559). The exits as rows give the same reads.
+#[test]
+fn test_the_last_reads_are_what_the_sets_of_every_block_gave() {
+    use crate::analysis::intervals::key;
+    use std::collections::BTreeSet;
+    for seed in 0..150 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            let (_, live_out) = crate::backend::allocate::live_reference(&body);
+            let mut expected: BTreeSet<(usize, u32)> = BTreeSet::new();
+            for block in &body.blocks {
+                let mut alive: BTreeSet<u32> = live_out[&block.at].clone();
+                let mut index = block.insns.len() as i64 - 1;
+                while index >= 0 {
+                    let one = &block.insns[index as usize];
+                    let mut first = index as usize;
+                    if one.group.is_some() {
+                        while first > 0 && block.insns[first - 1].group == one.group {
+                            first -= 1;
+                        }
+                    }
+                    let group = &block.insns[first..=index as usize];
+                    for item in group {
+                        for value in &item.defines {
+                            alive.remove(value);
+                        }
+                    }
+                    for item in group {
+                        expected.extend(item.uses.iter().filter(|value| !alive.contains(value)).map(|value| (key(item), *value)));
+                    }
+                    alive.extend(group.iter().flat_map(|item| item.uses.iter().copied()));
+                    index = first as i64 - 1;
+                }
+            }
+            assert_eq!(crate::backend::spiller::_final_uses(&body), expected, "seed {seed}");
+        }
+    }
+}
+
+/// Splitting a value asked of the liveness of every value in every block as sets, built afresh for each
+/// split and again for the body it made (9.7% of compiling `d_faces`, #559). One value at a time is asked
+/// of, and the rows answer it: whether it is live at a block's entry and exit, as the sets said.
+#[test]
+fn test_one_values_liveness_from_rows_is_what_the_sets_said() {
+    use crate::backend::allocate::{LiveAt, live_reference, live_rows, live_rows_by};
+    for seed in 0..150 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            let (entering, leaving) = live_reference(&body);
+            let rows = live_rows(&body);
+            let values: Vec<u32> = body.blocks.iter().flat_map(|block| block.insns.iter().flat_map(|one| one.defines.iter().chain(&one.uses).copied())).chain([u32::MAX, 0]).collect();
+            for &value in values.iter().take(40) {
+                let only = live_rows_by(&body, |one| one == value);
+                for block in &body.blocks {
+                    let (live_in, live_out) = (entering[&block.at].contains(&value), leaving[&block.at].contains(&value));
+                    assert_eq!((rows.live_in(block.at, value), rows.live_out(block.at, value)), (live_in, live_out), "seed {seed} value {value}");
+                    assert_eq!((only.live_in(block.at, value), only.live_out(block.at, value)), (live_in, live_out), "seed {seed} value {value} alone");
+                }
+            }
+            assert!(!rows.live_in(i64::MIN, 1), "a block the body does not hold");
+        }
+    }
+}
+
+/// The next value was found by putting every value the body names in a set (a fifth of a split's carving).
+#[test]
+fn test_the_next_value_is_one_past_the_largest_the_body_names() {
+    for seed in 0..150 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            let mut seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::from([0]);
+            for block in &body.blocks {
+                seen.extend(block.arrives());
+                for one in &block.insns {
+                    seen.extend(one.defines.iter().chain(&one.uses).copied());
+                }
+            }
+            assert_eq!(crate::backend::splitkit::_next_value(&body), seen.last().copied().expect("seeded") + 1, "seed {seed}");
+        }
+    }
+}
+
+/// The classes of every value numbered the body, found every interval and built the clobber masks for the
+/// `[word+word]` roles, all of which the allocator's facts had just found for the same body (2.3 s of
+/// compiling `d_faces`, #559). Given them, the classes are the same, in the same order, and nothing is worked
+/// out again.
+#[test]
+fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
+    use crate::analysis::intervals::{indexed, intervals, worked};
+    use crate::backend::allocate::_masks;
+    use crate::backend::classes::RegisterClasses;
+    use crate::backend::regclass::{Found, classes, classes_given};
+    let registers = RegisterClasses::m16();
+    for seed in 0..150 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            let live = intervals(&body, None);
+            let masks = _masks(&body, &indexed(&body), &crate::backend::target::BUILT_IN);
+            let before = worked();
+            let given = classes_given(&body, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &registers, &Found { live: &live, masks: &masks });
+            assert_eq!(worked() - before, 0, "seed {seed}: intervals were worked out again");
+            let alone = classes(&body, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &registers);
+            assert!(given.iter().eq(alone.iter()), "seed {seed}");
+        }
+    }
+    // A body with a `[base+index]` access of two words: the roles are chosen from the intervals and masks.
+    let cell = Mem { base: Some(Held { value: 1, width: 2 }), index: Some(Held { value: 2, width: 2 }), scale: 1, ..Mem::new(Some(Addr::new(Space::Literal, 0)), 2) };
+    let load = Insn::new(3, Some((3, 1)), Some(Semantics { name: Some("mov".to_owned()), dests: vec![held(3)], sources: vec![Loc::Mem(cell)], ..Semantics::new(Operation::Move) }), vec![3], vec![1, 2]);
+    let define = |at: i64, value: u32| Insn::new(at, Some((at, 1)), Some(Semantics { name: Some("mov".to_owned()), dests: vec![held(value)], sources: vec![imm(0)], ..Semantics::new(Operation::Move) }), vec![value], vec![]);
+    let blocks = vec![LirBlock::new(1, vec![Arc::new(define(1, 1)), Arc::new(define(2, 2)), Arc::new(load)])];
+    let pairs = LirBody::new("f", 1, blocks, Default::default(), Default::default());
+    let live = intervals(&pairs, None);
+    let masks = _masks(&pairs, &indexed(&pairs), &crate::backend::target::BUILT_IN);
+    let given = classes_given(&pairs, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &registers, &Found { live: &live, masks: &masks });
+    let alone = classes(&pairs, &std::collections::BTreeSet::new(), &crate::backend::target::BUILT_IN, &registers);
+    assert!(given.contains_key(&1) && given.contains_key(&2), "the pair's values are confined to a base and an index");
+    assert!(given.iter().eq(alone.iter()));
+}
+
+/// A mask at `slot` over registers, for the `_clobbered` tests.
+fn _mask_at(slot: i64, during: &[Register], high: &[Register], before: &[Register]) -> super::allocate::Mask {
+    super::allocate::Mask { slot, during: during.iter().copied().collect(), high: high.iter().copied().collect(), before: before.iter().copied().collect() }
+}
+
+/// `_clobbered` agrees with the look at every point it replaced, on random points and values.
+#[test]
+fn test_clobbered_agrees_with_a_look_at_every_point() {
+    use super::allocate::{Masks, _clobbered, _clobbered_reference};
+    use crate::analysis::intervals::{Interval, Segment};
+    let registers = [Register::AX, Register::BX, Register::CX, Register::DX, Register::SI];
+    let mut seed = 99_u64;
+    let mut next = |modulus: u64| {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        (seed >> 33) % modulus
+    };
+    for _ in 0..200 {
+        let pick = |next: &mut dyn FnMut(u64) -> u64| -> Vec<Register> { registers.iter().copied().filter(|_| next(4) == 0).collect() };
+        let list: Vec<_> = (0..next(12)).map(|at| { let during = pick(&mut next); let high = pick(&mut next); let before = pick(&mut next); _mask_at(at as i64 * 4 + next(3) as i64, &during, &high, &before) }).collect();
+        let masks = Masks::new(list);
+        for _ in 0..30 {
+            let mut start = next(20) as i64;
+            let segments = (0..1 + next(3)).map(|_| { let end = start + 1 + next(8) as i64; let seg = Segment { start, end }; start = end + next(5) as i64; seg }).collect();
+            let one = Interval::new(1, segments);
+            for register in registers {
+                for width in [1, 2, 4] {
+                    assert_eq!(_clobbered(&one, register, &masks, width), _clobbered_reference(&one, register, &masks, width), "{register:?} width {width} over {:?}", one.segments);
+                }
+            }
+        }
+    }
+}
+
+/// Every query looked at every point: `_clobbered` was 5.8% of compiling `d_faces` (#559). 20,000 points and
+/// 20,000 questions took 1.2 s; they are answered by bisection now.
+#[test]
+fn test_clobbered_does_not_look_at_every_point() {
+    use super::allocate::{Masks, _clobbered};
+    use crate::analysis::intervals::{Interval, Segment};
+    let masks = Masks::new((0..20_000).map(|at| _mask_at(at * 3, &[Register::DX], &[], &[])).collect());
+    let started = std::time::Instant::now();
+    let mut clobbered = 0;
+    for at in 0..20_000 {
+        let one = Interval::new(1, vec![Segment { start: at * 3 + 1, end: at * 3 + 2 }]);
+        clobbered += usize::from(_clobbered(&one, Register::DX, &masks, 2));
+    }
+    assert_eq!(clobbered, 0, "a value live between two points is not across either");
+    assert!(started.elapsed().as_secs_f64() < 0.2, "{:?} for 20,000 questions", started.elapsed());
 }

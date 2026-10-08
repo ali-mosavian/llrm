@@ -4,7 +4,7 @@
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--alternate-math]
-//!         [--mbf] [--whole-program] [--array-merging] [--own-frames] [--error-lines] [--include DIR]... [--dump DIR] [OPTIONS]
+//!         [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--include DIR]... [--dump DIR] [OPTIONS]
 //! ```
 //!
 //! OPTIONS are gcc's, as `llrm_core::driver::flags` takes them;
@@ -22,7 +22,7 @@ use llrm_core::hir::codec;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--own-frames] [--error-lines] \
+[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] \
 [--include INCLUDE] [--dump DUMP] {} source",
         flags::USAGE
     )
@@ -79,7 +79,8 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--mbf" => frontend.mbf = true,
             "--whole-program" => frontend.whole_program = true,
             "--array-merging" => frontend.array_merging = true,
-            "--own-frames" => frontend.own_frames = true,
+            "--own-frames" => {}
+            "--runtime-frames" => frontend.runtime_frames = true,
             "--error-lines" => frontend.error_lines = true,
             "--include" => frontend.includes.push(PathBuf::from(value("--include")?)),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
@@ -94,7 +95,10 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     frontend.checked_division = flags.sanitize.integer_divide_by_zero;
     frontend.debug = flags.debug;
     frontend.checked_overflow = flags.sanitize.signed_integer_overflow;
-    let codegen = flags.driver(flags.machine(llrm_core::abi::machine::BASIC.clone())?);
+    frontend.checked_stack = flags.sanitize.stack;
+    let bound = llrm_driver::target(&flags, Some(&["x86-m16"]))?;
+    frontend.segment_bytes = bound.target.layout().segment_bytes();
+    let codegen = bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?);
     Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen })
 }
 
@@ -110,14 +114,14 @@ pub fn main(argv: &[String]) -> i32 {
         if let Some(dump) = &args.dump {
             qbstages::dumped(&args.source, dump, &args.frontend, &args.codegen)?;
         }
-        let program = parsed(&args.source, &args.frontend, args.dump_hir.as_deref()).map_err(|error| error.0)?;
+        let program = llrm_core::support::debug::timed("frontend", || parsed(&args.source, &args.frontend, args.dump_hir.as_deref())).map_err(|error| error.0)?;
         if args.flags.assembly {
             let module = compile::assembled(&program, None, &args.codegen).map_err(|error| error.to_string())?;
             let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
             std::fs::write(output, llrm_core::driver::basic::text(&module)?).map_err(|error| error.to_string())?;
         } else if let Some(output) = &args.flags.output {
             let bytes = compile::object_bytes(&program, &args.source, None, &args.codegen).map_err(|error| error.to_string())?;
-            std::fs::write(output, bytes).map_err(|error| error.to_string())?;
+            llrm_core::support::debug::timed("write output", || std::fs::write(output, bytes)).map_err(|error| error.to_string())?;
         } else if args.dump.is_none() {
             print!("{}", codec::encode(&program, None).map_err(|error| error.0)?);
         }

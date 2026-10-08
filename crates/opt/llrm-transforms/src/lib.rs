@@ -20,22 +20,41 @@ pub mod exitsink;
 pub mod fill;
 pub mod floatfold;
 pub mod floatloop;
+pub mod argpromotion;
 pub mod calleepop;
+pub mod homes;
+pub mod spares;
+pub mod deadargs;
+pub mod inferspace;
+pub mod narrowspace;
 #[cfg(test)]
 mod calleepop_tests;
+#[cfg(test)]
+mod argpromotion_tests;
+#[cfg(test)]
+mod deadargs_tests;
+#[cfg(test)]
+mod inferspace_tests;
+#[cfg(test)]
+mod narrowspace_tests;
 pub mod globalopt;
 pub mod fold;
 pub mod splitcopy;
+pub mod availableexternally;
+#[cfg(test)]
+mod availableexternally_tests;
 pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
 pub mod fixednarrow;
+pub mod addresssink;
 pub mod gepoffset;
 pub mod gvn;
 pub mod hoist;
 pub mod indvars;
 pub mod inline;
 pub mod interprocedural;
+pub mod jumpthread;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loadjoins;
@@ -54,8 +73,10 @@ pub mod rotate;
 pub mod spill;
 #[cfg(test)]
 pub mod testing;
+pub mod tailrec;
 pub mod transform;
 pub mod unroll;
+pub mod trivialunswitch;
 pub mod unswitch;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called

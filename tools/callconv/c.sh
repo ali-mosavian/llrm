@@ -8,14 +8,14 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 W="$1"; mkdir -p "$W"
-BIN="${LLRM_BIN:-$ROOT/target/release}"
+BIN="$(python3 "$ROOT/tools/llrmbin.py" bin)"
 DOSRUN="${DOSRUN:-$HOME/scratch/pr-dosbox/src/dosbox-x}"
 [[ -x "$DOSRUN" ]] || DOSRUN="$BIN/dosbox-x"
 BCLIB="${BCLIB:-$HOME/work/other/d32x/toolchains/bcpp31/lib}"
 SRC="$ROOT/tests/fixtures/callconv/c"
 cp "$SRC"/*.c "$SRC"/*.h "$SRC"/probe.asm "$SRC"/bcc/*.OBJ "$W/"
 cd "$W"
-"$BIN/jwasm" -q -c -Zg -omf -FoPROBE.OBJ probe.asm >/dev/null
+"$BIN/jwasm" -q -c -Zg $(python3 "$ROOT/tools/linkrecipe.py" x86-m16 assembler) -FoPROBE.OBJ probe.asm >/dev/null
 jobs=""
 for k in cf cn pf pn; do
     K=${k^^}
@@ -28,7 +28,7 @@ for k in cf cn pf pn; do
     near() { if [[ $k == ?n && -f $k$2.llrm.obj ]]; then x=${1:0:3}; echo "$K${x^^}X.OBJ"; else echo "$K${1^^}.OBJ"; fi; }
     link() {
         local exe=$1; shift
-        { echo "format dos"; echo "option quiet"; echo "name $exe.EXE"; echo "file '$BCLIB/C0M.OBJ'"
+        { python3 "$ROOT/tools/linkrecipe.py" x86-m16 format; echo "option quiet"; echo "name $exe.EXE"; echo "file '$BCLIB/C0M.OBJ'"
           for o in ${K}HARN.OBJ PROBE.OBJ "$@"; do echo "file '$o'"; done
           for l in FP87 MATHM CM; do echo "library '$BCLIB/$l.LIB'"; done; } > $exe.lnk
         "$BIN/jwlink" @$exe.lnk > $exe.link 2>&1 || { echo "$exe: link failed"; return 0; }

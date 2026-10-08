@@ -43,7 +43,11 @@ use crate::expand::{self, Expander};
 use crate::spill::{self, Room, Traffic};
 use crate::{dead, profit, rotate};
 
-pub struct Lsr;
+/// `size`: code size outranks speed, and a loop that has another way out is left as it is.
+#[derive(Default)]
+pub struct Lsr {
+    pub size: bool,
+}
 
 impl FunctionPass for Lsr {
     fn name(&self) -> &'static str {
@@ -52,7 +56,7 @@ impl FunctionPass for Lsr {
 
     fn run(&mut self, unit: &mut Unit, analyses: &mut Analyses) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        if reduced(unit, analyses, &outer) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if reduced(unit, analyses, &outer, self.size) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -78,29 +82,59 @@ enum Resident {
 }
 
 /// Each loop's counters chosen, innermost first; whether any changed.
-pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer) -> bool {
+pub fn reduced(unit: &mut Unit, analyses: &Analyses, outer: &Outer, size: bool) -> bool {
     let target = Target { machine: outer.target(), costs: profit::costs(outer), room: profit::registers(outer), forms: outer.target().address_forms() };
     let mut done = BTreeSet::<i64>::new();
     let mut changed = false;
     loop {
-        let facts = analyses.fresh().get::<Registers>(unit.context, unit.layout, unit.function);
+        let mut fresh = analyses.fresh();
+        let facts = fresh.get::<Registers>(unit.context, unit.layout, unit.function);
+        let shape = fresh.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let plan = {
-            let view = memory::Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(&facts);
-            let mut loops = view.shape().loops.clone();
+            let view = memory::Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(&facts).with_shape(&shape);
+            let mut loops = shape.loops.clone();
             loops.sort_by_key(|one| (one.body.len(), one.header));
             let Some(loop_) = loops.into_iter().find(|one| !done.contains(&one.header)) else { break };
             done.insert(loop_.header);
-            _plan(&view, outer, &loop_, &target)
+            let pressure = analyses.fresh().get::<spill::Pressure>(unit.context, unit.layout, unit.function);
+            _plan(&view, outer, &loop_, &target, &pressure)
         };
         let Some(plan) = plan else { continue };
+        // A loop with another way out was never counted before: its choice is held to the function's whole price, work and
+        // spill, as hoist's is, where the loop's own model has been wrong about the registers a call leaves it. Where
+        // size outranks speed it stays as it is: the setup is code, and the trips that repay it are an estimate.
+        let leaves = plan.exit.as_ref().is_some_and(|(exit, _)| exit.proof.leaves);
+        if leaves && size {
+            continue;
+        }
+        let saved = leaves.then(|| (unit.function.clone(), _function_price(unit, analyses, outer, &target)));
         if let Some(first) = _applied(unit, &plan) {
             done.insert(cfg::id(first));
+        }
+        if let Some((before, Some(kept))) = saved {
+            dead::dead(unit.context, outer.callees(), unit.function);
+            let moved_price = _function_price(unit, analyses, outer, &target);
+            llrm_support::debug!("lsr", "leaving loop: kept {kept}, moved {moved_price:?}");
+            if moved_price.is_some_and(|moved| moved > kept) {
+                *unit.function = before;
+                continue;
+            }
         }
         // What the loop no longer reads is no use for the loop around it.
         dead::dead(unit.context, outer.callees(), unit.function);
         changed = true;
     }
     changed
+}
+
+/// What the function costs as it stands: `profit::motion_price` at the frequencies lsr's own prices use.
+fn _function_price(unit: &Unit, analyses: &Analyses, outer: &Outer, target: &Target) -> Option<i64> {
+    let mut fresh = analyses.fresh();
+    let facts = fresh.get::<Registers>(unit.context, unit.layout, unit.function);
+    let shape = fresh.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+    let view = memory::Unit::within(unit.context, unit.layout, unit.function, outer).with_registers(&facts).with_shape(&shape);
+    let frequencies = profit::_loop_products_by_branch(view.context, view.metadata, &outer.globals, unit.function, Some(&profit::proven_trips(&view, &facts)))?;
+    profit::motion_price(unit.context, unit.layout, outer, unit.function, &target.costs, target.room, &frequencies)
 }
 
 /// A recurrence the loop could carry, and the phi that already does.
@@ -189,6 +223,8 @@ struct Exit {
     most: BigInt,
     /// A symbolic count needs a guard, and the loop entered at its body.
     guarded: bool,
+    /// The test is, or is made, the loop's last block: a loop with other exits is entered at its body only by a guard here.
+    fused: bool,
 }
 
 /// One loop's choice, before anything changes.
@@ -247,7 +283,7 @@ fn _preheader(function: &Function, loop_: &Loop) -> Option<BlockId> {
     }
 }
 
-fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> Option<Plan> {
+fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pressure: &spill::Pressure) -> Option<Plan> {
     let function = view.function;
     let preheader = _preheader(function, loop_)?;
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else { return None };
@@ -257,8 +293,8 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         return None;
     }
     let facts = view.registers();
-    // lsr's prices were fitted to trips multiplied, ten where unproven: see #203.
-    let frequencies = profit::_loop_products(function, Some(&profit::proven_trips(view, &facts)))?;
+    // lsr's prices were fitted to trips multiplied, ten where unproven (#203), and a branch's cold arm less.
+    let frequencies = profit::_loop_products_by_branch(view.context, view.metadata, &outer.globals, function, Some(&profit::proven_trips(view, &facts)))?;
     let frequency = |block: BlockId| frequencies.get(&cfg::id(block)).copied().unwrap_or(1);
     let exit = _exit(view, loop_, &users);
     let nested = view.shape().loops.iter().filter(|one| one.header != loop_.header && loop_.body.contains(&one.header)).cloned().collect::<Vec<_>>();
@@ -314,12 +350,12 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
     let candidates = _candidates(view, target, &users, &sites, exit.as_ref());
     let web_values = users.values.keys().copied().collect::<BTreeSet<_>>();
     let live = _live_anyway(function, loop_, &users, exit.as_ref());
-    let cells = spill::cells(function);
-    let fixed = _fixed(view, outer, loop_, target.room, &cells, &web_values, &users, exit.as_ref(), &live);
+    let cells = pressure.cells();
+    let fixed = _fixed(view, outer, loop_, target.room, pressure, &web_values, &users, exit.as_ref(), &live);
     // The web's reads are the uses the choice replaces; each use adds its own back.
     let kept = |inst: InstId| !users.web.contains(&inst);
     let traffic = spill::traffic(function, &frequencies, &cells, &target.costs, &kept, &|value| spill::words(view.context, view.layout, function, value));
-    let alive = _alive(function, loop_, &sites);
+    let alive = _alive(function, pressure.found(), loop_, &sites);
     let mut keys = Vec::new();
     let latch_block = cfg::block(latch);
     // The most backedges: the counted exit's, or what an in-bounds access allows.
@@ -351,7 +387,7 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         views: _views(view),
     };
     let current = problem.candidates.iter().enumerate().filter(|(_, one)| one.existing.is_some()).map(|(index, _)| index).collect::<BTreeSet<_>>();
-    let before = problem.total(&current);
+    let before = problem.total_of(&current, true);
     let chosen = problem.solved(&current);
     let after = chosen.as_ref().and_then(|chosen| problem.total(chosen));
     llrm_support::debug!(
@@ -367,6 +403,16 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target) -> O
         after
     );
     if llrm_support::debug::enabled("lsr") {
+        for (label, set) in [("standing", Some(current.clone())), ("chosen", chosen.clone())] {
+            let Some(set) = set else { continue };
+            for index in 0..problem.sites.len() {
+                if let Some((Some((one, fit, price)), _)) = problem.choice(&set, index) {
+                    llrm_support::debug!("lsr", "  {label} site {index}: from {one}, cost {} x{}, k {}, held {:?}, product {:?}", price.cost, problem.sites[index].frequency, fit.k, price.held, price.product);
+                } else {
+                    llrm_support::debug!("lsr", "  {label} site {index}: exit-tested");
+                }
+            }
+        }
         for (at, site) in problem.sites.iter().enumerate() {
             let op = function.instruction(site.one.user);
             llrm_support::debug!("lsr", "  site {at}: {:?} operand {} of {:?} {:?}, {:?} + {:?}*t, x{}", site.one.kind, site.one.index, op.opcode, op.result, site.one.of.start, site.one.of.step.known(), site.frequency);
@@ -439,7 +485,7 @@ fn _exit(view: &memory::Unit, loop_: &Loop, users: &Users) -> Option<Exit> {
     let function = view.function;
     // The count holds whenever the loop goes on: where another exit stops
     // the program, nothing after it reads what the counters were.
-    let proofs = induction::counted_unless_stopped(view, loop_, None, true);
+    let proofs = induction::counted_leaving(view, loop_, None, true);
     let [proof] = &proofs[..] else { return None };
     let result = function.instruction(proof.compare).result?;
     if function.users(result).iter().any(|one| one.user != proof.branch) || users.web.contains(&proof.compare) {
@@ -456,7 +502,8 @@ fn _exit(view: &memory::Unit, loop_: &Loop, users: &Users) -> Option<Exit> {
     if guarded && (proof.posttested || rotate::_shape(function, loop_).is_none()) {
         return None;
     }
-    Some(Exit { proof: proof.clone(), trips, most, guarded })
+    let fused = proof.posttested || guarded || !proof.leaves;
+    Some(Exit { proof: proof.clone(), trips, most, guarded, fused })
 }
 
 /// Whether `candidate`'s step is made before `proof`'s test where the test
@@ -522,7 +569,7 @@ fn _fixed(
     outer: &Outer,
     loop_: &Loop,
     room: Room,
-    cells: &BTreeMap<ValueId, ValueId>,
+    pressure: &spill::Pressure,
     web: &BTreeSet<ValueId>,
     users: &Users,
     exit: Option<&Exit>,
@@ -530,24 +577,19 @@ fn _fixed(
 ) -> BTreeMap<i64, Vec<spill::Site>> {
     let function = view.function;
     let symbols = _symbols(users, exit);
-    let counted = |value: ValueId| spill::integer(view.context, function, value) && !web.contains(&value) && !(symbols.contains(&value) && !live.contains(&value));
-    let found = liveness::live(function);
     let across = |inst: InstId| spill::kept_across(outer, view.context, function, inst);
-    let transient = |inst: InstId, live: &BTreeSet<ValueId>| spill::transient(view.context, view.layout, function, inst, room, live);
-    let segment = |value: ValueId| spill::segment_view(view.context, view.layout, function, value);
-    let addressed = spill::addressed(function);
-    let routed = |value: ValueId| addressed.contains(&value);
-    loop_.body.iter().map(|&at| (at, spill::sites(function, &found, cfg::block(at), room, &across, &transient, cells, &counted, &segment, &routed))).collect()
+    let model = spill::View::over(pressure, view.context, view.layout, function, room, &across);
+    let hide = |value: ValueId| web.contains(&value) || (symbols.contains(&value) && !live.contains(&value));
+    loop_.body.iter().map(|&at| (at, model.sites(cfg::block(at), &hide))).collect()
 }
 
 /// Where each site's value is live in the loop, before each instruction.
-fn _alive(function: &Function, loop_: &Loop, sites: &[Site]) -> Vec<BTreeMap<i64, Vec<bool>>> {
-    let found = liveness::live(function);
+fn _alive(function: &Function, found: &liveness::Liveness, loop_: &Loop, sites: &[Site]) -> Vec<BTreeMap<i64, Vec<bool>>> {
     sites
         .iter()
         .map(|site| {
             let own = |value: ValueId| value == site.one.value;
-            loop_.body.iter().map(|&at| (at, liveness::live_points(function, &found, cfg::block(at)).into_iter().map(|(_, before, _)| before.iter().any(|&one| own(one))).collect())).collect()
+            loop_.body.iter().map(|&at| (at, liveness::live_points(function, found, cfg::block(at)).into_iter().map(|(_, before, _)| before.iter().any(|&one| own(one))).collect())).collect()
         })
         .collect()
 }
@@ -651,7 +693,7 @@ fn _frames(function: &Function) -> BTreeSet<ValueId> {
 /// The function's far views of a segment, which the segment registers hold.
 fn _views(view: &memory::Unit) -> BTreeSet<ValueId> {
     let function = view.function;
-    function.walk().filter_map(|(_, inst)| function.instruction(inst).result).filter(|&value| spill::segment_view(view.context, view.layout, function, value)).collect()
+    function.walk().filter_map(|(_, inst)| function.instruction(inst).result).filter(|&value| spill::segment_view(view.context, view.layout, view.spaces(), function, value)).collect()
 }
 
 /// How many registers of an address cannot be where it needs them: each
@@ -776,20 +818,37 @@ fn _latch_arm(function: &Function, phi: ValueId, latch: BlockId) -> Option<Opera
     function.instruction(inst).operands.chunks(2).find(|pair| pair[1] == Operand::Block(latch)).map(|pair| pair[0])
 }
 
-/// What `k * r` costs a trip: nothing, a negation, a shift or a multiply.
+/// What `k * r` costs a trip: nothing, a negation, a shift or a multiply. On a two-address target the
+/// candidate stays live, so a negation or a shift is made in a copy of it, unless `lea` scales it.
 fn _scaling(target: &Target, k: &BigInt) -> i64 {
     let costs = &target.costs;
     let magnitude = BigInt::from(k.magnitude().clone());
+    let copy = if target.room.two_address && !_leas(target, k) { costs.r#move } else { 0 };
     if *k == BigInt::from(1) || *k == BigInt::from(0) {
         0
     } else if *k == BigInt::from(-1) {
-        costs.add
+        costs.add + copy
     } else if (&magnitude & (&magnitude - 1)) == BigInt::from(0) {
-        costs.shift + if *k < BigInt::from(0) { costs.add } else { 0 }
+        costs.shift + copy + if *k < BigInt::from(0) { costs.add } else { 0 }
     } else {
         let multiply = magnitude.to_i64().map_or(costs.multiply, |factor| target.machine.multiply_by(factor));
         multiply + if *k < BigInt::from(0) { costs.add } else { 0 }
     }
+}
+
+/// What `k * r` costs where a use adds `rest`, and whether the use is `rest - r`: one `sub` from a copy of
+/// `rest` (the copy is the use's, as `made` charges it), with no negation of `r` and no product to hold.
+/// Priced as a negation, a copy and an add, it made a counter that rebuilds `c - r` look dearer than it is
+/// (#721: Nib -Os queens, 34% in the model, tied in the code).
+fn _scaled(target: &Target, k: &BigInt, added: bool) -> (i64, bool) {
+    let subtracted = added && *k == BigInt::from(-1);
+    (if subtracted { 0 } else { _scaling(target, k) }, subtracted)
+}
+
+/// Whether one `lea` makes `k * r + rest + constant`: where any register may be a base and an index
+/// (`[bx+si]` is no `lea` of `ax`), and its scales hold `k`.
+fn _leas(target: &Target, k: &BigInt) -> bool {
+    target.forms.iter().any(|form| form.bases.is_none() && form.indices.is_none() && (*k == BigInt::from(1) || k.to_i64().is_some_and(|scale| scale > 1 && form.scales.contains(&scale))))
 }
 
 /// `site`'s price from `candidate`.
@@ -933,16 +992,22 @@ fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, cand
             if let Some((shift, _, inverse)) = &fit.trip {
                 price.cost += costs.add + if *shift != 0 { costs.shift } else { 0 } + if *inverse != BigInt::from(1) { costs.multiply + costs.add } else { 0 };
             }
-            price.cost += _scaling(target, &fit.k);
-            if fit.trip.is_none() && _scaling(target, &fit.k) != 0 {
-                price.product = Some((small(&fit.k), _scaling(target, &fit.k), block));
-            }
             let pointer = candidate.of.pointer.is_some();
             let symbolic = !fit.rest.is_zero() || matches!(fit.base, Some(Operand::Value(_)));
+            let (scaling, subtracted) = _scaled(target, &fit.k, fit.trip.is_none() && (symbolic || fit.constant != BigInt::from(0)));
+            price.cost += scaling;
+            if fit.trip.is_none() && scaling != 0 {
+                price.product = Some((small(&fit.k), scaling, block));
+            }
             // A pointer made from an integer, in a carrying space, carries into its selector.
+            // A two-address target makes a result in its first operand's register: the candidate stays
+            // live, as a counter does, so a form no address takes (a negation, a general scale) is
+            // copied first. `lea` makes `cand * k + rest + constant` in one, where its scales hold `k`.
+            // (A scaled one is made in a copy already, which the add then makes its result in.)
+            let copy = if target.room.two_address && (subtracted || fit.k == BigInt::from(1) && !_leas(target, &fit.k)) { costs.r#move } else { 0 };
             let made = |constant| {
                 let ty = view.function.value(site.one.value).ty;
-                if pointer { costs.add } else { profit::advance(view.context, view.layout, ty, costs.add, constant, costs) }
+                copy + if pointer { costs.add } else { profit::advance(view.context, view.layout, ty, costs.add, constant, costs) }
             };
             if symbolic {
                 let whole = fit.rest.plus(&Scev::constant(fit.constant.clone(), fit.rest.width));
@@ -996,7 +1061,9 @@ fn _exit_price(target: &Target, exit: &Exit, candidate: &Candidate, keys: &mut V
         return None;
     }
     let end = _end(exit, candidate);
-    if end.is_zero() && candidate.of.pointer.is_none() {
+    // Free only where the step's flags are the test's: the backend fuses a zero test with the step that precedes it
+    // along a single path: a test at the latch, not one at the head of a loop that has other exits and no guard to enter at its body.
+    if end.is_zero() && candidate.of.pointer.is_none() && exit.fused {
         return Some((0, None));
     }
     let key = (!end.terms.is_empty() || candidate.of.pointer.is_some()).then(|| _interned(keys, (candidate.of.pointer, end)));
@@ -1084,6 +1151,30 @@ impl Problem<'_> {
 
     /// The cost of `set`, where every use has a fit in it.
     fn total(&self, set: &BTreeSet<usize>) -> Option<i64> {
+        self.total_of(set, false)
+    }
+
+    /// What site `index` costs from a counter of `set` that is already
+    /// there, extended: the extension is paid by the use, the rest is what the
+    /// use needs of a counter of that value at its width.
+    fn widened(&self, set: &BTreeSet<usize>, index: usize) -> Option<i64> {
+        let site = &self.sites[index];
+        set.iter()
+            .filter(|&&one| self.candidates[one].existing.is_some() && self.candidates[one].of.pointer.is_none() && self.candidates[one].of.width() < site.one.of.width())
+            .flat_map(|&one| {
+                let have = &self.candidates[one].of;
+                (0..self.candidates.len()).filter(move |&wide| {
+                    let of = &self.candidates[wide].of;
+                    of.pointer.is_none() && of.width() == site.one.of.width() && of.start.known().is_some() && of.start.known() == have.start.known() && of.step.known().is_some() && of.step.known() == have.step.known()
+                })
+            })
+            .filter_map(|wide| self.fits[index][wide].as_ref().map(|(_, price)| price.cost))
+            .min()
+    }
+
+    /// `total`; with `standing`, a wider use no counter of `set` fits costs
+    /// what the loop pays for it now, `widened`: the loop as it stands.
+    fn total_of(&self, set: &BTreeSet<usize>, standing: bool) -> Option<i64> {
         if set.is_empty() {
             return None;
         }
@@ -1105,7 +1196,15 @@ impl Problem<'_> {
         let mut reads = BTreeMap::<Resident, i64>::new();
 
         for (index, site) in self.sites.iter().enumerate() {
-            match self.choice(set, index)? {
+            let choice = match self.choice(set, index) {
+                Some(choice) => choice,
+                None if standing && self.widened(set, index).is_some() => {
+                    cost += (costs.extend + self.widened(set, index)?) * site.frequency;
+                    continue;
+                }
+                None => return None,
+            };
+            match choice {
                 (_, Some((one, (exit, key)))) => {
                     cost += exit * site.frequency;
                     *reads.entry(Resident::Counter(one)).or_default() += site.frequency;

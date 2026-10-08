@@ -125,7 +125,7 @@ fn a_rewound_loop_keeps_its_count_for_rotate() {
 fn rewinding_the_corpus_loses_no_trip_count() {
     let later = OperationCosts { add: 1, r#move: 1, load: 1, store: 1, memory_update: 1, ..OperationCosts::default() };
     let counts = |context: &Context, layout: &DataLayout, function: &Function, outer: &Outer| {
-        let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer);
+        let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::within(context, layout, function, outer));
         let facts = llrm_analysis::consts::known(&unit, None, None, None);
         loops::loops(&cfg::graph(function), function.entry().map(cfg::id))
             .into_iter()
@@ -136,7 +136,7 @@ fn rewinding_the_corpus_loses_no_trip_count() {
     for (name, mut module) in llrm_analysis::testing::corpus() {
         // Emitted counters live in allocas until promoted.
         managed(&mut module, crate::promote::Promote);
-        managed(&mut module, crate::lsr::Lsr);
+        managed(&mut module, crate::lsr::Lsr::default());
         let (layout, outer) = (layout(&module), Outer::of(&module, None));
         let analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
         let names = crate::testing::bodies(&module).into_iter().filter_map(|id| module.global(id).name.clone()).collect::<Vec<_>>();
@@ -154,4 +154,125 @@ fn rewinding_the_corpus_loses_no_trip_count() {
         }
     }
     assert!(fired > 0, "the corpus rewinds somewhere");
+}
+
+// ------------------------------------------------------------------ widened
+
+/// `for (unsigned short i = 0; i < n; ++i) a[i] = 0` on a 32-bit address:
+/// the counter's `zext` to the index width is a conversion a trip and its
+/// counted-loop proof was 16 bits against the pointer's 32, so `fill` and
+/// `lsr` found no matching counter (m32 sieve, 19277 executed).
+fn clearing(layout: &str) -> String {
+    format!(
+        "target datalayout = \"{layout}\"
+
+define i32 @f(i16 %n) {{
+b0:
+  %buf = alloca [64 x i8]
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %go = icmp ult i16 %i, %n
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %w = zext i16 %i to i32
+  %p = getelementptr inbounds i8, ptr %buf, i32 %w
+  store i8 1, ptr %p
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i32 0
+}}
+"
+    )
+}
+
+fn widening(text: &str) -> (bool, String) {
+    let (changed, module) = through(text, &[&[0], &[1], &[7], &[64]], |context, layout, function, analyses| super::widened(context, layout, function, analyses.outer()));
+    (changed, printed(&module))
+}
+
+#[test]
+fn a_counter_extended_to_the_index_width_is_that_wide() {
+    let (changed, after) = widening(&clearing("e-p:32:32-n8:16:32"));
+    assert!(changed, "{after}");
+    assert!(after.contains("icmp ult i32 %widen.iv"), "{after}");
+    assert!(!after.contains("zext i16 %i to i32"), "{after}");
+}
+
+#[test]
+fn a_counter_extended_past_the_index_width_stays() {
+    // 16-bit addresses (a segment's offset): `zext` to 32 is no index.
+    let text = clearing("e-p:16:16-n8:16:32").replace("i32 %w", "i16 %w16").replace("zext i16 %i to i32", "zext i16 %i to i32\n  %w16 = trunc i32 %w to i16");
+    let (changed, after) = widening(&text);
+    assert!(!changed, "{after}");
+}
+
+/// bench/nbody: `for (unsigned short j = i + 1; j < 4; ++j) x[j]`: a start the loop does not define.
+/// The narrow counter was `inc bx; movzx esi,bx; cmp bx,4` each trip (38 instructions an
+/// iteration against gcc's 27); its zero extension is the counter of the index's width from the
+/// extended start.
+#[test]
+fn a_counter_from_a_start_the_loop_does_not_define_is_widened() {
+    let text = clearing("e-p:32:32-n8:16:32").replace("define i32 @f(i16 %n) {\nb0:", "define i32 @f(i16 %n) {\nb0:\n  %s = add i16 %n, 1").replace("[ 0, %b0 ]", "[ %s, %b0 ]").replace("icmp ult i16 %i, %n", "icmp ult i16 %i, 4");
+    let (changed, after) = widening(&text);
+    assert!(changed, "{after}");
+    assert!(after.contains("icmp ult i32 %widen.iv") && after.contains("zext i16 %s to i32"), "{after}");
+    assert!(!after.contains("zext i16 %i to i32"), "{after}");
+}
+
+/// Each loop asked what is known of the body without memory and derived it again: `widened` over a body of
+/// loops derived it once for each (#560). It derives it once for the body.
+#[test]
+fn what_is_known_of_a_body_is_derived_once_for_all_its_loops() {
+    let text = "define i32 @f(i32 %n) {
+b0:
+  br label %h1
+
+h1:
+  %i1 = phi i32 [ 0, %b0 ], [ %x1, %l1 ]
+  %g1 = icmp ult i32 %i1, %n
+  br i1 %g1, label %l1, label %p2
+
+l1:
+  %x1 = add i32 %i1, 1
+  br label %h1
+
+p2:
+  br label %h2
+
+h2:
+  %i2 = phi i32 [ 0, %p2 ], [ %x2, %l2 ]
+  %g2 = icmp ult i32 %i2, %n
+  br i1 %g2, label %l2, label %p3
+
+l2:
+  %x2 = add i32 %i2, 1
+  br label %h2
+
+p3:
+  br label %h3
+
+h3:
+  %i3 = phi i32 [ 0, %p3 ], [ %x3, %l3 ]
+  %g3 = icmp ult i32 %i3, %n
+  br i1 %g3, label %l3, label %done
+
+l3:
+  %x3 = add i32 %i3, 1
+  br label %h3
+
+done:
+  ret i32 0
+}
+";
+    let mut module = parsed(text);
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let before = llrm_analysis::consts::register_derivations();
+    assert!(!super::widened(context, &layout, function, &outer), "nothing to widen");
+    assert!(llrm_analysis::consts::register_derivations() - before <= 1, "{} derivations for three loops", llrm_analysis::consts::register_derivations() - before);
 }

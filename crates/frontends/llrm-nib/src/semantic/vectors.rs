@@ -17,7 +17,7 @@ impl TypeRegistry {
             id: type_id,
             name,
             kind: "pointer",
-            width: 2,
+            width: self.sizes.near,
             signed: None,
             evaluation: "none",
             element: Some(element_id),
@@ -70,18 +70,18 @@ impl FunctionCompiler<'_> {
                 .ok_or_else(|| Diagnostic::new(span, "an empty list needs a vec type"))?,
         };
         let element = self.types.sequence_element(type_name).expect("a vec type");
-        let size = hir::Operand::Constant(U16, i64::from(self.types.width(element.id())));
+        let size = hir::Operand::Constant(self.word_id(), i64::from(self.types.width(element.id())));
         let vector = match expression {
             Expr::Array(items, _) if items.is_empty() => self.empty(type_name),
             Expr::Array(items, _) => {
-                let count = hir::Operand::Constant(U16, items.len() as i64);
+                let count = hir::Operand::Constant(self.word_id(), items.len() as i64);
                 let empty = self.empty(type_name);
                 let vector = self.grow(empty, type_name, count, size);
                 for (index, item) in items.iter().enumerate() {
                     let at = self.element_pointer(
                         vector,
                         element,
-                        hir::Operand::Constant(U16, index as i64),
+                        hir::Operand::Constant(self.word_id(), index as i64),
                     );
                     self.store_element(at, element, item)?;
                 }
@@ -106,7 +106,7 @@ impl FunctionCompiler<'_> {
                 };
                 let value = self.coerced(value, scalar)?;
                 let value = required(value, span)?;
-                let count = self.coerced(count, TypeName::U16)?;
+                let count = self.coerced(count, self.word())?;
                 let count = required(count, span)?;
                 let empty = self.empty(type_name);
                 let vector = self.grow(empty, type_name, count.clone(), size);
@@ -199,9 +199,17 @@ impl FunctionCompiler<'_> {
                 continue;
             };
             let item = match end {
-                Some(_) => ElementType::Scalar(
-                    self.expression_type_hint(iterable).unwrap_or(TypeName::I16),
-                ),
+                // A range's variable is the common type of its bounds, as the loop makes it: a
+                // literal start takes the end's (`0..xs.len` is a usize, not an i16).
+                Some(end) => {
+                    let (start, stop) = (self.expression_type_hint(iterable), self.expression_type_hint(end));
+                    let one = match (start, stop) {
+                        (Some(start), Some(stop)) => self.rules.common(start, stop).unwrap_or(start),
+                        (Some(one), None) | (None, Some(one)) => one,
+                        (None, None) => TypeName::I16,
+                    };
+                    ElementType::Scalar(one)
+                }
                 None => self.iterated_item(iterable)?,
             };
             let scope = self
@@ -309,14 +317,14 @@ impl FunctionCompiler<'_> {
     }
 
     pub(super) fn length(&mut self, vector: u32) -> hir::Operand {
-        let length = self.value(TypeName::U16);
+        let length = self.value(self.word());
         self.emit(
             "load",
             vec![length],
             vec![hir::Operand::DescriptorPlace {
                 base: vector,
                 field: "length",
-                type_id: U16,
+                type_id: self.word_id(),
             }],
             None,
         );
@@ -410,7 +418,7 @@ impl FunctionCompiler<'_> {
         let (start, end) = match range {
             None => (None, length),
             Some((start, end, range_span)) => {
-                let mut bound = |one: &Expr| self.coerced(one, TypeName::U16).and_then(|one| required(one, span));
+                let mut bound = |one: &Expr| self.coerced(one, self.word()).and_then(|one| required(one, span));
                 let start = start.map(&mut bound).transpose()?;
                 let end = match end.map(&mut bound).transpose()? {
                     Some(end) => {
@@ -431,9 +439,9 @@ impl FunctionCompiler<'_> {
                 let width = self.types.width(element.id());
                 let data = self.indexed_pointer(data, start.clone(), width, span)?;
                 let count = match (&start, &end) {
-                    (hir::Operand::Constant(_, first), hir::Operand::Constant(_, last)) => hir::Operand::Constant(U16, last - first),
+                    (hir::Operand::Constant(_, first), hir::Operand::Constant(_, last)) => hir::Operand::Constant(self.word_id(), last - first),
                     _ => {
-                        let count = self.value(TypeName::U16);
+                        let count = self.value(self.word());
                         self.emit("sub", vec![count], vec![end, start], None);
                         hir::Operand::Value(count)
                     }
@@ -463,7 +471,7 @@ impl FunctionCompiler<'_> {
         let index = self
             .emit_builtin(
                 rt::BUFFER_SHRINK,
-                vec![hir::Operand::Value(vector), hir::Operand::Constant(U16, 1)],
+                vec![hir::Operand::Value(vector), hir::Operand::Constant(self.word_id(), 1)],
             )
             .expect("a length");
         Ok((vector, self.element_pointer(vector, element, index)))
@@ -544,7 +552,7 @@ impl FunctionCompiler<'_> {
             return Ok(None);
         };
         let element = self.types.sequence_element(type_name).expect("a sequence type");
-        let size = hir::Operand::Constant(U16, i64::from(self.types.width(element.id())));
+        let size = hir::Operand::Constant(self.word_id(), i64::from(self.types.width(element.id())));
         match (name, arguments) {
             ("push", [value]) => {
                 let settled = self.settled_failure(value, span)?;
@@ -555,7 +563,7 @@ impl FunctionCompiler<'_> {
                 let vector = self.value(type_name);
                 self.emit("load", vec![vector], vec![place.clone()], None);
                 let index = self.length(vector);
-                let grown = self.grow(vector, type_name, hir::Operand::Constant(U16, 1), size);
+                let grown = self.grow(vector, type_name, hir::Operand::Constant(self.word_id(), 1), size);
                 self.emit(
                     "store",
                     Vec::new(),
@@ -618,7 +626,7 @@ impl FunctionCompiler<'_> {
     /// A heap copy of a string or vec, and of everything its elements own.
     pub(super) fn emit_copy(&mut self, operand: hir::Operand, type_name: TypeName) -> hir::Operand {
         let element = self.types.owned_element(type_name).expect("an owning buffer");
-        let size = hir::Operand::Constant(U16, i64::from(self.types.width(element.id())));
+        let size = hir::Operand::Constant(self.word_id(), i64::from(self.types.width(element.id())));
         let copy = self
             .emit_builtin(rt::BUFFER_CLONE, vec![operand, size])
             .expect("a pointer");
@@ -652,20 +660,20 @@ impl FunctionCompiler<'_> {
         body: impl FnOnce(&mut Self, hir::Operand),
     ) {
         let name = format!("$index{}", self.next_place);
-        let index_place = self.place(&name, TypeName::U16, true);
+        let index_place = self.place(&name, self.word(), true);
         self.emit(
             "store",
             Vec::new(),
             vec![
                 hir::Operand::Place(index_place),
-                hir::Operand::Constant(U16, 0),
+                hir::Operand::Constant(self.word_id(), 0),
             ],
             None,
         );
         let (condition, exit) = (self.block(), self.block());
         self.terminate(jump(condition));
         self.current = condition;
-        let index = self.value(TypeName::U16);
+        let index = self.value(self.word());
         self.emit(
             "load",
             vec![index],
@@ -674,11 +682,11 @@ impl FunctionCompiler<'_> {
         );
         self.branch_unless("below", hir::Operand::Value(index), count, exit);
         body(self, hir::Operand::Value(index));
-        let next = self.value(TypeName::U16);
+        let next = self.value(self.word());
         self.emit(
             "add",
             vec![next],
-            vec![hir::Operand::Value(index), hir::Operand::Constant(U16, 1)],
+            vec![hir::Operand::Value(index), hir::Operand::Constant(self.word_id(), 1)],
             None,
         );
         self.emit(

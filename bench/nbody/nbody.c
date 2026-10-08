@@ -1,3 +1,4 @@
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32
 /* Four-body scalar kernel; result quantization is part of the oracle. */
 extern void report(long value);
 

@@ -1,4 +1,4 @@
-' RUN: llrm-qb %s -O2 --cpu 486 -fsanitize=bounds -S -o /dev/stdout
+' RUN: llrm-qb %s -O2 -march=i486 -fsanitize=bounds -S -o /dev/stdout
 ' Under -fsanitize=bounds, B$UBND stays where it can raise error 9, on the
 ' cold path: a parameter array, and an array after ERASE.
 ' CHECK-LABEL: PARAM proc

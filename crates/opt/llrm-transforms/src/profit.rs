@@ -24,7 +24,6 @@ use llrm_analysis::branchprob;
 use llrm_analysis::cfg;
 use llrm_analysis::effects::Declarations;
 use llrm_analysis::consts::Known;
-use llrm_analysis::liveness::Liveness;
 use llrm_analysis::{induction, memory};
 
 use crate::spill::{self, Room};
@@ -88,6 +87,8 @@ pub fn operation(context: &Context, layout: &DataLayout, function: &Function, ca
             advance(context, layout, function.value(instruction.result?).ty, costs.address, constant, costs)
         }
         Opcode::Alloca { .. } => costs.address,
+        // Lowered as a jump around a move, the compare priced on its own.
+        Opcode::Select => costs.branch + costs.r#move,
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub) | Opcode::FNeg | Opcode::FCmp(_) => costs.float_add,
         Opcode::Binary(BinaryOp::FMul) => costs.float_multiply,
         Opcode::Binary(BinaryOp::FDiv) => costs.float_divide,
@@ -103,7 +104,9 @@ pub fn operation(context: &Context, layout: &DataLayout, function: &Function, ca
         }
         Opcode::Call(_) | Opcode::Invoke(_) => costs.call,
         Opcode::Ret | Opcode::Resume | Opcode::Unreachable => costs.return_,
-        Opcode::Br | Opcode::Switch => costs.branch,
+        Opcode::Br => costs.branch,
+        // Lowered as a compare and a jump for each case, then the jump for the rest.
+        Opcode::Switch => costs.branch + (instruction.operands.len() as i64 - 2) / 2 * (costs.add + costs.branch),
         _ => return None,
     };
     Some(price)
@@ -116,6 +119,22 @@ pub fn _block(context: &Context, layout: &DataLayout, function: &Function, calle
 /// Semantic work present once in the body, independent of frequency.
 pub fn r#static(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts) -> Option<i64> {
     function.layout().iter().map(|&block| _block(context, layout, function, callees, cfg::id(block), costs)).sum()
+}
+
+/// Where `loop_` stands in the unit's function: how often it is entered for each entry of the function, in
+/// `UNIT`ths (what its outside predecessors weigh), and whether it calls a function that may touch memory.
+pub fn site(unit: &memory::Unit, outer: &Outer, loop_: &llrm_analysis::graph::loops::Loop) -> llrm_analysis::peelsize::Site {
+    let trips = proven_trips(unit, &unit.registers());
+    let entries = match _frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(&trips)) {
+        Some(frequency) => cfg::graph(unit.function).iter().filter(|block| !loop_.body.contains(&block.at) && block.succ.contains(&loop_.header)).map(|block| frequency.get(&block.at).copied().unwrap_or(UNIT)).sum::<i64>().max(1),
+        None => UNIT,
+    };
+    let callees = outer.callees();
+    let writes = unit.function.walk().filter(|(block, _)| loop_.body.contains(&cfg::id(*block))).any(|(_, inst)| {
+        unit.calls_out(inst) && !callee(unit.context, unit.function, inst).and_then(|id| callees.get(&id)).is_some_and(|summary| summary.effects == llrm_mir::memory::Effects::NONE)
+    });
+    llrm_support::debug!("peelsite", "callees of the loop at b{}: {:?}", loop_.header, unit.function.walk().filter(|(block, _)| loop_.body.contains(&cfg::id(*block))).filter(|(_, inst)| unit.calls_out(*inst)).map(|(_, inst)| callee(unit.context, unit.function, inst).map(|id| (id, callees.get(&id).map(|one| one.effects)))).collect::<Vec<_>>());
+    llrm_analysis::peelsize::Site { entries, writes }
 }
 
 /// Whether the target prices every instruction here, which a copy's cost needs.
@@ -184,6 +203,25 @@ pub fn _loop_products(function: &Function, trips: Option<&IndexMap<i64, i64>>) -
     Some(frequency)
 }
 
+/// `_loop_products`, each block weighed by the share of its innermost loop's
+/// trips that reach it, as `_frequencies` finds the share: the latch runs once
+/// a trip, so a block behind a branch runs `odds[block] / odds[latch]` of them
+/// and a block every trip passes through weighs the whole product, as before.
+pub fn _loop_products_by_branch(context: &Context, metadata: &[llrm_mir::module::MetadataNode], globals: &Declarations, function: &Function, trips: Option<&IndexMap<i64, i64>>) -> Option<BTreeMap<i64, i64>> {
+    let mut weight = _loop_products(function, trips)?;
+    let odds = _frequencies(context, metadata, globals, function, trips)?;
+    let loops = cfg::Shape::of(function).loops;
+    for (at, count) in weight.iter_mut() {
+        let Some(innermost) = loops.iter().filter(|one| one.body.contains(at)).min_by_key(|one| one.body.len()) else { continue };
+        let trip: i64 = innermost.latches.iter().map(|latch| odds.get(latch).copied().unwrap_or(UNIT)).sum();
+        let here = odds.get(at).copied().unwrap_or(UNIT);
+        if here < trip {
+            *count = (*count * here / trip).max(1);
+        }
+    }
+    Some(weight)
+}
+
 /// Profile-free expected work at `frequency`, a block's executions per entry
 /// (`_frequencies`, or the older `_loop_products`).
 pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts, frequency: &BTreeMap<i64, i64>) -> Option<i64> {
@@ -197,62 +235,24 @@ pub fn weighted(context: &Context, layout: &DataLayout, function: &Function, cal
 
 /// What fitting MIR within `room` spills, a call keeping what `across`
 /// says, as the one spill model (`spill`) forecasts it.
-#[allow(clippy::too_many_arguments)]
-pub fn spill_forecast(
-    context: &Context,
-    layout: &DataLayout,
-    function: &Function,
-    costs: &OperationCosts,
-    room: Room,
-    across: &dyn Fn(InstId) -> i64,
-    frequency: &BTreeMap<i64, i64>,
-    found: &Liveness,
-) -> Option<spill::Forecast<ValueId>> {
+pub fn spill_forecast(context: &Context, layout: &DataLayout, function: &Function, costs: &OperationCosts, room: Room, across: &dyn Fn(InstId) -> i64, frequency: &BTreeMap<i64, i64>) -> Option<spill::Forecast<ValueId>> {
     if !room.priced() {
         return Some(spill::Forecast { cost: 0, spilled: BTreeSet::new(), peak: 0 });
     }
-    let cells = spill::cells(function);
-    let traffic = spill::traffic(function, frequency, &cells, costs, &|_| true, &|value| spill::words(context, layout, function, value));
-    let counted = |value: ValueId| spill::integer(context, function, value);
-    let addressed = spill::addressed(function);
-    let points = function.layout().iter().flat_map(|&block| spill::sites(function, found, block, room, across, &|inst, live| spill::transient(context, layout, function, inst, room, live), &cells, &counted, &|value| spill::segment_view(context, layout, function, value), &|value| addressed.contains(&value))).flat_map(spill::Site::points);
-    Some(spill::forecast(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs))))
-}
-
-/// Whole-live-range traffic needed to fit MIR within `room`, a call
-/// keeping what `across` says, as the one spill model (`spill`) prices it.
-#[allow(clippy::too_many_arguments)]
-pub fn spill_risk(
-    context: &Context,
-    layout: &DataLayout,
-    function: &Function,
-    costs: &OperationCosts,
-    room: Room,
-    across: &dyn Fn(InstId) -> i64,
-    frequency: &BTreeMap<i64, i64>,
-    found: &Liveness,
-) -> Option<i64> {
-    spill_forecast(context, layout, function, costs, room, across, frequency, found).map(|one| one.cost)
+    Some(spill::View::of(context, layout, function, room, across).forecast(costs, frequency))
 }
 
 /// Semantic work plus finite-capacity whole-range spill traffic.
-pub fn pressure_adjusted(
-    context: &Context,
-    layout: &DataLayout,
-    function: &Function,
-    callees: &Callees,
-    costs: &OperationCosts,
-    room: Room,
-    across: &dyn Fn(InstId) -> i64,
-    frequency: &BTreeMap<i64, i64>,
-    found: &Liveness,
-) -> Option<i64> {
-    let work = weighted(context, layout, function, callees, costs, frequency);
-    let pressure = spill_risk(context, layout, function, costs, room, across, frequency, found);
-    match (work, pressure) {
-        (Some(work), Some(pressure)) => Some(work + pressure),
-        _ => None,
-    }
+#[allow(clippy::too_many_arguments)]
+pub fn pressure_adjusted(context: &Context, layout: &DataLayout, function: &Function, callees: &Callees, costs: &OperationCosts, room: Room, across: &dyn Fn(InstId) -> i64, frequency: &BTreeMap<i64, i64>) -> Option<i64> {
+    let work = weighted(context, layout, function, callees, costs, frequency)?;
+    Some(work + spill_forecast(context, layout, function, costs, room, across, frequency)?.cost)
+}
+
+/// What `function` costs at `frequency` under `costs` and `room`: the one
+/// price a motion is judged by, with the motion and without it.
+pub fn motion_price(context: &Context, layout: &DataLayout, outer: &Outer, function: &Function, costs: &OperationCosts, room: Room, frequency: &BTreeMap<i64, i64>) -> Option<i64> {
+    pressure_adjusted(context, layout, function, outer.callees(), costs, room, &|inst| spill::kept_across(outer, context, function, inst), frequency)
 }
 
 #[cfg(test)]

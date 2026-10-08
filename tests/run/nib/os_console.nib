@@ -1,0 +1,13 @@
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32
+# The OS layer's console write puts exactly `length` bytes on standard output: no newline of its own.
+import os
+
+fn main() -> i16:
+    let text = "ab\r\ncd"
+    unsafe:
+        let chars: *far char = &text
+        let bytes = chars.cast[u8]()
+        os.write(bytes, 4)
+        os.write(bytes.offset(4), 2)
+    print("")
+    return 0

@@ -104,6 +104,11 @@ impl EscapedBefore {
         self.at.get(at).map(|bits| bits.iter().map(|one| self.objects[one].clone()).collect())
     }
 
+    /// What escaped before `at`, unnamed: two instructions with equal bits have the same objects.
+    pub fn bits(&self, at: &InstId) -> Option<&Bits> {
+        self.at.get(at)
+    }
+
     /// Whether the access `reference` at `at`, through a pointer no fact
     /// follows or one only to what escaped, cannot reach `cell`: every byte
     /// of it is in frame objects not escaped before `at`. LLVM's
@@ -148,7 +153,7 @@ pub fn nonnull_by_definition(unit: &Unit, value: ValueId) -> Option<bool> {
     // first bytes are the runtime's); a far one may be 0000:0000.
     if let ValueDef::Argument(at) = unit.function.value(value).def {
         let facts = Facts::param(unit.function, at as usize);
-        let near = unit.operand_type(Operand::Value(value)).is_some_and(|ty| matches!(unit.context.types.get(ty), Type::Pointer(0)));
+        let near = unit.operand_type(Operand::Value(value)).is_some_and(|ty| matches!(unit.context.types.get(ty), Type::Pointer(space) if *space == unit.spaces().near));
         if facts.non_null() || near && facts.dereferenceable().is_some_and(|bytes| bytes > 0) {
             return Some(true);
         }
@@ -239,6 +244,23 @@ pub struct Summary {
     pub captures: BTreeSet<Option<Identity>>,
     pub unknown_read: bool,
     pub unknown_write: bool,
+    /// The `!tbaa` access types of the writes `unknown_write` stands for, where
+    /// every one is a pointer no fact follows and has a type: a store of one type cannot land on a load of a
+    /// type apart from it, however unplaced its pointer. None: some has none.
+    pub unknown_write_types: Option<BTreeSet<Access>>,
+}
+
+/// An access type: its name and its ancestors', as `MemRef::typed` and `lineage`.
+pub type Access = (String, Vec<String>);
+
+/// The types of two writes' unplaced stores together.
+fn merged_types(one: (bool, &Option<BTreeSet<Access>>), other: (bool, &Option<BTreeSet<Access>>)) -> Option<BTreeSet<Access>> {
+    match (one, other) {
+        ((false, _), (_, types)) => types.clone(),
+        ((_, types), (false, _)) => types.clone(),
+        ((true, Some(one)), (true, Some(other))) => Some(one.union(other).cloned().collect()),
+        _ => None,
+    }
 }
 
 impl Summary {
@@ -272,6 +294,7 @@ impl Summary {
             captures: self.captures.clone(),
             unknown_read: self.unknown_read,
             unknown_write: self.unknown_write,
+            unknown_write_types: self.unknown_write_types.clone(),
         }
     }
 }
@@ -403,6 +426,19 @@ fn _borrowed(unit: &Unit, at: InstId, index: usize) -> bool {
 fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual: &[Provenance], callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
     let unit = &procedure.unit;
     let allowed = _allowed(unit, at);
+    let (mut reads, mut writes) = _through_arguments(&allowed, actual);
+    let (other_reads, other_writes) = _unknown_other(unit, facts, at, callbacks)?;
+    if allowed.other.reads {
+        reads.extend(other_reads);
+    }
+    if allowed.other.writes {
+        writes.extend(other_writes);
+    }
+    Ok((reads, writes))
+}
+
+/// What a callee nobody summarized may read and write through each of `actual`, as `allowed` says.
+fn _through_arguments(allowed: &Allowed, actual: &[Provenance]) -> (BTreeSet<Slice>, BTreeSet<Slice>) {
     let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
     for (index, one) in actual.iter().enumerate() {
         let through = allowed.through.get(index).copied().unwrap_or(allowed.arguments);
@@ -414,19 +450,13 @@ fn _unknown_visible(procedure: &Procedure, facts: &PointsTo, at: InstId, actual:
             writes.extend(objects);
         }
     }
-    let (other_reads, other_writes) = _unknown_other(unit, facts, at, callbacks)?;
-    if allowed.other.reads {
-        reads.extend(other_reads);
-    }
-    if allowed.other.writes {
-        writes.extend(other_writes);
-    }
-    Ok((reads, writes))
+    (reads, writes)
 }
 
 /// What an unsummarized callee may read and write at `at` other than
 /// through its arguments.
 fn _unknown_other(unit: &Unit, facts: &PointsTo, at: InstId, callbacks: Option<&Summary>) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>), String> {
+    OTHER_RUNS.with(|runs| runs.set(runs.get() + 1));
     let mut reads = NONLOCAL.slices.clone();
     reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default()));
     // A port `ports` left reaching memory reaches it as its device does, by
@@ -496,24 +526,82 @@ fn outlives(slice: &Slice) -> bool {
     !matches!(slice.object.kind, MemoryKind::Frame | MemoryKind::Stack)
 }
 
+/// Whether the address `inst` accesses is an integer made a pointer, moved by
+/// GEPs and casts: LLVM's `inttoptr`, which `_lost` publishes the escape of.
+fn from_integer(unit: &Unit, inst: InstId) -> bool {
+    let op = unit.function.instruction(inst);
+    let address = if matches!(op.opcode, Opcode::Store { .. }) { op.operands.get(1) } else { op.operands.first() };
+    let mut at = address.copied();
+    while let Some((_, def)) = at.and_then(|one| unit.defining(one)) {
+        match &def.opcode {
+            Opcode::Cast(CastOp::IntToPtr) => return true,
+            Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) | Opcode::GetElementPtr { .. } => at = def.operands.first().copied(),
+            _ => return false,
+        }
+    }
+    false
+}
+
+thread_local! {
+    static OTHER_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static DIRECT_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out what an unknown call does other than through its
+/// arguments, for a test that calls alike are worked out once.
+pub fn other_runs() -> usize {
+    OTHER_RUNS.with(std::cell::Cell::get)
+}
+
+/// How many direct summaries this thread has made, for a test that a procedure's is made once.
+pub fn direct_runs() -> usize {
+    DIRECT_RUNS.with(std::cell::Cell::get)
+}
+
+/// How many times this thread has summarized a body against its callees' summaries, for a test
+/// that a body in no cycle of calls is visited once.
+pub fn visits() -> usize {
+    VISITS.with(std::cell::Cell::get)
+}
+
 pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
+    DIRECT_RUNS.with(|runs| runs.set(runs.get() + 1));
     let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
     let (mut unknown_read, mut unknown_write) = (false, false);
+    let mut types = Some(BTreeSet::new());
     let facts = points_to(unit, None, None)?;
     for (_, inst) in unit.function.walk() {
         let Some(reference) = MemRef::of(unit, inst) else { continue };
         let read = matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. });
+        // A write nothing places is its type's, not a slice of the unknown object.
+        let unplaced = |types: &mut Option<BTreeSet<Access>>| {
+            let access = reference.typed.clone().map(|typed| (typed, reference.lineage.clone()));
+            match (types.as_mut(), access) {
+                (Some(types), Some(access)) => {
+                    types.insert(access);
+                }
+                _ => *types = None,
+            }
+        };
         let Some(provenance) = facts.reference(unit, &reference) else {
             if read {
                 unknown_read = true;
             } else {
                 unknown_write = true;
+                // An address built from an integer reaches only what escaped, as `Unknown`
+                // does; any other the analysis lost may be a tracked global's too.
+                if from_integer(unit, inst) {
+                    unplaced(&mut types);
+                } else {
+                    types = None;
+                }
             }
             continue;
         };
         for one in provenance.slices {
             let unknown = one.object.kind == MemoryKind::Unknown;
-            if outlives(&one) {
+            if outlives(&one) && !(unknown && !read) {
                 if read {
                     reads.insert(one);
                 } else {
@@ -525,42 +613,14 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
                     unknown_read = true;
                 } else {
                     unknown_write = true;
+                    unplaced(&mut types);
                 }
             }
         }
     }
     let captures =
         facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter && matches!(one.identity, Some(Identity::Int(_)))).map(|one| one.identity.clone()).collect();
-    Ok(Summary { reads, writes, captures, unknown_read, unknown_write })
-}
-
-fn _recursive_edges(procedures: &IndexMap<String, Procedure>) -> BTreeSet<(String, String)> {
-    let graph = procedures
-        .iter()
-        .map(|(name, procedure)| {
-            let targets = procedure.calls.values().filter(|target| procedures.contains_key(*target)).collect::<BTreeSet<_>>();
-            (name, targets)
-        })
-        .collect::<IndexMap<_, _>>();
-
-    let reaches = |start: &String, wanted: &String| {
-        let (mut pending, mut seen) = (vec![start], BTreeSet::new());
-        while let Some(at) = pending.pop() {
-            if at == wanted {
-                return true;
-            }
-            if !seen.insert(at) {
-                continue;
-            }
-            pending.extend(graph.get(at).into_iter().flatten().copied());
-        }
-        false
-    };
-
-    graph
-        .iter()
-        .flat_map(|(caller, targets)| targets.iter().filter(|callee| reaches(callee, caller)).map(|callee| ((*caller).clone(), (*callee).clone())))
-        .collect()
+    Ok(Summary { reads, writes, captures, unknown_read, unknown_write, unknown_write_types: types })
 }
 
 fn _widen_parameters(summary: Summary) -> Summary {
@@ -603,56 +663,183 @@ pub fn summaries(procedures: &IndexMap<String, Procedure>, known: Option<&IndexM
     // What a body captures grows from nothing: a call captures what its
     // callee's summary says, so a least fixed point, as a recursive one
     // that captures nothing proves.
-    let direct = procedures
-        .iter()
-        .map(|(name, one)| Ok((name.clone(), Summary { captures: BTreeSet::new(), .._direct_summary(&one.unit)? })))
-        .collect::<Result<Vec<_>, String>>()?;
+    // What a body does on its own does not change from round to round: made once.
+    let direct = llrm_support::debug::timed("summaries direct", || {
+        procedures.iter().map(|(name, one)| Ok((name.clone(), _direct_summary(&one.unit)?))).collect::<Result<IndexMap<_, _>, String>>()
+    })?;
     let mut result = known.cloned().unwrap_or_default();
-    result.extend(direct);
-    let recursive = _recursive_edges(procedures);
-    loop {
-        let mut changed = false;
-        for (name, procedure) in procedures {
-            let callbacks = _callbacks(&procedure.unit, &result);
-            let captured_at = procedure.calls.iter().map(|(at, target)| (*at, _summary(&procedure.unit, &result, target).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
-            let facts = points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at))?;
-            let direct = _direct_summary(&procedure.unit)?;
-            let (mut reads, mut writes) = (direct.reads, direct.writes);
-            let captures = facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter && matches!(one.identity, Some(Identity::Int(_)))).map(|one| one.identity.clone()).collect();
-            let (mut unknown_read, mut unknown_write) = (direct.unknown_read, direct.unknown_write);
-            for at in call_sites(&procedure.unit) {
-                let target = procedure.calls.get(&at);
-                let callee = target.and_then(|target| _summary(&procedure.unit, &result, target));
-                let actual = _actuals(procedure, &facts, at);
-                let Some(callee) = callee else {
-                    let (read, written) = _unknown_visible(procedure, &facts, at, &actual, callbacks.as_ref())?;
-                    reads.extend(read);
-                    writes.extend(written);
-                    continue;
-                };
-                let mut effect = callee.instantiated(&actual);
-                let target = target.expect("a known callee has a target");
-                if recursive.contains(&(name.clone(), target.clone())) {
-                    effect = _widen_parameters(effect);
-                }
-                reads.extend(effect.reads);
-                writes.extend(effect.writes);
-                unknown_read |= effect.unknown_read;
-                unknown_write |= effect.unknown_write;
-            }
-            // A callee's frame is gone when it returns: what its calls touch
-            // there, like its own accesses, is no effect of calling it.
-            let (reads, writes) = (reads.into_iter().filter(outlives).collect(), writes.into_iter().filter(outlives).collect());
-            let made = Summary { reads: _coalesced(&reads), writes: _coalesced(&writes), captures, unknown_read, unknown_write };
-            if made != result[name] {
-                result.insert(name.clone(), made);
-                changed = true;
-            }
+    result.extend(direct.iter().map(|(name, one)| (name.clone(), Summary { captures: BTreeSet::new(), ..one.clone() })));
+    // A worklist, callees first. A body is visited again only when a summary it reads changed: a
+    // callee's, or, where it calls something unknown, an entry's (`_callbacks`). So a body in no cycle
+    // is visited once, and a cycle iterates only as long as it changes.
+    let edges = procedures
+        .iter()
+        .enumerate()
+        .map(|(at, (_, procedure))| (at, procedure.calls.values().filter_map(|target| procedures.get_index_of(target)).collect::<BTreeSet<_>>()))
+        .collect();
+    let graph = llrm_mir::callgraph::CallGraph::from_edges(edges);
+    let order: Vec<usize> = graph
+        .bottom_up_components()
+        .into_iter()
+        .flat_map(|(mut members, _)| {
+            members.sort_unstable();
+            members
+        })
+        .collect();
+    let mut rank = vec![0; procedures.len()];
+    for (at, one) in order.iter().enumerate() {
+        rank[*one] = at;
+    }
+    let entries: Vec<usize> = procedures
+        .values()
+        .next()
+        .and_then(|one| one.unit.globals_aa)
+        .map(|found| found.entries().iter().filter_map(|name| procedures.get_index_of(name)).collect())
+        .unwrap_or_default();
+    let mut readers: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); procedures.len()];
+    // The bodies that call something unknown read the entries' summaries together, as one: what a
+    // call back into the module may do.
+    let mut callers_of_unknown: BTreeSet<usize> = BTreeSet::new();
+    for (at, (_, procedure)) in procedures.iter().enumerate() {
+        for target in procedure.calls.values().filter_map(|target| procedures.get_index_of(target)) {
+            readers[target].insert(at);
         }
-        if !changed {
-            return Ok(result);
+        if call_sites(&procedure.unit).iter().any(|site| procedure.calls.get(site).and_then(|target| _summary(&procedure.unit, &result, target)).is_none()) {
+            callers_of_unknown.insert(at);
         }
     }
+    let called_back = |result: &IndexMap<String, Summary>| procedures.values().next().and_then(|one| _callbacks(&one.unit, result));
+    let mut callbacks = called_back(&result);
+    // What each body's points-to facts were found from: they change only with the callees' captures,
+    // not with the effects a revisit is for.
+    let mut found: Vec<Option<Visit>> = vec![None; procedures.len()];
+    let mut version = 0;
+    let mut queued = vec![true; procedures.len()];
+    let mut work: std::collections::BinaryHeap<std::cmp::Reverse<usize>> = (0..procedures.len()).map(std::cmp::Reverse).collect();
+    while let Some(std::cmp::Reverse(first)) = work.pop() {
+        let at = order[first];
+        queued[at] = false;
+        llrm_support::debug::counted("summaries rounds", true);
+        let (name, procedure) = procedures.get_index(at).expect("a member of the graph");
+        let made = _summarized(at, procedure, &direct[name], &result, (callbacks.as_ref(), version), &mut found[at], &graph, procedures)?;
+        if made != result[name] {
+            result.insert(name.clone(), made);
+            let mut woken: Vec<usize> = readers[at].iter().copied().collect();
+            if entries.contains(&at) {
+                let now = called_back(&result);
+                if now != callbacks {
+                    callbacks = now;
+                    version += 1;
+                    woken.extend(callers_of_unknown.iter().copied());
+                }
+            }
+            for reader in woken {
+                if !queued[reader] {
+                    queued[reader] = true;
+                    work.push(std::cmp::Reverse(rank[reader]));
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// What a body's last visit was made from, and found: its points-to facts, from its callees' captures,
+/// and what its calls to something unknown may do, from those facts and the callbacks of one `version`.
+#[derive(Clone)]
+struct Visit {
+    captured: IndexMap<InstId, Option<BTreeSet<Option<Identity>>>>,
+    facts: Rc<PointsTo>,
+    version: Option<usize>,
+    unknown: (BTreeSet<Slice>, BTreeSet<Slice>),
+}
+
+/// `procedure`'s summary given `result`, the summaries of what it calls so far: what its body does
+/// on its own (`direct`) and what each call does, instantiated at its actuals.
+fn _summarized(
+    me: usize,
+    procedure: &Procedure,
+    direct: &Summary,
+    result: &IndexMap<String, Summary>,
+    (callbacks, version): (Option<&Summary>, usize),
+    memo: &mut Option<Visit>,
+    graph: &llrm_mir::callgraph::CallGraph<usize>,
+    procedures: &IndexMap<String, Procedure>,
+) -> Result<Summary, String> {
+    VISITS.with(|visits| visits.set(visits.get() + 1));
+    let captured_at = procedure.calls.iter().map(|(at, target)| (*at, _summary(&procedure.unit, result, target).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
+    if memo.as_ref().is_none_or(|one| one.captured != captured_at) {
+        let facts = Rc::new(llrm_support::debug::timed("summaries points-to", || points_to(&procedure.unit, Some(&procedure.arguments), Some(&captured_at)))?);
+        *memo = Some(Visit { captured: captured_at, facts, version: None, unknown: Default::default() });
+    }
+    let visit = memo.as_mut().expect("made above");
+    let facts = Rc::clone(&visit.facts);
+    // What the calls to something unknown may do, all of them together, depends on the facts and on
+    // what a call back into the module may do, and on nothing a revisit changes.
+    if visit.version != Some(version) {
+        let unit = &procedure.unit;
+        let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
+        // What a call may do other than through its arguments depends on its callee and on what escaped
+        // before it, and a body calls the same few routines again and again: each pair is worked out
+        // once, and added to the whole once.
+        let mut others: Vec<(Option<GlobalId>, Option<&Bits>, bool, bool, (BTreeSet<Slice>, BTreeSet<Slice>))> = Vec::new();
+        for at in call_sites(unit) {
+            if procedure.calls.get(&at).and_then(|target| _summary(unit, result, target)).is_some() {
+                continue;
+            }
+            let allowed = _allowed(unit, at);
+            let (read, written) = _through_arguments(&allowed, &_actuals(procedure, &facts, at));
+            reads.extend(read);
+            writes.extend(written);
+            if !(allowed.other.reads || allowed.other.writes) {
+                continue;
+            }
+            let (callee, escaped) = (llrm_mir::memory::callee(unit.context, unit.function, at), facts.escaped_before.bits(&at));
+            match others.iter_mut().find(|(one, bits, ..)| *one == callee && *bits == escaped) {
+                Some((_, _, wants_reads, wants_writes, _)) => {
+                    *wants_reads |= allowed.other.reads;
+                    *wants_writes |= allowed.other.writes;
+                }
+                None => others.push((callee, escaped, allowed.other.reads, allowed.other.writes, _unknown_other(unit, &facts, at, callbacks)?)),
+            }
+        }
+        for (_, _, wants_reads, wants_writes, (other_reads, other_writes)) in others {
+            if wants_reads {
+                reads.extend(other_reads);
+            }
+            if wants_writes {
+                writes.extend(other_writes);
+            }
+        }
+        visit.unknown = (reads, writes);
+        visit.version = Some(version);
+    }
+    let (mut reads, mut writes) = (direct.reads.clone(), direct.writes.clone());
+    reads.extend(visit.unknown.0.iter().cloned());
+    writes.extend(visit.unknown.1.iter().cloned());
+    let captures = facts.escaped.iter().filter(|one| one.kind == MemoryKind::Parameter && matches!(one.identity, Some(Identity::Int(_)))).map(|one| one.identity.clone()).collect();
+    let (mut unknown_read, mut unknown_write) = (direct.unknown_read, direct.unknown_write);
+    let mut types = direct.unknown_write_types.clone();
+    for at in call_sites(&procedure.unit) {
+        let target = procedure.calls.get(&at);
+        let callee = target.and_then(|target| _summary(&procedure.unit, result, target));
+        let Some(callee) = callee else { continue };
+        let actual = _actuals(procedure, &facts, at);
+        let mut effect = callee.instantiated(&actual);
+        let target = target.expect("a known callee has a target");
+        if procedures.get_index_of(target).is_some_and(|callee| graph.together(me, callee)) {
+            effect = _widen_parameters(effect);
+        }
+        reads.extend(effect.reads);
+        writes.extend(effect.writes);
+        unknown_read |= effect.unknown_read;
+        types = merged_types((unknown_write, &types), (effect.unknown_write, &effect.unknown_write_types));
+        unknown_write |= effect.unknown_write;
+    }
+    // A callee's frame is gone when it returns: what its calls touch
+    // there, like its own accesses, is no effect of calling it.
+    let (reads, writes) = (reads.into_iter().filter(outlives).collect(), writes.into_iter().filter(outlives).collect());
+    Ok(Summary { reads: _coalesced(&reads), writes: _coalesced(&writes), captures, unknown_read, unknown_write, unknown_write_types: types })
 }
 
 /// What one call reads and writes, as the bytes of the objects it reaches.
@@ -706,14 +893,28 @@ pub fn calls_annotated(procedure: &Procedure, known: &IndexMap<String, Summary>)
             effect.reads.extend(NONLOCAL.slices.clone());
             effect.reads.extend(_tracked(&procedure.unit));
         }
+        // What an unplaced write may reach: each of its types' stores, not an untyped one.
+        let mut typed = Vec::new();
         if effect.unknown_write {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
-            effect.writes.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
-            effect.writes.extend(NONLOCAL.slices.clone());
-            effect.writes.extend(_tracked(&procedure.unit));
+            let mut reached = if visible.is_empty() { UNKNOWN.slices.clone() } else { visible };
+            reached.extend(NONLOCAL.slices.clone());
+            match &effect.unknown_write_types {
+                // A pointer no fact follows reaches only what escaped, never a tracked global.
+                Some(types) if !types.is_empty() => {
+                    for (name, lineage) in types {
+                        typed.extend(reached.iter().map(|one| MemRef { typed: Some(name.clone()), lineage: lineage.clone(), ..reference(one) }));
+                    }
+                }
+                _ => {
+                    effect.writes.extend(reached);
+                    effect.writes.extend(_tracked(&procedure.unit));
+                }
+            }
         }
         let fills = _fills(&procedure.unit, &facts, at);
-        out.insert(at, Effect { loads: effect.reads.iter().map(reference).collect(), stores: effect.writes.iter().map(reference).collect(), fills });
+        let stores = effect.writes.iter().map(reference).chain(typed).collect();
+        out.insert(at, Effect { loads: effect.reads.iter().map(reference).collect(), stores, fills });
     }
     Ok(out)
 }
@@ -964,7 +1165,7 @@ fn _direct(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) ->
         }
         // A segment is no pointer to a program object: `segment:0` is a
         // new root.
-        Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if unit.space(op.operands[0]) != Some(2) => Ok(_operand(unit, op.operands[0], values)),
+        Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if !unit.spaces().is_segment(unit.space(op.operands[0])) => Ok(_operand(unit, op.operands[0], values)),
         Opcode::GetElementPtr { source } => {
             let Some(fact) = _operand(unit, op.operands[0], values) else {
                 return Ok(None);
@@ -1240,6 +1441,27 @@ pub fn points_to(
         }
     };
 
+    // Objects named by the initializers of the globals among `reached`, closed:
+    // memory a callee reads a pointer out of holds them without any store.
+    let initialized = |mut reached: Vec<usize>| {
+        let mut at = 0;
+        while at < reached.len() {
+            let object = objects.borrow()[reached[at]].clone();
+            at += 1;
+            let Some(Identity::Global(global)) = object.identity.as_ref().filter(|_| object.kind == MemoryKind::Global) else { continue };
+            let Some(llrm_mir::module::GlobalKind::Variable(variable)) = unit.globals.get(*global as usize).map(|one| &one.kind) else { continue };
+            let mut held = BTreeSet::new();
+            variable.initializer.iter().for_each(|&one| globalsaa::embedded(unit.context, one, &mut held));
+            for one in held.into_iter().filter_map(|one| memory::global_object(unit, one)) {
+                let found = number(&one);
+                if !reached.contains(&found) {
+                    reached.push(found);
+                }
+            }
+        }
+        reached
+    };
+
     // What each instruction publishes does not depend on what reached it,
     // so it is found once; only the unions along edges iterate: the
     // gen/kill form of a forward dataflow.
@@ -1248,6 +1470,7 @@ pub fn points_to(
         operands.iter().filter_map(|&one| _operand(unit, one, values)).flat_map(|one| one.slices.into_iter().map(|slice| slice.object)).collect::<Vec<_>>()
     };
     let mut publishes: IndexMap<i64, Vec<Vec<usize>>> = IndexMap::default();
+    let mut during: IndexMap<InstId, Vec<usize>> = IndexMap::default();
     for block in &graph {
         let mut cells = CellMap::new(incoming[&block.at].clone(), _key_place);
         let mut mine = Vec::new();
@@ -1256,6 +1479,9 @@ pub fn points_to(
             let mut newly = BTreeSet::new();
             // What a call reads a pointer out of, it may keep.
             let mut lent = BTreeSet::new();
+            // What it reads a pointer out of but keeps none of: reachable during
+            // the call, so it may read and write it, but escapes no further.
+            let mut passing = BTreeSet::new();
             if calls.contains(&inst) {
                 if let Some(arguments) = arguments {
                     let actual = _resolved_actuals(arguments.get(&inst).map_or(&[][..], Vec::as_slice), &values);
@@ -1272,8 +1498,12 @@ pub fn points_to(
                         let objects = one.slices.iter().map(|one| one.object.clone());
                         if kept(index)? {
                             newly.extend(objects)
-                        } else if reads(index) && !llrm_mir::memory::noretain(unit.context, unit.globals, unit.function, inst, index) {
-                            lent.extend(objects)
+                        } else if reads(index) {
+                            if llrm_mir::memory::noretain(unit.context, unit.globals, unit.function, inst, index) {
+                                passing.extend(objects)
+                            } else {
+                                lent.extend(objects)
+                            }
                         }
                     }
                 } else {
@@ -1311,6 +1541,7 @@ pub fn points_to(
             let mut published = pointees(newly, &cells);
             published.extend(pointees(lent, &cells).into_iter().filter(|one| !lent_numbers.contains(one)));
             mine.push(published);
+            during.insert(inst, initialized(pointees(passing, &cells)));
         }
         publishes.insert(block.at, mine);
     }
@@ -1355,7 +1586,11 @@ pub fn points_to(
         for (&inst, escapes) in instructions(block.at).iter().zip(&publishes[&block.at]) {
             state.union_with(&bits_of(escapes));
             if calls.contains(&inst) || matches!(function.instruction(inst).opcode, Opcode::Load { .. } | Opcode::Store { .. }) {
-                before.insert(inst, state.clone());
+                let mut visible = state.clone();
+                if let Some(reached) = during.get(&inst) {
+                    visible.union_with(&bits_of(reached));
+                }
+                before.insert(inst, visible);
             }
         }
     }
@@ -1388,7 +1623,7 @@ fn _lost(unit: &Unit, inst: InstId, values: &IndexMap<ValueId, Provenance>) -> V
     let op = unit.function.instruction(inst);
     let carried = match &op.opcode {
         Opcode::ICmp(_) => return Vec::new(),
-        Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => unit.space(op.operands[0]) != Some(2),
+        Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => !unit.spaces().is_segment(unit.space(op.operands[0])),
         Opcode::Load { .. } | Opcode::Store { .. } | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select => true,
         Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Ret | Opcode::Cast(CastOp::PtrToInt) => true,
         _ => false,
@@ -1569,14 +1804,37 @@ pub fn annotated(unit: &Unit) -> Result<IndexMap<InstId, MemRef>, String> {
 
 /// `annotated`, given the points-to facts and what `consts::known` finds
 /// without memory.
+/// `ranges::bounded`'s facts, the manager's where the unit carries them for the registers asked of, else worked out.
+enum Bounded<'a> {
+    Held(&'a ranges::Bounds),
+    Worked(ranges::Facts),
+}
+
+impl Bounded<'_> {
+    fn at(&self, at: i64) -> Option<&IndexMap<ValueId, ranges::Interval>> {
+        match self {
+            Bounded::Held(held) => held.at(at),
+            Bounded::Worked(worked) => worked.get(&at),
+        }
+    }
+}
+
 pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, Known>) -> Result<IndexMap<InstId, MemRef>, String> {
-    let bounded = ranges::bounded_with(unit, known)?;
+    let bounded = match (unit.bounds, unit.registers) {
+        (Some(held), Some(registers)) if std::ptr::eq(known, registers) => {
+            if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+                assert!(held.facts() == ranges::bounded_with(unit, known)?, "the bounds a unit carries are not those of the body it stands over: stale");
+            }
+            Bounded::Held(held)
+        }
+        _ => Bounded::Worked(ranges::bounded_with(unit, known)?),
+    };
     let strides = congruences_with(unit, known);
     let constants = ranges::intervals(known);
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {
         let mut got = facts.reference(unit, reference);
-        let interval = reference.base.and_then(|base| bounded.get(&at).and_then(|known| known.get(&base)).or_else(|| constants.get(&base)));
+        let interval = reference.base.and_then(|base| bounded.at(at).and_then(|known| known.get(&base)).or_else(|| constants.get(&base)));
         if let (Some(current), true, Some(base), Some(interval)) = (&got, reference.object, reference.base, interval) {
             if interval.width == reference.base_width && current.slices.len() == 1 && reference.scale > 0 {
                 let source = current.slices.first().expect("one slice");
@@ -1602,7 +1860,7 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
         // A far access whose selector's range lands it in foreign memory
         // names those linear bytes, whatever its pointer's provenance.
         if let (None, Some(Operand::Value(segment))) = (reference.selector, reference.segment) {
-            let lookup = |value: ValueId| bounded.get(&at).and_then(|known| known.get(&value)).or_else(|| constants.get(&value)).map(|one| (value, one.clone()));
+            let lookup = |value: ValueId| bounded.at(at).and_then(|known| known.get(&value)).or_else(|| constants.get(&value)).map(|one| (value, one.clone()));
             let known = [Some(segment), reference.base].into_iter().flatten().filter_map(lookup).collect();
             if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {
                 got = Some(foreign);
@@ -1612,7 +1870,7 @@ pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, K
         // memory, whatever its pointer was made from.
         // The frontend states it only where the target says the address is outside
         // the program; where the selector is a constant here, the target is asked again.
-        if reference.space == llrm_mir::datalayout::FIXED_SPACE && (reference.selector.is_none() || regions::foreign_provenance(reference, &BTreeMap::new(), unit.program).is_some()) {
+        if unit.spaces().is_fixed(reference.space) && (reference.selector.is_none() || regions::foreign_provenance(reference, &BTreeMap::new(), unit.program).is_some()) {
             got = Some(regions::fixed_provenance());
         }
         Ok(MemRef { provenance: got, ..reference.clone() })

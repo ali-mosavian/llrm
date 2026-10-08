@@ -469,12 +469,12 @@ impl FunctionCompiler<'_> {
                 let data_type = self.types.pointer(element.id(), 0);
                 let data = self.value_type(data_type);
                 self.emit("copy", vec![data], vec![hir::Operand::Value(pointer)], None);
-                let words = shape.descriptor().into_iter().map(|(_, value)| hir::Operand::Constant(U16, i64::from(value))).collect();
+                let words = shape.descriptor().into_iter().map(|(_, value)| hir::Operand::Constant(self.word_id(), i64::from(value))).collect();
                 let pointer_type = self.types.slice_pointer(*element, 1);
                 let hir::Operand::Value(descriptor) = self.view_descriptor(&view.owner, pointer_type, words, data) else {
                     unreachable!("a view is a descriptor pointer")
                 };
-                Ok(Subject::Sequence { descriptor, data, length: hir::Operand::Constant(U16, i64::from(shape.len())), element: *element })
+                Ok(Subject::Sequence { descriptor, data, length: hir::Operand::Constant(self.word_id(), i64::from(shape.len())), element: *element })
             }
             _ => Err(Diagnostic::new(span, "a sequence pattern needs a vec, one-dimensional array or view")),
         }
@@ -542,7 +542,7 @@ impl FunctionCompiler<'_> {
                 Binding { type_: BindingType::Struct(source.struct_id), mutable: false, storage: Storage::Reference(pointer) }
             }
             Subject::Scalar(operand, type_name, None) => {
-                let place = self.local_place(name, type_id(*type_name), width(*type_name), false);
+                let place = self.local_place(name, type_id(*type_name), width(self.types.sizes, *type_name), false);
                 self.emit(
                     "store",
                     Vec::new(),

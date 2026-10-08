@@ -1,26 +1,104 @@
-reason = "-Os opens a frame with locals with enter N,0 (one instruction for three; 14 clocks for 3 on the 486, so -Os only); -O2 unchanged"
-blessed = "2026-10-03"
+reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
+blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 609598
-memory_operands = 163316
+instructions = 609549
+memory_operands = 163285
+code_bytes = 374
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 8.3504
 
 [bas.Os]
-instructions = 690595
-memory_operands = 163309
+instructions = 690584
+memory_operands = 163312
+code_bytes = 320
+data_bytes = 13
+bss_bytes = 0
+kernel_ms = 9.4315
 
 [c.O2]
 instructions = 569021
 memory_operands = 82807
+code_bytes = 213
+data_bytes = 80400
+bss_bytes = 0
+kernel_ms = 7.5915
 
 [c.Os]
-instructions = 650015
+instructions = 650017
 memory_operands = 82800
+code_bytes = 202
+data_bytes = 80400
+bss_bytes = 0
 
 [nib.O2]
 instructions = 569021
 memory_operands = 82807
+code_bytes = 216
+data_bytes = 0
+bss_bytes = 80400
+kernel_ms = 8.2632
 
 [nib.Os]
-instructions = 650015
+instructions = 650017
 memory_operands = 82800
+code_bytes = 205
+data_bytes = 0
+bss_bytes = 80400
+
+[ow.O2]
+instructions = 6756017
+memory_operands = 925604
+code_bytes = 295
+data_bytes = 80400
+bss_bytes = 0
+kernel_ms = 90.1173
+
+[ow.Os]
+instructions = 6714616
+memory_operands = 885005
+code_bytes = 276
+data_bytes = 80400
+bss_bytes = 0
+kernel_ms = 89.5651
+
+[bcc.O2]
+instructions = 4986414
+memory_operands = 120602
+code_bytes = 221
+data_bytes = 0
+bss_bytes = 80400
+kernel_ms = 66.5136
+
+[bcc.Os]
+instructions = 4986412
+memory_operands = 120602
+code_bytes = 219
+data_bytes = 0
+bss_bytes = 80400
+kernel_ms = 66.5136
+
+[bc.O2]
+instructions = 10014180
+memory_operands = 2895698
+code_bytes = 356
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 133.7264
+
+[pds71.O2]
+instructions = 10014196
+memory_operands = 3016302
+code_bytes = 360
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 133.7231
+
+[vbdos.O2]
+instructions = 10175076
+memory_operands = 3096729
+code_bytes = 362
+data_bytes = 7
+bss_bytes = 10
+kernel_ms = 135.8657

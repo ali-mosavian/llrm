@@ -70,7 +70,7 @@ entry:
 
 /// What `alias::annotated` says of @f of `module`, asked directly.
 fn direct(module: &Module) -> Answer {
-    alias::annotated(&Unit::of(module, &layout(module), function(module, "f")))
+    alias::annotated(&crate::testing::with_registers(Unit::of(module, &layout(module), function(module, "f"))))
 }
 
 /// What the passes saw of `Annotated`, run in turn on `TWO`, and the
@@ -161,12 +161,12 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
         let outer = Rc::new(outer);
         for (_, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
             let at = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
-            let unit = Unit::of(&module, &layout, function);
+            let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
             let mut analyses = Analyses::new(Rc::clone(&outer));
             assert_eq!(*analyses.get::<Pointers>(&module.context, &layout, function), alias::points_to(&unit, None, None), "{at}");
             assert_eq!(*analyses.get::<Annotated>(&module.context, &layout, function), alias::annotated(&unit), "{at}");
             assert_eq!(*analyses.get::<Registers>(&module.context, &layout, function), consts::known(&unit, None, None, None), "{at}");
-            assert_eq!(*analyses.get::<DominatedEdges>(&module.context, &layout, function), ranges::dominated_edges(&unit), "{at}");
+            assert_eq!(analyses.get::<DominatedEdges>(&module.context, &layout, function).as_ref().as_ref().map(|states| states.blocks(function)).map_err(String::clone), ranges::dominated_edges(&unit), "{at}");
             let effects = alias::calls_annotated(&Procedure::of(unit), summaries);
             assert_eq!(*analyses.get::<CallEffects>(&module.context, &layout, function), effects, "{at}");
             let calls: Calls = effects.unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect::<IndexMap<_, _>>();
@@ -239,4 +239,259 @@ fn summaries_read_each_bodys_shape_from_its_manager() {
     let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
     analyses.get::<Summaries>(&module);
     assert!(analyses.cached_function::<Shape>(module.named("f").unwrap()).is_some());
+}
+
+/// A body that calls something unknown may call back into any entry, so its summary reads each
+/// entry's. Solved callees-first, `@p` was visited before `@entry` had @h's store from its callee,
+/// and never again: QCport's `dl` and `savegame` came out other than before (#394).
+#[test]
+fn a_body_calling_the_unknown_is_summarized_again_when_an_entry_changes() {
+    let module = parsed(
+        "@g = internal global i16 0
+
+declare void @ext()
+
+define internal void @p() {
+entry:
+  call void @ext()
+  ret void
+}
+
+define void @entry() {
+entry:
+  call void @h()
+  ret void
+}
+
+define internal void @h() {
+entry:
+  store i16 1, ptr @g
+  ret void
+}
+",
+    );
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    let found = analyses.get::<Summaries>(&module);
+    let summaries = Result::as_ref(&*found).expect("summarized");
+    let reaches_g = |name: &str| summaries[name].unknown_write || summaries[name].writes.iter().any(|one| one.object.kind == crate::memory::MemoryKind::Global);
+    assert!(reaches_g("entry"), "the entry writes @g through @h");
+    assert!(reaches_g("p"), "@p's unknown call may call back into @entry");
+}
+
+/// Each access asked of its own alloca's uses whether the address is exposed, and the answer was never
+/// kept: `mir decide` and `gvn` grew with slope 2.5–2.9 in a function's blocks, `exposes` 21% of the
+/// compile of 300 (#557). The manager finds a function's exposed frames once.
+#[test]
+fn test_a_functions_exposed_frames_are_found_once_not_per_access() {
+    let accesses: String = (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
+    let module = parsed(&format!("{DOS}declare void @out(ptr)\n\ndefine i16 @f() {{\nentry:\n  %slot = alloca i16\n  %hidden = alloca i16\n{accesses}  call void @out(ptr %hidden)\n  ret i16 %v39\n}}\n"));
+    let layout = layout(&module);
+    let function = function(&module, "f");
+    let mut analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
+    let before = crate::frameescape::scans();
+    analyses.get::<Annotated>(&module.context, &layout, function).as_ref().as_ref().expect("annotates");
+    assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
+    let exposed = analyses.get::<super::ExposedFrames>(&module.context, &layout, function);
+    let names: Vec<_> = exposed.iter().map(|one| function.value(*one).name.clone()).collect();
+    assert_eq!(names.len(), 1, "only @hidden's address is handed out: {names:?}");
+}
+
+/// GlobalsAA ran points-to over every body without the exposure table, so each access scanned its alloca's
+/// uses: 34% of compiling a function of 1600 statements (#560). The table is made once per body.
+#[test]
+fn test_globals_aa_asks_each_bodys_exposed_frames_once() {
+    let accesses: String = (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
+    let module = parsed(&format!("{DOS}@g = global i16 0\n\ndefine i16 @f() {{\nentry:\n  %slot = alloca i16\n{accesses}  store i16 %v39, ptr @g\n  ret i16 %v39\n}}\n"));
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    let before = crate::frameescape::scans();
+    analyses.get::<super::GlobalsAA>(&module);
+    assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
+}
+
+/// Two loops, the second counting to `%lim`, which a block outside both makes.
+const LIMITED: &str = "define i16 @f() {
+b0:
+  %five = add i16 2, 3
+  %seven = add i16 3, 4
+  br label %h0
+
+h0:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %l0 ]
+  %c = icmp slt i16 %i, 9
+  br i1 %c, label %l0, label %p1
+
+l0:
+  %i.next = add i16 %i, 1
+  br label %h0
+
+p1:
+  %lim = add i16 %five, 0
+  br label %h1
+
+h1:
+  %j = phi i16 [ 0, %p1 ], [ %j.next, %l1 ]
+  %d = icmp slt i16 %j, %lim
+  br i1 %d, label %l1, label %end
+
+l1:
+  %j.next = add i16 %j, 1
+  br label %h1
+
+end:
+  ret i16 %j
+}
+";
+
+/// A change made to what a loop's bound comes from, outside the loop, is not seen in the loop's blocks: its trips were
+/// kept stale. Only the loop it reaches is proved again.
+#[test]
+fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
+    let mut module = parsed(&format!("{DOS}{LIMITED}"));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let trips = |counted: &crate::induction::Counted, header: &str, function: &llrm_mir::module::Function| {
+        let header = crate::cfg::id(crate::testing::block(function, header));
+        counted[&header].iter().filter_map(|proof| proof.count.clone()).next()
+    };
+    {
+        let (context, function) = module.function_mut("f").unwrap();
+        let before = analyses.get::<super::Counted>(context, &layout, function);
+        assert_eq!(trips(&before, "h1", function), Some(num_bigint::BigInt::from(5)));
+        let lim = value(function, "lim");
+        let lim = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(lim)).unwrap();
+        let seven = Operand::Value(value(function, "seven"));
+        function.set_operand(lim, 0, seven);
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    let (context, function) = module.function_mut("f").unwrap();
+    let proved = crate::induction::proved();
+    let after = analyses.get::<super::Counted>(context, &layout, function);
+    // The check derives them afresh to compare, and is counted.
+    if std::env::var_os("LLRM_CHECK_REPLAY").is_none() {
+        assert_eq!(crate::induction::proved() - proved, 1, "only the loop the change reaches is proved again");
+    }
+    assert_eq!(trips(&after, "h1", function), Some(num_bigint::BigInt::from(7)), "the loop that reads the changed bound");
+    assert_eq!(*after, *Analyses::new(outer).get::<super::Counted>(context, &layout, function), "what was brought up to date is what deriving it afresh gives");
+}
+
+/// A branch's bound changed outside the blocks it narrows: the edge facts of the blocks past it were kept stale. Only
+/// the blocks the change reaches are worked again, and what comes out is what working them all gives.
+#[test]
+fn a_change_to_a_branch_bound_reworks_the_blocks_past_it() {
+    let mut module = parsed(&format!("{DOS}{LIMITED}"));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let states = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
+        let function = function(module, "f");
+        analyses.get::<DominatedEdges>(&module.context, &layout, function).as_ref().as_ref().map(|states| states.blocks(function)).map_err(String::clone).unwrap()
+    };
+    let before = states(&mut analyses, &module);
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let lim = value(function, "lim");
+        let lim = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(lim)).unwrap();
+        let seven = Operand::Value(value(function, "seven"));
+        function.set_operand(lim, 0, seven);
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    let solved = ranges::blocks_solved();
+    let after = states(&mut analyses, &module);
+    // The check works them all again to compare, and is counted.
+    if std::env::var_os("LLRM_CHECK_REPLAY").is_none() {
+        assert!(ranges::blocks_solved() - solved < function(&module, "f").layout().len(), "{} blocks worked of {}", ranges::blocks_solved() - solved, function(&module, "f").layout().len());
+    }
+    assert_ne!(before, after, "the bound the change reached");
+    let fresh = Analyses::new(outer);
+    let mut fresh = fresh;
+    assert_eq!(after, states(&mut fresh, &module), "what was brought up to date is what working every block gives");
+}
+
+/// The second loop starts straight from the first's header, below no block of its own, and carries what the first
+/// knows of values it never reads.
+const DIRECT: &str = "define i16 @f() {
+b0:
+  %nine = add i16 4, 5
+  %three = add i16 1, 2
+  %four = add i16 2, 2
+  br label %h0
+
+h0:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %l0 ]
+  %t = mul i16 %i, %three
+  br label %l0
+
+l0:
+  %i.next = add i16 %i, 1
+  %c = icmp slt i16 %i.next, %nine
+  br i1 %c, label %h0, label %h1
+
+h1:
+  %j = phi i16 [ 0, %h0 ], [ %j.next, %l1 ]
+  %d = icmp slt i16 %j, 5
+  br i1 %d, label %l1, label %end
+
+l1:
+  %j.next = add i16 %j, 1
+  br label %h1
+
+end:
+  ret i16 %j
+}
+";
+
+/// What a loop knows is read from the loop its header's dominator is in, as well as from the blocks above: a change in
+/// the first of two such loops to a value the second never reads left the second's facts, which carry it, stale.
+#[test]
+fn a_change_to_a_loop_reworks_the_loop_that_starts_from_it() {
+    let mut module = parsed(&format!("{DOS}{DIRECT}"));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
+        let function = function(module, "f");
+        analyses.get::<super::Bounded>(&module.context, &layout, function).as_ref().as_ref().map(ranges::Bounds::facts).map_err(String::clone).unwrap()
+    };
+    let before = facts(&mut analyses, &module);
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let t = value(function, "t");
+        let t = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(t)).unwrap();
+        let four = Operand::Value(value(function, "four"));
+        function.set_operand(t, 1, four);
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    let after = facts(&mut analyses, &module);
+    assert_ne!(before, after, "the value the change reached");
+    assert_eq!(after, facts(&mut Analyses::new(outer), &module), "what was brought up to date is what working every loop gives");
+}
+
+/// A loop carries what is known of the values made above it, whether it reads them or not: an instruction erased there,
+/// which no loop's blocks held, was still in the loop's facts. Seven bench programs and four pipeline tests found it.
+#[test]
+fn an_instruction_erased_above_a_loop_leaves_the_loops_facts() {
+    let mut module = parsed(&format!("{DOS}{LIMITED}"));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
+        let function = function(module, "f");
+        analyses.get::<super::Bounded>(&module.context, &layout, function).as_ref().as_ref().map(ranges::Bounds::facts).map_err(String::clone).unwrap()
+    };
+    let seven = {
+        let function = function(&module, "f");
+        value(function, "seven")
+    };
+    let before = facts(&mut analyses, &module);
+    assert!(before.values().any(|known| known.contains_key(&seven)), "a loop carries it");
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let made = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(seven)).unwrap();
+        function.erase(made).unwrap();
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    let after = facts(&mut analyses, &module);
+    assert!(after.values().all(|known| !known.contains_key(&seven)), "gone from every loop");
+    assert_eq!(after, facts(&mut Analyses::new(outer), &module), "what was brought up to date is what working every loop gives");
 }

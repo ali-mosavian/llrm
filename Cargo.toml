@@ -21,16 +21,30 @@ tempfile = "3.27.0"
 toml = { version = "0.9", features = ["preserve_order"] }
 regex = "1"
 llrm-support = { path = "crates/support/llrm-support" }
-llrm-x86-code16 = { path = "crates/target/llrm-x86-code16" }
+llrm-x86-m16 = { path = "crates/target/llrm-x86-m16" }
+llrm-target = { path = "crates/target/llrm-target" }
+llrm-x86 = { path = "crates/target/llrm-x86" }
+llrm-x86-m32 = { path = "crates/target/llrm-x86-m32" }
 llrm-omf = { path = "crates/target/llrm-omf" }
-llrm-bcmachine = { path = "crates/bc/llrm-bcmachine" }
-llrm-bc = { path = "crates/bc/llrm-bc" }
+llrm-object = { path = "crates/target/llrm-object" }
+llrm-elf = { path = "crates/target/llrm-elf" }
+llrm-dwarf = { path = "crates/target/llrm-dwarf" }
+llrm-coff = { path = "crates/target/llrm-coff" }
+llrm-coff32 = { path = "crates/target/llrm-coff32" }
+llrm-coff64 = { path = "crates/target/llrm-coff64" }
+llrm-elf32 = { path = "crates/target/llrm-elf32" }
+llrm-elf64 = { path = "crates/target/llrm-elf64" }
+llrm-macho = { path = "crates/target/llrm-macho" }
+llrm-x86-bcmachine = { path = "crates/target/llrm-x86-bcmachine" }
+llrm-x86-bc = { path = "crates/target/llrm-x86-bc" }
 llrm-bcdriver = { path = "crates/bc/llrm-bcdriver" }
 llrm-hir = { path = "crates/ir/llrm-hir" }
 llrm-mir = { path = "crates/ir/llrm-mir" }
+llrm-lir = { path = "crates/ir/llrm-lir" }
 llrm-analysis = { path = "crates/opt/llrm-analysis" }
 llrm-transforms = { path = "crates/opt/llrm-transforms" }
 llrm-core = { path = "crates/backend/llrm-core" }
+llrm-driver = { path = "crates/backend/llrm-driver" }
 llrm-peepgen = { path = "crates/backend/llrm-peepgen" }
 llrm-nib = { path = "crates/frontends/llrm-nib" }
 llrm-qb = { path = "crates/frontends/llrm-qb" }
@@ -52,7 +66,6 @@ llrm-bcdriver = { workspace = true }
 llrm-nib = { workspace = true }
 llrm-qb = { workspace = true }
 llrm-c = { workspace = true }
-iced-x86 = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 
@@ -66,6 +79,12 @@ jw = []
 dosrun = []
 
 [dev-dependencies]
+llrm-target = { workspace = true }
+llrm-x86 = { workspace = true }
+llrm-x86-m16 = { workspace = true }
+llrm-x86-m32 = { workspace = true }
+llrm-driver = { workspace = true }
+llrm-object = { workspace = true }
 regex = { workspace = true }
 toml = { workspace = true }
 

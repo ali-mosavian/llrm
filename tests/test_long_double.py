@@ -9,6 +9,7 @@ import os
 import shutil
 import warnings
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,8 +18,10 @@ from tools.e2e import dosbox
 from tools.e2e.configs import QB45
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "target" / "release"
-LOOPS = ROOT / "tools" / "loops" / "runtime"
+sys.path.insert(0, str(ROOT / "tools" / "dosbatch"))
+import dosbatch  # noqa: E402
+from tools import llrmbin  # noqa: E402
+BIN = llrmbin.bin_dir()
 SOURCE = ROOT / "tests" / "fixtures" / "c" / "longdouble.c"
 
 
@@ -46,9 +49,7 @@ def test_a_long_double_program_prints_on_dos_what_it_prints_on_the_host(tmp_path
         return done.stdout
 
     run(BIN / "llrm-c", SOURCE, "-O2", "-o", "p.obj")
-    for part in ("crt", "ext"):
-        run(BIN / "jwasm", "-q", "-c", "-Cp", "-Zg", "-omf", f"-Fo{part}.obj", LOOPS / f"{part}.asm")
-    run(BIN / "jwlink", "option", "quiet", "format", "dos", "name", "P.EXE", "file", "crt.obj", "file", "p.obj", "file", "ext.obj")
+    dosbatch.link_c(tmp_path / "p.obj", tmp_path / "P.EXE", tmp_path)
     assert dosbox.launch(tmp_path, QB45, ["P.EXE > P.TXT"], timeout=60).finished
     on_dos = dosbox.read_dos(tmp_path, "P.TXT").replace("\r", "")
 

@@ -25,16 +25,25 @@ impl Types<'_> {
             return Ok(made);
         }
         let one = *self.of.get(&id).ok_or_else(|| format!("no debug type {id}"))?;
+        // An aggregate may be reached from one of its own members: its node is made first, set after.
+        let reserved = matches!(one.kind, di::Kind::Struct | di::Kind::Union).then(|| di::reserve_type(module));
+        if let Some(reserved) = reserved {
+            self.made.insert(id, reserved);
+        }
         let target = one.target.map(|target| self.node(module, target)).transpose()?;
         let members = one
             .members
             .iter()
             .map(|member| Ok(di::Member { name: member.name.clone(), r#type: self.node(module, member.r#type)?, offset: member.offset, bits: member.bit_start.zip(member.bit_width) }))
             .collect::<Emit<Vec<_>>>()?;
-        let made = di::add_type(
-            module,
-            &di::Type { kind: one.kind, name: one.name.clone(), size: one.size, reach: one.reach, target, members },
-        );
+        let described = di::Type { kind: one.kind, name: one.name.clone(), size: one.size, reach: one.reach, target, members, spelling: one.spelling.clone() };
+        let made = match reserved {
+            Some(reserved) => {
+                di::set_type(module, reserved, &described);
+                reserved
+            }
+            None => di::add_type(module, &described),
+        };
         self.made.insert(id, made);
         Ok(made)
     }
@@ -56,6 +65,9 @@ pub(super) fn emitted<'h>(
 ) -> Emit<HashMap<(i64, i64), MetadataId>> {
     let mut variables = HashMap::new();
     let Some(debug) = &hir.debug else { return Ok(variables) };
+    if let Some(language) = debug.language {
+        di::set_language(module, language);
+    }
     let mut types = Types { of: debug.types.iter().map(|one| (one.id, one)).collect(), made: HashMap::new() };
     for global in &debug.globals {
         let Some(&object) = data.get(&global.object) else { continue };
@@ -85,7 +97,7 @@ pub(super) fn emitted<'h>(
             match place.storage {
                 Storage::Local => {
                     let group = groups.iter().find(|group| group.places.iter().any(|one| one.id == place.id)).ok_or("a local outside the frame")?;
-                    let node = di::Variable { scope: scope.clone(), name: variable.name.clone(), r#type, offset: place.offset - group.start };
+                    let node = di::Variable { scope: scope.clone(), name: variable.name.clone(), r#type, offset: place.offset - group.start, parameter: variable.parameter, argument: variable.argument };
                     variables.insert((function.id, place.id), di::add_variable(module, &node));
                 }
                 // Where it was passed: its argument's cell.

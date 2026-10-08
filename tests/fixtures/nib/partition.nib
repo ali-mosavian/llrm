@@ -1,0 +1,16 @@
+# quicksort's partition: every index is checked, none inside the loop.
+
+fn partition(a: &mut [i16], lo: i16, hi: i16) -> i16:
+    let pivot: i16 = a[hi]
+    let mut i: i16 = lo
+    for j in lo..hi:
+        if a[j] < pivot:
+            let t: i16 = a[i]
+            a[i] = a[j]
+            a[j] = t
+            i += 1
+    return i
+
+fn main() -> i16:
+    let mut values: i16[8] = [5, 3, 8, 1, 9, 2, 7, 4]
+    return partition(values, 0, 7)

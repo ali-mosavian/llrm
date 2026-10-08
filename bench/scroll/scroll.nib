@@ -1,0 +1,27 @@
+# Scroll an 80x25 text screen up a row, blank the bottom row, scroll it back down, and keep a copy
+# in a back buffer: fifty times, then a weighted sum of the copy.
+var screen: i16[2000] = [0] * 2000
+var back: i16[2000] = [0] * 2000
+
+fn bench_scroll() -> i32:
+    let mut total: i32 = 0
+    for r in 0..50:
+        for i in 0..1920:
+            screen[i] = screen[i + 80]
+        for i in 1920..2000:
+            screen[i] = 0x0720
+        let mut j: i16 = 1919
+        while j >= 0:
+            screen[j + 80] = screen[j]
+            j -= 1
+        for i in 0..2000:
+            back[i] = screen[i]
+    for i in 0..2000:
+        total += i32(back[i]) * i32((i & 15) + 1)
+    return total
+
+fn main() -> i16:
+    for i in 0..2000:
+        screen[i] = ((i * 7) & 255) | 0x0700
+    print(bench_scroll())
+    return 0

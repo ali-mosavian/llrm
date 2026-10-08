@@ -92,6 +92,35 @@ pub fn grouped(function: &mut Function, target: i64, sources: &BTreeSet<i64>) ->
     Some(bridge)
 }
 
+thread_local! {
+    static COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many copies of a function this thread has made to try grouping a loop on, for a test that a loop
+/// already in the form makes none.
+pub fn copies() -> usize {
+    COPIES.with(std::cell::Cell::get)
+}
+
+/// Whether `loop_` has a block to group in `function`, whose graph and predecessors are given: its entries
+/// from outside are not one block that only enters it, it has more than one latch, or an exit is reached
+/// from outside the loop too. What the rest of `_simplified` finds on a copy, found without one.
+fn _needs_grouping(function: &Function, graph: &[cfg::Block], predecessors: &std::collections::BTreeMap<i64, BTreeSet<i64>>, loop_: &loops::Loop) -> bool {
+    let Some(entering) = predecessors.get(&loop_.header) else { return false };
+    let outside = entering.difference(&loop_.body).copied().collect::<BTreeSet<_>>();
+    let Some(&parent) = outside.first() else { return false };
+    if outside.len() != 1 || function.successors(cfg::block(parent)) != [cfg::block(loop_.header)] || loop_.latches.len() != 1 {
+        return true;
+    }
+    let empty = BTreeSet::new();
+    graph
+        .iter()
+        .filter(|block| loop_.body.contains(&block.at))
+        .flat_map(|block| block.succ.iter().copied())
+        .filter(|at| !loop_.body.contains(at))
+        .any(|target| !predecessors.get(&target).unwrap_or(&empty).is_subset(&loop_.body))
+}
+
 /// Whether any loop changed.
 pub fn simplified(function: &mut Function) -> bool {
     let shape = cfg::Shape::of(function);
@@ -105,8 +134,16 @@ fn _simplified(function: &mut Function, mut shape: cfg::Shape) -> bool {
     }
     let mut changed = false;
     let headers = shape.loops.iter().map(|loop_| loop_.header).collect::<Vec<_>>();
+    // The function's graph, which only a loop that changes it makes stale.
+    let mut whole = cfg::graph(function);
+    let mut entered = loops::predecessors(&whole);
     for header in headers {
         let original = shape.loops.iter().find(|loop_| loop_.header == header).expect("StopIteration").clone();
+        // A loop that is already in the form has nothing to group: neither it nor the function is copied.
+        if !_needs_grouping(function, &whole, &entered, &original) {
+            continue;
+        }
+        COPIES.with(|copies| copies.set(copies.get() + 1));
         let mut candidate = function.clone();
         let mut grouping = false;
         let predecessors = loops::predecessors(&cfg::graph(&candidate));
@@ -154,6 +191,8 @@ fn _simplified(function: &mut Function, mut shape: cfg::Shape) -> bool {
             *function = candidate;
             changed = true;
             shape = cfg::Shape::of(function);
+            whole = cfg::graph(function);
+            entered = loops::predecessors(&whole);
         }
     }
     changed

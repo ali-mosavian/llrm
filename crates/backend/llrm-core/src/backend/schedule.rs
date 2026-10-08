@@ -64,7 +64,7 @@ impl LIRTransform for Scheduler {
 /// x87, and source-map-sensitive allocator artifacts are boundaries.  This
 /// is a proof boundary, not a list of currently inconvenient cases: every
 /// form left inside has only GPR/flag state represented by `_effects`.
-pub fn _safe(one: &Insn) -> Option<(Lanes, Lanes)> {
+pub fn _safe(bits: u32, one: &Insn) -> Option<(Lanes, Lanes)> {
     let what = one.what.as_ref()?;
     if ![
         Operation::Move,
@@ -121,7 +121,7 @@ pub fn _safe(one: &Insn) -> Option<(Lanes, Lanes)> {
     if registers.iter().any(|register| !_GENERAL.contains(&register.full_register32())) {
         return None;
     }
-    let (reads, writes) = _register_effects(one, false, true)?;
+    let (reads, writes) = _register_effects(bits, one, false, true)?;
     if reads
         .union(&writes)
         .any(|lane| lane.0 != Register::None && !_lanes(lane.0).contains(lane))
@@ -229,9 +229,9 @@ pub fn _partial_merge_delay(window: &[Arc<Insn>], producer: usize, consumer: usi
 /// `_graph`'s result: each occurrence's lanes, then its `needs` and `users`.
 pub type Graph = (Vec<(Lanes, Lanes)>, Vec<BTreeSet<usize>>, Vec<BTreeSet<usize>>);
 
-pub fn _graph(window: &[Arc<Insn>]) -> Graph {
+pub fn _graph(bits: u32, window: &[Arc<Insn>]) -> Graph {
     let effects: Vec<(Lanes, Lanes)> =
-        window.iter().map(|one| _safe(one).expect("every window occurrence is safe")).collect();
+        window.iter().map(|one| _safe(bits, one).expect("every window occurrence is safe")).collect();
     let mut needs: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); window.len()];
     let mut users: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); window.len()];
     for (left, (reads, writes)) in effects.iter().enumerate() {
@@ -258,9 +258,9 @@ pub fn _graph(window: &[Arc<Insn>]) -> Graph {
 /// and multiply use neither pairing slot, and the remaining register ALU or
 /// move forms can issue in either pipe.  `_safe` has already ruled out memory
 /// and all forms whose category is not complete here.
-pub fn _pair_class(one: &Insn) -> &'static str {
+pub fn _pair_class(bits: u32, one: &Insn) -> &'static str {
     let what = one.what.as_ref().expect("a safe form has semantics");
-    let Some(encoded) = select::emit(what, 0, None, false, false, None) else {
+    let Some(encoded) = select::emit_in(bits, what, 0, None, false, false, None) else {
         return "np";
     };
     // GCC's Pentium description marks scalar SHLD/SHRD `pent_pair=np` even
@@ -281,8 +281,8 @@ pub fn _pair_class(one: &Insn) -> &'static str {
 }
 
 /// Issue independent audited U/V pairs in an in-order Pentium listing.
-pub fn _pentium_ordered(window: &[Arc<Insn>], cpu: &Profile) -> Vec<Arc<Insn>> {
-    let (_effects, mut needs, users) = _graph(window);
+pub fn _pentium_ordered(bits: u32, window: &[Arc<Insn>], cpu: &Profile) -> Vec<Arc<Insn>> {
+    let (_effects, mut needs, users) = _graph(bits, window);
     let mut ready_at = vec![0_i64; window.len()];
     let mut left: BTreeSet<usize> = (0..window.len()).collect();
     let mut emitted: Vec<Arc<Insn>> = Vec::new();
@@ -299,7 +299,7 @@ pub fn _pentium_ordered(window: &[Arc<Insn>], cpu: &Profile) -> Vec<Arc<Insn>> {
                 .expect("min() arg is an empty sequence");
             continue;
         }
-        let classes: IndexMap<usize, &str> = ready.iter().map(|index| (*index, _pair_class(&window[*index]))).collect();
+        let classes: IndexMap<usize, &str> = ready.iter().map(|index| (*index, _pair_class(bits, &window[*index]))).collect();
         // A U-only form can pair only as the first instruction, while an
         // ordinary form can be placed in U or V.  Prefer a candidate that
         // actually makes a pair; otherwise preserve source order.
@@ -344,8 +344,8 @@ pub fn _pentium_ordered(window: &[Arc<Insn>], cpu: &Profile) -> Vec<Arc<Insn>> {
 }
 
 /// List-schedule one side-effect-free window by lanes and measured latency.
-pub fn _ordered(window: &[Arc<Insn>], cpu: &Profile) -> Vec<Arc<Insn>> {
-    let (_effects, mut needs, users) = _graph(window);
+pub fn _ordered(bits: u32, window: &[Arc<Insn>], cpu: &Profile) -> Vec<Arc<Insn>> {
+    let (_effects, mut needs, users) = _graph(bits, window);
     let mut ready_at = vec![0_i64; window.len()];
     let mut left: BTreeSet<usize> = (0..window.len()).collect();
     let mut emitted: Vec<Arc<Insn>> = Vec::new();
@@ -403,7 +403,7 @@ pub fn scheduled<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Resul
         let flush = |window: &mut Vec<Arc<Insn>>, out: &mut Vec<Arc<Insn>>, changed: &mut bool| {
             if !window.is_empty() {
                 let ordered =
-                    if target.pentium_pairing { _pentium_ordered(window, target) } else { _ordered(window, target) };
+                    if target.pentium_pairing { _pentium_ordered(body.bits, window, target) } else { _ordered(body.bits, window, target) };
                 *changed |= ordered != *window;
                 out.extend(ordered);
                 window.clear();
@@ -411,7 +411,7 @@ pub fn scheduled<'a>(body: &LirBody, cpu: impl Into<ProfileOrName<'a>>) -> Resul
         };
 
         for one in &block.insns {
-            if _safe(one).is_none() {
+            if _safe(body.bits, one).is_none() {
                 flush(&mut window, &mut out, &mut changed);
                 out.push(Arc::clone(one));
             } else {

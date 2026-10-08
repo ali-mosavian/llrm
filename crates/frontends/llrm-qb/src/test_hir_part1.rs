@@ -68,18 +68,18 @@ fn test_qb_cli_exposes_pds_alternate_math_option() {
 #[test]
 fn test_qb_cli_reads_the_machine_it_is_given() {
     let directory = tempfile::tempdir().expect("tempdir");
-    let path = directory.path().join("386.toml");
-    std::fs::write(&path, llrm_core::abi::machine::DOS.replace("cpu = \"486\"", "cpu = \"386\"")).expect("writes");
+    let path = directory.path().join("far.toml");
+    std::fs::write(&path, llrm_x86_m16::machine::DOS.replace("far_bss = false", "far_bss = true")).expect("writes");
     let args = parse_args(&argv(&["probe.bas", "--machine", path.to_str().expect("utf-8")])).expect("parses");
-    assert_eq!(args.codegen.machine.cpu, "386");
-    assert_eq!(parse_args(&argv(&["probe.bas"])).expect("parses").codegen.machine, *llrm_core::abi::machine::BASIC);
+    assert!(args.codegen.machine.far_bss);
+    assert_eq!(parse_args(&argv(&["probe.bas"])).expect("parses").codegen.machine, *llrm_x86_m16::machine::BASIC);
 }
 
 /// BASIC's runtime runs compiled code on the program's stack, in the data
 /// group, unless -mno-stack-is-data says otherwise.
 #[test]
 fn test_qb_cli_keeps_the_stack_in_the_data_group_unless_told_not_to() {
-    let stack_is_data = |arguments: &[&str]| parse_args(&argv(arguments)).expect("parses").codegen.machine.segments.stack_is_data;
+    let stack_is_data = |arguments: &[&str]| parse_args(&argv(arguments)).expect("parses").codegen.machine.segments.unwrap().stack_is_data;
     assert!(stack_is_data(&["probe.bas"]));
     assert!(!stack_is_data(&["probe.bas", "-mno-stack-is-data"]));
 }
@@ -298,7 +298,7 @@ fn test_implicit_module_end_uses_cenp_not_explicit_end_entry() {
 /// effects had been mistaken for encoded ES operands of the call.
 #[test]
 fn test_runtime_entry_reserves_the_complete_live_local_extent() {
-    let source = parsed(&fixture("runtime-frame-stack.bas"));
+    let source = parsed_runtime_frames(&fixture("runtime-frame-stack.bas"));
     let listing = listing(&source);
     let procedure = between(&listing, "REPORT proc far", "REPORT endp");
 

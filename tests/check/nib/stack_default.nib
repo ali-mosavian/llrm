@@ -1,0 +1,15 @@
+# RUN: llrm-nib %s -O2 -S -o /dev/stdout
+# a recursion that is no tail call keeps its frame: `n - deep(n - 1)`, where `1 + deep(n - 1)` is a loop
+# The default build checks nothing: no limit word, no panic.
+# CHECK-LABEL: _deep proc
+# CHECK-NOT: _llrm_os_stack_low
+# CHECK-NOT: N$ESTK
+# CHECK: _deep endp
+fn deep(n: i16) -> i16:
+    if n == 0:
+        return 0
+    return n - deep(n - 1)
+
+fn main() -> i16:
+    print(deep(3))
+    return 0

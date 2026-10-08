@@ -220,6 +220,9 @@ facts! {
         // the first only, so an object whose address sits in that memory (an
         // array behind a descriptor) still escapes through a `nocapture` call.
         NoRetain no_retain "noretain" on [Param, Operand];
+        // Of a string argument: the routine frees it where the runtime allocated it, a temporary, which
+        // a copy of its body cannot. A copy stands in only where the actual is no such object.
+        Releases releases "releases" on [Param];
         WriteOnly write_only "writeonly" on [Operand];
         NoReturn no_return "noreturn" on [Callable];
         // Every loop of it that does nothing observable ends: the language says
@@ -238,6 +241,9 @@ facts! {
         // is greater, nothing about how often. LLVM knows strcmp's by name
         // (LibFunc); here the language states it of the routine.
         ThreeWayCompare three_way_compare "threeway" on [Callable];
+        // Of a routine: it compares SP with its runtime's stack limit on entry
+        // (`-fsanitize=stack`). The runtime's description says where the limit is.
+        StackCheck stack_check "stackcheck" on [Callable];
     }
     valued {
         Dereferenceable(u64) dereferenceable "dereferenceable" on [Param];

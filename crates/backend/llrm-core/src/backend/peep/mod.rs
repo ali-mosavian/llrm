@@ -5,7 +5,11 @@ pub mod guards;
 pub mod make;
 pub mod walk;
 
+use std::sync::Arc;
+
 use iced_x86::Register;
+
+use crate::model::lir::{Insn, LirBody};
 
 /// A set of mnemonics from `peephole.peep`, and for a family (`far_loads`)
 /// the fixed register that picks each member.
@@ -47,22 +51,30 @@ pub mod field {
     pub const VOLATILE: u32 = 1 << 14;
 }
 
-#[allow(clippy::all, unused_imports, unused_variables, unreachable_patterns)]
-mod generated {
-    use std::sync::Arc;
+/// A rewrite of a whole body by one rule group.
+pub type BodyRule = fn(&LirBody, &walk::Facts) -> LirBody;
+/// A rewrite of a run of instructions by one rule group.
+pub type InsnRule = fn(&[Arc<Insn>], &walk::Facts) -> Vec<Arc<Insn>>;
 
-    use iced_x86::{Register, RflagsBits};
-
-    use super::walk::{self, Cx, Facts, Kind, Matcher, Out, Rewrite, Side, Skip, Window};
-    use super::{Set, field, guards, make};
-    use crate::backend::lanes::Lanes;
-    use crate::model::ir::{Imm, Loc, Operation, Semantics};
-    use crate::model::lir::{self, Insn, LirBody};
-
-    include!(concat!(env!("OUT_DIR"), "/peephole.rs"));
+/// `body` rewritten by `rule`, unchanged where the target has none.
+pub fn rewritten(rule: Option<BodyRule>, body: &LirBody, facts: &walk::Facts) -> LirBody {
+    rule.map_or_else(|| body.clone(), |rule| rule(body, facts))
 }
 
-pub use generated::*;
+/// `insns` rewritten by `rule`, unchanged where the target has none.
+pub fn rewritten_insns(rule: Option<InsnRule>, insns: &[Arc<Insn>], facts: &walk::Facts) -> Vec<Arc<Insn>> {
+    rule.map_or_else(|| insns.to_vec(), |rule| rule(insns, facts))
+}
+
+/// No mnemonics.
+pub static NO_NAMES: Set = Set { names: &[], fixed: &[] };
+
+include!(concat!(env!("OUT_DIR"), "/peep_rules.rs"));
+
+/// Every target's rules, as its definition directory is named.
+pub mod targets {
+    include!(concat!(env!("OUT_DIR"), "/peep_targets.rs"));
+}
 
 #[cfg(test)]
 mod tests;

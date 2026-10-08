@@ -6,6 +6,7 @@ pub mod debug;
 pub mod dominance;
 pub mod escape;
 pub mod facts;
+pub mod meaning;
 pub mod mir;
 pub mod model;
 pub mod onerror;

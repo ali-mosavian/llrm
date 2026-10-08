@@ -23,10 +23,11 @@ use iced_x86::Register;
 
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops::{self, Loop};
+use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::Frame;
 use crate::backend::{liveness, select, spiller};
-use crate::backend::peephole::{_lanes, Lanes};
+use crate::backend::peephole::{self, _lanes, Lanes};
 use crate::backend::target;
 use crate::support::hash::IndexMap;
 use crate::model::ir::{self, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
@@ -37,11 +38,14 @@ use crate::objectfile::module::Addr;
 pub struct LoopSlots {
     pub frame: Option<Rc<RefCell<Frame>>>,
     pub cpu: Profile,
+    /// The bytes of a slot and of the register that stands for it: the target's stack slot.
+    pub word: u32,
+    pub classes: Rc<RegisterClasses>,
 }
 
 impl LoopSlots {
-    pub fn new<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>) -> Result<Self, String> {
-        Ok(Self { frame, cpu: targets::profile(cpu)?.clone() })
+    pub fn new<'a>(frame: Option<Rc<RefCell<Frame>>>, cpu: impl Into<ProfileOrName<'a>>, word: u32, classes: &Rc<RegisterClasses>) -> Result<Self, String> {
+        Ok(Self { frame, cpu: targets::profile(cpu)?.clone(), word, classes: Rc::clone(classes) })
     }
 }
 
@@ -58,15 +62,13 @@ impl LIRTransform for LoopSlots {
         let Some(frame) = &self.frame else {
             return Ok(body);
         };
-        let spills = frame.borrow().capacities.iter().filter(|(_, width)| **width == 2).map(|(at, _)| *at).collect();
+        let m = self.word;
+        let spills = frame.borrow().capacities.iter().filter(|(_, width)| **width == i64::from(m)).map(|(at, _)| *at).collect();
         let park = self.cpu.cost("push_r")? + self.cpu.cost("pop_r")?;
         llrm_support::debug!("traffic", "{} {:?}", body.name, crate::backend::allocate::traffic_by_cause(&body));
-        Ok(promoted(&hoisted(&body, &spills), &spills, &self.cpu.operations, park))
+        Ok(promoted(m, &self.classes.available, &hoisted(m, &self.classes.available, &body, &spills), &spills, &self.cpu.operations, park))
     }
 }
-
-const WORD: u32 = 2;
-const ROOTS: [Register; 6] = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
 
 /// The slot `mem` names, when it is a whole frame cell.
 fn slot(mem: &Mem) -> Option<i64> {
@@ -85,13 +87,15 @@ fn is_bp(register: Register) -> bool {
 }
 
 /// The word slot `mem` names, when it is exactly one.
-fn word_slot(mem: &Mem) -> Option<i64> {
-    slot(mem).filter(|_| mem.width == WORD)
+fn word_slot(m: u32, mem: &Mem) -> Option<i64> {
+    slot(mem).filter(|_| mem.width == m)
 }
 
 /// How one instruction reaches the frame.
 #[derive(Default)]
 struct Touch {
+    /// The slot width the accesses were sorted by.
+    word: u32,
     reads: BTreeSet<i64>,
     writes: BTreeSet<i64>,
     /// Frame bytes it reaches other than as exactly one word, which no
@@ -114,7 +118,7 @@ struct Reach {
 impl Touch {
     /// Whether an access that is not exactly word slot `at` reads it, or writes it.
     fn reaches(&self, at: i64, writing: bool) -> bool {
-        self.wide.iter().any(|one| one.from < at + i64::from(WORD) && at < one.to && if writing { one.written } else { one.read })
+        self.wide.iter().any(|one| one.from < at + i64::from(self.word) && at < one.to && if writing { one.written } else { one.read })
     }
 
     /// Whether this reads word slot `at` in whole or in part.
@@ -128,8 +132,8 @@ impl Touch {
     }
 }
 
-fn touch(one: &Insn) -> Touch {
-    let mut out = Touch::default();
+fn touch(m: u32, one: &Insn) -> Touch {
+    let mut out = Touch { word: m, ..Touch::default() };
     let Some(what) = one.what.as_ref() else {
         out.other = true;
         out.traps = true;
@@ -161,7 +165,7 @@ fn touch(one: &Insn) -> Touch {
                     out.other = true;
                 } else if is_bp(mem.through) {
                     // An address of the frame is a pointer into it.
-                    match slot(mem).filter(|_| mem.width == WORD && what.op != Operation::Address) {
+                    match slot(mem).filter(|_| mem.width == m && what.op != Operation::Address) {
                         Some(at) if written => {
                             out.writes.insert(at);
                             if !moves {
@@ -188,13 +192,13 @@ fn touch(one: &Insn) -> Touch {
 }
 
 /// Blocks where slot `at` may be read before it is written.
-fn live_in(body: &LirBody, at: i64) -> BTreeSet<i64> {
+fn live_in(m: u32, body: &LirBody, at: i64) -> BTreeSet<i64> {
     let first = body
         .blocks
         .iter()
         .map(|block| {
             let seen = block.insns.iter().find_map(|one| {
-                let touched = touch(one);
+                let touched = touch(m, one);
                 if touched.reads_slot(at) {
                     Some(true)
                 } else {
@@ -219,36 +223,36 @@ fn live_in(body: &LirBody, at: i64) -> BTreeSet<i64> {
 }
 
 /// The word register `root` names, as a plain operand.
-fn word(root: Register) -> Loc {
-    Loc::Reg(Reg { register: target::named(root, 2), width: WORD })
+fn word(m: u32, root: Register) -> Loc {
+    Loc::Reg(Reg { register: target::named(root, i64::from(m)), width: m })
 }
 
-fn plain_word(place: &Loc, root: Register) -> bool {
-    matches!(place, Loc::Reg(reg) if reg.width == WORD && ir::root(reg.register) == ir::root(root))
+fn plain_word(m: u32, place: &Loc, root: Register) -> bool {
+    matches!(place, Loc::Reg(reg) if reg.width == m && ir::root(reg.register) == ir::root(root))
 }
 
 /// A reload of a slot into `root`: `mov r,[slot]`.
-fn reload_of(one: &Insn, root: Register) -> Option<i64> {
+fn reload_of(m: u32, one: &Insn, root: Register) -> Option<i64> {
     let what = one.what.as_ref()?;
     match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
-        (Operation::Move, [dest], [Loc::Mem(mem)]) if plain_word(dest, root) && mem.width == WORD => slot(mem),
+        (Operation::Move, [dest], [Loc::Mem(mem)]) if plain_word(m, dest, root) && mem.width == m => slot(mem),
         _ => None,
     }
 }
 
 /// Whether `one` reads `root` only as a plain word source and writes none of it.
-fn reads_plainly(one: &Insn, root: Register, effect: &liveness::Effect) -> bool {
+fn reads_plainly(m: u32, one: &Insn, root: Register, effect: &liveness::Effect) -> bool {
     let Some(what) = one.what.as_ref() else {
         return false;
     };
     let lanes = _lanes(root);
-    let low = _lanes(target::named(root, 2));
+    let low = _lanes(target::named(root, i64::from(m)));
     effect.writes.is_disjoint(&lanes)
         && effect.reads.iter().filter(|lane| lanes.contains(lane)).all(|lane| low.contains(lane))
         && !what.dests.iter().any(|place| matches!(place, Loc::Reg(reg) if ir::root(reg.register) == ir::root(root)))
-        && what.sources.iter().any(|place| plain_word(place, root))
+        && what.sources.iter().any(|place| plain_word(m, place, root))
         && what.sources.iter().chain(&what.dests).all(|place| match place {
-            Loc::Reg(reg) if ir::root(reg.register) == ir::root(root) => plain_word(place, root),
+            Loc::Reg(reg) if ir::root(reg.register) == ir::root(root) => plain_word(m, place, root),
             Loc::Mem(mem) => [mem.through, mem.index_through].iter().all(|one| ir::root(*one) != ir::root(root)),
             _ => true,
         })
@@ -265,6 +269,8 @@ enum Hold {
 
 /// Registers the loop leaves free, untouched ones first, parked ones last.
 fn free(
+    m: u32,
+    roots: &[Register],
     body: &LirBody,
     one: &Loop,
     index: &BTreeMap<i64, usize>,
@@ -272,7 +278,7 @@ fn free(
     exits: &BTreeSet<i64>,
 ) -> Vec<(Register, Hold)> {
     let mut out = Vec::new();
-    'roots: for root in ROOTS {
+    'roots: for root in roots.iter().copied() {
         let lanes = _lanes(root);
         let through = [one.header].iter().chain(exits).any(|at| !live_into[at].is_disjoint(&lanes));
         let mut folded = Vec::new();
@@ -280,7 +286,7 @@ fn free(
             let block = &body.blocks[index[at]];
             let mut reloaded = None;
             for (position, insn) in block.insns.iter().enumerate() {
-                let Some(effect) = liveness::effect(insn) else {
+                let Some(effect) = liveness::effect(body.bits, insn) else {
                     continue 'roots;
                 };
                 if effect.reads.is_disjoint(&lanes) && effect.writes.is_disjoint(&lanes) {
@@ -289,21 +295,21 @@ fn free(
                 if through {
                     continue 'roots;
                 }
-                if let Some(from) = reload_of(insn, root) {
+                if let Some(from) = reload_of(m, insn, root) {
                     reloaded = Some(from);
                     folded.push((index[at], position, from));
-                } else if let Some(from) = reloaded.filter(|_| reads_plainly(insn, root, &effect)) {
+                } else if let Some(from) = reloaded.filter(|_| reads_plainly(m, insn, root, &effect)) {
                     folded.push((index[at], position, from));
                 } else {
                     continue 'roots;
                 }
             }
         }
-        let wide = [one.header].iter().chain(exits).any(|at| !live_into[at].is_disjoint(&lanes.minus(&_lanes(target::named(root, 2)))));
+        let wide = [one.header].iter().chain(exits).any(|at| !live_into[at].is_disjoint(&lanes.minus(&_lanes(target::named(root, i64::from(m))))));
         out.push((
             root,
             match (through, folded.is_empty()) {
-                (true, _) => Hold::Parked(if wide { 4 } else { WORD }),
+                (true, _) => Hold::Parked(if wide { 4 } else { m }),
                 (false, true) => Hold::Untouched,
                 (false, false) => Hold::Folded(folded),
             },
@@ -342,20 +348,20 @@ fn made(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) 
     Arc::new(Insn::new(at, Some((at, at)), Some(what), Vec::new(), Vec::new()))
 }
 
-fn cell(at: i64) -> Mem {
-    Mem { through: Register::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, at)), WORD) }
+fn cell(m: u32, at: i64) -> Mem {
+    Mem { through: Register::BP, disp_width: 2, ..Mem::new(Some(Addr::new(Space::Frame, at)), m) }
 }
 
 /// `one` with each slot access made its register.
-fn rewritten(one: &Arc<Insn>, homes: &BTreeMap<i64, Loc>) -> Arc<Insn> {
+fn rewritten(m: u32, one: &Arc<Insn>, homes: &BTreeMap<i64, Loc>) -> Arc<Insn> {
     let Some(what) = one.what.as_ref() else {
         return Arc::clone(one);
     };
     let swap = |place: &Loc| match place {
-        Loc::Mem(mem) => word_slot(mem).and_then(|at| homes.get(&at)).cloned().unwrap_or_else(|| place.clone()),
+        Loc::Mem(mem) => word_slot(m, mem).and_then(|at| homes.get(&at)).cloned().unwrap_or_else(|| place.clone()),
         other => other.clone(),
     };
-    if !what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Mem(mem) if word_slot(mem).is_some_and(|at| homes.contains_key(&at)))) {
+    if !what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Mem(mem) if word_slot(m, mem).is_some_and(|at| homes.contains_key(&at)))) {
         return Arc::clone(one);
     }
     let what = Semantics {
@@ -368,22 +374,22 @@ fn rewritten(one: &Arc<Insn>, homes: &BTreeMap<i64, Loc>) -> Arc<Insn> {
 
 /// Whether `one` still encodes with slot `at` in a register: an x87 store
 /// or a far-pointer load takes only memory.
-fn registrable(one: &Arc<Insn>, at: i64) -> bool {
-    let touched = touch(one);
+fn registrable(m: u32, bits: u32, home: Register, one: &Arc<Insn>, at: i64) -> bool {
+    let touched = touch(m, one);
     if touched.reaches(at, false) || touched.reaches(at, true) {
         return false;
     }
     if !touched.reads.contains(&at) && !touched.writes.contains(&at) {
         return true;
     }
-    let homes = BTreeMap::from([(at, word(Register::DI))]);
-    rewritten(one, &homes).what.as_ref().is_some_and(|what| select::emit(what, 0, None, false, false, None).is_some())
+    let homes = BTreeMap::from([(at, word(m, home))]);
+    rewritten(m, one, &homes).what.as_ref().is_some_and(|what| select::emit_in(bits, what, 0, None, false, false, None).is_some())
 }
 
 /// What holding a slot in a register saves each trip: a reload whose
 /// register is freed goes, one kept becomes a register move.
-fn saving(one: &Insn, at: i64, folded: bool, costs: &OperationCosts) -> i64 {
-    let touched = touch(one);
+fn saving(m: u32, one: &Insn, at: i64, folded: bool, costs: &OperationCosts) -> i64 {
+    let touched = touch(m, one);
     let (reads, writes) = (touched.reads_slot(at), touched.writes_slot(at));
     if !reads && !writes {
         return 0;
@@ -403,7 +409,7 @@ enum Source {
 /// never writes -- a slot, or a constant -- and which nothing reads before
 /// that load. A constant counts: a segment register takes one only as
 /// `push / pop`, which qbdemo's PLASMA ran every pixel.
-fn invariant(body: &LirBody, one: &Loop, index: &BTreeMap<i64, usize>, entering: &Lanes, root: Register, spills: &BTreeSet<i64>) -> Option<Source> {
+fn invariant(m: u32, body: &LirBody, one: &Loop, index: &BTreeMap<i64, usize>, entering: &Lanes, root: Register, spills: &BTreeSet<i64>) -> Option<Source> {
     let lanes = _lanes(root);
     if !entering.is_disjoint(&lanes) {
         return None;
@@ -411,18 +417,21 @@ fn invariant(body: &LirBody, one: &Loop, index: &BTreeMap<i64, usize>, entering:
     let mut from = None;
     for at in &one.body {
         for insn in &body.blocks[index[at]].insns {
-            let effect = liveness::effect(insn)?;
-            if effect.writes.is_disjoint(&lanes) {
+            let effect = liveness::effect(body.bits, insn)?;
+            // A `rep movs` steps si and di only if it runs: a conditional write, but one
+            // that makes the register unfit to hold its value from one trip to the next.
+            let may_write = peephole::_register_effects(body.bits, insn, true, false).map_or(effect.writes, |(_, writes)| effect.writes.or(&writes));
+            if may_write.is_disjoint(&lanes) {
                 continue;
             }
             let what = insn.what.as_ref()?;
             let source = match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
                 (Operation::Move, [Loc::Reg(reg)], [Loc::Mem(mem)])
-                    if ir::root(reg.register) == ir::root(root) && reg.width == WORD && mem.width == WORD =>
+                    if ir::root(reg.register) == ir::root(root) && reg.width == m && mem.width == m =>
                 {
                     Source::Slot(slot(mem)?)
                 }
-                (Operation::Move, [Loc::Reg(reg)], [Loc::Imm(imm)]) if ir::root(reg.register) == ir::root(root) && reg.width == WORD => {
+                (Operation::Move, [Loc::Reg(reg)], [Loc::Imm(imm)]) if ir::root(reg.register) == ir::root(root) && reg.width == m => {
                     Source::Constant(imm.clone())
                 }
                 _ => return None,
@@ -435,8 +444,8 @@ fn invariant(body: &LirBody, one: &Loop, index: &BTreeMap<i64, usize>, entering:
     }
     let insns = || one.body.iter().flat_map(|at| body.blocks[index[at]].insns.iter());
     let kept = match from.as_ref()? {
-        Source::Slot(at) if spills.contains(at) => !insns().any(|insn| touch(insn).writes_slot(*at)),
-        Source::Slot(at) => insns().all(|insn| spares(insn, *at)),
+        Source::Slot(at) if spills.contains(at) => !insns().any(|insn| touch(m, insn).writes_slot(*at)),
+        Source::Slot(at) => insns().all(|insn| spares(m, insn, *at)),
         Source::Constant(_) => true,
     };
     kept.then_some(from?)
@@ -444,7 +453,7 @@ fn invariant(body: &LirBody, one: &Loop, index: &BTreeMap<i64, usize>, entering:
 
 /// Whether `one` cannot write the frame cell at `at`: it writes memory only
 /// in far segments, at globals, or at other frame cells.
-fn spares(one: &Insn, at: i64) -> bool {
+fn spares(m: u32, one: &Insn, at: i64) -> bool {
     let Some(what) = one.what.as_ref() else {
         return false;
     };
@@ -453,7 +462,7 @@ fn spares(one: &Insn, at: i64) -> bool {
     }
     what.dests.iter().all(|place| match place {
         Loc::Mem(mem) => match (slot(mem), mem.addr) {
-            (Some(cell), _) => (cell - at).abs() >= i64::from(WORD) && mem.width <= WORD,
+            (Some(cell), _) => (cell - at).abs() >= i64::from(m) && mem.width <= m,
             (None, Some(addr)) => {
                 matches!(addr.space, Space::Far | Space::Segment | Space::Group | Space::External) && !is_bp(mem.through)
             }
@@ -464,7 +473,7 @@ fn spares(one: &Insn, at: i64) -> bool {
 }
 
 /// `body` with each loop-invariant reload moved to where its loop is entered.
-pub fn hoisted(body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
+pub fn hoisted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
     let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
     let index = body.blocks.iter().enumerate().map(|(position, block)| (block.at, position)).collect::<BTreeMap<_, _>>();
@@ -481,9 +490,9 @@ pub fn hoisted(body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
         if entries.is_empty() || !entries.iter().all(|at| body.blocks[index[at]].succ == [one.header]) {
             continue;
         }
-        let roots = ROOTS.iter().chain(target::SEGMENTS.iter().filter(|one| ![Register::CS, Register::SS].contains(one)));
+        let roots = available.iter().chain(target::SEGMENTS.iter().filter(|one| ![Register::CS, Register::SS].contains(one)));
         let moved = roots
-            .filter_map(|root| invariant(body, one, &index, &live_into[&one.header], *root, spills).map(|at| (*root, at)))
+            .filter_map(|root| invariant(m, body, one, &index, &live_into[&one.header], *root, spills).map(|at| (*root, at)))
             .collect::<Vec<_>>();
         if moved.is_empty() {
             continue;
@@ -532,7 +541,7 @@ pub fn hoisted(body: &LirBody, spills: &BTreeSet<i64>) -> LirBody {
 }
 
 /// `body` with each loop's spill slots in the registers it leaves free.
-pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, park: i64) -> LirBody {
+pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, park: i64) -> LirBody {
     let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
     let mut found = loops::loops(graph, Some(body.entry));
@@ -550,7 +559,7 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
         let insns = || one.body.iter().flat_map(|at| body.blocks[index[at]].insns.iter());
         let (mut slots, mut other, mut traps) = (BTreeSet::new(), false, false);
         for insn in insns() {
-            let touched = touch(insn);
+            let touched = touch(m, insn);
             other |= touched.other;
             traps |= touched.traps;
             slots.extend(touched.reads.into_iter().chain(touched.writes));
@@ -572,7 +581,7 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
         {
             continue;
         }
-        let registers = free(body, one, &index, &live_into, &exits);
+        let registers = free(m, available, body, one, &index, &live_into, &exits);
         let reloads = registers
             .iter()
             .flat_map(|(_, hold)| folds(hold).iter().map(|(block, position, _)| (*block, *position)))
@@ -580,12 +589,12 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
         // Most saved first.
         let mut ranked = slots
             .iter()
-            .filter(|at| insns().all(|insn| registrable(insn, **at)))
+            .filter(|at| insns().all(|insn| registrable(m, body.bits, *available.last().expect("a register to hold a slot"), insn, **at)))
             .map(|at| {
                 let mut saved = 0;
                 for block in &one.body {
                     for (position, insn) in body.blocks[index[block]].insns.iter().enumerate() {
-                        saved += saving(insn, *at, reloads.contains(&(index[block], position)), costs);
+                        saved += saving(m, insn, *at, reloads.contains(&(index[block], position)), costs);
                     }
                 }
                 (saved, *at)
@@ -596,8 +605,8 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
         // The trips a saving repeats: the header's frequency per entry.
         let entering: f64 = entries.iter().map(|from| busy.edge(*from, one.header)).sum();
         let trips = if entering > 0.0 { busy.block(one.header) / entering } else { 1.0 };
-        let written = |at: i64| insns().any(|insn| touch(insn).writes_slot(at));
-        let stored = |at: i64| written(at) && { let live = live_in(body, at); exits.iter().any(|to| live.contains(to)) };
+        let written = |at: i64| insns().any(|insn| touch(m, insn).writes_slot(at));
+        let stored = |at: i64| written(at) && { let live = live_in(m, body, at); exits.iter().any(|to| live.contains(to)) };
         // BP takes the last slot when the rest fill every free register.
         let bp = !other && !traps && ranked.len() == registers.len() + 1 && !stored(ranked.last().expect("a slot").1);
         let mut homes = BTreeMap::<i64, Loc>::new();
@@ -606,7 +615,7 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
             let parked = if matches!(hold, Hold::Parked(_)) { (entered + left) * park } else { 0 };
             let cost = entered * costs.load + if stored(*at) { left * costs.store } else { 0 } + parked;
             if *saved as f64 * trips > cost as f64 {
-                homes.insert(*at, word(*root));
+                homes.insert(*at, word(m, *root));
                 hosts.insert(*at, host);
             }
         }
@@ -614,7 +623,7 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
         if let Some(at) = bp_slot {
             let saved = ranked.last().expect("a slot").0;
             if saved as f64 * trips > (entered * (costs.store + costs.load) + left * costs.load) as f64 {
-                homes.insert(at, Loc::Reg(Reg { register: Register::BP, width: WORD }));
+                homes.insert(at, Loc::Reg(Reg { register: target::named(Register::BP, i64::from(m)), width: m }));
             }
         }
         // A register freed by folding its reloads is free only when each
@@ -631,7 +640,7 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
                 hosts.remove(&at);
             }
             if homes.len() < slots.len() {
-                homes.retain(|_, home| !matches!(home, Loc::Reg(reg) if reg.register == Register::BP));
+                homes.retain(|_, home| !matches!(home, Loc::Reg(reg) if is_bp(reg.register)));
             }
             if homes.len() == before {
                 break;
@@ -647,7 +656,7 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
         if homes.is_empty() {
             continue;
         }
-        let with_bp = homes.values().any(|home| matches!(home, Loc::Reg(reg) if reg.register == Register::BP));
+        let with_bp = homes.values().any(|home| matches!(home, Loc::Reg(reg) if is_bp(reg.register)));
         let parked = hosts
             .values()
             .filter_map(|host| match &registers[*host] {
@@ -665,16 +674,16 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
                 match fold {
                     Some((_, _, from, root)) => {
                         let home = homes[from].clone();
-                        if reload_of(insn, *root).is_some() {
+                        if reload_of(m, insn, *root).is_some() {
                             gone.extend(insn.defines.iter().copied());
                             continue;
                         }
                         let what = insn.what.as_ref().expect("a plain reader");
-                        let swap = |place: &Loc| if plain_word(place, *root) { home.clone() } else { place.clone() };
+                        let swap = |place: &Loc| if plain_word(m, place, *root) { home.clone() } else { place.clone() };
                         let what = Semantics { sources: what.sources.iter().map(swap).collect(), ..what.clone() };
-                        insns.push(rewritten(&unread(&Arc::new(Insn { what: Some(what), ..(**insn).clone() }), &gone), &homes));
+                        insns.push(rewritten(m, &unread(&Arc::new(Insn { what: Some(what), ..(**insn).clone() }), &gone), &homes));
                     }
-                    None => insns.push(rewritten(&unread(insn, &gone), &homes)),
+                    None => insns.push(rewritten(m, &unread(insn, &gone), &homes)),
                 }
             }
             blocks[index[at]] = block.with_insns(insns);
@@ -690,8 +699,8 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
                 place += 1;
             }
             for (slot, home) in &homes {
-                let load = made(near, Operation::Move, "mov", vec![home.clone()], vec![Loc::Mem(cell(*slot))]);
-                if matches!(home, Loc::Reg(reg) if reg.register == Register::BP) {
+                let load = made(near, Operation::Move, "mov", vec![home.clone()], vec![Loc::Mem(cell(m, *slot))]);
+                if matches!(home, Loc::Reg(reg) if is_bp(reg.register)) {
                     let bp = home.clone();
                     insns.insert(insns.len() - usize::from(jumps), made(near, Operation::Push, "push", vec![], vec![bp]));
                     insns.insert(insns.len() - usize::from(jumps), load);
@@ -708,12 +717,12 @@ pub fn promoted(body: &LirBody, spills: &BTreeSet<i64>, costs: &OperationCosts, 
             let near = insns.first().map_or(*to, |insn| insn.at);
             let mut place = 0;
             if with_bp {
-                insns.insert(0, made(near, Operation::Pop, "pop", vec![Loc::Reg(Reg { register: Register::BP, width: WORD })], vec![]));
+                insns.insert(0, made(near, Operation::Pop, "pop", vec![Loc::Reg(Reg { register: target::named(Register::BP, i64::from(m)), width: m })], vec![]));
                 place = 1;
             }
             for (slot, home) in &homes {
                 if stored(*slot) {
-                    insns.insert(place, made(near, Operation::Move, "mov", vec![Loc::Mem(cell(*slot))], vec![home.clone()]));
+                    insns.insert(place, made(near, Operation::Move, "mov", vec![Loc::Mem(cell(m, *slot))], vec![home.clone()]));
                     place += 1;
                 }
             }
@@ -771,10 +780,10 @@ mod tests {
                         bump(0x10, Register::BX),
                         bump(0x11, Register::DX),
                         bump(0x12, Register::DI),
-                        with(made(0x13, Operation::Move, "mov", vec![reg(Register::SI)], vec![Loc::Mem(cell(-4))]), vec![5], vec![]),
+                        with(made(0x13, Operation::Move, "mov", vec![reg(Register::SI)], vec![Loc::Mem(cell(2, -4))]), vec![5], vec![]),
                         with(Arc::new(Insn::new(0x13, Some((0x13, 0x13)), Some(Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) }), vec![], vec![])), vec![], vec![5]),
                         with(made(0x14, Operation::Binary, "add", vec![reg(Register::AX)], vec![reg(Register::AX), reg(Register::SI)]), vec![], vec![5]),
-                        with(made(0x15, Operation::Move, "mov", vec![reg(Register::SI)], vec![Loc::Mem(cell(-4))]), vec![6], vec![]),
+                        with(made(0x15, Operation::Move, "mov", vec![reg(Register::SI)], vec![Loc::Mem(cell(2, -4))]), vec![6], vec![]),
                         with(made(0x15, Operation::Binary, "add", vec![reg(Register::BX)], vec![reg(Register::BX), reg(Register::SI)]), vec![], vec![6]),
                         bump(0x15, Register::CX),
                         Arc::new(Insn::new(0x16, Some((0x16, 0x17)), Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }), vec![], vec![])),
@@ -787,11 +796,86 @@ mod tests {
             IndexMap::default(),
         );
         let costs = &crate::backend::cpu::profile("486").unwrap().operations;
-        let out = promoted(&body, &BTreeSet::from([-4]), costs, 2);
+        let out = promoted(2, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::from([-4]), costs, 2);
         let reloads = |body: &LirBody| body.insns().iter().filter(|one| one.defines.contains(&5)).count();
         assert_eq!(reloads(&body), 1);
         assert_eq!(reloads(&out), 0, "the reload stays: the test does not reach the fold");
         let said = crate::backend::verify::verify(&out, false);
         assert!(said.is_empty(), "{said:?}");
+    }
+
+    /// `for (...) copy(a, b)` with `mov di, a` in the loop: `rep movsd` leaves di past the
+    /// cells it moved, so a hoisted `mov di, a` ran once and every later trip copied to
+    /// the wrong place (tests/run/c/es_across_copy printed 15054 for 186450).
+    #[test]
+    fn test_a_register_a_string_move_advances_is_not_loop_invariant() {
+        let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
+        let copy = Semantics {
+            name: Some("movsd".to_owned()),
+            dests: vec![Loc::Mem(crate::model::ir::Mem::new(None, 0)), reg(Register::SI), reg(Register::DI), reg(Register::CX)],
+            sources: vec![reg(Register::CX), reg(Register::SI), reg(Register::DI), reg(Register::DS), reg(Register::ES)],
+            ..Semantics::new(Operation::Copy)
+        };
+        let body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]),
+                block(
+                    0x10,
+                    vec![
+                        made(0x10, Operation::Move, "mov", vec![reg(Register::SI)], vec![word(8)]),
+                        made(0x11, Operation::Move, "mov", vec![reg(Register::DI)], vec![word(4)]),
+                        made(0x12, Operation::Move, "mov", vec![reg(Register::CX)], vec![word(50)]),
+                        made(0x12, Operation::Move, "mov", vec![reg(Register::BX)], vec![word(7)]),
+                        Arc::new(Insn::new(0x13, Some((0x13, 0x14)), Some(copy), vec![], vec![])),
+                        Arc::new(Insn::new(0x15, Some((0x15, 0x16)), Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }), vec![], vec![])),
+                    ],
+                    vec![0x10, 0x20],
+                ),
+                block(0x20, vec![Arc::new(Insn { reads_complete: true, ..(*made(0x20, Operation::Return, "ret", vec![], vec![])).clone() })], vec![]),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let out = super::hoisted(2, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::new());
+        let in_loop = out.blocks.iter().find(|one| one.at == 0x10).expect("the loop");
+        let sets = |register: Register| in_loop.insns.iter().any(|one| matches!(one.what.as_ref().map(|what| what.dests.as_slice()), Some([Loc::Reg(reg)]) if reg.register == register));
+        assert!(!sets(Register::BX), "premise: an invariant constant leaves the loop");
+        assert!(sets(Register::DI) && sets(Register::SI), "the loop sets si and di");
+    }
+
+    /// m32's slots are dwords: LoopSlots was dropped there. Its BP parking once found no BP
+    /// to pop, because EBP is not the register BP: the loop left its exit with EBP holding a slot's
+    /// value and a program ran quicksort into a general protection fault.
+    #[test]
+    fn test_a_dword_slot_parked_in_the_frame_register_is_pushed_and_popped() {
+        let wide = |register: Register| Loc::Reg(Reg { register, width: 4 });
+        let one = Imm { value: 1, width: 4, address: None };
+        let bump = |at: i64, register: Register| made(at, Operation::Binary, "add", vec![wide(register)], vec![wide(register), Loc::Imm(one.clone())]);
+        let slot = |at: i64| Loc::Mem(cell(4, at));
+        let busy = [Register::EAX, Register::EBX, Register::ECX, Register::EDX, Register::ESI, Register::EDI];
+        let mut loop_body: Vec<Arc<Insn>> = busy.iter().enumerate().map(|(at, register)| bump(0x10 + at as i64, *register)).collect();
+        for at in 0..8 {
+            loop_body.push(made(0x20 + at, Operation::Binary, "add", vec![wide(Register::EAX)], vec![wide(Register::EAX), slot(-4)]));
+        }
+        loop_body.push(Arc::new(Insn::new(0x30, Some((0x30, 0x31)), Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }), vec![], vec![])));
+        let body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]),
+                block(0x10, loop_body, vec![0x10, 0x40]),
+                block(0x40, vec![made(0x40, Operation::Return, "ret", vec![], vec![])], vec![]),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let costs = &crate::backend::cpu::profile("486").unwrap().operations;
+        let out = promoted(4, &crate::backend::classes::RegisterClasses::m16().available, &body, &BTreeSet::from([-4]), costs, 2);
+        let is_bp = |insn: &Arc<Insn>, op: Operation| insn.what.as_ref().is_some_and(|what| what.op == op && what.dests.iter().chain(&what.sources).any(|place| matches!(place, Loc::Reg(reg) if super::is_bp(reg.register))));
+        let pushes = out.insns().iter().filter(|insn| is_bp(insn, Operation::Push)).count();
+        let pops = out.insns().iter().filter(|insn| is_bp(insn, Operation::Pop)).count();
+        assert_eq!((pushes, pops), (1, 1), "the slot lives in EBP between a push and a pop");
     }
 }

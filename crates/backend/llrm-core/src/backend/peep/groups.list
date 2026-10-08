@@ -1,0 +1,24 @@
+# The rule groups of a target's peephole.peep that the schedule runs, and the
+# one form of each it runs: `body` rewrites a whole body (peephole.rs), `insns` a
+# run of instructions (isel/combined.rs). build.rs makes `peep::Rules` from this
+# list and refuses a group the .peep has that is not here, or lacks its form.
+extensions body
+pushed_constants body
+pushes body
+narrowed_moves body
+commuted body
+transferred body
+shuttles body
+restored_copies body
+fused body
+far_loads body
+increments body
+borrows body
+doubled body
+narrowed_arithmetic body
+widened_moves body
+zero_extensions body
+zero_compares body
+memory_arguments insns
+paired_pushes insns
+immediate_arguments insns

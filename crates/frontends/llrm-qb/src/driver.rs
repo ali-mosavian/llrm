@@ -45,17 +45,21 @@ pub struct Frontend {
     /// Integer arithmetic and narrowing raise error 6, Overflow:
     /// `-fsanitize=signed-integer-overflow`.
     pub checked_overflow: bool,
+    /// Each procedure compares SP with the runtime's limit on entry:
+    /// `-fsanitize=stack`.
+    pub checked_stack: bool,
     pub mbf: bool,
     pub alternate_math: bool,
     /// Nothing outside the source calls its procedures: `--whole-program`.
     pub whole_program: bool,
     /// Lay out dynamic arrays read together in one allocation: `--array-merging`.
     pub array_merging: bool,
-    /// Procedures frame themselves where the runtime needs no frame, not
-    /// only where the dialect does so by default: `--own-frames`.
-    pub own_frames: bool,
+    /// Every procedure uses the runtime's frame entry and exit: `--runtime-frames`.
+    pub runtime_frames: bool,
     /// Errors in a module handler report their BASIC line: `--error-lines`.
     pub error_lines: bool,
+    /// The most bytes the target's data segment holds: its description's, set by the CLI that bound the target.
+    pub segment_bytes: Option<usize>,
     pub includes: Vec<PathBuf>,
 }
 
@@ -71,12 +75,14 @@ impl Frontend {
             checked_division: false,
             debug: false,
             checked_overflow: false,
+            checked_stack: false,
             mbf: false,
             alternate_math: false,
             whole_program: false,
             array_merging: false,
-            own_frames: false,
+            runtime_frames: false,
             error_lines: false,
+            segment_bytes: None,
             includes: Vec::new(),
         }
     }
@@ -107,8 +113,9 @@ fn _options(source: &Path, frontend: &Frontend) -> Result<qbfront::driver::Args,
             alternate_math: frontend.alternate_math,
             whole_program: frontend.whole_program,
             array_merging: frontend.array_merging,
-            own_frames: frontend.own_frames,
+            runtime_frames: frontend.runtime_frames,
             error_lines: frontend.error_lines,
+            segment_bytes: frontend.segment_bytes,
         },
         debug: frontend.debug,
         syntax: false,
@@ -141,12 +148,18 @@ pub fn parsed(source: &Path, frontend: &Frontend, dump: Option<&Path>) -> Result
         }
         std::fs::write(dump, &stdout).map_err(|error| FrontendError(error.to_string()))?;
     }
-    decoded(&stdout)
+    let mut program = decoded(&stdout, frontend.checked_arrays)?;
+    if frontend.checked_stack {
+        let family = program.runtime.value();
+        program.stack_check = Some(llrm_core::abi::runtime::semantics::stack(family).ok_or_else(|| FrontendError(format!("the {family} runtime states no stack limit")))?);
+    }
+    Ok(program)
 }
 
 /// The program qbfront's HIR text `text` states, with what the runtime
-/// adds: its entry, and what its routines promise.
-pub fn decoded(text: &str) -> Result<model::Program, FrontendError> {
+/// adds: its entry, and what its routines promise. `checked` is the
+/// program's `-fsanitize=bounds`.
+pub fn decoded(text: &str, checked: bool) -> Result<model::Program, FrontendError> {
     let mut program =
         codec::decode(text).map_err(|error| FrontendError(format!("qbfront produced invalid HIR: {error}")))?;
     let family = program.runtime.value();
@@ -162,6 +175,10 @@ pub fn decoded(text: &str) -> Result<model::Program, FrontendError> {
     if !handles {
         program.promises = model::RuntimePromises::of(llrm_core::abi::runtime::ENTERS_USER_CODE.iter().copied(), llrm_core::abi::runtime::writers(family), []);
     }
+    // Where an error is handled the routine raises it, as the checks the frontend writes do.
+    program.promises.checked = checked || handles;
+    program.promises.descriptor = llrm_core::abi::runtime::semantics::descriptor(family);
+    program.promises.routines = llrm_core::abi::runtime::semantics::routines();
     program.promises.nounwind = llrm_core::abi::runtime::CONTRACTS.iter().filter(|(_, contract)| !contract.raises_error).map(|(name, _)| name.clone()).collect();
     program.promises.no_retain = llrm_core::abi::runtime::captures_nothing().into_iter().map(str::to_owned).collect();
     program.promises.no_return = llrm_core::abi::runtime::never_returning().into_iter().map(str::to_owned).collect();

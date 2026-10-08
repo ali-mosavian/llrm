@@ -1,0 +1,9 @@
+fn mix(n: i16) -> i32:
+    let mut t: i32 = 0
+    for i in 1..n:
+        t += i32(i & 255)
+    return t
+
+fn main() -> i16:
+    print(mix(30000))
+    return 0

@@ -944,8 +944,8 @@ fn array_bounds_are_typed_descriptor_calls_not_array_element_syntax() {
     )
     .unwrap();
     let hir = compile(&module, "bounds", Dialect::QuickBasic45, "qb45").unwrap();
-    assert!(hir.contains("\"callee\":\"B$LBND\""));
-    assert!(hir.contains("\"callee\":\"B$UBND\""));
+    // Bounds DIM stated are folded (#380); no call remains.
+    assert!(!hir.contains("B$LBND") && !hir.contains("B$UBND"));
 }
 
 #[test]
@@ -966,7 +966,7 @@ fn array_order_is_an_explicit_compiler_option() {
 }
 
 #[test]
-fn huge_array_option_uses_the_measured_hary_contract() {
+fn huge_array_option_addresses_elements_inline_not_through_hary() {
     // PDHUGE wrapped its 80,802-byte index at 64 KiB because /Ah never
     // reached semantic lowering and the descriptor selector never advanced.
     let module = parse(
@@ -979,14 +979,14 @@ fn huge_array_option_uses_the_measured_hary_contract() {
     let huge = compile_with_options(&module, "huge", Dialect::Pds71, "pds71", &Options { huge_arrays: true, ..Options::default() })
     .unwrap();
     assert!(!ordinary.contains("\"callee\":\"B$HARY\""));
-    assert!(huge.contains("\"callee\":\"B$HARY\""));
-    assert!(huge.contains("\"address\":\"huge\""));
+    // #371: the element is a pointer plus a 32-bit offset, no B$HARY.
+    assert!(!huge.contains("B$HARY"));
     assert!(huge.contains("\"type\":1,\"value\":514"));
     assert_ne!(ordinary, huge);
 }
 
 #[test]
-fn checked_array_option_routes_static_access_through_hary() {
+fn checked_array_option_checks_static_access_in_code_not_through_hary() {
     // PDRTC printed its no-error sentinel when /D was dropped and the
     // out-of-range static-array store was lowered as unchecked arithmetic.
     let module = parse("dim a(1) as integer\na(2) = 7\n", Dialect::Pds71).unwrap();
@@ -995,8 +995,9 @@ fn checked_array_option_routes_static_access_through_hary() {
     let checked = compile_with_options(&module, "checked", Dialect::Pds71, "pds71", &Options { checked_arrays: true, ..Options::default() })
     .unwrap();
     assert!(!ordinary.contains("\"callee\":\"B$HARY\""));
-    assert!(checked.contains("\"callee\":\"B$HARY\""));
-    assert!(checked.contains("\"address\":\"huge\""));
+    // #371: the subscript is compared in code and raises ERROR 9.
+    assert!(!checked.contains("B$HARY"));
+    assert_ne!(ordinary, checked);
 }
 
 #[test]
@@ -2364,4 +2365,33 @@ fn volatile_goes_after_as_and_byref_is_accepted() {
     let volatile: Vec<bool> = sub.parameters.iter().map(|one| one.declaration.volatile).collect();
     assert_eq!(volatile, [true, true, true, false, false]);
     assert_eq!(sub.parameters.iter().map(|one| (one.by_value, one.segmented)).collect::<Vec<_>>(), [(false, false), (true, false), (false, true), (false, false), (false, false)]);
+}
+
+/// A near runtime's literal was laid out by a table of qbfront's own (length at 0, a data pointer at 2, bytes
+/// from 4) beside the runtime description's: two owners of one fact. The literal follows the description.
+#[test]
+fn a_near_string_literal_is_laid_out_as_the_runtime_description_says() {
+    for (dialect, runtime) in [(Dialect::QuickBasic45, "qb45"), (Dialect::Pds71, "pds71")] {
+        let layout = llrm_qbruntime::semantics::descriptor(runtime).expect("a near runtime states its descriptor");
+        let module = parse("x$ = \"ab\"\n", dialect).unwrap();
+        let hir = compile(&module, "lit", dialect, runtime).unwrap();
+        let mut bytes = vec![0u8; layout.size as usize];
+        bytes[layout.length as usize] = 2;
+        bytes.extend_from_slice(b"ab");
+        let text: Vec<String> = bytes.iter().map(u8::to_string).collect();
+        assert!(hir.contains(&format!("\"bytes\":[{}]", text.join(","))), "{runtime}: {hir}");
+        assert!(hir.contains(&format!("\"addend\":{}", layout.size)) && hir.contains(&format!("\"at\":{}", layout.data)), "{runtime}: {hir}");
+    }
+}
+
+/// The near-data budget was a literal 64 KiB: a target whose data segment holds 1 KiB got a 2 KiB array
+/// accepted, and a target with no segments was refused one. The target's description says how much, once.
+#[test]
+fn the_near_data_budget_is_the_targets_segment() {
+    let module = parse("DIM SHARED a(1 TO 1000) AS INTEGER\na(1) = 1\n", Dialect::Pds71).unwrap();
+    let on = |segment_bytes| compile_with_options(&module, "m", Dialect::Pds71, "pds71", &Options { segment_bytes, ..Options::default() });
+    let error = on(Some(1024)).unwrap_err().message;
+    assert!(error.contains("exceeds the 1 KiB near-data budget"), "{error}");
+    assert!(on(Some(65536)).is_ok());
+    assert!(on(None).is_ok());
 }

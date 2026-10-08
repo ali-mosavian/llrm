@@ -13,7 +13,7 @@ use crate::model::passes::LIRTransform;
 /// An instruction that names a value in two different required registers.
 fn requires_two_registers(body: &LirBody) -> bool {
     body.insns().iter().filter_map(|one| one.what.as_ref()).any(|what| {
-        let required = target::requirements(what);
+        let required = crate::backend::classes::RegisterClasses::m16().requirements(what);
         let named = |side: &str, index: usize| match (side, index) {
             ("dest", at) => what.dests.get(at),
             (_, at) => what.sources.get(at),
@@ -45,7 +45,7 @@ fn longest_copy(body: &LirBody) -> usize {
     body.blocks.iter().map(|block| block.insns.iter().filter(|one| one.group.is_some()).count()).max().unwrap_or(0)
 }
 
-/// `conc7` at `--cpu Core`: a far-pointer loop spills a dword and the word
+/// `conc7` at `-march=core2`: a far-pointer loop spills a dword and the word
 /// of it another value reads, and the loop's parallel copy exchanges them.
 /// ParallelCopy refused it ("need a temporary", #106). Which cycles the
 /// allocator leaves depends on how it spills, so the premise is the loop's
@@ -85,13 +85,14 @@ fn far_pointer_slot_also_read_as_words(body: &LirBody) -> bool {
     })
 }
 
-/// `conc9` at `--cpu Core` reloads a far pointer's halves as words, which
+/// `conc9` at `-march=core2` reloads a far pointer's halves as words, which
 /// the peephole fuses into `les`; LoopSlots then held the low word's slot in
 /// a register and rewrote the `les` to read it ("les si, dx": no encoding,
 /// llrm-nib stopped, #107).
 #[test]
 fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_words_in_registers() {
-    let (body, phases) = before_regalloc_in(Calls::Everything, "conc9_les.ll", "f_conc9_s2_xi_bgnlnpfpn_index_n_st1_sum", "Core");
+    // Without the spiller: the selector class it now holds in registers no longer leaves this far pointer reloaded as words.
+    let (body, phases) = crate::backend::regalloc_input::before_phase_skipping(Calls::Everything, "conc9_les.ll", "f_conc9_s2_xi_bgnlnpfpn_index_n_st1_sum", "Core", "RegAlloc", &["SsaSpill"]);
     let mut body = body;
     let mut phases = phases.into_iter();
     for mut phase in phases.by_ref() {
@@ -107,14 +108,15 @@ fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_words_in_r
     }
 }
 
-/// Seven pointers walking 24-byte records at `--cpu Core`: the loop's
+/// Seven pointers walking 24-byte records at `-march=core2`: the loop's
 /// parallel copy has a move for each, each reading an address made again.
 /// A value made for the copy lives across all of it, and seven of them left
 /// no register for the eighth ("value#125 cannot be spilled and ...", found
 /// by the loop corpus after the products moved before the copy).
 #[test]
 fn test_the_addresses_a_parallel_copy_reads_do_not_all_live_across_it() {
-    let (body, phases) = before_regalloc("walks7_s24.ll", "_f_conc7_s24_xi_bln_index_n_st1_sum_as_end", "Core");
+    // Without the spiller: a phi it moves to memory leaves a copy of six, and the allocator must still take seven.
+    let (body, phases) = crate::backend::regalloc_input::before_regalloc_unspilled("walks7_s24.ll", "_f_conc7_s24_xi_bln_index_n_st1_sum_as_end", "Core");
     let longest = longest_copy(&body);
     assert!(longest >= 7, "premise: a parallel copy of {longest} moves");
     let done = through(body, phases);

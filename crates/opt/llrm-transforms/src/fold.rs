@@ -101,9 +101,20 @@ fn _folded(context: &mut Context, layout: &DataLayout, function: &mut Function, 
 fn _numbers(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, calls: &Calls) -> bool {
     let (values, edge) = {
         let held = manager::Held::of(context, layout, function, analyses, true);
-        let unit = held.unit(context, layout, function, analyses.outer());
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let unit = held.unit(context, layout, function, &outer);
         let edges = floatfacts::exit_cells(&unit, calls);
-        let facts = consts::known(&unit, Some(calls), Some(&edges), None);
+        // With no edges the answer is the manager's, where it was of these writes.
+        let shared = (edges.is_empty() && *calls == manager::writes(context, layout, function, analyses)).then(|| analyses.get::<manager::ThroughMemory>(context, layout, function));
+        let facts = match shared.as_deref() {
+            Some(Ok(through)) => {
+                if std::env::var_os("LLRM_CHECK_FACTS").is_some() {
+                    assert!(*through == consts::known(&unit, Some(calls), Some(&edges), None), "ThroughMemory's integers are not those fold derives for itself");
+                }
+                through.clone()
+            }
+            _ => consts::known(&unit, Some(calls), Some(&edges), None),
+        };
         (_known_values(&unit, &facts), _folded_phi_edges(&unit, &facts))
     };
     let mut rewritten = BTreeSet::new();

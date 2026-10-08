@@ -1,5 +1,5 @@
 ' dialect: pds71
-' flags: -O2 --cpu 486 --huge-arrays
+' flags: -O2 -march=i486 --huge-arrays
 ' 21843 triples of INTEGERs (131058 bytes) REDIM'd /AH: 6-byte elements, a stride that does not divide 64K, over three windows. PDS /AH (BC too) refuses 21845 of them.
 DEFINT A-Z
 TYPE Tri

@@ -127,14 +127,14 @@ fn main() -> i16:
     // The runtime routine stays declared either way; only its calls go.
     let checks = |unchecked_bounds| {
         let module = super::parse(super::lex(source).unwrap()).unwrap();
-        let hir = super::compile_module(module, "t", &super::Frontend { unchecked_bounds, ..Default::default() }).unwrap();
+        let hir = super::compile_module(module, "t", &super::Frontend { unchecked_bounds, ..crate::real_mode() }).unwrap();
         hir.replace([' ', '\n'], "").matches("\"callee\":\"N$EBND\"").count()
     };
     assert_eq!(checks(false), 3);
     assert_eq!(checks(true), 0);
     let constant = "fn main() -> i16:\n    let values: i16[3] = [1, 2, 3]\n    return values[3]\n";
     let module = super::parse(super::lex(constant).unwrap()).unwrap();
-    let refused = super::compile_module(module, "t", &super::Frontend { unchecked_bounds: true, ..Default::default() }).expect_err("refused");
+    let refused = super::compile_module(module, "t", &super::Frontend { unchecked_bounds: true, ..crate::real_mode() }).expect_err("refused");
     assert!(refused.message.contains("3 is outside 0..3"), "{}", refused.message);
 }
 
@@ -162,7 +162,7 @@ fn main() -> i16:
     let directory = tempfile::tempdir().expect("a directory");
     let main = directory.path().join("main.nib");
     std::fs::write(&main, source).expect("written");
-    let hir = super::compile_file(&main, &Default::default()).unwrap_or_else(|(_, error)| panic!("{}", error.message));
+    let hir = super::compile_file(&main, &crate::real_mode()).unwrap_or_else(|(_, error)| panic!("{}", error.message));
     let program = codec::decode(&hir).expect("decodes");
     let executed = execute::run(&program, "main", &[]).expect("runs");
     assert_eq!(executed.output, "-24 24 0 11333\n");
@@ -903,7 +903,7 @@ fn linked_output(main: &str, files: &[(&str, &str)]) -> Result<String, String> {
     };
     let module = super::modules::load(main, &mut read)
         .map_err(|(module, error)| format!("{module}: {}", error.message))?;
-    let hir = super::compile_module(module, "t", &Default::default()).map_err(|error| error.message)?;
+    let hir = super::compile_module(module, "t", &crate::real_mode()).map_err(|error| error.message)?;
     let executed = execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs");
     assert_eq!(executed.leaked, 0, "heap buffers leaked");
     Ok(executed.output)
@@ -2068,10 +2068,22 @@ fn an_array_field_is_declared_for_c_and_assembler_and_refused_for_basic() {
     assert!(declarations(&module, "t", Language::Basic).expect_err("refused").message.contains("\"bound\" has no declaration in BASIC"));
 }
 
+/// A near pointer field in the assembler's struct was `dw` whatever the target: on a flat one it is a dword, so a
+/// struct a C or assembler caller laid out from it was two bytes short and every field after the pointer was misplaced.
+#[test]
+fn a_pointer_field_in_an_assembler_struct_is_the_targets_pointer_width() {
+    use super::declarations::{Language, declarations_on};
+    let source = "@repr(\"c\")\nstruct Node:\n    next: *near mut i16\n    id: i16\n\nfn main() -> i16:\n    return 0\n";
+    let module = super::parse(super::lex(source).expect("lexes")).expect("parses");
+    let on = |target: &dyn llrm_target::Target| declarations_on(&module, "t", Language::Assembler, crate::Frontend::for_target(target).unwrap().sizes(), crate::Frontend::for_target(target).unwrap().native()).expect("declares");
+    assert!(on(&llrm_x86_m16::M16).contains("    next dw ?\n"));
+    assert!(on(&llrm_x86_m32::M32).contains("    next dd ?\n"));
+}
+
 /// `source`'s refusal, its imports supplied by the compiler.
 fn refused_with_imports(source: &str) -> String {
     let module = super::modules::load(source, &mut |name| Err(format!("{name} is not supplied"))).expect("loads");
-    super::compile_module(module, "t", &Default::default()).expect_err("refused").message
+    super::compile_module(module, "t", &crate::real_mode()).expect_err("refused").message
 }
 
 #[test]
@@ -3427,4 +3439,126 @@ fn a_borrow_covers_only_the_place_it_names_and_ends_at_its_last_use() {
     assert!(refused(&source.replace("add_into(p.a, p.b)", "add_into(p.a, p.a)")).contains("aliases a mutable argument"));
     assert!(refused(&source.replace("struct Bag:\n    items:", "struct Bag:\n    mut items:").replace("self.total += x", "self.items.push(x)")).contains("is borrowed here"));
     assert!(refused(&source.replace("        sum += e\n    v.push(sum)", "        v.push(e)")).contains("is borrowed here"));
+}
+
+#[test]
+fn a_loader_returns_its_table_and_a_failed_load_drops_the_half_built_one() {
+    let source = include_str!("../../../../examples/loader.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/loader.out"));
+    // The entry moved into the table; a use after the push is refused.
+    assert_eq!(
+        refused(&source.replace("table.entries.push(entry)\n", "table.entries.push(entry)\n        print(entry.key)\n")),
+        "\"entry\" was moved; copy it with .copy() to keep using it"
+    );
+    // The table is the callee's own: a view of its name would dangle.
+    let dangling = "fn title(text: &string) -> &string:\n    match load(\"x\", text):\n        .ok(t):\n            return t.name\n        .err(_):\n            return text\n\nfn report";
+    assert_eq!(
+        refused(&source.replace("fn report", dangling)),
+        "a returned borrow of \"t\" would dangle; only a borrowed parameter's can be returned"
+    );
+}
+
+#[test]
+fn channels_close_once_on_every_exit_in_reverse_order_and_a_drop_type_moves_whole() {
+    let source = include_str!("../../../../examples/channels.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/channels.out"));
+    // Taking a field out of a Link would close the channel twice.
+    assert_eq!(
+        refused(&source.replace("print(f\"{link.near.name} to {link.far.name}\")", "let n = link.near\n            print(f\"{n.name} to {link.far.name}\")")),
+        "cannot move a field out of Link, which has a drop"
+    );
+    // `drop` is the compiler's to call.
+    assert_eq!(
+        refused(&source.replace("print(f\"kept {c.name}\")\n        .none:\n            print(\"closed\")\n    match pass_on(Channel(name=\"f\")", "c.drop()\n            print(f\"kept {c.name}\")\n        .none:\n            print(\"closed\")\n    match pass_on(Channel(name=\"f\")")),
+        "drop runs when its owner ends; it cannot be called"
+    );
+}
+
+#[test]
+fn tickets_move_through_a_vec_an_option_and_a_struct_without_a_leak() {
+    let source = include_str!("../../../../examples/desk.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/desk.out"));
+    // A ticket in `aside` is not also in `closed`.
+    assert_eq!(
+        refused(&source.replace("            aside.push(ticket)\n", "            aside.push(ticket)\n            self.closed.push(ticket)\n")),
+        "\"ticket\" was moved; copy it with .copy() to keep using it"
+    );
+    // Closing moves the ticket into the desk.
+    assert_eq!(
+        refused(&source.replace("desk.close(ticket)\n        .none:\n            print(\"no email", "desk.close(ticket)\n            print(ticket.title)\n        .none:\n            print(\"no email")),
+        "\"ticket\" was moved; copy it with .copy() to keep using it"
+    );
+}
+
+#[test]
+fn borrows_of_a_returned_catalog_hold_the_catalog_still_until_their_last_use() {
+    let source = include_str!("../../../../examples/catalog.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/catalog.out"));
+    // The generator holds the parts for the whole loop.
+    assert!(
+        refused(&source.replace("    for part in scarce(a.parts, 5):\n        print(", "    for part in scarce(a.parts, 5):\n        a.add(\"nut\", 1, 500)\n        print("))
+            .contains("\"a\" is borrowed here, so it cannot be changed")
+    );
+    // A result may come from either catalog, so both stay put.
+    let changed = source
+        .replace("    let b = south()", "    let mut b = south()")
+        .replace("            print(f\"{part.name}: {part.stock} at {part.price}\")", "            b.add(\"x\", 1, 1)\n            print(f\"{part.name}: {part.stock} at {part.price}\")");
+    assert!(refused(&changed).contains("\"b\" is borrowed here, so it cannot be changed"));
+    // A name of a catalog the function built itself is gone with it.
+    assert_eq!(
+        refused(&source.replace("fn main", "fn title() -> &string:\n    let c = north()\n    return c.parts[0].name\n\nfn main")),
+        "a returned borrow of \"c\" would dangle; only a borrowed parameter's can be returned"
+    );
+}
+
+#[test]
+fn a_scanner_holding_a_borrow_is_passed_down_and_back_and_cannot_outlive_its_source() {
+    let source = include_str!("../../../../examples/scanner.nib");
+    assert_eq!(output_without_leaks(source), include_str!("../../../../examples/scanner.out"));
+    // The source cannot grow while the scanner and a view of it are in use.
+    let grown = source
+        .replace("    let src = Source(", "    let mut src = Source(")
+        .replace("    text: string", "    mut text: string")
+        .replace("    print(f\"{tally.words}", "    src.text.push('x')\n    print(f\"{tally.words}");
+    assert!(refused(&grown).contains("\"src\" is borrowed here, so it cannot be changed"));
+    // Reseated to a source of an inner block, it would outlive it.
+    let inner = source.replace("    let mut s = skip(scan(src), 4)\n", "    let mut s = skip(scan(src), 4)\n    if true:\n        let other = Source(text=\"x\")\n        s = scan(other)\n");
+    assert!(refused(&inner).contains("\"s\" would outlive \"other\", which it borrows"));
+}
+
+#[test]
+fn a_void_function_value_is_called_and_returns_nothing() {
+    // #416: the dispatcher of a `fn() -> void` type was `return member()`,
+    // "void function cannot return a value" at 0:0; a lambda's body too.
+    let source = "\
+fn hi() -> void:
+    print(1)
+
+fn run(cb: fn() -> void) -> void:
+    cb()
+
+fn each(cb: fn(i16) -> void) -> void:
+    cb(2)
+
+fn main() -> i16:
+    run(hi)
+    each(|x| print(x))
+    return 0
+";
+    assert_eq!(output_without_leaks(source), "1\n2\n");
+    assert_eq!(refused("fn one() -> i16:\n    return 1\nfn f() -> void:\n    return one()\nfn main() -> i16:\n    f()\n    return 0\n"), "void function cannot return a value");
+}
+
+/// `@repr("c")` without `pack=` packs to the target's own alignment, its stack slot (2 on m16, 4
+/// on m32); `@repr("c16")` stays 2 and may not ask for 4.
+#[test]
+fn repr_c_packs_to_the_targets_alignment() {
+    let source = |layout: &str| format!("@repr(\"{layout}\")\nstruct S:\n    a: u8\n    b: i32\n\nfn main() -> i16:\n    print(size_of[S]())\n    return 0\n");
+    let run = |text: &str, slot: u32| {
+        let module = super::modules::load(text, &mut |_| Err("no such module".to_owned())).expect("loads");
+        let hir = super::compile_module(module, "t", &super::Frontend { slot, ..crate::real_mode() }).expect("compiles");
+        execute::run(&codec::decode(&hir).expect("decodes"), "main", &[]).expect("runs").output
+    };
+    assert_eq!((run(&source("c"), 2), run(&source("c"), 4), run(&source("c16"), 4)), ("6\n".to_owned(), "8\n".to_owned(), "6\n".to_owned()));
+    assert!(refused("@repr(\"c16\", pack=4)\nstruct S:\n    a: u8\n\nfn main() -> i16:\n    return 0\n").contains("pack is 1 or 2"));
 }

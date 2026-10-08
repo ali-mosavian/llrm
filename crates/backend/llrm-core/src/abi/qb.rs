@@ -111,17 +111,20 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
 });
 
 /// An inline block as a call: its declared registers are all it reads and changes.
-fn _inline_contract(asm: &model::Asm) -> Result<(Contract, Vec<runtime::Reg>, Vec<runtime::Reg>), AbiError> {
+fn _inline_contract(asm: &model::Asm) -> Result<(Contract, Vec<(runtime::Reg, u32)>, Vec<(runtime::Reg, u32)>), AbiError> {
     let registers = |names: &[String]| {
         names
             .iter()
             .map(|name| {
-                crate::backend::inline_asm::named(name)
+                crate::backend::inline_asm::view(name)
                     .ok_or_else(|| AbiError(format!("inline assembly names no register {}", pyrepr::string(name))))
             })
             .collect::<Result<Vec<_>, _>>()
     };
     let (inputs, outputs, clobbers) = (registers(&asm.inputs)?, registers(&asm.outputs)?, registers(&asm.clobbers)?);
+    // A register is its root whatever the view: a 32-bit one clobbers the whole.
+    let roots = |named: &[(runtime::Reg, u32)]| named.iter().map(|one| one.0).collect::<Vec<_>>();
+    let (input_roots, output_roots, clobber_roots) = (roots(&inputs), roots(&outputs), roots(&clobbers));
     let memory = if asm.memory { runtime::Memory::Any } else { runtime::Memory::None };
     let contract = Contract {
         name: crate::hir::symbols::ASM.to_owned(),
@@ -132,11 +135,11 @@ fn _inline_contract(asm: &model::Asm) -> Result<(Contract, Vec<runtime::Reg>, Ve
         error_handling: false,
         writes: memory,
         reads: memory,
-        clobbers: clobbers.iter().chain(&outputs).copied().collect(),
+        clobbers: clobber_roots.iter().chain(&output_roots).copied().collect(),
         established: true,
         evidence: "inline assembly: the inputs, outputs and clobbers it declares".to_owned(),
         documented: None,
-        inputs: Some(inputs.iter().copied().collect()),
+        inputs: Some(input_roots.iter().copied().collect()),
         direct_inputs: None,
         clobbers_reached: true,
         caller_cleanup: 0,
@@ -161,16 +164,13 @@ pub fn asm_call(name: &str) -> Option<Result<(Contract, Registers), AbiError>> {
         memory: block.memory,
     };
     Some(_inline_contract(&asm).and_then(|(contract, inputs, outputs)| {
-        let machine = |names: Vec<runtime::Reg>| {
+        let machine = |names: Vec<(runtime::Reg, u32)>| {
             names
                 .into_iter()
-                .map(|one| match one {
-                    runtime::Reg::Ax => Ok(Register::AX),
-                    runtime::Reg::Bx => Ok(Register::BX),
-                    runtime::Reg::Cx => Ok(Register::CX),
-                    runtime::Reg::Dx => Ok(Register::DX),
-                    runtime::Reg::Si => Ok(Register::SI),
-                    runtime::Reg::Di => Ok(Register::DI),
+                .map(|(one, bits)| match one {
+                    runtime::Reg::Ax | runtime::Reg::Bx | runtime::Reg::Cx | runtime::Reg::Dx | runtime::Reg::Si | runtime::Reg::Di => {
+                        crate::backend::inline_asm::machine(one, bits).ok_or_else(|| AbiError(format!("inline assembly passes a value in {}", one.name())))
+                    }
                     other => Err(AbiError(format!("inline assembly passes a value in {}", other.name()))),
                 })
                 .collect::<Result<Vec<_>, _>>()
@@ -748,6 +748,8 @@ pub struct HirAbi {
     pub objects: std::collections::BTreeMap<String, String>,
     /// The registers a call no runtime contract describes keeps.
     pub preserved: BTreeSet<runtime::Reg>,
+    /// The runtime's stack limit and overflow handler, where the program checks its stack.
+    pub stack_check: Option<model::StackCheck>,
 }
 
 impl HirAbi {
@@ -758,6 +760,7 @@ impl HirAbi {
             runtime: program.runtime,
             objects: functions.filter_map(|one| Some((one.name.clone(), one.symbol.clone()?))).collect(),
             preserved: program.preserved.iter().map(|one| runtime::Reg::from_value(one)).collect::<Result<_, _>>()?,
+            stack_check: program.stack_check.clone(),
         })
     }
 }
@@ -774,6 +777,10 @@ pub fn registers(name: &str) -> Option<Registers> {
 }
 
 impl crate::backend::assemble::Abi for HirAbi {
+    fn stack_check(&self) -> Option<&model::StackCheck> {
+        self.stack_check.as_ref()
+    }
+
     fn registers(&self, callee: &str) -> Option<Registers> {
         if let Some(block) = asm_call(callee) {
             return block.ok().map(|(_, registers)| registers);
@@ -814,12 +821,20 @@ impl LoweredTarget {
 }
 
 impl llrm_mir::target::Machine for LoweredTarget {
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.machine.spaces()
+    }
+
     fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)> {
         self.machine.foreign_span(selectors, offsets, width)
     }
 
     fn costs(&self) -> llrm_mir::target::OperationCosts {
         self.machine.costs()
+    }
+
+    fn size_costs(&self) -> llrm_mir::target::OperationCosts {
+        self.machine.size_costs()
     }
 
     fn registers(&self) -> i64 {
@@ -840,6 +855,10 @@ impl llrm_mir::target::Machine for LoweredTarget {
 
     fn two_address(&self) -> bool {
         self.machine.two_address()
+    }
+
+    fn private_convention(&self) -> Option<llrm_mir::target::PrivateConvention> {
+        self.machine.private_convention()
     }
 
     fn address_registers(&self) -> i64 {

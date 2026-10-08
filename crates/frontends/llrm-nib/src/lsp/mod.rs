@@ -47,6 +47,14 @@ struct Server {
     exited: bool,
 }
 
+/// The frontend for the target `-m<mode>` names.
+fn frontend_for(mode: u32) -> Result<crate::Frontend, String> {
+    let mut flags = llrm_core::driver::flags::Flags::default();
+    flags.take(&[format!("-m{mode}")], &mut 0)?;
+    let bound = llrm_driver::target(&flags, None)?;
+    crate::Frontend::for_target(&*bound.target)
+}
+
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 
@@ -56,7 +64,19 @@ impl Server {
         let id = message.get("id").cloned();
         let params = message.get("params").cloned().unwrap_or(Value::Null);
         match message.get("method").and_then(Value::as_str).unwrap_or("") {
-            "initialize" => reply(id, Ok(capabilities())),
+            "initialize" => {
+                // The project's target: `initializationOptions: {"mode": 32}`, gcc's -m32; real mode's otherwise.
+                let named = params.pointer("/initializationOptions/mode").and_then(Value::as_u64).map(|mode| mode as u32);
+                match named.map(frontend_for).transpose() {
+                    Ok(frontend) => {
+                        if let Some(frontend) = frontend {
+                            self.documents.frontend = frontend;
+                        }
+                        reply(id, Ok(capabilities()))
+                    }
+                    Err(message) => reply(id, Err((INVALID_PARAMS, message))),
+                }
+            }
             "shutdown" => reply(id, Ok(Value::Null)),
             "exit" => {
                 self.exited = true;

@@ -11,7 +11,7 @@ use crate::context::{ConstantExpr, ConstantKind, GlobalId};
 use crate::facts::Facts;
 use crate::intrinsics::Intrinsic;
 use crate::memory;
-use crate::module::{Function, GlobalKind, InstId, MetadataOperand, Module, Operand};
+use crate::module::{Function, GlobalKind, InstId, Linkage, MetadataOperand, Module, Operand};
 use crate::opcode::Opcode;
 use crate::passes::{ModuleAnalyses, ModuleAnalysis};
 use crate::program::{Program, ProgramAnalyses, ProgramAnalysis};
@@ -234,6 +234,18 @@ impl<N: Copy + Ord> CallGraph<N> {
         })
     }
 
+    /// The strongly connected components, callees before their callers, each with whether it is
+    /// a cycle: what a bottom-up solver visits, iterating only within a cycle.
+    pub fn bottom_up_components(&self) -> Vec<(Vec<N>, bool)> {
+        let mut out: BTreeMap<usize, (Vec<N>, bool)> = BTreeMap::new();
+        for (&node, &(component, cyclic)) in self.components() {
+            if self.callees.contains_key(&node) {
+                out.entry(component).or_insert_with(|| (Vec::new(), cyclic)).0.push(node);
+            }
+        }
+        out.into_values().collect()
+    }
+
     /// Whether `function` can call itself: it is in a cycle of calls.
     pub fn recursive(&self, function: N) -> bool {
         self.components().get(&function).is_some_and(|one| one.1)
@@ -318,4 +330,52 @@ pub fn addressed(module: &Module) -> BTreeSet<GlobalId> {
         }
     }
     out
+}
+
+/// A function attribute a frontend states: nothing outside the module's code enters this
+/// function by a far call, so where every call of it is direct, it may be entered near.
+pub const NEAR_CODE: &str = "nearcode";
+
+/// Defined functions only their own module's calls reach: internal or private, not interrupt
+/// handlers, and never named but as a callee. What a call to one may assume of its callers
+/// (where they are, what they pass) holds for every call there is.
+pub fn direct_only(module: &Module) -> BTreeSet<GlobalId> {
+    let named = addressed(module);
+    module
+        .functions()
+        .filter(|(id, global, function)| {
+            !function.is_declaration()
+                && matches!(global.linkage, Linkage::Internal | Linkage::Private)
+                && function.calling_convention != crate::opcode::X86_INTR
+                && !named.contains(id)
+        })
+        .map(|(id, _, _)| id)
+        .collect()
+}
+
+/// Every plain direct call of each function, and the functions some call of which is not one: an
+/// `invoke`, or a call with more or fewer arguments than parameters.
+pub struct DirectCalls {
+    pub sites: BTreeMap<GlobalId, Vec<(GlobalId, InstId)>>,
+    pub refused: BTreeSet<GlobalId>,
+}
+
+pub fn direct_calls(module: &Module) -> DirectCalls {
+    let mut found = DirectCalls { sites: BTreeMap::new(), refused: BTreeSet::new() };
+    for (caller, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+        for (_, inst) in function.walk() {
+            let instruction = function.instruction(inst);
+            let Some(callee) = memory::callee(&module.context, function, inst) else { continue };
+            match &instruction.opcode {
+                Opcode::Call(_) if instruction.operands.len() == module.global(callee).function().map_or(0, |one| one.parameters().len()) + 1 => {
+                    found.sites.entry(callee).or_default().push((caller, inst));
+                }
+                Opcode::Call(_) | Opcode::Invoke(_) => {
+                    found.refused.insert(callee);
+                }
+                _ => {}
+            }
+        }
+    }
+    found
 }

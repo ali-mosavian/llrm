@@ -5,7 +5,30 @@ use std::process::ExitCode;
 use qbfront::Dialect;
 
 fn main() -> ExitCode {
-    let mut arguments = env::args().skip(1);
+    let mut flags = llrm_core::driver::flags::Flags::default();
+    let argv: Vec<String> = env::args().skip(1).collect();
+    let mut taken = 0;
+    let mut rest = Vec::new();
+    while taken < argv.len() {
+        // The target flags are the shared parser's: -m16, -m32, -m64.
+        if llrm_core::driver::flags::Flags::mode_flag(&argv[taken]).is_some() {
+            if let Err(why) = flags.take(&argv, &mut taken) {
+                eprintln!("qbfront: {why}");
+                return ExitCode::from(2);
+            }
+        } else {
+            rest.push(argv[taken].clone());
+        }
+        taken += 1;
+    }
+    let segment_bytes = match llrm_driver::target(&flags, Some(&["x86-m16"])) {
+        Ok(bound) => bound.target.layout().segment_bytes(),
+        Err(why) => {
+            eprintln!("qbfront: {why}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut arguments = rest.into_iter();
     let mut dialect = Dialect::VbDos;
     let mut runtime = "vbdos".to_string();
     let mut row_major = false;
@@ -18,7 +41,7 @@ fn main() -> ExitCode {
     let mut alternate_math = false;
     let mut whole_program = false;
     let mut array_merging = false;
-    let mut own_frames = false;
+    let mut runtime_frames = false;
     let mut error_lines = false;
     let mut syntax = false;
     let mut include_dirs = Vec::new();
@@ -66,7 +89,9 @@ fn main() -> ExitCode {
         } else if argument == "--array-merging" {
             array_merging = true;
         } else if argument == "--own-frames" {
-            own_frames = true;
+            // Accepted: own frames are the default.
+        } else if argument == "--runtime-frames" {
+            runtime_frames = true;
         } else if argument == "--error-lines" {
             error_lines = true;
         } else if argument == "--array-order" {
@@ -101,7 +126,7 @@ fn main() -> ExitCode {
     }
     let Some(input) = input else {
         eprintln!(
-            "usage: qbfront [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--checked-division] [--checked-overflow] [--whole-program] [--array-merging] [--own-frames] [--error-lines] [-g] [--include DIR] [--syntax] FILE"
+            "usage: qbfront [-m16] [--dialect PROFILE] [--runtime PROFILE] [--array-order column-major|row-major] [--huge-arrays] [--checked-arrays] [--checked-division] [--checked-overflow] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [-g] [--include DIR] [--syntax] FILE"
         );
         return ExitCode::from(2);
     };
@@ -118,8 +143,9 @@ fn main() -> ExitCode {
             alternate_math,
             whole_program,
             array_merging,
-            own_frames,
+            runtime_frames,
             error_lines,
+            segment_bytes,
         },
         debug,
         syntax,

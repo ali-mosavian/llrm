@@ -19,7 +19,7 @@ fn the_pipeline_keeps_every_corpus_module_verifying_and_computing_the_same() {
             program.exports.entries.insert("main".to_owned());
             pipeline::applied(program, &applied)
         };
-        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), entered)
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), entered)
             .and_then(|done| done)
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         if let Some(Ok(before)) = before {
@@ -91,14 +91,17 @@ b2:
   %w = load i16, ptr @i
   %n = add i16 %w, 1
   store i16 %n, ptr @i
-  br label %b1
+  br label %b1, !llvm.loop !0
 
 b3:
   ret void
 }
+
+!0 = distinct !{!0, !1}
+!1 = !{!\"llvm.loop.unroll.full\"}
 ",
     );
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let text = llrm_mir::print::module(&module);
     for trip in 1..=3 {
         assert!(text.contains(&format!("call void @print(i16 {trip})")), "{text}");
@@ -132,14 +135,17 @@ b2:
   call void @print(i16 %v)
   %w = load i16, ptr @i
   %n = add i16 %w, 1
-  br label %b1
+  br label %b1, !llvm.loop !0
 
 b3:
   ret void
 }
+
+!0 = distinct !{!0, !1}
+!1 = !{!\"llvm.loop.unroll.full\"}
 ",
     );
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let text = llrm_mir::print::module(&module);
     for trip in 1..=3 {
         assert!(text.contains(&format!("call void @print(i16 {trip})")), "{text}");
@@ -185,7 +191,7 @@ b3:
 ",
         llrm_analysis::testing::DOS
     ));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let text = llrm_mir::print::module(&module);
     let body = &text[text.find("b2:").expect("the loop")..];
     let body = &body[..body.find("br i1").expect("its latch")];
@@ -248,7 +254,7 @@ done:
 ";
     let mut module = llrm_analysis::testing::parsed(text);
     let before = interpret::run(&module, "main", Vec::new(), FUEL);
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let after = llrm_mir::print::module(&module);
     assert_eq!(interpret::run(&module, "main", Vec::new(), FUEL), before, "{after}");
     assert!(!after.contains(" phi "), "{after}");
@@ -302,7 +308,7 @@ b3:
         llrm_analysis::testing::DOS
     );
     let mut module = crate::testing::parsed(&text);
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let after = crate::testing::printed(&module);
     let body = after.split("b2:").nth(1).unwrap_or("");
     assert!(!body.split("\n\n").next().unwrap_or("").contains("store i16"), "{after}");
@@ -340,7 +346,7 @@ b3:
 ",
         llrm_analysis::testing::DOS
     ));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let text = llrm_mir::print::module(&module);
     let body = &text[text.find("b2:").expect("the loop")..];
     let body = &body[..body.find("br label").expect("its latch")];
@@ -376,7 +382,7 @@ b2:
         llrm_analysis::testing::DOS
     );
     let mut module = crate::testing::parsed(&text);
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let after = crate::testing::printed(&module);
     let body = after.split("b1:").nth(1).unwrap_or("").split("\n\n").next().unwrap_or("");
     assert!(body.contains("load volatile i16, ptr addrspace(4)"), "{after}");
@@ -404,7 +410,84 @@ b0:
 ";
     assert!(text.contains("store i8 1, ptr %q"), "the shape that was forwarded over");
     let mut module = llrm_analysis::testing::parsed(&format!("{}{text}", llrm_analysis::testing::DOS));
-    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_code16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
     let printed = llrm_mir::print::module(&module);
     assert_eq!(printed.matches("load i16").count(), 2, "{printed}");
+}
+
+/// A loop of calls to a function that touches no memory is peeled, but each body's pipeline ran its
+/// peel before anything stated what its callees do, so the call looked like it may write and a
+/// copy that grows was refused (nib's nbody_fixed read 3,457,356 instructions against 3,116,356).
+#[test]
+fn a_loop_calling_a_pure_function_is_judged_on_what_the_function_does() {
+    let mut module = llrm_analysis::testing::parsed(
+        "define internal i16 @g(i16 %x) {
+b0:
+  %y = mul i16 %x, 7
+  ret i16 %y
+}
+
+define i16 @f(i16 %p) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %acc = phi i16 [ %p, %b0 ], [ %sum, %b2 ]
+  %go = icmp slt i16 %i, 6
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %r = call i16 @g(i16 %i)
+  %sum = add i16 %acc, %r
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 %acc
+}
+",
+    );
+    let applied = Applied { options: pipeline::Options { inline: crate::inline::Threshold::none(), ..pipeline::Options::default() }, ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let text = llrm_mir::print::module(&module);
+    assert!(!text.contains("phi i16 [ 0,"), "the loop of calls to @g stayed rolled:\n{text}");
+}
+
+/// QCport -O2 ran 11 KB past BCC's code, and out of memory loading a level: every call a body of nine
+/// operations was cheaper than in clocks was copied, though three copies come to more bytes than three
+/// calls. -O2 puts such a copy back as -Os does, unless the clocks it saves pay for the bytes.
+#[test]
+fn o2_does_not_copy_a_body_into_three_sites_where_the_code_grows() {
+    let mut module = llrm_analysis::testing::parsed(
+        "define i16 @mix(i16 %a, i16 %b) {
+b:
+  %t0 = xor i16 %a, %b
+  %t1 = shl i16 %a, 3
+  %t2 = add i16 %t0, %t1
+  %t3 = lshr i16 %b, 2
+  %t4 = sub i16 %t2, %t3
+  %t5 = and i16 %t4, 2047
+  %t6 = or i16 %t5, %a
+  %t7 = xor i16 %t6, %b
+  %t8 = add i16 %t7, 5
+  ret i16 %t8
+}
+
+define i16 @f(i16 %x, i16 %y) {
+b:
+  %p = call i16 @mix(i16 %x, i16 %y)
+  %q = call i16 @mix(i16 %y, i16 %x)
+  %r = call i16 @mix(i16 %p, i16 %q)
+  ret i16 %r
+}
+",
+    );
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| pipeline::applied(program, &Applied::default())).and_then(|done| done).unwrap();
+    assert_eq!(llrm_mir::print::module(&module).matches("call i16 @mix").count(), 3);
 }

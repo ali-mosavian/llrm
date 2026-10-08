@@ -1,7 +1,10 @@
 //! Runs a Nib module's entry on the host HIR interpreter.
 //!
-//!   llrm-run SOURCE.nib [ENTRY] [INTEGER...]
+//!   llrm-run [-m16|-m32] SOURCE.nib [ENTRY] [INTEGER...] [< INPUT]
+//!
+//! Standard input, when it is not a terminal, is what the program reads from its console.
 
+use std::io::{IsTerminal, Read};
 use std::process::ExitCode;
 
 use llrm_core::hir::codec;
@@ -9,9 +12,16 @@ use llrm_core::hir::execute;
 use llrm_core::hir::model::Number;
 
 fn main() -> ExitCode {
-    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let mut arguments: Vec<String> = std::env::args().skip(1).collect();
+    let frontend = match llrm_nib::cli::frontend_with_mode(&mut arguments) {
+        Ok(frontend) => frontend,
+        Err(why) => {
+            eprintln!("llrm-run: {why}");
+            return ExitCode::from(2);
+        }
+    };
     let Some(input) = arguments.first() else {
-        eprintln!("usage: llrm-run SOURCE.nib [ENTRY] [INTEGER...]");
+        eprintln!("usage: llrm-run [-m16|-m32] SOURCE.nib [ENTRY] [INTEGER...]");
         return ExitCode::from(2);
     };
     let entry = arguments.get(1).map_or("main", String::as_str);
@@ -24,7 +34,7 @@ fn main() -> ExitCode {
         eprintln!("llrm-run: arguments are integers");
         return ExitCode::from(2);
     };
-    let hir = match llrm_nib::compile_file(std::path::Path::new(input), &Default::default()) {
+    let hir = match llrm_nib::compile_file(std::path::Path::new(input), &frontend) {
         Ok(hir) => hir,
         Err((path, error)) => {
             eprintln!(
@@ -40,7 +50,11 @@ fn main() -> ExitCode {
     let result = codec::decode(&hir)
         .map_err(|error| error.to_string())
         .and_then(|program| {
-            execute::run(&program, entry, &values).map_err(|error| error.to_string())
+            let mut input = Vec::new();
+            if !std::io::stdin().is_terminal() {
+                std::io::stdin().read_to_end(&mut input).map_err(|error| error.to_string())?;
+            }
+            execute::run_with_input(&program, entry, &values, execute::STEP_LIMIT, &input).map_err(|error| error.to_string())
         });
     match result {
         Ok(executed) => {

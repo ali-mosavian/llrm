@@ -76,8 +76,13 @@ fn notification(method: &str, params: Value) -> Value {
 
 /// Every message the server sends for `messages`, framed as over stdio.
 fn session(messages: &[Value]) -> Vec<Value> {
+    session_with(json!({}), messages)
+}
+
+/// `session`, the editor's `initialize` carrying `params`.
+fn session_with(params: Value, messages: &[Value]) -> Vec<Value> {
     let mut input = Vec::new();
-    for one in [&[request(0, "initialize", json!({}))], messages].concat() {
+    for one in [&[request(0, "initialize", params)], messages].concat() {
         transport::write(&mut input, &one).expect("framed");
     }
     let mut output = Vec::new();
@@ -227,4 +232,20 @@ fn completion_offers_the_locals_in_scope_at_the_cursor() {
     for hidden in ["value", "mode"] {
         assert!(!labels.iter().any(|one| one == hidden), "{hidden}, out of scope, in {labels:?}");
     }
+}
+
+/// The editor checked every project as real mode's: `let n: usize = 70000` was an error on m32,
+/// where a word is 32 bits. The project's target comes with `initialize`; one no target declares is refused.
+#[test]
+fn the_projects_target_decides_what_the_editor_checks() {
+    let program = Program::new();
+    let text = "fn main() -> i16:\n    let n: usize = 70000\n    print(n)\n    return 0\n";
+    let messages = [program.opened("main", text)];
+    let real = session(&messages);
+    assert!(published(&real, &program.uri("main"))[0]["message"].as_str().expect("a message").contains("does not fit"));
+    let flat = session_with(json!({"initializationOptions": {"mode": 32}}), &messages);
+    // Nothing to report where nothing was reported before.
+    assert!(flat.iter().all(|one| one["params"]["uri"] != program.uri("main").as_str()), "{flat:?}");
+    let unknown = session_with(json!({"initializationOptions": {"mode": 64}}), &[]);
+    assert!(unknown[0]["error"]["message"].as_str().expect("an error").contains("no target for -m64"), "{unknown:?}");
 }

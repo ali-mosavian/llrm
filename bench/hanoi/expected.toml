@@ -1,0 +1,134 @@
+reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
+blessed = "2026-10-07"
+
+[bas.O2]
+instructions = 344048
+memory_operands = 131059
+code_bytes = 211
+data_bytes = 15
+bss_bytes = 0
+kernel_ms = 4.5989
+
+[bas.Os]
+instructions = 344048
+memory_operands = 131059
+code_bytes = 211
+data_bytes = 15
+bss_bytes = 0
+kernel_ms = 5.691
+
+[c.O2]
+instructions = 278516
+memory_operands = 16384
+code_bytes = 79
+data_bytes = 0
+bss_bytes = 0
+
+[c.Os]
+instructions = 278516
+memory_operands = 16384
+code_bytes = 76
+data_bytes = 0
+bss_bytes = 0
+
+[nib.O2]
+instructions = 212980
+memory_operands = 49147
+code_bytes = 78
+data_bytes = 0
+bss_bytes = 0
+
+[nib.Os]
+instructions = 212980
+memory_operands = 49147
+code_bytes = 77
+data_bytes = 0
+bss_bytes = 0
+
+[ow.O2]
+instructions = 376809
+memory_operands = 65530
+code_bytes = 114
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 5.0264
+
+[ow.Os]
+instructions = 319471
+memory_operands = 65530
+code_bytes = 105
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 4.2615
+
+[bcc.O2]
+instructions = 393193
+memory_operands = 65531
+code_bytes = 118
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 5.2449
+
+[bcc.Os]
+instructions = 401385
+memory_operands = 65531
+code_bytes = 114
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 5.3542
+
+[tc.O2]
+instructions = 352236
+memory_operands = 65530
+code_bytes = 107
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 4.6986
+
+[tc.Os]
+instructions = 352236
+memory_operands = 65530
+code_bytes = 105
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 4.6986
+
+[tcpp.O2]
+instructions = 401385
+memory_operands = 65531
+code_bytes = 114
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 5.3542
+
+[tcpp.Os]
+instructions = 401385
+memory_operands = 65531
+code_bytes = 112
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 5.3542
+
+[bc.O2]
+instructions = 942068
+memory_operands = 458743
+code_bytes = 284
+data_bytes = 7
+bss_bytes = 12
+kernel_ms = 13.0127
+
+[pds71.O2]
+instructions = 1015797
+memory_operands = 475127
+code_bytes = 281
+data_bytes = 7
+bss_bytes = 12
+kernel_ms = 13.9951
+
+[vbdos.O2]
+instructions = 1294325
+memory_operands = 557047
+code_bytes = 287
+data_bytes = 7
+bss_bytes = 12
+kernel_ms = 17.7073

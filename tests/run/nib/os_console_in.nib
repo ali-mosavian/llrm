@@ -1,0 +1,25 @@
+# flags: -O2 -march=i486 | -O2 -march=i486 -m32
+# stdin: conin.dat
+# The OS layer's console follows redirection: standard input is conin.dat ("Q", "ab", CR LF), standard output
+# a file. A key is read without waiting once one is ready, a line is `read` on the standard input handle, and
+# a read at the end of the input returns 0. The write goes to
+# the stdout handle.
+import os
+
+var buffer: u8[8] = [0] * 8
+
+fn main() -> i16:
+    unsafe:
+        print(os.console_key_ready())
+        print(os.console_read_key())
+        print(os.read(os.STDIN, &mut buffer, 3))
+        print(buffer[0])
+        print(buffer[2])
+        print(os.console_key_ready())
+        print(os.console_read_key())
+        print(os.read(os.STDIN, &mut buffer, 3))
+        let text = "ok"
+        let chars: *far char = &text
+        os.write(chars.cast[u8](), 2)
+    print("")
+    return 0

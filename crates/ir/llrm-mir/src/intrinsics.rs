@@ -24,10 +24,16 @@ pub enum Intrinsic {
     /// nearest, ties to even.
     LRint,
     MemSet,
+    /// `llvm.experimental.memset.pattern`: its first argument's cells, as many
+    /// as the third says and as wide as the second, each become the second.
+    MemSetPattern,
     /// `llvm.memcpy`: as many bytes from its second argument to its first as
     /// its third says, byte for byte. A byte the source never wrote stays
     /// only that byte undefined; the two do not overlap.
     MemCpy,
+    /// `llvm.memmove`: as `memcpy`, where the two may overlap: every byte
+    /// read is as it was before the call.
+    MemMove,
     LifetimeStart,
     LifetimeEnd,
     /// `llvm.assume`: its condition holds here, which a pass may use and no
@@ -62,6 +68,12 @@ pub enum Intrinsic {
     /// It has side effects, and its bytes jump nowhere outside themselves.
     Asm,
 }
+
+/// Metadata on a `llvm.memmove` call saying which way its copy may run, as the
+/// pass that made it proved: ascending addresses, or descending. Without either,
+/// lowering compares the two pointers itself.
+pub const FORWARD: &str = "llrm.forward";
+pub const BACKWARD: &str = "llrm.backward";
 
 /// What names inline code: `llrm.ia16.code.<hex bytes>` and, per argument,
 /// `.<offset>` of the word that takes its displacement, `p<n>` or `m<n>`
@@ -219,7 +231,7 @@ const FIXED: &[(Slot, &[&str])] = &[(Slot::Any(0), &[]), (Slot::Any(0), &[]), (S
 const LIFETIME: &[(Slot, &[&str])] = &[(Slot::Int(64), &["immarg"]), (Slot::Any(0), &["nocapture"])];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 33] = [
+const TABLE: [Spec; 35] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -269,8 +281,26 @@ const TABLE: [Spec; 33] = [
         memory: &[(Some("argmem"), "write")],
     },
     Spec {
+        name: "llvm.experimental.memset.pattern",
+        intrinsic: Intrinsic::MemSetPattern,
+        overloads: &[Kind::Pointer, Kind::Int, Kind::Int],
+        returns: Slot::Void,
+        parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Any(1), &[]), (Slot::Any(2), &[]), (Slot::Int(1), &["immarg"])],
+        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
+        memory: &[(Some("argmem"), "write")],
+    },
+    Spec {
         name: "llvm.memcpy",
         intrinsic: Intrinsic::MemCpy,
+        overloads: &[Kind::Pointer, Kind::Pointer, Kind::Int],
+        returns: Slot::Void,
+        parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Any(1), &["nocapture", "readonly"]), (Slot::Any(2), &[]), (Slot::Int(1), &["immarg"])],
+        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
+        memory: &[(Some("argmem"), "readwrite")],
+    },
+    Spec {
+        name: "llvm.memmove",
+        intrinsic: Intrinsic::MemMove,
         overloads: &[Kind::Pointer, Kind::Pointer, Kind::Int],
         returns: Slot::Void,
         parameters: &[(Slot::Any(0), &["nocapture", "writeonly"]), (Slot::Any(1), &["nocapture", "readonly"]), (Slot::Any(2), &[]), (Slot::Int(1), &["immarg"])],
@@ -448,7 +478,7 @@ impl Intrinsic {
         let Type::Function { returns, parameters, variadic } = types.get(function_type) else { unreachable!("a function's type") };
         if self == Intrinsic::Asm {
             let block = asm(name).ok_or("Inline assembly's name does not parse!")?;
-            let word = |ty: &TypeId| types.int_bits(*ty) == Some(16) || matches!(types.get(*ty), Type::Pointer(0));
+            let word = |ty: &TypeId| matches!(types.int_bits(*ty), Some(16 | 32)) || matches!(types.get(*ty), Type::Pointer(0));
             let answers = match &block.outputs[..] {
                 [] => types.is_void(*returns),
                 [_] => word(returns),

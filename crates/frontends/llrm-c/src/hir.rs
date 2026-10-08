@@ -29,7 +29,6 @@ pub const CALLER_POPS: i64 = 0x80;
 pub const FAR_CALL: i64 = 0x4;
 pub const INTERRUPT: i64 = 0x8;
 // cg_target_switches (x86swi.h)
-pub const BIG_DATA: i64 = 0x2;
 pub const BIG_CODE: i64 = 0x4;
 
 /// Borland headers expose these as compiler intrinsics, while their callable
@@ -134,6 +133,9 @@ pub struct Symbol {
     pub call_class: i64,
     pub call_target: i64,
     pub register_parms: bool, // any argument passed in a register
+    /// The register list the front end recorded, as it writes it (`[ff:0]`): the default one is its description's
+    /// `default_registers`; any other is an `aux` pragma's or `__fastcall`'s.
+    pub register_list: String,
     pub code: Option<Code>,
     pub segment: i64,
 }
@@ -180,15 +182,21 @@ impl Symbol {
         self.call_class & REVERSE_PARMS != 0
     }
 
+    /// The program's entry, `entry` (the routine the runtime's start calls, its C runtime description's).
+    pub fn is_entry(&self, entry: &str) -> bool {
+        self.base == entry && self.exported()
+    }
+
     pub fn object_name(&self) -> String {
         if self.pattern == "^" {
             return self.base.to_uppercase();
         }
+
         let base = intrinsic_runtime(&self.base).unwrap_or(&self.base);
         if self.pattern.is_empty() {
             base.to_owned()
         } else {
-            self.pattern.replace('*', base)
+            llrm_target::calling::spell(&self.pattern, base)
         }
     }
 }
@@ -298,11 +306,50 @@ pub struct Unit {
     pub procs: Vec<Proc>,
     /// Compiled with -d2.
     pub debug: Option<Debug>,
+    /// The routine the runtime's start calls, and the `cc` of the convention it calls it in (the C runtime description's).
+    pub entry: String,
+    pub entry_cc: String,
+    /// What the front end records of a function it passes in its default registers.
+    pub default_registers: String,
+    /// The `cc` of the convention a function the front end records as cdecl has, and one it records in its default registers;
+    /// none where that is the C one (`ccc`).
+    pub cdecl_cc: Option<String>,
+    pub registers_cc: Option<String>,
     /// INIT's code-generator switches (`CGSW_GEN_*`).
     pub switches: i64,
+    /// Recorded by the 386 front end: flat, `int` and every pointer 4 bytes.
+    pub flat: bool,
+    /// What the translation warned of, each once: the caller prints it.
+    pub warnings: std::cell::RefCell<std::collections::BTreeSet<String>>,
 }
 
 impl Unit {
+    /// Each symbol's decoration as `calling` states it for `format`: what the front end recorded is OMF's, and a
+    /// symbol whose pattern a convention states takes that convention's for `format`. The entry is called by
+    /// the runtime's start in the convention the description names, whatever the front end made of it.
+    pub fn decorate(&mut self, calling: &llrm_target::calling::Calling, format: &str) {
+        let entry = calling.by_cc(&self.entry_cc).and_then(|one| one.symbol.get(format)).cloned();
+        let registers = self.registers_cc.as_deref().and_then(|cc| calling.by_cc(cc)).and_then(|one| one.symbol.get(format)).cloned();
+        for symbol in self.symbols.values_mut() {
+            if symbol.is_entry(&self.entry) {
+                if let Some(pattern) = &entry {
+                    symbol.pattern = pattern.clone();
+                }
+            } else if let Some(pattern) = registers.clone().filter(|_| symbol.register_parms && symbol.register_list == self.default_registers) {
+                // In its default registers: the convention this ABI states for them spells it, whatever Open Watcom's was.
+                symbol.pattern = pattern;
+            } else if let Some(pattern) = calling.redecorated(&symbol.pattern, format) {
+                symbol.pattern = pattern;
+            }
+        }
+    }
+
+    /// Warns that far and huge pointers are near on a target with one address space (the front end
+    /// gives both the same type, so it cannot say which was written).
+    pub fn warn_near(&self) {
+        self.warnings.borrow_mut().insert("warning: __far and __huge pointers are near on this target: it has one address space".to_owned());
+    }
+
     /// Whether the symbol is in DGROUP, reached through DS.
     pub fn grouped(&self, symbol: &Symbol) -> bool {
         if symbol.imported() && symbol.segment < 0 {
@@ -388,6 +435,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
             "INIT" => {
                 made.target = hex(field(one, "target"));
                 made.switches = hex(field(one, "sw"));
+                made.flat = one.fields.get("flat").is_some_and(|one| one == "1");
                 // CGSW_GEN_DBG_TYPES or CGSW_GEN_DBG_LOCALS
                 if hex(field(one, "sw")) & 0x0018_0000 != 0 {
                     made.debug = Some(Debug::default());
@@ -462,6 +510,7 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                         call_class: 0,
                         call_target: 0,
                         register_parms: false,
+                        register_list: String::new(),
                         code: None,
                         segment: int(one.fields.get("seg").map_or("0", String::as_str)),
                     },
@@ -474,8 +523,9 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                     .expect("KeyError: symbol");
                 symbol.call_class = hex(field(one, "class"));
                 symbol.call_target = hex(field(one, "target"));
-                symbol.register_parms =
-                    one.fields.get("parms").map_or("[]", String::as_str) != "[]";
+                let parms = one.fields.get("parms").map_or("[]", String::as_str);
+                symbol.register_parms = parms != "[]";
+                symbol.register_list = parms.to_owned();
             }
             "CODE" => {
                 let fixups = field(one, "fix")

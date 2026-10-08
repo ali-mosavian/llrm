@@ -32,7 +32,7 @@ pub fn dumped(source: &Path, output: &Path, frontend: &super::Frontend, options:
     write(&output.join("03-hir.json"), &hir::encode(&program, Some(2)).map_err(|error| error.to_string())?)?;
     let stages = output.join("mir");
     std::fs::create_dir_all(&stages).map_err(|error| error.to_string())?;
-    nib::assembled(&program, entry, &codegen::Options { dump: Some(stages), ..options.clone() })?;
+    nib::assembled(&program, entry, &codegen::Options { dump: Some(stages), ..options.clone() }, &frontend.os)?;
     write(
         &output.join("README.txt"),
         "Nib frontend stage dumps\n========================\n\n\
@@ -55,7 +55,7 @@ mod tests {
     use llrm_core::support::pyjson::{self, Json};
 
     fn options() -> llrm_core::driver::Options {
-        llrm_core::driver::Options { dump: None, ..llrm_core::driver::Options::of(crate::compile::machine()) }
+        llrm_core::driver::Options { dump: None, ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) }
     }
 
     #[test]
@@ -63,7 +63,7 @@ mod tests {
         // nbody used to expose HIR and MIR only through separate ad-hoc commands.
         let directory = tempfile::tempdir().expect("a directory");
         let nbody = fixture("nbody.nib");
-        let output = dumped(&nbody, &directory.path().join("nbody"), &super::super::Frontend::default(), &options(), "main").expect("dumps");
+        let output = dumped(&nbody, &directory.path().join("nbody"), &crate::real_mode(), &options(), "main").expect("dumps");
         let names = |directory: &std::path::Path| -> Vec<String> {
             let mut names: Vec<String> = std::fs::read_dir(directory)
                 .expect("lists")
@@ -93,7 +93,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("a directory");
         let source = directory.path().join("lib.nib");
         std::fs::write(&source, "@export(\"cdecl16\")\nfn twice(value: i16) -> i16:\n    return value * 2\n").expect("writes");
-        let output = dumped(&source, &directory.path().join("dump"), &super::super::Frontend::default(), &options(), "main").expect("dumps");
+        let output = dumped(&source, &directory.path().join("dump"), &crate::real_mode(), &options(), "main").expect("dumps");
         let listing = std::fs::read_to_string(output.join("mir/listing.asm")).expect("a listing");
         assert!(listing.contains("_twice"), "{listing}");
     }
@@ -123,10 +123,10 @@ mod tests {
         std::fs::write(&source, "struct P:\n    mut x: i16\n    y: i16\n\nfn bump(dst: &mut P, src: &P, n: i16) -> void:\n    for i in 0..n:\n        dst.x += src.y\n\nfn main() -> i16:\n    let mut a = P(x=0, y=0)\n    let b = P(x=0, y=3)\n    bump(a, b, 4)\n    return a.x\n").expect("writes");
         let output = directory.path().join("dump");
         // Unrolled, the 4-trip loop is gone and there is nothing to count.
-        let argv = [source.display().to_string(), "-O2".into(), "-fno-inline-functions".into(), "-fno-unroll-loops".into(), "-fno-peel-loops".into(), "--dump".into(), output.display().to_string()];
+        let argv = [source.display().to_string(), "-O2".into(), "-fno-inline-functions".into(), "-fno-inline-functions-called-once".into(), "-fno-unroll-loops".into(), "-fno-peel-loops".into(), "--dump".into(), output.display().to_string()];
         assert_eq!(crate::cli::main(&argv), 0);
         let listing = dumped_listing(&output);
-        let body = listing.split("_bump proc far\n").nth(1).and_then(|one| one.split("_bump endp").next()).expect("bump");
+        let body = listing.split("_bump proc near\n").nth(1).and_then(|one| one.split("_bump endp").next()).expect("bump");
         // The loop: from the label its backward jump names to that jump.
         let jump = regex::Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
         let (head, end) = jump

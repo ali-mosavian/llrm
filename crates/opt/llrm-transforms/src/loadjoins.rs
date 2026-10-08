@@ -56,7 +56,8 @@ impl FunctionPass for LoadJoins {
         let pointers = analyses.get::<Pointers>(context, layout, unit.function);
         let changed = Accesses::managed(context, layout, unit.function, analyses).and_then(|accesses| {
             let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
-            reused(context, layout, unit.function, analyses.outer(), analyses.outer().callees(), &accesses, pointers, self.insert)
+            let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, unit.function);
+            reused(context, layout, unit.function, analyses.outer(), analyses.outer().callees(), &accesses, pointers, self.insert, &shape)
         });
         match changed {
             Ok(true) => PreservedAnalyses::none(),
@@ -69,8 +70,8 @@ impl FunctionPass for LoadJoins {
 /// `function`'s join loads made phis, as `accesses` (of `function` as it
 /// stands) says what each instruction touches and `pointers` what each
 /// pointer points to; whether any was.
-pub fn reused(context: &Context, layout: &DataLayout, function: &mut Function, outer: &Outer, callees: &Callees, accesses: &Accesses, pointers: &PointsTo, insert: bool) -> Result<bool, String> {
-    let joined = planned(&Unit::within(context, layout, function, outer), callees, accesses, pointers, insert);
+pub fn reused(context: &Context, layout: &DataLayout, function: &mut Function, outer: &Outer, callees: &Callees, accesses: &Accesses, pointers: &PointsTo, insert: bool, shape: &llrm_analysis::cfg::Shape) -> Result<bool, String> {
+    let joined = planned(&Unit::within(context, layout, function, outer).with_shape(shape), callees, accesses, pointers, insert);
     if joined.is_empty() {
         return Ok(false);
     }

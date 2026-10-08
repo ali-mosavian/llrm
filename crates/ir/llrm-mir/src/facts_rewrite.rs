@@ -79,6 +79,7 @@ impl Fact {
             | Fact::NonNull
             | Fact::NoCapture
             | Fact::NoRetain
+            | Fact::Releases
             | Fact::WriteOnly
             | Fact::NoReturn
             | Fact::NoUnwind
@@ -86,6 +87,7 @@ impl Fact {
             | Fact::NoCallback
             | Fact::Cold
             | Fact::ThreeWayCompare
+            | Fact::StackCheck
             | Fact::Dereferenceable(_)
             | Fact::Align(_)
             | Fact::Initializes(_)

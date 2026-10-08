@@ -1,0 +1,7 @@
+description = "Scroll an 80x25 text screen up and down a row, blank the bottom row, copy it to a back buffer, fifty times"
+repetitions = 1
+
+[region]
+bas = "BenchScroll"
+c = "bench_scroll"
+nib = "bench_scroll"

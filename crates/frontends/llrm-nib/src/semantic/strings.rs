@@ -120,7 +120,7 @@ impl FunctionCompiler<'_> {
                 let copy = self
                     .emit_builtin(
                         rt::BUFFER_CLONE,
-                        vec![required(text, span)?, hir::Operand::Constant(U16, 1)],
+                        vec![required(text, span)?, hir::Operand::Constant(self.word_id(), 1)],
                     )
                     .expect("a string");
                 let copy = self.temporary_owned(copy, TypeName::String);
@@ -161,11 +161,11 @@ impl FunctionCompiler<'_> {
         element: ElementType,
     ) -> (u32, hir::Operand) {
         let data = self.slice_data_pointer(descriptor, element, 1);
-        let length = self.value(TypeName::U16);
+        let length = self.value(self.word());
         let place = hir::Operand::IndirectPlace {
             base: descriptor,
             offset: 0,
-            type_id: U16,
+            type_id: self.word_id(),
             inbounds: false, member: None,
         };
         self.emit("load", vec![length], vec![place], None);
@@ -187,8 +187,8 @@ impl FunctionCompiler<'_> {
                 rt::BUFFER_RESERVE,
                 vec![
                     hir::Operand::Value(current),
-                    hir::Operand::Constant(U16, 0),
-                    hir::Operand::Constant(U16, 1),
+                    hir::Operand::Constant(self.word_id(), 0),
+                    hir::Operand::Constant(self.word_id(), 1),
                 ],
             )
             .expect("a string");
@@ -216,7 +216,7 @@ impl FunctionCompiler<'_> {
         let [index] = indices else {
             return Err(Diagnostic::new(span, "a string or vec has one index"));
         };
-        let index = self.coerced(index, TypeName::U16)?;
+        let index = self.coerced(index, self.word())?;
         let length = self.length(pointer);
         self.check_bounds(&required(index.clone(), span)?, length, span)?;
         let width = self.types.width(element.id());

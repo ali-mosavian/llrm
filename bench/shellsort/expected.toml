@@ -1,26 +1,134 @@
-reason = "-Os opens a frame with locals with enter N,0 (one instruction for three; 14 clocks for 3 on the 486, so -Os only); -O2 unchanged"
-blessed = "2026-10-03"
+reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
+blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 10478
-memory_operands = 2016
+instructions = 10449
+memory_operands = 2001
+code_bytes = 348
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 0.1557
 
 [bas.Os]
-instructions = 10807
-memory_operands = 2016
+instructions = 10795
+memory_operands = 2014
+code_bytes = 320
+data_bytes = 17
+bss_bytes = 0
+kernel_ms = 0.1604
 
 [c.O2]
-instructions = 9102
+instructions = 9038
 memory_operands = 1630
+code_bytes = 181
+data_bytes = 0
+bss_bytes = 0
 
 [c.Os]
-instructions = 9428
+instructions = 9366
 memory_operands = 1630
+code_bytes = 165
+data_bytes = 0
+bss_bytes = 0
 
 [nib.O2]
-instructions = 11436
+instructions = 11370
 memory_operands = 1661
+code_bytes = 224
+data_bytes = 0
+bss_bytes = 0
 
 [nib.Os]
-instructions = 11858
+instructions = 11794
 memory_operands = 1757
+code_bytes = 208
+data_bytes = 0
+bss_bytes = 0
+
+[ow.O2]
+instructions = 12654
+memory_operands = 3468
+code_bytes = 222
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.1701
+
+[ow.Os]
+instructions = 13134
+memory_operands = 3907
+code_bytes = 197
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.1765
+
+[bcc.O2]
+instructions = 14884
+memory_operands = 4984
+code_bytes = 253
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.1999
+
+[bcc.Os]
+instructions = 16489
+memory_operands = 3260
+code_bytes = 231
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.2213
+
+[tc.O2]
+instructions = 20543
+memory_operands = 8990
+code_bytes = 307
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.2754
+
+[tc.Os]
+instructions = 20413
+memory_operands = 8990
+code_bytes = 302
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.2736
+
+[tcpp.O2]
+instructions = 19038
+memory_operands = 3859
+code_bytes = 261
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.2552
+
+[tcpp.Os]
+instructions = 18972
+memory_operands = 3326
+code_bytes = 249
+data_bytes = 0
+bss_bytes = 0
+kernel_ms = 0.2543
+
+[bc.O2]
+instructions = 43087
+memory_operands = 19747
+code_bytes = 602
+data_bytes = 7
+bss_bytes = 14
+kernel_ms = 0.5912
+
+[pds71.O2]
+instructions = 41764
+memory_operands = 19749
+code_bytes = 596
+data_bytes = 7
+bss_bytes = 14
+kernel_ms = 0.5701
+
+[vbdos.O2]
+instructions = 41842
+memory_operands = 19775
+code_bytes = 598
+data_bytes = 7
+bss_bytes = 14
+kernel_ms = 0.5677

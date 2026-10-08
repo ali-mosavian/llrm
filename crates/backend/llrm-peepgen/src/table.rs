@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use iced_x86::{Code, Instruction, RflagsBits};
 use indexmap::IndexMap;
 
-#[path = "../../../target/llrm-x86-code16/src/instructions/parse.rs"]
+#[path = "../../../target/llrm-x86-m16/src/instructions/parse.rs"]
 #[allow(dead_code)]
 mod parse;
 
@@ -30,7 +30,7 @@ pub fn flag(name: &str) -> Option<u32> {
 }
 
 /// `ir::Operation`'s variants, as x86.instr spells each (`Operation::as_str`).
-pub const OPERATIONS: [(&str, &str); 28] = [
+pub const OPERATIONS: [(&str, &str); 29] = [
     ("move", "Move"),
     ("xchg", "Exchange"),
     ("addr", "Address"),
@@ -59,6 +59,7 @@ pub const OPERATIONS: [(&str, &str); 28] = [
     ("farithp", "FloatArithPop"),
     ("funary", "FloatUnary"),
     ("barrier", "Barrier"),
+    ("copy", "Copy"),
 ];
 
 #[derive(Debug)]
@@ -101,7 +102,7 @@ pub fn variant(name: &str) -> bool {
     OPERATIONS.iter().any(|(_, variant)| *variant == name)
 }
 
-/// As `llrm_x86_code16::instructions::flags`: what iced's Code reads, and
+/// As `llrm_x86_m16::instructions::flags`: what iced's Code reads, and
 /// writes, sets, clears or leaves undefined.
 fn flags(code: Code) -> (u32, u32) {
     let mut one = Instruction::default();

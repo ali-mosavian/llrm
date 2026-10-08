@@ -4,6 +4,8 @@
 
 use std::collections::BTreeSet;
 
+use crate::spaces::Spaces;
+
 /// Where the target keeps no program data, as linear addresses: old
 /// `abi::machine::Machine::foreign_span`. A real-mode target has some (its
 /// video memory and ROM); any other none.
@@ -11,6 +13,9 @@ pub trait Machine {
     /// The linear bytes that `width`-byte accesses at `selectors` and
     /// `offsets` (unsigned words) reach, where foreign memory holds them all.
     fn foreign_span(&self, selectors: (i64, i64), offsets: (i64, i64), width: i64) -> Option<(i64, i64)>;
+
+    /// The address spaces by role: the numbers the target's description gives them.
+    fn spaces(&self) -> Spaces;
 
     /// What each operation costs on this target, for profitability.
     fn costs(&self) -> OperationCosts;
@@ -56,6 +61,11 @@ pub trait Machine {
     /// call is direct: its own contract may keep more than any call does.
     fn kept_across(&self, _callee: Option<&str>) -> i64 {
         self.call_registers()
+    }
+
+    /// The convention a function nothing outside the program reaches takes, where the target states one.
+    fn private_convention(&self) -> Option<PrivateConvention> {
+        None
     }
 
     /// What multiplying by the constant `factor`, above one, costs: a
@@ -125,6 +135,8 @@ pub struct OperationCosts {
     pub r#move: i64,
     pub call: i64,
     pub return_: i64,
+    /// What one argument word costs around a call: pushed by the caller, read by the callee.
+    pub argument: i64,
     /// What a caller pays to take `n` words of arguments off the stack: the cheaper of `n` pops
     /// (`pop` each) and one `adjust` of the stack pointer.
     pub pop: i64,
@@ -136,9 +148,20 @@ pub struct OperationCosts {
     pub float_divide: i64,
     pub float_load: i64,
     pub float_store: i64,
+    /// What dropping a floating value from the register stack costs once its last reader is past (x87 `fstp st(0)`):
+    /// one held across a loop is released after it.
+    pub float_release: i64,
     pub extend: i64,
     pub fill: i64,
     pub fill_cell: i64,
+    /// `rep movs` as a copy sets it up (ES, the two addresses, the count) and
+    /// what each cell costs it; `direction` is `std` and `cld` around a backward one.
+    pub copy: i64,
+    pub copy_cell: i64,
+    pub direction: i64,
+    /// How many operations a completely unrolled loop may total before the work it saves is boosted
+    /// (`peelsize::Limits`); 0: the target states none and the pass's own is used.
+    pub unroll_budget: i64,
 }
 
 impl OperationCosts {
@@ -146,6 +169,25 @@ impl OperationCosts {
     pub fn cleanup(&self, words: i64) -> i64 {
         (words * self.pop).min(self.adjust)
     }
+
+    /// `price` for an operation on `width`-byte values where the code's own operand size is `operand` bytes:
+    /// a word or dword that is not that size runs under the operand-size prefix (a dword in real mode, a word in flat code).
+    pub fn sized(&self, price: i64, width: i64, operand: i64) -> i64 {
+        price + if width != operand && width > 1 { self.prefix } else { 0 }
+    }
+}
+
+/// What one `lea` of `width`-byte values costs, where the target has an
+/// address form for it. A `word` one is a plain address (a base and an
+/// index, unscaled, no prefix); any other takes a form that scales, which
+/// costs its address-size prefix, and runs under the operand-size prefix a
+/// dword does.
+pub fn three_operand(costs: &OperationCosts, forms: &[AddressForm], width: i64, operand: i64, scale: i64, word: bool) -> Option<i64> {
+    if word {
+        return forms.iter().any(|form| !form.secondary && form.index_width == 2).then_some(costs.address);
+    }
+    let form = forms.iter().find(|form| form.index_width == 4 && form.scales.contains(&scale))?;
+    Some(costs.sized(costs.address, width, operand) + form.use_cost)
 }
 
 impl Default for OperationCosts {
@@ -166,6 +208,7 @@ impl Default for OperationCosts {
             r#move: 1,
             call: 1,
             return_: 1,
+            argument: 2,
             pop: 1,
             adjust: 1,
             return_pops: 0,
@@ -174,9 +217,14 @@ impl Default for OperationCosts {
             float_divide: 1,
             float_load: 1,
             float_store: 1,
+            float_release: 0,
             extend: 1,
             fill: 1,
             fill_cell: 1,
+            copy: 1,
+            copy_cell: 1,
+            direction: 1,
+            unroll_budget: 0,
         }
     }
 }
@@ -254,11 +302,23 @@ impl AddressForm {
     }
 }
 
+/// The convention the target gives a private function, and those a function must have for it to take it: a marked function
+/// (Pascal's, an interrupt's) keeps the protocol its marker names.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct PrivateConvention {
+    pub to: u32,
+    pub from: Vec<u32>,
+}
+
 /// A target that states nothing: no foreign memory, unit prices, and no
 /// registers, which leaves pressure unpriced.
 pub struct Neutral;
 
 impl Machine for Neutral {
+    fn spaces(&self) -> Spaces {
+        Spaces::FLAT
+    }
+
     fn foreign_span(&self, _: (i64, i64), _: (i64, i64), _: i64) -> Option<(i64, i64)> {
         None
     }
@@ -278,5 +338,34 @@ impl Machine for Neutral {
     /// An address adds one index, unscaled and free.
     fn address_forms(&self) -> Vec<AddressForm> {
         vec![AddressForm::new(2, BTreeSet::from([1]), 0, 0, 0, false, None).expect("no fallback to disagree")]
+    }
+}
+
+#[cfg(test)]
+mod operand_size_tests {
+    use super::*;
+
+    fn form(index_width: i64, secondary: bool, use_cost: i64) -> AddressForm {
+        AddressForm::new(index_width, BTreeSet::from([1, 2, 4, 8]), 0, use_cost, 0, secondary, None).expect("a form")
+    }
+
+    /// The operand-size prefix is for the size that is not the code's own: a dword in real mode, a word when flat.
+    #[test]
+    fn the_prefix_is_for_the_size_that_is_not_the_codes_own() {
+        let costs = OperationCosts { prefix: 1, ..OperationCosts::default() };
+        assert_eq!((costs.sized(5, 4, 2), costs.sized(5, 2, 2), costs.sized(5, 4, 4), costs.sized(5, 2, 4), costs.sized(5, 1, 4)), (6, 5, 5, 6, 5));
+    }
+
+    /// A flat target's dword address has no prefix and its price is the `lea`'s; it had none, because only the
+    /// prefixed (secondary) form was looked for. A word address needs a form of index width 2.
+    #[test]
+    fn a_native_dword_address_is_priced_and_a_word_one_needs_a_word_form() {
+        let costs = OperationCosts { address: 2, prefix: 1, ..OperationCosts::default() };
+        let flat = [form(4, false, 0)];
+        assert_eq!(three_operand(&costs, &flat, 4, 4, 2, false), Some(2));
+        assert_eq!(three_operand(&costs, &flat, 2, 4, 1, true), None);
+        let real = [form(2, false, 0), form(4, true, 1)];
+        assert_eq!(three_operand(&costs, &real, 4, 2, 2, false), Some(2 + 1 + 1));
+        assert_eq!(three_operand(&costs, &real, 2, 2, 1, true), Some(2));
     }
 }

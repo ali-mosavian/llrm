@@ -1,26 +1,134 @@
-reason = "an internal function whose callers are all direct takes fastcc: the callee pops its arguments (ret N) and no caller adds sp, so fewer instructions at -O2 and -Os"
-blessed = "2026-10-03"
+reason = "interprocedural register use: a caller keeps a value in a register a private callee leaves (m16's cdecl16 loses AX BX CX DX ES at every call); nbody_fixed -O2 executes 3.7% more instructions and 20% fewer memory operands, the allocator's estimate preferring it, queens -O2 4 bytes more"
+blessed = "2026-10-07"
 
 [bas.O2]
-instructions = 131691
-memory_operands = 94939
+instructions = 127550
+memory_operands = 92918
+code_bytes = 484
+data_bytes = 121
+bss_bytes = 0
+kernel_ms = 1.7446
 
 [bas.Os]
-instructions = 131489
-memory_operands = 94939
+instructions = 127348
+memory_operands = 92918
+code_bytes = 459
+data_bytes = 121
+bss_bytes = 0
+kernel_ms = 1.7421
 
 [c.O2]
-instructions = 84439
+instructions = 84137
 memory_operands = 61509
+code_bytes = 175
+data_bytes = 0
+bss_bytes = 1212
 
 [c.Os]
-instructions = 84237
+instructions = 83935
 memory_operands = 61509
+code_bytes = 167
+data_bytes = 0
+bss_bytes = 1212
 
 [nib.O2]
-instructions = 138296
-memory_operands = 113322
+instructions = 136879
+memory_operands = 112415
+code_bytes = 338
+data_bytes = 0
+bss_bytes = 0
 
 [nib.Os]
-instructions = 138998
-memory_operands = 114228
+instructions = 137583
+memory_operands = 113321
+code_bytes = 317
+data_bytes = 0
+bss_bytes = 0
+
+[ow.O2]
+instructions = 151210
+memory_operands = 92313
+code_bytes = 278
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 2.0383
+
+[ow.Os]
+instructions = 161207
+memory_operands = 92413
+code_bytes = 263
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 2.1716
+
+[bcc.O2]
+instructions = 137252
+memory_operands = 92113
+code_bytes = 258
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 1.8521
+
+[bcc.Os]
+instructions = 330372
+memory_operands = 92113
+code_bytes = 310
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 4.4275
+
+[tc.O2]
+instructions = 335232
+memory_operands = 215841
+code_bytes = 378
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 4.4923
+
+[tc.Os]
+instructions = 335132
+memory_operands = 215841
+code_bytes = 372
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 4.491
+
+[tcpp.O2]
+instructions = 336370
+memory_operands = 92519
+code_bytes = 364
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 4.5075
+
+[tcpp.Os]
+instructions = 336368
+memory_operands = 92519
+code_bytes = 360
+data_bytes = 0
+bss_bytes = 1212
+kernel_ms = 4.5075
+
+[bc.O2]
+instructions = 603771
+memory_operands = 310816
+code_bytes = 778
+data_bytes = 7
+bss_bytes = 118
+kernel_ms = 8.0983
+
+[pds71.O2]
+instructions = 543500
+memory_operands = 310917
+code_bytes = 766
+data_bytes = 7
+bss_bytes = 118
+kernel_ms = 7.2915
+
+[vbdos.O2]
+instructions = 545217
+memory_operands = 311422
+code_bytes = 772
+data_bytes = 7
+bss_bytes = 118
+kernel_ms = 7.3159

@@ -119,10 +119,10 @@ fn compiled(tool: &str, source: &Path, arguments: &[&str]) -> String {
 /// Each loop of `stem`'s kernel in BASIC, C and Nib, normalized.
 fn kernels(dir: &Path, stem: &str, basic: &str) -> [(&'static str, Vec<(Vec<String>, bool)>); 3] {
     let source = |extension: &str| dir.join(format!("{stem}.{extension}"));
-    let cpu = ["-O2", "--cpu", "486"];
-    let bas = compiled("llrm-qb", &source("bas"), &[&cpu[..], &["--dialect", "pds71", "--runtime", "pds71", "--huge-arrays"]].concat());
+    let cpu = ["-O2", "-march=i486"];
+    let bas = compiled("llrm-qb", &source("bas"), &[&cpu[..], &["--dialect", "pds71", "--runtime", "pds71", "--huge-arrays", "-fno-inline-functions-called-once"]].concat());
     let c = compiled("llrm-c", &source("c"), &[&cpu[..], &["-fno-inline-functions"]].concat());
-    let nib = compiled("llrm-nib", &source("nib"), &cpu);
+    let nib = compiled("llrm-nib", &source("nib"), &[&cpu[..], &["-fno-inline-functions-called-once"]].concat());
     let of = |asm: &str, name: &str| loops(&procedure(asm, name)).iter().map(|(one, inner)| (normalized(one), *inner)).collect();
     let kernel = format!("_bench_{stem}");
     [("bas", of(&bas, basic)), ("c", of(&c, &kernel)), ("nib", of(&nib, &kernel))]
@@ -140,7 +140,10 @@ fn test_huge_array_loops_are_the_same_in_basic_c_and_nib() {
     let corpus = root.join("tests/run/huge");
     let mut stems: Vec<String> = std::fs::read_dir(&corpus).unwrap().flatten().filter_map(|one| {
         let path = one.path();
-        (path.extension()? == "nib").then(|| path.file_stem().unwrap().to_string_lossy().into_owned())
+        // copyw and fillw are 16-bit words past 64K, which BASIC can only index as two columns (a subscript is at
+        // most 32767): their loops differ by construction. tests/run holds all three and compares their output.
+        let stem = path.file_stem()?.to_string_lossy().into_owned();
+        (path.extension()? == "nib" && !["copyw", "fillw"].contains(&stem.as_str())).then_some(stem)
     }).collect();
     stems.sort();
     assert!(stems.len() >= 5, "premise: the corpus is found: {stems:?}");
@@ -165,4 +168,23 @@ fn test_huge_array_loops_are_the_same_in_basic_c_and_nib() {
     }
     assert!(differ.is_empty(), "{} of {} differ:\n{}", differ.len(), programs.len(), differ.join("\n"));
     assert!(carried.is_empty(), "an inner loop carries:\n{}", carried.join("\n"));
+}
+
+/// Scroll's loop saved ES, set it to DS and restored it around each of its
+/// four string ops (16 instructions a trip), and began each backward copy
+/// with `sub si, 3` after the `mov si, K` (#493, #494). In all three
+/// languages the loop holds only the string ops' own setup.
+#[test]
+fn test_scroll_loop_sets_no_segment_and_steps_no_start() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let languages = kernels(&root.join("bench/scroll"), "scroll", "BENCHSCROLL");
+    for (language, loops) in &languages {
+        let strings: Vec<_> = loops.iter().filter(|(one, _)| one.iter().any(|line| line.starts_with("rep "))).collect();
+        assert_eq!(strings.len(), 1, "premise: {language} has one loop of string ops: {loops:?}");
+        let body = &strings[0].0;
+        assert_eq!(body.iter().filter(|line| line.starts_with("rep ")).count(), 4, "premise: {language}: {body:?}");
+        let segment = body.iter().filter(|line| line.contains("es") && (line.starts_with("push") || line.starts_with("pop") || line.starts_with("mov es"))).count();
+        let stepped = body.iter().filter(|line| line.starts_with("sub ") && line.ends_with(", 3")).count();
+        assert_eq!((segment, stepped), (0, 0), "{language}:\n{}", body.join("\n"));
+    }
 }

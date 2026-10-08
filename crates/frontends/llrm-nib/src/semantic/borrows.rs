@@ -5,7 +5,7 @@
 //! binding in scope borrows it.
 
 use super::*;
-use crate::syntax::Pattern;
+use crate::syntax::{Clause, Pattern};
 
 /// What holds a borrow: a reference's or view's value, or a struct's place
 /// that keeps a view. Also a binding's identity, as a root.
@@ -216,12 +216,27 @@ impl FunctionCompiler<'_> {
             return BTreeSet::new();
         };
         let Some(signature) = self.known_signature(name) else {
-            return BTreeSet::new();
+            return self.generator_roots(name, arguments);
         };
         arguments
             .iter()
             .zip(&signature.parameters)
             .filter(|(_, parameter)| matches!(parameter, SignatureParameter::Borrowed { .. }))
+            .flat_map(|(argument, _)| self.roots(argument))
+            .map(Root::somewhere)
+            .collect()
+    }
+
+    /// A generator call's state keeps each borrowed argument (section 12):
+    /// it borrows what they do.
+    fn generator_roots(&self, name: &str, arguments: &[Expr]) -> BTreeSet<Root> {
+        let Some(generator) = self.templates.borrow().generator(name).cloned() else {
+            return BTreeSet::new();
+        };
+        arguments
+            .iter()
+            .zip(&generator.parameters)
+            .filter(|(_, parameter)| matches!(parameter.type_, ParameterType::Borrowed { .. }))
             .flat_map(|(argument, _)| self.roots(argument))
             .map(Root::somewhere)
             .collect()
@@ -344,6 +359,7 @@ impl FunctionCompiler<'_> {
                 self.reseatable.insert(own);
                 Binding { storage: Storage::Slice(own), ..binding }
             }
+            (true, Binding { storage: Storage::Reference(_), .. }) if !self.owns(&binding.storage) => self.reseatable_reference(name, binding),
             _ => binding,
         };
         self.record_borrow(&binding, source);
@@ -373,7 +389,11 @@ impl FunctionCompiler<'_> {
                 descriptor
             }
         };
+        let first = self.current_block_mut().instructions.len();
         self.copy_view(source, own, element, rank);
+        let block = self.current;
+        let stores: Vec<usize> = (first..self.current_block_mut().instructions.len()).filter(|at| self.current_block_mut().instructions[*at].op == "store").collect();
+        self.reseats.extend(stores.into_iter().map(|at| (block, at)));
         let roots = self.roots(value);
         self.borrowed_from.insert(BorrowKey::Value(own), roots);
         Ok(true)
@@ -418,7 +438,42 @@ impl FunctionCompiler<'_> {
             (None, Some(struct_id)) => self.value_roots(expression, ElementType::Struct(struct_id)),
             (None, None) => self.value_roots(expression, ElementType::Scalar(self.signature.result)),
         };
-        match roots.iter().find(|one| !Life::Lent.may_hold(one)) {
+        self.refuse_dangling(roots, Life::Lent, span)
+    }
+
+    /// `return items` in a generator hands `items` over: what it borrows must
+    /// outlive the loop consuming the generator, else the state it escapes in
+    /// would hold a borrow of the generator's own local (section 12).
+    pub(super) fn check_handed_over(&mut self, items: &Expr, span: Span) -> Result<(), Diagnostic> {
+        let held = self.consumers.last().map_or(Life::Lent, |consumer| Life::Scope(consumer.depth.saturating_sub(1)));
+        let roots = self.handed_roots(items);
+        self.refuse_dangling(roots, held, span)
+    }
+
+    /// The borrows an iterator `items` holds: a local one is moved, so only
+    /// what it holds counts, not its own binding.
+    fn handed_roots(&self, items: &Expr) -> BTreeSet<Root> {
+        match items {
+            Expr::Name(name, _) => {
+                let key = self.resolve(name).and_then(|(_, binding)| identity(&binding.storage));
+                key.and_then(|key| self.borrowed_from.get(&key).or_else(|| self.held.get(&key))).cloned().unwrap_or_default()
+            }
+            Expr::Generator { clauses, .. } => clauses
+                .iter()
+                .filter_map(|clause| match clause {
+                    Clause::For { iterable, .. } => Some(self.roots(iterable)),
+                    Clause::If(_) => None,
+                })
+                .flatten()
+                .collect(),
+            _ => self.roots(items),
+        }
+    }
+
+    /// Errs unless a value living `held` may hold each of `roots`; else keeps
+    /// them as what the caller lent.
+    fn refuse_dangling(&mut self, roots: BTreeSet<Root>, held: Life, span: Span) -> Result<(), Diagnostic> {
+        match roots.iter().find(|one| !held.may_hold(one)) {
             Some(local) => Err(Diagnostic::new(span, format!("a returned borrow of {:?} would dangle; only a borrowed parameter's can be returned", local.name))),
             None => {
                 self.keep_lent(&roots);
@@ -514,6 +569,12 @@ impl FunctionCompiler<'_> {
             let lent = borrow_key(&binding.storage).filter(|key| borrows(self.borrowed_from.get(key)));
             let held = identity(&binding.storage).filter(|key| borrows(self.held.get(key)));
             holders.extend(lent.into_iter().chain(held));
+        }
+        // What a `let mut` reference's cell holds outlives each pointer loaded from it.
+        for cell in &self.reference_cells {
+            if holders.contains(&BorrowKey::Value(cell.latest)) {
+                holders.insert(BorrowKey::Place(cell.place));
+            }
         }
         holders
     }
@@ -647,7 +708,7 @@ pub(super) fn check_disjoint(lent: &[Lent], spans: &[Span]) -> Result<(), Diagno
 }
 
 /// Errs unless `target` may hold a borrow of each of `roots`.
-fn check_holds(target: &Root, roots: &BTreeSet<Root>, span: Span) -> Result<(), Diagnostic> {
+pub(super) fn check_holds(target: &Root, roots: &BTreeSet<Root>, span: Span) -> Result<(), Diagnostic> {
     match roots.iter().find(|root| !target.life.may_hold(root)) {
         Some(root) => Err(Diagnostic::new(span, format!("{:?} would outlive {:?}, which it borrows", target.name, root.name))),
         None => Ok(()),
