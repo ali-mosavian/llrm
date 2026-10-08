@@ -904,6 +904,22 @@ fn argument_classes(memory: &[i64], result_pointer: Option<i64>) -> Vec<(usize, 
         .collect()
 }
 
+/// The position of the `byval` parameter `place` is the bytes of: its symbol is the parameter, the pointer to the caller's copy.
+fn byval_home_at(function: &model::Function, place: &model::Place) -> Option<usize> {
+    let abi = function.abi.as_ref()?;
+    function.parameters.iter().position(|&one| one == place.symbol).filter(|&at| abi.byval.contains(&(at as i64)))
+}
+
+fn byval_home(function: &model::Function, place: &model::Place) -> bool {
+    byval_home_at(function, place).is_some()
+}
+
+/// `byval([bytes x i8])` for each of `positions`: the aggregate its pointer argument stands for.
+fn byval_attributes(types: &mut Types, positions: &[i64], bytes: &[i64]) -> Vec<(usize, Attribute)> {
+    let byte = types.int(8);
+    positions.iter().zip(bytes).map(|(&at, &count)| (at as usize, Attribute::Type("byval".to_owned(), types.intern(Type::Array { element: byte, count: count as u64 })))).collect()
+}
+
 /// The parameter `function`'s floating result is stored through and
 /// returned in its place, where its ABI has one.
 fn result_destination(tables: &Tables, function: &model::Function) -> Option<usize> {
@@ -948,8 +964,9 @@ fn declare(module: &mut Module, tables: &Tables, function: &model::Function) -> 
     };
     let global = module.add_function(&function.name, ty, linkage)?;
     place_function(module, global, abi);
+    let byval = function.abi.as_ref().map(|abi| byval_attributes(&mut module.context.types, &abi.byval, &abi.byval_bytes)).unwrap_or_default();
     if let (Some(model_abi), llrm_mir::GlobalKind::Function(placed)) = (&function.abi, &mut module.globals[global.0 as usize].kind) {
-        for (index, class) in argument_classes(&model_abi.memory, model_abi.result_pointer) {
+        for (index, class) in argument_classes(&model_abi.memory, model_abi.result_pointer).into_iter().chain(byval) {
             placed.parameter_attrs.get_mut(index).ok_or("a parameter class of no parameter")?.push(class);
         }
     }
@@ -1162,7 +1179,7 @@ fn declare_outside(module: &mut Module, tables: &mut Tables, function: &model::F
             tables.callees.insert(MEMSET.to_owned(), reference);
         }
     }
-    if !interrupted(function) && function.places.iter().any(|one| one.storage == Storage::Parameter) && !tables.callees.contains_key(VA_START) {
+    if !interrupted(function) && function.places.iter().any(|one| one.storage == Storage::Parameter && !byval_home(function, one)) && !tables.callees.contains_key(VA_START) {
         let types = &mut module.context.types;
         let (void, pointer) = (types.void(), types.ptr(0));
         let ty = function_type(types, void, vec![pointer]);
@@ -1746,7 +1763,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         }
         if interrupted(self.function) {
             self.passed = Some(self.b.parameter(0));
-        } else if self.function.places.iter().any(|one| one.storage == Storage::Parameter) {
+        } else if self.function.places.iter().any(|one| one.storage == Storage::Parameter && !byval_home(self.function, one)) {
             let pointer = self.b.context.types.ptr(0);
             let list = self.b.alloca(pointer, "");
             let (void, callee) = (self.b.context.types.void(), Value::Constant(self.tables.callees[VA_START]));
@@ -1948,6 +1965,10 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 Ok(self.offset(self.objects[object], offset, true))
             }
             Storage::Parameter => {
+                if let Some(at) = byval_home_at(self.function, place) {
+                    let parameter = self.b.parameter(at);
+                    return Ok(self.offset(parameter, place.offset, false));
+                }
                 let area = self.passed.ok_or("a parameter's storage in a function that is not variadic")?;
                 Ok(self.offset(area, place.offset, false))
             }
@@ -2390,7 +2411,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let parameters = arguments.iter().map(|&one| self.b.type_of(one)).collect();
                 let ty = function_type(&mut self.b.context.types, returns, parameters);
                 let order: Vec<usize> = (1..instruction.operands.len()).collect();
-                let attributes = self.extensions(instruction, &order);
+                let mut attributes = self.extensions(instruction, &order);
+                attributes.extend(self.byval_arguments(instruction));
                 if let Some(answer) = self.raising_call(instruction.id, true, convention, ty, callee, arguments, &attributes)? {
                     let result = self.answered(instruction, through, answer)?;
                     self.define(instruction, result);
@@ -2403,6 +2425,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let order = site.and_then(|site| passed(site, operands.len())).unwrap_or_else(|| (0..operands.len()).collect());
                 let arguments: Vec<Value> = order.iter().map(|&one| operands[one]).collect();
                 let mut attributes = self.extensions(instruction, &order);
+                attributes.extend(self.byval_arguments(instruction));
                 for &(operand, fact) in self.tables.argument_facts.get(&(self.function.id, instruction.id)).into_iter().flatten() {
                     let index = order.iter().position(|&at| at as i64 == operand).ok_or("a fact of an argument the call does not pass")?;
                     attributes.push((index, fact.attribute().ok_or("an instruction flag of an argument")?));
@@ -2475,6 +2498,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             })
             .chain(classes)
             .collect()
+    }
+
+    /// The `byval` attribute of each argument of `instruction`'s call that is a large aggregate's address.
+    fn byval_arguments(&mut self, instruction: &model::Instruction) -> Vec<(usize, Attribute)> {
+        let Some(site) = self.function.calls.iter().find(|one| one.instruction == instruction.id) else { return Vec::new() };
+        byval_attributes(&mut self.b.context.types, &site.byval, &site.byval_bytes)
     }
 
     /// How `instruction`'s result comes back.

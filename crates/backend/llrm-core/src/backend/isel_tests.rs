@@ -2525,12 +2525,20 @@ b1:
 /// passing one would push the pointer where the callee expects the bytes.
 #[test]
 fn test_parameters_passed_in_the_frame_are_refused() {
-    for attribute in ["byval(i32)", "inalloca(i32)", "byref(i32)"] {
+    for attribute in ["inalloca(i32)", "byref(i32)"] {
         let text = format!("define i16 @f(ptr {attribute} %p) addrspace(1) {{\n  %v = load i16, ptr %p\n  ret i16 %v\n}}\n");
         assert!(selected(&text, "f").is_err(), "{attribute}");
         let text = format!("declare void @g(ptr) addrspace(1)\ndefine void @f(ptr %p) addrspace(1) {{\n  call addrspace(1) void @g(ptr {attribute} %p)\n  ret void\n}}\n");
         assert!(selected(&text, "f").is_err(), "a call's {attribute}");
     }
+}
+
+/// A `byval` parameter is selected: its bytes are the stack's, and the parameter is their address.
+#[test]
+fn test_a_byval_parameter_is_the_address_of_its_bytes_in_the_frame() {
+    let text = "define i16 @f(ptr byval([8 x i8]) %p) addrspace(1) {\n  %at = getelementptr i8, ptr %p, i16 6\n  %v = load i16, ptr %at\n  ret i16 %v\n}\n";
+    let convention = selected(text, "f").unwrap().convention;
+    assert!(matches!(convention.parameters[..], [crate::backend::isel::Parameter::Bytes(_)]), "{:?}", convention.parameters);
 }
 
 /// A call writes what its MIR says it may: a double loaded from a cell the

@@ -1443,6 +1443,24 @@ mod tests {
         assert!(lines.contains(&"mov byte ptr [esp+eax+2], al".to_owned()), "{lines:#?}");
     }
 
+    /// A struct wider than 16 bytes passed by value is one `byval` pointer and a copy, not a parameter and a store per word: a
+    /// 4 KB one was 1,024 parameters, and the backend quadratic in them (pr20621-1: a 64 KB one never finished compiling).
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_large_struct_passed_by_value_is_one_copy_not_a_word_each() {
+        let scratch = tempfile::tempdir().unwrap();
+        let source = scratch.path().join("big.c");
+        std::fs::write(&source, "struct big { int i[1024]; };\nint foo(struct big b, int x) { return b.i[x]; }\nint main(void) { struct big g; g.i[3] = 7; return foo(g, 3); }\n").unwrap();
+        let argv: Vec<String> = ["-m32", "-O0", "x.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        let recorded = super::recorded_for(&source, &[], false, &[], &super::Profile::of(&llrm_x86_m32::M32).unwrap()).expect("records big.c");
+        let built = super::selected(&recorded, "big", None, &args.codegen).unwrap();
+        let lines: Vec<String> = llrm_core::backend::masm::text(&built).unwrap().lines().map(|line| line.trim().to_owned()).collect();
+        assert!(lines.len() < 80, "{} lines", lines.len());
+        assert!(lines.contains(&"rep movsd".to_owned()) && lines.contains(&"ret 4100".to_owned()), "{lines:#?}");
+    }
+
     /// `fixture`'s flat object, as records: (type, body).
     fn flat_object(fixture: &str) -> Vec<(u8, Vec<u8>)> {
         flat_object_with(fixture, &[])
