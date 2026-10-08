@@ -58,8 +58,9 @@ impl Level {
 }
 
 /// gcc's `-f` pass names, each with the options it sets.
-const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 15] = [
+const PASSES: [(&str, fn(&mut pipeline::Options, bool)); 16] = [
     ("allocation-search", |options, on| options.search = on),
+    ("allocation-search-all", |options, on| options.exhaustive = on),
     ("unroll-loops", |options, on| options.unroll = on),
     ("peel-loops", |options, on| options.peel = on),
     ("inline-functions-called-once", |options, on| options.inline.last = on),
