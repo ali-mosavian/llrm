@@ -351,7 +351,7 @@ fn wrap_of(procedure: &Procedure) -> Option<crate::backend::shrinkwrap::Wrap> {
 
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
-    parts(procedure, stack_addressed(procedure, 0).is_some())
+    parts(procedure, frame_omitted(procedure, 0).is_some())
 }
 
 /// `_frame_parts`, with no frame register where `omit`: the entry sets none and the return takes back
@@ -488,7 +488,7 @@ pub fn return_overhead_bytes(procedure: &Procedure) -> Result<usize, Unprintable
 /// The procedure as emitted, frame included: what this prints and objbuild
 /// encodes. A branch's target is still a block; `label(number, at)` names it.
 pub fn listing(procedure: &Procedure, number: usize) -> Result<Vec<Item>, Unprintable> {
-    let items = match stack_addressed(procedure, number) {
+    let items = match frame_omitted(procedure, number) {
         Some(items) => items,
         None => built(procedure, number, false)?,
     };
@@ -604,6 +604,26 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
         out.push(Item::Callee(Callee::new(check.handler.clone(), check.far)));
     }
     Ok(out)
+}
+
+/// `stack_addressed`, but tuned for size only where it is no longer: `[esp+d]` is a byte longer than `[ebp+d]`, and a
+/// displacement past 127 three more, which a large frame's cells can cost more than the entry and return save.
+fn frame_omitted(procedure: &Procedure, number: usize) -> Option<Vec<Item>> {
+    let omitted = stack_addressed(procedure, number)?;
+    if !procedure.size {
+        return Some(omitted);
+    }
+    let bytes = |items: &[Item]| -> usize {
+        items
+            .iter()
+            .filter_map(|item| match spelled(item.clone(), &procedure.registers) {
+                Item::Semantics(what) => select::emit_in(procedure.body.bits, &what, 0, None, false, false, None).map(|one| one.code.len()),
+                _ => None,
+            })
+            .sum()
+    };
+    let framed = built(procedure, number, false).ok()?;
+    (bytes(&omitted) <= bytes(&framed)).then_some(omitted)
 }
 
 /// The items of a procedure that needs no frame register, its cells addressed through the stack
