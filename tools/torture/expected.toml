@@ -40,10 +40,6 @@ program = "20021127-1"
 reason = "The program defines `llabs` (a body that aborts) and expects the compiler to replace the call by GCC's builtin (`-std=c99`: llabs is a reserved library name, so defining it is undefined behaviour); llrm calls the definition as written."
 
 [[differs]]
-program = "nestfunc-4"
-reason = "A 1000-level call chain that needs about 24 KB of stack at -O0 (the test itself says `dg-add-options stack_size` and sizes DEPTH from STACK_SIZE); the m32 DOS program's stack is 16 KB and faults at its guard (exception 0Bh). Depth 200 passes."
-
-[[differs]]
 program = "widechar-3"
 reason = "Open Watcom defines no `__BYTE_ORDER__` or `__ORDER_BIG_ENDIAN__`: both are 0 in the `#if` and the big-endian branch is taken, which expects strlen of L\"abcdef\" to be 0 (the little-endian answer, 1, is right: checked with the branch removed)."
 
@@ -58,10 +54,6 @@ reason = "`x[0] |= foo ()` where foo changes x[0]: the order of the read of x[0]
 [[differs]]
 program = "bf-sign-2"
 reason = "wccq non-conforming (front-end route): it types a bit-field by its declared type, so `unsigned :15` and `unsigned long :31` stay unsigned in arithmetic, where ISO C11 6.3.1.1p2 promotes any bit-field whose values fit an int to int (checked on both targets: u15 and u31 give the unsigned answer)."
-
-[[differs]]
-program = "memcpy-1"
-reason = "Two 128 KB local arrays: 256 KB of stack, where the m32 DOS program's is 16 KB (the test sizes them from STACK_SIZE with `dg-add-options stack_size`); the stack overflows and the emulator ends the program or loses it."
 
 [[differs]]
 program = "920710-1"
@@ -94,10 +86,6 @@ reason = "x86-m16 only: `i != USHRT_MAX + 1U` is 65535 + 1 = 0 in a 16-bit unsig
 [[differs]]
 program = "bitfld-1"
 reason = "x86-m16 only: the bit-field promotions (`unsigned int u : 7`, `-13U % 61`) are computed in a 16-bit int where the test's values assume 32."
-
-[[differs]]
-program = "921202-1"
-reason = "x86-m16 only: three arrays of 2055 longs on the stack (the test sizes them from STACK_SIZE with `dg-add-options stack_size`), against an 8 KB stack."
 
 [[differs]]
 program = "960521-1"
