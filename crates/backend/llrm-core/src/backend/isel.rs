@@ -530,6 +530,7 @@ pub fn selected_with<'c>(module: &Module, name: &str, abi: &'c dyn Abi, pool: &m
         folded: BTreeSet::new(),
         depth: hole,
         allocas: 0,
+        frame_objects: Vec::new(),
         scratch: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
@@ -746,6 +747,8 @@ struct Selector<'m, 'c, 'p> {
     depth: i64,
     /// Where the allocas end, below which the stack temporaries go.
     allocas: i64,
+    /// Each alloca's frame displacement and size.
+    frame_objects: Vec<(i64, i64)>,
     /// The temporaries' bytes the instruction being selected has taken:
     /// a temporary lives only within the instruction that made it.
     scratch: i64,
@@ -889,6 +892,7 @@ impl Selector<'_, '_, '_> {
                     });
                     let address = function.instruction(inst).result.expect("an address");
                     self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1 });
+                    self.frame_objects.push((disp, size));
                     if llrm_analysis::frameescape::exposes(function, address, |inst| self.marker(inst)) {
                         reach.insert((disp, disp + size));
                     }
@@ -1887,9 +1891,27 @@ impl Selector<'_, '_, '_> {
             return Ok(None);
         }
         let offset = offset as i64;
-        let pointer = self.pointer(instruction.operands[0])?.moved(offset);
+        let base = self.pointer(instruction.operands[0])?;
+        let pointer = self.within_object(base, base.moved(offset), instruction.ty);
         self.pointers.insert(value, pointer);
         Ok(Some(pointer))
+    }
+
+    /// `moved`, a frame address a constant GEP reached from `base`, as the one address of its residue modulo 2^w (w the address space's offset bits, which
+    /// a far pointer's 16-bit offset has too) that lies in the object `base` is in. An index is a signed pointer-width integer: 32798 into a 32,800-byte object on a
+    /// 16-bit target is -32738 in an i16, the same address below the object, where it made the frame twice as big; an index a
+    /// wrap past the object's top is brought back the same way. An offset of 32 bits or more never wraps an object.
+    fn within_object(&self, base: Pointer, moved: Pointer, ty: TypeId) -> Pointer {
+        let (Pointer::Frame { disp: from, .. }, Pointer::Frame { disp: to, index, scale }) = (base, moved) else { return moved };
+        let Type::Pointer(space) = self.types().get(ty) else { return moved };
+        let bits = self.layout.offset_bits(*space);
+        if bits >= 32 {
+            return moved;
+        }
+        let wrap = 1i64 << bits;
+        let Some(&(object, size)) = self.frame_objects.iter().find(|&&(object, size)| (object..=object + size).contains(&from)) else { return moved };
+        let inside = object + (to - object).rem_euclid(wrap);
+        if inside <= object + size { Pointer::Frame { disp: inside, index, scale } } else { moved }
     }
 
     /// A global's address, and a constant displacement from it. A far
