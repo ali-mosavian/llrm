@@ -1911,19 +1911,20 @@ impl Selector<'_, '_, '_> {
         Ok(Some(pointer))
     }
 
-    /// `moved`, a frame address a constant GEP reached from `base`, as the address that lies in the object `base` is in. An
-    /// index is a signed pointer-width integer: 32798 into a 32,800-byte object on a 16-bit target is -32738 in an i16, the same
-    /// address modulo 64 KB but below the object, where it made the frame twice as big (and, past 64 KB, wrap).
+    /// `moved`, a frame address a constant GEP reached from `base`, as the one address of its residue modulo 2^w (w the pointer's
+    /// width) that lies in the object `base` is in. An index is a signed pointer-width integer: 32798 into a 32,800-byte object on a
+    /// 16-bit target is -32738 in an i16, the same address below the object, where it made the frame twice as big; an index a
+    /// wrap past the object's top is brought back the same way. A pointer of 4 or more bytes never wraps an object.
     fn within_object(&self, base: Pointer, moved: Pointer, ty: TypeId) -> Pointer {
         let (Pointer::Frame { disp: from, .. }, Pointer::Frame { disp: to, index, scale }) = (base, moved) else { return moved };
         let Ok(width) = self.width(ty) else { return moved };
-        let wrap = 1i64 << (8 * width.min(4));
-        let Some(&(object, size)) = self.frame_objects.iter().find(|&&(object, size)| (object..=object + size).contains(&from)) else { return moved };
-        if to < object && to + wrap <= object + size {
-            Pointer::Frame { disp: to + wrap, index, scale }
-        } else {
-            moved
+        if width >= 4 {
+            return moved;
         }
+        let wrap = 1i64 << (8 * width);
+        let Some(&(object, size)) = self.frame_objects.iter().find(|&&(object, size)| (object..=object + size).contains(&from)) else { return moved };
+        let inside = object + (to - object).rem_euclid(wrap);
+        if inside <= object + size { Pointer::Frame { disp: inside, index, scale } } else { moved }
     }
 
     /// A global's address, and a constant displacement from it. A far
