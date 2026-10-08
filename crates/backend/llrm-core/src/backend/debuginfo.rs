@@ -180,6 +180,10 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
     let mut starts: Vec<(usize, usize)> = module.procedures.iter().filter_map(|one| symbols.get(&one.name).copied()).collect();
     starts.sort_unstable();
     let mut info = Info { format: debug.format, language: debug.language, dialect: debug.dialect, producer: debug.producer, frame_register: debug.frame_register.clone(), return_register: debug.return_register.clone(), registers: debug.registers.clone(), files: vec![model::File { name: source.to_owned(), checksum: None }], types: debug.types.clone(), ..Info::default() };
+    // The register the code would address a cell by is the one pushed below the return address: a frame address away.
+    if let Some((.., entry)) = debug.frame.filter(|_| module.procedures.iter().any(|one| one.body.cfa_variables)) {
+        info.frame_base = model::FrameBase::Cfa { bias: 2 * entry[0] };
+    }
     info.globals = debug.globals.iter().filter(|one| one.scope.is_none() && defined(&one.symbol)).map(|one| variable(&one.name, one.r#type, Kind::Local, &one.symbol, one.displacement)).collect();
     for procedure in &module.procedures {
         let (Some(described), Some(&(section, start))) = (debug.procedures.get(&procedure.name), symbols.get(&procedure.name)) else { continue };
@@ -218,7 +222,13 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                 Space::Frame => {
                     let home = Location::Frame { disp: addr.disp };
                     // The argument is in its register until the function stores it into the home.
-                    let stored = one.arrives.zip(debug.frame).and_then(|(register, (frame, ..))| super::arrival::stored(&code.image[start..end], frame, addr.disp, register).map(|at| (register, at)));
+                    let stored = one.arrives.zip(debug.frame).and_then(|(register, (frame, stack, entry))| {
+                        let cell = match info.frame_base {
+                            model::FrameBase::Register => super::arrival::Cell::Frame { register: frame, disp: addr.disp },
+                            model::FrameBase::Cfa { bias } => super::arrival::Cell::Stack { register: stack, entry: entry[usize::from(procedure.far)], from_cfa: addr.disp - bias },
+                        };
+                        super::arrival::stored(&code.image[start..end], cell, register).map(|at| (register, at))
+                    });
                     let location = match stored {
                         Some((register, at)) if at < end - start => {
                             let range = |offset, length| model::Range { section, offset, length };

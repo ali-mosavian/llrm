@@ -4,6 +4,7 @@
 
 /// C13 gives each local the ranges its place holds over.
 pub const LOCATION_RANGES: bool = true;
+pub const CFA_LOCATIONS: bool = false;
 
 pub mod codeview;
 

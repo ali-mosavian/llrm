@@ -84,7 +84,7 @@ b3:
 fn a_copy_no_larger_than_the_loop_is_admitted_even_under_os() {
     let os = Limits { grows: false, ..Limits::default() };
     assert!(summing(4, "%x", "").admitted(&os));
-    assert!(!summing(8, "%x", "").admitted(&os));
+    assert!(!summing(16, "%x", "").admitted(&os));
     assert!(summing(8, "%x", "").admitted(&Limits::default()));
 }
 
@@ -226,8 +226,8 @@ fn the_count_is_the_one_asked_about() {
 #[test]
 fn a_cold_loop_is_not_copied_where_the_code_grows() {
     let limits = Limits::default();
-    assert!(summing(8, "%x", "").entered(&limits, ENTRY / 20 + 1));
-    assert!(!summing(8, "%x", "").entered(&limits, ENTRY / 256));
+    assert!(summing(16, "%x", "").entered(&limits, ENTRY / 20 + 1));
+    assert!(!summing(16, "%x", "").entered(&limits, ENTRY / 256));
     assert!(summing(4, "%x", "").entered(&limits, 1));
     assert!(summing(10, "0", "").entered(&limits, 1));
 }

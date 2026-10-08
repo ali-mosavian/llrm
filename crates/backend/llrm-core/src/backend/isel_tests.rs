@@ -4081,13 +4081,13 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
     use crate::model::lir::DebugPlace;
     use iced_x86::Register;
     use llrm_mir::debuginfo as di;
-    let mut module = llrm_mir::Module::default();
+    let mut module = llrm_mir::parse::module("define void @f(i16 %a, i16 %b, i32 %c) {\nentry:\n  ret void\n}\n").expect("parses");
     let int = di::add_type(&mut module, &di::Type { kind: di::Kind::Scalar, name: "int16".into(), size: 0, reach: di::Reach::Near, target: None, members: Vec::new(), spelling: None });
     let named = ["a", "b", "c", "d"];
     let parameters = named.iter().enumerate().map(|(at, name)| (at as i64, (*name).to_owned(), int)).collect();
     di::add_function(&mut module, &di::Function { function: "f".into(), module: false, name: "f".into(), r#type: int, parameters });
     // a in a cell, b in AX, c in DX:AX; d is past the three the function has.
     let convention = Convention { parameters: vec![Parameter::Cell(6), Parameter::Registers(vec![Register::AX]), Parameter::Registers(vec![Register::DX, Register::AX])], returns: Vec::new(), popped: 0, saved: Vec::new() };
-    let found: Vec<(String, DebugPlace)> = isel::parameters(&module, "f", &convention, &Default::default()).into_iter().map(|one| (one.name, one.place)).collect();
+    let found: Vec<(String, DebugPlace)> = isel::parameters(&module, module.functions().next().expect("@f").2, "f", &convention, &Default::default()).into_iter().map(|one| (one.name, one.place)).collect();
     assert_eq!(found, [("a".to_owned(), DebugPlace::At(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 6))), ("b".to_owned(), DebugPlace::Register(Register::AX)), ("d".to_owned(), DebugPlace::Gone)]);
 }

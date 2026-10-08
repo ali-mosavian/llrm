@@ -375,3 +375,54 @@ fn gdb_reads_a_parameter_at_the_first_instruction_from_the_register_it_arrived_i
     assert!(text.contains("$1 = 1") && text.contains("$2 = {x = 3, y = 4}"), "at the entry:\n{text}");
     assert!(text.contains("$3 = 1"), "after the store, from the cell:\n{text}");
 }
+
+/// `-g` kept the frame register for every function with a variable: `push ebp; mov ebp, esp` and every cell through `ebp`, where
+/// the same build without `-g` addressed them through `esp`. DWARF finds a cell from the canonical frame address, so the code
+/// is the code.
+#[test]
+fn an_elf_function_with_variables_has_the_code_it_has_without_g() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let assembly = |source: &Path, flags: &[&str]| {
+        let out = scratch.path().join("x.s");
+        let made = compile(source, &[&["-m32", "-O0", "-fobject-format=elf", "-S"], flags].concat(), &out);
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        std::fs::read_to_string(&out).unwrap()
+    };
+    let gdb = root.join("tests/fixtures/dwarf/gdb.c");
+    assert!(!assembly(&gdb, &[]).contains("ebp"), "the instrument: without -g the function keeps no frame register");
+    // `crc` bumps a local in place (`add dword ptr [ebp-n], 1`), which `-g` split into a load, an add and a store while it marked
+    // the store volatile for the optimiser, which -O0 does not run.
+    for source in [gdb, root.join("bench/crc/crc.c")] {
+        assert_eq!(assembly(&source, &[]), assembly(&source, &["-g"]), "{}", source.display());
+    }
+}
+
+/// The programs, per level, whose code `-g` must leave alone, at least: raised as the ranges land (#755). `None` is every
+/// bench program. A level not listed has no floor yet.
+const IDENTICAL_FLOOR: &[(&str, Option<usize>)] = &[("O0", None)];
+
+/// `-g` changed the code of every bench program: a frame register kept for its variables and a volatile on their stores.
+/// The count of bench programs whose assembly is the same with and without `-g` may not fall below the floor.
+#[test]
+fn g_leaves_the_code_of_the_bench_programs_alone_to_the_floor() {
+    let scratch = tempfile::tempdir().unwrap();
+    let programs = bench_programs();
+    for &(level, floor) in IDENTICAL_FLOOR {
+        let flag = format!("-{level}");
+        let assembly = |source: &Path, debug: bool| {
+            let out = scratch.path().join("x.s");
+            let mut flags = vec!["-m32", "-fobject-format=elf", flag.as_str(), "-S"];
+            if debug {
+                flags.push("-g");
+            }
+            let made = compile(source, &flags, &out);
+            assert!(made.status.success(), "{}: {}", source.display(), String::from_utf8_lossy(&made.stderr));
+            std::fs::read_to_string(&out).unwrap()
+        };
+        let differing: Vec<String> = programs.iter().filter(|source| assembly(source, false) != assembly(source, true)).map(|source| source.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        let identical = programs.len() - differing.len();
+        let floor = floor.unwrap_or(programs.len());
+        assert!(identical >= floor, "{level}: -g changed the code of {differing:?}: {identical} of {} identical, the floor is {floor}", programs.len());
+    }
+}
