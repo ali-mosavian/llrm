@@ -174,6 +174,11 @@ pub fn emitted(program: &model::Program, options: &Options) -> Result<(Program, 
     let target = std::rc::Rc::new(crate::abi::qb::LoweredTarget::of(options.cpu()?, crate::abi::qb::HirAbi::of(program)?));
     let mut linked = timed("mir link", || linked(modules, runtime, target))?;
     linked.exports.entries = program.entries.iter().cloned().collect();
+    if crate::support::debug::enabled("mir") {
+        let bodies = || linked.modules.iter().flat_map(|module| module.globals.iter().filter_map(|global| global.function()).filter(|one| !one.is_declaration()));
+        let instructions: usize = bodies().map(|one| one.layout().iter().map(|&block| one.block(block).instructions().len()).sum::<usize>()).sum();
+        llrm_support::debug!("mir", "functions {} instructions {}", bodies().count(), instructions);
+    }
     Ok((linked, data))
 }
 
