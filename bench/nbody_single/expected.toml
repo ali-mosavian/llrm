@@ -1,32 +1,32 @@
-reason = "regparm3 is the default (user decision 2026-10-08), measured on main after #887: AX/DX/CX cannot address, only SI/DI survive a call; the rows here move down"
+reason = "x/16.0f is x*0.0625f (#938): the constant is an fmul memory operand (11 clocks, read twice a step) in place of a register copy fdiv'd (73); m32 clocks 9321367 -> 8643367, instructions equal, memory operands +4.3%, code +2 bytes"
 blessed = "2026-10-08"
 
 [bas.O2]
 instructions = 1037182
-memory_operands = 138105
-code_bytes = 388
+memory_operands = 144105
+code_bytes = 390
 data_bytes = 145
 bss_bytes = 0
 
 [bas.Os]
 instructions = 1037188
-memory_operands = 138105
-code_bytes = 383
+memory_operands = 144105
+code_bytes = 385
 data_bytes = 145
 bss_bytes = 0
 kernel_ms = 13.8468
 
 [c.O2]
 instructions = 1037188
-memory_operands = 138111
-code_bytes = 335
+memory_operands = 144111
+code_bytes = 337
 data_bytes = 24
 bss_bytes = 96
 
 [c.Os]
 instructions = 1037188
-memory_operands = 138111
-code_bytes = 335
+memory_operands = 144111
+code_bytes = 337
 data_bytes = 24
 bss_bytes = 96
 
