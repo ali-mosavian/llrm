@@ -13,6 +13,7 @@ pub mod arithmetic;
 pub mod asm;
 pub mod coalesce;
 pub mod arrival;
+pub mod valuetrack;
 pub mod cfi;
 pub mod debuginfo;
 pub mod comparefold;

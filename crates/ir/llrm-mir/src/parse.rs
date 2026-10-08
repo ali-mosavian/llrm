@@ -1207,17 +1207,32 @@ impl Parser {
         Ok(None)
     }
 
+    /// `, 4, 8` after a piece's variable: where in it the piece is, and how long.
+    fn piece_span(&mut self) -> Parsed<(u32, u32)> {
+        self.expect_punct(',')?;
+        let offset = u32::try_from(self.unsigned()?).or_else(|_| self.fail("a piece's offset is a u32"))?;
+        self.expect_punct(',')?;
+        let bytes = u32::try_from(self.unsigned()?).or_else(|_| self.fail("a piece's length is a u32"))?;
+        Ok((offset, bytes))
+    }
+
     /// `#dbg_declare(ptr %x, !5)`, `#dbg_value(i16 %v, !5)` or `#dbg_gone(!5)`: what is said of a variable before the
     /// instruction that follows.
     fn debug_record(&mut self, local: &mut Local) -> Parsed<()> {
         let Token::Word(word) = self.next() else { unreachable!("a record") };
         self.expect_punct('(')?;
         let what = match word.as_str() {
-            "#dbg_declare" | "#dbg_value" => {
+            "#dbg_declare" | "#dbg_value" | "#dbg_piece" => {
                 let (_, at) = self.typed_value(local)?;
                 self.expect_punct(',')?;
-                if word == "#dbg_declare" { DebugWhat::Declare(at) } else { DebugWhat::Value(at) }
+                match word.as_str() {
+                    "#dbg_declare" => DebugWhat::Declare(at),
+                    "#dbg_value" => DebugWhat::Value(at),
+                    // The piece's place in the variable follows its name.
+                    _ => DebugWhat::Piece { value: at, offset: 0, bytes: 0 },
+                }
             }
+            "#dbg_gonepiece" => DebugWhat::GonePiece { offset: 0, bytes: 0 },
             "#dbg_gone" => DebugWhat::Gone,
             other => return self.fail(format!("`{other}` is not a debug record")),
         };
@@ -1226,6 +1241,17 @@ impl Parser {
             return self.fail("a debug record names its variable, `!N`");
         };
         let variable = self.metadata_id(number);
+        let what = match what {
+            DebugWhat::Piece { value, .. } => {
+                let (offset, bytes) = self.piece_span()?;
+                DebugWhat::Piece { value, offset, bytes }
+            }
+            DebugWhat::GonePiece { .. } => {
+                let (offset, bytes) = self.piece_span()?;
+                DebugWhat::GonePiece { offset, bytes }
+            }
+            other => other,
+        };
         self.expect_punct(')')?;
         local.pending_records.push((variable, what));
         Ok(())

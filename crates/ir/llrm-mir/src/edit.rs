@@ -138,14 +138,47 @@ impl Function {
         list.iter().position(|one| *one == inst).and_then(|at| list.get(at + 1).copied())
     }
 
-    fn detach(&mut self, inst: InstId) -> Option<(BlockId, Option<InstId>)> {
+    /// The first instruction after the phis of the block that the unconditional branch `inst` alone enters.
+    fn sole_successor_start(&self, inst: InstId) -> Option<InstId> {
+        if self.instruction(inst).opcode != Opcode::Br {
+            return None;
+        }
+        let [Operand::Block(target)] = self.instruction(inst).operands[..] else { return None };
+        // A phi that names the block as where its value comes from is a use of it too, but no way in.
+        // (An erase has already taken its own use of the block away.)
+        let entries: Vec<InstId> = self.block_users(target).iter().map(|one| one.user).filter(|&one| self.instruction(one).opcode != Opcode::Phi).collect();
+        if !entries.is_empty() && entries != [inst] {
+            return None;
+        }
+        self.block(target).instructions().iter().copied().find(|&one| self.instruction(one).opcode != Opcode::Phi)
+    }
+
+    /// Takes `inst` out of its block. What was said before it is said before what followed it; with none after it, it goes with the
+    /// instruction where that is moved (`moving`: a block moved whole takes its last instruction along), else with the code, when
+    /// it is erased.
+    fn detach(&mut self, inst: InstId, moving: bool) -> Option<(BlockId, Option<InstId>)> {
         let block = self.parent(inst)?;
         let next = self.next_of(block, inst);
         // What stood before it stays where the source says it was: before what followed it. A last instruction has none to
         // hand them to (a block is erased with its terminator): they go with it.
         match next {
             Some(next) => self.debug_records.iter_mut().filter(|one| one.before == inst).for_each(|one| one.before = next),
-            None => self.debug_records.retain(|one| one.before != inst),
+            // An unconditional branch to a block nothing else enters is the end of one block and the start of the other: what was said
+            // before it is said before what the other block starts with, once the two are one.
+            None if moving => {}
+            None if self.sole_successor_start(inst).is_some() => {
+                let start = self.sole_successor_start(inst).expect("checked");
+                self.debug_records.iter_mut().filter(|one| one.before == inst).for_each(|one| one.before = start);
+            }
+            None => {
+                let (gone, kept): (Vec<DebugRecord>, Vec<DebugRecord>) = std::mem::take(&mut self.debug_records).into_iter().partition(|one| one.before == inst);
+                self.debug_records = kept;
+                for one in gone {
+                    if !self.debug_dropped.contains(&one.variable) {
+                        self.debug_dropped.push(one.variable);
+                    }
+                }
+            }
         }
         self.blocks[block.0 as usize].instructions.retain(|one| *one != inst);
         self.parent[inst.0 as usize] = None;
@@ -177,7 +210,7 @@ impl Function {
         if position == Position::Before(inst) {
             return Ok(());
         }
-        let (from, _) = self.detach(inst).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
+        let (from, _) = self.detach(inst, true).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
         let (block, next) = self.attach(inst, position)?;
         self.log(Change::Moved { inst, block, next, from });
         Ok(())
@@ -246,6 +279,10 @@ impl Function {
     }
 
     /// What `-g` says of the variables, in the order it was said.
+    pub fn debug_dropped(&self) -> &[MetadataId] {
+        &self.debug_dropped
+    }
+
     pub fn debug_records(&self) -> &[DebugRecord] {
         &self.debug_records
     }
@@ -258,7 +295,7 @@ impl Function {
     /// The records of what `value` was now say `with`.
     fn retarget_debug_records(&mut self, value: ValueId, with: Operand) {
         for record in &mut self.debug_records {
-            if let DebugWhat::Declare(at) | DebugWhat::Value(at) = &mut record.what
+            if let DebugWhat::Declare(at) | DebugWhat::Value(at) | DebugWhat::Piece { value: at, .. } = &mut record.what
                 && *at == Operand::Value(value)
             {
                 *at = with;
@@ -291,14 +328,14 @@ impl Function {
         if let Some(result) = self.instruction(inst).result {
             // What named the value says nothing now (a use of it is no use).
             for record in &mut self.debug_records {
-                if let DebugWhat::Declare(at) | DebugWhat::Value(at) = record.what
-                    && at == Operand::Value(result)
-                {
-                    record.what = DebugWhat::Gone;
+                match record.what {
+                    DebugWhat::Declare(at) | DebugWhat::Value(at) if at == Operand::Value(result) => record.what = DebugWhat::Gone,
+                    DebugWhat::Piece { value, offset, bytes } if value == Operand::Value(result) => record.what = DebugWhat::GonePiece { offset, bytes },
+                    _ => {}
                 }
             }
         }
-        if let Some((block, next)) = self.detach(inst) {
+        if let Some((block, next)) = self.detach(inst, false) {
             self.log(Change::Erased { inst, block, next });
         }
         self.erased[inst.0 as usize] = true;
@@ -446,7 +483,7 @@ impl Function {
     pub fn delete_body(&mut self) {
         for block in self.layout.clone() {
             for inst in self.block(block).instructions.clone() {
-                let (block, next) = self.detach(inst).expect("a placed instruction");
+                let (block, next) = self.detach(inst, false).expect("a placed instruction");
                 self.log(Change::Erased { inst, block, next });
             }
             self.blocks[block.0 as usize].erased = true;

@@ -209,14 +209,28 @@ impl Tree<'_> {
                 Ok([vec![0x91], crate::sleb(from_frame_base)].concat())
             }
             Location::Register(name) => self.register(name),
-            _ => refused("a location list holds frame cells and registers"),
+            // DW_OP_consts, DW_OP_stack_value.
+            Location::Constant(value) => Ok([vec![0x11], crate::sleb(*value), vec![0x9F]].concat()),
+            // Each piece's place, then DW_OP_piece and its size; a piece with no place is the size alone.
+            Location::Pieces(pieces) => {
+                let mut out = Vec::new();
+                for (bytes, place) in pieces {
+                    if let Some(place) = place {
+                        out.extend(self.expression(place)?);
+                    }
+                    out.push(0x93);
+                    out.extend(crate::uleb(u64::from(*bytes)));
+                }
+                Ok(out)
+            }
+            _ => refused("a location list holds frame cells, registers, constants and pieces"),
         }
     }
 
     /// The expression of where `location` is.
     fn location(&mut self, location: &Location) -> Result<Value, Unsupported> {
         Ok(match location {
-            Location::Frame { .. } | Location::Register(_) => Value::Expr(self.expression(location)?),
+            Location::Frame { .. } | Location::Register(_) | Location::Constant(_) | Location::Pieces(_) => Value::Expr(self.expression(location)?),
             Location::Static { symbol, disp } => Value::ExprAddr { symbol: *symbol, delta: *disp },
             Location::List(entries) => Value::LocList(self.list(entries)?),
         })

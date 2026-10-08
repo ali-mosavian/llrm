@@ -257,15 +257,15 @@ fn _promoted(context: &mut Context, layout: &DataLayout, function: &mut Function
 #[derive(Debug, Default)]
 struct Plan {
     /// The variable `-g` names that each cell is, where it is one (`llrm_mir::DebugRecord`).
-    variables: Vec<Option<llrm_mir::MetadataId>>,
+    variables: Vec<Option<Named>>,
     types: Vec<TypeId>,
     stores: HashMap<InstId, usize>,
     loads: HashMap<InstId, usize>,
 }
 
-/// The variable `-g` declared that each cell of `plan` is: the one at the offset a store of it writes in the frame object the
-/// declaration names.
-fn named_cells(unit: &Unit, plan: &Plan, metadata: &[llrm_mir::module::MetadataNode]) -> Vec<Option<llrm_mir::MetadataId>> {
+/// What `-g` declared that each cell of `plan` is: the variable whose frame object holds its bytes, and where in the variable it
+/// is, none where it is all of it.
+fn named_cells(unit: &Unit, plan: &Plan, metadata: &[llrm_mir::module::MetadataNode]) -> Vec<Option<Named>> {
     let declared: Vec<(Operand, llrm_mir::MetadataId, i64)> = unit
         .function
         .debug_records()
@@ -275,18 +275,47 @@ fn named_cells(unit: &Unit, plan: &Plan, metadata: &[llrm_mir::module::MetadataN
             _ => None,
         })
         .collect();
-    let mut named = vec![None; plan.types.len()];
+    let mut named: Vec<Option<(llrm_mir::MetadataId, i64, u32)>> = vec![None; plan.types.len()];
     if declared.is_empty() {
-        return named;
+        return Vec::new();
     }
     for (&inst, &slot) in &plan.stores {
         let pointer = unit.function.instruction(inst).operands[1];
         let (base, offset) = llrm_mir::valuetracking::underlying(unit.context, unit.layout, unit.function, pointer);
-        if let Some(&(_, variable, _)) = declared.iter().find(|(address, _, at)| *address == base && Some(*at) == offset) {
-            named[slot] = Some(variable);
+        let Some(offset) = offset else { continue };
+        // The variable of that object that starts last at or before the cell.
+        let owner = declared.iter().filter(|(address, _, at)| *address == base && *at <= offset).max_by_key(|(_, _, at)| *at);
+        if let Some(&(_, variable, at)) = owner {
+            let bytes = unit.layout.alloc_size(&unit.context.types, plan.types[slot]) as u32;
+            named[slot] = Some((variable, offset - at, bytes));
         }
     }
+    // A variable one cell is all of is that value; a variable of several cells has each as a piece.
     named
+        .iter()
+        .map(|one| {
+            let (variable, offset, bytes) = (*one)?;
+            let cells = named.iter().flatten().filter(|(other, ..)| *other == variable).count();
+            Some(Named { variable, piece: (cells > 1 || offset != 0).then_some((offset as u32, bytes)) })
+        })
+        .collect()
+}
+
+/// A variable `-g` declared, and the bytes of it that a cell is when it is not all.
+#[derive(Clone, Copy, Debug)]
+struct Named {
+    variable: llrm_mir::MetadataId,
+    piece: Option<(u32, u32)>,
+}
+
+impl Named {
+    /// What a debugger is told when the cell has `value`.
+    fn is(&self, value: Operand) -> llrm_mir::DebugWhat {
+        match self.piece {
+            Some((offset, bytes)) => llrm_mir::DebugWhat::Piece { value, offset, bytes },
+            None => llrm_mir::DebugWhat::Value(value),
+        }
+    }
 }
 
 /// The type `inst` loads or stores.
@@ -490,8 +519,8 @@ fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
                 let first = function.block(block).instructions().first().copied();
                 function.insert(phi, first.map_or(Position::End(block), Position::Before)).expect("a placed block");
                 phis.insert((frontier, slot), (phi, from));
-                if let Some(variable) = plan.variables.get(slot).copied().flatten() {
-                    named_phis.push((block, phi, variable));
+                if let Some(named) = plan.variables.get(slot).copied().flatten() {
+                    named_phis.push((block, phi, named));
                 }
                 if !defining.contains(&frontier) {
                     work.push(frontier);
@@ -501,11 +530,11 @@ fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
     }
 
     // What the debugger is told of a variable: the phi that merges its paths, from the top of the block on.
-    for (block, phi, variable) in named_phis {
+    for (block, phi, named) in named_phis {
         let value = function.instruction(phi).result.expect("a phi's value");
         let first = function.block(block).instructions().iter().copied().find(|&one| function.instruction(one).opcode != Opcode::Phi);
         if let Some(first) = first {
-            function.add_debug_record(first, variable, llrm_mir::DebugWhat::Value(Operand::Value(value)));
+            function.add_debug_record(first, named.variable, named.is(Operand::Value(value)));
         }
     }
 
@@ -531,10 +560,10 @@ fn rewrite(context: &mut Context, function: &mut Function, plan: &Plan) {
             } else if let Some(&slot) = plan.stores.get(&inst) {
                 current[slot] = function.instruction(inst).operands[0];
                 // And the value it stores, from the instruction after it on.
-                if let Some(variable) = plan.variables.get(slot).copied().flatten()
+                if let Some(named) = plan.variables.get(slot).copied().flatten()
                     && let Some(next) = function.block(block).instructions().iter().copied().skip_while(|&one| one != inst).nth(1)
                 {
-                    function.add_debug_record(next, variable, llrm_mir::DebugWhat::Value(current[slot]));
+                    function.add_debug_record(next, named.variable, named.is(current[slot]));
                 }
             }
         }

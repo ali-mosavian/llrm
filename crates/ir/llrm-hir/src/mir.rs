@@ -1514,6 +1514,8 @@ struct Body<'b, 'm, 'h> {
     addresses: HashMap<i64, i64>,
     /// The addresses of the variables `-g` declares.
     declared_addresses: HashSet<i64>,
+    /// Of those, the ones that are an address into a variable, with the variable, how far into it, and how many bytes it is.
+    declared_offsets: HashMap<i64, (MetadataId, i64, i64)>,
     handling: Option<handling::Handling>,
     /// The module handler, where this emits its own function.
     outlined: Option<handling::Outlined>,
@@ -1549,6 +1551,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             objects: Vec::new(),
             addresses: HashMap::new(),
             declared_addresses: HashSet::new(),
+            declared_offsets: HashMap::new(),
             handling: None,
             outlined: None,
             destination,
@@ -1591,6 +1594,39 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
     /// A debugger reads a declared variable from its cell at any time, so every store into one stays, in order, as a volatile
     /// one does: not only those the language writes as stores to the variable, but any through an address into it. The
     /// optimiser asks nothing else; `-g` of a variable the allocator keeps in a register will not need it.
+    /// A store of `value` to the declared place `place` says so to the debugger from the next instruction on: the variable, or the
+    /// bytes of it a member is, has the value. A store the optimiser may delete leaves that, where it left the cell.
+    fn say_stored(&mut self, place: &Operand, value: llrm_mir::Operand) {
+        // The variable, how far into it the store is, how many bytes it writes, and how many the variable is.
+        let (variable, at, bytes, whole) = match place {
+            Operand::PlaceRef(one) => {
+                let Some(&variable) = self.tables.variables.get(&(self.function.id, one.place)) else { return };
+                let place = self.places[&one.place];
+                let width = place.extent.unwrap_or(self.tables.types[&place.r#type].width);
+                (variable, 0, width, width)
+            }
+            Operand::ProjectedPlace(one) if one.indices.iter().all(|index| matches!(index, Operand::Constant(_))) => {
+                let Some(&variable) = self.tables.variables.get(&(self.function.id, one.place)) else { return };
+                let place = self.places[&one.place];
+                (variable, one.offset, self.tables.types[&one.r#type].width, place.extent.unwrap_or(self.tables.types[&place.r#type].width))
+            }
+            Operand::IndirectPlace(one) => {
+                let Some(&(variable, at, whole)) = self.declared_offsets.get(&one.base) else { return };
+                (variable, at + one.offset, self.tables.types[&one.r#type].width, whole)
+            }
+            _ => return,
+        };
+        let what = if at == 0 && bytes == whole {
+            llrm_mir::DebugWhat::Value(value)
+        } else {
+            match (u32::try_from(at), u32::try_from(bytes)) {
+                (Ok(offset), Ok(bytes)) => llrm_mir::DebugWhat::Piece { value, offset, bytes },
+                _ => return,
+            }
+        };
+        self.b.debug_say(variable, what);
+    }
+
     /// The instruction made as the `first`th is volatile for `-g`'s sake alone.
     fn observe(&mut self, first: usize) {
         if let Some(node) = self.tables.observed {
@@ -2020,6 +2056,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             // An address of a declared variable moved by an offset is an address into it: a store through it is a store to it.
             if matches!(op, Op::Add | Op::Sub) && instruction.operands.iter().any(|one| matches!(one, Operand::ValueRef(value) if self.declared_addresses.contains(&value.value))) {
                 self.declared_addresses.insert(instruction.results[0]);
+                if let [Operand::ValueRef(base), Operand::Constant(model::Constant { value: model::Number::Int(step), .. })] = &instruction.operands[..]
+                    && let Some(&(variable, at, bytes)) = self.declared_offsets.get(&base.value)
+                    && let Ok(step) = i64::try_from(*step)
+                {
+                    self.declared_offsets.insert(instruction.results[0], (variable, at + if op == Op::Sub { -step } else { step }, bytes));
+                }
             }
             self.define(instruction, result);
             return Ok(());
@@ -2152,6 +2194,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 self.b.store(value, pointer, volatile || observed);
                 if observed && !volatile {
                     self.observe(first);
+                    self.say_stored(&instruction.operands[0], value);
                 }
                 self.tagged(tag);
                 self.stated_access(&instruction.operands[0], false);
@@ -2177,6 +2220,18 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 };
                 if let (true, Some(&result)) = (self.declared_place(&instruction.operands[0]), instruction.results.first()) {
                     self.declared_addresses.insert(result);
+                    // Where in which variable the address is, if it is a place or a member of one.
+                    let (id, at) = match &instruction.operands[0] {
+                        Operand::PlaceRef(one) => (Some(one.place), 0),
+                        Operand::ProjectedPlace(one) if one.indices.iter().all(|index| matches!(index, Operand::Constant(_))) => (Some(one.place), one.offset),
+                        _ => (None, 0),
+                    };
+                    if let Some(id) = id
+                        && let Some(&variable) = self.tables.variables.get(&(self.function.id, id))
+                    {
+                        let place = self.places[&id];
+                        self.declared_offsets.insert(result, (variable, at, place.extent.unwrap_or(self.tables.types[&place.r#type].width)));
+                    }
                 }
                 if let (Operand::PlaceRef(one), Some(&result)) = (&instruction.operands[0], instruction.results.first()) {
                     let place = self.places[&one.place];
