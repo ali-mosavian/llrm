@@ -154,7 +154,7 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
 
 def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
     """`p` with only the steps `names` (the tier, the languages and the crates as planned). A step the diff did not select may be named:
-    a budget refresh after a merge conflict re-runs build, compile-cost and scaling, not the other fourteen steps. The build comes
+    a change to the measurement tools re-runs build and measure, not the other fourteen steps. The build comes
     first where a step needs the binaries, as `plan` has it."""
     unknown = [n for n in names if n not in known]
     if unknown:
@@ -163,6 +163,11 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
     if any(one != "pytest" for one in steps) or "build" in names:
         steps.insert(0, "build")
     return Plan(p.tier, p.reason + " (steps asked for)", steps, p.packages, p.languages)
+
+
+# The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
+# test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
+BUILD = "cargo build --release -q --bins && cargo test --release -q --workspace --no-run"
 
 
 # Commands. Each runs under bash in the repo root with CARGO_TARGET_DIR set.
@@ -180,7 +185,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, str]:
         'echo "$out" | tail -1 | grep -q " 0 problems"'
     )
     steps = {
-        "build": "cargo build --release -q --bins && cargo test --release -q --workspace --no-run",
+        "build": BUILD,
         "lib": f"{cargo} {scope} --lib",
         "doc": f"{cargo} {scope} --doc",
         "integration": f"{cargo} {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
@@ -190,8 +195,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, str]:
         "pytest": "uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py",
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
         "qcport": "[ -f ~/scratch/qcport-env.sh ] || { echo SKIPPED: no ~/scratch/qcport-env.sh; exit 77; }; . ~/scratch/qcport-env.sh && uv run -q --project tools python tools/qcport-run.py",
-        "compile-cost": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/compile-cost.py",
-        "scaling": "python3 crates/target/*/vsgcc/scaling_gate.py",
+        "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
         "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} --test run -- test_every_program_under_tests_run_prints_its_out",
     }
     for s in split:
@@ -277,7 +281,7 @@ def execute(p: Plan) -> tuple[int, list[str]]:
     jobs = int(os.environ.get("JOBS", "4"))
     with ThreadPoolExecutor(jobs) as pool:
         # The longest steps start first.
-        order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "compile-cost", "scaling", "pytest-programs", "turbo", "bench"))
+        order = sorted(rest, key=lambda s: s not in ("run", "identity", "qcport", "measure", "pytest-programs", "turbo", "bench"))
         for future in as_completed([pool.submit(run_step, s, cmds[s], logs, env, checks.get(s)) for s in order]):
             report(*future.result())
     for name in alone:
@@ -352,7 +356,7 @@ def main() -> int:
     ap.add_argument("--files", nargs="*")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--tier", default="auto", choices=["auto", "fast", "full"])
-    ap.add_argument("--steps", nargs="+", metavar="STEP", help="only these steps (the plan is otherwise as planned); `build compile-cost scaling` after a budget conflict")
+    ap.add_argument("--steps", nargs="+", metavar="STEP", help="only these steps (the plan is otherwise as planned); `build measure`")
     args = ap.parse_args()
     if args.command == "main":
         return watch_main(args.force)
