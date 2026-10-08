@@ -11,5 +11,7 @@ llrm-object = { workspace = true }
 iced-x86 = { workspace = true }
 
 [features]
-# testing, the object corpus helpers for the other crates' tests
+# testing, the object corpus helpers for the other crates' tests. On by default: `cargo test --workspace` turns it on for every crate it
+# builds (a dev-dependency asks), so a build without it was another llrm-c from the tested one (md5, and 6% in a step's compile cost).
+default = ["testing"]
 testing = []

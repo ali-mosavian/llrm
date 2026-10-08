@@ -86,15 +86,28 @@ pub type HeldCells = IndexMap<InstId, Rc<Cells>>;
 /// nothing.
 pub type Calls = IndexMap<InstId, Vec<MemRef>>;
 
+/// A reference as resolved for one epoch's queries, with the number it was given: a stable identity to key answers by, where
+/// its address varied from run to run and so did the work of the passes asking (`mir hoist`, up to 0.9%).
+pub struct Resolved {
+    pub id: u32,
+    reference: MemRef,
+}
+
+impl std::ops::Deref for Resolved {
+    type Target = MemRef;
+    fn deref(&self) -> &MemRef {
+        &self.reference
+    }
+}
+
 /// Alias questions for one immutable known-value epoch.
 pub struct _MemoryQueries<'a> {
     pub unit: Unit<'a>,
     pub known: IndexMap<ValueId, Known>,
     pub facts: BTreeMap<ValueId, Interval>,
-    /// Each reference asked, resolved; kept, so a resolved one's address
-    /// is its identity in `overlaps`.
-    pub addressed: HashMap<MemRef, Rc<MemRef>>,
-    pub overlaps: HashMap<((Addr, u32), usize), bool>,
+    /// Each reference asked, resolved, numbered in the order asked: the number is its identity in `overlaps`.
+    pub addressed: HashMap<MemRef, Rc<Resolved>>,
+    pub overlaps: HashMap<((Addr, u32), u32), bool>,
     pub places: HashMap<(Addr, u32), (OverlapBucket, Option<ByteRange>)>,
     /// The buckets `places` names, this epoch's own.
     pub buckets: OverlapBuckets,
@@ -139,11 +152,11 @@ impl<'a> _MemoryQueries<'a> {
         }
     }
 
-    pub fn resolve(&mut self, reference: &MemRef) -> Rc<MemRef> {
+    pub fn resolve(&mut self, reference: &MemRef) -> Rc<Resolved> {
         if let Some(saved) = self.addressed.get(reference) {
             return Rc::clone(saved);
         }
-        let made = Rc::new(_addressed(&self.unit, reference, &self.known));
+        let made = Rc::new(Resolved { id: self.addressed.len() as u32, reference: _addressed(&self.unit, reference, &self.known) });
         self.addressed.insert(reference.clone(), Rc::clone(&made));
         made
     }
@@ -180,10 +193,10 @@ impl<'a> _MemoryQueries<'a> {
         }
     }
 
-    pub fn may_overlap(&mut self, where_: (Addr, u32), reference: &Rc<MemRef>) -> bool {
+    pub fn may_overlap(&mut self, where_: (Addr, u32), reference: &Resolved) -> bool {
         #[cfg(test)]
         MAY_OVERLAP.with(|asked| asked.set(asked.get() + 1));
-        let key = (where_, Rc::as_ptr(reference) as usize);
+        let key = (where_, reference.id);
         if let Some(&answer) = self.overlaps.get(&key) {
             return answer;
         }
@@ -192,7 +205,7 @@ impl<'a> _MemoryQueries<'a> {
         answer
     }
 
-    fn _overlap(&mut self, where_: (Addr, u32), reference: &Rc<MemRef>) -> bool {
+    fn _overlap(&mut self, where_: (Addr, u32), reference: &Resolved) -> bool {
         // An answer Rust cannot represent is taken to overlap.
         overlapping(&self.cell(where_), reference, Some(&self.facts), Some(&self.facts), self.unit.program).unwrap_or(true)
     }

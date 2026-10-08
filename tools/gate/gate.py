@@ -152,6 +152,19 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
     return p
 
 
+def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
+    """`p` with only the steps `names` (the tier, the languages and the crates as planned). A step the diff did not select may be named:
+    a budget refresh after a merge conflict re-runs build, compile-cost and scaling, not the other fourteen steps. The build comes
+    first where a step needs the binaries, as `plan` has it."""
+    unknown = [n for n in names if n not in known]
+    if unknown:
+        raise SystemExit(f"gate: no step named {' '.join(unknown)}; the steps are {' '.join(sorted(known))}")
+    steps = [n for n in dict.fromkeys(names) if n != "build"]
+    if any(one != "pytest" for one in steps) or "build" in names:
+        steps.insert(0, "build")
+    return Plan(p.tier, p.reason + " (steps asked for)", steps, p.packages, p.languages)
+
+
 # Commands. Each runs under bash in the repo root with CARGO_TARGET_DIR set.
 def commands(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, str]:
     scope = "--workspace" if p.packages is None else " ".join(f"-p {n}" for n in p.packages)
@@ -339,12 +352,15 @@ def main() -> int:
     ap.add_argument("--files", nargs="*")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--tier", default="auto", choices=["auto", "fast", "full"])
+    ap.add_argument("--steps", nargs="+", metavar="STEP", help="only these steps (the plan is otherwise as planned); `build compile-cost scaling` after a budget conflict")
     args = ap.parse_args()
     if args.command == "main":
         return watch_main(args.force)
     if args.command == "bisect":
         return bisect(args.rest[0], args.rest[1], args.rest[2:])
     p = plan(args.files if args.files is not None else changed_files(args.base), args.tier)
+    if args.steps:
+        p = restricted(p, args.steps, set(commands(p, load(), packages())) | set(load()["exclusive"]))
     print(f"tier {p.tier}: {p.reason}")
     print("steps:", " ".join(p.steps), "| run languages:", " ".join(p.languages), "| crates:", "all" if p.packages is None else f"{len(p.packages)}")
     if args.command == "plan" or p.tier == "none":

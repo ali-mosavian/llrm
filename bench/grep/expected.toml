@@ -1,4 +1,4 @@
-reason = "return duplication (gcc copy_bb_p): a jump to a block that only returns is replaced by a copy of it at -O2: instructions fall (fib -3.7%, queens -0.4%), code bytes grow by the copies"
+reason = "shrink wrapping places the whole prologue: a path that returns before the frame is touched builds none (recpow -12.8%, recchop -4.5%)"
 blessed = "2026-10-09"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 3056
 kernel_ms = 3415.6629
 
 [nib.O2]
-code_bytes = 1499
+code_bytes = 1468
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.5804
 
 [nib.Os]
-code_bytes = 1390
+code_bytes = 1388
 data_bytes = 3157
 bss_bytes = 0
 kernel_ms = 4239.6052

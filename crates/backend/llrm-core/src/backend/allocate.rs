@@ -157,6 +157,11 @@ pub struct LiveRows {
 }
 
 impl LiveRows {
+    /// How many values the rows number.
+    pub fn numbered(&self) -> usize {
+        self.numbered.len()
+    }
+
     /// The values live at the entry of the block at `at`, in order.
     pub fn entering(&self, at: i64) -> impl Iterator<Item = u32> + '_ {
         self.values(&self.into, self.position[&at])
