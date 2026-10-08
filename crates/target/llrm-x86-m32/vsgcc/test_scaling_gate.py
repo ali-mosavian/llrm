@@ -106,3 +106,26 @@ def test_the_pass_budget_holds_only_steps_above_linear():
 
     budget = json.loads(gate.PASS_BUDGET.read_text())
     assert budget and all(v > gate.LINEAR for v in budget.values())
+
+
+def test_a_refresh_with_no_real_change_rewrites_nothing():
+    """Every PR rewrote about 111 lines of pass-budget.json and 14 of scaling-budget.json, nearly all noise, so any two PRs conflicted."""
+    axes = {"a O2": 2.000, "b O2": 3.100}
+    noisy = {"a O2": 2.004, "b O2": 3.080}  # within SLACK
+    assert gate.refreshed_axes(axes, noisy) == axes
+    assert gate.refreshed_axes(axes, {"a O2": 2.100, "b O2": 3.080}) == {"a O2": 2.100, "b O2": 3.100}  # one moved past it
+    budget = {"a O2 x": 3.0, "b O2 y": 2.5, "c O2 z": 2.4}
+    now = {"a O2 x": (3.06, 0.1), "b O2 y": (2.45, 0.1), "c O2 z": (2.41, 0.017)}  # all within PASS_SLACK; c is between LOW and FLOOR
+    assert gate.refreshed_passes(budget, now) == budget
+
+
+def test_a_refresh_changes_only_the_pass_entries_that_moved():
+    budget = {"a O2 x": 3.0, "b O2 y": 2.5, "c O2 z": 2.4, "d O2 w": 2.6}
+    now = {
+        "a O2 x": (4.0, 0.1),  # moved up
+        "b O2 y": (2.0, 0.1),  # fixed: not above linear
+        "c O2 z": (2.41, 0.001 + gate.LOW),  # on the edge of LOW: kept
+        "e O2 v": (3.3, 0.1),  # new
+        "f O2 u": (3.3, gate.LOW),  # new but small: not recorded
+    }  # d is gone
+    assert gate.refreshed_passes(budget, now) == {"a O2 x": 4.0, "c O2 z": 2.4, "e O2 v": 3.3}

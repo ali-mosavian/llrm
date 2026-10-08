@@ -2,7 +2,8 @@
 """The scaling gate: llrm-c's cost at size 2N over its cost at N, per axis and level, against a stored budget.
 
     python3 scaling_gate.py             compare with tools/gate/scaling-budget.json; exit 1 on a change past SLACK, up or down
-    python3 scaling_gate.py --refresh   rewrite the budget from this measurement
+    python3 scaling_gate.py --refresh   rewrite the entries of the budgets that moved past their tolerance (none if none did)
+    python3 scaling_gate.py --resolve   after a merge conflict in the budgets: take origin/main's files, then --refresh
     python3 scaling_gate.py --ratios    print the ratios only
 
 Cost is user-space instructions (`perf stat`), less what llrm-c spends on an empty file: work done, so the ratio is the
@@ -18,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -140,6 +142,34 @@ def pass_budget(now: dict[str, tuple[float, float]]) -> dict[str, float]:
     return {k: round(v, 3) for k, (v, share) in sorted(now.items()) if v > LINEAR and share >= FLOOR}
 
 
+def refreshed_axes(old: dict[str, float], now: dict[str, float], slack: float = SLACK) -> dict[str, float]:
+    """The axis budget with the ratios that moved past `slack` rewritten and the rest as they were: a refresh that changes what
+    the gate would not have noticed rewrites nothing, so two PRs' refreshes do not conflict on noise."""
+    return {k: (old[k] if k in old and old[k] / slack <= v <= old[k] * slack else v) for k, v in sorted(now.items())}
+
+
+def refreshed_passes(old: dict[str, float], now: dict[str, tuple[float, float]], slack: float = PASS_SLACK) -> dict[str, float]:
+    """The pass budget as `compare_passes` would have it refreshed: an entry kept while its step still reads within `slack` of it
+    (or sits between LOW and FLOOR of the work, where it may flip in and out), rewritten when it moved, dropped when the step is
+    gone or no longer above LINEAR, and a new superlinear step of FLOOR or more added."""
+    new = pass_budget(now)
+    out = {}
+    for key in sorted(old.keys() | new.keys()):
+        read = now.get(key)
+        if key in old and read is not None and read[0] > LINEAR and (old[key] / slack <= read[0] <= old[key] * slack or read[1] < FLOOR):
+            out[key] = old[key]
+        elif key in new:
+            out[key] = new[key]
+    return out
+
+
+def resolve(base: str = "origin/main") -> None:
+    """Takes `base`'s budget files whole (a merge conflict in them is noise or somebody's refresh) and refreshes them again here."""
+    files = [str(BUDGET.relative_to(BUDGET.parents[2])), str(PASS_BUDGET.relative_to(PASS_BUDGET.parents[2]))]
+    subprocess.run(["git", "checkout", base, "--", *files], cwd=BUDGET.parents[2], check=True)
+    subprocess.run(["git", "add", *files], cwd=BUDGET.parents[2], check=True)
+
+
 def compare(budget: dict[str, float], now: dict[str, float], slack: float = SLACK) -> tuple[list[str], list[str]]:
     lines, bad = [], []
     for key in sorted(budget.keys() ^ now.keys()):
@@ -156,9 +186,13 @@ def compare(budget: dict[str, float], now: dict[str, float], slack: float = SLAC
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--resolve", nargs="?", const="origin/main", metavar="BASE", help="take BASE's budget files (a conflict in them), then --refresh")
     parser.add_argument("--ratios", action="store_true")
     parser.add_argument("--jobs", type=int, default=4)
     args = parser.parse_args()
+    if args.resolve:
+        resolve(args.resolve)
+        args.refresh = True
     try:
         now = {k: round(v, 3) for k, v in measure(args.jobs).items()}
         passes = {k: (round(v, 3), round(share, 4)) for k, (v, share) in measure_passes(args.jobs).items()}
@@ -169,9 +203,11 @@ def main() -> int:
         print(json.dumps({"axes": now, "passes": passes}, indent=1))
         return 0
     if args.refresh:
-        BUDGET.write_text(json.dumps(now, indent=0) + "\n")
-        PASS_BUDGET.write_text(json.dumps(pass_budget(passes), indent=0) + "\n")
-        print(f"budget: {len(now)} axes -> {BUDGET.name}, {len(pass_budget(passes))} superlinear steps -> {PASS_BUDGET.name}")
+        axes, steps = refreshed_axes(json.loads(BUDGET.read_text()), now), refreshed_passes(json.loads(PASS_BUDGET.read_text()), passes)
+        moved = sum(axes.get(k) != v for k, v in json.loads(BUDGET.read_text()).items()), sum(steps.get(k) != v for k, v in json.loads(PASS_BUDGET.read_text()).items())
+        BUDGET.write_text(json.dumps(axes, indent=0) + "\n")
+        PASS_BUDGET.write_text(json.dumps(steps, indent=0) + "\n")
+        print(f"budget: {moved[0]} of {len(axes)} axes moved -> {BUDGET.name}, {moved[1]} of {len(steps)} superlinear steps moved -> {PASS_BUDGET.name}")
         return 0
     lines, bad = compare(json.loads(BUDGET.read_text()), now)
     print("\n".join(lines))
