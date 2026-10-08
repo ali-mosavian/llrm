@@ -116,6 +116,23 @@ pub(super) fn emitted<'h>(
     Ok(variables)
 }
 
+/// The number each frame variable is named by while the code is lowered, before its node is made.
+pub(super) fn provisional(hir: &model::Module) -> HashMap<(i64, i64), MetadataId> {
+    let mut chosen = HashMap::new();
+    let Some(debug) = &hir.debug else { return chosen };
+    for procedure in &debug.functions {
+        let Some(function) = hir.functions.iter().find(|one| one.id == procedure.function) else { continue };
+        for variable in &procedure.variables {
+            let Some(place) = function.places.iter().find(|one| one.id == variable.place) else { continue };
+            if matches!(place.storage, Storage::Local) {
+                let number = u32::try_from(chosen.len()).expect("a few variables");
+                chosen.insert((function.id, place.id), MetadataId(super::PROVISIONAL_VARIABLES + number));
+            }
+        }
+    }
+    chosen
+}
+
 impl Body<'_, '_, '_> {
     /// Each frame variable declared where its frame object is.
     pub(super) fn declare_variables(&mut self) {

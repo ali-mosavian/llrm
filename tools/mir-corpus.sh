@@ -7,6 +7,7 @@
 # left out when a function is refused or the module fails the verifier, and
 # a module identical to one already kept is kept once. C has no route:
 # llrm-c raises straight to the old MIR.
+export LLRM_VERIFY=${LLRM_VERIFY:-1}  # the gate checks each pass and phase
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:-$root/crates/opt/llrm-analysis/corpus}

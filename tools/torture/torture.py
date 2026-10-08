@@ -24,6 +24,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[0] / "dosbatch"))
 import dosbatch  # noqa: E402
+os.environ.setdefault("LLRM_VERIFY", "1")  # the gate checks each pass and phase (llrm_support::debug::verifying)
 
 BIN = dosbatch.BIN
 CORPUS = Path(os.environ.get("TORTURE_CORPUS", Path.home() / "work/personal/gcc/gcc/testsuite/gcc.c-torture/execute"))

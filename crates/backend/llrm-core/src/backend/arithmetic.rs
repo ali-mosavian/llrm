@@ -77,10 +77,21 @@ pub fn cheapest_narrow_chain<'a>(
 /// The chain of `number`: of its magnitude negated, or, as GCC's `synth_mult` has it for a negative `t` (`a * -7` is `a - a*8`), of
 /// `1 - number` shifted and taken from the source.
 fn chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea: bool) -> Result<Option<(Chain, i64)>, String> {
-    if number >= -1 || number == i64::MIN {
-        return positive_chains(number, cpu, with_lea);
-    }
+    // Asked again and again for one multiply (is it scalable, what does it cost, what is it): the answer is a function of the number
+    // and of the profile's prices, so the profile remembers it.
     let target = targets::profile(cpu)?;
+    if let Some(known) = target.multiplies.get(number, with_lea) {
+        return Ok(known);
+    }
+    let found = unremembered_chains(number, target, with_lea)?;
+    target.multiplies.put(number, with_lea, found.clone());
+    Ok(found)
+}
+
+fn unremembered_chains(number: i64, target: &targets::Profile, with_lea: bool) -> Result<Option<(Chain, i64)>, String> {
+    if number >= -1 || number == i64::MIN {
+        return positive_chains(number, target, with_lea);
+    }
     let alu = cost(target, "alu_rr")?;
     let mut best: Option<(Chain, i64)> = None;
     let mut consider = |parts: Chain, price: i64| {
@@ -198,9 +209,19 @@ fn positive_chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea:
 
     // `min(..., key=clocks)`: the first of equal keys wins.
     let mut best: Option<(Vec<(&'static str, i64)>, i64)> = None;
-    let synthesized = synth(number, &mut BTreeMap::new(), &|parts| clocks(parts), &fused);
-    let synthesized = synthesized?.map(|(parts, _)| parts);
-    for parts in [chain(false), chain(true)].into_iter().flat_map(|parts| [parts.clone(), fused(parts)]).chain(synthesized) {
+    // Horner's chains first: what they cost bounds the search.
+    for parts in [chain(false), chain(true)].into_iter().flat_map(|parts| [parts.clone(), fused(parts)]) {
+        let price = clocks(&parts)?;
+        if best.as_ref().is_none_or(|(_, kept)| price < *kept) {
+            best = Some((parts, price));
+        }
+    }
+    let shifts = |count: i64| shift(target, count).unwrap_or(i64::MAX / 4);
+    let leas = |scale: i64| lea(scale).filter(|_| scale <= 8);
+    let ops = Ops { shift: &shifts, alu: cost(target, "alu_rr")?, mov: cost(target, "mov_rr")?, lea: &leas };
+    let limit = best.as_ref().map_or(i64::MAX / 4, |(_, price)| *price);
+    let synthesized = synth(number, limit, &mut BTreeMap::new(), &ops).map(|(parts, _)| parts);
+    for parts in synthesized {
         let price = clocks(&parts)?;
         if best.as_ref().is_none_or(|(_, kept)| price < *kept) {
             best = Some((parts, price));
@@ -211,70 +232,109 @@ fn positive_chains<'a>(number: i64, cpu: impl Into<ProfileOrName<'a>>, with_lea:
 
 type Chain = Vec<(&'static str, i64)>;
 
-/// GCC's `synth_mult` (expmed.cc): the chain of `t`, by the cheaper of what the lower bits allow. Even `t` is a shift of `t >> m`; odd `t` is
-/// `t - 1` or `t + 1` (the one a run of ones points to) plus or minus the source, a shift and a source added to `(t - 1) >> m` or
-/// `(t + 1) >> m`, or `q * (2^m +- 1)` for a factor of that form: `q`'s chain, then `cur + cur<<m` or `cur<<m - cur`. `fused` turns a shift
-/// and an add into a `lea`; `price` is the clocks of a chain (with its seed copy), memoised by `t`.
-fn synth(t: i64, memo: &mut BTreeMap<i64, Option<(Chain, i64)>>, price: &dyn Fn(&[(&'static str, i64)]) -> Result<i64, String>, fused: &dyn Fn(Chain) -> Chain) -> Result<Option<(Chain, i64)>, String> {
+#[cfg(test)]
+thread_local! {
+    /// The targets `synth` was asked of on this thread: the work a search did.
+    static SEARCHED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// What a chain's operations cost on the target, in clocks.
+struct Ops<'a> {
+    shift: &'a dyn Fn(i64) -> i64,
+    alu: i64,
+    mov: i64,
+    /// A `lea` of `base + index*scale`, where the target has the scale.
+    lea: &'a dyn Fn(i64) -> Option<i64>,
+}
+
+/// GCC's `alg_hash` entry (expmed.cc): the chain found for `t` within a limit, or that none was.
+enum Known {
+    Found(Chain, i64),
+    Impossible(i64),
+}
+
+/// GCC's `synth_mult` (expmed.cc): the chain of `t` costing less than `limit`, and its cost, or none. The search is bounded as GCC's is:
+/// `limit` is what the best chain so far costs (`cost_limit`, passed down less each operation: `new_limit`), a `t` is looked up in `memo`
+/// first (`alg_hash`: what was found, or that nothing is under that limit), and the caller starts from the cost of the `imul` and the
+/// Horner chain (`expand_mult`'s `max_cost`).
+/// Even `t` is a shift of `t >> m`; odd `t` is `t - 1` or `t + 1` (the one a run of ones points to) plus or minus the source, a shift and a
+/// source added to `(t - 1) >> m` or `(t + 1) >> m`, or `q * (2^m +- 1)` for a factor of that form: `q`'s chain, then `cur + cur<<m`
+/// or `cur<<m - cur`. The chain's copy of the source is not counted.
+fn synth(t: i64, limit: i64, memo: &mut BTreeMap<i64, Known>, ops: &Ops) -> Option<(Chain, i64)> {
+    #[cfg(test)]
+    SEARCHED.with(|count| count.set(count.get() + 1));
+    if limit <= 0 || t < 1 {
+        return None;
+    }
     if t == 1 {
-        return Ok(Some((Vec::new(), 0)));
+        return Some((Vec::new(), 0));
     }
-    if t < 1 {
-        return Ok(None);
+    match memo.get(&t) {
+        Some(Known::Found(chain, cost)) => return (*cost < limit).then(|| (chain.clone(), *cost)),
+        Some(Known::Impossible(under)) if limit <= *under => return None,
+        _ => {}
     }
-    if let Some(known) = memo.get(&t) {
-        return Ok(known.clone());
-    }
-    let mut options: Vec<(i64, Chain)> = Vec::new();
+    let alu = ops.alu;
+    // The options: what `t` is reached from, and the operations after it.
+    let mut options: Vec<(i64, Chain, i64)> = Vec::new();
+    // `q << m` and then an add or subtract of the source: one `lea` for an add of a scale.
+    let shift_add = |m: i64, sub: bool| -> (Chain, i64) {
+        match (sub, (ops.lea)(1 << m)) {
+            (false, Some(lea)) if (1..=3).contains(&m) => (vec![("lea", 1 << m)], lea),
+            _ => (vec![("shl", m), (if sub { "sub" } else { "add" }, 0)], (ops.shift)(m) + alu),
+        }
+    };
     if t & 1 == 0 {
         let m = i64::from(t.trailing_zeros());
-        options.push((t >> m, vec![("shl", m)]));
+        options.push((t >> m, vec![("shl", m)], (ops.shift)(m)));
     } else {
         // A run of ones at the bottom (but not 3) is `(t + 1) - 1`; otherwise `(t - 1) + 1`.
-        let w = (t + 1) & !t;
-        if w > 2 && t != 3 {
-            options.push((t + 1, vec![("sub", 0)]));
+        if (t + 1) & !t > 2 && t != 3 {
+            options.push((t + 1, vec![("sub", 0)], alu));
         } else {
-            options.push((t - 1, vec![("add", 0)]));
+            options.push((t - 1, vec![("add", 0)], alu));
         }
         for m in (2..=(63 - i64::from((t - 1).leading_zeros()))).rev() {
             let up = (1i64 << m) + 1;
             let down = (1i64 << m) - 1;
             if t % up == 0 && t > up {
-                options.push((t / up, vec![("fadd", m)]));
+                let (op, cost) = match (m <= 3).then(|| (ops.lea)(1 << m)).flatten() {
+                    Some(lea) => (("flea", 1 << m), lea),
+                    None => (("fadd", m), ops.mov + (ops.shift)(m) + alu),
+                };
+                options.push((t / up, vec![op], cost));
                 break;
             }
             if t % down == 0 && t > down {
-                options.push((t / down, vec![("fsub", m)]));
+                options.push((t / down, vec![("fsub", m)], ops.mov + (ops.shift)(m) + alu));
                 break;
             }
         }
-        for (q, op) in [(t - 1, "add"), (t + 1, "sub")] {
+        for (q, sub) in [(t - 1, false), (t + 1, true)] {
             let m = i64::from(q.trailing_zeros());
-            if m > 0 && q >> m > 1 {
-                options.push((q >> m, vec![("shl", m), (op, 0)]));
+            if m > 0 {
+                let (tail, cost) = shift_add(m, sub);
+                options.push((q >> m, tail, cost));
             }
         }
     }
+    let mut bound = limit;
     let mut best: Option<(Chain, i64)> = None;
-    for (q, tail) in options {
-        if q >= t {
-            // `t + 1` shifts down below `t` only when it is even, as it is for odd `t`; a larger `q` is no progress.
-            let reduced = q >> q.trailing_zeros();
-            if reduced >= t {
-                continue;
-            }
+    for (q, tail, cost) in options {
+        // No progress: a larger target whose odd part is no smaller.
+        if q >= t && q >> q.trailing_zeros() >= t {
+            continue;
         }
-        let Some((mut parts, _)) = synth(q, memo, price, fused)? else { continue };
+        let Some((mut parts, below)) = synth(q, bound - cost, memo, ops) else { continue };
         parts.extend(tail);
-        let parts = fused(parts);
-        let clocks = price(&parts)?;
-        if best.as_ref().is_none_or(|(_, kept)| clocks < *kept) {
-            best = Some((parts, clocks));
-        }
+        bound = below + cost;
+        best = Some((parts, bound));
     }
-    memo.insert(t, best.clone());
-    Ok(best)
+    memo.insert(t, match &best {
+        Some((chain, cost)) => Known::Found(chain.clone(), *cost),
+        None => Known::Impossible(limit),
+    });
+    best
 }
 
 #[cfg(test)]
@@ -343,6 +403,24 @@ mod tests {
         assert_eq!(cheapest_narrow_chain(-15, m32).unwrap().unwrap().0, [("shl", 4), ("rsub", 0)]);
         let (chain, clocks) = cheapest_chain(1103515245, m32).unwrap().unwrap();
         assert!(clocks < 29, "{chain:?} {clocks}");
+    }
+
+    /// `a * 2654448107u` took 75 million instructions in the selector, four of them 337 million, at -O0 as well: the selector asks for a
+    /// multiply's chain three times (is it scalable, what does it cost, what is it) and each time searched every way down from every target.
+    /// GCC's `synth_mult` prunes by the cost so far and keeps what it found (`alg_hash`).
+    #[test]
+    fn test_the_search_for_a_wide_odd_constant_is_made_once_and_bounded() {
+        let m32 = targets::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
+        for factor in [2654448107i64, 3141592653, 4294967291, 2147483647, 1103515245] {
+            SEARCHED.with(|count| count.set(0));
+            let first = cheapest_chain(factor, m32).unwrap().unwrap();
+            let once = SEARCHED.with(std::cell::Cell::get);
+            for _ in 0..3 {
+                assert_eq!(cheapest_chain(factor, m32).unwrap().unwrap(), first);
+            }
+            assert_eq!(SEARCHED.with(std::cell::Cell::get), once, "x{factor} searched again");
+            assert!(once < 4000, "x{factor}: {once} targets searched for {:?}", first.0);
+        }
     }
 
     #[test]
