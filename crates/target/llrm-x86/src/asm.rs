@@ -6,7 +6,7 @@
 //! instruction is one row. Of the forms that take the operands written, the
 //! shortest is kept, and iced's block encoder sizes the jumps.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 use std::sync::LazyLock;
 
 use iced_x86::{
@@ -167,7 +167,7 @@ fn forms(bits: u32) -> &'static HashMap<Mnemonic, Vec<Code>> {
 }
 
 fn forms_of(bits: u32) -> HashMap<Mnemonic, Vec<Code>> {
-    let mut forms: HashMap<Mnemonic, Vec<Code>> = HashMap::new();
+    let mut forms: HashMap<Mnemonic, Vec<Code>> = HashMap::default();
     for code in Code::values() {
         let info = code.op_code();
         // A 32-bit block takes the 16-bit operand forms too (a 66h prefix), but only 32-bit addresses.
@@ -536,7 +536,7 @@ pub fn assembled(lines: &[&str], mode: Mode) -> Result<Vec<u8>, Refusal> {
     }
     let mut instructions: Vec<(Instruction, Option<String>, usize)> = Vec::new();
     // Each label's instruction, by index; the end of the block is one past the last.
-    let mut labels: HashMap<String, usize> = HashMap::new();
+    let mut labels: HashMap<String, usize> = HashMap::default();
     for (line, text) in lines.iter().enumerate() {
         let mut text = text.split(';').next().unwrap_or("").trim();
         while let Some((label, after)) = text.split_once(':').filter(|(label, _)| is_label(label.trim())) {

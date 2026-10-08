@@ -6,6 +6,7 @@ rust-version.workspace = true
 description = "Compiles llrm's peephole rules and instruction table into a decision-automaton matcher"
 
 [dependencies]
+llrm-support = { workspace = true }
 llrm-lir = { workspace = true }
 iced-x86 = { workspace = true }
 indexmap = { workspace = true }

@@ -2,7 +2,7 @@
 //! function, and the block or instruction at fault. `opt -passes=verify`
 //! is its oracle: `tools/mir-oracle.sh` holds the two to the same verdicts.
 
-use std::collections::{HashMap, HashSet};
+use crate::hash::{HashMap, HashSet};
 
 use crate::context::{ConstantKind, Context};
 use crate::dominators::DominatorTree;
@@ -169,7 +169,7 @@ impl Checker<'_> {
     /// Each phi has one input per edge into its block, and inputs from one
     /// block agree, as LLVM requires.
     fn phi_inputs(&mut self, block: BlockId) {
-        let mut edges: HashMap<BlockId, usize> = HashMap::new();
+        let mut edges: HashMap<BlockId, usize> = HashMap::default();
         for one in self.function.block_users(block) {
             let user = self.function.instruction(one.user);
             if user.opcode.is_terminator()
@@ -183,7 +183,7 @@ impl Checker<'_> {
             if instruction.opcode != Opcode::Phi {
                 continue;
             }
-            let mut inputs: HashMap<BlockId, Vec<Operand>> = HashMap::new();
+            let mut inputs: HashMap<BlockId, Vec<Operand>> = HashMap::default();
             for pair in instruction.operands.chunks(2) {
                 if let [value, Operand::Block(from)] = pair {
                     inputs.entry(*from).or_default().push(*value);
@@ -272,7 +272,7 @@ impl Checker<'_> {
                 }
             }
             Opcode::Switch => {
-                let mut seen = HashSet::new();
+                let mut seen = HashSet::default();
                 for pair in instruction.operands[2..].chunks(2) {
                     if let Operand::Constant(case) = pair[0] {
                         if self.context.get(case).ty != ty(0) || !matches!(self.context.get(case).kind, ConstantKind::Int(_)) {

@@ -10,7 +10,8 @@
 //! RESUME it ran. A procedure's own handlers, ON LOCAL ERROR's, run in it,
 //! entered from its pad, and read its locals.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet};
+use llrm_support::hash::HashMap;
 
 use llrm_mir::opcode::Attribute;
 use llrm_mir::{BlockId, Constant, ConstantKind, Operand as Value, TypeId};

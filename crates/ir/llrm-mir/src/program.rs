@@ -6,7 +6,8 @@
 //! `OuterAnalysisManagerProxy` one level up.
 
 use std::any::{Any, TypeId};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
+use crate::hash::HashMap;
 use std::rc::Rc;
 
 use crate::context::GlobalId;
@@ -342,7 +343,7 @@ impl ProgramProxy {
     /// pass manager.
     pub fn of(module: &Module, target: Rc<dyn Machine>) -> Rc<Self> {
         let layout = module.datalayout.as_deref().map_or_else(|| Ok(DataLayout::default()), DataLayout::parse).expect("a module's datalayout parses");
-        Rc::new(Self { segments: SegmentLayout::of(&layout), layout, target, exports: Exports::default(), runtime: Rc::default(), module: 0, results: HashMap::new() })
+        Rc::new(Self { segments: SegmentLayout::of(&layout), layout, target, exports: Exports::default(), runtime: Rc::default(), module: 0, results: HashMap::default() })
     }
 
     /// `P`'s result, if computed: LLVM's `getCachedResult`.

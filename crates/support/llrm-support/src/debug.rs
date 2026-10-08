@@ -241,7 +241,7 @@ pub fn timed_by<T>(name: impl FnOnce() -> String, run: impl FnOnce() -> T) -> T 
         return run();
     }
     thread_local! {
-        static NAMES: std::cell::RefCell<std::collections::HashSet<&'static str>> = std::cell::RefCell::new(Default::default());
+        static NAMES: std::cell::RefCell<crate::hash::HashSet<&'static str>> = std::cell::RefCell::new(Default::default());
     }
     let name = name();
     let name = NAMES.with(|names| {

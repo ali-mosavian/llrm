@@ -8,16 +8,16 @@
 "chain O1": 3.06,
 "chain O2": 3.093,
 "chain Os": 3.087,
-"functions O1": 2.117,
-"functions O2": 2.112,
-"functions Os": 2.109,
+"functions O1": 2.085,
+"functions O2": 2.084,
+"functions Os": 2.078,
 "live O1": 3.144,
 "live O2": 3.133,
 "live Os": 2.891,
 "mulconst O1": 2.059,
 "mulconst O2": 2.065,
 "mulconst Os": 2.077,
-"straight O1": 2.095,
-"straight O2": 2.116,
-"straight Os": 2.164
+"straight O1": 2.062,
+"straight O2": 2.087,
+"straight Os": 2.136
 }

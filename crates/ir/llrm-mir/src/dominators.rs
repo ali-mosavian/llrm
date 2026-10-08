@@ -147,7 +147,7 @@ fn intersect(idom: &[u32], order: &[u32], mut a: u32, mut b: u32) -> u32 {
 /// The blocks reachable from `entry`, in postorder, without recursion.
 fn postorder(function: &Function, entry: BlockId) -> Vec<BlockId> {
     let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::from([entry]);
+    let mut seen = crate::hash::HashSet::from_iter([entry]);
     let mut stack = vec![(entry, function.successors(entry), 0)];
     while let Some((block, successors, next)) = stack.last_mut() {
         if let Some(&successor) = successors.get(*next) {
@@ -181,7 +181,7 @@ mod tests {
         if a == entry {
             return true;
         }
-        let (mut seen, mut work) = (std::collections::HashSet::from([entry]), vec![entry]);
+        let (mut seen, mut work) = (crate::hash::HashSet::from_iter([entry]), vec![entry]);
         while let Some(at) = work.pop() {
             for next in function.successors(at) {
                 if next != a && seen.insert(next) {
