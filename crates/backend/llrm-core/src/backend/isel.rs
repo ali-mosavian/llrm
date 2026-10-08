@@ -73,6 +73,8 @@ mod wide;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Parameter {
     Cell(i64),
+    /// A `byval` aggregate: its bytes are the stack's from here up, and the parameter is their address.
+    Bytes(i64),
     Registers(Vec<Register>),
 }
 
@@ -148,13 +150,32 @@ enum Callee {
     Inline(String, Vec<u8>),
 }
 
+/// The type a parameter or argument is passed by value in memory (`byval`): its bytes are the stack's, rounded to a slot.
+fn byval_type(attributes: &[llrm_mir::Attribute]) -> Option<TypeId> {
+    attributes.iter().find_map(|one| match one {
+        llrm_mir::Attribute::Type(name, ty) if name == "byval" => Some(*ty),
+        _ => None,
+    })
+}
+
+/// The bytes of a `byval` argument on the stack: its type's size, up to a whole slot.
+fn byval_bytes(module: &Module, layout: &DataLayout, arch: &dyn llrm_target::Target, ty: TypeId) -> Result<u32, Unselected> {
+    let slot = arch.stack_slot_bytes() as u32;
+    Ok((layout.alloc_size(&module.context.types, ty) as u32).next_multiple_of(slot))
+}
+
+/// An argument's `llrm-argument` class: `byval` is memory.
+fn class_of(attributes: &[llrm_mir::Attribute]) -> Option<&str> {
+    byval_type(attributes).map(|_| llrm_mir::opcode::MEMORY).or_else(|| llrm_mir::opcode::argument_class(attributes))
+}
+
 /// Refuses an argument passed in the frame's own bytes: its slot would be
 /// addressable, which `sealed_arguments` denies, and the bytes are not what
 /// a push of the pointer passes.
 fn in_the_frame(attributes: &[Vec<llrm_mir::Attribute>]) -> Result<(), Unselected> {
     for attribute in attributes.iter().flatten() {
         if let llrm_mir::Attribute::Type(name, _) = attribute {
-            if matches!(name.as_str(), "byval" | "inalloca" | "byref") {
+            if matches!(name.as_str(), "inalloca" | "byref") {
                 return refuse(format!("a {name} argument"));
             }
         }
@@ -176,7 +197,15 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
     let (_, _, variadic) = module.signature(function.ty);
     let Passing { in_order, pops, registers } = passing(arch, function.calling_convention, variadic)?;
     let types = &module.context.types;
-    let sizes = function.parameters().iter().map(|&one| size_of(module, layout, function.value(one).ty)).collect::<Result<Vec<_>, _>>()?;
+    let sizes = function
+        .parameters()
+        .iter()
+        .enumerate()
+        .map(|(index, &one)| match byval_type(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice)) {
+            Some(ty) => byval_bytes(module, layout, arch, ty),
+            None => size_of(module, layout, function.value(one).ty),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let mut widths = sizes.iter().map(|&width| slot(arch, width)).collect::<Vec<_>>();
     // The last pushed is nearest: C's first argument, BASIC's last.
     if in_order {
@@ -188,7 +217,7 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
     let mut parameters = Vec::new();
     let mut cursor = first;
     if let Some(entry) = registers {
-        let classes: Vec<Option<&str>> = (0..function.parameters().len()).map(|index| llrm_mir::opcode::argument_class(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice))).collect();
+        let classes: Vec<Option<&str>> = (0..function.parameters().len()).map(|index| class_of(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice))).collect();
         let kinds: Vec<_> = function
             .parameters()
             .iter()
@@ -225,6 +254,11 @@ fn convention(module: &Module, layout: &DataLayout, global: GlobalId, arch: &dyn
         }
         if in_order {
             parameters.reverse();
+        }
+    }
+    for (index, parameter) in parameters.iter_mut().enumerate() {
+        if let (Parameter::Cell(disp), Some(_)) = (&*parameter, byval_type(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice))) {
+            *parameter = Parameter::Bytes(*disp);
         }
     }
     let (result, _, _) = module.signature(function.ty);
@@ -632,7 +666,7 @@ pub(crate) fn parameters(module: &Module, function: &Function, name: &str, conve
             // The parameter the source named `index`th is wherever the passes left it.
             let at = usize::try_from(index).ok().and_then(|index| (0..convention.parameters.len()).find(|&at| function.parameter_origin(at) == Some(index)));
             let place = match at.and_then(|at| convention.parameters.get(at)) {
-                Some(Parameter::Cell(disp)) => DebugPlace::At(Addr::new(Space::Frame, *disp)),
+                Some(Parameter::Cell(disp) | Parameter::Bytes(disp)) => DebugPlace::At(Addr::new(Space::Frame, *disp)),
                 // Stored at the entry, so the cell is where it is.
                 Some(Parameter::Registers(_)) if at.is_some_and(|at| homes.contains_key(&at)) => DebugPlace::At(Addr::new(Space::Frame, homes[&at.unwrap_or_default()])),
                 // One register holds it; a value in two (a long in dx:ax) is no register's, and is left out.
@@ -913,6 +947,12 @@ impl Selector<'_, '_, '_> {
                 }
             }
         }
+        // A `byval` parameter's bytes are reached through its address: no call or store spares them.
+        for (index, place) in convention.parameters.iter().enumerate() {
+            if let (Parameter::Bytes(disp), Some(ty)) = (place, byval_type(function.parameter_attrs.get(index).map_or(&[], Vec::as_slice))) {
+                reach.insert((*disp, *disp + i64::from(byval_bytes(self.module, &self.layout, self.arch, ty)?)));
+            }
+        }
         self.private = crate::model::lir::outside(&reach);
         self.allocas = self.depth;
         // What `-g` says of each variable in memory, now that the allocas have their cells.
@@ -968,6 +1008,12 @@ impl Selector<'_, '_, '_> {
             }
             let ty = function.value(parameter).ty;
             let disp = match place {
+                // Its own bytes are the stack's: the value is their address, and the body reaches the frame through it.
+                Parameter::Bytes(disp) => {
+                    self.pointers.insert(parameter, Pointer::Frame { disp: *disp, index: None, scale: 1 });
+                    self.unsealed = true;
+                    continue;
+                }
                 Parameter::Cell(disp) => *disp,
                 // It arrives in registers: an instruction at entry delivers each value in its register.
                 Parameter::Registers(registers) => {
@@ -3292,14 +3338,18 @@ impl Selector<'_, '_, '_> {
                 Opcode::Call(info) | Opcode::Invoke(info) => info.argument_attrs.as_slice(),
                 _ => &[],
             };
-            let class = |index: usize| llrm_mir::opcode::argument_class(attrs.get(index).map_or(&[], Vec::as_slice));
+            let class = |index: usize| class_of(attrs.get(index).map_or(&[], Vec::as_slice));
             let mut kinds = Vec::new();
             for (index, &argument) in arguments.iter().enumerate().take(described) {
                 if class(index) == Some(llrm_mir::opcode::RESULT_POINTER) {
                     continue;
                 }
                 let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
-                kinds.push(entry.kind(argument_of(self.types(), ty, self.size(ty)?, class(index)), self.arch.stack_slot_bytes()));
+                let size = match byval_type(attrs.get(index).map_or(&[], Vec::as_slice)) {
+                    Some(bytes) => byval_bytes(self.module, &self.layout, self.arch, bytes)?,
+                    None => self.size(ty)?,
+                };
+                kinds.push(entry.kind(argument_of(self.types(), ty, size, class(index)), self.arch.stack_slot_bytes()));
             }
             let mut placement = entry.place(&kinds);
             let mut next = placement.places.clone().into_iter();
@@ -3362,6 +3412,14 @@ impl Selector<'_, '_, '_> {
             spans.push((index, pushed));
             let argument = arguments[index];
             let ty = function.operand_type(&self.module.context, argument).expect("a typed argument");
+            let attrs = match &instruction.opcode {
+                Opcode::Call(info) | Opcode::Invoke(info) => info.argument_attrs.get(index).map_or(&[][..], Vec::as_slice),
+                _ => &[],
+            };
+            if let Some(aggregate) = byval_type(attrs) {
+                pushed += self.pushed_bytes(argument, aggregate, at, out)?;
+                continue;
+            }
             if self.is_float(ty) {
                 // Its bytes from a stack temporary, the high dword pushed
                 // first; a constant's bits pushed as they are.
@@ -3600,6 +3658,23 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// A `byval` argument: the bytes of `source`, an `aggregate`, made the next on the stack (the callee's own copy). The stack
+    /// grows by their size, rounded to a slot, and they are copied in by `memcpy`'s lowering: its moves, or `rep movs`. The
+    /// layout is what that many pushes made, so a callee compiled by another compiler reads the same bytes.
+    fn pushed_bytes(&mut self, source: Operand, aggregate: TypeId, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<i64, Unselected> {
+        let bytes = i64::from(byval_bytes(self.module, &self.layout, self.arch, aggregate)?);
+        let copy = self.layout.alloc_size(self.types(), aggregate) as i64;
+        let from = self.pointer(source)?;
+        let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
+        let count = Loc::Imm(Imm { value: bytes, width: if bytes > 0x7FFF { 4 } else { 2 }, address: None });
+        out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp.clone(), count])));
+        let base = self.fresh_held(self.address_bytes());
+        out.push(insn(at, semantics(Operation::Move, "mov", vec![Loc::Held(base)], vec![sp])));
+        let to = Pointer::Based { base, index: None, scale: 1, offset: 0, segment: Some(Register::SS) };
+        self.copied(to, from, Some(copy), None, false, false, at, out)?;
+        Ok(bytes)
+    }
+
     /// The bytes of the stores `memset` expands a constant `length` to,
     /// each at a one-byte displacement: two or more dwords store a register.
     fn stored_bytes(length: i64) -> i64 {
@@ -3624,6 +3699,14 @@ impl Selector<'_, '_, '_> {
         let volatile = self.constant(volatile, 1) != Some(0);
         let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
         let constant = self.constant(length, self.address_bytes());
+        self.copied(to, from, constant, Some(length), volatile, backward, at, out)
+    }
+
+    /// `memcpy`'s lowering, between pointers made by the caller: a constant `length` (or the operand that holds it).
+    #[allow(clippy::too_many_arguments)]
+    fn copied(&mut self, to: Pointer, from: Pointer, constant: Option<i64>, length: Option<Operand>, volatile: bool, backward: bool, at: i64, out: &mut Vec<Arc<Insn>>) -> Result<(), Unselected> {
+        let length = length.filter(|_| constant.is_none());
+        let counted_operand = || length.expect("a length that is no constant is an operand");
         if let Some(length) = constant
             && length / 4 + (length % 4).count_ones() as i64 <= MEMCPY_MOVES
         {
@@ -3661,6 +3744,7 @@ impl Selector<'_, '_, '_> {
         // Downward, each side starts at its last byte: `std` steps the string down.
         let counted = match (constant, backward) {
             (None, true) => {
+                let length = counted_operand();
                 let ty = self.function.operand_type(&self.module.context, length).expect("a typed length");
                 Some(self.held(length, ty, at, out)?)
             }
@@ -3726,6 +3810,7 @@ impl Selector<'_, '_, '_> {
                 }
             }
             (None, false) => {
+                let length = counted_operand();
                 let ty = self.function.operand_type(&self.module.context, length).expect("a typed length");
                 let counted = self.held(length, ty, at, out)?;
                 let (bulk, tail) = (self.fresh_held(self.address_bytes()), self.fresh_held(self.address_bytes()));
