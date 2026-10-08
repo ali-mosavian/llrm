@@ -72,6 +72,7 @@ pub mod shrinkwrap;
 pub mod select {
     pub use llrm_x86::select::*;
 
+    /// A deliberate model simplification (pricing every frame cell as near costs two bytes of the objects, accepted): see below.
     /// `emit_in`, for a price: the bytes an instruction takes, or whether it encodes. A frame cell is priced as a near one (a one-byte
     /// displacement): where it ends up is for the frame layout to decide after the machine phases, and a price that knew a
     /// displacement would be wrong the moment the layout moved. Incoming arguments, whose place is fixed, keep theirs.
