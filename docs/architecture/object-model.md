@@ -58,12 +58,14 @@ facts are the model's: a register's number is the target's `registers.regs` `dwa
 Enums, typedefs, qualifiers, block scopes, register and listed locations, columns and checksums are in
 the model; a frontend fills them as it learns to, and a writer that cannot say one refuses it by name.
 
-A `Location::Frame` is relative to the frame register after the prologue, which the backend keeps for any function that has debug variables (`masm::stack_addressed` refuses one with variables), so the model carries one frame register, not one per function.
+A `Location::Frame` is relative to the frame register as the code would set it. A format that finds a cell from the canonical frame address (DWARF: `FrameBase::Cfa`, `CFA_LOCATIONS`) needs no frame register kept for it; one that does not (CodeView, Turbo Debugger) is told of a cell only where the code keeps the register anyway.
 
-**`-g` never changes the code; what a format cannot say is left out** (gcc's way). A variable lives in MIR as a debug
-record (`#dbg_declare`, `#dbg_value`, `#dbg_gone`), a side table kept true by the edit points, not an instruction.
-Until the backend reads the allocator's ranges (#755 phases 2 and 3), a declared variable's stores are still lowered
-volatile (`hir/mir.rs`, `observe_declared_stores`), which costs code at -O>0.
+**`-g` never changes the code; what a format cannot say is left out** (gcc's way). A variable lives in MIR as debug records
+(`#dbg_declare`, `#dbg_value`, `#dbg_piece`, `#dbg_gone`), a side table kept true by the edit points, not instructions; no
+global or store is kept for a debugger. On a `CFA_LOCATIONS` format the backend finds where each value is by following the
+final code (`backend/valuetrack.rs`: LLVM's instruction-referencing LiveDebugValues) and writes ranges. A record a pass could not
+keep true says nothing, never a wrong thing: a variable is `<optimized out>` where it is not known. `tools/g-identical.sh`
+and `g_leaves_the_code_of_the_bench_programs_alone_to_the_floor` hold the rule.
 
 ## Moves
 

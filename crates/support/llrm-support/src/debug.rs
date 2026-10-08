@@ -7,6 +7,15 @@
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+/// Whether the compiler checks its own work between passes and phases (`LLRM_VERIFY`, any value but `0`): the module the frontend
+/// made is checked either way, as LLVM's release pipeline checks its input once; what each pass and each machine phase returned is
+/// checked when this is on. Tests, the gate, torture and the QCport run set it, so a phase that breaks an invariant is caught in
+/// every gate run and not in a user's compile.
+pub fn verifying() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LLRM_VERIFY").is_ok_and(|value| value != "0"))
+}
+
 /// Whether `channel` is on.
 pub fn enabled(channel: &str) -> bool {
     static CHANNELS: OnceLock<Vec<String>> = OnceLock::new();

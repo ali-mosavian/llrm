@@ -55,7 +55,7 @@ fn nib_symbols_read_with_their_types() {
         cv4info::shape(&object()),
         [
             "DATA counter: SHORT",
-            "DATA total: UNSIGNED LONG",
+            // `total` is read and written by nothing, so the optimiser drops it, and `-g` keeps nothing it does not (it kept it, for a debugger).
             "LOCAL main.origin: struct point {x +0 SHORT, y +2 LONG}",
             "LOCAL main.ratio: REAL32",
             "LOCAL main.result: LONG",

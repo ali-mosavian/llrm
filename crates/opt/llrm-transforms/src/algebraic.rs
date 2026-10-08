@@ -393,7 +393,7 @@ fn _replace(function: &mut Function, inst: InstId, opcode: Opcode, operands: Vec
 /// Every use of `inst` now reads `with`, and `inst` and what it alone read, gone.
 fn _forward(function: &mut Function, inst: InstId, with: Operand) {
     let result = function.instruction(inst).result.expect("a value");
-    function.replace_all_uses_with(result, with);
+    function.replace_value(result, with);
     _erase(function, inst);
 }
 
@@ -614,7 +614,7 @@ fn _constant_address(context: &mut Context, function: &mut Function, inst: InstI
         && context.types.int_bits(context.get(*number).ty) == Some(16)
     {
         let address = context.constant(Constant { ty: instruction.ty, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value: *number }) });
-        function.replace_all_uses_with(result, Operand::Constant(address));
+        function.replace_value(result, Operand::Constant(address));
         _erase(function, inst);
         return true;
     }
@@ -635,7 +635,7 @@ fn _constant_address(context: &mut Context, function: &mut Function, inst: InstI
     };
     let at = context.int(index_ty, (start.wrapping_add(step) & mask(width)) as i128);
     let address = context.constant(Constant { ty: pointer, kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value: at }) });
-    function.replace_all_uses_with(result, Operand::Constant(address));
+    function.replace_value(result, Operand::Constant(address));
     _erase(function, inst);
     true
 }

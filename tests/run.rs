@@ -19,6 +19,8 @@ fn test_every_program_under_tests_run_prints_its_out() {
     let bin = Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap();
     let done = Command::new("python3")
         .arg(root.join("tools/dosbatch/run_tests.py"))
+        // The gate's fast tier names the languages a diff can affect; unset, every program runs.
+        .args(std::env::var("LLRM_RUN_ONLY").unwrap_or_default().split_whitespace())
         .env("LLRM_BIN", bin)
         .current_dir(root)
         .output()
