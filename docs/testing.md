@@ -25,28 +25,27 @@ skips ~190 s of debugger and identity steps) and the load it puts on the host. R
 gate logs, the fast tier selects the failing step every time. Of the last 80 merges, 61 pick fast, 17 full, 2 nothing.
 
 
-### Compile cost
+### Compile cost and its growth
 
-`tools/compile-cost.py` (step `compile-cost`, run when the backend, transforms, front end or x86 targets change) counts the
-user-space instructions `llrm-c` retires (`perf stat -e instructions:u`) compiling the 66 vsgcc programs and QCport's 65
-modules at -O1, -O2 and -Os, and compares each with `tools/gate/compile-baseline.json`. Instructions count work, so host load
-does not move them. It fails when a level's geomean moves past 1.003 or any file past 1.02, up or down; the same build
-measured twice differs by 0.0001 in geomean and 0.0047 at worst (`--noise`). The baseline is main: a change that raises
-the cost on purpose, or lowers it, runs `python3 tools/compile-cost.py --refresh` in the same commit (it rewrites the entries
-that moved past noise; `--update` rewrites all), so the cost is in the diff and a gain is not given back unseen. Baseline: main 167ad0dde. The QCport files
-need `QCPORT` and `QCPORT_INC` (`~/scratch/qcport-env.sh`); without them they are reported as not measured. Without a working
-counter the step exits 77 (SKIPPED).
+`tools/measure.py check` (step `measure`, run when the backend, transforms, front end or x86 targets change) compares this tree's
+`llrm-c` with the same measurement of the commit it branches from. Three measurements, all user-space instructions
+(`perf stat -e instructions:u`), so host load does not move them:
 
-### Scaling
+- the compile of the 66 vsgcc programs and QCport's 65 modules at -O1, -O2 and -Os (`tools/compile-cost.py`);
+- 2N/N on generated programs, per axis and level (`crates/target/*/vsgcc/scaling_gate.py`): linear work reads 2.0, a pass gone
+  quadratic pulls an axis towards 4;
+- 2N/N for each step of the compile with 1.5% or more of its work (`LLRM_DEBUG=time`'s `[instr]` rows).
 
-`crates/target/*/vsgcc/scaling_gate.py` (step `scaling`, same owners as compile-cost) compiles each of scaling.py's generated
-programs at N and 2N (llrm-c -O1, -O2, -Os) and compares the ratio of instructions, net of the empty file, with
-`tools/gate/scaling-budget.json`. Linear work reads 2.0; a pass gone quadratic pulls its axis towards 4. The same build
-twice differs by 0.0014 at worst; it fails past 1% either way, so a fix that lowers an axis refreshes the budget in the same
-commit: `python3 crates/target/*/vsgcc/scaling_gate.py --refresh`. The gcc-like target is about 2.1 on every axis; the budget
-is main today (branches, live, chain and callers at -Os read 2.8 to 4.6: #924 and #941). Per step, `LLRM_DEBUG=time`'s `[instr]` rows (own user-space instructions, net of the empty file) give 2N/N for every step with 2% or more of
-the compile's work; one above 2.1 must have its ratio in `tools/gate/pass-budget.json` (±5%, the counts move 2.7% between runs), so a new
-superlinear step fails and a fixed one asks for a refresh. Wall time per step is not usable (a linear step read 4-6x at 2N under load).
+A measurement is stored per commit in `~/.cache/llrm/measure` (`LLRM_MEASURE_DIR`), never in the repository, so two branches
+share no file and nothing conflicts. The base's is read from there; if it is missing the base is built in a tree and target
+directory of its own with the gate's build command (`gate.BUILD`: `cargo build --bins` alone makes another llrm-c) and
+measured with this tree's tools and inputs, then stored (3-8 minutes, once per base). A stored measurement of another
+method (tools, programs, QCport modules) is not used. A rise past the tolerances in `tools/gate/tiers.toml` `[measure]` fails: a
+level's geomean 1.003, one file 1.02, an axis 1.01, a step 1.05 (a step needs 2.5% of the work to fail, so one on the edge of the
+share floor does not flip). A drop is recorded nowhere; the next branch's base has it. Tolerances come from the same build
+measured twice (`tools/compile-cost.py --noise`: geomean within 0.0001, worst file 0.0047 of 393). The QCport files need `QCPORT`
+and `QCPORT_INC` (`~/scratch/qcport-env.sh`); without them they are not measured. Without a working counter the step exits 77
+(SKIPPED). Wall time per step is not usable (a linear step read 4-6x at 2N under load).
 
 ## What belongs in the suite
 
