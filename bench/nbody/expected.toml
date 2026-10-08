@@ -1,5 +1,5 @@
-reason = "below -Omax the backend makes a function once unless the allocator left frame traffic, and not again without callee facts: grep nib -2.0% code; nbody_fixed nib memory operands -13%/-23%, instructions -2.0%/+1.8%, code +2.7%/+0.4%"
-blessed = "2026-10-08"
+reason = "return duplication (gcc copy_bb_p): a jump to a block that only returns is replaced by a copy of it at -O2: instructions fall (fib -3.7%, hanoi -3.6%, rectwo -2.4%, queens -0.4%), code bytes grow by the copies"
+blessed = "2026-10-09"
 
 [bas.O2]
 instructions = 55209
