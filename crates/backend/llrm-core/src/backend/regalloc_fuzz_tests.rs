@@ -800,6 +800,39 @@ fn test_the_intervals_of_the_same_instructions_are_worked_out_once() {
     assert_eq!(worked() - before, 2, "another body was answered from the first");
 }
 
+/// A spill made a body of nearly the same instructions, and every fact of it was worked out afresh (the allocator's
+/// 9784 rebuilds of `d_faces`, #944). An answer is the earlier one moved to the new slots, worked out again for the values
+/// the changed instructions name: the same intervals and weights.
+#[test]
+fn test_the_intervals_of_an_edited_body_are_the_ones_worked_out_afresh() {
+    use crate::analysis::intervals::{edited, intervals, intervals_afresh};
+    use std::sync::Arc;
+    let mut made = 0;
+    for seed in 0..120 {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (plain, _) = body(seed, &shape);
+        for body in [in_ssa(&plain), plain] {
+            intervals(&body, None);
+            let mut other = body.clone();
+            let (block, at) = {
+                let blocks: Vec<usize> = other.blocks.iter().enumerate().filter(|(_, block)| block.insns.len() > 2).map(|(at, _)| at).collect();
+                let Some(&block) = blocks.get(seed as usize % blocks.len().max(1)) else { continue };
+                (block, 1 + seed as usize % (other.blocks[block].insns.len() - 2))
+            };
+            // One instruction made afresh, and another of the block's put in again beside it: as a spill's reload would be.
+            let copy = Arc::new((*other.blocks[block].insns[at]).clone());
+            other.blocks[block].insns[at] = copy;
+            let inserted = Arc::new((*other.blocks[block].insns[at - 1]).clone());
+            other.blocks[block].insns.insert(at, inserted);
+            let before = edited();
+            let found = intervals(&other, None);
+            made += edited() - before;
+            assert_eq!(found, intervals_afresh(&other), "seed {seed}");
+        }
+    }
+    assert!(made > 50, "premise: bodies were answered by editing ({made})");
+}
+
 /// `spiller::siblings` built the interference of every value live together (13.8% of compiling
 /// `d_faces`, #559) to ask of the pairs among the values a plain move relates. The graph of those
 /// values alone has the edges among them that the whole graph has.

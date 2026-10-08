@@ -207,6 +207,7 @@ impl Remembered {
 }
 
 thread_local! {
+    static EDITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static RECENT: std::cell::RefCell<Vec<Remembered>> = const { std::cell::RefCell::new(Vec::new()) };
     static WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -214,6 +215,16 @@ thread_local! {
 /// How many times this thread has worked out intervals, for a test that asking again of one body does not.
 pub fn worked() -> usize {
     WORKED.with(std::cell::Cell::get)
+}
+
+/// How many answers this thread has made by editing an earlier one, for a test that a body made of another's instructions is.
+pub fn edited() -> usize {
+    EDITED.with(std::cell::Cell::get)
+}
+
+/// `intervals` worked out from the body alone, whatever is remembered: what an edited answer is held to.
+pub fn intervals_afresh(body: &LirBody) -> IndexMap<u32, Interval> {
+    worked_out(body, None, &Frequency::of(body))
 }
 
 /// How many answers are remembered: the allocator's rewrites and its trial candidates alternate
@@ -263,6 +274,7 @@ pub fn intervals_over(body: &LirBody, index: Option<&Indexes>, busy: &Frequency)
     let (answer, totals) = match edited {
         Some(found) => {
             llrm_support::debug::counted("intervals edited", true);
+            EDITED.with(|count| count.set(count.get() + 1));
             if std::env::var_os("LLRM_CHECK_INTERVALS").is_some() {
                 let whole = worked_out(body, Some(index), busy);
                 if found.0 != whole {
@@ -305,23 +317,38 @@ fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency)
     if !same_blocks {
         return None;
     }
-    // The values the instructions that are not in both name.
+    // The values the instructions that are not in both name, and those of the parallel copy each is in: a copy's moves are
+    // all read and written at its last, which a change to any of them moves.
     let mut touched: crate::support::hash::HashSet<u32> = Default::default();
     let mut changed = 0;
-    for one in &held.insns {
-        if !index.at.contains_key(&key(one)) {
-            changed += 1;
-            if std::env::var_os("LLRM_DEBUG_EDIT").is_some() {
-                eprintln!("gone at {} defines {:?} uses {:?} meta {}", held.index.at[&key(one)], one.defines, one.uses, one.is_meta());
+    let mut names = |run: &[&Arc<Insn>], gone: &dyn Fn(&Arc<Insn>) -> bool| {
+        let mut start = 0;
+        while start < run.len() {
+            let mut end = start + 1;
+            if run[start].group.is_some() {
+                while end < run.len() && run[end].group == run[start].group {
+                    end += 1;
+                }
             }
-            touched.extend(one.defines.iter().chain(&one.uses).copied());
+            let hit = run[start..end].iter().filter(|one| gone(one)).count();
+            if hit > 0 {
+                changed += hit;
+                for one in &run[start..end] {
+                    touched.extend(one.defines.iter().chain(&one.uses).copied());
+                }
+            }
+            start = end;
         }
+    };
+    let mut at = 0;
+    for (_, _, _, count) in &held.blocks {
+        let run: Vec<&Arc<Insn>> = held.insns[at..at + count].iter().collect();
+        names(&run, &|one| !index.at.contains_key(&key(one)));
+        at += count;
     }
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        if !held.index.at.contains_key(&key(one)) {
-            changed += 1;
-            touched.extend(one.defines.iter().chain(&one.uses).copied());
-        }
+    for block in &body.blocks {
+        let run: Vec<&Arc<Insn>> = block.insns.iter().collect();
+        names(&run, &|one| !held.index.at.contains_key(&key(one)));
     }
     if changed * 4 > held.insns.len() + 16 || touched.len() * 3 > held.answer.len() + 16 {
         return None;
@@ -357,22 +384,7 @@ fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency)
         let at = old.partition_point(|one| *one < slot) - 1;
         new[at] + (slot - old[at])
     };
-    if std::env::var_os("LLRM_DEBUG_EDIT").is_some() {
-        eprintln!("changed {changed} touched {:?}", touched.len());
-        eprintln!("old {:?}", old.iter().zip(&new).filter(|(o, _)| (300..335).contains(*o)).collect::<Vec<_>>());
-        eprintln!("tops {:?}", tops.iter().filter(|(o, _)| (300..335).contains(*o)).collect::<Vec<_>>());
-    }
     let again = worked_out_with_totals(body, index, busy, &|value| touched.contains(&value));
-    if std::env::var_os("LLRM_DEBUG_EDIT").is_some() {
-        let whole = worked_out(body, Some(index), busy);
-        for (value, one) in &again.0 {
-            if whole.get(value) != Some(one) {
-                eprintln!("restricted differs for {value}: {:?} vs {:?}", one.segments.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>(), whole.get(value).map(|o| o.segments.iter().map(|s| (s.start, s.end)).collect::<Vec<_>>()));
-            }
-        }
-        let t: Vec<u32> = touched.iter().copied().collect();
-        eprintln!("touched {t:?}");
-    }
     let mut answer: IndexMap<u32, Interval> = IndexMap::default();
     let mut totals: IndexMap<u32, f64> = IndexMap::default();
     for (value, kept) in held.answer.iter().filter(|(value, _)| !touched.contains(value)) {
