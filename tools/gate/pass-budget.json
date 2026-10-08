@@ -36,7 +36,7 @@
 "callers Os analysis annotated": 3.31,
 "callers Os analysis call-effects": 3.672,
 "callers Os analysis float-facts": 3.457,
-"callers Os analysis globals-aa": 3.583,
+"callers Os analysis globals-aa": 3.018,
 "callers Os analysis points-to": 3.421,
 "callers Os analysis registers": 3.62,
 "callers Os analysis summaries": 3.864,
