@@ -119,15 +119,7 @@ impl Profile {
 
     /// The existing target-ranking cost for one named instruction form.
     pub fn cost(&self, operation: &str) -> Result<i64, String> {
-        let costs: IndexMap<&str, i64> = self
-            ._costs
-            .iter()
-            .map(|(key, value)| (key.as_str(), *value))
-            .collect();
-        costs
-            .get(operation)
-            .copied()
-            .ok_or_else(|| format!("{} has no cost for {operation}", self.name))
+        _listed(&self._costs, operation).ok_or_else(|| format!("{} has no cost for {operation}", self.name))
     }
 
     /// The cheaper way to double a register: `add r,r` or `shl r,1`, which
@@ -145,26 +137,18 @@ impl Profile {
 
     /// Whether this profile has an explicit ranking for a form.
     pub fn prices(&self, operation: &str) -> bool {
-        let costs: IndexMap<&str, i64> = self
-            ._costs
-            .iter()
-            .map(|(key, value)| (key.as_str(), *value))
-            .collect();
-        costs.contains_key(operation)
+        _listed(&self._costs, operation).is_some()
     }
 
     /// The existing dependency latency, distinct from occupancy cost.
     pub fn latency(&self, operation: &str) -> Result<i64, String> {
-        let latencies: IndexMap<&str, i64> = self
-            ._latencies
-            .iter()
-            .map(|(key, value)| (key.as_str(), *value))
-            .collect();
-        latencies
-            .get(operation)
-            .copied()
-            .ok_or_else(|| format!("{} has no latency for {operation}", self.name))
+        _listed(&self._latencies, operation).ok_or_else(|| format!("{} has no latency for {operation}", self.name))
     }
+}
+
+/// What `table` lists for `operation`; the last of a name listed twice, as a map built from the table says.
+fn _listed(table: &[(String, i64)], operation: &str) -> Option<i64> {
+    table.iter().rev().find(|(name, _)| name == operation).map(|(_, value)| *value)
 }
 
 /// `str | Profile`, the argument every public function here accepts.
