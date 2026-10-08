@@ -3762,6 +3762,59 @@ fn test_a_function_the_spiller_makes_larger_is_built_without_it() {
     assert_eq!(sized_with(assemble::Candidates::Both, &text), allocator);
 }
 
+/// A function that called one whose registers are known was made twice, the second time without that, and the cheaper kept:
+/// the facts won in 4% of 947 such functions (0.3% of their cost). Only -Omax makes it twice.
+#[test]
+fn test_a_caller_is_made_without_its_callee_facts_only_with_an_exhaustive_search() {
+    let text = "
+define internal i16 @f(i16 %a) addrspace(1) {
+  %b = add i16 %a, 3
+  ret i16 %b
+}
+define i16 @g(i16 %a) addrspace(1) {
+  %b = call addrspace(1) i16 @f(i16 %a)
+  %c = add i16 %b, %a
+  ret i16 %c
+}
+";
+    let made = |exhaustive: bool| {
+        let profile = crate::backend::cpu::tuned_with(&llrm_x86_m16::M16, "486", false, true, exhaustive).expect("a profile");
+        let before = assemble::machinings();
+        assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).expect("assembles");
+        assemble::machinings() - before
+    };
+    let (directed, all) = (made(false), made(true));
+    assert!(all > directed, "premise: the caller has callee facts to be made without ({all} against {directed})");
+    assert_eq!(all - directed, 1);
+}
+
+/// A function ran the spiller's route and the allocator's alone, and the cheaper was kept, whatever the allocator left: for
+/// the 77% of 4422 functions with frame or spill traffic the spiller could remove, and none else, that is one route fewer,
+/// and the bytes of the 66 programs and QCport were the same. Below -Omax the allocator alone is the only route where it
+/// left no traffic.
+#[test]
+fn test_the_spiller_route_is_run_only_where_the_allocator_left_frame_traffic() {
+    let dir = concat!(env!("LLRM_ROOT"), "/tests/check/mir");
+    let (mut directed, mut both) = (0, 0);
+    for entry in std::fs::read_dir(dir).unwrap().map(|one| one.unwrap().path()).filter(|path| path.extension().is_some_and(|ext| ext == "ll")) {
+        let text = std::fs::read_to_string(&entry).unwrap();
+        let Ok(module) = llrm_mir::parse::module(&format!("{LAYOUT}{text}")) else { continue };
+        let profile = crate::backend::cpu::tuned_with(&llrm_x86_m16::M16, "486", false, true, false).expect("a profile");
+        let run = |candidates| {
+            assemble::trying(candidates, || {
+                let before = assemble::routes();
+                assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Profile(profile), &crate::backend::target::BASIC).ok().map(|_| assemble::routes() - before)
+            })
+        };
+        let (Some(each), Some(alone), Some(spiller)) = (run(assemble::Candidates::Both), run(assemble::Candidates::AllocatorOnly), run(assemble::Candidates::SpillerOnly)) else { continue };
+        directed += each;
+        both += alone + spiller;
+    }
+    let all = both;
+    assert!(all > 0, "premise: some file assembled");
+    assert!(directed < all, "{directed} routes against {all}");
+}
+
 /// A memcpy past the unrolled moves is `rep movsd` through es:di, the source
 /// read through ss as an override and the tail by `movsw`: a refusal failed
 /// every program with a copy that long.
