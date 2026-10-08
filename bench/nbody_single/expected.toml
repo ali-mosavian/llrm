@@ -1,5 +1,5 @@
-reason = "an integer of 32 bits or more made a float is rounded to a float, as C requires (the x87 register kept the extra bits and a compare against a float read them): a store and a load per conversion"
-blessed = "2026-10-07"
+reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+blessed = "2026-10-08"
 
 [bas.O2]
 instructions = 919099
@@ -18,32 +18,30 @@ bss_bytes = 0
 kernel_ms = 13.8468
 
 [c.O2]
-instructions = 901107
+instructions = 901105
 memory_operands = 146077
-code_bytes = 1069
+code_bytes = 1057
 data_bytes = 68
 bss_bytes = 96
-kernel_ms = 12.0218
 
 [c.Os]
-instructions = 1037190
+instructions = 1037188
 memory_operands = 138111
-code_bytes = 346
+code_bytes = 335
 data_bytes = 24
 bss_bytes = 96
 
 [nib.O2]
-instructions = 948123
+instructions = 948121
 memory_operands = 186080
-code_bytes = 1048
+code_bytes = 1036
 data_bytes = 76
 bss_bytes = 0
-kernel_ms = 12.648
 
 [nib.Os]
-instructions = 1350472
+instructions = 1350470
 memory_operands = 230174
-code_bytes = 582
+code_bytes = 571
 data_bytes = 32
 bss_bytes = 0
 
