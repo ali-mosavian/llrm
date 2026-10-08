@@ -612,6 +612,30 @@ pub fn optimized<E: From<String>>(
             reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-deadargs.")?;
         }
     }
+    // GCC's recursive inlining: a function that calls itself is given copies of itself (`inline::inlined_into_itself`), as -finline-functions
+    // does, so not at -O1's none or -Os (the recursive call is cold there). After the parameters nothing reads are gone and the tail calls
+    // are loops, as GCC's early passes have made them: a body with two calls would be a tree, not a chain.
+    if let Some(budget) = threshold.budget(reach).filter(|_| !threshold.single) {
+        for at in 0..count {
+            for &id in &procedures[at] {
+                let module = &mut program.modules[at];
+                let Some(original) = module.global(id).function().cloned() else { continue };
+                if !original.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, &original, inst) == Some(id)) {
+                    continue;
+                }
+                let mut work = original.clone();
+                let (metadata, globals) = (module.metadata.clone(), module.globals.iter().map(GlobalValue::declaration).collect::<Vec<_>>());
+                let made = inline::inlined_into_itself(id, &mut work, &original, budget, &|context, function| crate::profit::_frequencies(context, &metadata, &globals, function, None).unwrap_or_default(), &mut module.context);
+                if made == 0 {
+                    continue;
+                }
+                *function_mut(module, id).1 = work;
+                edited(&mut modules[at], &[id]);
+                reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-recursive.")?;
+            }
+        }
+    }
+
     // Propagation may have left a body doing less than it states.
     stamped_all(program, modules).map_err(E::from)?;
     for at in 0..count {
