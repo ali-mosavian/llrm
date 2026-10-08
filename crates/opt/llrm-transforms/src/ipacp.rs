@@ -129,7 +129,7 @@ pub fn cloned(module: &mut Module, layout: &DataLayout, procedures: &[GlobalId],
             benefit = benefit * (100 - RECURSION_PENALTY) / 100;
         }
         let cost = if replaces { 0 } else { size };
-        let verdict = saved > 0 && (replaces || (benefit * 1000 >= EVAL_THRESHOLD * size && state.grown + size <= unit.max(LARGE_UNIT) * UNIT_GROWTH / 100 + 1));
+        let verdict = (saved > 0 || loops) && (replaces || (benefit * 1000 >= EVAL_THRESHOLD * size && state.grown + size <= unit.max(LARGE_UNIT) * UNIT_GROWTH / 100 + 1));
         llrm_support::debug!(
             "ipa-cp",
             "{}: {} sites, {} of {} actuals known, saved {saved} clocks, loops {loops}, benefit {benefit}, size {size}: {}",
@@ -262,7 +262,6 @@ fn time_saved(module: &Module, layout: &DataLayout, body: &Function, known: &[Op
             break;
         }
     }
-    llrm_support::debug!("ipa-cp", "reached {} of {} blocks, {} folded, {} varying", reached.len(), body.layout().len(), folded.len(), varying.len());
     let frequency = profit::_frequencies(&module.context, &module.metadata, &module.globals, body, None).unwrap_or_default();
     // A block runs about as often as GCC guesses a loop does (its time estimates stop at ten trips), not as often as the nest multiplies out.
     let weight = |block| frequency.get(&cfg::id(block)).copied().unwrap_or(profit::UNIT).min(MAX_FREQUENCY * profit::UNIT);
