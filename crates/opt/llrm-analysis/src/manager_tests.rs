@@ -510,3 +510,28 @@ fn an_instruction_erased_above_a_loop_leaves_the_loops_facts() {
     assert!(after.values().all(|known| !known.contains_key(&seven)), "gone from every loop");
     assert_eq!(after, facts(&mut Analyses::new(outer), &module), "what was brought up to date is what working every loop gives");
 }
+
+/// Every pass that said it changed something dropped the pointer analyses, though five in six of them (twelve call-effects
+/// runs a function in QCport) were true after it: the change was to integers.
+#[test]
+fn an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_does_not() {
+    let mut module = parsed("declare void @use(ptr)\ndefine i32 @f(ptr %p, i32 %a) {\nentry:\n  %x = add i32 %a, 1\n  %y = mul i32 %x, 3\n  %q = getelementptr i32, ptr %p, i32 1\n  call void @use(ptr %q)\n  ret i32 %y\n}\n");
+    let id = module.named("f").expect("f");
+    let llrm_mir::module::GlobalKind::Function(f) = &mut module.globals[id.0 as usize].kind else { panic!("a function") };
+    let (x, y, q) = {
+        let named = |name: &str| value(f, name);
+        (named("x"), named("y"), named("q"))
+    };
+    let a = f.parameters()[1];
+    f.take_changes();
+    let before = f.mark();
+    f.replace_all_uses_with(x, Operand::Value(a));
+    let changes = f.changes_since(before).expect("on the log").to_vec();
+    assert!(!changes.is_empty());
+    for scalars_matter in [true, false] {
+        assert!(super::pointers_unaffected(&changes, &module.context, function(&module, "f"), scalars_matter), "an integer edit moved the pointer analyses");
+    }
+    let (f, _) = (function(&module, "f"), y);
+    let gep = f.walk().map(|(_, one)| one).find(|one| f.instruction(*one).result == Some(q)).expect("the gep");
+    assert!(!super::pointers_unaffected(&[llrm_mir::module::Change::Rewritten(gep)], &module.context, f, false), "an edit to an address left the pointer analyses as they were");
+}

@@ -456,16 +456,16 @@ no:
             "movzx ax, bl",
             "neg ax",
             "cmp cx, 3",
-            "sete dl",
-            "movzx cx, dl",
-            "and bl, dl",
+            "sete cl",
+            "movzx dx, cl",
+            "and bl, cl",
             "jne L0_6",
             "L0_8:",
             "xor ax, ax",
             "pop bp",
             "retf",
             "L0_6:",
-            "add ax, cx",
+            "add ax, dx",
             "pop bp",
             "retf",
         ]
@@ -2052,9 +2052,9 @@ done:
         )
     };
     let element = |text: &str| inner(text).into_iter().find(|line| line.contains("a[")).expect("the element's read");
-    assert_eq!(element(&sum("inbounds")), "add ax, word ptr a[esi+esi]");
+    assert_eq!(element(&sum("inbounds")), "add ax, word ptr a[ebx+ebx]");
     // Without `inbounds` nothing places the start: the offset may wrap.
-    assert_eq!(element(&sum("")), "add ax, word ptr a[si]");
+    assert_eq!(element(&sum("")), "add ax, word ptr a[bx]");
 }
 
 /// A word product only cells read is the 67h form's scaled index on the
@@ -2198,7 +2198,7 @@ done:
     let body = got.iter().position(|line| line == "L0_2:").expect("the loop");
     let mut steps = got[body + 3..body + 5].to_vec();
     steps.sort();
-    assert_eq!((&got[body + 1..body + 3], steps, &got[body + 5..body + 7]), (&["mov cl, byte ptr es:[si]".to_owned(), "mov byte ptr [bx], cl".to_owned()][..], vec!["inc bx".to_owned(), "inc si".to_owned()], &["dec ax".to_owned(), "jne L0_2".to_owned()][..]), "{got:?}");
+    assert_eq!((&got[body + 1..body + 3], steps, &got[body + 5..body + 7]), (&["mov al, byte ptr es:[si]".to_owned(), "mov byte ptr [bx], al".to_owned()][..], vec!["inc bx".to_owned(), "inc si".to_owned()], &["dec cx".to_owned(), "jne L0_2".to_owned()][..]), "{got:?}");
 }
 
 /// An unsigned integer converts as the signed one twice its width it
@@ -4109,4 +4109,32 @@ fn test_selecting_a_function_scans_for_exposed_allocas_once_not_once_per_alloca(
         let scans = llrm_analysis::frameescape::scans() - before;
         assert!(scans <= 1, "{scans} scans for {locals} locals");
     }
+}
+
+/// Selecting a function asked for what every function of the module does to memory by scanning the module: n functions made
+/// n scans of n functions (a quarter of the compile of 1024 functions). The module is scanned once, for every function.
+#[test]
+fn test_the_callees_of_a_module_are_scanned_once_for_all_its_functions_not_for_each() {
+    // The tests of this crate run side by side in one process: each counts the scans its own thread makes.
+    thread_local! {
+        static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    llrm_mir::passes::observe(llrm_mir::passes::Observer {
+        span: |_, _, run| run(),
+        function: |_, run| run(),
+        count: |what, _| {
+            if what == "callees" {
+                SCANS.with(|scans| scans.set(scans.get() + 1));
+            }
+        },
+    });
+    let scans = |functions: usize| {
+        let text: String = (0..functions).map(|n| format!("define i16 @f{n}(i16 %x) {{\nb:\n  %y = add i16 %x, {n}\n  ret i16 %y\n}}\n\n")).collect();
+        SCANS.with(|scans| scans.set(0));
+        assembled_on("486", &text);
+        SCANS.with(std::cell::Cell::get)
+    };
+    assert!(scans(4) > 0, "the observer saw no scan: another test installed its own");
+    let (few, many) = (scans(4), scans(24));
+    assert_eq!(few, many, "{few} scans for 4 functions, {many} for 24");
 }

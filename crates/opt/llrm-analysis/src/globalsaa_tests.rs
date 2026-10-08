@@ -295,3 +295,44 @@ fn a_callee_declared_after_the_outer_facts_may_call_back() {
     let (_, call) = f.walk().next().expect("the call");
     assert!(crate::globalsaa::calls_back(&unit, call));
 }
+
+/// Every edit to a body worked out what every body contributes to `GlobalsAA` again: an escape analysis of each, whole
+/// (`chain-32`: 135 runs, 15% of the compile). A body not edited since keeps its contribution.
+#[test]
+fn an_edit_to_one_body_works_out_that_body_alone() {
+    let mut module = parsed(&format!(
+        "{DOS}@g = internal global i16 0
+define i16 @f(i16 %a) {{
+b0:
+  %x = add i16 %a, 1
+  %y = mul i16 %x, 2
+  ret i16 %y
+}}
+define i16 @h(i16 %a) {{
+b0:
+  %x = add i16 %a, 3
+  %y = mul i16 %x, 4
+  store i16 %y, ptr @g
+  ret i16 %y
+}}
+"
+    ));
+    let program = Program::new(vec![module.clone()], Rc::new(Neutral)).unwrap();
+    let mut analyses = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
+    let first = analyses.get::<GlobalsAA>(&module);
+    let (f, h) = (module.named("f").unwrap(), module.named("h").unwrap());
+    let before = {
+        let memo = analyses.memo::<super::Bodies>();
+        (Rc::clone(&memo.per[&f].1), Rc::clone(&memo.per[&h].1))
+    };
+    // `@f` edited: an operand now the parameter.
+    let (_, function) = module.function_mut("f").unwrap();
+    let (x, a) = (value(function, "x"), function.parameters()[0]);
+    function.replace_all_uses_with(x, llrm_mir::module::Operand::Value(a));
+    analyses.invalidate(&llrm_mir::passes::PreservedAnalyses::none());
+    let second = analyses.get::<GlobalsAA>(&module);
+    assert_eq!(first, second);
+    let memo = analyses.memo::<super::Bodies>();
+    assert!(Rc::ptr_eq(&before.1, &memo.per[&h].1), "an unedited body's contribution was worked out again");
+    assert!(!Rc::ptr_eq(&before.0, &memo.per[&f].1), "an edited body's contribution was kept");
+}

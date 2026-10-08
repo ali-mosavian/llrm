@@ -1,21 +1,19 @@
-reason = "return duplication (gcc copy_bb_p): a jump to a block that only returns is replaced by a copy of it at -O2: instructions fall (fib -3.7%, queens -0.4%), code bytes grow by the copies; parity/qbsp c -O2 instructions +3 are loop-alignment nops its fall-through now executes (the copy moved the loop head's offset)"
-blessed = "2026-10-08"
+reason = "return duplication (gcc copy_bb_p): a jump to a block that only returns is replaced by a copy of it at -O2: instructions fall (fib -3.7%, queens -0.4%), code bytes grow by the copies"
+blessed = "2026-10-09"
 
 [bas.O2]
-instructions = 30047
+instructions = 30045
 memory_operands = 8013
-code_bytes = 234
+code_bytes = 232
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.4138
 
 [bas.Os]
-instructions = 30047
+instructions = 30045
 memory_operands = 8013
-code_bytes = 234
+code_bytes = 232
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.4138
 
 [c.O2]
 instructions = 30009
