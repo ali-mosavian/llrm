@@ -30,14 +30,41 @@ struct State {
     has: BTreeMap<(u32, Option<(u32, u32)>), NoteValue>,
 }
 
-/// The full 32-bit register a general register is a part of; any other register is itself.
-fn family(register: Register) -> Register {
-    if register.is_gpr() { register.full_register32() } else { register }
+/// The target's registers as the tracking needs them, from its description: which register each view belongs to, which two address
+/// cells, and which hold values (the roots of class `gpr`).
+pub struct Regs {
+    frame: String,
+    stack: String,
+    general: Vec<String>,
+    roots: BTreeMap<String, String>,
 }
 
-fn register_of(held: &Held) -> Option<Register> {
+impl Regs {
+    pub fn new(file: &[llrm_target::registers::Register], frame: Register, stack: Register) -> Self {
+        let roots: BTreeMap<String, String> = file.iter().map(|one| (one.name.clone(), one.root.clone())).collect();
+        let general = file.iter().filter(|one| one.is("gpr") && one.root == one.name).map(|one| one.name.clone()).collect();
+        let named = |register: Register| {
+            let name = format!("{register:?}").to_lowercase();
+            roots.get(&name).cloned().unwrap_or(name)
+        };
+        Self { frame: named(frame), stack: named(stack), general, roots }
+    }
+
+    /// The register `register` is a view of; any register the description does not know is itself.
+    fn root(&self, register: Register) -> String {
+        let name = format!("{register:?}").to_lowercase();
+        self.roots.get(&name).cloned().unwrap_or(name)
+    }
+
+    /// The registers a call that says nothing of what it clobbers may: every general one but the two that address cells.
+    fn volatile(&self) -> impl Iterator<Item = &String> {
+        self.general.iter().filter(|one| **one != self.frame && **one != self.stack)
+    }
+}
+
+fn register_of(held: &Held, regs: &Regs) -> Option<String> {
     match held {
-        Held::Register(register) => Some(family(*register)),
+        Held::Register(register) => Some(regs.root(*register)),
         Held::Cell { .. } => None,
     }
 }
@@ -48,11 +75,11 @@ fn cells_overlap(a: (i64, u32), b: (i64, u32)) -> bool {
 
 impl State {
     /// Nothing holds `held` any more, nor anything overlapping it.
-    fn lose(&mut self, held: &Held) {
+    fn lose(&mut self, held: &Held, regs: &Regs) {
         match held {
             Held::Register(register) => {
-                let family = family(*register);
-                self.holds.retain(|one, _| register_of(one) != Some(family));
+                let family = regs.root(*register);
+                self.holds.retain(|one, _| register_of(one, regs).as_ref() != Some(&family));
             }
             Held::Cell { disp, bytes } => self.holds.retain(|one, _| !matches!(one, Held::Cell { disp: d, bytes: b } if cells_overlap((*d, *b), (*disp, *bytes)))),
         }
@@ -64,8 +91,8 @@ impl State {
     }
 
     /// `held` holds `value`, and nothing overlapping it does.
-    fn set(&mut self, held: Held, value: u32) {
-        self.lose(&held);
+    fn set(&mut self, held: Held, value: u32, regs: &Regs) {
+        self.lose(&held, regs);
         self.holds.insert(held, value);
     }
 
@@ -80,12 +107,12 @@ impl State {
 
 /// A frame cell, as the frame register would address it, of a memory operand of `one`, if it names one: through the stack
 /// pointer or the frame register alone, which `rows` says how far from the canonical frame address at `at`.
-fn cell(one: &Instruction, rows: &[FrameRow], at: usize, bias: i64, bytes: u32) -> Option<Held> {
+fn cell(one: &Instruction, rows: &[FrameRow], at: usize, bias: i64, bytes: u32, regs: &Regs) -> Option<Held> {
     if one.memory_index() != Register::None || one.memory_base() == Register::None {
         return None;
     }
     let row = rows.iter().rev().find(|row| row.offset <= at)?;
-    let base = format!("{:?}", family(one.memory_base())).to_lowercase();
+    let base = regs.root(one.memory_base());
     if base != row.cfa_register {
         return None;
     }
@@ -93,32 +120,8 @@ fn cell(one: &Instruction, rows: &[FrameRow], at: usize, bias: i64, bytes: u32) 
     Some(Held::Cell { disp: disp - row.cfa_offset + bias, bytes })
 }
 
-/// The target's frame and stack registers: the two the code addresses its cells by.
-#[derive(Clone, Copy)]
-pub struct Frame {
-    pub pointer: Register,
-    pub stack: Register,
-}
-
-impl Frame {
-    /// The general registers in numeric order, from the frame register's file (`Mark::Clobbers` numbers them).
-    fn general() -> impl Iterator<Item = Register> {
-        Register::values().filter(|one| one.is_gpr32() && one.number() < 8)
-    }
-
-    /// The general registers a clobber set names, as the bits `Mark::Clobbers` holds.
-    fn clobbered(self, mask: u8) -> impl Iterator<Item = Register> {
-        Self::general().filter(move |one| mask >> one.number() & 1 != 0)
-    }
-
-    /// Every general register but the two that address cells.
-    fn volatile(self) -> impl Iterator<Item = Register> {
-        Self::general().filter(move |one| *one != self.pointer.full_register32() && *one != self.stack.full_register32())
-    }
-}
-
 /// What `one` does to `state`: a move of a whole register or cell copies what it holds; any other write loses what it writes.
-fn step(state: &mut State, one: &Instruction, rows: &[FrameRow], bias: i64, info: &mut InstructionInfoFactory, clobbers: Option<u8>, exposed: bool, frame: Frame) {
+fn step(state: &mut State, one: &Instruction, rows: &[FrameRow], bias: i64, info: &mut InstructionInfoFactory, clobbers: Option<&[Register]>, exposed: bool, regs: &Regs) {
     let at = one.ip() as usize;
     let size = |kind: OpKind, register: Register| if kind == OpKind::Register { register.size() as u32 } else { one.memory_size().size() as u32 };
     let copy = one.mnemonic() == Mnemonic::Mov && one.op_count() == 2 && matches!((one.op0_kind(), one.op1_kind()), (OpKind::Register, OpKind::Register | OpKind::Memory) | (OpKind::Memory, OpKind::Register));
@@ -126,13 +129,13 @@ fn step(state: &mut State, one: &Instruction, rows: &[FrameRow], bias: i64, info
         let (to, from) = (size(one.op0_kind(), one.op0_register()), size(one.op1_kind(), one.op1_register()));
         let place = |kind: OpKind, register: Register, bytes: u32| match kind {
             OpKind::Register => Some(Held::Register(register)),
-            _ => cell(one, rows, at, bias, bytes),
+            _ => cell(one, rows, at, bias, bytes, regs),
         };
         let source = place(one.op1_kind(), one.op1_register(), from).and_then(|held| state.holds.get(&held).copied());
         let target = place(one.op0_kind(), one.op0_register(), to);
         match (target, source) {
-            (Some(target), Some(value)) if to == from => state.set(target, value),
-            (Some(target), _) => state.lose(&target),
+            (Some(target), Some(value)) if to == from => state.set(target, value, regs),
+            (Some(target), _) => state.lose(&target, regs),
             // A write through a pointer may write a frame cell whose address the function let out.
             (None, _) => {
                 if exposed && one.op0_kind() == OpKind::Memory {
@@ -145,13 +148,13 @@ fn step(state: &mut State, one: &Instruction, rows: &[FrameRow], bias: i64, info
     let used = info.info(one);
     for register in used.used_registers() {
         if matches!(register.access(), OpAccess::Write | OpAccess::CondWrite | OpAccess::ReadWrite | OpAccess::ReadCondWrite) {
-            state.lose(&Held::Register(register.register()));
+            state.lose(&Held::Register(register.register()), regs);
         }
     }
     for memory in used.used_memory() {
         if matches!(memory.access(), OpAccess::Write | OpAccess::CondWrite | OpAccess::ReadWrite | OpAccess::ReadCondWrite) {
-            match cell(one, rows, at, bias, memory.memory_size().size() as u32) {
-                Some(held) => state.lose(&held),
+            match cell(one, rows, at, bias, memory.memory_size().size() as u32, regs) {
+                Some(held) => state.lose(&held, regs),
                 None if exposed => state.lose_cells(),
                 None => {}
             }
@@ -160,9 +163,9 @@ fn step(state: &mut State, one: &Instruction, rows: &[FrameRow], bias: i64, info
     // The stack pointer's own pushes are cells the code names by no operand: a push loses what it covers.
     if matches!(one.mnemonic(), Mnemonic::Push | Mnemonic::Pushad | Mnemonic::Pushfd | Mnemonic::Pushf) {
         let row = rows.iter().rev().find(|row| row.offset <= at);
-        if let Some(row) = row.filter(|row| row.cfa_register == format!("{:?}", frame.stack.full_register32()).to_lowercase()) {
+        if let Some(row) = row.filter(|row| row.cfa_register == regs.stack) {
             let bytes = (-i64::from(one.stack_pointer_increment())).max(0);
-            state.lose(&Held::Cell { disp: -row.cfa_offset - bytes + bias, bytes: bytes as u32 });
+            state.lose(&Held::Cell { disp: -row.cfa_offset - bytes + bias, bytes: bytes as u32 }, regs);
         }
     }
     if one.flow_control() == FlowControl::Call || one.flow_control() == FlowControl::IndirectCall {
@@ -171,8 +174,8 @@ fn step(state: &mut State, one: &Instruction, rows: &[FrameRow], bias: i64, info
             state.lose_cells();
         }
         match clobbers {
-            Some(mask) => frame.clobbered(mask).for_each(|register| state.lose(&Held::Register(register))),
-            None => frame.volatile().for_each(|register| state.lose(&Held::Register(register))),
+            Some(registers) => registers.iter().for_each(|register| state.lose(&Held::Register(*register), regs)),
+            None => regs.volatile().for_each(|root| state.holds.retain(|one, _| register_of(one, regs).as_ref() != Some(root))),
         }
     }
 }
@@ -220,7 +223,7 @@ fn where_is(state: &State, variable: u32, piece: Option<(u32, u32)>) -> Option<W
 /// Each variable the notes name, with the ranges of `code` (start, end) it is in a place over. `marks` are the procedure's, by
 /// the offset into `code` they stand at, in the order masm wrote them; `rows` its frame rows; `bias` how far below the
 /// canonical frame address the frame register would sit (a cell `Place::Cell { disp }` is `disp - bias` from it).
-pub fn tracked(code: &[u8], frame: Frame, rows: &[FrameRow], bias: i64, notes: &[DebugNote], marks: &[(usize, Mark)]) -> BTreeMap<(u32, Option<(u32, u32)>), Vec<(usize, usize, Where)>> {
+pub fn tracked(code: &[u8], regs: &Regs, rows: &[FrameRow], bias: i64, notes: &[DebugNote], marks: &[(usize, Mark)]) -> BTreeMap<(u32, Option<(u32, u32)>), Vec<(usize, usize, Where)>> {
     let mut decoder = Decoder::with_ip(32, code, 0, DecoderOptions::NONE);
     let mut decode = |at: usize| -> Option<Instruction> {
         decoder.set_position(at).ok()?;
@@ -232,12 +235,12 @@ pub fn tracked(code: &[u8], frame: Frame, rows: &[FrameRow], bias: i64, notes: &
     // and what the call ending there clobbered.
     let mut defs: BTreeMap<usize, Vec<(u32, Place)>> = BTreeMap::new();
     let mut before: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
-    let mut clobbers: BTreeMap<usize, u8> = BTreeMap::new();
+    let mut clobbers: BTreeMap<usize, Vec<Register>> = BTreeMap::new();
     for &(at, mark) in marks {
         match mark {
             Mark::Def { tag, place } => defs.entry(at).or_default().push((tag, place)),
             Mark::Note(note) => before.entry(at).or_default().push(note),
-            Mark::Clobbers(mask) => *clobbers.entry(at).or_default() |= mask,
+            Mark::Clobbered(register) => clobbers.entry(at).or_default().push(register),
             _ => {}
         }
     }
@@ -249,7 +252,7 @@ pub fn tracked(code: &[u8], frame: Frame, rows: &[FrameRow], bias: i64, notes: &
         let mut found = false;
         while scan.can_decode() {
             let one = scan.decode();
-            if one.mnemonic() == Mnemonic::Lea && [frame.pointer, frame.stack].map(family).contains(&family(one.memory_base())) {
+            if one.mnemonic() == Mnemonic::Lea && [&regs.frame, &regs.stack].contains(&&regs.root(one.memory_base())) {
                 found = true;
                 break;
             }
@@ -260,7 +263,7 @@ pub fn tracked(code: &[u8], frame: Frame, rows: &[FrameRow], bias: i64, notes: &
     // What is said before the first instruction (the arguments, in the registers they arrive in) holds from the entry.
     let mut first = State { holds: BTreeMap::new(), has: BTreeMap::new() };
     for &(tag, place) in defs.get(&0).into_iter().flatten() {
-        first.set(place, tag);
+        first.set(place, tag, regs);
     }
     let mut work: Vec<(usize, State)> = vec![(0, first)];
     while let Some((at, mut state)) = work.pop() {
@@ -279,9 +282,9 @@ pub fn tracked(code: &[u8], frame: Frame, rows: &[FrameRow], bias: i64, notes: &
         }
         // What the instruction does, then what it is told it made.
         let end = at + one.len();
-        step(&mut state, &one, rows, bias, &mut info, clobbers.get(&end).copied(), exposed, frame);
+        step(&mut state, &one, rows, bias, &mut info, clobbers.get(&end).map(Vec::as_slice), exposed, regs);
         for &(tag, place) in defs.get(&end).into_iter().flatten() {
-            state.set(place, tag);
+            state.set(place, tag, regs);
         }
         let (falls, jumps) = match one.flow_control() {
             FlowControl::Next | FlowControl::Call | FlowControl::IndirectCall | FlowControl::XbeginXabortXend | FlowControl::Interrupt | FlowControl::Exception => (true, false),

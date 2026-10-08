@@ -38,6 +38,8 @@ pub struct Debug {
     pub dialect: model::Dialect,
     pub producer: model::Producer,
     pub frame_register: String,
+    /// The target's register file, as described: which registers are views of which, and which hold values.
+    pub file: Vec<llrm_target::registers::Register>,
     /// What the target calls a call's return address in call frame information; empty where it numbers none.
     pub return_register: String,
     /// The frame and stack registers of 32-bit code, and the bytes a call pushes (near, far): what its frame
@@ -157,6 +159,7 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
         let registers = arch.frame_registers();
         (registers.pointer, registers.stack, [arch.return_address_bytes(false), arch.return_address_bytes(true)])
     });
+    let file_copy = file.clone();
     let registers = file.into_iter().map(|one| model::Register { name: one.name, bits: one.bits, dwarf: one.dwarf, codeview: one.codeview }).collect();
     let language = match di::language(module) {
         Some(di::Language::C) => model::Language::C,
@@ -168,7 +171,7 @@ pub fn described(module: &llrm_mir::Module, names: &IndexMap<(Space, i64), Strin
         di::Dialect::Bc => model::Dialect::Bc,
         di::Dialect::Cv4 => model::Dialect::Cv4,
     };
-    Ok(Some(Debug { format: model::Format::Default, language, dialect, producer, frame_register, return_register, frame, registers, types, nodes, procedures, globals: out }))
+    Ok(Some(Debug { format: model::Format::Default, language, dialect, producer, frame_register, file: file_copy, return_register, frame, registers, types, nodes, procedures, globals: out }))
 }
 
 /// Where one value is, as the model says it.
@@ -280,7 +283,7 @@ pub fn laid_out(debug: &Debug, module: &masm::Module, source: &str, segments: &[
                     // which may be a value it no longer has: a variable with one is said to be nowhere.
                     let emitted: BTreeSet<u32> = marks.iter().filter_map(|(_, mark)| if let masm::Mark::Note(note) = mark { Some(*note) } else { None }).collect();
                     let lost = procedure.body.notes.iter().enumerate().any(|(note, said)| said.variable == node && !emitted.contains(&(note as u32)));
-                    let found = if lost { Default::default() } else { super::valuetrack::tracked(&code.image[start..end], super::valuetrack::Frame { pointer: debug.frame.map(|(pointer, ..)| pointer).unwrap_or(iced_x86::Register::None), stack: debug.frame.map(|(_, stack, _)| stack).unwrap_or(iced_x86::Register::None) }, rows, bias, &procedure.body.notes, &marks) };
+                    let found = if lost { Default::default() } else { super::valuetrack::tracked(&code.image[start..end], &super::valuetrack::Regs::new(&debug.file, debug.frame.map_or(iced_x86::Register::None, |(pointer, ..)| pointer), debug.frame.map_or(iced_x86::Register::None, |(_, stack, _)| stack)), rows, bias, &procedure.body.notes, &marks) };
                     let parts: Vec<_> = found.into_iter().filter(|((variable, _), _)| *variable == node).map(|((_, piece), ranges)| (piece, ranges)).collect();
                     let entries = combined(parts).into_iter().map(|(from, to, location)| (model::Range { section, offset: start + from, length: to - from }, location));
                     variables.push(Variable { name: one.name.clone(), r#type, kind, location: Location::List(entries.collect()) });

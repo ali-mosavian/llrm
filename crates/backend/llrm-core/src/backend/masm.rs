@@ -259,8 +259,8 @@ pub enum Mark {
     Def { tag: u32, place: Place },
     /// Note `note` of the body (`LirBody::notes`) stands here.
     Note(u32),
-    /// The call before it clobbers these registers, as bits: eax, ecx, edx, ebx, esp, ebp, esi, edi.
-    Clobbers(u8),
+    /// The call before it clobbers this register (one mark for each it clobbers).
+    Clobbered(Register),
 }
 
 /// Where an instruction put a value `-g` names.
@@ -286,11 +286,6 @@ fn placed(dest: &Loc) -> Option<Place> {
         },
         _ => None,
     }
-}
-
-/// The registers of `clobbers` as `Mark::Clobbers` says them: bit `n` for the general register numbered `n`.
-fn clobber_bits(clobbers: &BTreeSet<Register>) -> u8 {
-    clobbers.iter().filter(|one| one.is_gpr()).fold(0, |bits, one| bits | 1 << one.full_register32().number())
 }
 
 fn reg(register: Register) -> Loc {
@@ -619,8 +614,8 @@ fn built(procedure: &Procedure, number: usize, omit: bool) -> Result<Vec<Item>, 
                         if callee.pops != 0 && callee.code.is_empty() && first.is_some() {
                             out.push(Item::Mark(Mark::Pops(callee.pops)));
                         }
-                        if first.is_some() && !one.clobbers.is_empty() {
-                            out.push(Item::Mark(Mark::Clobbers(clobber_bits(&one.clobbers))));
+                        if first.is_some() {
+                            out.extend(one.clobbers.iter().map(|&register| Item::Mark(Mark::Clobbered(register))));
                         }
                     }
                 }
