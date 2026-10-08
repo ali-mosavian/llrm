@@ -1,21 +1,19 @@
-reason = "synth_mult: a constant multiply is the cheaper of the Horner chain and gcc's (factors 2^m +- 1, t - 1 and t + 1); four parity c rows are one instruction longer and one byte smaller, chosen by clocks"
+reason = "regalloc search picks one shape plus the no-split body below -Omax: grep nib code +5 bytes (the unfolded no-split trial is not tried)"
 blessed = "2026-10-08"
 
 [bas.O2]
-instructions = 68
+instructions = 64
 memory_operands = 14
-code_bytes = 243
+code_bytes = 241
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0139
 
 [bas.Os]
-instructions = 61
+instructions = 57
 memory_operands = 14
-code_bytes = 225
+code_bytes = 223
 data_bytes = 13
 bss_bytes = 0
-kernel_ms = 0.0138
 
 [c.O2]
 instructions = 52

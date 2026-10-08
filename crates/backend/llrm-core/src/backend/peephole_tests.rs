@@ -3388,3 +3388,36 @@ fn test_two_cells_equal_but_spelled_through_other_registers_are_decoded_apart() 
     assert_ne!(first, second, "[si+2] decoded as [bx+2]");
     assert_eq!(second[0].memory_base(), Register::SI);
 }
+
+/// The passes asked `_register_effects` of the same instruction again and again, each time lowering it to text and decoding
+/// it: 886,000 asks for 16,000 distinct instructions in one QCport module. An instruction equal to one already answered is
+/// answered from it, whichever `Insn` it is held in.
+#[test]
+fn test_an_instruction_equal_to_one_already_answered_is_not_worked_out_again() {
+    let add = |at| insn(at, Some((at, at + 2)), Some(sem(Operation::Binary, "add", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::BX, 2)])), vec![], vec![]);
+    let before = effects_computed();
+    let first = _register_effects(16, &add(0), false, true);
+    for at in 1..6 {
+        assert_eq!(_register_effects(16, &add(at), false, true), first);
+    }
+    assert_eq!(effects_computed() - before, 1, "worked out again for each ask");
+    let other = insn(0, Some((0, 2)), Some(sem(Operation::Binary, "add", vec![rl(Register::AX, 2)], vec![rl(Register::AX, 2), rl(Register::CX, 2)])), vec![], vec![]);
+    assert_ne!(_register_effects(16, &other, false, true), first, "another instruction was given this one's answer");
+}
+
+/// `dead_at_exit` was worked out for the body ten passes in a row, though all but one of them left it as it was (#924). A body
+/// that is the same is answered from the last; one whose instruction changed is not.
+#[test]
+fn test_the_dead_lanes_of_a_body_no_pass_changed_are_worked_out_once() {
+    let mov = |at, to, from| Arc::new(insn(at, Some((at, at + 2)), Some(sem(Operation::Move, "mov", vec![rl(to, 2)], vec![rl(from, 2)])), vec![], vec![]));
+    let input = body("f", 0, vec![block(0, vec![mov(0, Register::AX, Register::BX), mov(2, Register::CX, Register::AX)], vec![])]);
+    let before = liveness::exits_computed();
+    let first = liveness::dead_at_exit(&input);
+    for _ in 0..5 {
+        assert_eq!(liveness::dead_at_exit(&input.clone()), first);
+    }
+    assert_eq!(liveness::exits_computed() - before, 1, "worked out again for each ask");
+    let changed = body("f", 0, vec![block(0, vec![mov(0, Register::AX, Register::BX), mov(2, Register::DX, Register::AX)], vec![])]);
+    liveness::dead_at_exit(&changed);
+    assert_eq!(liveness::exits_computed() - before, 2, "a changed body was given the last answer");
+}

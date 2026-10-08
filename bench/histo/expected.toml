@@ -1,4 +1,4 @@
-reason = "regparm3 convention: AX/DX/CX cannot address; only SI/DI survive a call (user decision 2026-10-08)"
+reason = "regalloc search picks one shape plus the no-split body below -Omax: grep nib code +5 bytes (the unfolded no-split trial is not tried)"
 blessed = "2026-10-08"
 
 [bas.O2]
@@ -30,16 +30,16 @@ data_bytes = 0
 bss_bytes = 4608
 
 [nib.O2]
-instructions = 83603
+instructions = 83601
 memory_operands = 12672
-code_bytes = 133
+code_bytes = 131
 data_bytes = 4608
 bss_bytes = 0
 
 [nib.Os]
-instructions = 75795
+instructions = 75793
 memory_operands = 13056
-code_bytes = 127
+code_bytes = 125
 data_bytes = 4608
 bss_bytes = 0
 

@@ -68,6 +68,8 @@ pub struct Options {
     pub for_size: bool,
     /// The allocator tries other shapes of a body and keeps the cheapest (`-fallocation-search`).
     pub search: bool,
+    /// With `search`, every shape rather than the one the spills suggest (`-fallocation-search-all`; -Omax).
+    pub exhaustive: bool,
 }
 
 impl Default for Options {
@@ -94,6 +96,7 @@ impl Default for Options {
             unswitch: false,
             for_size: false,
             search: true,
+            exhaustive: false,
         }
     }
 }
@@ -134,7 +137,7 @@ impl Options {
 
     /// -Omax: every pass the default has on, LLVM's -O3 budgets, twice the target's unroll budget and a 250 inline threshold.
     pub fn aggressive() -> Self {
-        Self { limits: Limits { target_percent: 200, ..Limits::default() }, inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) }, ..Self::default() }
+        Self { limits: Limits { target_percent: 200, ..Limits::default() }, inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) }, exhaustive: true, ..Self::default() }
     }
 
     /// -Os: no copy grows the code. Inlining keeps -O2's threshold: the
@@ -149,6 +152,11 @@ impl Options {
     /// Whether the allocator tries other shapes of a body and keeps the cheapest.
     pub fn searches(&self) -> bool {
         self.search
+    }
+
+    /// Whether the search tries every shape of a body.
+    pub fn searches_all(&self) -> bool {
+        self.exhaustive
     }
 
     /// Whether code size outranks speed where they conflict: -Os and -Oz.
@@ -346,7 +354,7 @@ pub fn recorded(program: &mut Program, applied: &Applied) -> Result<Vec<Stage>, 
 fn rerun(module: &mut Module, analyses: &mut ModuleAnalyses, id: GlobalId, fixed: &mut Fixed) -> Result<(), String> {
     let layout = analyses.program().layout.clone();
     let outer = analyses.outer(module);
-    let mut declared = Declared::of(module);
+    let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
     let Module { context, globals, metadata, .. } = &mut *module;
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
         return Err(format!("@{}: not a function", id.0));
@@ -354,7 +362,10 @@ fn rerun(module: &mut Module, analyses: &mut ModuleAnalyses, id: GlobalId, fixed
     let mut unit = Unit { context, layout: &layout, function, id: Some(id), metadata, declared: &mut declared };
     let preserved = fixed.run(&mut unit, analyses.manager(id, &outer));
     analyses.invalidate(&preserved);
-    declared.place(module)
+    if declared.place(module)? > 0 {
+        analyses.invalidate(&PreservedAnalyses::none());
+    }
+    Ok(())
 }
 
 /// The pipeline over one body, the old `_Transaction`: the structural
@@ -519,11 +530,13 @@ impl Run {
         if !self.promotes && matches!(pass.name(), "sroa" | "promote") {
             return false;
         }
-        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses));
+        let before = unit.function.mark();
+        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
         if preserved.are_all_preserved() {
             return false;
         }
         llrm_mir::passes::spanned("invalidate", || analyses.invalidate(&preserved));
+        analyses.check_kept(pass.name(), unit.context, unit.layout, unit.function);
         self.changed(stage, unit, analyses);
         true
     }

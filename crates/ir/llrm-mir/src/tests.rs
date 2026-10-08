@@ -371,3 +371,21 @@ fn test_a_use_before_its_definition_in_one_block_is_refused() {
     let problems = crate::verify::verify(&parse::module(&text).unwrap_or_else(|error| panic!("{error}")));
     assert!(problems.iter().any(|one| one.contains("does not dominate")), "{problems:?}");
 }
+
+/// `Declared::over` the module's declarations answers as `of` the module does: a name the module has is its id, a new one
+/// the next, and `place` says how many it added (the caller's held declarations are then stale).
+#[test]
+fn test_declared_over_the_declarations_answers_as_declared_of_the_module() {
+    use crate::passes::{Declarations, Declared, ModuleAnalyses};
+    let mut module = parse::module(&format!("{DATALAYOUT}declare void @known()\n")).unwrap_or_else(|error| panic!("{error}"));
+    let ty = module.global(module.named("known").unwrap()).function().unwrap().ty;
+    let held = ModuleAnalyses::of(&module, std::rc::Rc::new(crate::target::Neutral)).get::<Declarations>(&module);
+    let (mut over, mut of) = (Declared::over(held, module.metadata.len()), Declared::of(&module));
+    let known = module.named("known").unwrap();
+    assert_eq!((over.declare("known", ty), of.declare("known", ty)), (known, known));
+    let fresh = over.declare("fresh", ty);
+    assert_eq!(fresh, of.declare("fresh", ty));
+    assert_eq!(over.place(&mut module).unwrap(), 1);
+    assert_eq!(module.named("fresh"), Some(fresh));
+    assert_eq!(Declared::over(Default::default(), 0).place(&mut module).unwrap(), 0);
+}

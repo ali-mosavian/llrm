@@ -1313,7 +1313,7 @@ fn test_any_integer_operand_converts_to_a_float() {
     // dword, u32 a qword whose high dword is zero.
     let widened = |pattern: &str| Regex::new(pattern).unwrap().is_match(mixed);
     assert!(widened(r"movzx [a-d]x, (?:[a-d]l|byte ptr \[bp\+\d+\])") && widened(r"movzx e[a-d]x, (?:[a-d]x|word ptr \[bp\+\d+\])"), "{mixed}");
-    let qword = Regex::new(r"mov dword ptr \[bp-(\d+)\], ebx\n\s*mov dword ptr \[bp-(\d+)\], 0\n\s*fild qword ptr \[bp-(\d+)\]").unwrap();
+    let qword = Regex::new(r"mov dword ptr \[bp-(\d+)\], e[a-d]x\n\s*mov dword ptr \[bp-(\d+)\], 0\n\s*fild qword ptr \[bp-(\d+)\]").unwrap();
     let cells = qword.captures(mixed).unwrap_or_else(|| panic!("{mixed}"));
     let at = |group: usize| cells[group].parse::<i64>().unwrap();
     assert_eq!((at(1), at(2)), (at(3), at(3) - 4), "{mixed}");

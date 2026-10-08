@@ -54,6 +54,8 @@ pub struct Profile {
     pub size: bool,
     /// Whether the allocator tries other shapes of a body than the one it is given and keeps the cheapest, as LLVM and GCC do not.
     pub search: bool,
+    /// With `search`, whether it tries every shape (`-fallocation-search-all`, -Omax) or the one the spills suggest and the body without splitting.
+    pub exhaustive: bool,
     /// How the target this profile is for builds its cost model from the CPU's prices.
     pub model: llrm_target::CostModel,
     /// The chains of shifts and adds found for constant multiplies under this profile's prices (GCC's `alg_hash`).
@@ -162,6 +164,7 @@ impl Profile {
             address_prefix_stall: 0,
             size: false,
             search: true,
+            exhaustive: false,
             model: arch.cost_model(),
             multiplies: Default::default(),
         }
@@ -246,24 +249,34 @@ fn _profile(arch: &dyn Target, name: &str) -> Result<Profile, String> {
 }
 
 /// The profiles made so far, by target, CPU and size: each made once, as the passes hold them.
-static _MADE: LazyLock<std::sync::Mutex<std::collections::HashMap<(&'static str, String, bool, bool), &'static Profile>>> = LazyLock::new(Default::default);
+static _MADE: LazyLock<std::sync::Mutex<std::collections::HashMap<(&'static str, String, bool, bool, bool), &'static Profile>>> = LazyLock::new(Default::default);
 
 /// `name`'s profile on the target `arch`, tuned for size where `size`.
 pub fn tuned_for(arch: &dyn Target, name: &str, size: bool) -> Result<&'static Profile, String> {
     tuned_searching(arch, name, size, true)
 }
 
+/// `tuned_for`, trying every shape of a body where `exhaustive`.
+pub fn tuned_exhaustive(arch: &dyn Target, name: &str, size: bool, exhaustive: bool) -> Result<&'static Profile, String> {
+    tuned_with(arch, name, size, true, exhaustive)
+}
+
 /// `tuned_for`, the allocator trying other shapes of a body only where `search`.
 pub fn tuned_searching(arch: &dyn Target, name: &str, size: bool, search: bool) -> Result<&'static Profile, String> {
+    tuned_with(arch, name, size, search, false)
+}
+
+/// `tuned_searching`, every shape where `exhaustive`.
+pub fn tuned_with(arch: &dyn Target, name: &str, size: bool, search: bool, exhaustive: bool) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
     }
     let mut made = _MADE.lock().expect("the profiles are not poisoned");
-    let key = (arch.name(), name.to_owned(), size, search);
+    let key = (arch.name(), name.to_owned(), size, search, exhaustive);
     if let Some(&one) = made.get(&key) {
         return Ok(one);
     }
-    let one: &'static Profile = Box::leak(Box::new(Profile { size, search, ..(_profile(arch, name)).expect("every listed CPU has a profile") }));
+    let one: &'static Profile = Box::leak(Box::new(Profile { size, search, exhaustive, ..(_profile(arch, name)).expect("every listed CPU has a profile") }));
     made.insert(key, one);
     Ok(one)
 }

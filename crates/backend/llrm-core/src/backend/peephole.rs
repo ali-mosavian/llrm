@@ -146,6 +146,12 @@ impl LIRTransform for Peephole {
     }
 
     fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+        self.once(body)
+    }
+}
+
+impl Peephole {
+    fn once(&mut self, body: LirBody) -> Result<LirBody, String> {
         // Before the rest: a thrashed copy is one fewer instruction for
         // everything below to reason about, and it is the only pass here
         // that can remove a copy the coalescer refused on colourability.
@@ -893,6 +899,74 @@ pub fn _register_effects(bits: u32, one: &Insn, may_write: bool, flags: bool) ->
         // decoded-opaque fallback never applies and this is unknown.
         _ => return None,
     };
+    // Every pass of the peephole, and the liveness and copy propagation around it, asks of the same instructions again and again (50 asks
+    // for each of an `-O2` module's 16,000, #924): the answer depends on these fields alone, and is remembered by their value.
+    let key = EffectKey { bits, may_write, flags, what, requires: &one.requires, delivers: &one.delivers };
+    if let Some(found) = EFFECTS.with(|held| held.borrow().find(&key)) {
+        return found;
+    }
+    EFFECTS_COMPUTED.with(|count| count.set(count.get() + 1));
+    let answer = _register_effects_of(bits, one, what, may_write, flags);
+    EFFECTS.with(|held| held.borrow_mut().remember(&key, answer.clone()));
+    answer
+}
+
+/// The inputs of `_register_effects` after the cases it answers at once: the same ones, the same answer.
+struct EffectKey<'a> {
+    bits: u32,
+    may_write: bool,
+    flags: bool,
+    what: &'a Semantics,
+    requires: &'a [(Held, Register)],
+    delivers: &'a [(Held, Register)],
+}
+
+impl EffectKey<'_> {
+    fn hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = rustc_hash::FxHasher::default();
+        (self.bits, self.may_write, self.flags, self.what, self.requires, self.delivers).hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+type Effects = Option<(Lanes, Lanes)>;
+
+/// What `_register_effects` answered, by the hash of what it was asked, and the asked kept to tell a hash that is another's.
+#[derive(Default)]
+struct EffectsHeld {
+    by_hash: HashMap<u64, Vec<(u32, bool, bool, Semantics, Vec<(Held, Register)>, Vec<(Held, Register)>, Effects)>>,
+    count: usize,
+}
+
+impl EffectsHeld {
+    fn find(&self, key: &EffectKey) -> Option<Effects> {
+        self.by_hash.get(&key.hash())?.iter().find(|(bits, may_write, flags, what, requires, delivers, _)| {
+            *bits == key.bits && *may_write == key.may_write && *flags == key.flags && what == key.what && requires == key.requires && delivers == key.delivers
+        }).map(|(.., answer)| answer.clone())
+    }
+
+    fn remember(&mut self, key: &EffectKey, answer: Effects) {
+        // A function's instructions, not the run's.
+        if self.count > 200_000 {
+            *self = Self::default();
+        }
+        self.count += 1;
+        self.by_hash.entry(key.hash()).or_default().push((key.bits, key.may_write, key.flags, key.what.clone(), key.requires.to_vec(), key.delivers.to_vec(), answer));
+    }
+}
+
+thread_local! {
+    static EFFECTS: RefCell<EffectsHeld> = RefCell::new(EffectsHeld::default());
+    static EFFECTS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out an instruction's register effects, for a test that asking again of one does not.
+pub fn effects_computed() -> usize {
+    EFFECTS_COMPUTED.with(std::cell::Cell::get)
+}
+
+fn _register_effects_of(bits: u32, one: &Insn, what: &Semantics, may_write: bool, flags: bool) -> Effects {
     let instructions = _decoded(bits, what)?;
     // A fixed-register ABI names the conventional register (AX, BX, ...)
     // separately from the value it carries.  The Held width is authoritative:

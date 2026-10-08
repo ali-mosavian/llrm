@@ -1,4 +1,4 @@
-reason = "frequency kept from isel: huge -O2 memory operands -200 (-0.12..-0.24%), instructions +1..2, code +2..7 B"
+reason = "regalloc search picks one shape plus the no-split body below -Omax: grep nib code +5 bytes (the unfolded no-split trial is not tried)"
 blessed = "2026-10-08"
 
 [bas.O2]

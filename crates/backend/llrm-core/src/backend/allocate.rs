@@ -920,16 +920,18 @@ fn _allocated(
     let mut cascades: IndexMap<u32, i64> = IndexMap::default();
     let mut newest = 1;
 
-    let queued = |value: u32, live: &IndexMap<u32, Interval>, stage: &IndexMap<u32, Stage>, fixed: &IndexMap<u32, Register>| {
+    let wide = classes.available.len();
+    let queued = |value: u32, live: &IndexMap<u32, Interval>, stage: &IndexMap<u32, Stage>, fixed: &IndexMap<u32, Register>, confined: &Classes| {
+        // A value that only some registers can hold goes first, as LLVM's register class priority puts it: the wide ones fit around it.
         Reverse(Queued(
             !fixed.contains_key(&value),
-            -_priority(live.get(&value), stage.get(&value).copied().unwrap_or(Stage::Assign)),
+            -_queue_priority(live.get(&value), stage.get(&value).copied().unwrap_or(Stage::Assign), confined.get(&value).map(BTreeSet::len), wide),
             value,
         ))
     };
 
     let mut queue: BinaryHeap<Reverse<Queued>> =
-        _values(&body).into_iter().map(|one| queued(one, &facts.live, &stage, &fixed)).collect();
+        _values(&body).into_iter().map(|one| queued(one, &facts.live, &stage, &fixed, &facts.confined)).collect();
     // How many entries each value has in the queue.
     let mut waiting: IndexMap<u32, usize> = IndexMap::default();
     for Reverse(Queued(_, _, one)) in &queue {
@@ -1039,7 +1041,7 @@ fn _allocated(
                     r#where.shift_remove(&one);
                     cascades.insert(one, cascades[&value]);
                     stage.insert(one, Stage::Assign);
-                    queue.push(queued(one, &facts.live, &stage, &fixed));
+                    queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined));
                     *waiting.entry(one).or_insert(0) += 1;
                 }
                 r#where.insert(value, got);
@@ -1049,7 +1051,7 @@ fn _allocated(
             }
             if at == Stage::Assign {
                 stage.insert(value, Stage::Split);
-                queue.push(queued(value, &facts.live, &stage, &fixed));
+                queue.push(queued(value, &facts.live, &stage, &fixed, &facts.confined));
                 *waiting.entry(value).or_insert(0) += 1;
                 continue;
             }
@@ -1161,7 +1163,7 @@ fn _allocated(
                     union.remove(_whole(got), one, &facts.live);
                     r#where.shift_remove(&one);
                     stage.insert(one, Stage::Spill);
-                    queue.push(queued(one, &facts.live, &stage, &fixed));
+                    queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined));
                     *waiting.entry(one).or_insert(0) += 1;
                 }
                 r#where.insert(value, got);
@@ -1239,7 +1241,7 @@ fn _allocated(
         llrm_support::debug::timed("after queue", || {
             for one in facts.live.keys().copied().filter(|one| !r#where.contains_key(one) && !spilled.contains(one)) {
                 if changed.contains(&one) || waiting.get(&one).copied().unwrap_or(0) == 0 {
-                    queue.push(queued(one, &facts.live, &stage, &fixed));
+                    queue.push(queued(one, &facts.live, &stage, &fixed, &facts.confined));
                     *waiting.entry(one).or_insert(0) += 1;
                 }
             }
@@ -1337,6 +1339,13 @@ fn _values(body: &LirBody) -> Vec<u32> {
         }
     }
     out.into_iter().collect()
+}
+
+/// Where a range sits in the queue: first by how few registers may hold it (LLVM's register class `AllocationPriority`, which
+/// `RegClassPriorityTrumpsGlobalness` puts before anything else), then `_priority`. The wide values fit around the narrow ones.
+fn _queue_priority(one: Option<&Interval>, at: Stage, class: Option<usize>, wide: usize) -> f64 {
+    let narrow = class.map_or(0, |registers| wide.saturating_sub(registers));
+    _priority(one, at) + narrow as f64 * 1e9
 }
 
 /// Where this range sits in the queue. Larger first, as LLVM does.
@@ -1923,35 +1932,42 @@ impl RegAlloc {
             // Other shapes of the same body, which the base allocation's spills
             // suggest: each is kept only if its output is cheaper.
             let building = llrm_support::debug::span("regalloc candidates");
-            let mut candidates: Vec<(LirBody, BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
+            let mut candidates: Vec<(Shape, LirBody, BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
             let (separated, opened) = constrain::addressed(&body, &spilled);
             if !opened.is_empty() {
-                candidates.push((separated, reloads.clone(), BTreeSet::new(), opened));
+                candidates.push((Shape::Addressed, separated, reloads.clone(), BTreeSet::new(), opened));
             }
             let (unfolded, opened) = spiller::unfolded_indexes(&body, &spilled);
             if !opened.is_empty() {
-                candidates.push((unfolded, reloads.clone(), BTreeSet::new(), BTreeSet::new()));
+                candidates.push((Shape::Unfolded, unfolded, reloads.clone(), BTreeSet::new(), BTreeSet::new()));
             }
             let (scoped, keep) = splitkit::loop_bases(&body, &spilled);
             if !keep.is_empty() {
                 let folded = _scoped_foldable_indexes(&scoped, &keep);
                 let (opened_body, opened) = spiller::unfolded_indexes(&scoped, &folded);
                 if !opened.is_empty() {
-                    candidates.push((opened_body, reloads.clone(), keep.clone(), keep.clone()));
+                    candidates.push((Shape::ScopedOpened, opened_body, reloads.clone(), keep.clone(), keep.clone()));
                 }
-                candidates.push((scoped, reloads.clone(), keep.clone(), keep.clone()));
+                candidates.push((Shape::Scoped, scoped, reloads.clone(), keep.clone(), keep.clone()));
             }
             for candidate in _retainable_bases(&body, &spilled) {
                 let keep = BTreeSet::from([candidate]);
-                candidates.push((body.clone(), reloads.clone(), keep.clone(), keep));
+                candidates.push((Shape::Retainable, body.clone(), reloads.clone(), keep.clone(), keep));
             }
             // Splitting is priced one value at a time, against registers its
             // pieces may later lose; the whole output without it is the check.
             let whole = candidates.len();
-            candidates.push((body.clone(), reloads.clone(), BTreeSet::new(), BTreeSet::new()));
+            candidates.push((Shape::Whole, body.clone(), reloads.clone(), BTreeSet::new(), BTreeSet::new()));
             drop(building);
-            for (at, (candidate, unspillable, protected, kept)) in candidates.into_iter().enumerate() {
+            // Unless the search is exhaustive (-Omax): the first shape of `Shape::PICKED` the spills admit, and the body without
+            // splitting, which no spill suggests. Across 4045 allocations of QCport, the bench and the 66 programs this is the
+            // exhaustive search's output on every bench row, +0.04% on QCport's bytes, at 2 allocations instead of up to 12.
+            let picked = if cpu.exhaustive { None } else { Shape::PICKED.iter().find_map(|want| candidates.iter().position(|one| one.0 == *want)) };
+            for (at, (shape, candidate, unspillable, protected, kept)) in candidates.into_iter().enumerate() {
                 for splitting in [true, false] {
+                    if !cpu.exhaustive && !(shape == Shape::Whole && !splitting) && !(Some(at) == picked && splitting != (shape == Shape::Whole)) {
+                        continue;
+                    }
                     // The base run was this body with splitting.
                     if at == whole && splitting {
                         continue;
@@ -1974,6 +1990,28 @@ impl RegAlloc {
         let _apply = llrm_support::debug::span("regalloc apply");
         applied(&best.out, &best.got, &self.classes).map(|placed| datagroup::restored(&placed, data_free, &segments))
     }
+}
+
+/// The other shapes of a body the allocator may try after the first allocation, by what they change.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// Address computations of spilled values made apart from their users.
+    Addressed,
+    /// Folded indexes of spilled values opened.
+    Unfolded,
+    /// Loop-local copies of the base values a loop's spills lost, protected from spilling.
+    Scoped,
+    /// `Scoped`, with the indexes it can fold opened.
+    ScopedOpened,
+    /// One spilled invariant base value protected from spilling.
+    Retainable,
+    /// The body as it was, for the no-splitting allocation.
+    Whole,
+}
+
+impl Shape {
+    /// The order a shape is picked in: the one that won most often, by mean and worst case, over every order tried on 4045 allocations.
+    const PICKED: [Shape; 4] = [Shape::Retainable, Shape::Scoped, Shape::Addressed, Shape::Unfolded];
 }
 
 /// One finished allocation: its output, what that costs, and the frame it left.
@@ -3056,6 +3094,19 @@ mod tests {
         let body = _one_block(vec![_mov(1, 1, 0), _mov(2, 2, 2), _shl(1, 2, 4)]);
         let message = unplaced(allocated(&body, Some(&pins(&[(1, Register::DX), (2, Register::DX)]))));
         assert!(message.contains("both required in"), "{message}");
+    }
+
+    /// A base or index on m16 may be BX, SI, DI or BP; a value of any class fits in the rest. The queue took the longest range
+    /// first whatever its class, so a short base found its three registers taken by wide values that could have been elsewhere:
+    /// bench/quicksort +18% instructions against the search over shapes, which tried the base first (#944).
+    #[test]
+    fn test_a_value_few_registers_may_hold_goes_before_a_longer_one_any_may() {
+        let span = |end: i64| Interval::new(1, vec![Segment { start: 0, end }]);
+        let (short, long) = (span(4), span(400));
+        assert!(_queue_priority(Some(&short), Stage::Assign, Some(4), 6) > _queue_priority(Some(&long), Stage::Assign, Some(6), 6));
+        assert!(_queue_priority(Some(&short), Stage::Assign, None, 6) < _queue_priority(Some(&long), Stage::Assign, None, 6), "no class: longest first");
+        assert!(_queue_priority(Some(&long), Stage::Assign, Some(4), 6) > _queue_priority(Some(&short), Stage::Assign, Some(4), 6), "one class: longest first");
+        assert!(_queue_priority(Some(&short), Stage::Assign, Some(1), 6) > _queue_priority(Some(&short), Stage::Assign, Some(4), 6), "the fewer registers, the sooner");
     }
 
     #[test]
