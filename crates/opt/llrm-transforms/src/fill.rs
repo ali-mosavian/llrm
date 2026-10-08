@@ -288,7 +288,7 @@ struct Copy {
 
 /// What lets one copy stand for the loop's trips in order.
 #[derive(Clone, Copy, PartialEq)]
-enum How {
+pub(crate) enum How {
     /// The two ranges are apart: `llvm.memcpy`.
     Apart,
     /// They overlap, but what each trip reads is as the trips before it left it
@@ -476,7 +476,7 @@ fn _pattern(context: &mut Context, declared: &mut Declared, space: u32, cell: Ty
 /// `llvm.memcpy`, or `llvm.memmove` where the ranges overlap, from pointers of
 /// space `from` to ones of `to`, in lengths `width` bits wide, declared where
 /// the module has none.
-fn _copy(context: &mut Context, declared: &mut Declared, how: How, to: u32, from: u32, width: u32) -> (GlobalId, TypeId) {
+pub(crate) fn _copy(context: &mut Context, declared: &mut Declared, how: How, to: u32, from: u32, width: u32) -> (GlobalId, TypeId) {
     let types = &mut context.types;
     let (void, destination, source, length, flag) = (types.void(), types.ptr(to), types.ptr(from), types.int(width), types.int(1));
     let ty = types.intern(Type::Function { returns: void, parameters: vec![destination, source, length, flag], variadic: false });

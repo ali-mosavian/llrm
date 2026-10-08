@@ -6,6 +6,7 @@ extern void report(long value);
 struct big { long a[10]; };
 struct big shared;
 
+static long peek(struct big b) { return b.a[3] + b.a[9]; }
 static long bump(struct big b) { b.a[0] = 99; return b.a[0] + b.a[9]; }
 
 int main(void)
@@ -19,5 +20,8 @@ int main(void)
     report(g.a[0]);
     report(bump(shared));
     report(shared.a[0]);
+    report(peek(g));
+    g.a[3] = 1000;
+    report(peek(g));
     return 0;
 }

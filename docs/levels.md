@@ -70,6 +70,9 @@ Sources read:
 | jump threading, branch at -Os | 0 copies `jumpthread.rs` | none copied unless every statement of the block dies (tree-ssa-threadupdate.cc:2077) | 3 at minsize (`JumpThreading.cpp:310`) | gcc's: 0 |
 | jump threading into a loop through its header | not done | `thread_through_loop_header` (tree-ssa-threadupdate.cc:1712) only for two idioms | none | left to `Rotate` |
 | jump threading total | 400 `jumpthread.rs:36` | `max-fsm-thread-paths` (not in 13.4.0's params.opt) | none | stays |
+| recursive inlining depth | 8 `inline.rs` (`RECURSIVE_DEPTH`) | `max-inline-recursive-depth-auto` 8 (params.opt:573) | none | gcc's |
+| recursive inlining size | 450 operations `inline.rs` (`RECURSIVE_SIZE`) | `max-inline-insns-recursive-auto` 450 (:553) | none | gcc's number in our operations |
+| recursive inlining probability | 10% `inline.rs` (`RECURSIVE_PROBABILITY`) | `min-inline-recursive-probability` 10 (:769) | none | gcc's |
 | ipa-cp evaluation | 500 `ipacp.rs:32` | `ipa-cp-eval-threshold` 500 (params.opt:217) | none | gcc's; benefit x frequency x 1000 / size, benefit from our clocks |
 | ipa-cp clones of a function | 8 `ipacp.rs:34` | `ipa-cp-max-recursive-depth` 8 (225), `ipa-cp-value-list-size` 8 (253) | none | gcc's, one cap for both |
 | ipa-cp recursion penalty | 40% `ipacp.rs:36` | `ipa-cp-recursion-penalty` 40 (237) | none | gcc's |

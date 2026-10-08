@@ -424,11 +424,10 @@ fn _stacked(body: &LirBody, floating: &HashSet<u32>, live_in: &Live, live_out: &
                 first = first.or(Some(position));
                 last = Some(position);
             }
-            // A copy moves a value between names, in whichever place its source is.
-            if _float_copy(one).is_some() {
-                continue;
-            }
-            for value in one.uses.iter().chain(&one.defines).filter(|value| floating.contains(value)) {
+            // A copy moves a value between names, in whichever place its source is: it reads nothing, but the name it
+            // defines is made here, after any call before it (a join's input that a call returned is not spilled by it).
+            let copy = _float_copy(one).is_some();
+            for value in one.uses.iter().filter(|_| !copy).chain(&one.defines).filter(|value| floating.contains(value)) {
                 events.entry(*value).or_insert((position, position)).1 = position;
             }
         }
