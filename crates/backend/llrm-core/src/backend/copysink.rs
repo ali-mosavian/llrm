@@ -36,7 +36,7 @@ fn _plain(one: &Insn) -> bool {
 }
 
 /// The (destination, source) of a plain register-to-register move.
-fn _copy(one: &Insn) -> Option<(Reg, Reg)> {
+pub fn copy_of(one: &Insn) -> Option<(Reg, Reg)> {
     if !_plain(one) {
         return None;
     }
@@ -52,7 +52,7 @@ fn _copy(one: &Insn) -> Option<(Reg, Reg)> {
 }
 
 /// Whether `one` reads (or writes) any of `lanes`, conservatively.
-fn _touches(bits: u32, one: &Insn, lanes: &Lanes, reading: bool) -> bool {
+pub fn touches(bits: u32, one: &Insn, lanes: &Lanes, reading: bool) -> bool {
     if _terminator(one.what.as_ref()) {
         return false;
     }
@@ -170,7 +170,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
         // before any trip never ran its latch.
         for block in inside.iter().map(|at| at_of[at]).filter(|block| dominance.dominates(block.at, source_at)) {
             for (index, one) in block.insns.iter().enumerate() {
-                let pair = _copy(one);
+                let pair = copy_of(one);
                 let Some((dest, register)) = pair else {
                     continue;
                 };
@@ -204,7 +204,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
                 let both: Lanes = written.or(&read);
                 if later
                     .iter()
-                    .any(|other| _touches(body.bits, other, &both, false) || _touches(body.bits, other, &written, true))
+                    .any(|other| touches(body.bits, other, &both, false) || touches(body.bits, other, &written, true))
                 {
                     continue;
                 }
