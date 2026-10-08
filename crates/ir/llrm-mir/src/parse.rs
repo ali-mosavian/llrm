@@ -11,7 +11,7 @@ use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, GlobalId,
 use crate::intrinsics;
 use crate::lexer::{Name, ParseError, Token, lex};
 use crate::module::{
-    Block, BlockId, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction, LINKAGE, Linkage, MetadataId, MetadataNode,
+    Block, BlockId, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction, LINKAGE, Linkage, MetadataId, MetadataNode,
     MetadataOperand, Module, Operand, UnnamedAddr, ValueData, ValueDef, ValueId,
 };
 use crate::opcode::{
@@ -54,6 +54,8 @@ struct Local {
     blocks: HashMap<Name, BlockId>,
     pending_values: HashMap<ValueId, usize>,
     pending_blocks: HashMap<BlockId, usize>,
+    /// Records read, to stand before the next instruction.
+    pending_records: Vec<(MetadataId, DebugWhat)>,
     next_slot: u32,
 }
 
@@ -330,6 +332,9 @@ impl Parser {
         }
         for global in &mut self.module.globals {
             if let GlobalKind::Function(function) = &mut global.kind {
+                for record in &mut function.debug_records {
+                    map(&mut record.variable);
+                }
                 for instruction in &mut function.instructions {
                     instruction.metadata.iter_mut().for_each(|(_, id)| map(id));
                 }
@@ -485,6 +490,7 @@ impl Parser {
             blocks: HashMap::new(),
             pending_values: HashMap::new(),
             pending_blocks: HashMap::new(),
+            pending_records: Vec::new(),
             next_slot: 0,
         };
         self.expect_punct('(')?;
@@ -1091,6 +1097,10 @@ impl Parser {
                         None => self.start_block(local, None)?,
                     };
                     current = Some(block);
+                    if matches!(self.peek(), Token::Word(word) if word.starts_with("#dbg_")) {
+                        self.debug_record(local)?;
+                        continue;
+                    }
                     let inst = self.instruction(local)?;
                     local.function.blocks[block.0 as usize].instructions.push(inst);
                     if local.function.instruction(inst).opcode.is_terminator() {
@@ -1195,6 +1205,30 @@ impl Parser {
             return Ok(Some(self.unsigned()?));
         }
         Ok(None)
+    }
+
+    /// `#dbg_declare(ptr %x, !5)`, `#dbg_value(i16 %v, !5)` or `#dbg_gone(!5)`: what is said of a variable before the
+    /// instruction that follows.
+    fn debug_record(&mut self, local: &mut Local) -> Parsed<()> {
+        let Token::Word(word) = self.next() else { unreachable!("a record") };
+        self.expect_punct('(')?;
+        let what = match word.as_str() {
+            "#dbg_declare" | "#dbg_value" => {
+                let (_, at) = self.typed_value(local)?;
+                self.expect_punct(',')?;
+                if word == "#dbg_declare" { DebugWhat::Declare(at) } else { DebugWhat::Value(at) }
+            }
+            "#dbg_gone" => DebugWhat::Gone,
+            other => return self.fail(format!("`{other}` is not a debug record")),
+        };
+        let Token::MetadataId(number) = self.next() else {
+            self.at -= 1;
+            return self.fail("a debug record names its variable, `!N`");
+        };
+        let variable = self.metadata_id(number);
+        self.expect_punct(')')?;
+        local.pending_records.push((variable, what));
+        Ok(())
     }
 
     fn instruction(&mut self, local: &mut Local) -> Parsed<InstId> {
@@ -1501,6 +1535,9 @@ impl Parser {
             Some(value)
         };
         local.function.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata });
+        for (variable, what) in std::mem::take(&mut local.pending_records) {
+            local.function.debug_records.push(DebugRecord { before: id, variable, what });
+        }
         if let Some(value) = result {
             self.name_value(local, value, result_name, line)?;
         }

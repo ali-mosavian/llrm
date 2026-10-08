@@ -20,15 +20,24 @@ fn final_mir(source: &Path, arguments: &[&str], dump: &Path) -> String {
     std::fs::read_to_string(stages.last().expect("a stage")).unwrap()
 }
 
-/// The (alloca, stores, volatile stores) of each alloca a `llvm.dbg.declare` names, in every function
+/// The (alloca, stores, volatile stores) of each alloca a `#dbg_declare` record names, in every function
 /// (a value's name is its function's).
 fn declared_stores(mir: &str) -> Vec<(String, usize, usize)> {
     let mut found = Vec::new();
     for function in mir.split("\ndefine ").skip(1) {
         let function = function.split("\n}").next().unwrap();
-        let declared: Vec<String> = function.lines().filter_map(|line| line.trim().strip_prefix("call void @llvm.dbg.declare.p0(ptr ")).map(|rest| rest.split(')').next().unwrap().to_owned()).collect();
+        let declared: Vec<String> = function.lines().filter_map(|line| line.trim().strip_prefix("#dbg_declare(ptr ")).map(|rest| rest.split(',').next().unwrap().to_owned()).collect();
         for name in declared {
-            let stores: Vec<&str> = function.lines().map(str::trim).filter(|line| line.starts_with("store ") && line.contains(&format!("ptr {name},"))).collect();
+            // The variable's own address and every one made from it by an offset: a store through either is a store to it.
+            let mut through = vec![name.clone()];
+            for line in function.lines().map(str::trim) {
+                if let Some((result, rest)) = line.split_once(" = getelementptr ")
+                    && through.iter().any(|one| rest.contains(&format!("ptr {one},")))
+                {
+                    through.push(result.to_owned());
+                }
+            }
+            let stores: Vec<&str> = function.lines().map(str::trim).filter(|line| line.starts_with("store ") && through.iter().any(|one| line.contains(&format!("ptr {one},")))).collect();
             let volatile = stores.iter().filter(|line| line.starts_with("store volatile ")).count();
             found.push((name, stores.len(), volatile));
         }

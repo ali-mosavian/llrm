@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::module::{Block, BlockId, Change, Function, InstId, Instruction, MetadataId, Operand, Use, ValueData, ValueDef, ValueId};
+use crate::module::{Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, Operand, Use, ValueData, ValueDef, ValueId};
 use crate::opcode::{Flags, Opcode};
 use crate::types::{Type, TypeId};
 
@@ -141,6 +141,12 @@ impl Function {
     fn detach(&mut self, inst: InstId) -> Option<(BlockId, Option<InstId>)> {
         let block = self.parent(inst)?;
         let next = self.next_of(block, inst);
+        // What stood before it stays where the source says it was: before what followed it. A last instruction has none to
+        // hand them to (a block is erased with its terminator): they go with it.
+        match next {
+            Some(next) => self.debug_records.iter_mut().filter(|one| one.before == inst).for_each(|one| one.before = next),
+            None => self.debug_records.retain(|one| one.before != inst),
+        }
         self.blocks[block.0 as usize].instructions.retain(|one| *one != inst);
         self.parent[inst.0 as usize] = None;
         Some((block, next))
@@ -199,6 +205,16 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// Makes the store `inst` volatile.
+    pub fn make_store_volatile(&mut self, inst: InstId) {
+        if let Opcode::Store { volatile, .. } = &mut self.instructions[inst.0 as usize].opcode
+            && !*volatile
+        {
+            *volatile = true;
+            self.log(Change::Rewritten(inst));
+        }
+    }
+
     /// Replaces an instruction's flags.
     pub fn set_flags(&mut self, inst: InstId, flags: Flags) {
         self.instructions[inst.0 as usize].flags = flags;
@@ -214,7 +230,29 @@ impl Function {
     /// Every use of `value` now reads `with`.
     pub fn replace_all_uses_with(&mut self, value: ValueId, with: Operand) {
         if with != Operand::Value(value) {
+            self.retarget_debug_records(value, with);
             self.replace_uses(self.users(value).to_vec(), with);
+        }
+    }
+
+    /// What `-g` says of the variables, in the order it was said.
+    pub fn debug_records(&self) -> &[DebugRecord] {
+        &self.debug_records
+    }
+
+    /// Says what `variable` is from just before `before` on. Nothing but the debug writers read it.
+    pub fn add_debug_record(&mut self, before: InstId, variable: MetadataId, what: DebugWhat) {
+        self.debug_records.push(DebugRecord { before, variable, what });
+    }
+
+    /// The records of what `value` was now say `with`.
+    fn retarget_debug_records(&mut self, value: ValueId, with: Operand) {
+        for record in &mut self.debug_records {
+            if let DebugWhat::Declare(at) | DebugWhat::Value(at) = &mut record.what
+                && *at == Operand::Value(value)
+            {
+                *at = with;
+            }
         }
     }
 
@@ -239,6 +277,16 @@ impl Function {
         let operands = self.instructions[inst.0 as usize].operands.clone();
         for (index, operand) in operands.into_iter().enumerate() {
             self.remove_use(operand, Use { user: inst, index: index as u32 });
+        }
+        if let Some(result) = self.instruction(inst).result {
+            // What named the value says nothing now (a use of it is no use).
+            for record in &mut self.debug_records {
+                if let DebugWhat::Declare(at) | DebugWhat::Value(at) = record.what
+                    && at == Operand::Value(result)
+                {
+                    record.what = DebugWhat::Gone;
+                }
+            }
         }
         if let Some((block, next)) = self.detach(inst) {
             self.log(Change::Erased { inst, block, next });
@@ -281,6 +329,8 @@ impl Function {
                 value
             })
             .collect();
+        self.track_parameters();
+        self.parameter_origins.splice(at..at, made.iter().map(|_| None));
         self.parameters.splice(at..at, made.iter().copied());
         if self.parameter_attrs.len() > at {
             self.parameter_attrs.splice(at..at, made.iter().map(|_| Vec::new()));
@@ -292,11 +342,20 @@ impl Function {
     /// Parameter `at`, which nothing uses, is gone; the function's type follows.
     pub fn remove_parameter(&mut self, context: &mut crate::context::Context, at: usize) {
         assert!(self.users(self.parameters[at]).is_empty(), "a parameter removed is unused");
+        self.track_parameters();
+        self.parameter_origins.remove(at);
         self.parameters.remove(at);
         if self.parameter_attrs.len() > at {
             self.parameter_attrs.remove(at);
         }
         self.parameters_changed(context);
+    }
+
+    /// From the first change of the parameters on, each one's origin is kept.
+    fn track_parameters(&mut self) {
+        if self.parameter_origins.is_empty() {
+            self.parameter_origins = (0..self.parameters.len()).map(Some).collect();
+        }
     }
 
     fn parameters_changed(&mut self, context: &mut crate::context::Context) {
@@ -384,6 +443,7 @@ impl Function {
             self.log(Change::BlockErased(block));
         }
         self.layout.clear();
+        self.debug_records.clear();
         self.erased.fill(true);
         self.value_uses.iter_mut().for_each(Vec::clear);
         self.block_uses.iter_mut().for_each(Vec::clear);

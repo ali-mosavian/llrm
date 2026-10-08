@@ -23,6 +23,13 @@ class CauseTests(unittest.TestCase):
         self.assertIsNone(torture.refusal("_main: .X is neither defined nor imported", rules))
 
 
+    def test_the_front_ends_gnu_and_c99_limits_are_named_not_counted_as_findings(self):
+        """Five more wccq errors (15 builds) were listed as compile findings; each is syntax Open Watcom lacks."""
+        rules = torture.expected()
+        for cause in ("wccq: Cannot use typedef '_' as a variable", "wccq: Incomplete enum declaration", "wccq: Type cast must be a scalar type",
+                      "wccq: Assembler error: '_'", "wccq: Expression for '_' must be a '_' or '_'"):
+            self.assertIsNotNone(torture.refusal(cause, rules), cause)
+
 
 class OptionTests(unittest.TestCase):
     def test_a_program_that_needs_fwrapv_is_built_with_it(self):
