@@ -30,9 +30,10 @@ gate logs, the fast tier selects the failing step every time. Of the last 80 mer
 `tools/compile-cost.py` (step `compile-cost`, run when the backend, transforms, front end or x86 targets change) counts the
 user-space instructions `llrm-c` retires (`perf stat -e instructions:u`) compiling the 66 vsgcc programs and QCport's 65
 modules at -O1, -O2 and -Os, and compares each with `tools/gate/compile-baseline.json`. Instructions count work, so host load
-does not move them. It fails when a level's geomean rises past 1.003 or any file past 1.02; the same build measured twice
-differs by 0.0001 in geomean and 0.0047 at worst (`--noise`). A change that raises the cost on purpose runs
-`tools/compile-cost.py --update` in the same commit, so the cost is in the diff. Baseline: main 167ad0dde. The QCport files
+does not move them. It fails when a level's geomean moves past 1.003 or any file past 1.02, up or down; the same build
+measured twice differs by 0.0001 in geomean and 0.0047 at worst (`--noise`). The baseline is main: a change that raises
+the cost on purpose, or lowers it, runs `python3 tools/compile-cost.py --refresh` in the same commit (it rewrites the entries
+that moved past noise; `--update` rewrites all), so the cost is in the diff and a gain is not given back unseen. Baseline: main 167ad0dde. The QCport files
 need `QCPORT` and `QCPORT_INC` (`~/scratch/qcport-env.sh`); without them they are reported as not measured. Without a working
 counter the step exits 77 (SKIPPED).
 

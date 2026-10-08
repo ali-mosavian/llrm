@@ -41,7 +41,7 @@
 "nbody_single -O1": 562929541,
 "nbody_single -O2": 569543262,
 "nbody_single -Os": 599676055,
-"particle -O1": 411329626,
+"particle -O1": 409179280,
 "particle -O2": 410945659,
 "particle -Os": 416945404,
 "qcport/bench -O1": 2892910647,
