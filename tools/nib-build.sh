@@ -42,20 +42,12 @@ for part in "$@"; do
     objects="$objects file $work/$name.obj"
     used="$used --used-by $work/$name.obj"
 done
-layer=$("$bin/llrm-nib" --os-layer directory)
-for field in start implementation; do
-    part=$("$bin/llrm-nib" --os-layer $field)
-    # shellcheck disable=SC2086
-    "$toolchain/jwasm" -q -c -Cp -Zg $omf $defines "-Fo$work/$field.obj" "$layer/$part"
-    used="$used --used-by $work/$field.obj"
+# The OS layer's objects come from the one function that knows which they are (dosbatch.os_objects).
+for line in $(python3 "$root/tools/dosbatch/os_objects.py" x86-m16 nib "$work"); do
+    field=${line%%=*}
+    used="$used --used-by ${line#*=}"
+    case $field in hook) hookobj="file ${line#*=}" ;; esac
 done
-hook=$("$bin/llrm-nib" --os-layer language_file)
-if [ -n "$hook" ]; then
-    # shellcheck disable=SC2086
-    "$toolchain/jwasm" -q -c -Cp -Zg $omf $defines "-Fo$work/hook.obj" "$hook"
-    used="$used --used-by $work/hook.obj"
-    hookobj="file $work/hook.obj"
-fi
 # jwlink keeps whatever any segment references, even one it drops, so the
 # runtime keeps only the routines the other objects name.
 "$bin/llrm-nib" "$root/crates/frontends/llrm-nib/src/runtime/runtime.nib" -o "$work/runtime.obj" "$level" --procedure-segments $abi $used >/dev/null

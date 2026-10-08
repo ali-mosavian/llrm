@@ -58,6 +58,27 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class NibCutTests(unittest.TestCase):
+    def test_the_runtime_is_cut_to_what_the_program_and_the_whole_os_layer_name(self):
+        """link_nib named the program and its foreign objects only, so a runtime routine the OS layer's hook calls (N$EDIV) was
+        cut and the link failed (jwlink E2028); nib-build.sh named start, implementation and hook. Both ask os_objects."""
+        with tempfile.TemporaryDirectory() as work:
+            layer = {"start": Path(work) / "start.obj", "implementation": Path(work) / "implementation.obj", "hook": Path(work) / "hook.obj"}
+            commands = []
+            with (
+                mock.patch.object(dosbatch, "os_objects", return_value=layer),
+                mock.patch.object(dosbatch, "_host", side_effect=commands.append),
+                mock.patch.object(dosbatch, "link_target", return_value=()),
+                mock.patch.object(dosbatch, "m_flag", return_value="-m16"),
+                mock.patch.object(dosbatch, "os_start", return_value=[]),
+                mock.patch.object(dosbatch, "os_defines", return_value=()),
+            ):
+                dosbatch.link_nib("x86-m16", Path("p.nib"), Path("p.obj"), Path("p.exe"), Path(work), "-O2", (Path("f.obj"),))
+            command = commands[0]
+            named = [command[i + 1] for i, word in enumerate(command) if word == "--used-by"]
+            self.assertEqual(named, ["p.obj", "f.obj", *map(str, layer.values())])
+
+
 class OutputCapTests(unittest.TestCase):
     """A program that printed without end made T292 and T294 write 931 MB each and the event log 22 GB: a gate hung for hours."""
 
