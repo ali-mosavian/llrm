@@ -46,7 +46,9 @@ pub struct Summary {
 
 pub type Callees = HashMap<GlobalId, Summary>;
 
+/// One scan of every function in `module`; counted as `callees` for an observer, which a pass that asks per query shows.
 pub fn callees(module: &Module) -> Callees {
+    crate::passes::counted("callees", false);
     module
         .globals
         .iter()

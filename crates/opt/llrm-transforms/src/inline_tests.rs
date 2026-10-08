@@ -36,7 +36,7 @@ fn inline_into(module: &mut Module, caller: &str, call: i64) -> bool {
 
 fn inline_with(module: &mut Module, caller: &str, call: i64, threshold: Threshold) -> bool {
     let layout = DataLayout::default();
-    let available = candidates(module, &layout, &call_counts(module), &private(module), &costs(call), call, threshold);
+    let available = candidates(module, &llrm_mir::memory::callees(module), &layout, &call_counts(module), &private(module), &costs(call), call, threshold);
     let by = Caller { layout: &layout, recursive: recursive(module).contains(&id(module, caller)), base: 0 };
     let mut changed = false;
     while expand_once(module, caller, &by, &available) {
@@ -150,9 +150,9 @@ b1:
 "
     ));
     let (private, layout) = (private(&module), DataLayout::default());
-    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(0), 0, Threshold::default()), IndexMap::default());
+    assert_eq!(candidates(&module, &llrm_mir::memory::callees(&module), &layout, &call_counts(&module), &private, &costs(0), 0, Threshold::default()), IndexMap::default());
     // Priced above the one instruction it duplicates, it is admitted.
-    assert_eq!(candidates(&module, &layout, &call_counts(&module), &private, &costs(2), 2, Threshold::default()).len(), 1);
+    assert_eq!(candidates(&module, &llrm_mir::memory::callees(&module), &layout, &call_counts(&module), &private, &costs(2), 2, Threshold::default()).len(), 1);
 }
 
 const HELPERS: &str = "define internal i16 @scale(i16 %x) {
@@ -403,7 +403,7 @@ b1:
     );
     let main = module.global(id(&module, "main")).function().unwrap();
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
-    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &costs(2), 2, Threshold::default());
+    let sites = constant_sites(&module, &llrm_mir::memory::callees(&module), &DataLayout::default(), &recursive(&module), main, &constants, &costs(2), 2, Threshold::default());
     let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[0]]);
 }
@@ -440,13 +440,13 @@ b1:
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
     // Two operations, under a call of 10 clocks by count; the multiply alone costs 30.
     let priced = OperationCosts { call: 10, multiply: 30, ..OperationCosts::default() };
-    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, priced.call, Threshold::default());
+    let sites = constant_sites(&module, &llrm_mir::memory::callees(&module), &DataLayout::default(), &recursive(&module), main, &constants, &priced, priced.call, Threshold::default());
     let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
     // `squared(3)` folds away entirely; `scaled(1, p)` keeps its multiply.
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[1]]);
     // Pushing and reading two arguments is overhead the copy saves as well.
     let passed = OperationCosts { argument: 20, ..priced };
-    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &passed, passed.call, Threshold::default());
+    let sites = constant_sites(&module, &llrm_mir::memory::callees(&module), &DataLayout::default(), &recursive(&module), main, &constants, &passed, passed.call, Threshold::default());
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[1]]);
 }
 
@@ -471,7 +471,7 @@ b1:
     let main = module.global(id(&module, "main")).function().unwrap();
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
     let priced = OperationCosts { call: 10, argument: 20, ..OperationCosts::default() };
-    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, priced.call, Threshold::default());
+    let sites = constant_sites(&module, &llrm_mir::memory::callees(&module), &DataLayout::default(), &recursive(&module), main, &constants, &priced, priced.call, Threshold::default());
     assert!(sites.is_empty(), "{} sites", sites.len());
 }
 
@@ -563,7 +563,7 @@ fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
     let text = |attr: &str| chain(8, attr, 2).replace("define i16 @big", "define internal i16 @big");
     let admits = |attr: &str, threshold: Threshold| {
         let module = parsed(&text(attr));
-        candidates(&module, &DataLayout::default(), &call_counts(&module), &private(&module), &costs(8), 8, threshold).len()
+        candidates(&module, &llrm_mir::memory::callees(&module), &DataLayout::default(), &call_counts(&module), &private(&module), &costs(8), 8, threshold).len()
     };
     let (speed, size) = (Threshold::default(), Threshold::default().for_size());
     assert_eq!((admits("", speed), admits("inlinehint", speed), admits("inlinehint", size)), (0, 1, 0));
@@ -610,11 +610,11 @@ b3:
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
     // A multiply is 20 clocks, a call 10: kept above the overhead, below its hot weight (23).
     let priced = OperationCosts { call: 10, multiply: 20, store: 0, load: 0, return_: 0, ..OperationCosts::default() };
-    let sites = constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, priced.call, Threshold::default());
+    let sites = constant_sites(&module, &llrm_mir::memory::callees(&module), &DataLayout::default(), &recursive(&module), main, &constants, &priced, priced.call, Threshold::default());
     let calls = main.walk().map(|(_, inst)| inst).filter(|&inst| callee(&module.context, main, inst).is_some()).collect::<Vec<_>>();
     assert_eq!(sites.keys().copied().collect::<Vec<_>>(), vec![calls[1]]);
     // Where size outranks speed a loop buys nothing.
-    assert!(constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, priced.call, Threshold::default().for_size()).is_empty());
+    assert!(constant_sites(&module, &llrm_mir::memory::callees(&module), &DataLayout::default(), &recursive(&module), main, &constants, &priced, priced.call, Threshold::default().for_size()).is_empty());
 }
 
 /// The last call of a private function inlines at any size, tuned for size or for speed: no copy is made, and
@@ -669,7 +669,7 @@ b1:
     let main = module.global(id(&module, "main")).function().unwrap();
     let constants = llrm_analysis::interprocedural::current_call_constants(&module.context, main);
     let priced = OperationCosts { call: 5, add: 2, multiply: 6, branch: 2, return_: 1, argument: 2, ..OperationCosts::default() };
-    let at = |threshold: Threshold| constant_sites(&module, &DataLayout::default(), &recursive(&module), main, &constants, &priced, 18, threshold).len();
+    let at = |threshold: Threshold| constant_sites(&module, &llrm_mir::memory::callees(&module), &DataLayout::default(), &recursive(&module), main, &constants, &priced, 18, threshold).len();
     assert_eq!((at(Threshold::default()), at(Threshold::default().for_size())), (0, 1));
 }
 
@@ -704,7 +704,7 @@ b1:
 fn a_routine_that_frees_a_temporary_is_not_inlined_at_a_call_of_one() {
     let mut module = parsed(RELEASING);
     let layout = DataLayout::default();
-    let available = candidates(&module, &layout, &call_counts(&module), &private(&module), &costs(5), 5, Threshold::default());
+    let available = candidates(&module, &llrm_mir::memory::callees(&module), &layout, &call_counts(&module), &private(&module), &costs(5), 5, Threshold::default());
     assert!(available.contains_key(&id(&module, "first")), "the premise: the body is a candidate");
     for (caller, inlined) in [("temporary", false), ("owned", true)] {
         let by = Caller { layout: &layout, recursive: false, base: 0 };
@@ -725,7 +725,7 @@ fn test_the_last_calls_into_a_large_caller_stop_where_it_has_doubled() {
     let mut module = parsed(&text);
     let layout = DataLayout::default();
     let original = operations(module.global(id(&module, "main")).function().unwrap());
-    let available = candidates(&module, &layout, &call_counts(&module), &private(&module), &costs(8), 8, Threshold::default());
+    let available = candidates(&module, &llrm_mir::memory::callees(&module), &layout, &call_counts(&module), &private(&module), &costs(8), 8, Threshold::default());
     let by = Caller { layout: &layout, recursive: false, base: original };
     while expand_once(&mut module, "main", &by, &available) {}
     let after = operations(module.global(id(&module, "main")).function().unwrap());
@@ -833,7 +833,7 @@ b1:
         let mut module = parsed(&text(bytes));
         let layout = DataLayout::default();
         let priced = OperationCosts { call: 2, argument: 1, add: 3, load: 3, ..OperationCosts::default() };
-        let available = candidates(&module, &layout, &call_counts(&module), &private(&module), &priced, 2, Threshold::default());
+        let available = candidates(&module, &llrm_mir::memory::callees(&module), &layout, &call_counts(&module), &private(&module), &priced, 2, Threshold::default());
         let by = Caller { layout: &layout, recursive: false, base: 0 };
         while expand_once(&mut module, "main", &by, &available) {}
         !printed(&module).contains("call ")

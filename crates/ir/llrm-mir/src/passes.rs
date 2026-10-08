@@ -59,7 +59,7 @@ pub fn in_function<T>(function: &str, run: impl FnOnce() -> T) -> T {
     out.expect("the observer ran the step")
 }
 
-fn counted(what: &'static str, hit: bool) {
+pub(crate) fn counted(what: &'static str, hit: bool) {
     if let Some(observer) = OBSERVER.get() {
         (observer.count)(what, hit);
     }
