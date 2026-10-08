@@ -1,16 +1,16 @@
 # Compile-time scaling, main aa93a260 (tinytim, instructions:u, median of 3, 6 axes run 6 at a time)
 
-Slopes are over the sizes llrm reached; "top 4" is the largest four. Pass tables: steps of llrm -O2 above exponent 1.15 (own ms, wall, so approximate). Regenerate: `scaling.py run --programs && scaling.py report`.
+Slopes are over the sizes llrm reached; "top 4" is the largest four. "Total" ratios are whole-process instructions; "net" subtract each compiler's empty-file cost. Pass tables: steps of llrm -O2 above exponent 1.15 (own ms, wall, so approximate). Regenerate: `scaling.py run --programs && scaling.py report`.
 
 ### functions
 
-| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc smallest | llrm/gcc largest | sizes llrm / gcc |
-|---|---|---|---|---|---|---|---|
-| -O0 | 1.18 / 1.39 | 0.93 / 1.01 | 0.97 / 1.00 | 0.98 / 1.03 | 3.06x @ 2^4 | 13.60x @ 2^11 | 8 / 12 |
-| -O1 | 1.21 / 1.38 | 0.98 / 1.01 | 1.09 / 1.18 | 1.00 / 1.03 | 4.61x @ 2^4 | 14.22x @ 2^10 | 7 / 10 |
-| -O2 | 1.20 / 1.37 | 1.00 / 1.03 | 1.14 / 1.26 | 1.06 / 1.24 | 2.73x @ 2^4 | 6.60x @ 2^10 | 7 / 9 |
-| -O3 | 1.20 / 1.36 | 1.05 / 1.09 | 1.14 / 1.26 | 1.07 / 1.13 | 2.23x @ 2^4 | 4.42x @ 2^10 | 7 / 8 |
-| -Os | 1.20 / 1.36 | 0.98 / 1.03 | 1.09 / 1.17 | 1.03 / 1.15 | 4.42x @ 2^4 | 12.34x @ 2^10 | 7 / 9 |
+| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
+|---|---|---|---|---|---|---|---|---|
+| -O0 | 1.18 / 1.39 | 0.93 / 1.01 | 0.97 / 1.00 | 0.98 / 1.03 | 3.06x @ 2^4 | 13.60x @ 2^11 | 13.64x | 8 / 12 |
+| -O1 | 1.21 / 1.38 | 0.98 / 1.01 | 1.09 / 1.18 | 1.00 / 1.03 | 4.61x @ 2^4 | 14.22x @ 2^10 | 14.25x | 7 / 10 |
+| -O2 | 1.20 / 1.37 | 1.00 / 1.03 | 1.14 / 1.26 | 1.06 / 1.24 | 2.73x @ 2^4 | 6.60x @ 2^10 | 6.61x | 7 / 9 |
+| -O3 | 1.20 / 1.36 | 1.05 / 1.09 | 1.14 / 1.26 | 1.07 / 1.13 | 2.23x @ 2^4 | 4.42x @ 2^10 | 4.42x | 7 / 8 |
+| -Os | 1.20 / 1.36 | 0.98 / 1.03 | 1.09 / 1.17 | 1.03 / 1.15 | 4.42x @ 2^4 | 12.34x @ 2^10 | 12.36x | 7 / 9 |
 
 Passes of llrm -O2 above exponent 1.15 on functions (top 4 sizes, own ms; largest N = 1024):
 
@@ -29,13 +29,13 @@ Passes of llrm -O2 above exponent 1.15 on functions (top 4 sizes, own ms; larges
 
 ### straight
 
-| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc smallest | llrm/gcc largest | sizes llrm / gcc |
-|---|---|---|---|---|---|---|---|
-| -O0 | 1.21 / 1.43 | 1.02 / 1.22 | 0.86 / 0.97 | 1.14 / 1.51 | 8.60x @ 2^4 | 29.29x @ 2^11 | 8 / 10 |
-| -O1 | 1.08 / 1.19 | 0.98 / 1.03 | 1.01 / 1.05 | 1.01 / 1.11 | 5.49x @ 2^4 | 10.74x @ 2^11 | 8 / 10 |
-| -O2 | 1.08 / 1.19 | 0.99 / 1.02 | 1.00 / 1.05 | 1.02 / 1.09 | 4.31x @ 2^4 | 7.74x @ 2^11 | 8 / 10 |
-| -O3 | 1.08 / 1.19 | 0.99 / 1.02 | 1.00 / 1.05 | 1.02 / 1.09 | 4.30x @ 2^4 | 7.73x @ 2^11 | 8 / 10 |
-| -Os | 1.05 / 1.16 | 0.92 / 0.99 | 1.02 / 1.12 | 0.96 / 1.04 | 5.40x @ 2^4 | 15.62x @ 2^12 | 9 / 12 |
+| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
+|---|---|---|---|---|---|---|---|---|
+| -O0 | 1.21 / 1.43 | 1.02 / 1.22 | 0.86 / 0.97 | 1.14 / 1.51 | 8.60x @ 2^4 | 29.29x @ 2^11 | 29.35x | 8 / 10 |
+| -O1 | 1.08 / 1.19 | 0.98 / 1.03 | 1.01 / 1.05 | 1.01 / 1.11 | 5.49x @ 2^4 | 10.74x @ 2^11 | 10.76x | 8 / 10 |
+| -O2 | 1.08 / 1.19 | 0.99 / 1.02 | 1.00 / 1.05 | 1.02 / 1.09 | 4.31x @ 2^4 | 7.74x @ 2^11 | 7.75x | 8 / 10 |
+| -O3 | 1.08 / 1.19 | 0.99 / 1.02 | 1.00 / 1.05 | 1.02 / 1.09 | 4.30x @ 2^4 | 7.73x @ 2^11 | 7.74x | 8 / 10 |
+| -Os | 1.05 / 1.16 | 0.92 / 0.99 | 1.02 / 1.12 | 0.96 / 1.04 | 5.40x @ 2^4 | 15.62x @ 2^12 | 15.65x | 9 / 12 |
 
 Passes of llrm -O2 above exponent 1.15 on straight (top 4 sizes, own ms; largest N = 2048):
 
@@ -56,13 +56,13 @@ Stopped early: clang O3 at N=32768
 
 ### branches
 
-| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc smallest | llrm/gcc largest | sizes llrm / gcc |
-|---|---|---|---|---|---|---|---|
-| -O0 | 1.40 / 1.56 | 0.88 / 0.95 | 0.88 / 0.95 | 0.96 / 1.02 | 9.46x @ 2^4 | 71.34x @ 2^9 | 6 / 12 |
-| -O1 | 1.65 / 1.74 | 0.95 / 0.97 | 1.01 / 1.02 | 1.01 / 1.11 | 13.90x @ 2^4 | 106.58x @ 2^8 | 5 / 10 |
-| -O2 | 1.64 / 1.73 | 0.97 / 0.98 | 1.01 / 1.02 | 1.02 / 1.08 | 10.67x @ 2^4 | 73.51x @ 2^8 | 5 / 10 |
-| -O3 | 1.64 / 1.73 | 0.97 / 0.98 | 1.01 / 1.02 | 1.01 / 1.06 | 10.57x @ 2^4 | 72.14x @ 2^8 | 5 / 10 |
-| -Os | 1.58 / 1.68 | 0.91 / 0.94 | 1.01 / 1.02 | 1.02 / 1.18 | 12.77x @ 2^4 | 93.16x @ 2^8 | 5 / 10 |
+| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
+|---|---|---|---|---|---|---|---|---|
+| -O0 | 1.40 / 1.56 | 0.88 / 0.95 | 0.88 / 0.95 | 0.96 / 1.02 | 9.46x @ 2^4 | 71.34x @ 2^9 | 72.19x | 6 / 12 |
+| -O1 | 1.65 / 1.74 | 0.95 / 0.97 | 1.01 / 1.02 | 1.01 / 1.11 | 13.90x @ 2^4 | 106.58x @ 2^8 | 107.46x | 5 / 10 |
+| -O2 | 1.64 / 1.73 | 0.97 / 0.98 | 1.01 / 1.02 | 1.02 / 1.08 | 10.67x @ 2^4 | 73.51x @ 2^8 | 73.92x | 5 / 10 |
+| -O3 | 1.64 / 1.73 | 0.97 / 0.98 | 1.01 / 1.02 | 1.01 / 1.06 | 10.57x @ 2^4 | 72.14x @ 2^8 | 72.53x | 5 / 10 |
+| -Os | 1.58 / 1.68 | 0.91 / 0.94 | 1.01 / 1.02 | 1.02 / 1.18 | 12.77x @ 2^4 | 93.16x @ 2^8 | 94.18x | 5 / 10 |
 
 Passes of llrm -O2 above exponent 1.15 on branches (top 4 sizes, own ms; largest N = 256):
 
@@ -81,13 +81,13 @@ Passes of llrm -O2 above exponent 1.15 on branches (top 4 sizes, own ms; largest
 
 ### live
 
-| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc smallest | llrm/gcc largest | sizes llrm / gcc |
-|---|---|---|---|---|---|---|---|
-| -O0 | 1.49 / 1.88 | 0.92 / 1.27 | 0.85 / 0.97 | 1.18 / 1.77 | 2.95x @ 2^4 | 53.94x @ 2^11 | 8 / 11 |
-| -O1 | 1.53 / 1.76 | 1.07 / 1.29 | 1.02 / 1.27 | 1.42 / 1.87 | 6.19x @ 2^4 | 37.26x @ 2^9 | 6 / 10 |
-| -O2 | 1.53 / 1.76 | 1.09 / 1.30 | 1.02 / 1.28 | 1.42 / 1.83 | 5.68x @ 2^4 | 29.68x @ 2^9 | 6 / 10 |
-| -O3 | 1.52 / 1.76 | 1.11 / 1.34 | 1.01 / 1.19 | 1.38 / 1.78 | 5.60x @ 2^4 | 26.71x @ 2^9 | 6 / 9 |
-| -Os | 1.55 / 1.84 | 1.14 / 1.46 | 1.20 / 1.40 | 1.38 / 1.80 | 5.68x @ 2^4 | 36.25x @ 2^10 | 7 / 10 |
+| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
+|---|---|---|---|---|---|---|---|---|
+| -O0 | 1.49 / 1.88 | 0.92 / 1.27 | 0.85 / 0.97 | 1.18 / 1.77 | 2.95x @ 2^4 | 53.94x @ 2^11 | 54.19x | 8 / 11 |
+| -O1 | 1.53 / 1.76 | 1.07 / 1.29 | 1.02 / 1.27 | 1.42 / 1.87 | 6.19x @ 2^4 | 37.26x @ 2^9 | 37.51x | 6 / 10 |
+| -O2 | 1.53 / 1.76 | 1.09 / 1.30 | 1.02 / 1.28 | 1.42 / 1.83 | 5.68x @ 2^4 | 29.68x @ 2^9 | 29.83x | 6 / 10 |
+| -O3 | 1.52 / 1.76 | 1.11 / 1.34 | 1.01 / 1.19 | 1.38 / 1.78 | 5.60x @ 2^4 | 26.71x @ 2^9 | 26.83x | 6 / 9 |
+| -Os | 1.55 / 1.84 | 1.14 / 1.46 | 1.20 / 1.40 | 1.38 / 1.80 | 5.68x @ 2^4 | 36.25x @ 2^10 | 36.33x | 7 / 10 |
 
 Passes of llrm -O2 above exponent 1.15 on live (top 4 sizes, own ms; largest N = 512):
 
@@ -106,13 +106,13 @@ Passes of llrm -O2 above exponent 1.15 on live (top 4 sizes, own ms; largest N =
 
 ### callers
 
-| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc smallest | llrm/gcc largest | sizes llrm / gcc |
-|---|---|---|---|---|---|---|---|
-| -O0 | 1.14 / 1.38 | 0.88 / 0.98 | 0.93 / 1.00 | 0.94 / 1.02 | 3.63x @ 2^4 | 17.79x @ 2^11 | 8 / 12 |
-| -O1 | 1.28 / 1.59 | 0.99 / 1.05 | 0.98 / 1.00 | 1.03 / 1.19 | 3.40x @ 2^4 | 16.27x @ 2^11 | 8 / 10 |
-| -O2 | 1.74 / 1.89 | 0.95 / 0.98 | 0.96 / 0.98 | 0.98 / 1.00 | 4.95x @ 2^4 | 81.00x @ 2^9 | 6 / 10 |
-| -O3 | 1.74 / 1.89 | 0.95 / 0.98 | 0.96 / 0.98 | 0.98 / 1.00 | 4.99x @ 2^4 | 82.27x @ 2^9 | 6 / 10 |
-| -Os | 2.17 / 2.17 | 0.89 / 0.89 | 0.94 / 0.94 | 0.97 / 1.00 | 15.81x @ 2^4 | 250.96x @ 2^7 | 4 / 11 |
+| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
+|---|---|---|---|---|---|---|---|---|
+| -O0 | 1.14 / 1.38 | 0.88 / 0.98 | 0.93 / 1.00 | 0.94 / 1.02 | 3.63x @ 2^4 | 17.79x @ 2^11 | 17.85x | 8 / 12 |
+| -O1 | 1.28 / 1.59 | 0.99 / 1.05 | 0.98 / 1.00 | 1.03 / 1.19 | 3.40x @ 2^4 | 16.27x @ 2^11 | 16.28x | 8 / 10 |
+| -O2 | 1.74 / 1.89 | 0.95 / 0.98 | 0.96 / 0.98 | 0.98 / 1.00 | 4.95x @ 2^4 | 81.00x @ 2^9 | 81.30x | 6 / 10 |
+| -O3 | 1.74 / 1.89 | 0.95 / 0.98 | 0.96 / 0.98 | 0.98 / 1.00 | 4.99x @ 2^4 | 82.27x @ 2^9 | 82.57x | 6 / 10 |
+| -Os | 2.17 / 2.17 | 0.89 / 0.89 | 0.94 / 0.94 | 0.97 / 1.00 | 15.81x @ 2^4 | 250.96x @ 2^7 | 256.06x | 4 / 11 |
 
 Passes of llrm -O2 above exponent 1.15 on callers (top 4 sizes, own ms; largest N = 512):
 
@@ -131,13 +131,13 @@ Passes of llrm -O2 above exponent 1.15 on callers (top 4 sizes, own ms; largest 
 
 ### chain
 
-| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc smallest | llrm/gcc largest | sizes llrm / gcc |
-|---|---|---|---|---|---|---|---|
-| -O0 | 1.10 / 1.31 | 0.87 / 0.98 | 0.96 / 1.00 | 0.92 / 1.00 | 2.99x @ 2^4 | 16.52x @ 2^12 | 9 / 12 |
-| -O1 | 2.06 / 2.11 | 0.77 / 0.83 | 1.82 / 1.89 | 0.94 / 1.00 | 9.56x @ 2^4 | 427.27x @ 2^8 | 5 / 12 |
-| -O2 | 2.05 / 2.09 | 0.80 / 0.86 | 1.84 / 1.90 | 0.94 / 1.00 | 9.04x @ 2^4 | 349.79x @ 2^8 | 5 / 12 |
-| -O3 | 2.05 / 2.09 | 0.80 / 0.86 | 1.84 / 1.90 | 0.94 / 1.00 | 9.05x @ 2^4 | 344.35x @ 2^8 | 5 / 12 |
-| -Os | 2.05 / 2.09 | 0.80 / 0.86 | 1.84 / 1.90 | 0.95 / 1.00 | 9.51x @ 2^4 | 372.52x @ 2^8 | 5 / 12 |
+| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |
+|---|---|---|---|---|---|---|---|---|
+| -O0 | 1.10 / 1.31 | 0.87 / 0.98 | 0.96 / 1.00 | 0.92 / 1.00 | 2.99x @ 2^4 | 16.52x @ 2^12 | 16.57x | 9 / 12 |
+| -O1 | 2.06 / 2.11 | 0.77 / 0.83 | 1.82 / 1.89 | 0.94 / 1.00 | 9.56x @ 2^4 | 427.27x @ 2^8 | 444.20x | 5 / 12 |
+| -O2 | 2.05 / 2.09 | 0.80 / 0.86 | 1.84 / 1.90 | 0.94 / 1.00 | 9.04x @ 2^4 | 349.79x @ 2^8 | 360.76x | 5 / 12 |
+| -O3 | 2.05 / 2.09 | 0.80 / 0.86 | 1.84 / 1.90 | 0.94 / 1.00 | 9.05x @ 2^4 | 344.35x @ 2^8 | 354.95x | 5 / 12 |
+| -Os | 2.05 / 2.09 | 0.80 / 0.86 | 1.84 / 1.90 | 0.95 / 1.00 | 9.51x @ 2^4 | 372.52x @ 2^8 | 384.96x | 5 / 12 |
 
 Passes of llrm -O2 above exponent 1.15 on chain (top 4 sizes, own ms; largest N = 256):
 
@@ -154,15 +154,15 @@ Passes of llrm -O2 above exponent 1.15 on chain (top 4 sizes, own ms; largest N 
 | regalloc spill | 580.2 | 1.68 |
 | mir decide | 492.0 | 1.45 |
 
-### QCport: 65 modules, cost (instructions:u above an empty file) against llrm's MIR instructions
+### QCport: 65 modules, cost against llrm's MIR instructions (instructions:u; slopes and "net" ratios are less the empty file's cost: gcc 18.7 M, clang 41 M, llrm 8.1 M)
 
-| level | llrm slope | gcc | clang | llrm/gcc geomean | worst llrm/gcc | modules |
-|---|---|---|---|---|---|---|
-| -O0 | 1.13 | 0.51 | 0.64 | 6.25x | 159.42x render/d_faces | 59 |
-| -O1 | 1.32 | 0.67 | 0.86 | 12.75x | 600.09x render/d_faces | 62 |
-| -O2 | 1.33 | 0.77 | 0.88 | 9.75x | 368.32x render/d_faces | 62 |
-| -O3 | 1.34 | 0.85 | 0.91 | 8.17x | 335.49x render/d_faces | 62 |
-| -Os | 1.32 | 0.73 | 0.85 | 10.99x | 427.04x render/d_faces | 61 |
+| level | llrm slope (net) | gcc | clang | llrm/gcc total, geomean | llrm/gcc net of empty file, geomean | worst total llrm/gcc | modules |
+|---|---|---|---|---|---|---|---|
+| -O0 | 1.13 | 0.51 | 0.64 | 6.25x | 7.30x | 159.42x render/d_faces | 59 |
+| -O1 | 1.32 | 0.67 | 0.86 | 12.75x | 14.19x | 600.09x render/d_faces | 62 |
+| -O2 | 1.33 | 0.77 | 0.88 | 9.75x | 10.56x | 368.32x render/d_faces | 62 |
+| -O3 | 1.34 | 0.85 | 0.91 | 8.17x | 8.79x | 335.49x render/d_faces | 62 |
+| -Os | 1.32 | 0.73 | 0.85 | 10.99x | 12.01x | 427.04x render/d_faces | 61 |
 
 Modules a compiler failed on (levels, reason):
 

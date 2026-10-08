@@ -309,7 +309,7 @@ def run_programs(qcport: Path, include: Path, runs: int, work: Path, jobs: int =
 def axis_tables(name: str, data: dict) -> list[str]:
     """Slopes of the three compilers over the sizes llrm reached (a compiler that reaches further is superlinear there too,
     which would skew a comparison over unequal ranges), and gcc's over its own range."""
-    lines = [f"### {name}", "", "| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc smallest | llrm/gcc largest | sizes llrm / gcc |", "|---|---|---|---|---|---|---|---|"]
+    lines = [f"### {name}", "", "| level | llrm slope (all / top 4 sizes) | gcc, same N | clang, same N | gcc, its own range | llrm/gcc total, smallest N | llrm/gcc total, largest N | llrm/gcc net of empty file, largest N | sizes llrm / gcc |", "|---|---|---|---|---|---|---|---|---|"]
     for level in LEVELS:
         llrm, gcc = data["series"].get(f"llrm {level}", []), data["series"].get(f"gcc {level}", [])
         same = {r["n"] for r in llrm}
@@ -321,7 +321,9 @@ def axis_tables(name: str, data: dict) -> list[str]:
         both = sorted({r["n"] for r in llrm} & {r["n"] for r in gcc})
         ratio = lambda n: next(r["ins"] for r in llrm if r["n"] == n) / next(r["ins"] for r in gcc if r["n"] == n)
         at = lambda n: f"{ratio(n):.2f}x @ 2^{int(math.log2(n))}"
-        lines.append(f"| -{level} | {cells[0]} | {cells[1]} | {cells[2]} | {own} | " + (f"{at(both[0])} | {at(both[-1])}" if both else "- | -") + f" | {len(llrm)} / {len(gcc)} |")
+        base = lambda c: data["base"][f"{c} {level}"]["ins"]
+        netted = lambda n: (next(r["ins"] for r in llrm if r["n"] == n) - base("llrm")) / (next(r["ins"] for r in gcc if r["n"] == n) - base("gcc"))
+        lines.append(f"| -{level} | {cells[0]} | {cells[1]} | {cells[2]} | {own} | " + (f"{at(both[0])} | {at(both[-1])} | {netted(both[-1]):.2f}x" if both else "- | - | -") + f" | {len(llrm)} / {len(gcc)} |")
     return lines + [""]
 
 
@@ -367,15 +369,16 @@ def chart(name: str, data: dict, out: Path, level: str = "O2") -> None:
 
 def program_tables(data: dict) -> list[str]:
     rows = {k: v for k, v in data["rows"].items() if v.get("mir")}
-    lines = [f"### QCport: {len(data['rows'])} modules, cost (instructions:u above an empty file) against llrm's MIR instructions", ""]
-    lines += ["| level | llrm slope | gcc | clang | llrm/gcc geomean | worst llrm/gcc | modules |", "|---|---|---|---|---|---|---|"]
+    lines = [f"### QCport: {len(data['rows'])} modules, cost against llrm's MIR instructions (instructions:u; slopes and \"net\" ratios are less the empty file's cost: gcc 18.7 M, clang 41 M, llrm 8.1 M)", ""]
+    lines += ["| level | llrm slope (net) | gcc | clang | llrm/gcc total, geomean | llrm/gcc net of empty file, geomean | worst total llrm/gcc | modules |", "|---|---|---|---|---|---|---|---|"]
     for level in LEVELS:
         both = {k: v for k, v in rows.items() if all(f"{c} {level}" in v for c in COMPILERS)}
         xs = [v["mir"] for v in both.values()]
         cells = [f"{slope(xs, [v[f'{c} {level}']['ins'] - data['base'][f'{c} {level}']['ins'] for v in both.values()]):.2f}" for c in COMPILERS]
         ratios = {k: v[f"llrm {level}"]["ins"] / v[f"gcc {level}"]["ins"] for k, v in both.items()}
         worst = max(ratios, key=ratios.get)
-        lines.append(f"| -{level} | {cells[0]} | {cells[1]} | {cells[2]} | {levels_time.geomean(list(ratios.values())):.2f}x | {ratios[worst]:.2f}x {worst} | {len(both)} |")
+        nets = [(v[f"llrm {level}"]["ins"] - data["base"][f"llrm {level}"]["ins"]) / (v[f"gcc {level}"]["ins"] - data["base"][f"gcc {level}"]["ins"]) for v in both.values()]
+        lines.append(f"| -{level} | {cells[0]} | {cells[1]} | {cells[2]} | {levels_time.geomean(list(ratios.values())):.2f}x | {levels_time.geomean([n for n in nets if n > 0]):.2f}x | {ratios[worst]:.2f}x {worst} | {len(both)} |")
     failed = {k: v["failed"] for k, v in data["rows"].items() if v["failed"]}
     reason = lambda why: "peephole: value read but never defined" if "peephole" in why else "front end E1060 Invalid type (dos.h _FAR)" if "E1060" in why else why.strip()[-80:]
     lines += ["", "Modules a compiler failed on (levels, reason):", ""]
