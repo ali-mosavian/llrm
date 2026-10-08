@@ -33,12 +33,13 @@ long bench(unsigned short steps)
 /// The running values `x[0..3]`, `y[0..3]` are phis of the step loop, the program stores each to its
 /// array cell on every trip, and nine floats crowd the x87 stack under the inner loop. Each was spilled to a cell
 /// of its own besides, 14 stores more than the 12 the program makes (nbody 61880 against 59081 instructions).
+/// -O3: gcc's -O2 copies a loop out only where the code does not grow, so the nest stays rolled there (6 stores).
 #[test]
 fn test_a_stored_loop_carried_float_is_spilled_to_the_cell_the_program_stores_it_in() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).args(["-m32", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"]).output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).args(["-m32", "-O3", "-march=i486", "-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let listing = std::fs::read_to_string(directory.join("a.s")).unwrap();
     let stores = listing.lines().filter(|line| line.trim_start().starts_with("fstp qword ptr [") || line.trim_start().starts_with("fst qword ptr [")).count();
@@ -65,10 +66,12 @@ fn test_a_constant_nothing_reads_is_not_loaded_and_popped() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).args(["-m32", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"]).output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).args(["-m32", "-O3", "-march=i486", "-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let listing = std::fs::read_to_string(directory.join("a.s")).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let stores = lines.iter().filter(|line| line.starts_with("fstp qword ptr [") || line.starts_with("fst qword ptr [")).count();
+    assert_eq!(stores, 12, "premise: the nest is copied out, as in the test above\n{listing}");
     let pairs = lines.windows(2).filter(|pair| (pair[0] == "fld1" || pair[0] == "fldz" || pair[0].starts_with("fld dword ptr $K")) && pair[1] == "fstp st(0)").count();
     assert_eq!(pairs, 0, "{listing}");
 }

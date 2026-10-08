@@ -1,7 +1,9 @@
 """`uv run --project tools python -m unittest discover -s tools/torture`"""
 
+import shutil
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -20,6 +22,26 @@ class CauseTests(unittest.TestCase):
         self.assertIn("front end", torture.refusal("wccq: Expecting '_' but found '_'", rules))
         self.assertIsNone(torture.refusal("_main: .X is neither defined nor imported", rules))
 
+
+
+class WorkTests(unittest.TestCase):
+    def test_two_runs_without_a_work_option_do_not_share_a_directory(self):
+        """The default was one fixed directory: a gate running beside a full run deleted its files (`dosbatch.run` clears its
+        work directory), the full run crashed on FileNotFoundError and the gate called dozens of programs wrong."""
+        made = []
+        real = Path.mkdir
+
+        def recording(self, *args, **kwargs):
+            made.append(self)
+            return real(self, *args, **kwargs)
+
+        for _ in range(2):
+            with mock.patch.object(torture, "programs", return_value=[]), mock.patch.object(sys, "argv", ["torture.py"]), mock.patch.object(Path, "mkdir", recording):
+                self.assertEqual(torture.main(), 2)
+        self.assertEqual(len(made), 2)
+        self.assertNotEqual(made[0], made[1])
+        for one in made:
+            shutil.rmtree(one, ignore_errors=True)
 
 
 class DifferencesTests(unittest.TestCase):
