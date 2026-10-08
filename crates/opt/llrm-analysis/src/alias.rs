@@ -692,9 +692,6 @@ pub struct SummaryMemo {
     direct: IndexMap<String, Summary>,
     found: IndexMap<String, Visit>,
     known: Option<IndexMap<String, Summary>>,
-    /// What a call back into the module did, as the run's last entries' summaries say: a body that calls something unknown was
-    /// made against it.
-    callbacks: Option<Summary>,
 }
 
 /// `summaries`, where only the bodies in `dirty` differ from the run `memo` holds, and nothing else it was made from does (the
@@ -702,9 +699,9 @@ pub struct SummaryMemo {
 ///
 /// A body's summary reads its own, its callees' and, where it calls something unknown, the entries' (`callbacks`). So what an edit
 /// can change is the dirty bodies and every body that reads them through a chain of calls. That closure starts again from nothing,
-/// as a whole run does, and the rest is as it was: nothing outside the closure reads anything in it, but for the callbacks, which
-/// the bodies that call something unknown outside the closure were made against: if the run ends with other callbacks than the
-/// last run's, the whole is worked out. `None` for `dirty`, or a memo of other bodies, is a whole run.
+/// as a whole run does, and the rest is as it was: nothing outside the closure reads anything in it. (The callbacks are an
+/// entry's summaries read by every body that calls something unknown, and an entry among those feeds them: a closure with an
+/// entry takes all of them.) `None` for `dirty`, or a memo of other bodies, is a whole run.
 pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Option<&IndexMap<String, Summary>>, memo: &mut SummaryMemo, dirty: Option<&BTreeSet<String>>) -> Result<IndexMap<String, Summary>, String> {
     let same_bodies = memo.result.len() >= procedures.len() && procedures.keys().all(|name| memo.direct.contains_key(name) && memo.result.contains_key(name)) && memo.direct.len() == procedures.len();
     let whole = dirty.is_none() || !same_bodies || memo.known.as_ref() != known;
@@ -831,13 +828,6 @@ pub fn summaries_updating(procedures: &IndexMap<String, Procedure>, known: Optio
             }
         }
     }
-    // The bodies outside the closure that call something unknown were made against the last run's callbacks.
-    let finally = called_back(&result);
-    if !whole && finally != memo.callbacks {
-        llrm_support::debug::counted("summaries callbacks changed", true);
-        return summaries_updating(procedures, known, memo, None);
-    }
-    memo.callbacks = finally;
     memo.found = procedures.keys().cloned().zip(found).filter_map(|(name, visit)| Some((name, visit?))).collect();
     memo.known = known.cloned();
     memo.result = result.clone();
