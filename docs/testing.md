@@ -45,7 +45,7 @@ programs at N and 2N (llrm-c -O1, -O2, -Os) and compares the ratio of instructio
 twice differs by 0.0014 at worst; it fails past 1% either way, so a fix that lowers an axis refreshes the budget in the same
 commit: `python3 crates/target/*/vsgcc/scaling_gate.py --refresh`. The gcc-like target is about 2.1 on every axis; the budget
 is main today (branches, live, chain and callers at -Os read 2.8 to 4.6: #924 and #941). Wall time per pass is not usable
-here (a linear pass read 4-6x at 2N under load); a per-pass gate waits for per-pass instruction counts in `LLRM_DEBUG=time`.
+here (a linear pass read 4-6x at 2N under load); `LLRM_DEBUG=time` also prints `[instr]` rows (own and total, in millions of the thread's user-space instructions, per span name; Mcpu-ns where the host has no counter) that repeat to 0.01%, for a per-pass gate to read.
 
 ## What belongs in the suite
 
