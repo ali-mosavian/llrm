@@ -1911,17 +1911,19 @@ impl Selector<'_, '_, '_> {
         Ok(Some(pointer))
     }
 
-    /// `moved`, a frame address a constant GEP reached from `base`, as the one address of its residue modulo 2^w (w the pointer's
-    /// width) that lies in the object `base` is in. An index is a signed pointer-width integer: 32798 into a 32,800-byte object on a
+    /// `moved`, a frame address a constant GEP reached from `base`, as the one address of its residue modulo 2^w (w the address space's offset bits, which
+    /// a far pointer's 16-bit offset has too) that lies in the object `base` is in. An index is a signed pointer-width integer: 32798 into a 32,800-byte object on a
     /// 16-bit target is -32738 in an i16, the same address below the object, where it made the frame twice as big; an index a
-    /// wrap past the object's top is brought back the same way. A pointer of 4 or more bytes never wraps an object.
+    /// wrap past the object's top is brought back the same way. An offset of 32 bits or more never wraps an object.
     fn within_object(&self, base: Pointer, moved: Pointer, ty: TypeId) -> Pointer {
         let (Pointer::Frame { disp: from, .. }, Pointer::Frame { disp: to, index, scale }) = (base, moved) else { return moved };
-        let Ok(width) = self.width(ty) else { return moved };
-        if width >= 4 {
+        let Type::Pointer(space) = self.types().get(ty) else { return moved };
+        // A pair's offset word, else the whole pointer.
+        let bits = if self.layout.is_pair(*space) { self.layout.offset_bits(*space) } else { 8 * self.width(ty).unwrap_or(8) };
+        if bits >= 32 {
             return moved;
         }
-        let wrap = 1i64 << (8 * width);
+        let wrap = 1i64 << bits;
         let Some(&(object, size)) = self.frame_objects.iter().find(|&&(object, size)| (object..=object + size).contains(&from)) else { return moved };
         let inside = object + (to - object).rem_euclid(wrap);
         if inside <= object + size { Pointer::Frame { disp: inside, index, scale } } else { moved }
