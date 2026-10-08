@@ -4,6 +4,7 @@
     tools/measure.py check              measure this tree's compiler, compare with the merge-base's; exit 1 on a rise past tolerance
     tools/measure.py record SHA [BIN]   measure the compiler in BIN (default: this tree's) and store it as SHA's
     tools/measure.py show               print this tree's measurement
+    tools/measure.py creep [REF]        compare REF (HEAD) with the commit 50 merges or a week back at the same tolerances
 
 Three measurements, all user-space instructions (`perf stat`), so a loaded host does not move them: the compile of the 66 vsgcc
 programs and QCport's modules at -O1/-O2/-Os (tools/compile-cost.py); the ratio of the compile at 2N to N on generated programs
@@ -27,6 +28,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -94,9 +96,12 @@ def stored(sha: str, which: str) -> dict | None:
 
 
 def save(sha: str, data: dict) -> Path:
+    """Written whole or not at all: a session reading while another writes never sees half a file."""
     CACHE.mkdir(parents=True, exist_ok=True)
     one = stored_path(sha, data["method"])
-    one.write_text(json.dumps(data, separators=(",", ":")) + "\n")
+    with tempfile.NamedTemporaryFile("w", dir=CACHE, suffix=".part", delete=False) as part:
+        part.write(json.dumps(data, separators=(",", ":")) + "\n")
+    os.replace(part.name, one)
     return one
 
 
@@ -127,29 +132,31 @@ def built(sha: str) -> Path:
 
 
 @contextlib.contextmanager
-def locked():
-    """One session builds a missing base; the others wait for its measurement."""
+def locked(name: str):
+    """An exclusive lock named `name` between sessions (and threads: each opens the file itself)."""
     CACHE.mkdir(parents=True, exist_ok=True)
-    with open(CACHE / "lock", "w") as handle:
+    with open(CACHE / f"{name}.lock", "w") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         yield
 
 
 def base_measurement(base: str, jobs: int, build=built) -> dict:
-    """`base`'s measurement by this tree's method: stored, else made with `base` built by `build`."""
+    """`base`'s measurement by this tree's method: stored, else made with `base` built by `build`. Sessions that miss the same base at
+    once wait on the base's lock and read what the first stored; the one tree and target the builds share are taken one at a time."""
     which = method()
     if (got := stored(base, which)) is not None:
         return got
-    with locked():
+    with locked(f"{base}-{which}"):
         if (got := stored(base, which)) is not None:
             return got
         print(f"measure: no measurement of {base[:9]} by this method; building and measuring it", flush=True)
-        previous = os.environ.get("LLRM_BIN")
-        os.environ["LLRM_BIN"] = str(build(base))
-        try:
-            data = measure_all(jobs)
-        finally:
-            os.environ.pop("LLRM_BIN") if previous is None else os.environ.__setitem__("LLRM_BIN", previous)
+        with locked("build"):
+            previous = os.environ.get("LLRM_BIN")
+            os.environ["LLRM_BIN"] = str(build(base))
+            try:
+                data = measure_all(jobs)
+            finally:
+                os.environ.pop("LLRM_BIN") if previous is None else os.environ.__setitem__("LLRM_BIN", previous)
         save(base, data)
         return data
 
@@ -211,6 +218,55 @@ def rises(base: dict, now: dict, tol: dict | None = None) -> tuple[list[str], li
     return lines, bad
 
 
+# --- creep: the parent forgives what the tolerance allows, ten times ----------------------------------------------------
+
+
+def anchor_of(head: str, merges: int = 50, days: float = 7, cwd: Path = ROOT) -> str:
+    """The commit on the first-parent line of `head` that is `merges` back or a week older, whichever is nearer `head`."""
+    line = [row.split() for row in git("rev-list", "--first-parent", "--timestamp", head, cwd=cwd).splitlines()]
+    by_count = min(merges, len(line) - 1)
+    stamp = int(line[0][0]) - days * 86400
+    by_age = next((at for at, (when, _) in enumerate(line) if int(when) <= stamp), len(line) - 1)
+    return line[min(by_count, by_age)][1]
+
+
+def trail(anchor: str, head: str, which: str, cwd: Path = ROOT) -> list[str]:
+    """The commits from `anchor` to `head`, oldest first, each measured one with its programs' -O2 geomean against the last measured."""
+    out, last = [], stored(anchor, which)
+    for sha in reversed(git("rev-list", "--first-parent", f"{anchor}..{head}", cwd=cwd).split()):
+        here = stored(sha, which)
+        subject = git("log", "-1", "--format=%s", sha, cwd=cwd)[:90]
+        if here is None or last is None:
+            out.append(f"{sha[:9]} {subject}: not measured")
+        else:
+            ratios = [here["compile"][k] / last["compile"][k] for k in here["compile"].keys() & last["compile"].keys() if k.endswith(" -O2")]
+            out.append(f"{sha[:9]} {subject}: -O2 geomean x{geomean(ratios):.4f} of the last measured")
+        if here is not None:
+            last = here
+    return out
+
+
+def creep(jobs: int, ref: str) -> int:
+    """`ref` against its anchor at the same tolerances: ten commits each inside them still add up."""
+    try:
+        head = git("rev-parse", ref)
+        which = method()
+        now = stored(head, which) or measure_all(jobs)
+        anchor = anchor_of(head)
+        base = base_measurement(anchor, jobs)
+    except NoCounter as why:
+        print(f"SKIPPED: instruction counter unavailable ({why})")
+        return 77
+    lines, bad = rises(base, now)
+    print(f"{head[:9]} against its anchor {anchor[:9]}")
+    print("\n".join(lines))
+    if bad:
+        print("CREEP:", *bad, sep="\n  ")
+        print("what added it, oldest first:", *trail(anchor, head, which), sep="\n  ")
+        return 1
+    return 0
+
+
 # --- commands --------------------------------------------------------------------------------------------------------
 
 
@@ -238,13 +294,15 @@ def check(jobs: int, ref: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["check", "record", "show"])
+    parser.add_argument("command", choices=["check", "record", "show", "creep"])
     parser.add_argument("rest", nargs="*", help="record: SHA [BIN]")
     parser.add_argument("--base", default=os.environ.get("LLRM_MEASURE_REF", "origin/main"), help="check: the branch the merge-base is taken with")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "4")))
     args = parser.parse_args()
     if args.command == "check":
         return check(args.jobs, args.base)
+    if args.command == "creep":
+        return creep(args.jobs, args.rest[0] if args.rest else "HEAD")
     if args.command == "record":
         sha = git("rev-parse", args.rest[0])
         if len(args.rest) > 1:

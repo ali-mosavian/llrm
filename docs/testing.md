@@ -42,7 +42,7 @@ directory of its own with the gate's build command (`gate.BUILD`: `cargo build -
 measured with this tree's tools and inputs, then stored (3-8 minutes, once per base). A stored measurement of another
 method (tools, programs, QCport modules) is not used. A rise past the tolerances in `tools/gate/tiers.toml` `[measure]` fails: a
 level's geomean 1.003, one file 1.02, an axis 1.01, a step 1.05 (a step needs 2.5% of the work to fail, so one on the edge of the
-share floor does not flip). A drop is recorded nowhere; the next branch's base has it. Tolerances come from the same build
+share floor does not flip). A drop is recorded nowhere; the next branch's base has it. Sessions that miss one base at once wait on its lock and read what the first stored. Against the parent alone, ten commits of +0.2% each pass; the scheduled run (`gate.py main`) also compares each main commit with the one 50 merges or a week back (`measure.py creep`), at the same tolerances, and lists the commits between with their steps. Tolerances come from the same build
 measured twice (`tools/compile-cost.py --noise`: geomean within 0.0001, worst file 0.0047 of 393). The QCport files need `QCPORT`
 and `QCPORT_INC` (`~/scratch/qcport-env.sh`); without them they are not measured. Without a working counter the step exits 77
 (SKIPPED). Wall time per step is not usable (a linear step read 4-6x at 2N under load).

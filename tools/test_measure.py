@@ -107,3 +107,52 @@ def test_a_base_is_built_the_way_the_gate_builds(tmp_path, monkeypatch):
     monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
     assert measure.built("0" * 40) == tmp_path / "target" / "release"
     assert ran == [["bash", "-c", measure.gate.BUILD]]
+
+
+def test_two_sessions_missing_the_same_base_build_it_once(tmp_path, monkeypatch):
+    """Two PRs gated at once on one new base both built it into the one shared tree and wrote the file twice."""
+    import threading
+    import time
+
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(measure, "method", lambda: "m")
+    built, answers = [], []
+
+    def build(sha):
+        built.append(sha)
+        time.sleep(0.3)  # the other session arrives while this one builds
+        return tmp_path
+
+    monkeypatch.setattr(measure, "measure_all", lambda jobs: made(files(a=1)))
+    threads = [threading.Thread(target=lambda: answers.append(measure.base_measurement("e" * 40, 1, build=build))) for _ in range(3)]
+    for one in threads:
+        one.start()
+    for one in threads:
+        one.join()
+    assert len(built) == 1 and answers == [made(files(a=1))] * 3
+    assert not list((tmp_path / "cache").glob("*.part")), "a half-written file was left"
+
+
+def test_ten_steps_each_inside_the_tolerance_fail_against_the_anchor():
+    """Each of ten commits adds 0.2% to every file: inside the 0.3% geomean tolerance against its parent, 2% against the anchor."""
+    chain = [made(files(**{f"p{i}": int(1000 * 1.002**step) for i in range(20)})) for step in range(11)]
+    assert all(measure.rises(a, b, TOL)[1] == [] for a, b in zip(chain, chain[1:]))
+    assert any("geomean" in line for line in measure.rises(chain[0], chain[-1], TOL)[1])
+
+
+def _repo(path, hours):
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    for n, hour in enumerate(hours):
+        when = f"{1_700_000_000 + hour * 3600} +0000"
+        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", f"c{n}"], cwd=path, check=True, env={**env, "GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when})
+    return measure.git("rev-parse", "HEAD", cwd=path)
+
+
+def test_the_anchor_is_fifty_merges_back_or_a_week_back_whichever_is_nearer(tmp_path):
+    busy = _repo(tmp_path / "busy", range(80))  # 80 commits an hour apart: 50 back is nearer than a week
+    assert measure.git("log", "-1", "--format=%s", measure.anchor_of(busy, cwd=tmp_path / "busy"), cwd=tmp_path / "busy") == "c29"
+    quiet = _repo(tmp_path / "quiet", [day * 48 for day in range(10)])  # two days apart: a week back (4 commits) is nearer than 50
+    assert measure.git("log", "-1", "--format=%s", measure.anchor_of(quiet, cwd=tmp_path / "quiet"), cwd=tmp_path / "quiet") == "c5"
+    short = _repo(tmp_path / "short", [0, 1])  # fewer commits than either: the first
+    assert measure.git("log", "-1", "--format=%s", measure.anchor_of(short, cwd=tmp_path / "short"), cwd=tmp_path / "short") == "c0"

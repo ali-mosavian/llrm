@@ -337,6 +337,10 @@ def watch_main(force: bool, every: int = 5, hours: float = 2.0) -> int:
     if not list((Path(os.environ.get("LLRM_MEASURE_DIR") or Path.home() / ".cache/llrm/measure")).glob(f"{head}-*.json")):
         full = plan(["Cargo.toml"], "full")
         execute(restricted(full, ["measure"], set(commands(full, load(), packages())) | set(load()["exclusive"])))
+    # And against the main commit 50 merges or a week back: a branch may add up to the tolerance, ten of them may not.
+    creep = subprocess.run([sys.executable, "tools/measure.py", "creep", "HEAD"], cwd=ROOT, env={**os.environ, "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")})
+    if creep.returncode == 1:
+        return 1
     merges = len(git("rev-list", "--first-parent", f"{green}..{head}").split()) if green else every
     if not (force or merges >= every or merges and time.time() - state.get("when", 0) >= hours * 3600):
         print(f"main: {merges} merges since the last green; not due")
