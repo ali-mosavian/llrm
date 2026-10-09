@@ -422,6 +422,43 @@ pub fn _undisturbed(
 /// `avoid_store_crossing` changes: where it is not set the run is the same
 /// either way.
 ///
+/// How loads are forwarded in one gvn run, and what is kept for the run's
+/// second numbering of the same function: the availability of each block
+/// (`dataflow`), or the walk's answer for every load, which neither depends on
+/// `avoid_store_crossing`.
+pub struct Forwarding {
+    dataflow: bool,
+    held: std::cell::OnceCell<avail::Held>,
+    walked: std::cell::OnceCell<Vec<avail::Forward>>,
+}
+
+impl Forwarding {
+    pub fn new(dataflow: bool) -> Self {
+        Self { dataflow, held: Default::default(), walked: Default::default() }
+    }
+
+    fn served(
+        &self,
+        unit: &memory::Unit,
+        accesses: &Accesses,
+        want: &BTreeSet<InstId>,
+    ) -> Vec<avail::Forward> {
+        let map =
+            || avail::forwardable_by(unit, accesses, want, self.held.get_or_init(|| avail::holders(unit, accesses)));
+        let walk = || self.walked.get_or_init(|| avail::forwardable_walk(unit, accesses, want)).clone();
+        if llrm_support::env_set("LLRM_CHECK_GVN") {
+            let (map, walk) = (map(), walk());
+            let seen = avail::compared(unit, &map, &walk);
+            eprintln!(
+                "GVNCHECK same={} different={} map_only={} map_only_invariant={} walk_only={}",
+                seen.same, seen.different, seen.map_only, seen.map_only_invariant, seen.walk_only
+            );
+            return if self.dataflow { map } else { walk };
+        }
+        if self.dataflow { map() } else { walk() }
+    }
+}
+
 /// `avoid_store_crossing` keeps a value from serving a load when a store
 /// lies on a path from its definition to the load.
 pub fn forwarded(
@@ -433,7 +470,7 @@ pub fn forwarded(
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &llrm_analysis::cfg::Shape,
     avoid_store_crossing: bool,
-    held: &std::cell::OnceCell<avail::Held>,
+    forwarding: &Forwarding,
     crossed: &std::cell::Cell<bool>,
 ) -> Result<bool, String> {
     let want = function
@@ -448,7 +485,8 @@ pub fn forwarded(
     let crossings = Crossings::of(function);
     // What each block holds is a fact of the instructions `function` has now,
     // which a caller that runs this twice on one function works out once.
-    let served = avail::forwardable_by(&unit, accesses, &want, held.get_or_init(|| avail::holders(&unit, accesses)))
+    let served = forwarding
+        .served(&unit, accesses, &want)
         .into_iter()
         .filter(|one| {
             let crosses = crossings.crosses(one.value, one.at);
@@ -695,7 +733,7 @@ b0:
             &registers,
             &shape,
             avoid_store_crossing,
-            &std::cell::OnceCell::new(),
+            &super::Forwarding::new(true),
             &std::cell::Cell::new(false),
         )
         .unwrap();

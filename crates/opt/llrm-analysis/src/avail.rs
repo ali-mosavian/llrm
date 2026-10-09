@@ -261,6 +261,85 @@ thread_local! {
     static CLOBBER_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Loads in `want` that a known value can serve, by the MemorySSA walk alone:
+/// no availability map is solved.
+pub fn forwardable_walk(
+    unit: &Unit,
+    accesses: &Accesses,
+    want: &BTreeSet<InstId>,
+) -> Vec<Forward> {
+    WALKED.with(|walked| walked.set(walked.get() + 1));
+    let missing: Vec<InstId> = unit
+        .function
+        .layout()
+        .iter()
+        .flat_map(|&block| unit.function.block(block).instructions().to_vec())
+        .filter(|inst| want.contains(inst) && loaded_into(unit, accesses, *inst).is_some())
+        .collect();
+    if missing.is_empty() { Vec::new() } else { memory_providers(unit, accesses, &missing) }
+}
+
+/// How the loads the availability map serves and those the walk serves compare.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Comparison {
+    /// Served by both, with the same value.
+    pub same: usize,
+    /// Served by both, with different values.
+    pub different: usize,
+    /// Served by the map only, and of those, invariant loads.
+    pub map_only: usize,
+    pub map_only_invariant: usize,
+    pub walk_only: usize,
+}
+
+/// `forwardable_by`'s loads against `forwardable_walk`'s.
+pub fn compared(
+    unit: &Unit,
+    map: &[Forward],
+    walk: &[Forward],
+) -> Comparison {
+    // A served load's own value is replaced by its provider, so a provider that
+    // is itself a served load stands for what serves that: both sides are
+    // compared at the end of their chains.
+    let root = |forwards: &[Forward], mut value: Operand| {
+        let served: HashMap<ValueId, Operand> =
+            forwards.iter().filter_map(|one| Some((unit.function.instruction(one.at).result?, one.value))).collect();
+        for _ in 0..forwards.len() + 1 {
+            match value {
+                Operand::Value(at) if served.contains_key(&at) => value = served[&at],
+                _ => break,
+            }
+        }
+        value
+    };
+    let by_walk: HashMap<InstId, Operand> = walk.iter().map(|one| (one.at, root(walk, one.value))).collect();
+    let by_map: HashMap<InstId, Operand> = map.iter().map(|one| (one.at, root(map, one.value))).collect();
+    let mut out = Comparison::default();
+    for one in map {
+        match by_walk.get(&one.at) {
+            Some(value) if *value == by_map[&one.at] => out.same += 1,
+            Some(_) => out.different += 1,
+            None => {
+                out.map_only += 1;
+                out.map_only_invariant +=
+                    usize::from(llrm_mir::memory::invariant_load(unit.context, unit.layout, unit.function, one.at));
+            }
+        }
+    }
+    out.walk_only = walk.iter().filter(|one| !by_map.contains_key(&one.at)).count();
+    out
+}
+
+thread_local! {
+    static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has walked for every load, for a test that a
+/// function numbered twice walks once.
+pub fn walked() -> usize {
+    WALKED.with(std::cell::Cell::get)
+}
+
 /// How many times this thread has asked whether a write clobbers a held cell,
 /// for a test that a store does not ask of every cell held.
 pub fn clobber_asks() -> usize {
