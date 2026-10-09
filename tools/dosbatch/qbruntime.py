@@ -62,6 +62,13 @@ def raw_output(work: Path, stem: str) -> bytes:
     return b""
 
 
+def dos_stem(stem: str) -> str:
+    """The one 8.3 basename used by a differential job and its artifacts."""
+    if not stem or any(not (character.isascii() and (character.isalnum() or character == "_")) for character in stem):
+        raise ValueError(f"DOS stem is not an ASCII basename: {stem!r}")
+    return stem[:8]
+
+
 @dataclass(frozen=True)
 class Differential:
     """The two runs of one llrm-qb object and their raw-output difference."""
@@ -73,15 +80,16 @@ class Differential:
 
 def differential(object_: Path, archive: Path, work: Path, stem: str) -> Differential:
     """Link one unchanged object against BCOM45 and LLRMQB, then compare bytes."""
+    job_stem = dos_stem(stem)
     reference_work = work / "bcom45"
     candidate_work = work / "llrmqb"
-    reference = dosbatch.run([dosbatch.Job(stem, "obj", object_)], reference_work)[stem]
+    reference = dosbatch.run([dosbatch.Job(job_stem, "obj", object_)], reference_work)[job_stem]
     candidate = dosbatch.run(
-        [dosbatch.Job(stem, "obj", object_, runtime="llrmqb", runtime_file=archive)], candidate_work
-    )[stem]
+        [dosbatch.Job(job_stem, "obj", object_, runtime="llrmqb", runtime_file=archive)], candidate_work
+    )[job_stem]
     if reference.status != "ok" or candidate.status != "ok":
         return Differential(reference, candidate, "a differential side did not complete")
-    difference = first_byte_difference(raw_output(reference_work, stem), raw_output(candidate_work, stem))
+    difference = first_byte_difference(raw_output(reference_work, job_stem), raw_output(candidate_work, job_stem))
     return Differential(reference, candidate, difference)
 
 

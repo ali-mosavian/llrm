@@ -33,6 +33,14 @@ class OutputTests(unittest.TestCase):
         self.assertEqual(qbruntime.first_byte_difference(b"A", b"A "), "byte 2: want <end> got 32")
 
 
+class DosNameTests(unittest.TestCase):
+    def test_runtime_jobs_use_one_8_3_stem_for_every_artifact(self):
+        """Shellsort's nine-character source name made both DOS links report not built."""
+        self.assertEqual(qbruntime.dos_stem("shellsort"), "shellsor")
+        self.assertEqual(qbruntime.dos_stem("quicksort"), "quicksor")
+        self.assertTrue(all(len(qbruntime.dos_stem(name)) <= 8 for name in qbruntime.MILESTONE_ONE))
+
+
 class ArchiveTests(unittest.TestCase):
     def test_archive_rebuild_removes_the_old_library_first(self):
         """LIB ignored replacement members, so a changed runtime still linked the old archive."""
