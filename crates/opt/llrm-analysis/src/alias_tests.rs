@@ -126,7 +126,8 @@ fn writes(
 
 #[test]
 fn test_points_to_flows_through_memory_and_a_phi() {
-    // A pointer spilled on one arm and joined with a copy retains its object set.
+    // A pointer spilled on one arm and joined with a copy retains its object
+    // set.
     let parsed = Parsed::new(
         "define void @f(i1 %c) {
 b0:
@@ -345,7 +346,8 @@ b30:
 
 #[test]
 fn test_parameter_modref_is_instantiated_at_a_call_site() {
-    // A callee writing parameter zero clobbers its actual object and no neighbour.
+    // A callee writing parameter zero clobbers its actual object and no
+    // neighbour.
     let summary =
         Summary { writes: BTreeSet::from([Slice::new(parameter(0), 2, 4, 1, 1).unwrap()]), ..Summary::default() };
     let actual = object(MemoryKind::Global, Identity::Global(7), Some(16));
@@ -371,7 +373,8 @@ b0:
 
 #[test]
 fn test_interprocedural_modref_reaches_the_call_operation() {
-    // A known callee replaces the call's catch-all effect with its actual object.
+    // A known callee replaces the call's catch-all effect with its actual
+    // object.
     let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
     let procedures =
         IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
@@ -531,7 +534,8 @@ fn test_capture_decides_what_nonlocal_reaches() {
 
 #[test]
 fn test_one_base_value_settles_provenance_references_by_displacement() {
-    // Two fields off one pointer, each whole-object provenance, were called overlapping.
+    // Two fields off one pointer, each whole-object provenance, were called
+    // overlapping.
     let parsed = Parsed::new(
         "define void @f(ptr %p) {
 b0:
@@ -625,9 +629,9 @@ fn a_returned_or_integer_address_escapes_and_a_frame_spill_does_not() {
     assert_eq!(escaped("store ptr %a, ptr %slot\n  ret ptr %slot").len(), 2);
 }
 
-/// PDS and VB FPDEEP: the raise left `ptrtoint` of `i`'s global and an `add` of it, nothing
-/// reading either, and the global counted as escaped, so each PRINT might have written `i`
-/// and its loop stayed rolled.
+/// PDS and VB FPDEEP: the raise left `ptrtoint` of `i`'s global and an `add` of
+/// it, nothing reading either, and the global counted as escaped, so each PRINT
+/// might have written `i` and its loop stayed rolled.
 #[test]
 fn an_integer_address_nothing_reads_escapes_nothing() {
     assert!(escaped("%n = ptrtoint ptr %a to i16\n  ret ptr null").is_empty());
@@ -803,9 +807,9 @@ b0:
 }
 
 /// A `noretain` call keeps nothing, but still reaches what its argument points
-/// to while it runs. `ERASE` of a `$STATIC` array through a descriptor zeroes the
-/// array; its write set lacked the array, so a later read of `cacheList(1)` was
-/// forwarded the 9 stored before it (Q45S34).
+/// to while it runs. `ERASE` of a `$STATIC` array through a descriptor zeroes
+/// the array; its write set lacked the array, so a later read of `cacheList(1)`
+/// was forwarded the 9 stored before it (Q45S34).
 #[test]
 fn a_noretain_call_still_writes_what_its_argument_points_to() {
     let premise = Parsed::new(
@@ -880,9 +884,10 @@ const TYPE_TREE: &str = "
 !5 = !{!3, !3, i64 0}
 ";
 
-/// With no type tree in the unit, each access built the module's whole tree from all its metadata
-/// (`Tbaa::of`) to read its own tag's ancestors: `Summaries` did that for every access of every
-/// procedure in every round, 41% of deedlines' compile (#394).
+/// With no type tree in the unit, each access built the module's whole tree
+/// from all its metadata (`Tbaa::of`) to read its own tag's ancestors:
+/// `Summaries` did that for every access of every procedure in every round, 41%
+/// of deedlines' compile (#394).
 #[test]
 fn an_access_in_a_unit_with_no_type_tree_builds_none() {
     let stores: String = (0..20).map(|at| format!("  store i16 {at}, ptr %p, !tbaa !{}\n", 4 + at % 2)).collect();
@@ -893,7 +898,8 @@ fn an_access_in_a_unit_with_no_type_tree_builds_none() {
     assert_eq!(llrm_mir::tbaa::built() - before, 0, "a type tree was built for an access");
 }
 
-/// Reading a tag's ancestors without the tree gives what the tree gives, for every tag.
+/// Reading a tag's ancestors without the tree gives what the tree gives, for
+/// every tag.
 #[test]
 fn a_tags_ancestors_are_the_same_with_and_without_the_type_tree() {
     let parsed = Parsed::new(&format!("define void @f() {{\n  ret void\n}}\n{TYPE_TREE}"));
@@ -906,8 +912,9 @@ fn a_tags_ancestors_are_the_same_with_and_without_the_type_tree() {
     assert_eq!(llrm_mir::tbaa::Tbaa::chain(metadata, llrm_mir::module::MetadataId(5)), ["int", "scalar", "root"]);
 }
 
-/// What a body does on its own was made again for every body in every round of the fixed point:
-/// 7000 times in deedlines, 47 s of 101 (#394). It is made once per body, however many rounds.
+/// What a body does on its own was made again for every body in every round of
+/// the fixed point: 7000 times in deedlines, 47 s of 101 (#394). It is made
+/// once per body, however many rounds.
 #[test]
 fn a_direct_summary_is_made_once_per_body_however_many_rounds() {
     let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
@@ -918,9 +925,10 @@ fn a_direct_summary_is_made_once_per_body_however_many_rounds() {
     assert_eq!(super::direct_runs() - before, 2);
 }
 
-/// Every round of the fixed point visited every body: a chain of calls with no cycle in it took
-/// as many rounds as it had links, and each visit ran `points_to` (#394). A body in no cycle is
-/// visited once, callees first; a cycle iterates, and only it.
+/// Every round of the fixed point visited every body: a chain of calls with no
+/// cycle in it took as many rounds as it had links, and each visit ran
+/// `points_to` (#394). A body in no cycle is visited once, callees first; a
+/// cycle iterates, and only it.
 #[test]
 fn a_body_in_no_cycle_of_calls_is_visited_once() {
     let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
@@ -938,8 +946,10 @@ fn a_body_in_no_cycle_of_calls_is_visited_once() {
     assert!(super::visits() - before >= 2, "a cycle is visited until nothing changes");
 }
 
-/// Every inline splice worked the summaries of the whole module out again (host.c: 72 runs, 20.8 s of 35.8 s). After
-/// one body is edited only it and what reads it are visited and made again, and the result is what a whole run makes.
+/// Every inline splice worked the summaries of the whole module out again
+/// (host.c: 72 runs, 20.8 s of 35.8 s). After one body is edited only it and
+/// what reads it are visited and made again, and the result is what a whole run
+/// makes.
 #[test]
 fn an_edit_visits_the_edited_body_and_its_callers_only() {
     let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
@@ -962,11 +972,13 @@ fn an_edit_visits_the_edited_body_and_its_callers_only() {
     assert_eq!(again, whole);
 }
 
-/// The facts a visit found are of the body as it was: an edited body is visited from its own, and the summaries are
-/// what a whole run of the edited module makes (host.c: one function differed before).
+/// The facts a visit found are of the body as it was: an edited body is visited
+/// from its own, and the summaries are what a whole run of the edited module
+/// makes (host.c: one function differed before).
 #[test]
 fn an_edited_body_is_summarized_from_its_new_facts() {
-    // The pointer passed is an instruction's, found by the body's points-to facts, not a constant.
+    // The pointer passed is an instruction's, found by the body's points-to
+    // facts, not a constant.
     let text = |at: u32| {
         CALLEE_WRITES_ITS_PARAMETER.replace(
             "  call void @callee(ptr getelementptr (i8, ptr @g, i16 4))",
@@ -986,9 +998,10 @@ fn an_edited_body_is_summarized_from_its_new_facts() {
     assert_ne!(again, first, "premise: the edit changes the summary");
 }
 
-/// Each call to something unknown built what it may do besides what its arguments reach (every
-/// tracked global, the callbacks) afresh: `_unknown_visible` was 28% of compiling deedlines, and
-/// `analysis summaries` 12 s of it (#558). Calls to one routine with the same escaped objects are
+/// Each call to something unknown built what it may do besides what its
+/// arguments reach (every tracked global, the callbacks) afresh:
+/// `_unknown_visible` was 28% of compiling deedlines, and `analysis summaries`
+/// 12 s of it (#558). Calls to one routine with the same escaped objects are
 /// worked out once.
 #[test]
 fn test_calls_alike_to_something_unknown_are_worked_out_once() {
@@ -1048,8 +1061,9 @@ mod counted {
 #[global_allocator]
 static COUNTING: counted::Counting = counted::Counting;
 
-/// A `MemRef` copied its type name and every ancestor's as strings, a vector, and a set: 5 allocations for a reference
-/// of a three-deep type, 8% of all the compile's allocations and ~3% of its instructions on QCport. The names are
+/// A `MemRef` copied its type name and every ancestor's as strings, a vector,
+/// and a set: 5 allocations for a reference of a three-deep type, 8% of all the
+/// compile's allocations and ~3% of its instructions on QCport. The names are
 /// shared.
 #[test]
 fn a_typed_reference_is_copied_without_allocating() {
@@ -1069,8 +1083,9 @@ fn a_typed_reference_is_copied_without_allocating() {
     drop((copy, copies));
 }
 
-/// Picking the buckets a write reaches made a vector for the objects, one for the classes and one grown a few times for
-/// the answer: 7% of the compile's allocations (QCport). One vector, sized once, is the answer.
+/// Picking the buckets a write reaches made a vector for the objects, one for
+/// the classes and one grown a few times for the answer: 7% of the compile's
+/// allocations (QCport). One vector, sized once, is the answer.
 #[test]
 fn picking_the_buckets_of_a_write_allocates_once() {
     let global =
@@ -1083,9 +1098,10 @@ fn picking_the_buckets_of_a_write_allocates_once() {
     drop(reached);
 }
 
-/// A callee was looked up among every global by name at every call of every visit (`_summary`: 12.7 G of host.c's 94 G
-/// instructions in `summaries visit`, a quarter of it that scan). The procedure knows once which of its callees another
-/// definition may replace.
+/// A callee was looked up among every global by name at every call of every
+/// visit (`_summary`: 12.7 G of host.c's 94 G instructions in `summaries
+/// visit`, a quarter of it that scan). The procedure knows once which of its
+/// callees another definition may replace.
 #[test]
 fn a_procedure_knows_which_callees_a_definition_elsewhere_may_replace() {
     let text = |linkage: &str| {
@@ -1098,14 +1114,16 @@ fn a_procedure_knows_which_callees_a_definition_elsewhere_may_replace() {
         let procedures =
             IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
         let found = summaries(&procedures, None).unwrap();
-        // No summary describes a call that may be replaced: f then writes what an unknown callee may.
+        // No summary describes a call that may be replaced: f then writes what
+        // an unknown callee may.
         assert_eq!(found["f"].writes.is_empty(), false, "f writes something, replaceable callee or not");
     }
 }
 
 #[test]
 fn initialized_asks_the_interner_per_parameter_not_per_read_and_parameter() {
-    // stamped_all interned one Parameter object per (read, parameter) pair: 112 M instructions per QCport file.
+    // stamped_all interned one Parameter object per (read, parameter) pair: 112
+    // M instructions per QCport file.
     let loads: String = (0..24).map(|i| format!("  %l{i} = load i16, ptr %p{}\n", i % 6)).collect();
     let text = format!(
         "define i16 @f(ptr %p0, ptr %p1, ptr %p2, ptr %p3, ptr %p4, ptr %p5) {{\nb0:\n{loads}  ret i16 %l0\n}}\n"

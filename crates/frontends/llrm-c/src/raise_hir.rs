@@ -43,7 +43,8 @@ pub fn widths_for(
         "TY_INTEGER" | "TY_UNSIGNED" | "TY_BOOLEAN" => 2,
         "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" => 2,
         "TY_LONG_POINTER" | "TY_HUGE_POINTER" | "TY_LONG_CODE_PTR" => 4,
-        // A float moves as its bits; only arithmetic and conversion need the x87.
+        // A float moves as its bits; only arithmetic and conversion need the
+        // x87.
         "TY_SINGLE" => 4,
         "TY_DOUBLE" => 8,
         "TY_LONG_DOUBLE" => 10,
@@ -125,9 +126,10 @@ pub(crate) fn classes_for(
     })
 }
 
-/// A call's contract under `convention`, a target's C ABI (`calling.toml`): stack arguments, what it
-/// clobbers, what it keeps, and `pushed` bytes its caller or it pops. `Reg` names the 16-bit
-/// registers; each stands for its family, so `eax` is `ax`, and the x87 stack is not one.
+/// A call's contract under `convention`, a target's C ABI (`calling.toml`):
+/// stack arguments, what it clobbers, what it keeps, and `pushed` bytes its
+/// caller or it pops. `Reg` names the 16-bit registers; each stands for its
+/// family, so `eax` is `ax`, and the x87 stack is not one.
 pub(crate) fn contract(
     convention: &Convention,
     name: String,
@@ -178,8 +180,9 @@ pub use llrm_core::backend::masm::InlinePart;
 mod tests {
     use super::*;
 
-    /// The clobber lists were `medium_model`'s and `cdecl32`'s, written in Rust beside `calling.toml`: a convention
-    /// that clobbers SI and keeps the rest says so, whichever target it is.
+    /// The clobber lists were `medium_model`'s and `cdecl32`'s, written in Rust
+    /// beside `calling.toml`: a convention that clobbers SI and keeps the
+    /// rest says so, whichever target it is.
     #[test]
     fn a_contract_clobbers_what_the_targets_convention_says() {
         let text = r#"default = "c"
@@ -211,8 +214,8 @@ variadic_float = "double"
         assert!(contract.evidence.starts_with("c: stack arguments"), "{}", contract.evidence);
     }
 
-    /// Both real targets: m16 clobbers AX, BX, CX, DX, ES and the flags; m32 AX, CX, DX and the flags (EBX, ESI, EDI,
-    /// EBP kept).
+    /// Both real targets: m16 clobbers AX, BX, CX, DX, ES and the flags; m32
+    /// AX, CX, DX and the flags (EBX, ESI, EDI, EBP kept).
     #[test]
     fn the_real_targets_clobber_what_they_did() {
         use llrm_target::Target;

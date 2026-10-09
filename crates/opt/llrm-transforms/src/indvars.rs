@@ -1,7 +1,7 @@
 //! IndVarSimplify's exit rewriting reused across an outer loop: llrm-core's
 //! `optimize/indvars.rs`, the port of `qbopt/optimize/indvars.py`, adapted
-//! to the rich MIR. `widened` is `widenIV` for a counter that needs no sign proof.
-//! `rewound` carries an exact inner recurrence's exit value
+//! to the rich MIR. `widened` is `widenIV` for a counter that needs no sign
+//! proof. `rewound` carries an exact inner recurrence's exit value
 //! around the outer loop, less its distance, in place of its saved start.
 //! Which counters a loop keeps, and which ends it, is `lsr`'s.
 
@@ -45,7 +45,8 @@ impl FunctionPass for IndVars {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        // What is known without memory is the manager's until a step changes the body.
+        // What is known without memory is the manager's until a step changes
+        // the body.
         let held = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
         // Only a `sext` of a counter asks what the loops bound.
         let widens =
@@ -423,14 +424,14 @@ fn _rewinding(
 #[path = "indvars_tests.rs"]
 mod tests;
 
-/// A counter read through `zext` to the default address's index width is a counter
-/// of that width, where `induction` proves its values never pass its own
-/// (`rises_unsigned`): C's `unsigned short i` reads `a[zext i]`, a conversion
-/// per trip, and its counted-loop proof is narrower than the address, so the
-/// idioms and strength reduction that want the address's width find none. The
-/// wide counter ends the loop against the bound extended once, before it, and
-/// what else reads the narrow one reads its low part. Every counter widened;
-/// whether any was.
+/// A counter read through `zext` to the default address's index width is a
+/// counter of that width, where `induction` proves its values never pass its
+/// own (`rises_unsigned`): C's `unsigned short i` reads `a[zext i]`, a
+/// conversion per trip, and its counted-loop proof is narrower than the
+/// address, so the idioms and strength reduction that want the address's width
+/// find none. The wide counter ends the loop against the bound extended once,
+/// before it, and what else reads the narrow one reads its low part. Every
+/// counter widened; whether any was.
 pub fn widened(
     context: &mut Context,
     layout: &DataLayout,
@@ -440,8 +441,8 @@ pub fn widened(
     widened_with(context, layout, function, outer, &mut llrm_analysis::memory::Standing::underived())
 }
 
-/// `widened`, what is known of the body without memory given as `standing` says: derived once for each state of the
-/// body, not once for each loop.
+/// `widened`, what is known of the body without memory given as `standing`
+/// says: derived once for each state of the body, not once for each loop.
 pub fn widened_with(
     context: &mut Context,
     layout: &DataLayout,
@@ -571,7 +572,8 @@ fn _find(
     None
 }
 
-/// `operand` zero-extended to `ty` at the end of `preheader`: a number is its own extension.
+/// `operand` zero-extended to `ty` at the end of `preheader`: a number is its
+/// own extension.
 fn _extended(
     context: &mut Context,
     function: &mut Function,

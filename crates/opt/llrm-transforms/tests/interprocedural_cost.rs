@@ -1,4 +1,5 @@
-//! What the whole-module step spends is bounded by what it changed, not by what it asked.
+//! What the whole-module step spends is bounded by what it changed, not by what
+//! it asked.
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use llrm_mir::passes::Observer;
@@ -39,9 +40,11 @@ fn source(callers: usize) -> String {
     text + &format!("  ret i16 {last}\n}}\n")
 }
 
-/// `memory::callees` scans every function of the module. The step used to scan for every procedure it looked at in
-/// every round, so a module of n callers paid n scans of n functions though nothing changed: n^2 at -O2 and worse at
-/// -Os. It now scans after a body changed (one pipeline run each), not once more for each question.
+/// `memory::callees` scans every function of the module. The step used to scan
+/// for every procedure it looked at in every round, so a module of n callers
+/// paid n scans of n functions though nothing changed: n^2 at -O2 and worse at
+/// -Os. It now scans after a body changed (one pipeline run each), not once
+/// more for each question.
 #[test]
 fn test_the_whole_module_step_scans_the_callees_after_a_change_not_for_every_question() {
     llrm_mir::passes::observe(Observer { span: |_, _, run| run(), function: |_, run| run(), count: counting });
@@ -81,7 +84,8 @@ fn test_the_whole_module_step_scans_the_callees_after_a_change_not_for_every_que
                 "{scans} scans at {callers} callers, {before} at {small}: grows faster than the module"
             );
         }
-        // A name table of every global, built and copied for each body looked at: no pass here declares a function.
+        // A name table of every global, built and copied for each body looked
+        // at: no pass here declares a function.
         let tables = NAME_TABLES.load(Ordering::Relaxed);
         assert!(tables <= 8, "{callers} callers: {tables} name tables of the module's globals built");
         prior = Some((scans, callers));

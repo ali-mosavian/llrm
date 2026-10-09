@@ -4,14 +4,18 @@
 //! call that cannot return.
 //!
 //! What changed with the representation:
-//! - A call names its callee, so the old local call table is the call's operand, and the runtime contracts'
-//!   `Control::Never` is the call's or callee's `noreturn` attribute. `terminal_sites` joins the two, and
-//!   interprocedural's `noreturn_procedures` and `terminal_calls` ask this module.
-//! - Every block ends in a terminator, so the old malformed fallthrough is gone. `unreachable` states that control
-//!   stops there; only `ret` returns.
+//! - A call names its callee, so the old local call table is the call's
+//!   operand, and the runtime contracts' `Control::Never` is the call's or
+//!   callee's `noreturn` attribute. `terminal_sites` joins the two, and
+//!   interprocedural's `noreturn_procedures` and `terminal_calls` ask this
+//!   module.
+//! - Every block ends in a terminator, so the old malformed fallthrough is
+//!   gone. `unreachable` states that control stops there; only `ret` returns.
 //! - The frontend's cold mark is a call stating `cold`, as LLVM spells it.
-//! - The old edit kept the cut tail and orphaned blocks as inert source-byte owners (`_without`); the rich MIR owns no
-//!   bytes, so they go. The block ends in `unreachable`, and `cfg::_unreachable` removes what no longer runs.
+//! - The old edit kept the cut tail and orphaned blocks as inert source-byte
+//!   owners (`_without`); the rich MIR owns no bytes, so they go. The block
+//!   ends in `unreachable`, and `cfg::_unreachable` removes what no longer
+//!   runs.
 //!
 //! Skipped: `test_qrender_main_spill_uses_shutdown_control_proof`'s frame
 //! and prologue half, which is the backend's; its noreturn half is

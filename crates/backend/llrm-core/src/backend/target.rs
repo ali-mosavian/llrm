@@ -175,7 +175,8 @@ pub static NARROW: LazyLock<PySet<Register>> = LazyLock::new(|| llrm_x86::regist
 // byte of an array.
 pub static BYTE: LazyLock<PySet<Register>> = LazyLock::new(|| llrm_x86::registers::BYTES.into_iter().collect());
 
-// The width each register names, and the register file at each width: the architecture's.
+// The width each register names, and the register file at each width: the
+// architecture's.
 pub use llrm_x86::registers::{AT_WIDTH, WIDTHS};
 
 /// The same register named at the width an operand needs.
@@ -229,7 +230,8 @@ pub struct Segments {
 
 impl Segments {
     pub fn of(machine: &Machine) -> Self {
-        // A flat machine has no selector to place: DS is only what string operations read.
+        // A flat machine has no selector to place: DS is only what string
+        // operations read.
         let Some(segments) = machine.segments.as_ref() else {
             return Self { selectors: Vec::new(), data: Register::DS, through: None, huge_shift: None };
         };
@@ -291,9 +293,11 @@ pub fn needs_data_group(one: &crate::model::lir::Insn) -> bool {
     named_for_data_group(what.name.as_deref().unwrap_or(""))
 }
 
-/// Whether an instruction of this mnemonic is a string instruction, an x87 one, a trap or a wait. Prefixes are taken
-/// off by hand: `str::trim_start_matches` with a `&str` pattern builds a substring searcher for each call, which was
-/// 2.4% of a large module's compile, asked of every instruction at every rebuild of the allocator's facts.
+/// Whether an instruction of this mnemonic is a string instruction, an x87 one,
+/// a trap or a wait. Prefixes are taken off by hand: `str::trim_start_matches`
+/// with a `&str` pattern builds a substring searcher for each call, which was
+/// 2.4% of a large module's compile, asked of every instruction at every
+/// rebuild of the allocator's facts.
 fn named_for_data_group(name: &str) -> bool {
     fn without<'a>(
         mut text: &'a str,
@@ -400,8 +404,9 @@ mod tests {
             || name.starts_with('f')
     }
 
-    /// Taking the prefixes off by hand must leave every mnemonic where it was: repeated prefixes, one prefix after
-    /// another, and a prefix that is not one.
+    /// Taking the prefixes off by hand must leave every mnemonic where it was:
+    /// repeated prefixes, one prefix after another, and a prefix that is
+    /// not one.
     #[test]
     fn test_a_mnemonic_is_told_as_a_string_or_x87_instruction_as_it_always_was() {
         let bases = [
@@ -454,14 +459,16 @@ mod tests {
         }
     }
 
-    /// What the allocator may hand out for an operand that reaches memory: the addressing registers it holds values in.
+    /// What the allocator may hand out for an operand that reaches memory: the
+    /// addressing registers it holds values in.
     fn bases(classes: &RegisterClasses) -> Vec<Register> {
         let addressing: BTreeSet<Register> = classes.addressing.iter().map(|x| ir::root(*x)).collect();
         classes.available.iter().copied().filter(|one| addressing.contains(one)).collect()
     }
 
-    /// `Segments::of` panicked ("a segmented machine") on a flat machine, so no flat
-    /// target reached the allocator; a flat machine places no selector.
+    /// `Segments::of` panicked ("a segmented machine") on a flat machine, so no
+    /// flat target reached the allocator; a flat machine places no
+    /// selector.
     #[test]
     fn test_a_flat_machine_has_no_selector_to_place() {
         let flat =
@@ -470,7 +477,8 @@ mod tests {
         assert!(segments.selectors.is_empty() && segments.through.is_none() && segments.huge_shift.is_none());
     }
 
-    /// The allocator's bases are the encodable ones less the frame register: a new frame rule changes one place.
+    /// The allocator's bases are the encodable ones less the frame register: a
+    /// new frame rule changes one place.
     #[test]
     fn test_the_allocators_bases_are_the_encodable_ones_but_the_frame() {
         let encodable: BTreeSet<Register> = llrm_x86_m16::ENCODABLE_BASES.into_iter().collect();
@@ -479,14 +487,16 @@ mod tests {
         assert!(crate::backend::select::_WORD_BASES.iter().all(|one| encodable.contains(one)));
     }
 
-    /// x86 arithmetic is two-address: the spill model charges the copy of a first operand that stays live.
+    /// x86 arithmetic is two-address: the spill model charges the copy of a
+    /// first operand that stays live.
     #[test]
     fn test_the_machine_says_its_arithmetic_is_two_address() {
         use llrm_mir::target::Machine;
         assert!(llrm_x86_m16::Dos::default().two_address());
     }
 
-    /// The spill model counts the registers an address may use as the allocator restricts to.
+    /// The spill model counts the registers an address may use as the allocator
+    /// restricts to.
     #[test]
     fn test_the_spill_models_address_registers_are_the_allocators() {
         use llrm_mir::target::Machine;
@@ -648,10 +658,10 @@ mod tests {
         );
     }
 
-    /// A string op's segment operand was a general value, so a selector made for
-    /// it crowded the general registers: examples/logfile.nib grew a spill (+2 bytes,
-    /// +2 memory operands). It is confined to the segment registers, as a far
-    /// access's selector is.
+    /// A string op's segment operand was a general value, so a selector made
+    /// for it crowded the general registers: examples/logfile.nib grew a
+    /// spill (+2 bytes, +2 memory operands). It is confined to the segment
+    /// registers, as a far access's selector is.
     #[test]
     fn test_a_string_ops_segment_operand_is_confined_to_a_segment_register() {
         use std::sync::Arc;
@@ -685,7 +695,8 @@ mod tests {
         assert!(!classes.contains_key(&1), "premise: the offsets stay general");
     }
 
-    /// nbody's FLD pointer was allocated to AX, which cannot address 16-bit memory.
+    /// nbody's FLD pointer was allocated to AX, which cannot address 16-bit
+    /// memory.
     #[test]
     fn test_x87_memory_operands_still_need_address_registers() {
         let what = semantics(
@@ -745,9 +756,10 @@ mod tests {
         Loc::Held(ir::Held { value, width: 2 })
     }
 
-    /// `les`, `lds`, `lfs` and `lgs` take the same operands and differ in the selector
-    /// register: which one the instruction is follows from the register, so none pins it.
-    /// Reading them as `d1=es` made every far load need ES.
+    /// `les`, `lds`, `lfs` and `lgs` take the same operands and differ in the
+    /// selector register: which one the instruction is follows from the
+    /// register, so none pins it. Reading them as `d1=es` made every far
+    /// load need ES.
     #[test]
     fn test_a_register_that_picks_a_form_of_a_family_is_no_requirement() {
         for name in ["les", "lds", "lfs", "lgs"] {
@@ -756,7 +768,8 @@ mod tests {
         }
     }
 
-    /// A divide reads the pair high half first, and writes the quotient then the remainder.
+    /// A divide reads the pair high half first, and writes the quotient then
+    /// the remainder.
     #[test]
     fn test_a_divide_pins_the_pair_dx_before_ax() {
         let what = semantics(Operation::Divide, "idiv", vec![held(1), held(2)], vec![held(3), held(4), held(5)]);
@@ -773,8 +786,9 @@ mod tests {
         assert!(pins(&narrow).is_empty(), "a divide into one register names no pair");
     }
 
-    /// `rep movs` reads its count in cx and the pointers in si and di, leaves them past the
-    /// cells, and reads the source override in fs and the destination in es.
+    /// `rep movs` reads its count in cx and the pointers in si and di, leaves
+    /// them past the cells, and reads the source override in fs and the
+    /// destination in es.
     #[test]
     fn test_a_rep_movs_pins_its_pointers_count_and_segments() {
         let what = semantics(
@@ -798,7 +812,8 @@ mod tests {
         );
     }
 
-    /// A shift by anything but a literal counts from cl: a literal count pins nothing.
+    /// A shift by anything but a literal counts from cl: a literal count pins
+    /// nothing.
     #[test]
     fn test_a_shift_by_cl_pins_the_count() {
         let by = |count: Loc| semantics(Operation::Binary, "shl", vec![held(1)], vec![held(1), count]);
@@ -806,7 +821,8 @@ mod tests {
         assert!(pins(&by(Loc::Imm(ir::Imm { value: 3, width: 1, address: None }))).is_empty());
     }
 
-    // ----------------------------------------------- what a funnel shift and a sign extension pin
+    // ----------------------------------------------- what a funnel shift and a
+    // sign extension pin
 
     fn funnel_of(
         count: Loc,

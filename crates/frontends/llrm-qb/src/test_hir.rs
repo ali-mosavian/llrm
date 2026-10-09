@@ -20,7 +20,8 @@ pub(super) fn root() -> PathBuf {
     PathBuf::from(env!("LLRM_ROOT"))
 }
 
-/// `tmp_path / name` holding `bytes`, in a directory that lives as long as the test.
+/// `tmp_path / name` holding `bytes`, in a directory that lives as long as the
+/// test.
 pub(super) fn written(
     directory: &tempfile::TempDir,
     name: &str,
@@ -31,7 +32,8 @@ pub(super) fn written(
     path
 }
 
-/// `qb_driver.parsed(source, dialect=..., runtime=...)` with every other default.
+/// `qb_driver.parsed(source, dialect=..., runtime=...)` with every other
+/// default.
 pub(super) fn parsed_as(
     source: &Path,
     dialect: &str,
@@ -77,7 +79,8 @@ pub(super) fn listing_unoptimised(program: &Program) -> String {
     masm::text(&qb_compile::assembled(program, None, &options).expect("assembles")).expect("prints")
 }
 
-/// `listing` where no function is inlined into its one caller: a test that reads the callee (a handler).
+/// `listing` where no function is inlined into its one caller: a test that
+/// reads the callee (a handler).
 pub(super) fn listing_calls_kept(program: &Program) -> String {
     let mut options = codegen();
     options.pipeline.inline = llrm_transforms::inline::Threshold::none();

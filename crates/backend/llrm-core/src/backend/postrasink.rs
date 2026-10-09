@@ -1,10 +1,13 @@
-//! LLVM's PostRAMachineSinking: a copy whose result only one successor reads moves into that successor.
+//! LLVM's PostRAMachineSinking: a copy whose result only one successor reads
+//! moves into that successor.
 //!
-//! `mov edi, edx` ahead of `test eax, eax / jne body` is dead on the path that returns at once, where nothing
-//! reads EDI (a saved register's incoming value is on the stack): the copy belongs to the block that reads it.
-//! Shrink wrapping can then place the prologue after the test, as gcc and LLVM do. Sound while the successor
-//! is entered only from here, nothing between the copy and the branch reads its result or writes its source,
-//! and no other successor has the result live.
+//! `mov edi, edx` ahead of `test eax, eax / jne body` is dead on the path that
+//! returns at once, where nothing reads EDI (a saved register's incoming value
+//! is on the stack): the copy belongs to the block that reads it.
+//! Shrink wrapping can then place the prologue after the test, as gcc and LLVM
+//! do. Sound while the successor is entered only from here, nothing between the
+//! copy and the branch reads its result or writes its source, and no other
+//! successor has the result live.
 
 use std::sync::Arc;
 
@@ -32,7 +35,8 @@ fn live_in(body: &LirBody) -> IndexMap<i64, Lanes> {
     .output
 }
 
-/// Blocks reachable from the entry, each before the successors it does not come back to (reverse post-order).
+/// Blocks reachable from the entry, each before the successors it does not come
+/// back to (reverse post-order).
 fn reverse_post_order(body: &LirBody) -> Vec<i64> {
     let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
     let mut seen = crate::support::hash::HashSet::default();
@@ -54,10 +58,12 @@ fn reverse_post_order(body: &LirBody) -> Vec<i64> {
     order
 }
 
-/// `body` with each copy moved into the one successor that reads it. One pass over the blocks, as LLVM makes: a copy
-/// that lands in a block is seen when that block's turn comes, and reverse post-order puts it after the block it came
-/// from. Liveness is worked out once; a copy moved into a block changes what is live into that block, not what is live
-/// into its successors, which is what the next step asks.
+/// `body` with each copy moved into the one successor that reads it. One pass
+/// over the blocks, as LLVM makes: a copy that lands in a block is seen when
+/// that block's turn comes, and reverse post-order puts it after the block it
+/// came from. Liveness is worked out once; a copy moved into a block changes
+/// what is live into that block, not what is live into its successors, which is
+/// what the next step asks.
 pub fn sunk(body: &LirBody) -> LirBody {
     if !body.blocks.iter().any(|block| block.succ.len() > 1 && block.insns.iter().any(|one| copy_of(one).is_some())) {
         return body.clone();
@@ -106,7 +112,8 @@ pub fn sunk(body: &LirBody) -> LirBody {
                 continue;
             }
             insns.get_mut(&at).expect("a block").remove(index);
-            // Bottom-up, so each earlier copy lands ahead of the later ones already there.
+            // Bottom-up, so each earlier copy lands ahead of the later ones
+            // already there.
             insns.get_mut(&target).expect("a block").insert(0, one);
             changed = true;
         }
@@ -179,15 +186,17 @@ mod tests {
         LirBlock { succ, ..LirBlock::new(at, insns) }
     }
 
-    /// `mov di, dx; cmp ax, bx; jl 9`, the loop at 9 reading DI, the exit at 5 not: the shape of a function that leaves
-    /// at once or works with a copy of its argument.
+    /// `mov di, dx; cmp ax, bx; jl 9`, the loop at 9 reading DI, the exit at 5
+    /// not: the shape of a function that leaves at once or works with a
+    /// copy of its argument.
     fn shape(
         exit_reads: bool,
         body_has_two_predecessors: bool,
     ) -> LirBody {
         let cmp = insn(2, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None);
         let branch = insn(3, Operation::Branch, "jl", vec![], vec![], Some(9));
-        // A generated return reads only what it requires and the epilogue: DI is not among them.
+        // A generated return reads only what it requires and the epilogue: DI
+        // is not among them.
         let ret = Arc::new(Insn {
             reads_complete: true,
             ..Arc::unwrap_or_clone(insn(5, Operation::Return, "ret", vec![], vec![], None))
@@ -224,8 +233,9 @@ mod tests {
             .count()
     }
 
-    /// The copy of a saved register's argument ran on the path that returns at once, where nothing reads it, and kept
-    /// the prologue from moving past the test (hanoi, fib: -7% instructions).
+    /// The copy of a saved register's argument ran on the path that returns at
+    /// once, where nothing reads it, and kept the prologue from moving past
+    /// the test (hanoi, fib: -7% instructions).
     #[test]
     fn test_a_copy_only_one_successor_reads_moves_into_it() {
         let body = shape(false, false);
@@ -245,8 +255,9 @@ mod tests {
         assert_eq!((copies_in(&after, 1), copies_in(&after, 9)), (1, 0));
     }
 
-    /// One pass sinks a chain: the block a copy lands in is visited after the one it left (rectwo c -15% needed it; a
-    /// repeat bought the same at 0.3% of compile time).
+    /// One pass sinks a chain: the block a copy lands in is visited after the
+    /// one it left (rectwo c -15% needed it; a repeat bought the same at
+    /// 0.3% of compile time).
     #[test]
     fn test_a_copy_goes_on_through_a_second_branch_in_one_pass() {
         let cmp = |at| insn(at, Operation::Compare, "cmp", vec![], vec![r(AX), r(BX)], None);

@@ -121,8 +121,9 @@ pub struct Symbol {
     pub call_class: i64,
     pub call_target: i64,
     pub register_parms: bool, // any argument passed in a register
-    /// The register list the front end recorded, as it writes it (`[ff:0]`): the default one is its description's
-    /// `default_registers`; any other is an `aux` pragma's or `__fastcall`'s.
+    /// The register list the front end recorded, as it writes it (`[ff:0]`):
+    /// the default one is its description's `default_registers`; any other
+    /// is an `aux` pragma's or `__fastcall`'s.
     pub register_list: String,
     pub code: Option<Code>,
     pub segment: i64,
@@ -173,7 +174,8 @@ impl Symbol {
         self.call_class & REVERSE_PARMS != 0
     }
 
-    /// The program's entry, `entry` (the routine the runtime's start calls, its C runtime description's).
+    /// The program's entry, `entry` (the routine the runtime's start calls, its
+    /// C runtime description's).
     pub fn is_entry(
         &self,
         entry: &str,
@@ -247,7 +249,8 @@ pub struct Statement {
 pub struct Proc {
     pub symbol: i64,
     pub type_: String,
-    pub parms: Vec<(i64, String)>, // as declared: last first where the convention pushes in order
+    // as declared: last first where the convention pushes in order
+    pub parms: Vec<(i64, String)>,
     pub autos: Vec<(String, String)>, // ("y5" | "t3", type)
     pub body: Vec<Statement>,
     /// Under -d2: its own debug type, and each parameter's and local's.
@@ -321,15 +324,18 @@ pub struct Unit {
     pub procs: Vec<Proc>,
     /// Compiled with -d2.
     pub debug: Option<Debug>,
-    /// The routine the runtime's start calls, and the `cc` of the convention it calls it in (the C runtime
-    /// description's). `-fwrapv`: signed overflow wraps, and C promises nothing of it.
+    /// The routine the runtime's start calls, and the `cc` of the convention it
+    /// calls it in (the C runtime description's). `-fwrapv`: signed
+    /// overflow wraps, and C promises nothing of it.
     pub wrapv: bool,
     pub entry: String,
     pub entry_cc: String,
-    /// What the front end records of a function it passes in its default registers.
+    /// What the front end records of a function it passes in its default
+    /// registers.
     pub default_registers: String,
-    /// The `cc` of the convention a function the front end records as cdecl has, and one it records in its default
-    /// registers; none where that is the C one (`ccc`).
+    /// The `cc` of the convention a function the front end records as cdecl
+    /// has, and one it records in its default registers; none where that is
+    /// the C one (`ccc`).
     pub cdecl_cc: Option<String>,
     pub registers_cc: Option<String>,
     /// INIT's code-generator switches (`CGSW_GEN_*`).
@@ -341,9 +347,11 @@ pub struct Unit {
 }
 
 impl Unit {
-    /// Each symbol's decoration as `calling` states it for `format`: what the front end recorded is OMF's, and a
-    /// symbol whose pattern a convention states takes that convention's for `format`. The entry is called by
-    /// the runtime's start in the convention the description names, whatever the front end made of it.
+    /// Each symbol's decoration as `calling` states it for `format`: what the
+    /// front end recorded is OMF's, and a symbol whose pattern a convention
+    /// states takes that convention's for `format`. The entry is called by
+    /// the runtime's start in the convention the description names, whatever
+    /// the front end made of it.
     pub fn decorate(
         &mut self,
         calling: &llrm_target::calling::Calling,
@@ -364,8 +372,8 @@ impl Unit {
             } else if let Some(pattern) =
                 registers.clone().filter(|_| symbol.register_parms && symbol.register_list == self.default_registers)
             {
-                // In its default registers: the convention this ABI states for them spells it, whatever Open Watcom's
-                // was.
+                // In its default registers: the convention this ABI states for
+                // them spells it, whatever Open Watcom's was.
                 symbol.pattern = pattern;
             } else if let Some(pattern) = calling.redecorated(&symbol.pattern, format) {
                 symbol.pattern = pattern;
@@ -373,8 +381,9 @@ impl Unit {
         }
     }
 
-    /// Warns that far and huge pointers are near on a target with one address space (the front end
-    /// gives both the same type, so it cannot say which was written).
+    /// Warns that far and huge pointers are near on a target with one address
+    /// space (the front end gives both the same type, so it cannot say
+    /// which was written).
     pub fn warn_near(&self) {
         self.warnings
             .borrow_mut()

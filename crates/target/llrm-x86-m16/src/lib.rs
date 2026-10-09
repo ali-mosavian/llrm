@@ -200,8 +200,9 @@ impl llrm_target::Target for M16 {
         llrm_x86::calling::callee_saved(CALLING.native())
     }
 
-    /// Where a routine with no convention of its own answers (BASIC's, the runtime's): the stack convention's,
-    /// cdecl16's. A function with a convention answers as its description says.
+    /// Where a routine with no convention of its own answers (BASIC's, the
+    /// runtime's): the stack convention's, cdecl16's. A function with a
+    /// convention answers as its description says.
     fn results(
         &self,
         width: u32,
@@ -218,8 +219,9 @@ mod tests {
     use super::*;
 
     /// isel read these as literals: a 2-byte slot, BP, the first argument at
-    /// [bp+4] (near) or [bp+6] (far), a dword result in DX:AX and an i64 in EDX:EAX.
-    /// The conventions a program may name are `calling.toml`'s, the language's own first; BASIC's are Pascal's.
+    /// [bp+4] (near) or [bp+6] (far), a dword result in DX:AX and an i64 in
+    /// EDX:EAX. The conventions a program may name are `calling.toml`'s,
+    /// the language's own first; BASIC's are Pascal's.
     #[test]
     fn test_calling_toml_gives_the_conventions_their_names() {
         assert_eq!(
@@ -248,8 +250,9 @@ mod tests {
         assert_eq!(CALLING.named("interrupt16").unwrap().return_address_bytes, 6);
     }
 
-    /// `like = "cdecl16"` carried Borland's `_name` into Pascal's: a Nib `pascal16` extern asked the linker for
-    /// `_span`, the library defined `SPAN` (examples/pascal/levels.nib: four undefined references).
+    /// `like = "cdecl16"` carried Borland's `_name` into Pascal's: a Nib
+    /// `pascal16` extern asked the linker for `_span`, the library defined
+    /// `SPAN` (examples/pascal/levels.nib: four undefined references).
     #[test]
     fn test_pascal_symbols_are_capitals_whatever_they_were_derived_from() {
         for name in ["pascal16", "qb45", "pds71", "vbdos"] {
@@ -275,8 +278,9 @@ mod tests {
         );
     }
 
-    /// Real mode has no psABI DWARF register map: none is numbered, so a DWARF location in m16
-    /// code is refused instead of written with i386's. CodeView's ids are there for BP and AX.
+    /// Real mode has no psABI DWARF register map: none is numbered, so a DWARF
+    /// location in m16 code is refused instead of written with i386's.
+    /// CodeView's ids are there for BP and AX.
     #[test]
     fn real_mode_numbers_codeview_but_not_dwarf() {
         let file = llrm_target::registers::parse(&M16.registers_text()).unwrap();
@@ -285,8 +289,9 @@ mod tests {
         assert_eq!((cv("bp"), cv("ax"), cv("st0")), (Some(14), Some(9), Some(128)));
     }
 
-    /// gcc-ia16 keeps ES, which it uses as a register and saves; Borland's convention clobbers it: a call that kept a
-    /// value in ES across a cdecl16 routine lost it.
+    /// gcc-ia16 keeps ES, which it uses as a register and saves; Borland's
+    /// convention clobbers it: a call that kept a value in ES across a
+    /// cdecl16 routine lost it.
     #[test]
     fn test_ia16_keeps_es_and_cdecl16_clobbers_it() {
         let kept = |name: &str| CALLING.named(name).unwrap().preserved.iter().any(|one| one.full == "es");

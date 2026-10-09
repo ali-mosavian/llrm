@@ -4,8 +4,9 @@
 //! descriptor is known here: its own procedure's, and through whole-array
 //! arguments, its callers' and callees'.
 //! Where all of them agree, the shape is a fact: the rank and constant
-//! dimension counts and lower bounds replace their descriptor reads, and a zero-based array's descriptor offset
-//! is its first byte, which each element access records as its origin.
+//! dimension counts and lower bounds replace their descriptor reads, and a
+//! zero-based array's descriptor offset is its first byte, which each element
+//! access records as its origin.
 //!
 //! B$DDIM puts a far array's data at offset 0 of its own segment and never
 //! moves it within that segment, so where every allocation is far with
@@ -219,7 +220,8 @@ fn known(compiler: &Compiler) -> (Classes, BTreeMap<Identity, Known>) {
                     Some(identity) => {
                         shapes.push((*identity, &shape.records, far_origin(&one.operands, &shape.records)))
                     }
-                    // An allocation of a descriptor with no identity could be any.
+                    // An allocation of a descriptor with no identity could be
+                    // any.
                     None => return (classes, BTreeMap::new()),
                 },
                 Some(Tag::Invoke { arguments }) => {
@@ -244,7 +246,8 @@ fn known(compiler: &Compiler) -> (Classes, BTreeMap<Identity, Known>) {
                     }
                 }
                 _ => {
-                    // A descriptor pointer stored or copied escapes this analysis.
+                    // A descriptor pointer stored or copied escapes this
+                    // analysis.
                     let escaped = matches!(one.op, "store" | "copy")
                         && one
                             .operands
@@ -287,8 +290,9 @@ const ENTRY: u32 = 1;
 /// The descriptors a function holds allocated before each instruction that
 /// asks, walking its blocks to a fixed point: a DIM or REDIM allocates, ERASE
 /// releases, and a call of a user procedure releases whatever it can reach --
-/// the `shared` module arrays, parameters and arrays handed whole. Every external entry
-/// starts with none. `entry` is what the function's own entry holds.
+/// the `shared` module arrays, parameters and arrays handed whole. Every
+/// external entry starts with none. `entry` is what the function's own entry
+/// holds.
 fn allocated_before(
     function: &Function,
     pointers: &BTreeMap<u32, Identity>,
@@ -703,7 +707,8 @@ mod tests {
             .collect()
     }
 
-    /// Worked by hand: a(i, j) is at ((j - 2) * 4 + i - 1) * 2, so +0Ah holds -(2 * 4 + 1) * 2.
+    /// Worked by hand: a(i, j) is at ((j - 2) * 4 + i - 1) * 2, so +0Ah holds
+    /// -(2 * 4 + 1) * 2.
     #[test]
     fn test_a_far_arrays_adjusted_offset_is_its_bounds_alone() {
         let one = applied_to("DEFINT A-Z\nSUB t\nREDIM a(-50 TO 50)\nx = a(3)\nEND SUB\n");

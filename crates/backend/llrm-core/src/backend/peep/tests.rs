@@ -160,8 +160,9 @@ fn a_selector_carries_the_rules_of_its_directory() {
     assert!(selector.rules().far_loads.is_some() && selector.rules().zero_jcc.contains("je"));
 }
 
-/// The groups of `groups.list` are the groups the targets have between them and a target with no
-/// rules has none: one list names them for the struct, `NONE` and the checks.
+/// The groups of `groups.list` are the groups the targets have between them and
+/// a target with no rules has none: one list names them for the struct, `NONE`
+/// and the checks.
 #[test]
 fn the_rule_groups_come_from_one_list() {
     let mut present = super::targets::x86_m16::RULES.present();

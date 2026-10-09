@@ -1,6 +1,7 @@
 //! A target's register file, from its `registers.regs`: one register a line,
-//! `name bits root lane classes dwarf codeview`, classes comma separated and `-` for none; the last
-//! two are the register's number in each debug format, `-` where it has none.
+//! `name bits root lane classes dwarf codeview`, classes comma separated and
+//! `-` for none; the last two are the register's number in each debug format,
+//! `-` where it has none.
 
 /// One register: a root, or a view of one.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -86,8 +87,8 @@ mod tests {
         assert_eq!((registers[0].dwarf, registers[0].codeview), (Some(0), Some(17)));
     }
 
-    /// A register with no number in a format says so with `-`, and a word that is no number is an
-    /// error, not a register with none.
+    /// A register with no number in a format says so with `-`, and a word that
+    /// is no number is an error, not a register with none.
     #[test]
     fn a_dash_is_no_number_and_a_word_is_an_error() {
         let none = parse("ah 8 eax 8 - - 5").unwrap();

@@ -276,7 +276,8 @@ impl Checker<'_> {
                 continue;
             }
             let dominated = if is_phi {
-                // Along its edge: the definition dominates the incoming block's end.
+                // Along its edge: the definition dominates the incoming block's
+                // end.
                 let Some(Operand::Block(from)) = instruction.operands.get(index + 1) else { continue };
                 self.function.parent(def).is_some_and(|block| tree.dominates(block, *from))
             } else {

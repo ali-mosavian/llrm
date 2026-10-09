@@ -1,7 +1,8 @@
 //! Bounded full unrolling of small exact-trip loops: llrm-core's
 //! `optimize/unroll.rs`, the port of `qbopt/optimize/unroll.py`, adapted to
 //! the rich MIR.
-//! LLVM: LoopUnroll's full unroll (`UnrollLoop` at the trip count), priced by its cost model, `analyzeLoopUnrollCost`.
+//! LLVM: LoopUnroll's full unroll (`UnrollLoop` at the trip count), priced by
+//! its cost model, `analyzeLoopUnrollCost`.
 //!
 //! A loop tested in its header, whose body is a chain of blocks to its
 //! latch, becomes one straight line in the latch: the first trip runs the

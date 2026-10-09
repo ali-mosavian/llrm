@@ -41,7 +41,8 @@ pub struct Frontend {
     pub array_order: String,
     pub huge_arrays: bool,
     pub checked_arrays: bool,
-    /// Integer division raises error 11 in code: `-fsanitize=integer-divide-by-zero`.
+    /// Integer division raises error 11 in code:
+    /// `-fsanitize=integer-divide-by-zero`.
     pub checked_division: bool,
     /// `-g`: each statement's source line.
     pub debug: bool,
@@ -55,13 +56,16 @@ pub struct Frontend {
     pub alternate_math: bool,
     /// Nothing outside the source calls its procedures: `--whole-program`.
     pub whole_program: bool,
-    /// Lay out dynamic arrays read together in one allocation: `--array-merging`.
+    /// Lay out dynamic arrays read together in one allocation:
+    /// `--array-merging`.
     pub array_merging: bool,
-    /// Every procedure uses the runtime's frame entry and exit: `--runtime-frames`.
+    /// Every procedure uses the runtime's frame entry and exit:
+    /// `--runtime-frames`.
     pub runtime_frames: bool,
     /// Errors in a module handler report their BASIC line: `--error-lines`.
     pub error_lines: bool,
-    /// The most bytes the target's data segment holds: its description's, set by the CLI that bound the target.
+    /// The most bytes the target's data segment holds: its description's, set
+    /// by the CLI that bound the target.
     pub segment_bytes: Option<usize>,
     pub includes: Vec<PathBuf>,
 }
@@ -204,7 +208,8 @@ pub fn decoded(
             [],
         );
     }
-    // Where an error is handled the routine raises it, as the checks the frontend writes do.
+    // Where an error is handled the routine raises it, as the checks the
+    // frontend writes do.
     program.promises.checked = checked || handles;
     program.promises.descriptor = llrm_core::abi::runtime::semantics::descriptor(family);
     program.promises.routines = llrm_core::abi::runtime::semantics::routines();

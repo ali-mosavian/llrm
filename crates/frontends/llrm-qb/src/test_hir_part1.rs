@@ -44,7 +44,8 @@ fn set(items: &[&str]) -> BTreeSet<String> {
     items.iter().map(|one| (*one).to_owned()).collect()
 }
 
-/// qb-qrender is built with BC /R; the object CLI formerly hid that semantic option.
+/// qb-qrender is built with BC /R; the object CLI formerly hid that semantic
+/// option.
 #[test]
 fn test_qb_cli_exposes_bc_row_major_array_order() {
     let args = parse_args(&argv(&["probe.bas", "--array-order", "row-major"])).expect("parses");
@@ -86,7 +87,8 @@ fn test_qb_cli_keeps_the_stack_in_the_data_group_unless_told_not_to() {
     assert!(!stack_is_data(&["probe.bas", "-mno-stack-is-data"]));
 }
 
-/// Q45N01 stopped at READ, then a native-only spill frame made READ report syntax error.
+/// Q45N01 stopped at READ, then a native-only spill frame made READ report
+/// syntax error.
 #[test]
 #[ignore = "the Python original fails too: q45n01 now has no spill, so no B$ENRA/B$EXSA"]
 fn test_qb45_numeric_read_data_reaches_typed_hir_and_fresh_omf() {
@@ -122,7 +124,8 @@ fn test_restore_keys_select_the_labeled_serialized_data_row() {
     assert!(listing.contains("pushw 1\n    call far ptr B$RSTB"), "{listing}");
 }
 
-/// Gorillas' inline ATN added PUSH BP, so READ reported Out of stack space at R 0.
+/// Gorillas' inline ATN added PUSH BP, so READ reported Out of stack space at R
+/// 0.
 #[test]
 fn test_inline_module_math_does_not_create_a_native_bp_frame() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -161,7 +164,8 @@ fn test_gorillas_console_line_input_keeps_prompt_and_destination() {
     assert!(!listing.contains("call far ptr B$LINE"));
 }
 
-/// Gorillas stopped at DO WHILE Char$ = "" by treating undeclared Char$ as numeric.
+/// Gorillas stopped at DO WHILE Char$ = "" by treating undeclared Char$ as
+/// numeric.
 #[test]
 fn test_gorillas_implicit_string_suffix_drives_string_comparison() {
     let listing = qb45_listing("STRLOOP.BAS", b"do while char$ = \"\"\r\nchar$ = inkey$\r\nloop\r\n");
@@ -191,7 +195,8 @@ fn test_gorillas_sleep_uses_the_long_runtime_abi() {
     assert!(listing.contains("call far ptr B$SLEP"));
 }
 
-/// Gorillas' InitVars became a fake procedure requiring QB45's nonexistent B$OEGP.
+/// Gorillas' InitVars became a fake procedure requiring QB45's nonexistent
+/// B$OEGP.
 #[test]
 fn test_single_module_gosub_keeps_its_module_error_handler() {
     // The division can raise, so the handler must be registered.
@@ -205,7 +210,8 @@ fn test_single_module_gosub_keeps_its_module_error_handler() {
     assert!(!listing.contains("call far ptr B$OEGP"));
 }
 
-/// Inlining Gorillas' GOSUB exposed module INTEGER i before a local SINGLE DIM i.
+/// Inlining Gorillas' GOSUB exposed module INTEGER i before a local SINGLE DIM
+/// i.
 #[test]
 fn test_procedure_dim_shadows_implicit_module_variable() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -218,7 +224,8 @@ fn test_procedure_dim_shadows_implicit_module_variable() {
 const STATIC_LOCAL: &[u8] = b"DECLARE FUNCTION F& ()\r\nDIM total AS LONG\r\ntotal = F&\r\nPRINT total\r\n\
 FUNCTION F& STATIC\r\nDIM total AS LONG\r\ntotal = 3\r\nF& = total\r\nEND FUNCTION\r\n";
 
-/// A STATIC FUNCTION's DIM total was refused as a duplicate of the module's total.
+/// A STATIC FUNCTION's DIM total was refused as a duplicate of the module's
+/// total.
 #[test]
 fn test_static_procedure_dim_shadows_module_variable() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -226,7 +233,8 @@ fn test_static_procedure_dim_shadows_module_variable() {
     assert!(!object_bytes(&parsed(&source), "STATLOC.BAS").expect("emits").is_empty());
 }
 
-/// Nibbles stored x87 status 16384 as arena(3,1).sister, then COLOR failed on 8224.
+/// Nibbles stored x87 status 16384 as arena(3,1).sister, then COLOR failed on
+/// 8224.
 #[test]
 fn test_integer_floor_division_stays_integer_until_its_qb_single_result() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -243,7 +251,8 @@ fn test_integer_floor_division_stays_integer_until_its_qb_single_result() {
     assert!(!mir.contains("fdiv"), "{mir}");
 }
 
-/// Nibbles indexed ARENA(row,col) as row*80+col and passed garbage colors to B$COLR.
+/// Nibbles indexed ARENA(row,col) as row*80+col and passed garbage colors to
+/// B$COLR.
 #[test]
 fn test_hir_lowering_honors_qb_multidimensional_array_order() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -271,7 +280,8 @@ fn test_hir_lowering_honors_qb_multidimensional_array_order() {
     assert_eq!(multiplier("row-major"), "3");
 }
 
-/// Nibbles reached HIR, but the showcase crashed while copying byte DB from its source.
+/// Nibbles reached HIR, but the showcase crashed while copying byte DB from its
+/// source.
 #[test]
 fn test_qb_stage_dump_reads_the_same_cp437_source_as_the_frontend() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -279,7 +289,8 @@ fn test_qb_stage_dump_reads_the_same_cp437_source_as_the_frontend() {
     assert_eq!(qbstages::_source_text(&source).unwrap(), "print \"\u{2588}\"\r\n");
 }
 
-/// Nibbles panicked because every INPUT table was mistaken for a VBDOS far literal.
+/// Nibbles panicked because every INPUT table was mistaken for a VBDOS far
+/// literal.
 #[test]
 fn test_qb45_input_type_table_uses_dgroup_far_pointer() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -318,7 +329,8 @@ fn test_runtime_entry_reserves_the_complete_live_local_extent() {
     assert!(procedure.contains("call far ptr B$EXSA"));
 }
 
-/// CALL probe printed OK for -42 because rewriting RETURN erased every block successor.
+/// CALL probe printed OK for -42 because rewriting RETURN erased every block
+/// successor.
 #[test]
 fn test_module_exit_rewrite_preserves_conditional_false_edges() {
     // A condition the optimizer cannot decide: both arms must survive and
@@ -334,13 +346,15 @@ fn test_module_exit_rewrite_preserves_conditional_false_edges() {
 
     assert!(main.contains("cmp eax, 42\n    je L"), "{main}");
     assert_eq!(main.matches("call far ptr B$PESD").count(), 2, "{main}");
-    // Each arm ends in its own exit: the jump to the shared `ret` is replaced by a copy of it (gcc's `copy_bb_p`,
-    // `jumps::duplicated`), and `driver::basic::ends_program` then spells every `ret` of the module as a call of
-    // B$CENP. Both arms must reach it.
+    // Each arm ends in its own exit: the jump to the shared `ret` is replaced
+    // by a copy of it (gcc's `copy_bb_p`, `jumps::duplicated`), and
+    // `driver::basic::ends_program` then spells every `ret` of the module as a
+    // call of B$CENP. Both arms must reach it.
     assert_eq!(main.matches("call far ptr B$CENP").count(), 2, "{main}");
 }
 
-/// SUBTRACTPAIR read 8-50: calls pushed left-to-right but formals used ascending offsets.
+/// SUBTRACTPAIR read 8-50: calls pushed left-to-right but formals used
+/// ascending offsets.
 #[test]
 fn test_pascal_formals_are_read_in_reverse_physical_stack_order() {
     let source = parsed(&fixture("runtime-call-basic.bas"));
@@ -351,7 +365,8 @@ fn test_pascal_formals_are_read_in_reverse_physical_stack_order() {
     assert!(function.contains("sub eax, dword ptr [bp+6]"), "{function}");
 }
 
-/// common.bas's whole-pointer string element failed HIR comparison verification.
+/// common.bas's whole-pointer string element failed HIR comparison
+/// verification.
 #[test]
 fn test_dynamic_string_array_near_offset_reaches_its_comparison() {
     let source = parsed(&fixture("dynamic_strings.bas"));
@@ -374,7 +389,8 @@ fn test_single_line_if_exit_does_not_connect_its_unreachable_continuation() {
     assert!(assembled(&source).is_ok());
 }
 
-/// The source frontend formerly stopped at allocated LIR and could not link anything.
+/// The source frontend formerly stopped at allocated LIR and could not link
+/// anything.
 #[test]
 fn test_qb_numeric_procedure_emits_a_fresh_far_pascal_object() {
     let source = parsed(&fixture("emission.bas"));

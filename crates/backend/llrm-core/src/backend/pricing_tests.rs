@@ -1,4 +1,5 @@
-//! The cost model's classes, priced by every CPU profile the backend schedules for.
+//! The cost model's classes, priced by every CPU profile the backend schedules
+//! for.
 
 use std::collections::BTreeSet;
 
@@ -153,9 +154,10 @@ fn test_g_matches_python_format() {
     assert_eq!(_g(1234567.0), "1.23457e+06");
 }
 
-/// `lea esi, [ebx+ebx*2]` (a multiply by 3) has two registers and no cell: the encoder named no form for it and priced
-/// it as nothing, so a function with one could not be priced in bytes and its routes compared as unpriced (nbody_fixed
-/// -Os).
+/// `lea esi, [ebx+ebx*2]` (a multiply by 3) has two registers and no cell: the
+/// encoder named no form for it and priced it as nothing, so a function with
+/// one could not be priced in bytes and its routes compared as unpriced
+/// (nbody_fixed -Os).
 #[test]
 fn test_a_lea_of_a_register_and_a_scaled_copy_of_it_has_a_byte_price() {
     let reg = |register| ir::Loc::Reg(ir::Reg { register, width: 4 });

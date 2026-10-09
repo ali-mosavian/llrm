@@ -3,11 +3,12 @@
 //! `optimize/floatfold.rs`, the port of `qbopt/optimize/floatfold.py`.
 //!
 //! What changed with the IR:
-//! - `stored` wrote an exact x87 value's bits where it was stored, x87 having no immediate operand. Here every read of
-//!   the value reads the constant, a store's included, and Dead takes the definition, as Fold's integers
+//! - `stored` wrote an exact x87 value's bits where it was stored, x87 having
+//!   no immediate operand. Here every read of the value reads the constant, a
+//!   store's included, and Dead takes the definition, as Fold's integers
 //!   (`_dead_values` is Dead's).
-//! - `discarded` dropped an unread exact conversion. Here every read of the conversion's integer reads the number, and
-//!   Dead takes the conversion.
+//! - `discarded` dropped an unread exact conversion. Here every read of the
+//!   conversion's integer reads the number, and Dead takes the conversion.
 //!
 //! Dropped, no rich MIR analogue: `checks` and `_checked`, the `Fcheck`
 //! (FWAIT) kept for each removed operation's exceptions: the rich MIR
@@ -190,7 +191,8 @@ fn _simplified(
     }
 }
 
-/// Whether `1 / divisor` is exact in `kind`: a normal power of two whose reciprocal is normal too.
+/// Whether `1 / divisor` is exact in `kind`: a normal power of two whose
+/// reciprocal is normal too.
 fn exact_reciprocal(
     kind: FloatKind,
     divisor: f64,
@@ -225,8 +227,10 @@ fn _combined(
             function.set_operand(inst, 1, instruction.operands[0]);
             true
         }
-        // A division by a constant is a multiply by its reciprocal, as `arcp` lets, or whenever the reciprocal is exact
-        // (LLVM's InstCombine, GCC's `fold_binary` for `RDIV_EXPR`): the product rounds as the quotient did.
+        // A division by a constant is a multiply by its reciprocal, as `arcp`
+        // lets, or whenever the reciprocal is exact (LLVM's InstCombine,
+        // GCC's `fold_binary` for `RDIV_EXPR`): the product rounds as the
+        // quotient did.
         Opcode::Binary(BinaryOp::FDiv) => {
             let Some((kind, divisor)) = float(context, instruction.operands[1]).filter(|(kind, divisor)| {
                 divisor.is_finite()
@@ -245,7 +249,8 @@ fn _combined(
             );
             _replaced(function, inst, multiply)
         }
-        // (x op c1) op c2 is x op (c1 op c2), where sums and products may regroup.
+        // (x op c1) op c2 is x op (c1 op c2), where sums and products may
+        // regroup.
         Opcode::Binary(op @ (BinaryOp::FAdd | BinaryOp::FMul))
             if facts.reassoc() && float(context, instruction.operands[1]).is_some() =>
         {

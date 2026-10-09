@@ -1,5 +1,6 @@
-//! A procedure only its own module calls is entered by a near call in every frontend: `call`
-//! and `ret`, not `call far ptr` and `retf`. Nib's were all far, whatever called them.
+//! A procedure only its own module calls is entered by a near call in every
+//! frontend: `call` and `ret`, not `call far ptr` and `retf`. Nib's were all
+//! far, whatever called them.
 
 use std::path::Path;
 use std::process::Command;
@@ -72,15 +73,17 @@ fn test_basic_enters_a_module_internal_procedure_near() {
     assert!(body.starts_with("DOWN proc near") && body.contains("call DOWN\n") && !body.contains("retf"), "{asm}");
 }
 
-/// A function only direct calls reach takes the fields it reads in place of the pointer it read
-/// them through: a struct's field in C, a slice's data pointer and length in Nib. The callee
-/// loads nothing through the pointer, and its callers pass the fields.
+/// A function only direct calls reach takes the fields it reads in place of the
+/// pointer it read them through: a struct's field in C, a slice's data pointer
+/// and length in Nib. The callee loads nothing through the pointer, and its
+/// callers pass the fields.
 #[test]
 fn test_c_passes_the_field_a_static_function_reads_through_its_struct_pointer() {
     let source = "struct P { int *data; int len; };\nstatic int sum(const struct P *p, int n) { int len = p->len; return n ? len - sum(p, n - 1) : len; }\nint up(struct P *p) { return sum(p, 3); }\n";
     let asm = compiled("llrm-c", "promote.c", source, &[]);
     let body = procedure(&asm, &common::symbol("sum"));
-    // The fields arrive in registers: nothing is read through the pointer or from the stack.
+    // The fields arrive in registers: nothing is read through the pointer or
+    // from the stack.
     assert!(!body.contains("ptr [bx+") && !body.contains("ptr [si+") && !body.contains("[bp+"), "{asm}");
     assert!(procedure(&asm, &common::symbol("up")).contains("[bx+2]"), "{asm}");
 }
@@ -91,13 +94,15 @@ fn test_nib_passes_the_slice_fields_an_unexported_function_reads() {
     let asm =
         compiled("llrm-nib", "promote.nib", source, &["-fno-inline-functions", "-fno-inline-functions-called-once"]);
     let body = procedure(&asm, "_total");
-    // The descriptor's words were read through the pointer: its length at +0, its data pointer at +4.
+    // The descriptor's words were read through the pointer: its length at +0,
+    // its data pointer at +4.
     assert!(!body.contains("es:[bx+4]") && !body.contains("[bx+4]"), "{asm}");
 }
 
-/// Queens' `safe(q, row, col)` read `q[r]` for `r < row` under a bounds check on the slice's length,
-/// 12, which only reached it as a field of the descriptor. Promoted, the length is a constant the
-/// callers pass and the check folds against `row`'s range; the constant is then no argument at all.
+/// Queens' `safe(q, row, col)` read `q[r]` for `r < row` under a bounds check
+/// on the slice's length, 12, which only reached it as a field of the
+/// descriptor. Promoted, the length is a constant the callers pass and the
+/// check folds against `row`'s range; the constant is then no argument at all.
 #[test]
 fn test_nib_queens_loses_its_bounds_checks_and_the_arguments_that_carried_them() {
     let asm = compiled(
@@ -109,8 +114,9 @@ fn test_nib_queens_loses_its_bounds_checks_and_the_arguments_that_carried_them()
     assert!(!asm.contains("N$EBND") && !asm.contains("pushw 12"), "{asm}");
 }
 
-/// A slice of a module array is a far pointer to DGROUP: pushed as segment and offset and read back
-/// with `les`. Every call fills it from one global, so the callee takes the offset and reads through DS.
+/// A slice of a module array is a far pointer to DGROUP: pushed as segment and
+/// offset and read back with `les`. Every call fills it from one global, so the
+/// callee takes the offset and reads through DS.
 #[test]
 fn test_nib_passes_a_global_array_slice_as_its_offset() {
     let source = "var table: i16[16] = [0] * 16\n\nfn total(a: &[i16], i: i16) -> i16:\n    if i == 0:\n        return a[0]\n    return total(a, i - 1) + a[i]\n\nfn main() -> i16:\n    table[3] = 5\n    print(total(table, 3))\n    return 0\n";
@@ -120,8 +126,9 @@ fn test_nib_passes_a_global_array_slice_as_its_offset() {
     assert!(!body.contains("les ") && !body.contains("es:[") && !body.contains("[bp+"), "{asm}");
 }
 
-/// Queens' `q` is a local array, so its far pointer is SS:offset: a callee given only that reads it
-/// through `ss:`, one word on the stack, where `les` loaded a segment for it at every call.
+/// Queens' `q` is a local array, so its far pointer is SS:offset: a callee
+/// given only that reads it through `ss:`, one word on the stack, where `les`
+/// loaded a segment for it at every call.
 #[test]
 fn test_nib_reads_a_local_array_slice_through_ss() {
     let asm = compiled(

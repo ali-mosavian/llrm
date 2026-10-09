@@ -20,8 +20,8 @@ thread_local! {
     static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has gone through a body for its assumptions, for a test that a pass asks once and not per
-/// query.
+/// How many times this thread has gone through a body for its assumptions, for
+/// a test that a pass asks once and not per query.
 pub fn built() -> usize {
     BUILT.with(std::cell::Cell::get)
 }

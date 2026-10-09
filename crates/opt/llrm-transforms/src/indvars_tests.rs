@@ -244,10 +244,10 @@ fn a_counter_extended_past_the_index_width_stays() {
     assert!(!changed, "{after}");
 }
 
-/// bench/nbody: `for (unsigned short j = i + 1; j < 4; ++j) x[j]`: a start the loop does not define.
-/// The narrow counter was `inc bx; movzx esi,bx; cmp bx,4` each trip (38 instructions an
-/// iteration against gcc's 27); its zero extension is the counter of the index's width from the
-/// extended start.
+/// bench/nbody: `for (unsigned short j = i + 1; j < 4; ++j) x[j]`: a start the
+/// loop does not define. The narrow counter was `inc bx; movzx esi,bx; cmp
+/// bx,4` each trip (38 instructions an iteration against gcc's 27); its zero
+/// extension is the counter of the index's width from the extended start.
 #[test]
 fn a_counter_from_a_start_the_loop_does_not_define_is_widened() {
     let text = clearing("e-p:32:32-n8:16:32")
@@ -260,8 +260,9 @@ fn a_counter_from_a_start_the_loop_does_not_define_is_widened() {
     assert!(!after.contains("zext i16 %i to i32"), "{after}");
 }
 
-/// Each loop asked what is known of the body without memory and derived it again: `widened` over a body of
-/// loops derived it once for each (#560). It derives it once for the body.
+/// Each loop asked what is known of the body without memory and derived it
+/// again: `widened` over a body of loops derived it once for each (#560). It
+/// derives it once for the body.
 #[test]
 fn what_is_known_of_a_body_is_derived_once_for_all_its_loops() {
     let text = "define i32 @f(i32 %n) {
@@ -317,7 +318,8 @@ done:
     );
 }
 
-/// A pass that asks the manager what the counted loops bound, and changes nothing.
+/// A pass that asks the manager what the counted loops bound, and changes
+/// nothing.
 struct AsksBounds;
 
 impl llrm_mir::passes::FunctionPass for AsksBounds {
@@ -335,8 +337,9 @@ impl llrm_mir::passes::FunctionPass for AsksBounds {
     }
 }
 
-/// A `sext` of a counter made indvars solve what the loops bound again, by hand, beside the manager's it could have
-/// asked: fpbench -O1 spent 40 Minstr in indvars, 29 of them in that solve.
+/// A `sext` of a counter made indvars solve what the loops bound again, by
+/// hand, beside the manager's it could have asked: fpbench -O1 spent 40 Minstr
+/// in indvars, 29 of them in that solve.
 #[test]
 fn test_indvars_reads_the_managers_bounds_for_a_widened_counter() {
     let mut module = parsed(
@@ -366,7 +369,8 @@ end:
     manager.add(super::IndVars);
     let before = llrm_analysis::ranges::loops_solved();
     manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
-    // The pass that asks, and the one indvars's evaluation of the loop leaves the body needing; by hand it was a third.
+    // The pass that asks, and the one indvars's evaluation of the loop leaves
+    // the body needing; by hand it was a third.
     assert_eq!(
         llrm_analysis::ranges::loops_solved() - before,
         2,

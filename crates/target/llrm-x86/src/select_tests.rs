@@ -784,7 +784,8 @@ fn test_a_placed_cell_emits_the_register_it_was_given() {
     let cell = based_cell(Register::SI).sources[0].clone();
     let what = sem(Operation::Move, Some("mov"), vec![rg(Register::AX, 2)], vec![cell], None, false);
     let made = made(emitted(&what));
-    assert!(hex(&made.code).starts_with("8b84"), "{}", hex(&made.code)); // mov ax,[si+disp]
+    // mov ax,[si+disp]
+    assert!(hex(&made.code).starts_with("8b84"), "{}", hex(&made.code));
 }
 
 // tests/test_lir.py
@@ -815,7 +816,8 @@ fn test_an_operation_may_carry_a_fixup_for_each_instruction_it_stands_for() {
     assert!(silent.places().is_empty() && silent.relocated_at().is_none());
 }
 
-/// A u16 count held in cx selected nothing: `sar eax,cx` had no encoding. The shift reads only cl.
+/// A u16 count held in cx selected nothing: `sar eax,cx` had no encoding. The
+/// shift reads only cl.
 #[test]
 fn test_a_shift_counts_from_cl_whatever_width_holds_the_count() {
     for (count, width) in [(Register::CL, 1), (Register::CX, 2), (Register::ECX, 4)] {
@@ -858,8 +860,9 @@ fn near_counted_return() {
     );
 }
 
-/// sweep_07 failed on rustc 1.99.0: an immediate too wide for i32 raised std's own
-/// text, which that release reworded. The error is ours, and says one thing.
+/// sweep_07 failed on rustc 1.99.0: an immediate too wide for i32 raised std's
+/// own text, which that release reworded. The error is ours, and says one
+/// thing.
 #[test]
 fn test_an_immediate_too_wide_raises_the_same_text_on_every_compiler() {
     assert_eq!(i32_of(1 << 40), Err("out of range integral type conversion attempted".to_owned()));
@@ -891,9 +894,10 @@ fn test_a_string_move_encodes_by_width_and_repeat() {
     assert_eq!(decoded_over(Register::FS), (Register::FS, 2));
 }
 
-/// An extension of a register into its own wider register has a shorter form: `movzx ax,al`
-/// (0f b6 c0, 3 bytes) is `mov ah,0` (b4 00), `movsx ax,al` is `cbw` (98) and `movsx eax,ax`
-/// `cwde` (66 98, not 66 0f bf c0). QCport -Os had some 200; neither writes a flag.
+/// An extension of a register into its own wider register has a shorter form:
+/// `movzx ax,al` (0f b6 c0, 3 bytes) is `mov ah,0` (b4 00), `movsx ax,al` is
+/// `cbw` (98) and `movsx eax,ax` `cwde` (66 98, not 66 0f bf c0). QCport -Os
+/// had some 200; neither writes a flag.
 #[test]
 fn test_an_extension_in_place_takes_its_shortest_form() {
     for (name, into, from, expected) in [
@@ -912,7 +916,8 @@ fn test_an_extension_in_place_takes_its_shortest_form() {
     }
 }
 
-/// `enter N,0` is c8 N N 00: the frame `push bp; mov bp,sp; sub sp,N` in 4 bytes of 6.
+/// `enter N,0` is c8 N N 00: the frame `push bp; mov bp,sp; sub sp,N` in 4
+/// bytes of 6.
 #[test]
 fn test_enter_encodes_its_size_and_nesting_level() {
     let what = sem(Operation::Nothing, Some("enter"), vec![], vec![imm(300, 2), imm(0, 1)], None, false);

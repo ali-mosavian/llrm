@@ -1,5 +1,6 @@
-//! The OS layer: every target implements the whole interface it declares, from the interface's own
-//! declaration, and no implementation carries an OS fact of its own.
+//! The OS layer: every target implements the whole interface it declares, from
+//! the interface's own declaration, and no implementation carries an OS fact of
+//! its own.
 
 use llrm_target::Target;
 use llrm_target::os::Interface;
@@ -17,9 +18,10 @@ fn source(
     std::fs::read_to_string(format!("{}/{name}", layer.directory)).unwrap()
 }
 
-/// Every operation of every group a target declares is a public symbol of its implementation, and
-/// the Nib binding rendered for it names that symbol: an operation added to interface.toml fails
-/// here for each target that declares its group and has not written it.
+/// Every operation of every group a target declares is a public symbol of its
+/// implementation, and the Nib binding rendered for it names that symbol: an
+/// operation added to interface.toml fails here for each target that declares
+/// its group and has not written it.
 #[test]
 fn test_every_target_implements_every_operation_of_the_groups_it_declares() {
     let interface = Interface::shipped();
@@ -53,8 +55,9 @@ fn test_every_target_implements_every_operation_of_the_groups_it_declares() {
     }
 }
 
-/// start.asm and os.asm each wrote DOS's function numbers (`mov ah, 3Dh`, `int 21h`) and the
-/// DPMI call as literals, once per target. They are the OS's facts, said once (runtime/shared/dos/facts.toml).
+/// start.asm and os.asm each wrote DOS's function numbers (`mov ah, 3Dh`, `int
+/// 21h`) and the DPMI call as literals, once per target. They are the OS's
+/// facts, said once (runtime/shared/dos/facts.toml).
 #[test]
 fn test_no_os_assembly_names_an_os_function_number() {
     let literal =
@@ -68,7 +71,8 @@ fn test_no_os_assembly_names_an_os_function_number() {
         for field in ["start", "implementation"] {
             check(format!("{} {field}", target.name()), source(&*target, field));
         }
-        // The languages' own assembly reaches the OS through the layer too: C's externals and both hooks.
+        // The languages' own assembly reaches the OS through the layer too: C's
+        // externals and both hooks.
         for language in ["nib", "c"] {
             let description = target.runtime(language).unwrap();
             for file in ["ext.asm", "init.asm"] {
@@ -80,10 +84,11 @@ fn test_no_os_assembly_names_an_os_function_number() {
     }
 }
 
-/// Each language's runtime on each target names what the layer and its own files define: the stack check's
-/// limit is a public of the layer, its handler of the language's externals, and a start-up hook is defined by
-/// the file that names it and handed to the assembler as LANG_INIT. A language that named a word the
-/// start-up never fills would compare with zero.
+/// Each language's runtime on each target names what the layer and its own
+/// files define: the stack check's limit is a public of the layer, its handler
+/// of the language's externals, and a start-up hook is defined by the file that
+/// names it and handed to the assembler as LANG_INIT. A language that named a
+/// word the start-up never fills would compare with zero.
 #[test]
 fn test_each_languages_runtime_names_symbols_that_are_defined() {
     for target in targets() {
@@ -128,7 +133,8 @@ fn test_each_languages_runtime_names_symbols_that_are_defined() {
     }
 }
 
-/// The layer returns DOS's own codes, so the interface's number for each condition must be DOS's.
+/// The layer returns DOS's own codes, so the interface's number for each
+/// condition must be DOS's.
 #[test]
 fn test_the_interfaces_error_codes_are_the_operating_systems_own() {
     let facts: toml::Table = llrm_x86::DOS_FACTS.parse().unwrap();
@@ -138,9 +144,10 @@ fn test_the_interfaces_error_codes_are_the_operating_systems_own() {
     }
 }
 
-/// The console's operations and the standard handles are the layer's: a program asks the key calls, and
-/// reads and writes the console as `read` and `write_file` on the handles the facts number. The binding
-/// carries those numbers, so no runtime spells a literal 1 for standard output.
+/// The console's operations and the standard handles are the layer's: a program
+/// asks the key calls, and reads and writes the console as `read` and
+/// `write_file` on the handles the facts number. The binding carries those
+/// numbers, so no runtime spells a literal 1 for standard output.
 #[test]
 fn test_the_console_and_its_standard_handles_come_from_the_layer() {
     let facts: toml::Table = llrm_x86::DOS_FACTS.parse().unwrap();
@@ -158,7 +165,8 @@ fn test_the_console_and_its_standard_handles_come_from_the_layer() {
             "{binding}"
         );
         assert!(layer.c_header().unwrap().contains("#define LLRM_OS_STDIN 0"));
-        // close's status was `i16`, a width written in the shared interface; it is the target's own word.
+        // close's status was `i16`, a width written in the shared interface; it
+        // is the target's own word.
         assert!(binding.contains("pub fn close(handle: i16) -> isize"), "{binding}");
         for (language, file) in [("c", "ext.asm"), ("nib", "init.asm")] {
             if let Ok(text) = std::fs::read_to_string(format!("{}/{file}", target.runtime(language).unwrap().directory))
@@ -172,8 +180,9 @@ fn test_the_console_and_its_standard_handles_come_from_the_layer() {
     }
 }
 
-/// The host interpreter's console was a literal handle 1 and had no input: standard output is the OS facts'
-/// stdout, and `read` on their stdin, `console_read_key` and `console_key_ready` take what the run is fed.
+/// The host interpreter's console was a literal handle 1 and had no input:
+/// standard output is the OS facts' stdout, and `read` on their stdin,
+/// `console_read_key` and `console_key_ready` take what the run is fed.
 #[test]
 fn test_the_interpreters_console_follows_the_standard_handles() {
     use std::io::Write;

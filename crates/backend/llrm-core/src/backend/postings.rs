@@ -1,10 +1,12 @@
 //! Where each value is defined and read in a body, kept as the body changes.
 //!
-//! A spill or split rewrites the instructions that name its values and keeps every other `Arc<Insn>`, so
-//! the answers of the spiller's scans, which look for the few values a rewrite is about, need not walk the
-//! body: they read the occurrences of those values. The postings follow the body the allocator asks about:
-//! asked of a body, they compare each block's instructions by identity with the body they were made of and
-//! redo only the blocks that differ (all of them, for another function).
+//! A spill or split rewrites the instructions that name its values and keeps
+//! every other `Arc<Insn>`, so the answers of the spiller's scans, which look
+//! for the few values a rewrite is about, need not walk the body: they read the
+//! occurrences of those values. The postings follow the body the allocator asks
+//! about: asked of a body, they compare each block's instructions by identity
+//! with the body they were made of and redo only the blocks that differ (all of
+//! them, for another function).
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -16,15 +18,16 @@ use crate::support::hash::HashMap;
 /// An instruction by its block's position in the body and its own in the block.
 pub type At = (u32, u32);
 
-/// The instructions that define and read each value, in body order: one entry for each time the
-/// instruction's `defines` or `uses` names it.
+/// The instructions that define and read each value, in body order: one entry
+/// for each time the instruction's `defines` or `uses` names it.
 #[derive(Debug, Default, PartialEq)]
 pub struct Postings {
     defs: HashMap<u32, Vec<At>>,
     uses: HashMap<u32, Vec<At>>,
     /// The instructions that `require` the value be in a register.
     needs: HashMap<u32, Vec<At>>,
-    /// For each block, the positions of its instructions with a frame cell among their operands.
+    /// For each block, the positions of its instructions with a frame cell
+    /// among their operands.
     frames: Vec<Vec<u32>>,
 }
 
@@ -52,7 +55,8 @@ impl Postings {
         self.uses.get(&value).map_or(&[], Vec::as_slice)
     }
 
-    /// The positions in block `block` of the instructions that read or write a frame cell.
+    /// The positions in block `block` of the instructions that read or write a
+    /// frame cell.
     pub fn frames(
         &self,
         block: usize,
@@ -67,7 +71,8 @@ impl Postings {
         self.needs.get(&value).map_or(&[], Vec::as_slice)
     }
 
-    /// The occurrences of the instructions of `insns`, block `block`, appended: that block is the last made.
+    /// The occurrences of the instructions of `insns`, block `block`, appended:
+    /// that block is the last made.
     fn add(
         &mut self,
         block: u32,
@@ -144,8 +149,8 @@ impl Postings {
     }
 }
 
-/// The body the postings were made of, held so that an instruction's address is not reused while it is
-/// compared with.
+/// The body the postings were made of, held so that an instruction's address is
+/// not reused while it is compared with.
 struct Followed {
     blocks: Vec<(i64, Vec<Arc<Insn>>)>,
     found: Postings,
@@ -156,8 +161,8 @@ thread_local! {
     static REDONE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many blocks this thread has worked the occurrences of again, for a test that a rewrite redoes only
-/// the blocks it changed.
+/// How many blocks this thread has worked the occurrences of again, for a test
+/// that a rewrite redoes only the blocks it changed.
 pub fn redone() -> usize {
     REDONE.with(std::cell::Cell::get)
 }
@@ -167,7 +172,8 @@ fn check() -> bool {
     *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_POSTINGS"))
 }
 
-/// Whether the postings already are those of `body`: its blocks, each of the same instructions.
+/// Whether the postings already are those of `body`: its blocks, each of the
+/// same instructions.
 fn current(
     held: &Followed,
     body: &LirBody,
@@ -180,7 +186,8 @@ fn current(
         })
 }
 
-/// `read` of the postings of `body`, made to follow it first. A read may ask again of the same body.
+/// `read` of the postings of `body`, made to follow it first. A read may ask
+/// again of the same body.
 pub fn following<R>(
     body: &LirBody,
     read: impl FnOnce(&Postings) -> R,

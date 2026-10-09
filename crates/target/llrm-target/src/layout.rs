@@ -6,8 +6,9 @@ use std::collections::BTreeMap;
 
 use llrm_mir::spaces::Spaces;
 
-/// A target's address spaces: the roles the passes ask (`llrm_mir::spaces::Spaces`, reached
-/// through `Deref`) and what an unmarked pointer is.
+/// A target's address spaces: the roles the passes ask
+/// (`llrm_mir::spaces::Spaces`, reached through `Deref`) and what an unmarked
+/// pointer is.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AddressSpaces {
     pub roles: Spaces,
@@ -37,8 +38,9 @@ pub struct Layout {
     /// LLVM's datalayout string.
     pub datalayout: String,
     pub spaces: AddressSpaces,
-    /// The operations (`select`, `fptoui.i64`) the machine has no instruction for, which the compiler expands before
-    /// selection: LLVM's `setOperationAction(..., Expand)`. An operation not listed is native.
+    /// The operations (`select`, `fptoui.i64`) the machine has no instruction
+    /// for, which the compiler expands before selection: LLVM's
+    /// `setOperationAction(..., Expand)`. An operation not listed is native.
     pub expand: Vec<String>,
 }
 
@@ -57,8 +59,8 @@ impl AddressSpaces {
 }
 
 impl Layout {
-    /// Whether the machine lacks an instruction for `operation`, so the compiler expands it (`expand` in the
-    /// description).
+    /// Whether the machine lacks an instruction for `operation`, so the
+    /// compiler expands it (`expand` in the description).
     pub fn expands(
         &self,
         operation: &str,
@@ -71,9 +73,10 @@ impl Layout {
         self.spaces.segment_bytes.map(|bytes| bytes as usize)
     }
 
-    /// `text`, a `datalayout.toml`: `datalayout`, `[spaces]` (`near`, `far`, and
-    /// `data` and `stack`, the optional `segment`, `huge`, `fixed`, `segment_bytes`) and `[pointers]` (a width in bytes
-    /// to `"near"` or `"far"`).
+    /// `text`, a `datalayout.toml`: `datalayout`, `[spaces]` (`near`, `far`,
+    /// and `data` and `stack`, the optional `segment`, `huge`, `fixed`,
+    /// `segment_bytes`) and `[pointers]` (a width in bytes to `"near"` or
+    /// `"far"`).
     pub fn parse(text: &str) -> Result<Self, String> {
         let value: toml::Table = text.parse().map_err(|error: toml::de::Error| error.to_string())?;
         let mode = value
@@ -163,7 +166,8 @@ mod tests {
         assert!(flat.spaces.unmarked(2).is_err());
     }
 
-    /// The segment size was the compiler's own 64K, cutting a flat program's large array in two.
+    /// The segment size was the compiler's own 64K, cutting a flat program's
+    /// large array in two.
     #[test]
     fn a_segment_size_is_the_layouts_and_a_flat_one_has_none() {
         assert_eq!(Layout::parse(FLAT).unwrap().segment_bytes(), None);

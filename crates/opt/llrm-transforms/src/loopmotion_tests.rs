@@ -313,9 +313,11 @@ fn test_the_entry_value_is_asked_once_per_block_not_per_path() {
     assert!(finished.recv_timeout(std::time::Duration::from_secs(20)).is_ok(), "loopmotion ran past 20 s");
 }
 
-/// Each loop sunk made the next ask of Annotated prove every loop's trips again, and work the edges' facts of every
-/// block again: 20 loops proved 420 times, 1,220 blocks and 400 loops worked: 59, 118 and 39 now. A change reaches the
-/// loops and blocks that read what it touched, so the others keep what they had.
+/// Each loop sunk made the next ask of Annotated prove every loop's trips
+/// again, and work the edges' facts of every block again: 20 loops proved 420
+/// times, 1,220 blocks and 400 loops worked: 59, 118 and 39 now. A change
+/// reaches the loops and blocks that read what it touched, so the others keep
+/// what they had.
 #[test]
 fn test_sinking_a_loops_store_proves_only_that_loop_again() {
     // The check derives them afresh to compare, and is counted.
@@ -357,8 +359,9 @@ fn test_sinking_a_loops_store_proves_only_that_loop_again() {
     );
 }
 
-/// A store moved to the loop's exit threw away every analysis held, so each of a nest's loops with a store to move
-/// worked its ranges out again (nest 32 deep: 55 `bounded` runs, 9.5 G of a 35 G compile). No value, block or edge
+/// A store moved to the loop's exit threw away every analysis held, so each of
+/// a nest's loops with a store to move worked its ranges out again (nest 32
+/// deep: 55 `bounded` runs, 9.5 G of a 35 G compile). No value, block or edge
 /// moves, so what is held of them stays.
 #[test]
 fn test_moving_a_store_keeps_the_ranges_held() {

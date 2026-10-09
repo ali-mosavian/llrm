@@ -1,34 +1,42 @@
-//! The registers an instruction reads and writes, from its row in `x86.instr`: its operands as `Semantics` has
-//! them, and the row's `reads` and `writes` for the registers it uses without naming. LLVM's `MCInstrDesc` operand
-//! defs and `ImplicitUses`/`ImplicitDefs`, with the flags the row's iced Code reads and writes.
+//! The registers an instruction reads and writes, from its row in `x86.instr`:
+//! its operands as `Semantics` has them, and the row's `reads` and `writes` for
+//! the registers it uses without naming. LLVM's `MCInstrDesc` operand
+//! defs and `ImplicitUses`/`ImplicitDefs`, with the flags the row's iced Code
+//! reads and writes.
 
 use iced_x86::Register;
 use llrm_lir::{Loc, Operation, Reg, Semantics};
-use llrm_x86::select;
+
+use crate::select;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Effects {
     pub reads: Vec<Register>,
     pub writes: Vec<Register>,
-    /// Written only if the instruction runs: a repeated string operation's, but its count's.
+    /// Written only if the instruction runs: a repeated string operation's, but
+    /// its count's.
     pub maybe_writes: Vec<Register>,
     /// `RflagsBits`, the writes including those left undefined.
     pub flags_read: u32,
     pub flags_written: u32,
 }
 
-/// What a row of `x86.instr` says of its instruction, as `build.rs` writes it out.
+/// What a row of `x86.instr` says of its instruction, as `build.rs` writes it
+/// out.
 #[derive(Clone, Copy, Debug)]
 pub struct Row {
     pub reads: &'static [&'static str],
     pub writes: &'static [&'static str],
-    /// What each dest, then each source, may be: `r`, `m`, `i`, `a` or `s`, as `x86.instr` spells them.
+    /// What each dest, then each source, may be: `r`, `m`, `i`, `a` or `s`, as
+    /// `x86.instr` spells them.
     pub kinds: &'static [&'static str],
     /// The bits of the operation, where it has the one (`stosb`'s 8).
     pub width: u32,
-    /// `(source, dest)`: the source is the dest's register, whatever the semantics name.
+    /// `(source, dest)`: the source is the dest's register, whatever the
+    /// semantics name.
     pub ties: &'static [(usize, usize)],
-    /// `(is a dest, operand, root)`: the operand is that register when it is one.
+    /// `(is a dest, operand, root)`: the operand is that register when it is
+    /// one.
     pub pins: &'static [(bool, usize, &'static str)],
     pub flags_read: u32,
     pub flags_written: u32,
@@ -74,7 +82,8 @@ pub fn root(
     }
 }
 
-/// The registers `place` reads or writes as an operand: the register itself, or the ones its address is encoded with.
+/// The registers `place` reads or writes as an operand: the register itself, or
+/// the ones its address is encoded with.
 fn used(
     places: &[Loc],
     bits: u32,
@@ -98,9 +107,11 @@ fn used(
             Loc::Mem(one) => {
                 let named = one.through != Register::None || one.index_through != Register::None || one.addr.is_some();
                 match select::operand_of(one, bits) {
-                    // An address that cannot be encoded (`[sp]` in real mode) is an instruction that cannot be.
+                    // An address that cannot be encoded (`[sp]` in real mode)
+                    // is an instruction that cannot be.
                     None if named => return false,
-                    // The string operations' operand names nothing: SI and DI do.
+                    // The string operations' operand names nothing: SI and DI
+                    // do.
                     None => continue,
                     found => found,
                 }
@@ -115,7 +126,8 @@ fn used(
             add(reads, operand.base);
             add(reads, operand.index);
             if matches!(place, Loc::Mem(_)) {
-                // The segment it names, else the default: SS behind the stack's registers, DS otherwise.
+                // The segment it names, else the default: SS behind the stack's
+                // registers, DS otherwise.
                 let stack = [Register::BP, Register::EBP, Register::SP, Register::ESP].contains(&operand.base);
                 add(
                     reads,
@@ -154,8 +166,9 @@ fn kind_of(place: &Loc) -> char {
     }
 }
 
-/// The form of `candidates` whose operands may be `what`'s, the one with fewest ties (`imul cx, dx, 3` is not `imul cx,
-/// 3`); else the first (`lea` of a memory operand).
+/// The form of `candidates` whose operands may be `what`'s, the one with fewest
+/// ties (`imul cx, dx, 3` is not `imul cx, 3`); else the first (`lea` of a
+/// memory operand).
 fn form_of(
     candidates: &'static [Row],
     what: &Semantics,
@@ -192,8 +205,9 @@ fn pinned(
     })
 }
 
-/// `places` as the instruction takes them: a source tied to a dest is that dest, and an operand the row pins to a
-/// register is that register, whatever the semantics name (the allocator and the encoder see to the rest).
+/// `places` as the instruction takes them: a source tied to a dest is that
+/// dest, and an operand the row pins to a register is that register, whatever
+/// the semantics name (the allocator and the encoder see to the rest).
 fn resolved(
     row: &Row,
     is_dest: bool,
@@ -208,7 +222,8 @@ fn resolved(
                 return dests.get(*dest).unwrap_or(place).clone();
             }
             match (place, row.pins.iter().find(|(dest, index, _)| *dest == is_dest && *index == at)) {
-                // A segment register is where the semantics put it: the selector is the allocator's choice.
+                // A segment register is where the semantics put it: the
+                // selector is the allocator's choice.
                 (Loc::Reg(one), Some((_, _, root_name))) if !["es", "ds", "fs", "gs", "ss"].contains(root_name) => {
                     pinned(root_name, one.width).map_or(place.clone(), |register| Loc::Reg(Reg { register, ..*one }))
                 }
@@ -218,8 +233,8 @@ fn resolved(
         .collect()
 }
 
-/// What `what` reads and writes in `bits`-bit code, given the table's `row` for a mnemonic and its operand counts; None
-/// where the table has no row.
+/// What `what` reads and writes in `bits`-bit code, given the table's `row` for
+/// a mnemonic and its operand counts; None where the table has no row.
 pub fn effects(
     rows: &dyn Fn(&str, usize, usize) -> &'static [Row],
     bits: u32,
@@ -251,7 +266,8 @@ pub fn effects(
         }
         return Some(Served::Known(all));
     }
-    // The machine instruction is the mnemonic's, whatever operation LIR lowered it as; a comparison with none is `cmp`.
+    // The machine instruction is the mnemonic's, whatever operation LIR lowered
+    // it as; a comparison with none is `cmp`.
     let name = match what.name.as_deref() {
         Some(name) if !name.is_empty() => name,
         _ if what.op == Operation::Compare => "cmp",
@@ -262,7 +278,8 @@ pub fn effects(
     let dests = resolved(&row, true, &what.dests, &[]);
     let sources = resolved(&row, false, &what.sources, &dests);
     let mut found = Effects { flags_read: row.flags_read, flags_written: row.flags_written, ..Effects::default() };
-    // A mixed-width operation is a different instruction, and `mov edi, sp` is none.
+    // A mixed-width operation is a different instruction, and `mov edi, sp` is
+    // none.
     if row.reads.contains(&"same") {
         let mut sizes = dests
             .iter()
@@ -293,19 +310,21 @@ pub fn effects(
         if !used(&sources, bits, &mut found.reads, None) {
             return Some(Served::Unknown);
         }
-        // `lea ax, [eax+edx]` uses only what the destination is wide: the low word of each.
+        // `lea ax, [eax+edx]` uses only what the destination is wide: the low
+        // word of each.
         if row.reads.contains(&"narrow")
             && let [Loc::Reg(dest)] = dests.as_slice()
             && dest.width == 2
         {
             for register in &mut found.reads {
-                if let Some(word) = llrm_x86::registers::word_of(*register) {
+                if let Some(word) = crate::registers::word_of(*register) {
                     *register = word;
                 }
             }
         }
     } else {
-        // Nothing is read, but the address of a memory operand would be; there is none.
+        // Nothing is read, but the address of a memory operand would be; there
+        // is none.
     }
     // A shift by a count whose low five bits are none changes no flag.
     if row.writes.contains(&"count") && matches!(sources.last(), Some(Loc::Imm(count)) if count.value & 31 == 0) {

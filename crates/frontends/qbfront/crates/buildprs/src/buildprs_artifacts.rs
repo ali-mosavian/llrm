@@ -1,9 +1,10 @@
-//! Inspect text-shaped `buildprs` golden artifacts before wiring generated tables.
+//! Inspect text-shaped `buildprs` golden artifacts before wiring generated
+//! tables.
 //!
 //! The original DOS tool emits MASM-style `.inc` / `.asm` files (`prstab.inc`,
 //! `prsirw.inc`, `prsstate.asm`, `prsrwt.asm`, …). Those files are not checked
-//! into this tree yet, but downstream Rust modules need a pragmatic way to parse
-//! and validate their public symbol contracts once they exist.
+//! into this tree yet, but downstream Rust modules need a pragmatic way to
+//! parse and validate their public symbol contracts once they exist.
 
 use std::collections::BTreeMap;
 

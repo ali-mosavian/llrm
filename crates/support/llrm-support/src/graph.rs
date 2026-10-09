@@ -24,9 +24,9 @@ impl<T: Node> Node for &T {
 }
 
 /// Who can reach each block, inverted from its own successors.
-/// Blocks in reverse postorder from `entry`, then those it cannot reach in body order:
-/// the order a forward dataflow worklist drains in, predecessors before successors
-/// but for back edges.
+/// Blocks in reverse postorder from `entry`, then those it cannot reach in body
+/// order: the order a forward dataflow worklist drains in, predecessors before
+/// successors but for back edges.
 pub fn reverse_postorder<N: Node>(
     blocks: &[N],
     entry: i64,

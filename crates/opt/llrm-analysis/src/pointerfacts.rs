@@ -43,8 +43,8 @@ impl Offsets<'_> {
         self.stepped(pointer, true)
     }
 
-    /// `relative` through steps that need not be `inbounds`: where the address is what matters, not
-    /// what the object it stays in is.
+    /// `relative` through steps that need not be `inbounds`: where the address
+    /// is what matters, not what the object it stays in is.
     pub fn fixed(
         &self,
         pointer: Operand,
@@ -146,8 +146,8 @@ impl Offsets<'_> {
     }
 }
 
-/// The operands a walk has passed, to refuse a cycle: a chain is a few steps, so the first ones are
-/// compared in place, and only a longer one is hashed.
+/// The operands a walk has passed, to refuse a cycle: a chain is a few steps,
+/// so the first ones are compared in place, and only a longer one is hashed.
 #[derive(Default)]
 struct Visited {
     first: [Option<Operand>; 16],
@@ -222,7 +222,8 @@ b:
         assert!(facts.same_bytes(location("b", 2), location("e", 2)));
     }
 
-    /// `@f`'s module, each `%name`'s relative offset and the checks on locations.
+    /// `@f`'s module, each `%name`'s relative offset and the checks on
+    /// locations.
     fn with_facts(
         text: &str,
         check: impl Fn(&Offsets, &dyn Fn(&str, u64) -> Location, &dyn Fn(&str) -> Operand),
@@ -236,7 +237,8 @@ b:
         check(&facts, &location, &at);
     }
 
-    /// A step of five or more indices, which are not kept in place, is read as one of four or fewer is.
+    /// A step of five or more indices, which are not kept in place, is read as
+    /// one of four or fewer is.
     #[test]
     fn a_step_of_many_constant_indices_is_an_offset() {
         with_facts(
@@ -350,9 +352,10 @@ b:
         );
     }
 
-    /// Every walk of a pointer's offsets hashed each operand it passed, with SipHash: 5% of compiling
-    /// matmul at -O2 (#560). A short chain is compared in place, and only a longer one hashed; a repeat is
-    /// refused either way.
+    /// Every walk of a pointer's offsets hashed each operand it passed, with
+    /// SipHash: 5% of compiling matmul at -O2 (#560). A short chain is
+    /// compared in place, and only a longer one hashed; a repeat is refused
+    /// either way.
     #[test]
     fn a_short_walk_is_not_hashed_and_a_repeat_is_refused_in_a_long_one() {
         use llrm_mir::module::ValueId;

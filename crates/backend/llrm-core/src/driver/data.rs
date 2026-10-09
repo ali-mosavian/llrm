@@ -83,8 +83,9 @@ impl Placed {
         }
         let mut bss: Vec<(String, Vec<GlobalId>)> = Vec::new();
         for (segment, members) in segments {
-            // What the image need not store (`stored_zero`): an object of zeros in far data, where the
-            // start-up zeroes far uninitialised data, in a segment of its own beside its segment.
+            // What the image need not store (`stored_zero`): an object of zeros
+            // in far data, where the start-up zeroes far
+            // uninitialised data, in a segment of its own beside its segment.
             let (zero, members): (Vec<GlobalId>, Vec<GlobalId>) = if far_bss && self.private.contains(&segment) {
                 members.into_iter().partition(|&global| stored_zero(module, global, &built.names))
             } else {
@@ -111,9 +112,10 @@ impl Placed {
                     built.publics.push(built.names[&(globals::space(module, global), i64::from(global.0))].clone());
                 }
             }
-            // An object past 64K runs on through further segments, each a full 64K
-            // and paragraph aligned, which the linker lays end to end: the segment
-            // value of a huge pointer's next 64K is this one's plus 0x1000.
+            // An object past 64K runs on through further segments, each a full
+            // 64K and paragraph aligned, which the linker lays end
+            // to end: the segment value of a huge pointer's next
+            // 64K is this one's plus 0x1000.
             let parts = split(items, &segment, segment_bytes)?;
             for (at, part) in parts.into_iter().enumerate() {
                 if at == 0 {
@@ -165,9 +167,9 @@ impl Placed {
 }
 
 /// What one segment can hold: a 16-bit offset's range.
-/// `items` cut into segments of at most `limit` bytes (64K where segments are), each but the last full. Only
-/// the one object a huge segment holds may be cut: it is alone, so its
-/// bytes start at offset 0.
+/// `items` cut into segments of at most `limit` bytes (64K where segments are),
+/// each but the last full. Only the one object a huge segment holds may be cut:
+/// it is alone, so its bytes start at offset 0.
 fn split(
     items: Vec<masm::Datum>,
     segment: &str,
@@ -183,7 +185,8 @@ fn split(
         if matches!(datum, Datum::Label(_) | Datum::Object(_)) {
             objects += 1;
         }
-        // What is left of a datum to place, as bytes or fill, may be cut anywhere.
+        // What is left of a datum to place, as bytes or fill, may be cut
+        // anywhere.
         let (mut rest, make): (usize, Box<dyn Fn(usize, usize) -> Datum>) = match datum {
             Datum::Bytes(bytes) => {
                 let whole = bytes.clone();
@@ -244,8 +247,9 @@ fn split(
     Ok(parts)
 }
 
-/// Whether `global`'s data is all zeros, with no address in it: what an image need not store. The one
-/// decision that zero data is uninitialised data, whatever shape its initializer has.
+/// Whether `global`'s data is all zeros, with no address in it: what an image
+/// need not store. The one decision that zero data is uninitialised data,
+/// whatever shape its initializer has.
 fn stored_zero(
     module: &Module,
     global: GlobalId,
@@ -293,9 +297,10 @@ mod tests {
         Datum::Label(Label { name: "_big".into() })
     }
 
-    /// An 80000-byte object was one 80000-byte segment, which no object file holds.
-    /// A flat target has no 64K segment: an 80000-byte object was cut in two (and refused beside
-    /// another), as a huge one is, so a flat program with a large array did not link.
+    /// An 80000-byte object was one 80000-byte segment, which no object file
+    /// holds. A flat target has no 64K segment: an 80000-byte object was
+    /// cut in two (and refused beside another), as a huge one is, so a flat
+    /// program with a large array did not link.
     #[test]
     fn a_target_without_segments_does_not_cut_an_object() {
         let parts = split(vec![label(), Datum::Fill(Fill { size: 80000, byte: None })], "S", None).unwrap();

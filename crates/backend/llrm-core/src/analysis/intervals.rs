@@ -53,7 +53,8 @@ impl Interval {
         self.segments.iter().map(|one| one.end - one.start).sum()
     }
 
-    /// What spilling this value is divided by: how many slots it is live for, and the grace every value has.
+    /// What spilling this value is divided by: how many slots it is live for,
+    /// and the grace every value has.
     pub fn spill_size(&self) -> i64 {
         self.size() + GRACE
     }
@@ -78,7 +79,8 @@ impl Interval {
     }
 }
 
-/// Python `id(insn)`: the instruction's identity, in every body that holds it (`Insn::id`).
+/// Python `id(insn)`: the instruction's identity, in every body that holds it
+/// (`Insn::id`).
 pub fn key(one: &Arc<Insn>) -> usize {
     one.id() as usize
 }
@@ -86,19 +88,24 @@ pub fn key(one: &Arc<Insn>) -> usize {
 /// Every instruction's slot number, and every block's span.
 #[derive(Clone, Debug)]
 pub struct Indexes {
-    pub at: IndexMap<usize, i64>,        // id(insn) -> the instruction's first slot
+    // id(insn) -> the instruction's first slot
+    pub at: IndexMap<usize, i64>,
     pub span: IndexMap<i64, (i64, i64)>, // block address -> [first, last)
-    pub order: Vec<i64>,                 // block addresses, in the order they are numbered
+    // block addresses, in the order they are numbered
+    pub order: Vec<i64>,
 }
 
-/// Where an instruction writes, given where it reads: the second of the two slots it holds.
+/// Where an instruction writes, given where it reads: the second of the two
+/// slots it holds.
 pub fn def_point(slot: i64) -> i64 {
     slot + DEF
 }
 
 impl Indexes {
-    /// Where the instruction at `position` in `block` ends: the point its two slots end at, which is where the next
-    /// instruction (or the block's end) begins. A segment that ends here touches one that starts at the next.
+    /// Where the instruction at `position` in `block` ends: the point its two
+    /// slots end at, which is where the next instruction (or the block's
+    /// end) begins. A segment that ends here touches one that starts at the
+    /// next.
     pub fn window_end(
         &self,
         block: &LirBlock,
@@ -107,7 +114,8 @@ impl Indexes {
         self.slot(block, position) + PER_INSN
     }
 
-    /// The slot of the instruction at `position` in `block`, or the block's end past its last.
+    /// The slot of the instruction at `position` in `block`, or the block's end
+    /// past its last.
     pub fn slot(
         &self,
         block: &LirBlock,
@@ -136,7 +144,8 @@ impl Indexes {
 
 /// Number every point a value can start or stop being live.
 pub fn indexed(body: &LirBody) -> Indexes {
-    // Sized for what it holds: growing a table of a function's instructions by doubling rehashed it six times over.
+    // Sized for what it holds: growing a table of a function's instructions by
+    // doubling rehashed it six times over.
     let mut at =
         IndexMap::with_capacity_and_hasher(body.blocks.iter().map(|block| block.insns.len()).sum(), Default::default());
     let mut span = IndexMap::with_capacity_and_hasher(body.blocks.len(), Default::default());
@@ -158,19 +167,20 @@ pub fn indexed(body: &LirBody) -> Indexes {
     Indexes { at, span, order: body.blocks.iter().map(|block| block.at).collect() }
 }
 
-/// The numberings made, most recent first, each with the blocks' instructions it was of (held): the bodies a function's
-/// allocator alternates among each find theirs.
+/// The numberings made, most recent first, each with the blocks' instructions
+/// it was of (held): the bodies a function's allocator alternates among each
+/// find theirs.
 #[derive(Default)]
 struct Numbered(Vec<(Vec<(i64, Insns)>, Arc<Indexes>)>);
 
-/// How many times this body's facts have numbered it for `indexed_shared`, for a test that asking again of one body
-/// does not.
+/// How many times this body's facts have numbered it for `indexed_shared`, for
+/// a test that asking again of one body does not.
 pub fn numbered(body: &LirBody) -> usize {
     body.facts.0.counted("indexed")
 }
 
-/// `indexed(body)`, remembered for the next ask of the same instructions (block by block, by identity, in the same
-/// order).
+/// `indexed(body)`, remembered for the next ask of the same instructions (block
+/// by block, by identity, in the same order).
 pub fn indexed_shared(body: &LirBody) -> Arc<Indexes> {
     let kept = body
         .facts
@@ -206,9 +216,10 @@ pub fn indexed_shared(body: &LirBody) -> Arc<Indexes> {
     found
 }
 
-/// What an answer of `intervals_over` was made of: the body's blocks, each by the instructions it held (shared, so that
-/// an address is not reused while it is remembered, and a block that is the same allocation needs no looking at), its
-/// phis, and what its frequencies read.
+/// What an answer of `intervals_over` was made of: the body's blocks, each by
+/// the instructions it held (shared, so that an address is not reused while it
+/// is remembered, and a block that is the same allocation needs no looking at),
+/// its phis, and what its frequencies read.
 struct Remembered {
     entry: i64,
     blocks: Vec<(i64, Vec<i64>, Vec<crate::model::lir::Phi>, Insns)>,
@@ -216,7 +227,8 @@ struct Remembered {
     odds: crate::model::lir::BlockOdds,
     trips: Vec<(i64, i64)>,
     answer: Arc<IndexMap<u32, Interval>>,
-    /// The body's numbering, and what each value's references weigh before they are divided by its size.
+    /// The body's numbering, and what each value's references weigh before they
+    /// are divided by its size.
     index: Arc<Indexes>,
     totals: Arc<IndexMap<u32, f64>>,
 }
@@ -258,16 +270,19 @@ impl Remembered {
     }
 }
 
-/// Where the slots of an earlier numbering are in a later one, for a body that keeps most of the earlier one's blocks:
-/// the block tops carry the instructions of the blocks that are the same (each is where it was, relative to its top),
-/// and each instruction both have in the others is a point of its own.
+/// Where the slots of an earlier numbering are in a later one, for a body that
+/// keeps most of the earlier one's blocks: the block tops carry the
+/// instructions of the blocks that are the same (each is where it was, relative
+/// to its top), and each instruction both have in the others is a point of its
+/// own.
 pub struct Shift {
     old: Vec<i64>,
     new: Vec<i64>,
     tops: crate::support::hash::HashMap<i64, i64>,
 }
 
-/// The blocks of `body` that are not the same instructions as `held`'s (by position).
+/// The blocks of `body` that are not the same instructions as `held`'s (by
+/// position).
 pub fn differing_blocks(
     held: &[(i64, &Insns)],
     body: &LirBody,
@@ -275,9 +290,10 @@ pub fn differing_blocks(
     (0..body.blocks.len()).filter(|at| !held[*at].1.same_insns(&body.blocks[*at].insns)).collect()
 }
 
-/// The runs of instructions in only one of the two bodies, and of the parallel copy each is in (a copy's moves are all
-/// read and written at its last, which a change to any of them moves), each run once; the number of instructions that
-/// changed.
+/// The runs of instructions in only one of the two bodies, and of the parallel
+/// copy each is in (a copy's moves are all read and written at its last, which
+/// a change to any of them moves), each run once; the number of instructions
+/// that changed.
 pub fn changed_runs(
     held: &[(i64, &Insns)],
     held_index: &Indexes,
@@ -366,35 +382,38 @@ impl Shift {
     }
 }
 
-/// The answers remembered for this function's bodies, most recent first: the allocator's rewrites and its trial
-/// candidates alternate among a few, and they share the manager, so each is found by its blocks whichever asked last.
+/// The answers remembered for this function's bodies, most recent first: the
+/// allocator's rewrites and its trial candidates alternate among a few, and
+/// they share the manager, so each is found by its blocks whichever asked last.
 #[derive(Default)]
 struct Recent(Vec<Arc<Remembered>>);
 
-/// How many times this body's facts have worked out intervals, for a test that asking again of one body does not.
+/// How many times this body's facts have worked out intervals, for a test that
+/// asking again of one body does not.
 pub fn worked(body: &LirBody) -> usize {
     body.facts.0.counted("intervals-worked")
 }
 
-/// How many edited answers this body's facts have worked the changed values of out from where they occur, not by
-/// walking the body.
+/// How many edited answers this body's facts have worked the changed values of
+/// out from where they occur, not by walking the body.
 pub fn by_occurrences(body: &LirBody) -> usize {
     body.facts.0.counted("intervals-by-occurrences")
 }
 
-/// How many answers this body's facts have made by editing an earlier one, for a test that a body made of another's
-/// instructions is.
+/// How many answers this body's facts have made by editing an earlier one, for
+/// a test that a body made of another's instructions is.
 pub fn edited(body: &LirBody) -> usize {
     body.facts.0.counted("intervals-edited")
 }
 
-/// `intervals` worked out from the body alone, whatever is remembered: what an edited answer is held to.
+/// `intervals` worked out from the body alone, whatever is remembered: what an
+/// edited answer is held to.
 pub fn intervals_afresh(body: &LirBody) -> IndexMap<u32, Interval> {
     worked_out(body, None, &Frequency::of(body))
 }
 
-/// How many answers are remembered: the allocator's rewrites and its trial candidates alternate
-/// among a few bodies.
+/// How many answers are remembered: the allocator's rewrites and its trial
+/// candidates alternate among a few bodies.
 const REMEMBERED: usize = 6;
 
 /// The live interval of every value in this body, weighted.
@@ -405,13 +424,14 @@ pub fn intervals(
     intervals_over(body, index, &Frequency::of(body))
 }
 
-/// `intervals`, weighted by `busy`, the body's block frequencies, which a caller that asks for several
-/// facts of one body finds once.
+/// `intervals`, weighted by `busy`, the body's block frequencies, which a
+/// caller that asks for several facts of one body finds once.
 ///
-/// An answer is remembered for the next question of the same instructions: a spill is followed by the
-/// facts of the body it made, which the spiller's own steps and the class check each asked of it
-/// (58% of the asks of compiling `d_faces` were of a body already asked, #559). `index` is
-/// `indexed(body)` of this body, as every caller makes it, or none.
+/// An answer is remembered for the next question of the same instructions: a
+/// spill is followed by the facts of the body it made, which the spiller's own
+/// steps and the class check each asked of it (58% of the asks of compiling
+/// `d_faces` were of a body already asked, #559). `index` is `indexed(body)` of
+/// this body, as every caller makes it, or none.
 pub fn intervals_over(
     body: &LirBody,
     index: Option<&Indexes>,
@@ -421,8 +441,8 @@ pub fn intervals_over(
     llrm_support::debug::timed("intervals cloned", || (*shared).clone())
 }
 
-/// `intervals`, the remembered answer itself: for a caller that only reads it, which would copy every interval of the
-/// body to do so.
+/// `intervals`, the remembered answer itself: for a caller that only reads it,
+/// which would copy every interval of the body to do so.
 pub fn intervals_shared(
     body: &LirBody,
     index: Option<&Indexes>,
@@ -464,8 +484,10 @@ pub fn intervals_shared_over(
         }
     };
     let shared_index = index_is_numbered(body, index);
-    // A body made of the last one's instructions and a few others: its answer is that one's, moved to the new slots,
-    // and worked out again only for the values the others name (LLVM's `LiveIntervals` edited across a spill).
+    // A body made of the last one's instructions and a few others: its answer
+    // is that one's, moved to the new slots, and worked out again only for
+    // the values the others name (LLVM's `LiveIntervals` edited across a
+    // spill).
     let latest = body.facts.0.stash(|recent: &mut Recent| recent.0.first().cloned());
     let edited = latest.and_then(|held| updated(&held, body, index, busy));
     let (answer, totals) = match edited {
@@ -517,7 +539,8 @@ pub fn intervals_shared_over(
     answer
 }
 
-/// The numbering `indexed_shared` holds for `body`, if `index` is it: kept as it is, not copied.
+/// The numbering `indexed_shared` holds for `body`, if `index` is it: kept as
+/// it is, not copied.
 fn index_is_numbered(
     body: &LirBody,
     index: &Indexes,
@@ -527,8 +550,9 @@ fn index_is_numbered(
     })
 }
 
-/// The answer for `body` made from `held`'s, where `body` keeps most of the instructions `held` had: those it keeps are
-/// at new slots, and the values the others name are worked out again. None where that is not so.
+/// The answer for `body` made from `held`'s, where `body` keeps most of the
+/// instructions `held` had: those it keeps are at new slots, and the values the
+/// others name are worked out again. None where that is not so.
 fn updated(
     held: &Remembered,
     body: &LirBody,
@@ -547,8 +571,9 @@ fn updated(
     if !same_blocks {
         return None;
     }
-    // A block that is the same instructions needs no looking at: it is where it was, shifted. The others are compared
-    // by instruction, for the values the instructions that are not in both name.
+    // A block that is the same instructions needs no looking at: it is where it
+    // was, shifted. The others are compared by instruction, for the values
+    // the instructions that are not in both name.
     let blocks: Vec<(i64, &Insns)> = held.blocks.iter().map(|(at, _, _, insns)| (*at, insns)).collect();
     let differing = differing_blocks(&blocks, body);
     let mut touched: crate::support::hash::HashSet<u32> = Default::default();
@@ -591,10 +616,11 @@ fn updated(
     Some((answer, totals))
 }
 
-/// `worked_out_with_totals` of the values `only` holds, from where they occur: one pass over the instructions finds
-/// each value's occurrences and weights, and the intervals are found from those (`intervals_by_occurrences`) where the
-/// walk would take the body's liveness whole and walk every block. For a body with phis, whose arguments are read in
-/// other blocks, the walk.
+/// `worked_out_with_totals` of the values `only` holds, from where they occur:
+/// one pass over the instructions finds each value's occurrences and weights,
+/// and the intervals are found from those (`intervals_by_occurrences`) where
+/// the walk would take the body's liveness whole and walk every block. For a
+/// body with phis, whose arguments are read in other blocks, the walk.
 fn worked_among(
     body: &LirBody,
     index: &Indexes,
@@ -616,9 +642,10 @@ fn worked_out(
     worked_out_by(body, index, busy, &|_| true)
 }
 
-/// The intervals of the values in `only` alone, as `intervals` finds them in `body`: nothing is numbered,
-/// walked or weighed for the others. For a caller that adds a few values of its own to a body and asks
-/// of those, the others' intervals being the body's, remembered.
+/// The intervals of the values in `only` alone, as `intervals` finds them in
+/// `body`: nothing is numbered, walked or weighed for the others. For a caller
+/// that adds a few values of its own to a body and asks of those, the others'
+/// intervals being the body's, remembered.
 pub fn intervals_among(
     body: &LirBody,
     index: &Indexes,
@@ -628,8 +655,9 @@ pub fn intervals_among(
     worked_out_by(body, Some(index), busy, &|value| only.contains(&value))
 }
 
-/// `intervals_among`, the values named by a test: for values numbered together, a comparison, where a set is
-/// a search of a tree for every operand of every instruction of the body.
+/// `intervals_among`, the values named by a test: for values numbered together,
+/// a comparison, where a set is a search of a tree for every operand of every
+/// instruction of the body.
 pub fn intervals_where(
     body: &LirBody,
     index: &Indexes,
@@ -656,7 +684,8 @@ fn worked_out_by(
     worked_out_with_totals(body, index, busy, keep).0
 }
 
-/// `worked_out_by`, and what each value's references weigh before they are divided by its size.
+/// `worked_out_by`, and what each value's references weigh before they are
+/// divided by its size.
 fn worked_out_with_totals(
     body: &LirBody,
     index: &Indexes,
@@ -709,8 +738,9 @@ fn _ranges(
     found
 }
 
-/// What is live now in a block's backward walk, in the order values became so: removal leaves a gap, not
-/// a shift of all that follows, and a value made live again comes last.
+/// What is live now in a block's backward walk, in the order values became so:
+/// removal leaves a gap, not a shift of all that follows, and a value made live
+/// again comes last.
 struct Alive {
     order: Vec<Option<(u32, i64)>>,
     at: crate::support::hash::HashMap<u32, usize>,
@@ -766,20 +796,25 @@ pub(crate) fn _walked(
     _walked_at(body, index, keep, None)
 }
 
-/// The values `keep` says of a body of which only the instructions that name them are given, each block's
-/// with the slot each has in the whole body: the body's numbering, blocks and all else are `index`'s.
-/// Where an instruction is in a body: its block's number and its own in the block.
+/// The values `keep` says of a body of which only the instructions that name
+/// them are given, each block's with the slot each has in the whole body: the
+/// body's numbering, blocks and all else are `index`'s. Where an instruction is
+/// in a body: its block's number and its own in the block.
 pub type Place = (usize, usize);
 
-/// An instruction that names a value: where it is, and whether it defines and whether it reads the value.
+/// An instruction that names a value: where it is, and whether it defines and
+/// whether it reads the value.
 pub type Occurrence = (Place, bool, bool);
 
-/// The intervals of `values` (ascending), worked out from where they occur rather than by walking the body: what the
-/// walk finds of a value is decided in the blocks it occurs in and those it is live through, and the rest of the body
-/// adds nothing. `places[value]` are the instructions that name it, by block then position, once each, and whether each
-/// defines and reads it (not what the body's own says, where a caller adds values to it). The answer holds
-/// what `intervals_sparse` does, in another order of values; it costs the occurrences and the blocks the values are
-/// live in, where the walk costs every value live in every block, hashed.
+/// The intervals of `values` (ascending), worked out from where they occur
+/// rather than by walking the body: what the walk finds of a value is decided
+/// in the blocks it occurs in and those it is live through, and the rest of the
+/// body adds nothing. `places[value]` are the instructions that name it, by
+/// block then position, once each, and whether each defines and reads it (not
+/// what the body's own says, where a caller adds values to it). The answer
+/// holds what `intervals_sparse` does, in another order of values; it costs the
+/// occurrences and the blocks the values are live in, where the walk costs
+/// every value live in every block, hashed.
 pub fn intervals_by_occurrences(
     body: &LirBody,
     index: &Indexes,
@@ -793,7 +828,8 @@ pub fn intervals_by_occurrences(
     let graph = crate::analysis::graph::Graph::of(body);
     let predecessors = &graph.parents;
     let spans: Vec<(i64, i64)> = body.blocks.iter().map(|block| index.span[&block.at]).collect();
-    // Marks by block, a mark current when it equals the value's turn: no table is cleared between values.
+    // Marks by block, a mark current when it equals the value's turn: no table
+    // is cleared between values.
     let (mut in_mark, mut out_mark, mut written_mark, mut run_mark, mut reach_mark) =
         (vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count], vec![0u32; count]);
     let mut run_of: Vec<usize> = vec![0; count];
@@ -802,12 +838,12 @@ pub fn intervals_by_occurrences(
     for &value in values {
         let Some(found) = places.get(&value).filter(|found| !found.is_empty()) else { continue };
         turn += 1;
-        // By block: the parallel-copy runs it occurs in, as (last position of the run, defined there, read there),
-        // ascending.
+        // By block: the parallel-copy runs it occurs in, as (last position of
+        // the run, defined there, read there), ascending.
         let mut by_block: Vec<Vec<(usize, bool, bool)>> = Vec::new();
         let mut work: Vec<usize> = Vec::new();
-        // The blocks this value occurs in or is live through: all else is none of its business, so no pass is over
-        // every block.
+        // The blocks this value occurs in or is live through: all else is none
+        // of its business, so no pass is over every block.
         let mut reached: Vec<usize> = Vec::new();
         for &((block_index, at), defined, used) in found {
             let block = &body.blocks[block_index];
@@ -830,9 +866,10 @@ pub fn intervals_by_occurrences(
                 _ => runs.push((end, defined, used)),
             }
         }
-        // Live in a block, and out of it, by the occurrences: read before it is written there, and so up its
-        // predecessors until a block writes it. The first run that names it decides: a read, even with a write
-        // beside it (the walk takes the group's writes first).
+        // Live in a block, and out of it, by the occurrences: read before it is
+        // written there, and so up its predecessors until a block
+        // writes it. The first run that names it decides: a read, even with a
+        // write beside it (the walk takes the group's writes first).
         for &block_index in &reached {
             let runs = &by_block[run_of[block_index]];
             if runs.iter().any(|(_, defined, _)| *defined) {
@@ -900,7 +937,8 @@ pub fn intervals_by_occurrences(
     out
 }
 
-/// The position of the last instruction of the parallel-copy run `position` is in.
+/// The position of the last instruction of the parallel-copy run `position` is
+/// in.
 pub(crate) fn _group_end(
     block: &LirBlock,
     position: usize,
@@ -934,12 +972,14 @@ fn _walked_at(
     let mut pieces: IndexMap<u32, Vec<Segment>> = IndexMap::default();
     let mut starts: Vec<i64> = Vec::new();
     let (mut defined, mut used): (Vec<u32>, Vec<u32>) = (Vec::new(), Vec::new());
-    // One for every block, emptied at its start: a table grown anew for each block was a rehash of its own.
+    // One for every block, emptied at its start: a table grown anew for each
+    // block was a rehash of its own.
     let mut alive = Alive::new();
     let mut written: crate::support::hash::HashSet<u32> = Default::default();
     for (block_index, block) in body.blocks.iter().enumerate() {
         let (first, last) = index.span[&block.at];
-        // Each instruction's slot: the block's first after its phis' slot, then two for each that is no mark.
+        // Each instruction's slot: the block's first after its phis' slot, then
+        // two for each that is no mark.
         starts.clear();
         if let Some(given) = given {
             starts.extend_from_slice(&given[block_index]);
@@ -1014,8 +1054,9 @@ fn _walked_at(
     })
 }
 
-/// `_ranges` as it was written, over a hashed map of slots, a map that shifts on removal and a set per group,
-/// which `LLRM_CHECK_RANGES=1` and the tests hold the walk below to.
+/// `_ranges` as it was written, over a hashed map of slots, a map that shifts
+/// on removal and a set per group, which `LLRM_CHECK_RANGES=1` and the tests
+/// hold the walk below to.
 ///
 /// Python builds `pieces` by iterating sets; only the map's order differs,
 /// and nothing reads it in order.
@@ -1177,9 +1218,10 @@ pub(crate) fn divided(
 
 #[cfg(test)]
 mod tests {
-    /// The numbering of slots is this file's alone: everything else asks for a point (`def_point`, `window_end`,
-    /// `slot`, `spill_size`) and never does arithmetic on the constants, so the numbering can change while what is
-    /// asked stays true. Test code is free to name them.
+    /// The numbering of slots is this file's alone: everything else asks for a
+    /// point (`def_point`, `window_end`, `slot`, `spill_size`) and never
+    /// does arithmetic on the constants, so the numbering can change while what
+    /// is asked stays true. Test code is free to name them.
     #[test]
     fn test_nothing_outside_the_numbering_does_arithmetic_on_slots() {
         let mut found = Vec::new();

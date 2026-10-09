@@ -126,8 +126,10 @@ impl DataLayout {
         self.pointer(space).bits > self.pointer(0).bits
     }
 
-    /// The bits of `space`'s offset arithmetic: a pair's entry is a selector word then an offset word, a flat space's
-    /// offset is its whole pointer. The one place the split is stated; an address wraps modulo 2^this.
+    /// The bits of `space`'s offset arithmetic: a pair's entry is a selector
+    /// word then an offset word, a flat space's offset is its whole
+    /// pointer. The one place the split is stated; an address wraps modulo
+    /// 2^this.
     pub fn offset_bits(
         &self,
         space: u32,
@@ -283,8 +285,9 @@ pub fn float_bits(kind: FloatKind) -> u32 {
 mod tests {
     use super::DataLayout;
 
-    /// `offset_bits` was a pair's half for every space: a flat 16-bit space said 8, so a caller that wrapped a flat
-    /// offset by it (a frame index into a 32 KB object) wrapped at 256.
+    /// `offset_bits` was a pair's half for every space: a flat 16-bit space
+    /// said 8, so a caller that wrapped a flat offset by it (a frame index
+    /// into a 32 KB object) wrapped at 256.
     #[test]
     fn a_flat_spaces_offset_bits_are_its_pointer_bits_and_a_pairs_are_half() {
         let layout = DataLayout::parse("e-p:16:16-p1:32:16:16:16-p3:32:16:16:32").unwrap();

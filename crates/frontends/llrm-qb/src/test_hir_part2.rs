@@ -114,7 +114,8 @@ fn row(
     (offset, loc, target.to_owned(), index)
 }
 
-/// `object_module.of(records).calls`: far calls to externals in the code segment.
+/// `object_module.of(records).calls`: far calls to externals in the code
+/// segment.
 fn far_calls(records: &Records) -> BTreeMap<i64, String> {
     let (seg, _name, size) = omf::code_segment(records).expect("a code segment");
     let code = omf::segment_image(records, seg, size);
@@ -197,7 +198,8 @@ fn cmp_frame_zero(text: &str) -> bool {
     })
 }
 
-/// The default-type probe emitted only for VBDOS: PDS/QB rejected B$FLEN's missing ABI.
+/// The default-type probe emitted only for VBDOS: PDS/QB rejected B$FLEN's
+/// missing ABI.
 #[test]
 fn test_default_typed_len_emits_for_each_microsoft_runtime() {
     for (dialect, runtime) in [("qb45", "qb45"), ("pds71", "pds71"), ("vbdos", "vbdos")] {
@@ -206,7 +208,8 @@ fn test_default_typed_len_emits_for_each_microsoft_runtime() {
     }
 }
 
-/// A fresh MAIN failed runtime initialization when U_FLAG claimed /FPa instead of /FPi.
+/// A fresh MAIN failed runtime initialization when U_FLAG claimed /FPa instead
+/// of /FPi.
 #[test]
 fn test_vbdos_module_header_records_the_measured_compiler_switches() {
     let mut source = parsed(&fixture("emission.bas"));
@@ -218,7 +221,8 @@ fn test_vbdos_module_header_records_the_measured_compiler_switches() {
     assert_eq!(u16::from_le_bytes([code[46], code[47]]), 0x13C4);
 }
 
-/// QGL stayed in the local heap scanner: empty `_DATA` moved BC_DATA behind the C runtime.
+/// QGL stayed in the local heap scanner: empty `_DATA` moved BC_DATA behind the
+/// C runtime.
 #[test]
 fn test_fresh_basic_object_does_not_predeclare_the_c_data_class() {
     let source = parsed(&fixture("emission.bas"));
@@ -272,7 +276,8 @@ fn test_pds_alternate_math_module_header_records_the_measured_switch() {
     assert_eq!(u16::from_le_bytes([code[46], code[47]]), 0x1088);
 }
 
-/// The full source build printed usage because COMMAND$ became an empty implicit local.
+/// The full source build printed usage because COMMAND$ became an empty
+/// implicit local.
 #[test]
 fn test_command_line_is_resolved_as_the_zero_argument_runtime_intrinsic() {
     let mir = emitted_mir(&parsed(&fixture("command-line.bas")));
@@ -285,7 +290,8 @@ fn test_command_line_is_resolved_as_the_zero_argument_runtime_intrinsic() {
     assert_eq!(calls[..3], ["B$FCMD", "B$LTRM", "B$RTRM"]);
 }
 
-/// Fresh SYS_TIME_INIT loaded an implicit local forever instead of calling B$TIMR.
+/// Fresh SYS_TIME_INIT loaded an implicit local forever instead of calling
+/// B$TIMR.
 #[test]
 fn test_timer_loads_the_single_returned_by_the_runtime_clock() {
     let mir = emitted_mir(&parsed(&fixture("timer-basic.bas")));
@@ -299,7 +305,8 @@ fn test_timer_loads_the_single_returned_by_the_runtime_clock() {
     }
 }
 
-/// PDS TIMER had the measured zero-byte ABI but no table entry, so object emission refused it.
+/// PDS TIMER had the measured zero-byte ABI but no table entry, so object
+/// emission refused it.
 #[test]
 fn test_timer_emits_for_each_microsoft_runtime() {
     for (dialect, runtime) in [("qb45", "qb45"), ("pds71", "pds71"), ("vbdos", "vbdos")] {
@@ -308,7 +315,8 @@ fn test_timer_emits_for_each_microsoft_runtime() {
     }
 }
 
-/// SYS_TICK_HZ left its SINGLE on x87, while BC callers passed and read a hidden result slot.
+/// SYS_TICK_HZ left its SINGLE on x87, while BC callers passed and read a
+/// hidden result slot.
 #[test]
 fn test_qb_float_function_uses_hidden_near_result_pointer() {
     let source = parsed_runtime_frames(&fixture("float-function.bas"));
@@ -334,7 +342,8 @@ fn test_qb_float_function_uses_hidden_near_result_pointer() {
     assert!(procedure[..statement_table.unwrap()].ends_with(&hex("ca0600")));
 }
 
-/// SYS_MEM_MARK saw only memAvail&'s low word: external LONG returns in DX:AX, not EAX.
+/// SYS_MEM_MARK saw only memAvail&'s low word: external LONG returns in DX:AX,
+/// not EAX.
 #[test]
 fn test_qb_long_function_boundary_uses_the_legacy_dx_ax_pair() {
     let external = listing(&parsed(&fixture("external-long.bas")));
@@ -383,7 +392,8 @@ fn test_vbdos_managed_locals_begin_below_the_runtime_frame_header() {
     assert!(offsets.contains(&42), "{procedure}");
 }
 
-/// SYS read its Game argument at BP-0Eh and later raised error 64 opening the map.
+/// SYS read its Game argument at BP-0Eh and later raised error 64 opening the
+/// map.
 #[test]
 fn test_runtime_frame_keeps_parameters_above_bp() {
     let source = parsed(&fixture("emission.bas"));
@@ -414,7 +424,8 @@ fn test_source_call_releases_its_materialized_string_argument() {
     assert_eq!(calls[show - 1..show + 2], ["B$SASS", "SHOW", "B$STDL"]);
 }
 
-/// Nibbles pushed four bytes per PrintScore field, then RETF 10 left SP corrupted.
+/// Nibbles pushed four bytes per PrintScore field, then RETF 10 left SP
+/// corrupted.
 #[test]
 fn test_far_array_field_byref_uses_a_near_copy_in_copy_out_slot() {
     let source = parsed_as(&fixture("farbyref.bas"), "vbdos", "qb45");
@@ -461,7 +472,8 @@ fn test_fixed_string_array_descriptor_carries_a_near_data_offset() {
     assert!(!object_bytes(&source, "string-array-element.bas").expect("emits").is_empty());
 }
 
-/// Fresh SCREEN exited after `ugl`: BASIC startup zeroed its BC_DATA array descriptor.
+/// Fresh SCREEN exited after `ugl`: BASIC startup zeroed its BC_DATA array
+/// descriptor.
 #[test]
 fn test_module_static_numeric_array_has_a_relocated_basic_descriptor() {
     let source = parsed(&fixture("static-array-descriptor.bas"));
@@ -552,7 +564,8 @@ end function
     assert!(!cmp_frame_zero(procedure));
 }
 
-/// Q45A05 returned dimension 2 for LBOUND(a,1) because its descriptor was source-ordered.
+/// Q45A05 returned dimension 2 for LBOUND(a,1) because its descriptor was
+/// source-ordered.
 #[test]
 fn test_rank_two_descriptor_matches_qb_dimension_order_and_adjusted_offset() {
     let source = parsed_as(&root().join("tests/differential/conformance/qb45/q45a05.bas"), "qb45", "qb45");
@@ -613,7 +626,8 @@ fn test_static_array_formal_uses_a_lower_bound_adjusted_descriptor() {
     assert_eq!(descriptor_fixups, [row(0, 1, "segment", data), row(2, 2, "group", 1), row(10, 1, "segment", data)]);
 }
 
-/// MOD_TEX first passed a static AD to RDIM, then addressed its far allocation through DGROUP.
+/// MOD_TEX first passed a static AD to RDIM, then addressed its far allocation
+/// through DGROUP.
 #[test]
 fn test_dynamic_directive_makes_a_bounded_numeric_array_runtime_owned() {
     let source = parsed(&fixture("dynamic-bounded-array.bas"));
@@ -626,13 +640,15 @@ fn test_dynamic_directive_makes_a_bounded_numeric_array_runtime_owned() {
     assert!(!module.data.iter().any(|one| one.readonly && one.name == "VALUES$descriptor"));
     assert_eq!(calls, ["B$DDIM", "B$RDIM"]);
     let listing = listing(&source);
-    // Through the allocation's selector; its origin is the constant 0, so +0Ah is not read.
+    // Through the allocation's selector; its origin is the constant 0, so +0Ah
+    // is not read.
     let slot = |offset: &str| regex::Regex::new(&format!(r"\+{offset}\b")).unwrap().is_match(&listing);
     assert!(slot("2") && !slot("10"), "{listing}");
     assert!(listing.contains("mov dword ptr es:[bx], 7") || listing.contains("mov dword ptr es:[0], 7"), "{listing}");
 }
 
-/// COM_TOKENIZE passed a huge-pointer element to SASS, which reported string-space corruption.
+/// COM_TOKENIZE passed a huge-pointer element to SASS, which reported
+/// string-space corruption.
 #[test]
 fn test_dynamic_string_array_formal_uses_adjusted_near_descriptor_base() {
     let source = parsed_runtime_frames(&fixture("string-array-parameter.bas"));
@@ -654,7 +670,8 @@ fn test_dynamic_string_array_formal_uses_adjusted_near_descriptor_base() {
     );
 }
 
-/// D_SURF applied a one-based array's lower bound twice and hung before its first frame.
+/// D_SURF applied a one-based array's lower bound twice and hung before its
+/// first frame.
 #[test]
 fn test_dynamic_numeric_array_formal_uses_split_adjusted_far_base() {
     let source = parsed(&fixture("numeric-array-parameter.bas"));
@@ -668,7 +685,8 @@ fn test_dynamic_numeric_array_formal_uses_split_adjusted_far_base() {
     assert!(!indirect_loads(function).iter().any(|one| one.offset == 16));
 }
 
-/// R_SET_FRUSTUM rebuilt the same split descriptor 38 times; one expression needs one stable base.
+/// R_SET_FRUSTUM rebuilt the same split descriptor 38 times; one expression
+/// needs one stable base.
 #[test]
 fn test_numeric_array_descriptor_snapshot_is_reused_until_an_effectful_call() {
     let source = parsed(&fixture("numeric-array-base-reuse.bas"));
@@ -680,7 +698,8 @@ fn test_numeric_array_descriptor_snapshot_is_reused_until_an_effectful_call() {
     assert!(!loads.iter().any(|one| one.offset >= 14));
 }
 
-/// Qrender stopped at SYS_ERROR because COM_ARG returned descriptor bytes, not B$SCPF's AX pointer.
+/// Qrender stopped at SYS_ERROR because COM_ARG returned descriptor bytes, not
+/// B$SCPF's AX pointer.
 #[test]
 fn test_string_function_copies_its_local_result_to_the_runtime_temporary_chain() {
     let source = parsed(&fixture("string-function-result.bas"));
@@ -701,7 +720,8 @@ fn test_string_function_copies_its_local_result_to_the_runtime_temporary_chain()
     assert!(procedure.contains("call far ptr B$EXSA"));
 }
 
-/// D_SURF's LS_LCHAR called LEN then ASC; a direct literal temporary was consumed and ASC raised error 5.
+/// D_SURF's LS_LCHAR called LEN then ASC; a direct literal temporary was
+/// consumed and ASC raised error 5.
 #[test]
 fn test_non_addressable_byref_string_argument_is_copied_to_an_owned_descriptor() {
     let source = parsed(&fixture("asc-literal.bas"));
@@ -711,7 +731,8 @@ fn test_non_addressable_byref_string_argument_is_copied_to_an_owned_descriptor()
     assert!(index("B$SASS") < index("FIRSTCODE"));
 }
 
-/// Fresh SYS passed COM_TOKENIZE backwards and its filled argv heap was corrupt.
+/// Fresh SYS passed COM_TOKENIZE backwards and its filled argv heap was
+/// corrupt.
 #[test]
 fn test_basic_procedure_arguments_use_pascal_left_to_right_push_order() {
     let source = parsed(&fixture("pascal-call-order.bas"));
@@ -721,24 +742,28 @@ fn test_basic_procedure_arguments_use_pascal_left_to_right_push_order() {
     assert_eq!(call.order, [0, 1]);
 }
 
-/// MAIN's OPEN raised error 52 when a near string reference named only the far payload.
+/// MAIN's OPEN raised error 52 when a near string reference named only the far
+/// payload.
 #[test]
 fn test_readonly_literals_use_the_measured_near_descriptor_and_far_payload() {
     let source = parsed(&fixture("readonly-data.bas"));
     let records = records(&source, "readonly-data.bas");
     let by_name = by_name(&records);
 
-    assert_eq!(by_name["BC_DATA"].1, 10); // six-byte BASIC prefix plus the writable LONG
+    // six-byte BASIC prefix plus the writable LONG
+    assert_eq!(by_name["BC_DATA"].1, 10);
     let (descriptor, size) = by_name["BC_CN"];
     assert_eq!(size, 6);
     let (constant, size) = by_name["FSL_CONST"];
     assert_eq!(size, 8);
-    assert_eq!(omf::combines(&records)[&constant], 0); // private FAR_DATA, outside DGROUP
+    // private FAR_DATA, outside DGROUP
+    assert_eq!(omf::combines(&records)[&constant], 0);
     assert_eq!(
         fixup_rows(&records, descriptor),
         [
-            row(0, 2, "segment", constant),   // selector word
-            row(2, 1, "segment", constant),   // offset of the far string descriptor
+            row(0, 2, "segment", constant), // selector word
+            // offset of the far string descriptor
+            row(2, 1, "segment", constant),
             row(4, 1, "segment", descriptor), // selector-word address in DGROUP
         ]
     );
@@ -779,7 +804,8 @@ fn test_a_scalar_and_an_array_of_one_name_do_not_share_storage() {
     assert_ne!(stored(7), stored(5));
 }
 
-/// PRINT "A" emitted VBDOS's far bridge and printed garbage under QB 4.5 and PDS 7.1.
+/// PRINT "A" emitted VBDOS's far bridge and printed garbage under QB 4.5 and
+/// PDS 7.1.
 #[test]
 fn test_qb_and_pds_literals_use_their_measured_near_descriptor() {
     for (dialect, runtime) in [("qb45", "qb45"), ("pds71", "pds71")] {
@@ -830,7 +856,8 @@ fn test_on_error_emits_a_relocated_runtime_registration() {
     assert!(fixups.iter().filter(|one| one.seg == Some(1) && one.target == "segment" && one.index == 1).count() >= 2);
 }
 
-/// Gorillas ignored ON ERROR GOTO 0, sent a shot error to PaletteError, and resumed corrupt state.
+/// Gorillas ignored ON ERROR GOTO 0, sent a shot error to PaletteError, and
+/// resumed corrupt state.
 #[test]
 fn test_on_error_registrations_follow_source_order() {
     let directory = tempfile::TempDir::new().unwrap();
@@ -898,7 +925,8 @@ fn test_resume_statement_entries_are_optimizer_roots() {
     assert!(!object_bytes(&source, "Q45ER52.BAS").expect("emits").is_empty());
 }
 
-/// QGL MAIN's FOR bound was SSA-only, so RESUME side entries bypassed its definition.
+/// QGL MAIN's FOR bound was SSA-only, so RESUME side entries bypassed its
+/// definition.
 #[test]
 fn test_for_bounds_survive_resume_statement_side_entries() {
     let directory = tempfile::TempDir::new().unwrap();

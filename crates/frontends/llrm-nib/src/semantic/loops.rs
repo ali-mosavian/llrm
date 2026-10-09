@@ -154,7 +154,8 @@ impl<'a> FunctionCompiler<'a> {
         body: &[Statement],
         span: Span,
     ) -> Result<(), Diagnostic> {
-        // The sequence a loop walks is borrowed until the loop ends; an iterator it consumes is not.
+        // The sequence a loop walks is borrowed until the loop ends; an
+        // iterator it consumes is not.
         let walked = match borrows::expression_owner(iterable) {
             Some(_) if !self.loop_consumes(iterable) => self.roots(iterable),
             _ => BTreeSet::new(),
@@ -191,7 +192,8 @@ impl<'a> FunctionCompiler<'a> {
         let array_name = match iterable {
             Expr::Name(name, _) => name.as_str(),
             // Any other sequence is held by a hidden local while the loop
-            // runs: a view of a place or a range, or the value anything else makes.
+            // runs: a view of a place or a range, or the value anything else
+            // makes.
             _ => {
                 let held = self.hidden("sequence");
                 let value = match iterable {

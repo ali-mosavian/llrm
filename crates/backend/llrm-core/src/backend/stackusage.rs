@@ -37,7 +37,8 @@ pub struct Usage {
     bounds: BTreeMap<usize, Bound>,
 }
 
-/// The bytes a push or an `add sp` of `at` moves; a push of what has no width is a stack slot.
+/// The bytes a push or an `add sp` of `at` moves; a push of what has no width
+/// is a stack slot.
 fn moved(
     what: &crate::model::ir::Semantics,
     slot: i64,
@@ -52,7 +53,8 @@ fn moved(
     }
 }
 
-/// Bytes `procedure` has on the stack at its deepest: not counting what it calls.
+/// Bytes `procedure` has on the stack at its deepest: not counting what it
+/// calls.
 pub fn frame(
     procedure: &masm::Procedure,
     target: &dyn llrm_target::Target,
@@ -102,14 +104,17 @@ pub fn outgoing(
     peak
 }
 
-/// Drops the stack check of each procedure that cannot take SP below the limit by more than the
-/// runtime's red zone, given every other procedure checks:
+/// Drops the stack check of each procedure that cannot take SP below the limit
+/// by more than the runtime's red zone, given every other procedure checks:
 ///
-/// - it is a leaf (no call, no inline code), so nothing below it is checked either way;
-/// - only the module's own direct calls enter it (`entered_directly`: internal, address not taken), so its caller is a
-///   checked procedure, or a leaf that calls nothing;
-/// - its caller held SP at or above the limit after its own frame, then pushed at most the module's deepest `outgoing`
-///   and the return address before this frame, so this frame and that push stay within `red_zone` bytes below the
+/// - it is a leaf (no call, no inline code), so nothing below it is checked
+///   either way;
+/// - only the module's own direct calls enter it (`entered_directly`: internal,
+///   address not taken), so its caller is a checked procedure, or a leaf that
+///   calls nothing;
+/// - its caller held SP at or above the limit after its own frame, then pushed
+///   at most the module's deepest `outgoing` and the return address before this
+///   frame, so this frame and that push stay within `red_zone` bytes below the
 ///   limit.
 pub fn elide_checks(
     procedures: &mut [masm::Procedure],
@@ -131,15 +136,15 @@ pub fn elide_checks(
     }
 }
 
-/// A stack is one segment, and DGROUP's data and heap share it: what a segment of
-/// `segment_bytes` leaves it.
+/// A stack is one segment, and DGROUP's data and heap share it: what a segment
+/// of `segment_bytes` leaves it.
 pub fn stack_limit(segment_bytes: Option<usize>) -> Option<i64> {
     segment_bytes.map(|bytes| bytes as i64 - 0x1000)
 }
 
 /// The bytes the object's stack segment adds to the `base` the runtime links,
-/// so the deepest chain of frames fits. A chain that cannot fit a segment of `limit` bytes is an
-/// error; none where the target has no segments.
+/// so the deepest chain of frames fits. A chain that cannot fit a segment of
+/// `limit` bytes is an error; none where the target has no segments.
 pub fn stack_to_add(
     module: &Module,
     base: i64,
@@ -182,7 +187,8 @@ impl Usage {
         let graph = CallGraph::from_edges(callees);
         let frames = procedures.iter().map(|one| frame(one, target)).collect::<Vec<_>>();
         let mut usage = Self { names, frames, graph, outside, bounds: BTreeMap::new() };
-        // Callees first: each bound is its frame and the deepest of its callees' memoized ones.
+        // Callees first: each bound is its frame and the deepest of its
+        // callees' memoized ones.
         for index in usage.graph.bottom_up() {
             let bound = usage.settle(index);
             usage.bounds.insert(index, bound);
@@ -223,7 +229,8 @@ impl Usage {
         }
     }
 
-    /// What `name` can reach; a routine the program does not define, at least nothing and itself.
+    /// What `name` can reach; a routine the program does not define, at least
+    /// nothing and itself.
     pub fn bound(
         &self,
         name: &str,
@@ -273,7 +280,8 @@ impl Usage {
         text
     }
 
-    /// What `-Wstack-usage=limit` says: each root that can reach more than `limit`.
+    /// What `-Wstack-usage=limit` says: each root that can reach more than
+    /// `limit`.
     pub fn warnings(
         &self,
         limit: i64,

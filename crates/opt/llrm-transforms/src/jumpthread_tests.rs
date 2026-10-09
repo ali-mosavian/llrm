@@ -5,8 +5,8 @@ use llrm_analysis::testing::DOS;
 use super::JumpThread;
 use crate::testing::{managed, parsed, results};
 
-/// A loop of `n` trips: a switch on the state, each case setting the next from the input, the state joined from
-/// constants.
+/// A loop of `n` trips: a switch on the state, each case setting the next from
+/// the input, the state joined from constants.
 const MACHINE: &str = "define i16 @f(i16 %n, i16 %k) {
 b0:
   br label %head
@@ -93,7 +93,8 @@ done:
 }
 ";
 
-/// A loop whose dispatch is behind a switch with three edges to one block (`odd`) that reads a phi of its own.
+/// A loop whose dispatch is behind a switch with three edges to one block
+/// (`odd`) that reads a phi of its own.
 const BEHIND_A_SWITCH: &str = "define i16 @f(i16 %n, i16 %k) {
 b0:
   br label %head
@@ -151,8 +152,8 @@ fn test_a_switch_on_a_state_the_join_makes_constant_is_entered_at_its_case() {
     let mut after = before.clone();
     let printed = managed(&mut after, JumpThread { size: false });
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{printed}");
-    // Every way into the switch, the first trip's included, has its copy of the blocks down to a case: no dispatch is
-    // left.
+    // Every way into the switch, the first trip's included, has its copy of the
+    // blocks down to a case: no dispatch is left.
     assert!(blocks(&printed) > blocks(&llrm_mir::print::module(&before)), "{printed}");
     assert_eq!(printed.matches("switch").count(), 0, "{printed}");
 }
@@ -166,8 +167,9 @@ fn test_tuned_for_size_nothing_is_copied() {
     assert!(printed.contains("head:"), "{printed}");
 }
 
-/// A state machine as the loop passes leave it (switch in the header, the next state a phi of constants and of a phi of
-/// constants): two joins between the case and the switch, and the loop's own exit test in the latch.
+/// A state machine as the loop passes leave it (switch in the header, the next
+/// state a phi of constants and of a phi of constants): two joins between the
+/// case and the switch, and the loop's own exit test in the latch.
 const ROTATED: &str = r#"define i32 @f(i32 %0) {
 b1:
   %1 = sub i32 0, %0
@@ -241,9 +243,10 @@ fn test_a_state_made_by_two_joins_is_threaded_and_computes_the_same() {
     assert_eq!(printed.matches("switch").count(), 0, "{printed}");
 }
 
-/// A threaded block whose switch had several edges to one join gave the join's phi one input for them all: the module
-/// failed to verify ("a phi in block 6 has 1 inputs from block 5 for 5 edges"), found by the levels work with unrolling
-/// off.
+/// A threaded block whose switch had several edges to one join gave the join's
+/// phi one input for them all: the module failed to verify ("a phi in block 6
+/// has 1 inputs from block 5 for 5 edges"), found by the levels work with
+/// unrolling off.
 #[test]
 fn test_a_block_with_several_edges_to_a_join_gives_the_phi_an_input_for_each() {
     let pairs: Vec<Vec<i128>> =
@@ -255,8 +258,9 @@ fn test_a_block_with_several_edges_to_a_join_gives_the_phi_an_input_for_each() {
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{printed}");
 }
 
-/// A block copied on the way to a case, whose switch has three edges to one block, gave that block's phi one input: the
-/// module failed to verify ("a phi in block 6 has 1 inputs from block 5 for 5 edges").
+/// A block copied on the way to a case, whose switch has three edges to one
+/// block, gave that block's phi one input: the module failed to verify ("a phi
+/// in block 6 has 1 inputs from block 5 for 5 edges").
 #[test]
 fn test_a_copied_block_with_three_edges_to_a_block_gives_its_phi_three_inputs() {
     let pairs: Vec<Vec<i128>> =
@@ -268,7 +272,8 @@ fn test_a_copied_block_with_three_edges_to_a_block_gives_its_phi_three_inputs() 
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{printed}");
 }
 
-/// An inlined `safe()`: its result is a phi of constants, tested by the branch after it, in a loop.
+/// An inlined `safe()`: its result is a phi of constants, tested by the branch
+/// after it, in a loop.
 const TESTED_RESULT: &str = "define i16 @f(i16 %n, i16 %k) {
 b0:
   br label %head
@@ -308,8 +313,9 @@ done:
 }
 ";
 
-/// `r = phi(1, 0); if (r != 0)` after a call inlined: the test of a constant each path decides was run on every trip
-/// (queens: `xor eax, eax; cmp eax, 0; je`, 13% of its -O2 clocks over gcc).
+/// `r = phi(1, 0); if (r != 0)` after a call inlined: the test of a constant
+/// each path decides was run on every trip (queens: `xor eax, eax; cmp eax, 0;
+/// je`, 13% of its -O2 clocks over gcc).
 #[test]
 fn test_a_branch_on_a_compare_of_a_phi_of_constants_is_decided_on_each_path() {
     let pairs: Vec<Vec<i128>> =
@@ -322,9 +328,10 @@ fn test_a_branch_on_a_compare_of_a_phi_of_constants_is_decided_on_each_path() {
     assert_eq!(printed.matches("icmp ne").count(), 0, "{printed}");
 }
 
-/// Tuned for size GCC threads a branch whose copies would be empty (`tree-ssa-threadupdate.cc:2077`): the result of an
-/// inlined call tested by the next branch costs nothing to decide on each path (queens -Os: 187348 -> 173090
-/// instructions).
+/// Tuned for size GCC threads a branch whose copies would be empty
+/// (`tree-ssa-threadupdate.cc:2077`): the result of an inlined call tested by
+/// the next branch costs nothing to decide on each path (queens -Os: 187348 ->
+/// 173090 instructions).
 #[test]
 fn test_tuned_for_size_a_branch_whose_copies_are_empty_is_still_decided() {
     let pairs: Vec<Vec<i128>> =
@@ -337,8 +344,9 @@ fn test_tuned_for_size_a_branch_whose_copies_are_empty_is_still_decided() {
     assert_eq!(printed.matches("icmp ne").count(), 0, "{printed}");
 }
 
-/// The first trip of a loop is not peeled by threading its header's test (sieve: +29 B, a second copy of the outer
-/// loop's start): entering a loop through its header is a rotation, which `Rotate` makes where it pays.
+/// The first trip of a loop is not peeled by threading its header's test
+/// (sieve: +29 B, a second copy of the outer loop's start): entering a loop
+/// through its header is a rotation, which `Rotate` makes where it pays.
 #[test]
 fn test_the_test_of_a_loop_s_first_trip_is_not_threaded() {
     let text = "define i16 @f(i16 %n) {

@@ -38,9 +38,9 @@ fn test_concurrent_builds_of_one_tree_make_it_once_and_whole() {
     assert!(!directory.path().join("tree.lock").exists());
 }
 
-/// Of eight callers claiming one lock at once, exactly one wins, round after round. The lock
-/// was `mkdir`, which on a host with uutils coreutils 0.2.2 let two both succeed: a tree
-/// was then produced twice, one run in six.
+/// Of eight callers claiming one lock at once, exactly one wins, round after
+/// round. The lock was `mkdir`, which on a host with uutils coreutils 0.2.2 let
+/// two both succeed: a tree was then produced twice, one run in six.
 #[test]
 fn test_of_many_concurrent_claims_one_wins() {
     let directory = tempfile::tempdir().unwrap();
@@ -94,8 +94,9 @@ fn test_wccq_says_what_it_was_made_from() {
     assert_eq!(stamp.trim(), String::from_utf8(hash.stdout).unwrap().trim());
 }
 
-/// #512 stamped the i86 build `<hash>-i86` while hash.sh printed `<hash>`, so the
-/// test above failed on main. The stamp names its CPU, and the two never share one.
+/// #512 stamped the i86 build `<hash>-i86` while hash.sh printed `<hash>`, so
+/// the test above failed on main. The stamp names its CPU, and the two never
+/// share one.
 #[test]
 fn test_stamp_names_its_cpu() {
     let stamp = |cpu: &str| {
@@ -107,9 +108,10 @@ fn test_stamp_names_its_cpu() {
     assert_ne!(i86, flat);
 }
 
-/// The front end's sizes (a near pointer, a far one, `int`) were `LLRM_FLAT ? 4 : 2` in cgshim.c, a copy of the data
-/// layout and the C ABI beside the descriptions: build.rs now passes what each target's description says, and the stamp
-/// covers it.
+/// The front end's sizes (a near pointer, a far one, `int`) were `LLRM_FLAT ? 4
+/// : 2` in cgshim.c, a copy of the data layout and the C ABI beside the
+/// descriptions: build.rs now passes what each target's description says, and
+/// the stamp covers it.
 #[test]
 fn test_the_front_ends_sizes_are_the_descriptions_not_cgshims() {
     let shim = std::fs::read_to_string(root().join("toolchain/owshim/cgshim.c")).unwrap();

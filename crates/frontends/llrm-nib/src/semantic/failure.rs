@@ -12,10 +12,10 @@ fn outcome(layout: &EnumLayout) -> Option<(VariantLayout, VariantLayout)> {
 }
 
 impl FunctionCompiler<'_> {
-    /// `operand?` as a scalar: the success payload, or `void` when there is none.
-    /// `value` bound to a hidden local, when it holds a `?`: a statement
-    /// makes the place it writes, such as a pushed element or a dict entry,
-    /// only after its value can no longer return early.
+    /// `operand?` as a scalar: the success payload, or `void` when there is
+    /// none. `value` bound to a hidden local, when it holds a `?`: a
+    /// statement makes the place it writes, such as a pushed element or a
+    /// dict entry, only after its value can no longer return early.
     pub(super) fn settled_failure(
         &mut self,
         value: &Expr,

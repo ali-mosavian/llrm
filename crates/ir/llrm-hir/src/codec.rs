@@ -191,7 +191,8 @@ impl _Plain for model::DebugVariable {
 plain_record!(DebugFunction, None, function => "function", module => "module", name => "name", r#type => "type", parameters => "parameters",
     variables => "variables");
 plain_record!(DebugGlobal, None, function => "function", object => "object", offset => "offset", name => "name", r#type => "type");
-// `language` only where the frontend says, so a module without one writes as before.
+// `language` only where the frontend says, so a module without one writes as
+// before.
 impl _Plain for model::Debug {
     fn _plain(&self) -> JSON {
         let mut out: IndexMap<String, JSON> = IndexMap::default();
@@ -211,7 +212,8 @@ plain_record!(ValueRef, Some("value"), value => "value");
 plain_record!(Constant, Some("constant"), r#type => "type", value => "value");
 plain_record!(PlaceRef, Some("place"), place => "place");
 plain_record!(ArrayElement, Some("array_element"), place => "place", indices => "indices");
-// The member an access is, only where a frontend says: every other access writes as before.
+// The member an access is, only where a frontend says: every other access
+// writes as before.
 impl _Plain for model::ProjectedPlace {
     fn _plain(&self) -> JSON {
         let mut out: IndexMap<String, JSON> = IndexMap::default();
@@ -462,7 +464,8 @@ impl _Plain for model::Module {
     }
 }
 plain_record!(CellWriters, None, cell => "cell", routines => "routines");
-// `reads_arguments` and `no_return` only when made, so that promises read as they always have.
+// `reads_arguments` and `no_return` only when made, so that promises read as
+// they always have.
 impl _Plain for model::RuntimePromises {
     fn _plain(&self) -> JSON {
         let mut out: IndexMap<String, JSON> = IndexMap::default();
@@ -724,7 +727,8 @@ pub fn debug_json(debug: &model::Debug) -> String {
 
 pub fn decode(text: &str) -> Result<model::Program, InvalidHIR> {
     let raw = pyjson::loads(text).map_err(|error| InvalidHIR(format!("invalid HIR JSON: {error}")))?;
-    // A program of another schema is refused as such, not by the first field it has that this one does not.
+    // A program of another schema is refused as such, not by the first field it
+    // has that this one does not.
     if let Json::Dict(fields) = &raw
         && let Some(Json::Int(schema)) = fields.get("schema")
         && *schema != model::SCHEMA_VERSION
@@ -1642,7 +1646,8 @@ static RUNTIME_PROMISES: _Record = _Record {
             reads_arguments: _default(args, "reads_arguments", Vec::new())?,
             no_retain: _default(args, "no_retain", Vec::new())?,
             no_return: _default(args, "no_return", Vec::new())?,
-            // Read from the runtime's description after decoding, not carried in a program's text.
+            // Read from the runtime's description after decoding, not carried
+            // in a program's text.
             ..Default::default()
         })
     },

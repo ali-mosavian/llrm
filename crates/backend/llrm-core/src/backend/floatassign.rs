@@ -186,7 +186,8 @@ fn _integer_stores(
     Ok(out)
 }
 
-/// Whether the cell's address is made of SSA values, so every read of it names the same bytes.
+/// Whether the cell's address is made of SSA values, so every read of it names
+/// the same bytes.
 fn _stable(cell: &Mem) -> bool {
     match cell.addr {
         None => return false,
@@ -287,7 +288,8 @@ fn _quiet(
     false
 }
 
-/// Whether the load at `position` may be read again by each reader instead of held on the stack.
+/// Whether the load at `position` may be read again by each reader instead of
+/// held on the stack.
 ///
 /// GCC's memory equivalence: a value that is a cell nothing writes before its
 /// last reader is that cell. Its first read moves to its first reader, so
@@ -424,7 +426,8 @@ fn _shared_cells(
         }
     }
     let mut cells: IndexMap<u32, u32> = IndexMap::default();
-    let mut colors: IndexMap<u32, Vec<u32>> = IndexMap::default(); // web -> each cell's owner
+    // web -> each cell's owner
+    let mut colors: IndexMap<u32, Vec<u32>> = IndexMap::default();
     for value in members.iter().copied().collect::<BTreeSet<u32>>() {
         let owners = colors.entry(root[&value]).or_default();
         let taken =
@@ -438,7 +441,8 @@ fn _shared_cells(
     cells
 }
 
-/// Bundle -> the floating values it holds on the stack, LLVM's SpillPlacement per value.
+/// Bundle -> the floating values it holds on the stack, LLVM's SpillPlacement
+/// per value.
 ///
 /// A block wants a value on the stack at a border where it reads the value
 /// before the stack is next emptied, or holds it after the stack was last
@@ -451,7 +455,8 @@ fn _stacked(
     live_out: &Live,
     bundles: &spillplacement::Bundles,
 ) -> IndexMap<usize, BTreeSet<u32>> {
-    // Per block: where the stack is first and last emptied, and each value's first and last event.
+    // Per block: where the stack is first and last emptied, and each value's
+    // first and last event.
     let mut borders: IndexMap<i64, (Option<usize>, Option<usize>, IndexMap<u32, (usize, usize)>)> = IndexMap::default();
     for block in &body.blocks {
         let (mut first, mut last, mut events) = (None, None, IndexMap::<u32, (usize, usize)>::default());
@@ -461,9 +466,10 @@ fn _stacked(
                 first = first.or(Some(position));
                 last = Some(position);
             }
-            // A copy moves a value between names, in whichever place its source is: it reads nothing, but the name it
-            // defines is made here, after any call before it (a join's input that a call returned is not spilled by
-            // it).
+            // A copy moves a value between names, in whichever place its source
+            // is: it reads nothing, but the name it defines is made
+            // here, after any call before it (a join's input that a call
+            // returned is not spilled by it).
             let copy = _float_copy(one).is_some();
             for value in one.uses.iter().filter(|_| !copy).chain(&one.defines).filter(|value| floating.contains(value))
             {
@@ -646,8 +652,9 @@ fn _price(
 
 /// A stretch of one value in a register: from a definition, a restore or a
 /// block's entry, to its death, a boundary, or a block's exit.
-/// One instruction of a step: what it reloads, itself, what it stores, and the places (values and
-/// cells) it reads and writes. A copy's `(result, source)` is kept to take its source early.
+/// One instruction of a step: what it reloads, itself, what it stores, and the
+/// places (values and cells) it reads and writes. A copy's `(result, source)`
+/// is kept to take its source early.
 struct Piece {
     reloads: Vec<Arc<Insn>>,
     members: Vec<Arc<Insn>>,
@@ -669,8 +676,9 @@ impl Piece {
         out.extend(self.reloads.into_iter().chain(self.members).chain(self.stores));
     }
 
-    /// The source read into `fresh` before anything is written, and the copy reading it from there:
-    /// a cycle of copies is broken with one temporary.
+    /// The source read into `fresh` before anything is written, and the copy
+    /// reading it from there: a cycle of copies is broken with one
+    /// temporary.
     fn source_taken_first(
         &mut self,
         fresh: u32,
@@ -694,7 +702,8 @@ fn _place(cell: &Loc) -> String {
     parcopy::_named(cell).expect("a cell is a place")
 }
 
-/// `one` reading `fresh` where it read `source`, or writing `fresh` where it wrote.
+/// `one` reading `fresh` where it read `source`, or writing `fresh` where it
+/// wrote.
 fn _renamed(
     one: &Insn,
     source: Option<(u32, u32)>,
@@ -779,7 +788,8 @@ fn _live_after(
     after
 }
 
-/// Segments, the allocnos they join into, and where each read and definition belongs.
+/// Segments, the allocnos they join into, and where each read and definition
+/// belongs.
 struct Allocnos {
     segments: Vec<Segment>,
     parent: Vec<usize>,
@@ -825,11 +835,13 @@ struct Plan<'b> {
     body: &'b LirBody,
     floating: HashSet<u32>,
     homes: IndexMap<u32, Arc<Insn>>,
-    /// Of `homes`, the values the program stores to their cell: no load makes them, so a definition costs nothing more
-    /// in a register than in memory.
+    /// Of `homes`, the values the program stores to their cell: no load makes
+    /// them, so a definition costs nothing more in a register than in
+    /// memory.
     stored: HashSet<u32>,
     allocnos: Allocnos,
-    /// Root -> register cost minus memory cost, and whether it holds a definition leaving for memory.
+    /// Root -> register cost minus memory cost, and whether it holds a
+    /// definition leaving for memory.
     costs: IndexMap<usize, f64>,
 }
 
@@ -941,8 +953,9 @@ fn _allocnos(
                         let segment = allocnos.made(value);
                         allocnos.at_def.insert((at, first + position, value), segment);
                         // IRA's coalescing: a copy from a dying source into the
-                        // same spill cell is one allocno, a rename in a register
-                        // and no instruction in memory.
+                        // same spill cell is one allocno, a rename in a
+                        // register and no instruction
+                        // in memory.
                         let coalesced = _float_copy(one).filter(|(_, source)| {
                             !survives(*source)
                                 && !homes.contains_key(source)
@@ -1016,7 +1029,8 @@ impl Plan<'_> {
                 cost += load * weight(at);
             }
             if equivalent && self.stored.contains(&segment.value) {
-                // Its cell holds it wherever it lives: a copy defines it, in a register or not at all.
+                // Its cell holds it wherever it lives: a copy defines it, in a
+                // register or not at all.
             } else if equivalent {
                 cost += segment.defs.iter().map(|(at, _)| load * weight(*at)).sum::<f64>();
             } else {
@@ -1147,8 +1161,9 @@ fn _aliased(body: &LirBody) -> LirBody {
     out
 }
 
-/// The phis' values the optimizer proved are a cell's (`!llrm.home`) where the body still holds it
-/// (`storedhomes`): each is read back from the cell, and a store of its own is never made.
+/// The phis' values the optimizer proved are a cell's (`!llrm.home`) where the
+/// body still holds it (`storedhomes`): each is read back from the cell, and a
+/// store of its own is never made.
 fn _stored_homes(
     body: &LirBody,
     floating: &HashSet<u32>,
@@ -1161,8 +1176,9 @@ fn _stored_homes(
     .collect()
 }
 
-/// `body` without the constant loads nothing reads: a value whose copies were vacated (read back from its home
-/// instead) leaves `fld1; fstp st(0)` behind in stack form. A fixed-address load is no observable exception in MIR,
+/// `body` without the constant loads nothing reads: a value whose copies were
+/// vacated (read back from its home instead) leaves `fld1; fstp st(0)` behind
+/// in stack form. A fixed-address load is no observable exception in MIR,
 /// as a dead one MIR drops.
 fn _without_dead_loads(body: &LirBody) -> LirBody {
     let mut read: HashSet<u32> = body.pins.keys().copied().collect();
@@ -1242,7 +1258,8 @@ fn _homes(
                 })
                 .map(|(offset, _)| (position + 1 + offset) as i64)
                 .collect();
-            // A volatile read happens once, where it is: only its one reader, right after it, may take it.
+            // A volatile read happens once, where it is: only its one reader,
+            // right after it, may take it.
             let once = !one.volatile() || reads.iter().eq([position as i64 + 1].iter());
             if once && _rereadable(&block.insns, position, &reads) {
                 homes.insert(result.value, Arc::clone(one));
@@ -1372,7 +1389,8 @@ impl Plan<'_> {
                         .filter(|value| is_spilled(*value, &self.allocnos.at_use))
                         .collect();
                     let writes = _held_floats(&what.dests);
-                    // A copy between spilled values sharing a cell is no instruction at all.
+                    // A copy between spilled values sharing a cell is no
+                    // instruction at all.
                     if let (Some((result, source)), [read]) = (_float_copy(one), reads.as_slice()) {
                         if *read == source
                             && is_spilled(result, &self.allocnos.at_def)
@@ -1395,7 +1413,8 @@ impl Plan<'_> {
                     }
                     let mut made = Arc::clone(one);
                     let mut reloaded = Vec::new();
-                    // One operand at most is memory: the later loaded, so the loads keep their order.
+                    // One operand at most is memory: the later loaded, so the
+                    // loads keep their order.
                     let mut order = reads.clone();
                     order.sort_by_key(|value| self.homes.get(value).map_or(i64::MIN, |home| home.at));
                     let fused = match order.last() {
@@ -1428,10 +1447,11 @@ impl Plan<'_> {
                     }
                     pieces.push(piece);
                 }
-                // A step with spilled copies is written in an order where each reads before it is
-                // overwritten, one copy at a time, not all reloaded, all made, all stored: two x87
-                // slots whatever the step's width. A step of registers stays a group, which
-                // floatalloc renames for free.
+                // A step with spilled copies is written in an order where each
+                // reads before it is overwritten, one copy at a
+                // time, not all reloaded, all made, all stored: two x87
+                // slots whatever the step's width. A step of registers stays a
+                // group, which floatalloc renames for free.
                 if pieces.len() > 1 && pieces.iter().any(|piece| !piece.reloads.is_empty() || !piece.stores.is_empty())
                 {
                     let mut left: Vec<usize> = (0..pieces.len()).collect();
@@ -1547,7 +1567,8 @@ impl Plan<'_> {
             .collect();
         fused.requires =
             home.requires.iter().chain(&one.requires).copied().collect::<IndexSet<_>>().into_iter().collect();
-        // The operand is another instruction's: its fixup is bound by address, not by this one's record.
+        // The operand is another instruction's: its fixup is bound by address,
+        // not by this one's record.
         fused.symbol = if one.covers.is_some_and(|(start, end)| start != end) { Some(false) } else { one.symbol };
         Some(Arc::new(fused))
     }
@@ -1590,7 +1611,8 @@ fn _crowded(
                 .filter(|value| floating.contains(value))
                 .collect();
             // Stack form keeps an operand read again by duplicating it first:
-            // a compare pops what it reads, and a store without `fst` its source.
+            // a compare pops what it reads, and a store without `fst` its
+            // source.
             let duplicated: usize = group
                 .iter()
                 .filter_map(|one| one.what.as_ref())

@@ -206,7 +206,8 @@ fn operand(node: &Node) -> String {
     node.name.clone()
 }
 
-/// Seeds the default run covers, or `SCEV_SEEDS` of them, or `SCEV_SEED`'s alone.
+/// Seeds the default run covers, or `SCEV_SEEDS` of them, or `SCEV_SEED`'s
+/// alone.
 pub fn seeds() -> Vec<u64> {
     if let Some(one) = std::env::var("SCEV_SEED").ok().and_then(|text| text.parse().ok()) {
         return vec![one];

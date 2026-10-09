@@ -27,7 +27,8 @@ impl<'a> FunctionCompiler<'a> {
         }
         for argument in &settled {
             if let Expr::FString { parts, .. } = argument {
-                // As a direct argument, an f-string streams its pieces and allocates nothing.
+                // As a direct argument, an f-string streams its pieces and
+                // allocates nothing.
                 self.print_parts(parts, argument.span())?;
             } else {
                 self.print_value(argument, Format::default())?;

@@ -1,6 +1,7 @@
 //! llrm-core's `analysis/avail_tests.rs`, written as rich MIR.
 //!
-//! Skipped, x86 operand shapes: `test_preserved_allows_a_move_and_refuses_a_binary`
+//! Skipped, x86 operand shapes:
+//! `test_preserved_allows_a_move_and_refuses_a_binary`
 //! and `test_explicit_load_operand_is_not_a_preserved_half`. A rich MIR
 //! load's only operand is its pointer.
 
@@ -549,8 +550,9 @@ pad:
     }
 }
 
-/// Each load the loop lost was compared with every earlier load, one by one, though most are of one
-/// address (#560). Loads of one address are compared once.
+/// Each load the loop lost was compared with every earlier load, one by one,
+/// though most are of one address (#560). Loads of one address are compared
+/// once.
 #[test]
 fn test_loads_of_one_address_are_compared_with_a_missing_one_once() {
     let before_loop: String = (0..20).map(|at| format!("  %a{at} = load i16, ptr {CELL}\n")).collect();
@@ -565,8 +567,8 @@ fn test_loads_of_one_address_are_compared_with_a_missing_one_once() {
     assert!(same_runs() - before <= 20, "{} comparisons for 20 loads of one address", same_runs() - before);
 }
 
-/// 200 stores to 200 different cells of one array asked every cell held of each write: 19,900 clobber questions
-/// where the bytes a write meets hold one cell.
+/// 200 stores to 200 different cells of one array asked every cell held of each
+/// write: 19,900 clobber questions where the bytes a write meets hold one cell.
 #[test]
 fn test_a_store_asks_only_the_cells_it_can_reach() {
     let stores: String =
@@ -583,8 +585,9 @@ fn test_a_store_asks_only_the_cells_it_can_reach() {
     assert!(asked <= 1_000, "{asked} clobber questions for 200 stores to disjoint cells");
 }
 
-/// The cell naming a load's bytes was found by a scan of every cell held. It is asked of the cells a write to the
-/// load's address can reach, and must be the one the scan finds (the first held), at every point of a function whose
+/// The cell naming a load's bytes was found by a scan of every cell held. It is
+/// asked of the cells a write to the load's address can reach, and must be the
+/// one the scan finds (the first held), at every point of a function whose
 /// cells overlap and are rewritten.
 #[test]
 fn test_the_held_cell_naming_a_loads_bytes_is_the_one_a_scan_finds() {

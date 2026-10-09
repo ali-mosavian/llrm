@@ -9,10 +9,11 @@
 //! cancellation's zero be +0.
 //!
 //! What changed with the IR:
-//! - A rule is its instruction's (`rule`): the arithmetic, `fneg`, `llvm.fabs`, `llvm.sqrt`, the casts, `llvm.lrint`,
-//!   and a float load or store. `fptosi` and `fptoui` truncate, as the rich MIR defines them.
-//! - Memory is consts': a float store's bits reach its cells as a fact about the stored value, where the old one
-//!   shadowed the body.
+//! - A rule is its instruction's (`rule`): the arithmetic, `fneg`, `llvm.fabs`,
+//!   `llvm.sqrt`, the casts, `llvm.lrint`, and a float load or store. `fptosi`
+//!   and `fptoui` truncate, as the rich MIR defines them.
+//! - Memory is consts': a float store's bits reach its cells as a fact about
+//!   the stored value, where the old one shadowed the body.
 //! - A float phi is known where every incoming agrees, as consts' phis.
 //! - A loop exit's latch ends in its `br` to the header.
 //!
@@ -21,7 +22,8 @@
 //! (`Fcheck`: the rich MIR observes no FP exception); caching through
 //! `manager` (consts' note).
 //!
-//! Tests skipped: BC object corpora, `test_a_loop_exit_repeats_its_stores_every_iteration`
+//! Tests skipped: BC object corpora,
+//! `test_a_loop_exit_repeats_its_stores_every_iteration`
 //! and `test_fpcse_known_inputs_reach_float_computations`, rewritten as MIR;
 //! `test_entry_bytes_are_killed_by_a_store`, consts' own.
 
@@ -46,7 +48,8 @@ use crate::induction;
 use crate::memory::{MemRef, Unit};
 use crate::regions;
 
-/// Whether `ty` is, or holds, a floating-point number; an identified struct, whose body this does not read, may.
+/// Whether `ty` is, or holds, a floating-point number; an identified struct,
+/// whose body this does not read, may.
 fn floating(
     types: &Types,
     ty: TypeId,
@@ -59,9 +62,10 @@ fn floating(
     }
 }
 
-/// Whether `function` has any floating-point value or operand. Every solve of floats starts from one: where there is
-/// none, no float loop, fold or fact exists, and asking for the solve (a whole-function dataflow over memory) is a cost
-/// for nothing.
+/// Whether `function` has any floating-point value or operand. Every solve of
+/// floats starts from one: where there is none, no float loop, fold or fact
+/// exists, and asking for the solve (a whole-function dataflow over memory) is
+/// a cost for nothing.
 pub fn touches(
     context: &Context,
     function: &Function,
@@ -339,7 +343,8 @@ pub fn rule(
         Opcode::Call(_) => match unit.intrinsic(inst)? {
             Intrinsic::Unary(FloatFunction::Fabs) => (Operation::Abs, vec![float(0)?], returned()?),
             Intrinsic::Unary(FloatFunction::Sqrt) => (Operation::Sqrt, vec![float(0)?], returned()?),
-            // As the rounding mode says: only an integral input is exact under every one.
+            // As the rounding mode says: only an integral input is exact under
+            // every one.
             Intrinsic::LRint => (Operation::Convert, vec![float(0)?], integer(true)?),
             _ => return None,
         },
@@ -881,8 +886,10 @@ pub fn solved_with(
     solved_over(unit, calls, initial, &consts::known(unit, Some(calls), None, initial))
 }
 
-/// `solved_with`, given the integers under it: `consts::known(unit, Some(calls), None, initial)`, which a caller that
-/// asks it of the same body for itself (the manager's `ThroughMemory`, for `initial` none) need not derive again.
+/// `solved_with`, given the integers under it: `consts::known(unit,
+/// Some(calls), None, initial)`, which a caller that asks it of the same body
+/// for itself (the manager's `ThroughMemory`, for `initial` none) need not
+/// derive again.
 pub fn solved_over(
     unit: &Unit,
     calls: &Calls,

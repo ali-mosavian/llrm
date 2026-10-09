@@ -32,7 +32,8 @@ pub fn loaded(path: impl AsRef<Path>) -> Option<Module> {
     of(&omf::read(path).unwrap())
 }
 
-/// `Module(records, seg, name, code, start, end)` with every other field defaulted.
+/// `Module(records, seg, name, code, start, end)` with every other field
+/// defaulted.
 pub fn bare(
     found: &Module,
     code: Vec<u8>,

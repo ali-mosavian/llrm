@@ -199,8 +199,9 @@ impl<K: Clone + Eq + Hash, V, B: Bucket> CellMap<K, V, B> {
         self.items.retain(|key, _| !gone.contains(key));
     }
 
-    /// The cells `kill` would ask of a write that reaches `reached` (every bucket when None) and, where `displaced`
-    /// says so, meets its span: every cell that can overlap the write, and none it cannot.
+    /// The cells `kill` would ask of a write that reaches `reached` (every
+    /// bucket when None) and, where `displaced` says so, meets its span:
+    /// every cell that can overlap the write, and none it cannot.
     pub fn asked(
         &self,
         reached: Option<Vec<B>>,

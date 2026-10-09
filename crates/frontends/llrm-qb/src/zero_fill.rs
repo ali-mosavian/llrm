@@ -1,6 +1,6 @@
-//! Entry zeroing where procedures frame themselves. The frontend stores zero at entry to each
-//! local that needs it. Here those locals are laid out as one block of the
-//! frame, and the block's stores become one fill.
+//! Entry zeroing where procedures frame themselves. The frontend stores zero at
+//! entry to each local that needs it. Here those locals are laid out as one
+//! block of the frame, and the block's stores become one fill.
 
 use std::collections::BTreeSet;
 

@@ -33,7 +33,8 @@ const ATE_SIGNED: u8 = 5;
 const ATE_UNSIGNED: u8 = 7;
 const ATE_SIGNED_CHAR: u8 = 6;
 
-/// DW_LANG_C89, and the vendor code for assembly, which a debugger reads no language into.
+/// DW_LANG_C89, and the vendor code for assembly, which a debugger reads no
+/// language into.
 fn language(one: Language) -> u16 {
     match one {
         Language::C => 0x0001,
@@ -45,11 +46,13 @@ struct Tree<'a> {
     object: &'a Object,
     info: &'a Info,
     dies: Vec<Die>,
-    /// Why each type cannot be written, if it cannot: a type is refused where something uses it.
+    /// Why each type cannot be written, if it cannot: a type is refused where
+    /// something uses it.
     bad: Vec<Option<String>>,
     version: u16,
     address: usize,
-    /// The location lists, in `.debug_loclists` (a header first) or `.debug_loc`.
+    /// The location lists, in `.debug_loclists` (a header first) or
+    /// `.debug_loc`.
     locations: crate::buffer::Buf,
 }
 
@@ -193,7 +196,8 @@ impl Tree<'_> {
                 die
             }
             Type::Qualified { target, constant, volatile } => {
-                // const over volatile over the target; the outer one is this type's DIE.
+                // const over volatile over the target; the outer one is this
+                // type's DIE.
                 let tags: Vec<u16> = [(*constant, TAG_CONST), (*volatile, TAG_VOLATILE)]
                     .into_iter()
                     .filter(|(on, _)| *on)
@@ -261,7 +265,8 @@ impl Tree<'_> {
             }
             // DW_OP_consts, DW_OP_stack_value.
             Location::Constant(value) => Ok([vec![0x11], crate::sleb(*value), vec![0x9F]].concat()),
-            // Each piece's place, then DW_OP_piece and its size; a piece with no place is the size alone.
+            // Each piece's place, then DW_OP_piece and its size; a piece with
+            // no place is the size alone.
             Location::Pieces(pieces) => {
                 let mut out = Vec::new();
                 for (bytes, place) in pieces {
@@ -293,14 +298,16 @@ impl Tree<'_> {
         })
     }
 
-    /// A list of where a value is over each range of the code, at its place in the section of lists.
+    /// A list of where a value is over each range of the code, at its place in
+    /// the section of lists.
     fn list(
         &mut self,
         entries: &[(model::Range, Location)],
     ) -> Result<u32, Unsupported> {
         let (version, address) = (self.version, self.address);
         if version >= 5 && self.locations.at() == 0 {
-            // unit_length, version, address size, segment selector size, offset entry count.
+            // unit_length, version, address size, segment selector size, offset
+            // entry count.
             self.locations.u32(0);
             self.locations.u16(5);
             self.locations.u8(address as u8);
@@ -308,7 +315,8 @@ impl Tree<'_> {
             self.locations.u32(0);
         }
         let start = self.locations.at();
-        // Before 5 a range is an offset from the unit's base address: its low_pc.
+        // Before 5 a range is an offset from the unit's base address: its
+        // low_pc.
         let base = match self.info.code[..] {
             [one] => Some(one),
             _ => None,
@@ -368,7 +376,8 @@ impl Tree<'_> {
                 die.attrs.push((AT_EXTERNAL, Value::Flag));
             }
         }
-        // A list with no entry is a variable the optimiser removed: no location says "optimized out".
+        // A list with no entry is a variable the optimiser removed: no location
+        // says "optimized out".
         if !matches!(&one.location, Location::List(entries) if entries.is_empty()) {
             die.attrs.push((AT_LOCATION, self.location(&one.location)?));
         }
@@ -531,8 +540,9 @@ pub fn tree(
     tree.dies.push(unit);
     tree.dies.extend((0..info.types.len()).map(|_| Die::new(0)));
     let mut children = Vec::new();
-    // A type may name one that comes after it (a struct with a pointer to itself): find every type that
-    // cannot be written, and those that name one, before any is described.
+    // A type may name one that comes after it (a struct with a pointer to
+    // itself): find every type that cannot be written, and those that name
+    // one, before any is described.
     for index in 0..info.types.len() {
         if let Err(Unsupported(why)) = tree.describe(index) {
             tree.bad[index] = Some(why.trim_start_matches("DWARF: ").to_owned());

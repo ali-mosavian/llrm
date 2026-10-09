@@ -80,7 +80,8 @@ impl Compiler {
         id
     }
 
-    /// The locals holding dimension `dimension`'s bounds of `held`, and its rank's.
+    /// The locals holding dimension `dimension`'s bounds of `held`, and its
+    /// rank's.
     fn holding(
         &mut self,
         held: Held,

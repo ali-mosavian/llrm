@@ -29,7 +29,8 @@ impl TypeRegistry {
         TypeName::Pointer { type_id, far, width: self.pointer_width(far), mutable }
     }
 
-    /// Warns, once for each place, that a `far` or `huge` written where the target has one space is near.
+    /// Warns, once for each place, that a `far` or `huge` written where the
+    /// target has one space is near.
     pub(super) fn warn_target_width(
         &mut self,
         distance: &str,
@@ -41,7 +42,8 @@ impl TypeRegistry {
         self.warn(span, format!("warning: '{distance}' is near on this target: it has one address space"));
     }
 
-    /// Records `message` at `span`, once, unless the build asked for no warnings.
+    /// Records `message` at `span`, once, unless the build asked for no
+    /// warnings.
     pub(super) fn warn(
         &mut self,
         span: Span,
@@ -301,7 +303,8 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    /// Registers the type `p.cast[U]()` or `p.far()` gives, so that hints know it.
+    /// Registers the type `p.cast[U]()` or `p.far()` gives, so that hints know
+    /// it.
     pub(super) fn declare_cast(
         &mut self,
         receiver: &Expr,
@@ -375,7 +378,8 @@ impl FunctionCompiler<'_> {
         self.scopes.iter().rposition(|scope| scope.contains_key(name)) == Some(0)
     }
 
-    /// `p.offset(n)`, `p.cast[U]()`, `p.far()` or `p.is_null()` of a raw pointer.
+    /// `p.offset(n)`, `p.cast[U]()`, `p.far()` or `p.is_null()` of a raw
+    /// pointer.
     pub(super) fn pointer_method(
         &mut self,
         receiver: &Expr,
@@ -427,7 +431,8 @@ impl FunctionCompiler<'_> {
             // alone, which the program vouches is in DGROUP.
             // The offset alone, which the program vouches is in DGROUP: the
             // low word of the far pointer's bytes.
-            // Where far is near the offset is the pointer: a copy, and nothing is lost.
+            // Where far is near the offset is the pointer: a copy, and nothing
+            // is lost.
             ("near", [], []) if !self.types.sizes.segmented => {
                 let near = self.types.raw_pointer(target, "near", mutable);
                 let moved = self.value(near);

@@ -1,7 +1,8 @@
-//! `-gtd`: Borland's debug information in an OMF object. Borland's own tools read it: `TLINK /v`
-//! builds Turbo Debugger's table from it, and `TDUMP` prints that table, which for the same program
-//! compiled by Turbo C++ 3.0 (`-v -r-`, no register variables) says the same of its types, its
-//! variables and their types and its lines. Needs Turbo C++ in `TCPP30_DIR` (default
+//! `-gtd`: Borland's debug information in an OMF object. Borland's own tools
+//! read it: `TLINK /v` builds Turbo Debugger's table from it, and `TDUMP`
+//! prints that table, which for the same program compiled by Turbo C++ 3.0 (`-v
+//! -r-`, no register variables) says the same of its types, its variables and
+//! their types and its lines. Needs Turbo C++ in `TCPP30_DIR` (default
 //! `~/scratch/toolchains/tcpp30`) and the DOSBox-X this crate builds.
 
 use std::collections::BTreeSet;
@@ -13,8 +14,9 @@ mod common;
 
 use common::dosbox::{self, Session};
 
-/// A test that cannot run says so on stderr, and fails where `LLRM_REQUIRE_TURBO` is set, so a gate that has
-/// Turbo C++ and Turbo Debugger cannot pass by skipping.
+/// A test that cannot run says so on stderr, and fails where
+/// `LLRM_REQUIRE_TURBO` is set, so a gate that has Turbo C++ and Turbo Debugger
+/// cannot pass by skipping.
 fn skipped(reason: &str) {
     dosbox::skipped("LLRM_REQUIRE_TURBO", reason);
 }
@@ -35,8 +37,9 @@ fn toolchain() -> Option<(PathBuf, PathBuf)> {
     .then_some((borland, dosbox))
 }
 
-/// What TDUMP's Module Table says of a program: its type definitions and its variables' kinds, names and
-/// types (not where they are), each sorted, and its source lines.
+/// What TDUMP's Module Table says of a program: its type definitions and its
+/// variables' kinds, names and types (not where they are), each sorted, and its
+/// source lines.
 fn module(dump: &str) -> (Vec<String>, Vec<String>, BTreeSet<u32>) {
     let table = &dump[dump.find("Module Table").expect("a module table")..];
     let part = |from: &str, to: &str| -> Vec<String> {
@@ -82,9 +85,10 @@ fn module(dump: &str) -> (Vec<String>, Vec<String>, BTreeSet<u32>) {
     (types, locals, lines)
 }
 
-/// The tables TLINK builds from an llrm object and from Turbo C++'s of the same C program agree on the
-/// module's types (a struct, one holding a pointer to itself, an array), on each variable and its type,
-/// and llrm's lines are among Turbo C++'s (which also numbers each `{` and `}`).
+/// The tables TLINK builds from an llrm object and from Turbo C++'s of the same
+/// C program agree on the module's types (a struct, one holding a pointer to
+/// itself, an array), on each variable and its type, and llrm's lines are among
+/// Turbo C++'s (which also numbers each `{` and `}`).
 #[test]
 fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
     let Some((borland, dosbox)) = toolchain() else {
@@ -141,9 +145,11 @@ fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
     }
 }
 
-/// A pointer to a function points to a function type called as far as the pointer reaches. TDUMP's symbol table names
-/// the type of each public symbol: for the same C program Turbo C++ says `far pointer function far C` of `fp` and `near
-/// pointer _CS function near C` of `np`; llrm's near pointer read `function far C`.
+/// A pointer to a function points to a function type called as far as the
+/// pointer reaches. TDUMP's symbol table names the type of each public symbol:
+/// for the same C program Turbo C++ says `far pointer function far C` of `fp`
+/// and `near pointer _CS function near C` of `np`; llrm's near pointer read
+/// `function far C`.
 #[test]
 fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
     let Some((borland, dosbox)) = toolchain() else {
@@ -156,7 +162,8 @@ fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
         scratch.path().join("fnp.c"),
     )
     .unwrap();
-    // Turbo C++'s own convention, whose symbols the table is compared by: cdecl.
+    // Turbo C++'s own convention, whose symbols the table is compared by:
+    // cdecl.
     let made = Command::new(llrm_c())
         .args(["-m16", "-mabi=cdecl", "-gtd", "-O0"])
         .arg(scratch.path().join("fnp.c"))
@@ -187,9 +194,10 @@ fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
     assert_eq!(ours, theirs);
 }
 
-/// Turbo Debugger itself, driven. DOSBox-X's debug socket (`DOSBOX_DEBUG_PORT`, a private port) injects keys
-/// and reads the text screen; it stops the emulator at every INT 3, which Turbo Debugger uses for its own
-/// breakpoints, so a reader thread answers those with `continue`.
+/// Turbo Debugger itself, driven. DOSBox-X's debug socket (`DOSBOX_DEBUG_PORT`,
+/// a private port) injects keys and reads the text screen; it stops the
+/// emulator at every INT 3, which Turbo Debugger uses for its own breakpoints,
+/// so a reader thread answers those with `continue`.
 struct Dosbox(Session);
 
 impl Dosbox {
@@ -259,8 +267,9 @@ impl Dosbox {
         panic!("never reached line {line}: {:?}", self.at());
     }
 
-    /// Debugs `exe`: to the call of `sum` at `call`, into it and to `line`; then each of `watches`,
-    /// the Watches window's lines. A watch is Ctrl-F7 (scan code 0x64) and the text.
+    /// Debugs `exe`: to the call of `sum` at `call`, into it and to `line`;
+    /// then each of `watches`, the Watches window's lines. A watch is
+    /// Ctrl-F7 (scan code 0x64) and the text.
     fn debug(
         &self,
         exe: &str,
@@ -296,10 +305,12 @@ impl Dosbox {
     }
 }
 
-/// Borland's own Turbo Debugger, stopped on a line of the program built by Turbo C++ and of the one llrm
-/// built with `-gtd`, shows the same values: a parameter (`n`, a `struct node *` at `[_head]`), a local (`s`),
-/// what the parameter points at (`*n`, a `struct node`) and its field (`n->v`); and both are on the line
-/// the debugger was asked to reach, which needs the line table, the scopes and the types.
+/// Borland's own Turbo Debugger, stopped on a line of the program built by
+/// Turbo C++ and of the one llrm built with `-gtd`, shows the same values: a
+/// parameter (`n`, a `struct node *` at `[_head]`), a local (`s`),
+/// what the parameter points at (`*n`, a `struct node`) and its field (`n->v`);
+/// and both are on the line the debugger was asked to reach, which needs the
+/// line table, the scopes and the types.
 #[test]
 fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
     let Some((borland, dosbox)) = toolchain() else {
@@ -352,8 +363,9 @@ fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
     assert_eq!(llrm, turbo);
 }
 
-/// A variable the allocator keeps in one register from its first value to the last statement is a register variable to
-/// Turbo Debugger too: `k` of `regvar.c`, built optimised, is in TLINK's table as a `register`.
+/// A variable the allocator keeps in one register from its first value to the
+/// last statement is a register variable to Turbo Debugger too: `k` of
+/// `regvar.c`, built optimised, is in TLINK's table as a `register`.
 #[test]
 fn tdump_names_a_variable_the_allocator_keeps_in_a_register_as_a_register() {
     let Some((borland, dosbox)) = toolchain() else {

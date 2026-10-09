@@ -1,5 +1,6 @@
 //! `string` operators and methods (section 13): the compiler emits length,
-//! indexing, and iteration inline; joining, comparing, and copying call the runtime.
+//! indexing, and iteration inline; joining, comparing, and copying call the
+//! runtime.
 
 use llrm_core::abi::nib as rt;
 
@@ -151,7 +152,8 @@ impl FunctionCompiler<'_> {
         (data, hir::Operand::Value(length))
     }
 
-    /// `s[i]` as a destination: `s` is first made a writable heap copy if it may not be.
+    /// `s[i]` as a destination: `s` is first made a writable heap copy if it
+    /// may not be.
     pub(super) fn string_element_target(
         &mut self,
         name: &str,

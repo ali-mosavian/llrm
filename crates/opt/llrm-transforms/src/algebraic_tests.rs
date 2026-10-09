@@ -3,15 +3,19 @@
 //! before and after.
 //!
 //! Skipped:
-//! - The guards naming flags, merges, memory operands or a result wider than its operands: no instruction here has
-//!   them.
+//! - The guards naming flags, merges, memory operands or a result wider than
+//!   its operands: no instruction here has them.
 //! - test_shared_shift_distinguishes_a_word_tie_from_a_partial_write,
-//!   test_extracted_halves_recombine_to_the_original_value, test_joined_halves_are_consumed_as_halves,
-//!   test_recombination_follows_only_exact_word_copies, test_signed_recombination_compares_copy_sources_symmetrically,
-//!   test_constant_word_concatenation, test_product_projection_retains_observed_outputs, and the zero difference tests:
-//!   split halves, copies and the neg instruction.
-//! - The NBODY, HARR, MATRIX, NDMAX, HOTLPX, SPILL, ADDRM and NESTED fixtures: BC objects and emitted x86. ADDRM's
-//!   shared scale and NBODY's shift pair are `shared_shifts_*` and `shifts_*` here.
+//!   test_extracted_halves_recombine_to_the_original_value,
+//!   test_joined_halves_are_consumed_as_halves,
+//!   test_recombination_follows_only_exact_word_copies,
+//!   test_signed_recombination_compares_copy_sources_symmetrically,
+//!   test_constant_word_concatenation,
+//!   test_product_projection_retains_observed_outputs, and the zero difference
+//!   tests: split halves, copies and the neg instruction.
+//! - The NBODY, HARR, MATRIX, NDMAX, HOTLPX, SPILL, ADDRM and NESTED fixtures:
+//!   BC objects and emitted x86. ADDRM's shared scale and NBODY's shift pair
+//!   are `shared_shifts_*` and `shifts_*` here.
 
 use llrm_mir::interpret::Val;
 use llrm_mir::module::Module;
@@ -259,8 +263,8 @@ fn test_other_divisions_stay() {
     unchanged(&unary(16, "  %r = udiv i16 %x, 6\n  ret i16 %r\n"));
 }
 
-/// A division by one is the dividend, a remainder by one is zero: no power-of-two
-/// rewrite is needed (`llrm-mir`'s instcombine had both, #237).
+/// A division by one is the dividend, a remainder by one is zero: no
+/// power-of-two rewrite is needed (`llrm-mir`'s instcombine had both, #237).
 #[test]
 fn test_division_and_remainder_by_one_are_decided() {
     for op in ["sdiv", "udiv"] {
@@ -807,8 +811,9 @@ fn test_a_compare_narrows_for_a_loop_carried_source_or_a_dying_extension() {
     assert!(bare(&simplified(&text("%x")).1).contains("icmp ult i32 %w, 100"));
 }
 
-/// `udiv` and `urem` by a power of two are a logical shift and a mask. Selection had them as `div`, with the
-/// divisor in a register and EDX cleared: forty clocks on a 486 for one.
+/// `udiv` and `urem` by a power of two are a logical shift and a mask.
+/// Selection had them as `div`, with the divisor in a register and EDX cleared:
+/// forty clocks on a 486 for one.
 #[test]
 fn test_unsigned_power_division_is_a_shift_and_a_mask() {
     for (width, divisor) in [(32_u32, 2_i128), (32, 8), (32, 65536), (16, 4), (16, 16384), (8, 2)] {
@@ -820,8 +825,9 @@ fn test_unsigned_power_division_is_a_shift_and_a_mask() {
     }
 }
 
-/// A dividend proved non-negative needs no bias: `sdiv` and `srem` of it by a power of two are a shift and a
-/// mask. The bias was five instructions where one did.
+/// A dividend proved non-negative needs no bias: `sdiv` and `srem` of it by a
+/// power of two are a shift and a mask. The bias was five instructions where
+/// one did.
 #[test]
 fn test_a_signed_division_of_a_non_negative_dividend_is_unsigned() {
     let ranged = |op: &str, divisor: &str| {
@@ -834,7 +840,8 @@ fn test_a_signed_division_of_a_non_negative_dividend_is_unsigned() {
     }
 }
 
-/// What a branch proves reaches the division: `rest > 0` holds in the loop that divides `rest` by ten.
+/// What a branch proves reaches the division: `rest > 0` holds in the loop that
+/// divides `rest` by ten.
 #[test]
 fn test_a_branch_that_proves_a_dividend_positive_makes_its_division_unsigned() {
     let text = "define i32 @f(i32 %x) {
@@ -854,7 +861,8 @@ b2:
     assert!(done.contains("lshr") && !done.contains("sdiv"), "{done}");
 }
 
-/// Not where the dividend may be negative, or the divisor is not a positive constant.
+/// Not where the dividend may be negative, or the divisor is not a positive
+/// constant.
 #[test]
 fn test_a_signed_division_of_an_unknown_sign_stays_signed() {
     unchanged(&unary(32, "  %r = sdiv i32 %x, 16\n  ret i32 %r\n").replace("sdiv i32 %x, 16", "sdiv i32 %x, 10"));
@@ -862,8 +870,9 @@ fn test_a_signed_division_of_an_unknown_sign_stays_signed() {
     unchanged("define i32 @f(i32 range(i32 0, 100) %x, i32 %d) {\nb0:\n  %r = sdiv i32 %x, %d\n  ret i32 %r\n}\n");
 }
 
-/// bench/tile: `tile[(x + 7) & 63]` of `x < 40` on -m32 kept `mov esi,ebx; and esi,7Eh` per element
-/// (7 instructions an iteration against clang's 4): the range of `x` makes the mask a no-op.
+/// bench/tile: `tile[(x + 7) & 63]` of `x < 40` on -m32 kept `mov esi,ebx; and
+/// esi,7Eh` per element (7 instructions an iteration against clang's 4): the
+/// range of `x` makes the mask a no-op.
 fn masked_loop(
     bound: i32,
     mask: i32,
@@ -905,7 +914,8 @@ fn a_mask_that_clears_a_bit_the_range_reaches_is_kept() {
     assert!(text.contains("and i32"), "{text}");
 }
 
-/// A scale's low bit is known clear: `(x * 2) & 126` of `x < 64` drops the mask though the range reaches 126.
+/// A scale's low bit is known clear: `(x * 2) & 126` of `x < 64` drops the mask
+/// though the range reaches 126.
 #[test]
 fn a_mask_that_only_clears_a_scaled_low_bit_is_removed() {
     let text = checked(
@@ -917,8 +927,9 @@ fn a_mask_that_only_clears_a_scaled_low_bit_is_removed() {
     assert!(!text.contains("and i32"), "{text}");
 }
 
-/// A counter rebased by the bound a use subtracts it from left `row - (c + row)` behind it (queens: `lea; mov; sub;
-/// cmp` where gcc's loop has `add; je` on the counter itself).
+/// A counter rebased by the bound a use subtracts it from left `row - (c +
+/// row)` behind it (queens: `lea; mov; sub; cmp` where gcc's loop has `add; je`
+/// on the counter itself).
 #[test]
 fn test_a_value_less_a_sum_it_is_in_is_the_other_addend_negated() {
     let text = "define i16 @f(i16 %x) {
@@ -953,9 +964,11 @@ b0:
     assert!(after.contains("sub i16 0, %y"), "{after}");
 }
 
-/// A non-negative dividend divided by a constant that is not a power of two is the unsigned division: its reciprocal
-/// has no sign to correct, and the loop counter `i * 97 % 211` (x_hash) took an `idiv` where gcc multiplies. Tuned for
-/// size it stays, `div` being a byte over `idiv` where selection declines the reciprocal.
+/// A non-negative dividend divided by a constant that is not a power of two is
+/// the unsigned division: its reciprocal has no sign to correct, and the loop
+/// counter `i * 97 % 211` (x_hash) took an `idiv` where gcc multiplies. Tuned
+/// for size it stays, `div` being a byte over `idiv` where selection declines
+/// the reciprocal.
 #[test]
 fn test_a_non_negative_dividend_by_a_constant_is_unsigned_unless_tuned_for_size() {
     let text = "define i32 @f(i32 range(i32 0, 100000) %x) {\nb0:\n  %r = srem i32 %x, 211\n  %q = sdiv i32 %x, 10\n  %s = add i32 %r, %q\n  ret i32 %s\n}\n";
@@ -974,8 +987,9 @@ fn test_a_non_negative_dividend_by_a_constant_is_unsigned_unless_tuned_for_size(
     unchanged("define i32 @f(i32 range(i32 0, 100) %x) {\nb0:\n  %r = sdiv i32 %x, -10\n  ret i32 %r\n}\n");
 }
 
-/// `(i * 97) % 211` over a counter from 0: the counter never goes below its start (its update is `nsw`), and its
-/// product by a positive constant, `nsw`, is never negative: the remainder is unsigned (x_hash took an `idiv` for it,
+/// `(i * 97) % 211` over a counter from 0: the counter never goes below its
+/// start (its update is `nsw`), and its product by a positive constant, `nsw`,
+/// is never negative: the remainder is unsigned (x_hash took an `idiv` for it,
 /// 43 clocks, where gcc multiplies).
 #[test]
 fn test_a_remainder_of_a_counter_s_product_is_unsigned() {

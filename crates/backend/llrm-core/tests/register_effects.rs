@@ -1,12 +1,13 @@
-//! The register effects `x86.instr` states against the ones the encoder's bytes decode to, in the lanes the passes see:
-//! every row of each target's description, at each width.
+//! The register effects `x86.instr` states against the ones the encoder's bytes
+//! decode to, in the lanes the passes see: every row of each target's
+//! description, at each width.
 
 use iced_x86::Register;
 use llrm_core::backend::peephole::{_effects_by_decoding, _effects_by_table, _moved_lanes, _moved_lanes_by_decoding};
 use llrm_core::model::lir::Insn;
 use llrm_lir::{Addr, Address, Imm, Loc, Mem, Reg, Semantics, Space};
 use llrm_target::Target;
-use llrm_x86_m16::instructions::effects::root;
+use llrm_x86::effects::root;
 use llrm_x86_m16::instructions::parse::{self, Form, Side};
 
 /// Whether the encoder has no bytes for `what`.
@@ -26,8 +27,9 @@ fn byte(name: &str) -> Register {
     }
 }
 
-/// The `at`th operand of `side` as kind `kind`, widths in bytes as `Semantics` has them. A register `fixed` pins is
-/// the word when the operation is a byte one (`idiv bl` divides AX), and the count of a shift is CL.
+/// The `at`th operand of `side` as kind `kind`, widths in bytes as `Semantics`
+/// has them. A register `fixed` pins is the word when the operation is a byte
+/// one (`idiv bl` divides AX), and the count of a shift is CL.
 fn operand(
     kind: char,
     form: &Form,
@@ -61,7 +63,8 @@ fn operand(
             };
             Some(Loc::Reg(Reg { register, width: size }))
         }
-        // A string operation names its memory by SI and DI, which the row lists.
+        // A string operation names its memory by SI and DI, which the row
+        // lists.
         'm' if matches!(form.operation.as_str(), "fill" | "copy") => Some(Loc::Mem(Mem::new(None, bytes))),
         'm' => Some(Loc::Mem(match pick % 2 {
             0 => Mem { through: base, ..Mem::new(None, bytes) },
@@ -78,7 +81,8 @@ fn operand(
             },
         })),
         'a' => {
-            // A word `lea` in flat code takes a 16-bit address, behind a prefix.
+            // A word `lea` in flat code takes a 16-bit address, behind a
+            // prefix.
             let (base, index) = if bytes == 2 { (Register::BX, Register::SI) } else { (base, wide_index) };
             Some(Loc::Address(Address {
                 through: base,
@@ -108,7 +112,8 @@ fn the_table_gives_the_effects_the_decoder_does() {
         for form in &forms {
             let widths = if form.widths.is_empty() { vec![32] } else { form.widths.clone() };
             for &width in &widths {
-                // The selector emits no byte multiply (`select_sweep.rs` has none), so no semantics of one to check
+                // The selector emits no byte multiply (`select_sweep.rs` has
+                // none), so no semantics of one to check
                 // against.
                 if width == 8 && form.operation == "mul" && form.dests.len() == 2 {
                     continue;
@@ -125,7 +130,9 @@ fn the_table_gives_the_effects_the_decoder_does() {
                                 .enumerate()
                                 .map(|(at, choices)| {
                                     if let Some(dest) = form.operand(side, at)?.tied {
-                                        // The allocator keeps a tied source in the dest's register, but a pass before
+                                        // The allocator keeps a tied source in
+                                        // the dest's register, but a pass
+                                        // before
                                         // it may leave another.
                                         return match dests.get(dest) {
                                             Some(Loc::Reg(one)) if pick & 16 != 0 => Some(Loc::Reg(Reg {
@@ -170,7 +177,8 @@ fn the_table_gives_the_effects_the_decoder_does() {
                                 unanswered.push(format!("{} {}", form.operation, form.name));
                                 continue;
                             };
-                            // An instruction the encoder refuses has no bytes to decode; the table still says.
+                            // An instruction the encoder refuses has no bytes
+                            // to decode; the table still says.
                             if by_decoding.is_none() && !by_table.is_none() {
                                 refused += 1;
                                 continue;
@@ -202,8 +210,9 @@ fn the_table_gives_the_effects_the_decoder_does() {
     );
 }
 
-/// Instructions the encoder lowers to others (`push ss; pop es`, `cbw`, `push eax; pop ax; pop dx`), which no row of
-/// `x86.instr` describes by its own name.
+/// Instructions the encoder lowers to others (`push ss; pop es`, `cbw`, `push
+/// eax; pop ax; pop dx`), which no row of `x86.instr` describes by its own
+/// name.
 #[test]
 fn the_table_follows_the_encoder_into_what_it_lowers_to() {
     let reg = |register, width| Loc::Reg(Reg { register, width });

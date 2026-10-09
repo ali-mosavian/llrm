@@ -215,7 +215,8 @@ pub struct At {
 }
 
 impl At {
-    /// `ip` in 16-bit mode: where a size is asked of an instruction no object holds yet.
+    /// `ip` in 16-bit mode: where a size is asked of an instruction no object
+    /// holds yet.
     pub fn bits16(ip: u64) -> Self {
         At { ip, bits: BITNESS }
     }
@@ -276,7 +277,8 @@ pub fn _displacement_size(
     value: i64,
     bits: u32,
 ) -> u32 {
-    // A 32-bit address, named by a 32-bit register or by the mode, carries disp32.
+    // A 32-bit address, named by a 32-bit register or by the mode, carries
+    // disp32.
     let wide = bits == 32 || [base, index].into_iter().any(|one| width_of(one) == Some(4));
     if base == Register::None {
         return if wide { 4 } else { 2 };
@@ -293,7 +295,8 @@ pub fn _displacement_size(
     }
 }
 
-/// A requested displacement width in `bits`-bit mode: a word one is a dword there.
+/// A requested displacement width in `bits`-bit mode: a word one is a dword
+/// there.
 fn displacement_in(
     width: u32,
     bits: u32,
@@ -326,8 +329,9 @@ fn memory_operand(
     displ_size: u32,
     seg: Register,
 ) -> MemoryOperand {
-    // A 16-bit effective address is the sum modulo 64 KB, so a register-relative displacement past a signed word is the
-    // same address as its wrap, which is what the two-byte field holds.
+    // A 16-bit effective address is the sum modulo 64 KB, so a
+    // register-relative displacement past a signed word is the same address
+    // as its wrap, which is what the two-byte field holds.
     let displ = if displ_size == 2 && (base != Register::None || index != Register::None) {
         i64::from(displ as i16)
     } else {
@@ -373,7 +377,8 @@ pub fn operand_of(
             if index != Register::None && !_WORD_INDEXES.contains(&index) {
                 return None;
             }
-            // Through the frame register, spelled: BP in real mode, EBP in flat.
+            // Through the frame register, spelled: BP in real mode, EBP in
+            // flat.
             let frame = if what.through == Register::None { Register::BP } else { what.through };
             Some((
                 memory_operand(
@@ -428,8 +433,10 @@ pub fn _scaled_operand(
     if what.index_through == Register::None {
         return None;
     }
-    // Two registers and no cell: `[ebx+ebx*2]`, which a flat target spells with any 32-bit base and index (a multiply
-    // by 3, 5 or 9 as `lea`). The price of it was none, so a function with one could not be priced in bytes at all.
+    // Two registers and no cell: `[ebx+ebx*2]`, which a flat target spells with
+    // any 32-bit base and index (a multiply by 3, 5 or 9 as `lea`). The
+    // price of it was none, so a function with one could not be priced in bytes
+    // at all.
     let Some(addr) = what.addr else {
         let wide = |register: Register| width_of(register) == Some(4);
         if !(bits == 32 && wide(what.index_through) && wide(what.through)) {
@@ -482,7 +489,8 @@ pub fn r#move(
     at: At,
 ) -> Option<Emitted> {
     if into == outof {
-        return Some(Emitted::new(Vec::new())); // a move to itself is no instruction at all
+        // a move to itself is no instruction at all
+        return Some(Emitted::new(Vec::new()));
     }
     let code = if crate::registers::DWORDS.contains(&into) && crate::registers::DWORDS.contains(&outof) {
         Code::Mov_r32_rm32
@@ -578,10 +586,11 @@ pub fn _immediate(
     ((value & (2 * sign - 1)) ^ sign) - sign
 }
 
-/// `movzx r16,r8`, `movsx ax,al` and `movsx eax,ax` where the source is the low part of the
-/// destination: `mov rh,0`, `cbw` and `cwde`, in 2, 1 and 2 bytes for 3, 3 and 4. None of them
-/// touches a flag.
-/// What `movzx`/`movsx` of the low part of a register into the register is, instead of the extension.
+/// `movzx r16,r8`, `movsx ax,al` and `movsx eax,ax` where the source is the low
+/// part of the destination: `mov rh,0`, `cbw` and `cwde`, in 2, 1 and 2 bytes
+/// for 3, 3 and 4. None of them touches a flag.
+/// What `movzx`/`movsx` of the low part of a register into the register is,
+/// instead of the extension.
 pub enum InPlace {
     /// `mov rh, 0`: the high byte.
     ZeroHigh(Register),
@@ -607,9 +616,9 @@ pub fn in_place(
     }
 }
 
-/// `movzx r16,r8`, `movsx ax,al` and `movsx eax,ax` where the source is the low part of the
-/// destination: `mov rh,0`, `cbw` and `cwde`, in 2, 1 and 2 bytes for 3, 3 and 4. None of them
-/// touches a flag.
+/// `movzx r16,r8`, `movsx ax,al` and `movsx eax,ax` where the source is the low
+/// part of the destination: `mov rh,0`, `cbw` and `cwde`, in 2, 1 and 2 bytes
+/// for 3, 3 and 4. None of them touches a flag.
 fn extended_in_place(
     name: &str,
     into: Register,
@@ -624,8 +633,9 @@ fn extended_in_place(
     }
 }
 
-/// `what` as the instructions it is encoded as, where they are not the one it names: the in-place extensions, a segment
-/// register loaded through the stack, and a register restored from its wide copy.
+/// `what` as the instructions it is encoded as, where they are not the one it
+/// names: the in-place extensions, a segment register loaded through the stack,
+/// and a register restored from its wide copy.
 pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
     let seg = |place: &Loc| matches!(place, Loc::Reg(one) if SEGMENTS.contains_key(&one.register));
     let step = |op, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
@@ -647,7 +657,8 @@ pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
             Some(vec![push(outof), pop(into)])
         }
         (Operation::Restore, [low, high], [wide]) => Some(vec![push(wide), pop(low), pop(high)]),
-        // `mov rh, 0`; and `cbw`, which reads AL and writes AH as `mov ah, al` does.
+        // `mov rh, 0`; and `cbw`, which reads AL and writes AH as `mov ah, al`
+        // does.
         (Operation::Extend, [Loc::Reg(into)], [Loc::Reg(outof)]) => {
             let name = what.name.as_deref()?;
             let (dests, sources) = match in_place(name, into.register, outof.register)? {
@@ -656,7 +667,8 @@ pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
                     vec![Loc::Imm(ir::Imm { value: 0, width: 1, address: None })],
                 ),
                 InPlace::Cbw => (vec![Loc::Reg(ir::Reg { register: Register::AH, width: 1 })], what.sources.clone()),
-                // `cwde` is `movsx eax, ax` to the registers it reads and writes.
+                // `cwde` is `movsx eax, ax` to the registers it reads and
+                // writes.
                 InPlace::Cwde => return None,
             };
             Some(vec![step(Operation::Move, "mov", dests, sources)])
@@ -1003,8 +1015,9 @@ pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(
 pub static CONTROL_WORD: LazyLock<IndexMap<&'static str, &'static str>> =
     LazyLock::new(|| IndexMap::from_iter([("fldcw", "FLDCW_M2BYTE"), ("fnstcw", "FNSTCW_M2BYTE")]));
 
-/// iced's name of an instruction the tables spell in 16-bit mode as a word form (`RETNW`,
-/// `ENTERW_IMM16_IMM8`): in 32-bit mode it is the dword form (`RETND`).
+/// iced's name of an instruction the tables spell in 16-bit mode as a word form
+/// (`RETNW`, `ENTERW_IMM16_IMM8`): in 32-bit mode it is the dword form
+/// (`RETND`).
 fn in_mode(
     name: &str,
     at: At,
@@ -1201,7 +1214,8 @@ pub fn address_of(
     _assemble(&raised(create_reg_mem(code, into, built)), at, relocated)
 }
 
-/// `cell` as an encodable memory operand, and whether it is relocated: what `lea` names, and so the registers it reads.
+/// `cell` as an encodable memory operand, and whether it is relocated: what
+/// `lea` names, and so the registers it reads.
 pub fn address_operand(
     cell: &ir::Address,
     bits: u32,
@@ -1285,7 +1299,8 @@ pub fn pop_segment(
 ) -> Option<Emitted> {
     let named = SEGMENTS.get(&one)?;
     if one == Register::CS {
-        return None; // popping cs is not an instruction on anything after the 8086
+        // popping cs is not an instruction on anything after the 8086
+        return None;
     }
     let code = _code(&format!("POP{}_{named}", if width == 4 { "D" } else { "W" }))?;
     _assemble(&raised(create_reg(code, one)), at, true)
@@ -1348,7 +1363,8 @@ pub fn funnel(
     _assemble(&raised(create_reg_reg_i32(code, dest, other, count)), at, true)
 }
 
-/// A count in cx or ecx is one in cl: every shift and rotate reads only `count & 31`.
+/// A count in cx or ecx is one in cl: every shift and rotate reads only `count
+/// & 31`.
 fn _cl(count: Option<Register>) -> bool {
     matches!(count, Some(Register::CL | Register::CX | Register::ECX))
 }
@@ -2036,8 +2052,9 @@ pub fn emit_in(
         return jump(target, at, short);
     }
     if op == Operation::Call && what.indirect && sources.len() == 1 {
-        // A near code pointer is as wide as the mode's word; a pointer of two words (offset and selector) is a far one,
-        // which only a segmented mode has.
+        // A near code pointer is as wide as the mode's word; a pointer of two
+        // words (offset and selector) is a far one, which only a
+        // segmented mode has.
         let (near, near_code) = (i64::from(at.bits / 8), if at.bits == 32 { Code::Call_rm32 } else { Code::Call_rm16 });
         match &sources[0] {
             Loc::Reg(one) if i64::from(one.width) == near => {
@@ -2238,8 +2255,9 @@ pub fn emit_in(
             _ => None,
         };
     }
-    // A string operation repeats when it has a count, an extra result; it names its segments
-    // as operands only where the target has selector registers.
+    // A string operation repeats when it has a count, an extra result; it names
+    // its segments as operands only where the target has selector
+    // registers.
     if op == Operation::Fill && matches!(dests.len(), 2 | 3) {
         return fill(name, at, dests.len() == 3);
     }

@@ -102,7 +102,8 @@ fn sunk(function: &mut Function) -> bool {
     changed
 }
 
-/// The arms as one `Merged`, if they are one computation over values that reach `join`.
+/// The arms as one `Merged`, if they are one computation over values that reach
+/// `join`.
 fn merged(
     function: &Function,
     shape: &cfg::Shape,

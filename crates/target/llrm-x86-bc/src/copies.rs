@@ -3,10 +3,11 @@
 //! memset.
 //!
 //! Only where ES is proven DS's, by `push ds / pop es` (or `push ss`, where
-//! the stack is in DGROUP), as the old raise required. The step's sign is the direction flag, known where the body
-//! sets it or where it is the runtime's: on entry and after a call, where
-//! the runtime contracts keep direction as environment, which is clear. BC
-//! relies on that: it copies with a bare `movsw`.
+//! the stack is in DGROUP), as the old raise required. The step's sign is the
+//! direction flag, known where the body sets it or where it is the runtime's:
+//! on entry and after a call, where the runtime contracts keep direction as
+//! environment, which is clear. BC relies on that: it copies with a bare
+//! `movsw`.
 
 use std::collections::BTreeMap;
 

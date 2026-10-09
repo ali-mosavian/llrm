@@ -8,9 +8,10 @@ use crate::pipeline::{self, Applied};
 // Enough for every corpus entry that finishes at all.
 const FUEL: u64 = 2_000_000;
 
-/// The entries are independent, so they run on threads, largest first (one entry takes longer than all the others
-/// together). Run one after another they were a single 95 s test, the longest of the library tests by 20x, and set the
-/// gate's lib step.
+/// The entries are independent, so they run on threads, largest first (one
+/// entry takes longer than all the others together). Run one after another they
+/// were a single 95 s test, the longest of the library tests by 20x, and set
+/// the gate's lib step.
 #[test]
 fn the_pipeline_keeps_every_corpus_module_verifying_and_computing_the_same() {
     let mut files = corpus_files();
@@ -160,10 +161,11 @@ b3:
     }
 }
 
-/// FPDEEP built by PDS or VB kept its `FOR i = 1 TO 3` rolled, three PRINTs and their
-/// float chains computed at run time: the raise leaves a dead `ptrtoint` of the global
-/// holding `i`, GlobalsAA took it as an escape, and the dead code went only after the
-/// call-clobbered reload of `i` had been priced; a second pipeline run folded all of it.
+/// FPDEEP built by PDS or VB kept its `FOR i = 1 TO 3` rolled, three PRINTs and
+/// their float chains computed at run time: the raise leaves a dead `ptrtoint`
+/// of the global holding `i`, GlobalsAA took it as an escape, and the dead code
+/// went only after the call-clobbered reload of `i` had been priced; a second
+/// pipeline run folded all of it.
 #[test]
 fn a_global_whose_only_escape_is_dead_code_is_tracked_after_the_cleanup() {
     let mut module = llrm_analysis::testing::parsed(
@@ -495,9 +497,10 @@ b0:
     assert_eq!(printed.matches("load i16").count(), 2, "{printed}");
 }
 
-/// A loop of calls to a function that touches no memory is peeled, but each body's pipeline ran its
-/// peel before anything stated what its callees do, so the call looked like it may write and a
-/// copy that grows was refused (nib's nbody_fixed read 3,457,356 instructions against 3,116,356).
+/// A loop of calls to a function that touches no memory is peeled, but each
+/// body's pipeline ran its peel before anything stated what its callees do, so
+/// the call looked like it may write and a copy that grows was refused (nib's
+/// nbody_fixed read 3,457,356 instructions against 3,116,356).
 #[test]
 fn a_loop_calling_a_pure_function_is_judged_on_what_the_function_does() {
     let mut module = llrm_analysis::testing::parsed(
@@ -542,9 +545,10 @@ b3:
     assert!(!text.contains("phi i16 [ 0,"), "the loop of calls to @g stayed rolled:\n{text}");
 }
 
-/// QCport -O2 ran 11 KB past BCC's code, and out of memory loading a level: every call a body of nine
-/// operations was cheaper than in clocks was copied, though three copies come to more bytes than three
-/// calls. -O2 puts such a copy back as -Os does, unless the clocks it saves pay for the bytes.
+/// QCport -O2 ran 11 KB past BCC's code, and out of memory loading a level:
+/// every call a body of nine operations was cheaper than in clocks was copied,
+/// though three copies come to more bytes than three calls. -O2 puts such a
+/// copy back as -Os does, unless the clocks it saves pay for the bytes.
 #[test]
 fn o2_does_not_copy_a_body_into_three_sites_where_the_code_grows() {
     let mut module = llrm_analysis::testing::parsed(
@@ -579,8 +583,9 @@ b:
     assert_eq!(llrm_mir::print::module(&module).matches("call i16 @mix").count(), 3);
 }
 
-/// gcc states what a function's callers pass as a range on its parameters at -O2 and up (`-fipa-vrp`). -O1 ran it too,
-/// 1.0% of the compile of bench and QCport for no change in size to within 0.2% of four files.
+/// gcc states what a function's callers pass as a range on its parameters at
+/// -O2 and up (`-fipa-vrp`). -O1 ran it too, 1.0% of the compile of bench and
+/// QCport for no change in size to within 0.2% of four files.
 #[test]
 fn test_o1_states_no_ranges_from_the_callers_arguments_and_o2_does() {
     let text = "define internal i16 @pick(i16 %x) {

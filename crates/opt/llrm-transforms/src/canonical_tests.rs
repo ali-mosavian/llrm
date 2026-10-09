@@ -42,7 +42,8 @@ fn returned(
     run(module, "f", vec![Val::Int { bits: x, width: 16 }], 1_000).expect("runs")
 }
 
-/// Rotation's `bound - 0 + 0` and `bound <=u 0` used to be folded inside the rewrite that wrote them.
+/// Rotation's `bound - 0 + 0` and `bound <=u 0` used to be folded inside the
+/// rewrite that wrote them.
 #[test]
 fn test_a_neutral_term_is_its_operand_and_a_test_below_zero_is_equality() {
     for (op, constant) in [("add", 0), ("sub", 0), ("mul", 1)] {

@@ -50,9 +50,11 @@ fn longest_copy(body: &LirBody) -> usize {
 /// pressure; the cycle's shape is pinned in parcopy's own tests.
 #[test]
 fn test_a_parallel_copy_cycle_through_a_frame_slot_is_scheduled() {
-    // Unspilled: with SsaSpill in front the loop's longest parallel copy is 3 moves, not 8. A cycle through
-    // frame slots occurs in no corpus program, with or without the spiller, so this guards ParallelCopy for
-    // an allocator run on its own; what production does reach is a register cycle with no spare register.
+    // Unspilled: with SsaSpill in front the loop's longest parallel copy is 3
+    // moves, not 8. A cycle through frame slots occurs in no corpus
+    // program, with or without the spiller, so this guards ParallelCopy for
+    // an allocator run on its own; what production does reach is a register
+    // cycle with no spare register.
     let (body, mut phases) = before_regalloc_unspilled("conc7_far.ll", CONC7, "Core");
     let longest = longest_copy(&body);
     assert!(longest >= 8, "premise: a loop-carried parallel copy of {longest} moves, more than the registers hold");
@@ -70,7 +72,8 @@ const CONC7: &str = "_f_conc7_s1102468_xi_bpf_index_n_st1_sum_counteraffine_perm
 /// by the loop corpus after the products moved before the copy).
 #[test]
 fn test_the_addresses_a_parallel_copy_reads_do_not_all_live_across_it() {
-    // Without the spiller: a phi it moves to memory leaves a copy of six, and the allocator must still take seven.
+    // Without the spiller: a phi it moves to memory leaves a copy of six, and
+    // the allocator must still take seven.
     let (body, phases) = crate::backend::regalloc_input::before_regalloc_unspilled(
         "walks7_s24.ll",
         "_f_conc7_s24_xi_bln_index_n_st1_sum_as_end",

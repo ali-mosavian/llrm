@@ -203,7 +203,8 @@ fn fpdeep_keeps_its_print_loop_rolled() {
 /// What QB's FPDEEP prints once its loop is done is exact, so it prints
 /// constants and computes no float arithmetic after the loop; the old route's
 /// floatbounds, floatfold and literal tests. The loop's own chains are
-/// computed per trip (see above). PDS's and VB's tails still compute theirs: #381.
+/// computed per trip (see above). PDS's and VB's tails still compute theirs:
+/// #381.
 #[test]
 fn fpdeep_prints_constants_after_its_loop_and_computes_no_float_there() {
     let main = fpdeep("fpdeep-q-o.obj");
@@ -281,7 +282,8 @@ fn instructions(name: &str) -> Vec<iced_x86::Instruction> {
     decoded
 }
 
-/// PRESSX retained an unconditional jump to its exit immediately after loop elimination.
+/// PRESSX retained an unconditional jump to its exit immediately after loop
+/// elimination.
 #[test]
 fn pressx_has_no_jump_to_the_following_instruction() {
     for insn in instructions("pressx-p-g2.obj") {
@@ -296,7 +298,8 @@ fn pressx_has_no_jump_to_the_following_instruction() {
     }
 }
 
-/// FPCSE's removed loop still took three unconditional jumps through its old block layout.
+/// FPCSE's removed loop still took three unconditional jumps through its old
+/// block layout.
 #[test]
 fn a_removed_floating_loop_is_emitted_in_execution_order() {
     for tag in ["p-g2", "q-o", "v-g3"] {

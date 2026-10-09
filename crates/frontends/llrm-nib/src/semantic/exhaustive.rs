@@ -12,7 +12,8 @@ struct Constructor {
 }
 
 impl FunctionCompiler<'_> {
-    /// A value no row matches, spelled as a pattern, or `None` when the rows cover all.
+    /// A value no row matches, spelled as a pattern, or `None` when the rows
+    /// cover all.
     pub(super) fn uncovered(
         &self,
         rows: &[Vec<&Pattern>],

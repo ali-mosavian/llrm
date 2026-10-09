@@ -102,7 +102,8 @@ fn work(
     .map(|total| total / super::UNIT)
 }
 
-/// Three priced instructions in a loop body of one block, one before and one after.
+/// Three priced instructions in a loop body of one block, one before and one
+/// after.
 const COUNTED: &str = "define void @f(i16 %n) {
 b0:
   br label %head
@@ -283,7 +284,8 @@ b0:
   ret void
 }
 ";
-    // The address is rebuilt at its one use for 1, not stored and reloaded for 20.
+    // The address is rebuilt at its one use for 1, not stored and reloaded for
+    // 20.
     assert_eq!(risk(text, 1), Some(1));
 }
 
@@ -309,7 +311,8 @@ fn test_a_displacement_that_carries_into_the_selector_costs_the_carry() {
 
 /// A branch inside a loop splits its trips: the arms run as the header's
 /// odds share them, where the product model gave every block of the loop its
-/// factor (the old `_loop_products`, which gvn and lsr still price on, #202, #203).
+/// factor (the old `_loop_products`, which gvn and lsr still price on, #202,
+/// #203).
 #[test]
 fn test_a_branch_in_a_loop_splits_the_frequency_the_products_do_not() {
     let text = "define void @f(i16 %n, i1 %c) {
@@ -389,8 +392,8 @@ b2:
     assert!(at("cold") >= 1, "never below one unit");
 }
 
-/// A switch was priced as one branch whatever its cases, so inlining a 10-case `pl_view_of` into
-/// QCport's viewmdl.c looked free and grew it by 192 bytes.
+/// A switch was priced as one branch whatever its cases, so inlining a 10-case
+/// `pl_view_of` into QCport's viewmdl.c looked free and grew it by 192 bytes.
 #[test]
 fn test_a_switch_costs_a_compare_and_a_jump_for_each_case() {
     let price = |cases: usize| {
@@ -407,8 +410,8 @@ fn test_a_switch_costs_a_compare_and_a_jump_for_each_case() {
     assert_eq!((price(0), price(1), price(10)), (Some(3), Some(8), Some(53)));
 }
 
-/// A select had no price, so a body holding one was unpriced and never a candidate to inline:
-/// MID$'s length (a min and a max) kept its far call.
+/// A select had no price, so a body holding one was unpriced and never a
+/// candidate to inline: MID$'s length (a min and a max) kept its far call.
 #[test]
 fn a_select_is_priced() {
     let module = crate::testing::parsed(
@@ -425,8 +428,9 @@ fn a_select_is_priced() {
     assert_eq!(operation(&module.context, &layout, function, &Default::default(), select, &costs), Some(5));
 }
 
-/// Each site asked `spill::integer` of every value live at it, and `folded` looks at every user of the value:
-/// 6% of compiling matmul at -O2 (#560). A value is asked about once for the whole forecast.
+/// Each site asked `spill::integer` of every value live at it, and `folded`
+/// looks at every user of the value: 6% of compiling matmul at -O2 (#560). A
+/// value is asked about once for the whole forecast.
 #[test]
 fn test_a_forecast_asks_whether_a_value_is_folded_once_however_many_sites_it_is_live_at() {
     let values: String = (0..12).map(|at| format!("  %a{at} = add i16 {at}, 0\n")).collect();

@@ -18,12 +18,13 @@ pub struct Spaces {
     pub segment: Option<u32>,
     /// A far pointer whose offset carries into its selector.
     pub huge: Option<u32>,
-    /// Memory no program object occupies: a device's registers or its frame buffer.
-    /// A frontend states it of an access; an analysis reads it as "apart from every
-    /// program object".
+    /// Memory no program object occupies: a device's registers or its frame
+    /// buffer. A frontend states it of an access; an analysis reads it as
+    /// "apart from every program object".
     pub fixed: Option<u32>,
-    /// The most bytes a data segment holds: a larger object is cut into segments a huge pointer
-    /// steps through. None where the target has no segments.
+    /// The most bytes a data segment holds: a larger object is cut into
+    /// segments a huge pointer steps through. None where the target has no
+    /// segments.
     pub segment_bytes: Option<u64>,
 }
 
@@ -34,17 +35,19 @@ impl Default for Spaces {
 }
 
 impl Spaces {
-    /// One space, none of the others: a target with no segments, and the one a pass is
-    /// given when no target is named.
+    /// One space, none of the others: a target with no segments, and the one a
+    /// pass is given when no target is named.
     pub const FLAT: Self =
         Self { near: 0, far: 0, data: 0, stack: 0, segment: None, huge: None, fixed: None, segment_bytes: None };
 
-    /// Whether `far` is the `near` space: the target is flat, and a far or huge pointer is a near one.
+    /// Whether `far` is the `near` space: the target is flat, and a far or huge
+    /// pointer is a near one.
     pub fn far_is_near(&self) -> bool {
         self.far == self.near
     }
 
-    /// Whether `space` is the selector-alone space: never where the target has none.
+    /// Whether `space` is the selector-alone space: never where the target has
+    /// none.
     pub fn is_segment(
         &self,
         space: Option<u32>,

@@ -1,7 +1,8 @@
 //! llrm-core's `analysis/observers_tests.rs`, written as rich MIR. What
 //! `avail::dead_stores` finds dead with `private`, and without it.
 //!
-//! Skipped, reading BC fixtures: `test_a_taken_frame_address_makes_no_frame_cell_private`,
+//! Skipped, reading BC fixtures:
+//! `test_a_taken_frame_address_makes_no_frame_cell_private`,
 //! `test_only_the_main_body_owns_a_variable_nothing_else_names`, the three
 //! nbody tests and `test_a_long_handed_to_a_sub_keeps_both_halves_stored`.
 

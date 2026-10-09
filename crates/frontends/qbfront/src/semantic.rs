@@ -62,7 +62,8 @@ struct Type {
 
 #[derive(Clone)]
 struct Variable {
-    /// A BYREF pointee or a variable declared VOLATILE: another agent may write it.
+    /// A BYREF pointee or a variable declared VOLATILE: another agent may write
+    /// it.
     volatile: bool,
     place: u32,
     type_id: u32,
@@ -416,8 +417,8 @@ pub struct Options {
     /// Errors in code without a landing pad, as a module handler's, report
     /// their BASIC line: a statement-table row, 4 bytes, per line.
     pub error_lines: bool,
-    /// The most bytes the target's data segment holds, which the near-data and frame budgets are: none where
-    /// there are no segments, and no budget.
+    /// The most bytes the target's data segment holds, which the near-data and
+    /// frame budgets are: none where there are no segments, and no budget.
     pub segment_bytes: Option<usize>,
 }
 
@@ -618,12 +619,13 @@ fn built_from(
                             descriptor_place: None,
                             // A dynamic STRING array's elements are near string
                             // descriptors even when the array descriptor also
-                            // carries a whole data pointer.  BC loads the adjusted
-                            // near base at +0Ah before SASS/FLEN/SCAT.  Numeric
-                            // and fixed-string arrays retain the general huge
-                            // descriptor path because their element data may live
-                            // outside DGROUP. Microsoft keeps that pointer split:
-                            // selector at +2 and adjusted offset at +0Ah.
+                            // carries a whole data pointer.  BC loads the
+                            // adjusted near base at +0Ah before SASS/FLEN/SCAT.
+                            // Numeric and fixed-string arrays retain the
+                            // general huge descriptor path because their
+                            // element data may live outside DGROUP. Microsoft
+                            // keeps that pointer split: selector at +2 and
+                            // adjusted offset at +0Ah.
                             descriptor_data: if parameter_type == STRING {
                                 "near"
                             } else if compiler.options.huge_arrays {
@@ -1447,7 +1449,8 @@ impl Compiler {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        // The prelude's warnings would name lines of a file the user never wrote.
+        // The prelude's warnings would name lines of a file the user never
+        // wrote.
         if self.dialect.explicit_declarations() && !name.starts_with(PRELUDE_PREFIX) {
             self.warn_unassigned_reads(id == 1, &external_entries, &load_lines);
         }
@@ -2914,7 +2917,8 @@ impl Compiler {
                     if !self.dialect.augmented_assignment() {
                         return self.fail("augmented assignment needs the quickr profile");
                     }
-                    // `x op= e` is `x = x op (e)`, with x's subscripts evaluated once.
+                    // `x op= e` is `x = x op (e)`, with x's subscripts
+                    // evaluated once.
                     let target = self.stable_target(target)?;
                     let value = Expr::Binary {
                         op,
@@ -3206,7 +3210,8 @@ impl Compiler {
                             }
                         }
                         let term = match item.separator {
-                            // WRITE's commas are the runtime's: its items go as with `;`.
+                            // WRITE's commas are the runtime's: its items go as
+                            // with `;`.
                             PrintSeparator::Comma if *kind == PrintKind::Write => 'S',
                             PrintSeparator::Comma => 'C',
                             PrintSeparator::Semicolon => 'S',
@@ -3408,7 +3413,8 @@ impl Compiler {
                             // B$RESA receives the relocated code offset in AX,
                             // not on the Pascal stack. Carry only the semantic
                             // block identity here; the OMF adapter inserts the
-                            // physical AX move once final statement labels exist.
+                            // physical AX move once final statement labels
+                            // exist.
                             self.emit_runtime_call(&format!("$QB$RESA:{target}"), Vec::new(), Vec::new());
                         }
                     }
@@ -3689,7 +3695,8 @@ impl Compiler {
                             "store",
                             Vec::new(),
                             vec![
-                                // POKE writes the memory every time, whatever reads it.
+                                // POKE writes the memory every time, whatever
+                                // reads it.
                                 Operand::Indirect {
                                     base: pointer,
                                     offset: 0,
@@ -5480,7 +5487,8 @@ impl Compiler {
         Ok(bounds)
     }
 
-    /// One array bound as an INTEGER; a constant one, `-50` included, as a constant.
+    /// One array bound as an INTEGER; a constant one, `-50` included, as a
+    /// constant.
     fn bound(
         &mut self,
         expression: &Expr,
@@ -6533,8 +6541,9 @@ impl Compiler {
         if matches!(intrinsic.lowering, Lowering::Abs | Lowering::Sqrt) {
             let (mut operand, mut type_id) = self.numeric_argument(&arguments[0])?;
             if intrinsic.lowering == Lowering::Abs && matches!(type_id, INTEGER | LONG | BOOLEAN) {
-                // Signed absolute value without control flow: (x xor sign)-sign.
-                // As on the target integer instructions, MIN wraps to itself.
+                // Signed absolute value without control flow: (x xor
+                // sign)-sign. As on the target integer
+                // instructions, MIN wraps to itself.
                 let sign = self.value(type_id);
                 self.emit(
                     "sar",
@@ -6671,9 +6680,11 @@ impl Compiler {
                         }
                         let (numerator, numerator_type) = self.expression(numerator_expression)?;
                         if matches!(numerator_type, INTEGER | BOOLEAN | BYTE) {
-                            // INTEGER operands are exact in QB's SINGLE division.
-                            // Keep floor(n / positive-constant) integral until the
-                            // declared SINGLE result boundary: q + (-1 when the
+                            // INTEGER operands are exact in QB's SINGLE
+                            // division.
+                            // Keep floor(n / positive-constant) integral until
+                            // the declared SINGLE
+                            // result boundary: q + (-1 when the
                             // truncated division left a negative remainder).
                             let numerator = self.convert(numerator, numerator_type, INTEGER)?;
                             let numerator = if let Some(additive) = additive {
@@ -6792,7 +6803,8 @@ impl Compiler {
             self.emit(
                 "load",
                 vec![byte],
-                // PEEK reads the memory every time: interrupts and hardware change it.
+                // PEEK reads the memory every time: interrupts and hardware
+                // change it.
                 vec![Operand::Indirect { base: pointer, offset: 0, type_id: BYTE, volatile: true, inbounds: false }],
             );
             let result = self.convert(Operand::Value(byte), BYTE, INTEGER)?;
@@ -7264,10 +7276,10 @@ impl Compiler {
             .result
             .map(
                 |type_id| {
-                    // Like the string runtime functions, a source FUNCTION AS STRING
-                    // returns a near descriptor address in AX. The declared STRING
-                    // type describes the language result; it is not a four-byte
-                    // register result.
+                    // Like the string runtime functions, a source FUNCTION AS
+                    // STRING returns a near descriptor address in AX. The
+                    // declared STRING type describes the language result; it is
+                    // not a four-byte register result.
                     let result_type = if type_id == STRING { self.pointer_type(STRING) } else { type_id };
                     let value = self.value(result_type);
                     results.push(value);
@@ -7449,12 +7461,14 @@ impl Compiler {
         } else {
             binary_name(op)
         };
-        // Where errors land the processor's trap, which names no statement, is code.
+        // Where errors land the processor's trap, which names no statement, is
+        // code.
         if (self.options.checked_division || self.handles_errors || self.module_handled)
             && matches!(op, Binary::Modulo | Binary::IntegerDivide)
             && !matches!(common, SINGLE | DOUBLE)
         {
-            // Where only errors land (no -fsanitize), the zero divisor is the IR's own check.
+            // Where only errors land (no -fsanitize), the zero divisor is the
+            // IR's own check.
             self.division_checked(&left_operand, &right_operand, common, narrow_divmod, self.options.checked_division)?;
             if !narrow_divmod {
                 self.wrapped_division(op, operation, result, left_operand, right_operand, common)?;
@@ -8988,7 +9002,8 @@ impl Compiler {
             type_json(&mut out, type_);
         }
         out.push(']');
-        // What the language promises of each pointer parameter: it is addressable for the bytes it names.
+        // What the language promises of each pointer parameter: it is
+        // addressable for the bytes it names.
         for function in &self.functions {
             for &(value, bytes) in &function.promises {
                 let index =
@@ -9001,8 +9016,9 @@ impl Compiler {
         }
         // What the language promises of a FOR counter's add: it does not wrap.
         for function in &self.functions {
-            // A signed counter's add does not wrap as signed; an unsigned counter's
-            // as unsigned (it may well pass 32767): a counter that wrapped hangs in BC.
+            // A signed counter's add does not wrap as signed; an unsigned
+            // counter's as unsigned (it may well pass 32767): a
+            // counter that wrapped hangs in BC.
             let types: BTreeMap<u32, u32> = function.values.iter().copied().collect();
             for instruction in function.blocks.iter().flat_map(|block| &block.instructions).filter(|one| one.nowrap) {
                 let counts_up = instruction
@@ -9021,8 +9037,9 @@ impl Compiler {
                 );
             }
         }
-        // A call that fills a fixed-length destination: the callee writes its first
-        // bytes before reading any, reads none and keeps no copy of the pointer.
+        // A call that fills a fixed-length destination: the callee writes its
+        // first bytes before reading any, reads none and keeps no copy
+        // of the pointer.
         for function in &self.functions {
             for call in &function.calls {
                 for &(operand, bytes) in &call.fills {
@@ -9092,7 +9109,8 @@ impl Compiler {
         !self.options.runtime_frames
     }
 
-    /// Whether `bytes` is more than the target's data segment holds; never where it has none.
+    /// Whether `bytes` is more than the target's data segment holds; never
+    /// where it has none.
     fn beyond_segment(
         &self,
         bytes: usize,

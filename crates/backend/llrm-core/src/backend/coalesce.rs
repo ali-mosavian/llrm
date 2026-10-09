@@ -110,7 +110,8 @@ pub fn joined(
     }
     let mut held: IndexMap<u32, Register> = pinned.clone();
     let mut parent: IndexMap<u32, u32> = IndexMap::default();
-    // The web a root's values are kept as: the larger of the two joined, so a join costs the smaller's neighbours.
+    // The web a root's values are kept as: the larger of the two joined, so a
+    // join costs the smaller's neighbours.
     let mut node_of: IndexMap<u32, u32> = IndexMap::default();
     webs.begin(_interference(body), &held);
     let checking = llrm_support::env_set("LLRM_CHECK_COALESCE");
@@ -180,13 +181,15 @@ pub fn joined(
                     || held.contains_key(&theirs_node)
                     || !webs.either_george(mine_node, theirs_node, &allowed))
             {
-                continue; // Briggs and George: the merged class would not be colourable
+                // Briggs and George: the merged class would not be colourable
+                continue;
             }
             if mine_pin.is_some() && theirs_pin.is_none() {
                 std::mem::swap(&mut here, &mut there);
                 std::mem::swap(&mut mine_node, &mut theirs_node);
             }
-            // The root that stays is `there`; the web kept is the one with more neighbours.
+            // The root that stays is `there`; the web kept is the one with more
+            // neighbours.
             let (kept, gone) = if webs.degree(mine_node) > webs.degree(theirs_node) {
                 (mine_node, theirs_node)
             } else {
@@ -252,15 +255,17 @@ pub fn joined(
 /// What a web is to its neighbours' counts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Attr {
-    /// Its degree reaches its palette's size: Briggs's significant neighbour, where nothing is pinned.
+    /// Its degree reaches its palette's size: Briggs's significant neighbour,
+    /// where nothing is pinned.
     significant: bool,
     palette: u32,
     pinned: bool,
 }
 
-/// The interference webs the coalescer joins, and for each web what Briggs's test asks of its neighbours as a count
-/// kept as webs join, so a join costs the smaller web's neighbours and not the larger's (LLVM keeps no graph: the live
-/// ranges of the two answer, in the size of the smaller).
+/// The interference webs the coalescer joins, and for each web what Briggs's
+/// test asks of its neighbours as a count kept as webs join, so a join costs
+/// the smaller web's neighbours and not the larger's (LLVM keeps no graph: the
+/// live ranges of the two answer, in the size of the smaller).
 struct Webs {
     everything: BTreeSet<Register>,
     palettes: Vec<BTreeSet<Register>>,
@@ -268,9 +273,11 @@ struct Webs {
     palette_of: IndexMap<u32, u32>,
     near: Graph,
     attr: IndexMap<u32, Attr>,
-    /// Per web: its neighbours that are significant, by palette; and how many are pinned.
+    /// Per web: its neighbours that are significant, by palette; and how many
+    /// are pinned.
     counts: IndexMap<u32, IndexMap<u32, u32>>,
-    /// The same for the neighbours that are significant or pinned: the ones George's test refuses.
+    /// The same for the neighbours that are significant or pinned: the ones
+    /// George's test refuses.
     hots: IndexMap<u32, IndexMap<u32, u32>>,
     pinned_near: IndexMap<u32, u32>,
 }
@@ -404,7 +411,8 @@ impl Webs {
         self.palettes[palette as usize].intersection(allowed).next().is_some()
     }
 
-    /// How many neighbours of the join of `here` and `there` Briggs counts as significant for `allowed`.
+    /// How many neighbours of the join of `here` and `there` Briggs counts as
+    /// significant for `allowed`.
     fn significant(
         &self,
         here: u32,
@@ -444,7 +452,8 @@ impl Webs {
         count
     }
 
-    /// `significant` by looking at every neighbour: Briggs as the test is stated.
+    /// `significant` by looking at every neighbour: Briggs as the test is
+    /// stated.
     fn significant_by_scan(
         &self,
         here: u32,
@@ -472,9 +481,11 @@ impl Webs {
             .count()
     }
 
-    /// Whether `gone` can join `kept` without making `kept` harder to colour: each neighbour of `gone` is one of
-    /// `kept`'s, or shares no register with the join, or is neither pinned nor significant. Counted, when `gone`
-    /// has the more neighbours, as the hot ones that meet the join less those `kept` also has.
+    /// Whether `gone` can join `kept` without making `kept` harder to colour:
+    /// each neighbour of `gone` is one of `kept`'s, or shares no register
+    /// with the join, or is neither pinned nor significant. Counted, when
+    /// `gone` has the more neighbours, as the hot ones that meet the join
+    /// less those `kept` also has.
     fn george(
         &self,
         gone: u32,
@@ -511,7 +522,8 @@ impl Webs {
         hot == shared
     }
 
-    /// `george` by looking at every neighbour of `gone`: the test as it is stated.
+    /// `george` by looking at every neighbour of `gone`: the test as it is
+    /// stated.
     fn george_by_scan(
         &self,
         gone: u32,
@@ -537,8 +549,8 @@ impl Webs {
             )
     }
 
-    /// Whether either joins the other under George's test: the one that looks at the fewer neighbours first, as the
-    /// answer is the same.
+    /// Whether either joins the other under George's test: the one that looks
+    /// at the fewer neighbours first, as the answer is the same.
     fn either_george(
         &self,
         one: u32,
@@ -549,9 +561,11 @@ impl Webs {
         self.george(small, big, allowed) || self.george(big, small, allowed)
     }
 
-    /// `gone` joined into `kept`, `allowed` what the web may take now and `pin` whether it is pinned. Costs `gone`'s
-    /// neighbours, and `kept`'s when its own count of itself to them changes: its palette, its being pinned, or its
-    /// reaching its palette's size, each at most as often as the palette is large.
+    /// `gone` joined into `kept`, `allowed` what the web may take now and `pin`
+    /// whether it is pinned. Costs `gone`'s neighbours, and `kept`'s when
+    /// its own count of itself to them changes: its palette, its being pinned,
+    /// or its reaching its palette's size, each at most as often as the
+    /// palette is large.
     fn join(
         &mut self,
         gone: u32,
@@ -563,7 +577,8 @@ impl Webs {
         let gone_near: Vec<u32> = self.near.get(&gone).map(|set| set.iter().copied().collect()).unwrap_or_default();
         let (common, only): (Vec<u32>, Vec<u32>) =
             gone_near.iter().copied().partition(|other| self.near.get(&kept).is_some_and(|set| set.contains(other)));
-        // A neighbour of both loses one: it may stop being significant, and its neighbours' counts follow.
+        // A neighbour of both loses one: it may stop being significant, and its
+        // neighbours' counts follow.
         for &other in &common {
             let old = self.attr_of(other);
             let significant = self.degree(other) - 1 >= self.palettes[old.palette as usize].len();
@@ -610,7 +625,8 @@ impl Webs {
         self.palette_of.swap_remove(&gone);
     }
 
-    /// Every count kept, against the counts as `begin` makes them: a check for tests.
+    /// Every count kept, against the counts as `begin` makes them: a check for
+    /// tests.
     fn consistent(&self) -> bool {
         let mut fresh = self.clone_shape();
         for (node, neighbours) in fresh.near.clone() {
@@ -657,14 +673,16 @@ thread_local! {
     static NUMBERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many values the liveness rows of the last interference graph of this thread numbered, for a test that a graph of
-/// a few values is not made over every value in the body.
+/// How many values the liveness rows of the last interference graph of this
+/// thread numbered, for a test that a graph of a few values is not made over
+/// every value in the body.
 pub fn last_numbered() -> usize {
     NUMBERED.with(std::cell::Cell::get)
 }
 
-/// How many values the last interference graph of this thread was asked for, none for all, for a test
-/// that `siblings` asks of the webs it grows from only.
+/// How many values the last interference graph of this thread was asked for,
+/// none for all, for a test that `siblings` asks of the webs it grows from
+/// only.
 pub fn last_asked() -> Option<usize> {
     ASKED.with(std::cell::Cell::get)
 }
@@ -673,9 +691,10 @@ pub fn _interference(body: &LirBody) -> Graph {
     _interference_among(body, None)
 }
 
-/// `_interference`, of the values in `only` alone where it is given: a caller that asks of a few
-/// values pays for the pairs among them, not for every pair live together.
-/// The rows `_interference_among` reads: the walk's, or those found from where the values occur.
+/// `_interference`, of the values in `only` alone where it is given: a caller
+/// that asks of a few values pays for the pairs among them, not for every pair
+/// live together. The rows `_interference_among` reads: the walk's, or those
+/// found from where the values occur.
 enum Rows<'a> {
     Dense(allocate::LiveRows),
     Web(&'a allocate::WebRows),
@@ -716,8 +735,9 @@ pub fn _interference_among(
 ) -> Graph {
     ASKED.with(|asked| asked.set(only.map(BTreeSet::len)));
     let wanted = |value: u32| only.is_none_or(|only| only.contains(&value));
-    // Asked of a few values, the rows and widths come from where the values occur, not from a walk of every instruction
-    // (in a body with no phis, whose arguments are read in other blocks).
+    // Asked of a few values, the rows and widths come from where the values
+    // occur, not from a walk of every instruction (in a body with no phis,
+    // whose arguments are read in other blocks).
     let among = only.map(|only| {
         crate::backend::postings::following(body, |postings| {
             crate::analysis::occurrences::Occurrences::of(postings, only)
@@ -729,7 +749,8 @@ pub fn _interference_among(
         None => Rows::Dense(allocate::live_rows_by(body, wanted)),
     };
     NUMBERED.with(|numbered| numbered.set(rows.numbered()));
-    // A copy's widths are read only where both its values are asked of (an edge needs both).
+    // A copy's widths are read only where both its values are asked of (an edge
+    // needs both).
     let widths = match (&among, &web) {
         (Some(found), Some(_)) => found.widths(body, &wanted),
         _ => crate::analysis::occurrences::widths_of(body.blocks.iter().flat_map(|block| &block.insns), &wanted),
@@ -754,9 +775,10 @@ pub fn _interference_among(
     let targets: BTreeSet<i64> = body.blocks.iter().flat_map(|block| block.succ.iter().copied()).collect();
     let mut entries: BTreeSet<i64> = BTreeSet::from([body.entry]);
     entries.extend(body.blocks.iter().map(|block| block.at).filter(|at| !targets.contains(at)));
-    // Asked of a few values, a block that names none of them changes nothing in the walk: what is live in it stays so
-    // from its end to its start, so it adds pairs only at the entry, at its phis, and at a parallel copy where two
-    // of them are live.
+    // Asked of a few values, a block that names none of them changes nothing in
+    // the walk: what is live in it stays so from its end to its start, so
+    // it adds pairs only at the entry, at its phis, and at a parallel copy
+    // where two of them are live.
     let touched: Option<BTreeSet<usize>> = only.map(|only| {
         crate::backend::postings::following(body, |postings| {
             only.iter()
@@ -1037,7 +1059,8 @@ mod tests {
         .expect("allocates")
     }
 
-    /// HARR's hoisted selector copy became unencodable mov es,es across a coverage gap.
+    /// HARR's hoisted selector copy became unencodable mov es,es across a
+    /// coverage gap.
     #[test]
     fn test_retained_resource_identity_has_a_legal_encoding() {
         let body = body("resource-copy", vec![_move(3, 1, 1)], &[(1, Register::ES)]);

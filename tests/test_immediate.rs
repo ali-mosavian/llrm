@@ -19,8 +19,9 @@ fn listing(
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
 
-/// `if (x & 1)` was `mov ecx, eax; and ecx, 1; jne`: a copy made only to be `and`ed for its flags (x_collatz, 1.32x of
-/// gcc's clocks); the mask is `test`'s immediate.
+/// `if (x & 1)` was `mov ecx, eax; and ecx, 1; jne`: a copy made only to be
+/// `and`ed for its flags (x_collatz, 1.32x of gcc's clocks); the mask is
+/// `test`'s immediate.
 #[test]
 fn a_mask_compared_with_zero_is_test_with_an_immediate() {
     let text = listing(

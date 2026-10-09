@@ -123,7 +123,8 @@ impl Selector<'_, '_, '_> {
             self.integer_made_float(8, result, to, cell, 8, at, out)?;
             return Ok(());
         }
-        // fistp stores a qword, truncating as the control word is set: read back as the halves.
+        // fistp stores a qword, truncating as the control word is set: read
+        // back as the halves.
         if op == CastOp::FPToSI && self.is_float(from) {
             let held = self.float(operand, at, out)?;
             let cell = self.float_stored(held, "fisttp", 8, at, out);
@@ -143,9 +144,11 @@ impl Selector<'_, '_, '_> {
             self.wides.insert(result, (low, high));
             return Ok(());
         }
-        // fild reads a signed qword, so an unsigned one is its two halves each read as a qword of its own, the high one
-        // scaled by 2^32 (a qword of (0, 1) read the same way), and added: every step exact in the x87's 64-bit
-        // mantissa, one rounding when the sum is stored as a float or a double.
+        // fild reads a signed qword, so an unsigned one is its two halves each
+        // read as a qword of its own, the high one scaled by 2^32 (a
+        // qword of (0, 1) read the same way), and added: every step exact in
+        // the x87's 64-bit mantissa, one rounding when the sum is
+        // stored as a float or a double.
         if op == CastOp::UIToFP && self.is_float(to) {
             let (low, high) = self.wide(operand, at, out)?;
             let loaded = |this: &mut Self, below: Loc, above: Loc, out: &mut Vec<Arc<Insn>>| -> Held {
@@ -288,7 +291,8 @@ impl Selector<'_, '_, '_> {
                 (low, high)
             }
             BinaryOp::Mul => {
-                // low*low widened, and each half by the other's low into the high.
+                // low*low widened, and each half by the other's low into the
+                // high.
                 let (a, b) = (self.wide(left, at, out)?, self.wide(right, at, out)?);
                 let (low, carried) = (self.half(), self.half());
                 self.put(
@@ -372,8 +376,8 @@ impl Selector<'_, '_, '_> {
         }
     }
 
-    /// An integer operand's value where it is a constant, or a cast of one: at -O0 a shift's count is `zext i32 30 to
-    /// i64`.
+    /// An integer operand's value where it is a constant, or a cast of one: at
+    /// -O0 a shift's count is `zext i32 30 to i64`.
     fn constant_through_casts(
         &self,
         operand: Operand,
@@ -405,9 +409,11 @@ impl Selector<'_, '_, '_> {
         })
     }
 
-    /// A shift by a count the program computes: the shift of each half by the count's low five bits (the machine's own
-    /// reading of cl), and its sixth bit, spread over a register as a mask, choosing between the halves and the
-    /// fill, for the counts 32 to 63 (LLVM's ExpandShiftWithUnknownAmountBit, without a select the 486 has none of).
+    /// A shift by a count the program computes: the shift of each half by the
+    /// count's low five bits (the machine's own reading of cl), and its
+    /// sixth bit, spread over a register as a mask, choosing between the halves
+    /// and the fill, for the counts 32 to 63 (LLVM's
+    /// ExpandShiftWithUnknownAmountBit, without a select the 486 has none of).
     fn shifted_by_variable(
         &mut self,
         op: BinaryOp,
@@ -431,7 +437,8 @@ impl Selector<'_, '_, '_> {
             BinaryOp::Shl => {
                 let lower = self.made(Operation::Binary, "shl", vec![Loc::Held(low), cl.clone()], at, out);
                 let upper = self.made(Operation::Funnel, "shld", vec![Loc::Held(high), Loc::Held(low), cl], at, out);
-                // From 32: the high half is the low half shifted, the low half is zero.
+                // From 32: the high half is the low half shifted, the low half
+                // is zero.
                 let (kept_upper, from_lower) = (all(self, "and", upper, keep, out), all(self, "and", lower, mask, out));
                 let new_high = all(self, "or", kept_upper, from_lower, out);
                 (all(self, "and", lower, keep, out), new_high)
@@ -440,7 +447,8 @@ impl Selector<'_, '_, '_> {
                 let name = if op == BinaryOp::AShr { "sar" } else { "shr" };
                 let upper = self.made(Operation::Binary, name, vec![Loc::Held(high), cl.clone()], at, out);
                 let lower = self.made(Operation::Funnel, "shrd", vec![Loc::Held(low), Loc::Held(high), cl], at, out);
-                // From 32: the low half is the high half shifted, the high half is the fill.
+                // From 32: the low half is the high half shifted, the high half
+                // is the fill.
                 let (kept_lower, from_upper) = (all(self, "and", lower, keep, out), all(self, "and", upper, mask, out));
                 let new_low = all(self, "or", kept_lower, from_upper, out);
                 let new_high = if op == BinaryOp::AShr {

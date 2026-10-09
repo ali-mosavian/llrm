@@ -1,6 +1,7 @@
 //! Ports of `tests/test_ranges.py`, `tests/test_edge_ranges.py` and
-//! `tests/test_unsigned_edge_ranges.py`. `test_range_alias_checks_cover_width_and_wrap`
-//! is `regions`' `overlapping_range_covering_respects_width_wrap_and_each_fact_map`.
+//! `tests/test_unsigned_edge_ranges.py`.
+//! `test_range_alias_checks_cover_width_and_wrap` is `regions`'
+//! `overlapping_range_covering_respects_width_wrap_and_each_fact_map`.
 
 use std::collections::BTreeMap;
 
@@ -275,8 +276,9 @@ fn test_signed_widening_keeps_the_numeric_range() {
     }
 }
 
-/// nbody's `x[i]` index was `zext i16 %i to i32` with `%i` in 0..3: no interval came out, `covering` refused the
-/// access, and the hoist left x[i] and y[i] loaded on every trip of the inner loop.
+/// nbody's `x[i]` index was `zext i16 %i to i32` with `%i` in 0..3: no interval
+/// came out, `covering` refused the access, and the hoist left x[i] and y[i]
+/// loaded on every trip of the inner loop.
 #[test]
 fn test_zero_extending_a_non_negative_interval_keeps_the_numeric_range() {
     for (low, high) in [(0, 3), (1, 20), (0, 32767)] {
@@ -427,8 +429,8 @@ b0:
     }
 }
 
-/// `tests/test_edge_ranges.py:guarded_loop`: `for i = 0 while i < 10: if i < 4: off = i * 2`,
-/// the header also computing `header`.
+/// `tests/test_edge_ranges.py:guarded_loop`: `for i = 0 while i < 10: if i < 4:
+/// off = i * 2`, the header also computing `header`.
 fn guarded_loop(header: &str) -> Parsed {
     guarded_loop_of(16, header)
 }
@@ -467,7 +469,8 @@ b50:
     ))
 }
 
-/// `tests/test_edge_ranges.py`: i<4 bounds a word-array offset to 0..6, not the whole loop's 0..18.
+/// `tests/test_edge_ranges.py`: i<4 bounds a word-array offset to 0..6, not the
+/// whole loop's 0..18.
 #[test]
 fn test_guard_refines_subscript_without_leaking_to_the_join() {
     let parsed = guarded_loop("");
@@ -587,7 +590,8 @@ fn broken(
     }
 }
 
-/// Every interval `bounded` and `scoped` state holds of every value there, as run.
+/// Every interval `bounded` and `scoped` state holds of every value there, as
+/// run.
 #[test]
 fn every_bounded_fact_holds_when_run() {
     let loops = [
@@ -675,7 +679,8 @@ b2:
   ret void
 }
 ",
-        // Mandelbrot's escape loop: the phis stay in a box only by the loop's own exit test.
+        // Mandelbrot's escape loop: the phis stay in a box only by the loop's
+        // own exit test.
         "declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)
 
 define void @f(i16 %n) {
@@ -731,7 +736,8 @@ b4:
     }
 }
 
-/// An access into a global indexed by `index`, computed as `offset` from counter `%i` (0 ..= 49).
+/// An access into a global indexed by `index`, computed as `offset` from
+/// counter `%i` (0 ..= 49).
 fn indexed(
     offset: &str,
     gep: &str,
@@ -767,10 +773,14 @@ fn an_offset_is_exact_only_when_every_partial_sum_is_a_nonnegative_index() {
     for (offset, gep, exact) in [
         ("mul i16 %i, 2", "getelementptr inbounds i8, ptr @a, i16 %off", true),
         ("add i16 %i, 3", "getelementptr inbounds i16, ptr @a, i16 %off", true),
-        ("mul i16 %i, 2", "getelementptr i8, ptr @a, i16 %off", false), // no promise
-        ("sub i16 %i, 5", "getelementptr inbounds i8, ptr @a, i16 %off", false), // below 0
-        ("mul i16 %i, 2000", "getelementptr inbounds i8, ptr @a, i16 %off", false), // past 64K
-        ("mul i16 %i, 2", "getelementptr inbounds i8, ptr %q, i16 %off", false), // no object start
+        // no promise
+        ("mul i16 %i, 2", "getelementptr i8, ptr @a, i16 %off", false),
+        // below 0
+        ("sub i16 %i, 5", "getelementptr inbounds i8, ptr @a, i16 %off", false),
+        // past 64K
+        ("mul i16 %i, 2000", "getelementptr inbounds i8, ptr @a, i16 %off", false),
+        // no object start
+        ("mul i16 %i, 2", "getelementptr inbounds i8, ptr %q, i16 %off", false),
     ] {
         let parsed = indexed(offset, gep);
         let found = exact_offsets(&parsed.unit()).unwrap();
@@ -778,9 +788,11 @@ fn an_offset_is_exact_only_when_every_partial_sum_is_a_nonnegative_index() {
     }
 }
 
-/// Instruction selection solved the scoped bounds twice for a function with dword-indexed accesses: once inside
-/// `exact_offsets` and once for its own use (80% of isel for a 16-deep nest, 160 M). Given the facts,
-/// `exact_offsets_given` solves no loop again and says what `exact_offsets` does.
+/// Instruction selection solved the scoped bounds twice for a function with
+/// dword-indexed accesses: once inside `exact_offsets` and once for its own use
+/// (80% of isel for a 16-deep nest, 160 M). Given the facts,
+/// `exact_offsets_given` solves no loop again and says what `exact_offsets`
+/// does.
 #[test]
 fn the_exact_offsets_given_the_scoped_facts_solve_nothing_again() {
     let parsed = indexed("mul i16 %i, 2", "getelementptr inbounds i8, ptr @a, i16 %off");
@@ -906,7 +918,8 @@ out:
 }
 
 /// A condition a frontend states with `Op::Assume` bounds the value in the code
-/// that follows it: HIR through its lowering to the reader, no hand-written MIR.
+/// that follows it: HIR through its lowering to the reader, no hand-written
+/// MIR.
 #[test]
 fn an_assume_a_frontend_states_bounds_a_value_below_it() {
     use llrm_hir::model::{
@@ -916,7 +929,8 @@ fn an_assume_a_frontend_states_bounds_a_value_below_it() {
     let mut integer = Type::new(1, "integer", TypeKind::Integer, 2);
     integer.signed = Some(true);
     let types = vec![Type::new(0, "void", TypeKind::Void, 0), integer];
-    // v1 is the parameter; v2 = v1 < 10; assume v2; then a block that returns v1.
+    // v1 is the parameter; v2 = v1 < 10; assume v2; then a block that returns
+    // v1.
     let values = vec![Value { id: 1, r#type: 1 }, Value { id: 2, r#type: 1 }];
     let less = Instruction::new(1, Op::Lt, vec![2], vec![HirOperand::value_ref(1), HirOperand::constant(1, 10)]);
     let assume = Instruction::new(2, Op::Assume, vec![], vec![HirOperand::value_ref(2)]);
@@ -939,9 +953,9 @@ fn an_assume_a_frontend_states_bounds_a_value_below_it() {
     assert_eq!(below.get(&parameter), Some(&Interval { low: (-32768).into(), high: 9.into(), width: 16 }), "{below:?}");
 }
 
-/// What `!range` says of a load or a call bounded nothing: an enum's tag, `LEN`,
-/// every value a frontend states of an instruction was written to the IR and
-/// never read, though a parameter's `range` was.
+/// What `!range` says of a load or a call bounded nothing: an enum's tag,
+/// `LEN`, every value a frontend states of an instruction was written to the IR
+/// and never read, though a parameter's `range` was.
 #[test]
 fn a_range_in_metadata_bounds_a_load_and_a_call_result() {
     let parsed = Parsed::new(
@@ -1025,7 +1039,8 @@ b0:
     )
 }
 
-/// `smul.fix` had no interval, so no fixed-point product was ever known to be small.
+/// `smul.fix` had no interval, so no fixed-point product was ever known to be
+/// small.
 #[test]
 fn a_fixed_product_of_bounded_operands_is_bounded_with_its_floor() {
     let body = fixed("call i32 @llvm.smul.fix.i32(i32 %x, i32 %z, i32 1)");
@@ -1042,7 +1057,8 @@ fn a_fixed_product_whose_result_wraps_has_no_interval() {
     assert_eq!(computed(&body, "y", &[("x", interval(0, 1 << 20, 32)), ("z", interval(0, 1 << 20, 32))]), None);
 }
 
-/// x * x over [-5, 3] came out [-15, 25]: the corners treat the two x as independent.
+/// x * x over [-5, 3] came out [-15, 25]: the corners treat the two x as
+/// independent.
 #[test]
 fn a_square_is_never_negative() {
     let body = fixed("call i32 @llvm.smul.fix.i32(i32 %x, i32 %x, i32 0)");
@@ -1052,7 +1068,8 @@ fn a_square_is_never_negative() {
     assert_eq!(computed(&body, "y", &[("x", interval(2, 3, 32))]), Some(interval(4, 9, 32)));
 }
 
-/// `%s` computed from `x` and `z`, then compared against 1024: `no` is the edge where `%s <= 1024`.
+/// `%s` computed from `x` and `z`, then compared against 1024: `no` is the edge
+/// where `%s <= 1024`.
 fn tested(computation: &str) -> Parsed {
     Parsed::new(&format!(
         "declare i32 @llvm.smul.fix.i32(i32, i32, i32 immarg)
@@ -1090,7 +1107,8 @@ fn a_bounded_sum_bounds_its_addends() {
     assert_eq!(result[&parsed.value("z")], interval(3, 9, 32));
 }
 
-/// Without an interval for each addend the sum may have wrapped, and says nothing of them.
+/// Without an interval for each addend the sum may have wrapped, and says
+/// nothing of them.
 #[test]
 fn a_sum_of_an_unbounded_addend_bounds_nothing() {
     let parsed = tested("%s = add i32 %x, %z");
@@ -1098,7 +1116,8 @@ fn a_sum_of_an_unbounded_addend_bounds_nothing() {
     assert!(!result.contains_key(&parsed.value("x")));
 }
 
-/// `xx + yy <= 1024` with squares `xx = x*x >> 8` bounds `x` to 512: the exit test of a Mandelbrot loop.
+/// `xx + yy <= 1024` with squares `xx = x*x >> 8` bounds `x` to 512: the exit
+/// test of a Mandelbrot loop.
 #[test]
 fn a_bounded_square_bounds_its_root() {
     let parsed = tested("%s = call i32 @llvm.smul.fix.i32(i32 %x, i32 %x, i32 8)");
@@ -1106,7 +1125,8 @@ fn a_bounded_square_bounds_its_root() {
     assert_eq!(result[&parsed.value("x")], interval(-512, 512, 32));
 }
 
-/// An unbounded `x` may have wrapped `x*x >> 8` below 1024; its root is no smaller for that.
+/// An unbounded `x` may have wrapped `x*x >> 8` below 1024; its root is no
+/// smaller for that.
 #[test]
 fn a_square_of_an_unbounded_value_bounds_nothing() {
     let parsed = tested("%s = call i32 @llvm.smul.fix.i32(i32 %x, i32 %x, i32 8)");
@@ -1114,8 +1134,9 @@ fn a_square_of_an_unbounded_value_bounds_nothing() {
     assert!(!result.contains_key(&parsed.value("x")));
 }
 
-/// Mandelbrot's escape loop: `x' = xx - yy + cx`, `y' = (2xy >> 8) + cy`, left once `xx + yy > 1024`.
-/// `x_next` is what the latch hands back; `start` what the loop starts from.
+/// Mandelbrot's escape loop: `x' = xx - yy + cx`, `y' = (2xy >> 8) + cy`, left
+/// once `xx + yy > 1024`. `x_next` is what the latch hands back; `start` what
+/// the loop starts from.
 fn escape(
     x_next: &str,
     start: &str,
@@ -1154,9 +1175,10 @@ b4:
     ))
 }
 
-/// The loop's own exit test bounds what each trip squares, so the phis stay in a box the whole
-/// loop through: with no relation between phi and test, `x` and `y` had no interval at all and every
-/// product in the loop needed its 64-bit form.
+/// The loop's own exit test bounds what each trip squares, so the phis stay in
+/// a box the whole loop through: with no relation between phi and test, `x` and
+/// `y` had no interval at all and every product in the loop needed its 64-bit
+/// form.
 #[test]
 fn a_loop_phi_whose_exit_test_bounds_its_square_stays_in_a_box() {
     let parsed = escape("%xn = add i32 %d, %cx", "0");
@@ -1193,7 +1215,8 @@ b3:
     assert!(at.is_none_or(|at| !at.contains_key(&parsed.value("x"))), "{at:?}");
 }
 
-/// A phi whose entry is outside every box the latch keeps has no box: `x` starts at 2^30.
+/// A phi whose entry is outside every box the latch keeps has no box: `x`
+/// starts at 2^30.
 #[test]
 fn an_entry_outside_the_box_gets_no_box() {
     let parsed = escape("%xn = add i32 %d, %cx", "1073741824");
@@ -1205,9 +1228,10 @@ fn an_entry_outside_the_box_gets_no_box() {
     );
 }
 
-/// A range scope narrowed by each edge above a block copied every interval it knew once per edge
-/// (200 sequential loops: 301 s in `analysis annotated`, #556). An edge's effect is the intervals it
-/// sets, and `on_edge` is that effect on the known ones.
+/// A range scope narrowed by each edge above a block copied every interval it
+/// knew once per edge (200 sequential loops: 301 s in `analysis annotated`,
+/// #556). An edge's effect is the intervals it sets, and `on_edge` is that
+/// effect on the known ones.
 #[test]
 fn test_an_edge_sets_the_intervals_it_narrows_and_copies_none_of_the_rest() {
     let parsed = compare("slt", 16, 4);
@@ -1223,8 +1247,9 @@ fn test_an_edge_sets_the_intervals_it_narrows_and_copies_none_of_the_rest() {
     assert_eq!(whole[&x], delta[&x]);
 }
 
-/// 60 loops one after another narrowed by every edge above each of them again at each growth of its boxes: 14,760 edges
-/// worked out, cubic in the loops. The edges above a loop are narrowed once.
+/// 60 loops one after another narrowed by every edge above each of them again
+/// at each growth of its boxes: 14,760 edges worked out, cubic in the loops.
+/// The edges above a loop are narrowed once.
 #[test]
 fn test_the_edges_above_a_loop_are_narrowed_once_not_per_block_scoped() {
     // The check works the edges out again to compare, and is counted.
@@ -1232,7 +1257,8 @@ fn test_the_edges_above_a_loop_are_narrowed_once_not_per_block_scoped() {
         return;
     }
     let loops = 60;
-    // Each loop is entered through a block of its own: only a block with one way in carries its edge's test.
+    // Each loop is entered through a block of its own: only a block with one
+    // way in carries its edge's test.
     let mut text = String::from("define i32 @f(i32 %x) {\nb0:\n  br label %h0\n\n");
     for at in 0..loops {
         let from = if at == 0 { "b0".to_owned() } else { format!("p{at}") };
@@ -1252,9 +1278,10 @@ fn test_the_edges_above_a_loop_are_narrowed_once_not_per_block_scoped() {
     assert!(narrowed <= 5_000, "{narrowed} edges narrowed for {loops} sequential loops");
 }
 
-/// Each block of a loop swept every operation of the loop to a fixpoint to give its facts: 40 blocks of one operation
-/// each worked 6,560 out (x_switch: 50 Minstr, 12% of the compile, in `bounded`). A block's facts are found from the
-/// loop's own swept ones, working out only what its edges reach: 3,322.
+/// Each block of a loop swept every operation of the loop to a fixpoint to give
+/// its facts: 40 blocks of one operation each worked 6,560 out (x_switch: 50
+/// Minstr, 12% of the compile, in `bounded`). A block's facts are found from
+/// the loop's own swept ones, working out only what its edges reach: 3,322.
 #[test]
 fn test_a_block_works_out_only_the_operations_its_edges_reach() {
     // The check works every sweep out again to compare, and is counted.
@@ -1269,7 +1296,8 @@ fn test_a_block_works_out_only_the_operations_its_edges_reach() {
     );
     for at in 0..blocks {
         let next = if at + 1 == blocks { "latch".to_owned() } else { format!("s{}", at + 1) };
-        // Each block's test is of an argument of its own: its edge reaches one operation of the loop's forty.
+        // Each block's test is of an argument of its own: its edge reaches one
+        // operation of the loop's forty.
         text += &format!(
             "s{at}:\n  %a{at} = add nsw i32 %v{at}, 1\n  %t{at} = icmp slt i32 %v{at}, 100\n  br i1 %t{at}, label %{next}, label %x{at}\n\nx{at}:\n  br label %latch\n\n"
         );
@@ -1282,9 +1310,11 @@ fn test_a_block_works_out_only_the_operations_its_edges_reach() {
     assert!(worked <= 100 * blocks, "{worked} operations worked out for a loop of {blocks} blocks");
 }
 
-/// A block of a loop worked out every edge on its way from the header: a chain of 40 blocks, each behind the edges of
-/// the ones before, narrowed 820 edges (a nest 16 deep: 1.7 G of a 5.7 G compile in `bounded`). The state after each
-/// prefix of the edges is kept for the blocks that share it, and each block works out only the edge past it.
+/// A block of a loop worked out every edge on its way from the header: a chain
+/// of 40 blocks, each behind the edges of the ones before, narrowed 820 edges
+/// (a nest 16 deep: 1.7 G of a 5.7 G compile in `bounded`). The state after
+/// each prefix of the edges is kept for the blocks that share it, and each
+/// block works out only the edge past it.
 #[test]
 fn test_a_block_works_out_only_the_edge_past_the_prefix_it_shares() {
     // The check works every edge out again to compare, and is counted.

@@ -155,7 +155,8 @@ impl<'a> FunctionCompiler<'a> {
                         _ => {}
                     }
                     if let Expr::Repeat { value, .. } = value {
-                        // Evaluated before the new name exists, which it may shadow.
+                        // Evaluated before the new name exists, which it may
+                        // shadow.
                         self.statement(&Statement::Bind {
                             mutable: false,
                             name: format!("${name}_fill"),
@@ -176,7 +177,8 @@ impl<'a> FunctionCompiler<'a> {
                         mutable,
                         storage: Storage::Place(place),
                     };
-                    // Filling stores through the name, which a `let` would refuse.
+                    // Filling stores through the name, which a `let` would
+                    // refuse.
                     self.scopes.last_mut().expect("scope").insert(name.clone(), binding(true));
                     self.fill(name, shape, *span)?;
                     self.scopes.last_mut().expect("scope").insert(name.clone(), binding(*mutable));
@@ -314,7 +316,8 @@ impl<'a> FunctionCompiler<'a> {
                             self.coerced(value, element)?
                         };
                         if ownership::needs_drop(element) {
-                            // The new value first, then the old one is dropped (section 9.5).
+                            // The new value first, then the old one is dropped
+                            // (section 9.5).
                             self.consume(&value, *span)?;
                             let old = self.value(element);
                             self.emit("load", vec![old], vec![destination.clone()], None);
@@ -382,7 +385,8 @@ impl<'a> FunctionCompiler<'a> {
                         }
                         let mut stores = Vec::new();
                         self.prepare_array_stores(&destination, element, shape, value, *span, &mut stores)?;
-                        // The new elements first, then the old ones are dropped (section 9.5).
+                        // The new elements first, then the old ones are dropped
+                        // (section 9.5).
                         self.when_live(flag.clone(), |this| {
                             if this.element_needs_drop(element) {
                                 this.drop_owner(&destination);
@@ -408,7 +412,8 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
             Statement::Expr(expression) => {
-                // Checked before its shape, so what it names is learned and its own error comes first.
+                // Checked before its shape, so what it names is learned and its
+                // own error comes first.
                 self.expression(expression, None)?;
                 if !matches!(
                     expression,
@@ -511,7 +516,8 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    /// Stores `$name_fill`, bound beforehand, to each of `name`'s `length` elements.
+    /// Stores `$name_fill`, bound beforehand, to each of `name`'s `length`
+    /// elements.
     pub(super) fn fill(
         &mut self,
         name: &str,

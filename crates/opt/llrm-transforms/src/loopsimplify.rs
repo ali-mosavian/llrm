@@ -113,15 +113,17 @@ thread_local! {
     static COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many copies of a function this thread has made to try grouping a loop on, for a test that a loop
-/// already in the form makes none.
+/// How many copies of a function this thread has made to try grouping a loop
+/// on, for a test that a loop already in the form makes none.
 pub fn copies() -> usize {
     COPIES.with(std::cell::Cell::get)
 }
 
-/// Whether `loop_` has a block to group in `function`, whose graph and predecessors are given: its entries
-/// from outside are not one block that only enters it, it has more than one latch, or an exit is reached
-/// from outside the loop too. What the rest of `_simplified` finds on a copy, found without one.
+/// Whether `loop_` has a block to group in `function`, whose graph and
+/// predecessors are given: its entries from outside are not one block that only
+/// enters it, it has more than one latch, or an exit is reached from outside
+/// the loop too. What the rest of `_simplified` finds on a copy, found without
+/// one.
 fn _needs_grouping(
     function: &Function,
     graph: &[cfg::Block],
@@ -167,7 +169,8 @@ fn _simplified(
     let mut entered = loops::predecessors(&whole);
     for header in headers {
         let original = shape.loops.iter().find(|loop_| loop_.header == header).expect("StopIteration").clone();
-        // A loop that is already in the form has nothing to group: neither it nor the function is copied.
+        // A loop that is already in the form has nothing to group: neither it
+        // nor the function is copied.
         if !_needs_grouping(function, &whole, &entered, &original) {
             continue;
         }
