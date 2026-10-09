@@ -1804,9 +1804,9 @@ pub fn operand_at(
     unit: &Unit,
     operand: Operand,
     at: i64,
-    facts: &IndexMap<ValueId, Known>,
 ) -> Result<Option<Interval>, String> {
-    let Operand::Value(value) = operand else { return Ok(_operand(unit, operand, &Intervals::default(), facts)) };
+    let facts = unit.registers();
+    let Operand::Value(value) = operand else { return Ok(_operand(unit, operand, &Intervals::default(), &facts)) };
     let held = bounds(unit)?;
     // The manager's where the unit carries its edges (one block's, not a map of
     // them all), else worked out here.
@@ -1832,7 +1832,7 @@ pub fn operand_at(
             }
         }
     }
-    Ok(_operand(unit, operand, &known, facts))
+    Ok(_operand(unit, operand, &known, &facts))
 }
 
 /// The values that index accesses whose offset every wider sum names exactly.
