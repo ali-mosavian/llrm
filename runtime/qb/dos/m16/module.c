@@ -68,3 +68,13 @@ void md_set_cursor(ModuleData *data, const char *cursor)
 {
     data->data = (u16)cursor;
 }
+
+unsigned md_on_error(const ModuleData *data)
+{
+    return data->on_error;
+}
+
+void md_set_on_error(ModuleData *data, unsigned offset)
+{
+    data->on_error = (u16)offset;
+}

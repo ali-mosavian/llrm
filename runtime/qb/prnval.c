@@ -74,6 +74,24 @@ static void string(SD *sd, enum Terminator end)
     terminate(end);
 }
 
+/* B$FTAB: TAB(column) in a PRINT: spaces up to the 1-based column, on the next
+   line if the cursor is past it. */
+void B_FTAB(int column)
+{
+    int width = cn_width(), target, pos = cn_pos();
+
+    if (column < 1)
+        column = 1;
+    target = (column - 1) % width;
+    if (target < pos) {
+        cn_crlf();
+        pos = 0;
+    }
+    while (pos++ < target)
+        cn_putc(' ');
+}
+#pragma aux B_FTAB "B$FTAB"
+
 /* B$PEOS: the end of a PRINT that ended with a separator, and of an INPUT.  The
    console is written as each item is, so there is nothing to flush. */
 void B_PEOS(void)

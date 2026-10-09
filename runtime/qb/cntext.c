@@ -11,7 +11,11 @@ enum {
     MAX_FOREGROUND = 31,
     MAX_BACKGROUND = 15,       /* above 7 is the same colour */
     BLINK = 0x80,
+    BELL = 7,
     HOME = 11,
+    BEEP_HERTZ = 800,
+    BEEP_LENGTH = 25,        /* hundredths of a second */
+    DAY = 8640000L,
     CURSOR_RIGHT = 28,
     CURSOR_LEFT = 29,
     CURSOR_UP = 30,
@@ -67,6 +71,17 @@ static void text_clear(void)
     cursor_stale = 1;
 }
 
+/* The bell: a tone for a quarter of a second. */
+static void bell(void)
+{
+    long start = llrm_os_clock_hundredths();
+
+    llrm_os_speaker_tone(BEEP_HERTZ);
+    while ((llrm_os_clock_hundredths() - start + DAY) % DAY < BEEP_LENGTH)
+        ;
+    llrm_os_speaker_tone(0);
+}
+
 /* A control character of the console. */
 static void control(char c)
 {
@@ -105,8 +120,11 @@ static void control(char c)
         if (row < view_bottom)
             row++;
         break;
+    case BELL:
+        bell();
+        break;
     default:
-        break;                      /* the bell is silent here */
+        break;
     }
 }
 

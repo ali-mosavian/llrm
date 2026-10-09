@@ -161,8 +161,9 @@ static const char *decimal(const char *p, Parsed *out)
 #define parse_divisor big_w[1]
 #define parse_shifted big_w[2]
 
-/* floor(parse_numerator * 2^scale / parse_divisor), 63 or 64 bits, by long division; the
-   scale is chosen to make it so, and *inexact says if there was a remainder. */
+/* floor(parse_numerator * 2^scale / parse_divisor), 63 or 64 bits, by long
+   division; the scale is chosen to make it so, and *inexact says if there was a
+   remainder. */
 static unsigned long long divide_scaled(int *scale, int *inexact)
 {
     enum { QUOTIENT_BITS = 63 };
@@ -240,8 +241,8 @@ static double nearest_double(unsigned long long mantissa, int exponent)
         big_set(&parse_shifted, divide_scaled(&scale, &inexact));
         parse_numerator = parse_shifted;
     }
-    /* the value is parse_numerator * 2^-scale, and a little more if inexact; keep 53
-       bits of it, or fewer for a denormal */
+    /* the value is parse_numerator * 2^-scale, and a little more if inexact;
+       keep 53 bits of it, or fewer for a denormal */
     length = big_bits(&parse_numerator);
     lowest = -scale;
     cut = length > PRECISION ? (int)length - PRECISION : 0;
@@ -257,8 +258,8 @@ static double nearest_double(unsigned long long mantissa, int exponent)
         if (roundbit && (!lost_bits_zero || inexact || (kept & 1)))
             kept++;
     } else {
-        /* a short number is parse_shifted up to put its top bit at the hidden one, as
-           far as the lowest denormal allows */
+        /* a short number is parse_shifted up to put its top bit at the hidden
+           one, as far as the lowest denormal allows */
         int grow = PRECISION - (int)length;
 
         if (grow > lowest - LOWEST)

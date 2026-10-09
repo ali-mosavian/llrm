@@ -17,6 +17,10 @@ void module_name(char *name);
 /* Where the module's code is: the segment a far address is shown with. */
 unsigned module_code_segment(void);
 
+/* The ON ERROR handler's offset in the module's code, 0 for none. */
+unsigned md_on_error(const ModuleData *data);
+void md_set_on_error(ModuleData *data, unsigned offset);
+
 /* The first DATA line (MODULE_CODE.OF_DS). */
 const char *module_first_data(void);
 

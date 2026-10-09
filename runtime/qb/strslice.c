@@ -77,3 +77,44 @@ int B_SCMP(SD *first, SD *second)
 #pragma aux B_FMID "B$FMID"
 #pragma aux B_FCHR "B$FCHR"
 #pragma aux B_SCMP "B$SCMP"
+
+/* INSTR: where the match first is in the source from `start` (1 or more), 0 if
+   it is not.  An empty match is at `start` unless that is past the end; an
+   empty source has none. */
+static int instr(unsigned start, SD *source, SD *match)
+{
+    unsigned at, i;
+    int found = 0;
+
+    if (source->len != 0 && start <= source->len) {
+        found = start;
+        if (match->len != 0) {
+            found = 0;
+            for (at = start - 1; at + match->len <= source->len && !found;
+                 at++) {
+                for (i = 0; i < match->len
+                            && source->ptr[at + i] == match->ptr[i]; i++)
+                    ;
+                if (i == match->len)
+                    found = at + 1;
+            }
+        }
+    }
+    str_tmp_free(source);
+    str_tmp_free(match);
+    return found;
+}
+
+int B_INS2(SD *source, SD *match)
+{
+    return instr(1, source, match);
+}
+
+int B_INS3(int start, SD *source, SD *match)
+{
+    if (start <= 0)
+        qb_error(BE_ILLFUN);
+    return instr(start, source, match);
+}
+#pragma aux B_INS2 "B$INS2"
+#pragma aux B_INS3 "B$INS3"

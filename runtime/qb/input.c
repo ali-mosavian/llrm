@@ -136,4 +136,28 @@ void B_INPP(SD *prompt, const InputBlock QB_FAR *block)
     str_tmp_free(prompt);
     qb_input_line = line;
 }
+/* B$LNIN: LINE INPUT [prompt;] variable: the whole line, as typed, to a string
+   variable.  `fixed` is 0 for a dynamic string; `newline` is 0 when the
+   statement began with a semicolon. */
+void B_LNIN(SD *prompt, qb_data_ptr destination, int fixed, int newline)
+{
+    char *text;
+    SD *item;
+    unsigned length = 0;
+
+    (void)fixed;
+    if (prompt) {
+        cn_write(prompt->ptr, prompt->len);
+        str_tmp_free(prompt);
+    }
+    read_line();
+    if (newline)
+        cn_crlf();
+    while (line[length])
+        length++;
+    item = str_tmp(length, &text);
+    copy_bytes(text, line, length);
+    str_assign(item, QB_NEAR_OF(destination));
+}
 #pragma aux B_INPP "B$INPP"
+#pragma aux B_LNIN "B$LNIN"
