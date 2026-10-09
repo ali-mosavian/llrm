@@ -524,7 +524,7 @@ pub fn hoisted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSet
         }
         for at in &entries {
             let block = &blocks[index[at]];
-            let mut insns = block.insns.clone();
+            let mut insns = block.insns.to_vec();
             let jumps = insns.last().and_then(|last| last.what.as_ref()).is_some_and(|what| what.op == Operation::Jump);
             for load in first.values() {
                 insns.insert(insns.len() - usize::from(jumps), Arc::clone(load));
@@ -691,7 +691,7 @@ pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSe
         }
         for at in &entries {
             let block = &blocks[index[at]];
-            let mut insns = block.insns.clone();
+            let mut insns = block.insns.to_vec();
             let jumps = insns.last().and_then(|last| last.what.as_ref()).is_some_and(|what| what.op == Operation::Jump);
             let mut place = insns.len() - usize::from(jumps);
             let near = insns.get(place.saturating_sub(1)).map_or(*at, |insn| insn.at);
@@ -714,7 +714,7 @@ pub fn promoted(m: u32, available: &[Register], body: &LirBody, spills: &BTreeSe
         }
         for to in &exits {
             let block = &blocks[index[to]];
-            let mut insns = block.insns.clone();
+            let mut insns = block.insns.to_vec();
             let near = insns.first().map_or(*to, |insn| insn.at);
             let mut place = 0;
             if with_bp {

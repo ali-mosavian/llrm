@@ -149,7 +149,7 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
 
 /// `movzx root,word` for each root in `roots`, before `block`'s terminator.
 pub fn extended(block: &LirBlock, roots: Roots) -> LirBlock {
-    let mut insns = block.insns.clone();
+    let mut insns = block.insns.to_vec();
     let at = insns.last().map_or(block.at, |one| one.at);
     let position = if insns.last().is_some_and(|one| liveness::_terminator(one.what.as_ref())) { insns.len() - 1 } else { insns.len() };
     for (index, root) in ROOTS.iter().enumerate() {
@@ -282,8 +282,8 @@ pub fn established(body: &LirBody) -> LirBody {
                 None => block.clone(),
                 Some((position, roots)) => {
                     let at = block.insns.iter().position(|one| id(one) == *position).expect("the cell");
-                    let mut insns = block.insns.clone();
-                    let zeroed = extended(&LirBlock::new(block.at, Vec::new()), *roots).insns;
+                    let mut insns = block.insns.to_vec();
+                    let zeroed = extended(&LirBlock::new(block.at, Vec::new()), *roots).insns.to_vec();
                     let when = insns[at].at;
                     insns.splice(at..at, zeroed.into_iter().map(|one| Arc::new(Insn { at: when, ..(*one).clone() })));
                     block.with_insns(insns)

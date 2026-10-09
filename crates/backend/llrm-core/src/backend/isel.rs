@@ -2742,7 +2742,7 @@ impl Selector<'_, '_, '_> {
         if self.promoted.is_empty() {
             return Ok(blocks);
         }
-        let by_at: IndexMap<i64, Vec<Arc<Insn>>> = blocks.iter().map(|block| (block.at, block.insns.clone())).collect();
+        let by_at: IndexMap<i64, Vec<Arc<Insn>>> = blocks.iter().map(|block| (block.at, block.insns.to_vec())).collect();
         assert_eq!(by_at.len(), blocks.len(), "a block per address");
         let mut next = self.next;
         let mut fresh = || {

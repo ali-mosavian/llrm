@@ -447,11 +447,77 @@ impl Repr for Phi {
 #[derive(Debug, Eq, PartialEq)]
 pub struct LirBlock {
     pub at: i64,
-    pub insns: Vec<Arc<Insn>>,
+    pub insns: Insns,
     pub succ: Vec<i64>,
     pub phis: Vec<Phi>,
     /// Laid out after the hot code: every path from it ends in `unreachable`, isel finds.
     pub cold: bool,
+}
+
+/// A block's instructions, shared: a copy of the block is the same instructions, and two blocks are the same instructions when
+/// they are the same allocation (`same_as`), which is how the facts of a block are kept for every body that has it.
+#[derive(Clone, Debug, Default)]
+pub struct Insns(Arc<[Arc<Insn>]>);
+
+impl Insns {
+    /// `change` made to a copy of the instructions, which then are these: the way a test or a one-off edit changes a block.
+    pub fn edit<R>(&mut self, change: impl FnOnce(&mut Vec<Arc<Insn>>) -> R) -> R {
+        let mut insns = self.0.to_vec();
+        let out = change(&mut insns);
+        *self = insns.into();
+        out
+    }
+
+    pub fn same_as(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::ops::Deref for Insns {
+    type Target = [Arc<Insn>];
+    fn deref(&self) -> &[Arc<Insn>] {
+        &self.0
+    }
+}
+
+impl From<Vec<Arc<Insn>>> for Insns {
+    fn from(insns: Vec<Arc<Insn>>) -> Self {
+        Self(insns.into())
+    }
+}
+
+impl PartialEq for Insns {
+    fn eq(&self, other: &Self) -> bool {
+        self.same_as(other) || *self.0 == *other.0
+    }
+}
+
+impl Eq for Insns {}
+
+impl PartialEq<Vec<Arc<Insn>>> for Insns {
+    fn eq(&self, other: &Vec<Arc<Insn>>) -> bool {
+        *self.0 == **other
+    }
+}
+
+impl<const N: usize> PartialEq<[Arc<Insn>; N]> for Insns {
+    fn eq(&self, other: &[Arc<Insn>; N]) -> bool {
+        *self.0 == *other
+    }
+}
+
+impl FromIterator<Arc<Insn>> for Insns {
+    fn from_iter<I: IntoIterator<Item = Arc<Insn>>>(insns: I) -> Self {
+        Self(insns.into_iter().collect())
+    }
+}
+
+impl<'a> IntoIterator for &'a Insns {
+    type Item = &'a Arc<Insn>;
+    type IntoIter = std::slice::Iter<'a, Arc<Insn>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
 }
 
 #[cfg(test)]
@@ -473,7 +539,7 @@ impl LirBlock {
     pub fn new(at: i64, insns: Vec<Arc<Insn>>) -> Self {
         Self {
             at,
-            insns,
+            insns: insns.into(),
             succ: Vec::new(),
             phis: Vec::new(),
             cold: false,
@@ -483,7 +549,7 @@ impl LirBlock {
     /// Python's `replace(block, insns=insns)`: the old insns are never copied.
     #[must_use]
     pub fn with_insns(&self, insns: Vec<Arc<Insn>>) -> Self {
-        Self { at: self.at, insns, succ: self.succ.clone(), phis: self.phis.clone(), cold: self.cold }
+        Self { at: self.at, insns: insns.into(), succ: self.succ.clone(), phis: self.phis.clone(), cold: self.cold }
     }
 
     /// Python `LirBlock.arrives`.
@@ -908,6 +974,19 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    /// A copy of a body copied every block's instruction list (a block clone was 2.5% of compiling d_faces), and no block could say it
+    /// was the one a fact had been made of. A copy shares them; a rewritten block is the only one that is not the same.
+    #[test]
+    fn test_a_copy_of_a_body_shares_its_blocks_instructions_and_a_rewrite_shares_the_rest() {
+        let one = Arc::new(Insn::new(1, None, None, Vec::new(), Vec::new()));
+        let body = super::LirBody::new("f", 1, vec![super::LirBlock::new(1, vec![Arc::clone(&one)]), super::LirBlock::new(2, vec![one])], Default::default(), Default::default());
+        let copy = body.clone();
+        assert!(body.blocks.iter().zip(&copy.blocks).all(|(a, b)| a.insns.same_as(&b.insns)), "a copy made its own instruction lists");
+        let rewritten = body.with_blocks(vec![body.blocks[0].with_insns(Vec::new()), body.blocks[1].clone()]);
+        assert!(!rewritten.blocks[0].insns.same_as(&body.blocks[0].insns) && rewritten.blocks[1].insns.same_as(&body.blocks[1].insns));
+        assert!(body.blocks[0].insns == body.blocks[0].insns.to_vec(), "same instructions compare equal as lists");
+    }
     use std::sync::Arc;
 
     use super::{Insn, anchor, without};

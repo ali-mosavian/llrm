@@ -87,7 +87,7 @@ pub fn materialized(body: &LirBody, frame: &mut Frame) -> Result<LirBody, frames
                 _ => insns.push(Arc::clone(one)),
             }
         }
-        block.insns = insns;
+        block.insns = insns.into();
     }
     Ok(out)
 }
