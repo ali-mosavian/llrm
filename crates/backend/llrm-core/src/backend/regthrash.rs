@@ -20,6 +20,7 @@ use iced_x86::Register;
 use crate::backend::liveness;
 use crate::backend::peephole::{DeadAfter, Lanes, _lanes, _register_effects, _register_operand, id};
 use crate::backend::select;
+use crate::support::hash::IndexMap;
 use crate::model::ir::{Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
@@ -31,9 +32,16 @@ pub const ROUNDS: usize = 8;
 
 pub fn thrashed(body: LirBody) -> LirBody {
     let mut body = body;
+    // A rename leaves its block's live-in as it was, so what is dead at every block's exit is the same after each round: asked
+    // once, not once a round (the rounds grow with a function until ROUNDS, and each asked the whole body: a straight run of
+    // 1600 statements spent 250 Minstr of 340 here).
+    let exits = liveness::dead_at_exit(&body);
     for _round in 0..ROUNDS {
+        if std::env::var_os("LLRM_CHECK_THRASH").is_some() {
+            assert!(liveness::dead_at_exit(&body) == exits, "{}: a rename changed what is dead at a block's exit", body.name);
+        }
         // `after is body`: `_once` answers None where it returned `body` itself.
-        match _once(&body) {
+        match _once(&body, &exits) {
             None => return body,
             Some(after) => body = after,
         }
@@ -45,8 +53,7 @@ pub fn thrashed(body: LirBody) -> LirBody {
 ///
 /// A rename leaves its block's live-in as it was, so every block is judged
 /// against the same exit liveness.
-fn _once(body: &LirBody) -> Option<LirBody> {
-    let exits = liveness::dead_at_exit(body);
+fn _once(body: &LirBody, exits: &IndexMap<i64, Lanes>) -> Option<LirBody> {
     let mut blocks = body.blocks.clone();
     let mut changed = false;
     for block in &mut blocks {
@@ -64,7 +71,7 @@ pub fn _dead_after(bits: u32, block: &LirBlock, dead: Lanes) -> DeadAfter {
     let mut out = DeadAfter::default();
     for one in block.insns.iter().rev() {
         out.insert(id(one), dead);
-        dead = liveness::effect(bits, one).map_or_else(Lanes::new, |effect| effect.dead_before(&dead));
+        dead = liveness::effect_held(bits, one).map_or_else(Lanes::new, |effect| effect.dead_before(&dead));
     }
     out
 }
@@ -446,5 +453,21 @@ mod tests {
         assert!(verify::verify(&result, false).is_empty());
         let anchor = result.blocks[0].insns.iter().find(|one| one.defines == [2]).unwrap();
         assert!(anchor.what.as_ref().unwrap().op == Operation::Nothing && anchor.uses == [1]);
+    }
+
+    /// The rename of a copy asks what is dead after each instruction of its block every round, and each ask worked out the
+    /// instruction's effect again: a straight run of 1600 statements spent 250 Minstr of 340 in the rounds, and the cost of a
+    /// body grew faster than its size while the rounds did. An instruction's effect is worked out once however often it is asked.
+    #[test]
+    fn test_what_is_dead_after_an_instruction_is_asked_of_its_effect_once() {
+        let insns: Vec<Insn> = (0..40).map(|at| _insn(at, "mov", Operation::Move, vec![_reg(Register::EAX)], vec![Loc::Imm(Imm { value: at, width: 4, address: None })])).collect();
+        let body = _body(insns, Register::EAX);
+        let block = &body.blocks[0];
+        let before = crate::backend::liveness::effects_worked_out();
+        for _ask in 0..3 {
+            super::_dead_after(body.bits, block, Default::default());
+        }
+        let worked = crate::backend::liveness::effects_worked_out() - before;
+        assert!(worked <= block.insns.len(), "{worked} effects worked out for {} instructions asked of 3 times", block.insns.len());
     }
 }
