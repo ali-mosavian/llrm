@@ -760,15 +760,92 @@ fn _callbacks(
     unit: &Unit,
     known: &IndexMap<String, Summary>,
 ) -> Option<Summary> {
-    let mut out = Summary::default();
-    for name in unit.globals_aa?.entries() {
-        let one = known.get(name)?.instantiated(&[]);
-        out.reads.extend(one.reads);
-        out.writes.extend(one.writes);
-        out.unknown_read |= one.unknown_read;
-        out.unknown_write |= one.unknown_write;
+    callbacks_over(unit.globals_aa?, known)
+}
+
+/// `_callbacks` of GlobalsAA's `globals` and the summaries `known`: all that
+/// the answer depends on, so the module holds it once for every body that asks
+/// (`manager::Callbacks`).
+pub fn callbacks_over(
+    globals: &globalsaa::Globals,
+    known: &IndexMap<String, Summary>,
+) -> Option<Summary> {
+    CalledBack::of(globals, known)?.summary()
+}
+
+thread_local! {
+    static CALLBACK_ENTRIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many entries' summaries this thread has instantiated for callbacks, for
+/// a test that the work does not grow with the entries times the bodies.
+pub fn callback_entries() -> usize {
+    CALLBACK_ENTRIES.with(std::cell::Cell::get)
+}
+
+/// The callbacks as the entries' summaries add up, kept apart so that an entry
+/// whose summary changed is folded in alone: every change used to add the
+/// whole of them up again, entries times changes.
+struct CalledBack {
+    parts: IndexMap<String, Summary>,
+    out: Summary,
+}
+
+impl CalledBack {
+    fn of(
+        globals: &globalsaa::Globals,
+        known: &IndexMap<String, Summary>,
+    ) -> Option<Self> {
+        let mut parts = IndexMap::default();
+        for name in globals.entries() {
+            CALLBACK_ENTRIES.with(|entries| entries.set(entries.get() + 1));
+            parts.insert(name.clone(), known.get(name)?.instantiated(&[]));
+        }
+        let mut this = Self { parts, out: Summary::default() };
+        this.add_up();
+        Some(this)
     }
-    Some(Summary { reads: _coalesced(&out.reads), writes: _coalesced(&out.writes), ..out })
+
+    fn add_up(&mut self) {
+        let mut out = Summary::default();
+        for one in self.parts.values() {
+            out.reads.extend(one.reads.iter().cloned());
+            out.writes.extend(one.writes.iter().cloned());
+            out.unknown_read |= one.unknown_read;
+            out.unknown_write |= one.unknown_write;
+        }
+        self.out = out;
+    }
+
+    fn summary(&self) -> Option<Summary> {
+        Some(Summary { reads: _coalesced(&self.out.reads), writes: _coalesced(&self.out.writes), ..self.out.clone() })
+    }
+
+    /// Entry `name` is now `summary`: added in when it only grew, else all
+    /// added up again.
+    fn changed(
+        &mut self,
+        name: &str,
+        summary: &Summary,
+    ) {
+        CALLBACK_ENTRIES.with(|entries| entries.set(entries.get() + 1));
+        let now = summary.instantiated(&[]);
+        let Some(then) = self.parts.get_mut(name) else { return };
+        let grew = then.reads.is_subset(&now.reads)
+            && then.writes.is_subset(&now.writes)
+            && (!then.unknown_read || now.unknown_read)
+            && (!then.unknown_write || now.unknown_write);
+        *then = now;
+        if grew {
+            let then = &self.parts[name];
+            self.out.reads.extend(then.reads.iter().cloned());
+            self.out.writes.extend(then.writes.iter().cloned());
+            self.out.unknown_read |= then.unknown_read;
+            self.out.unknown_write |= then.unknown_write;
+        } else {
+            self.add_up();
+        }
+    }
 }
 
 fn _actuals(
@@ -1101,9 +1178,12 @@ pub fn summaries_updating(
             }
         }
     }
-    let called_back =
-        |result: &IndexMap<String, Summary>| procedures.values().next().and_then(|one| _callbacks(&one.unit, result));
-    let mut callbacks = called_back(&result);
+    let mut called_back = procedures
+        .values()
+        .next()
+        .and_then(|one| one.unit.globals_aa)
+        .and_then(|globals| CalledBack::of(globals, &result));
+    let mut callbacks = called_back.as_ref().and_then(CalledBack::summary);
     // What each body's points-to facts were found from: they change only with
     // the callees' captures, not with the effects a revisit is for. A visit
     // of an earlier run says what its calls to something unknown did
@@ -1143,7 +1223,23 @@ pub fn summaries_updating(
             result.insert(name.clone(), made);
             let mut woken: Vec<usize> = readers[at].iter().copied().collect();
             if entries.contains(&at) {
-                let now = llrm_support::debug::timed("summaries callbacks", || called_back(&result));
+                let now = llrm_support::debug::timed("summaries callbacks", || {
+                    match called_back.as_mut() {
+                        Some(held) => held.changed(name, &result[name]),
+                        None => {
+                            called_back = procedures
+                                .values()
+                                .next()
+                                .and_then(|one| one.unit.globals_aa)
+                                .and_then(|globals| CalledBack::of(globals, &result));
+                        }
+                    }
+                    called_back.as_ref().and_then(CalledBack::summary)
+                });
+                if llrm_support::env_set("LLRM_CHECK_CALLBACKS") {
+                    let fresh = procedures.values().next().and_then(|one| _callbacks(&one.unit, &result));
+                    assert!(now == fresh, "the callbacks folded in are not what adding the entries up again gives");
+                }
                 if now != callbacks {
                     callbacks = now;
                     version += 1;
@@ -1338,7 +1434,22 @@ pub fn calls_annotated(
     let captures =
         procedure.calls.keys().map(|at| (*at, callee(at).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
     let facts = points_to(&procedure.unit, Some(&procedure.arguments), Some(&captures))?;
-    let callbacks = _callbacks(&procedure.unit, known);
+    let computed;
+    let callbacks = match procedure.unit.callbacks {
+        Some(held) => {
+            if llrm_support::env_set("LLRM_CHECK_CALLBACKS") {
+                assert!(
+                    *held == _callbacks(&procedure.unit, known),
+                    "the held callbacks are not what adding the entries up gives"
+                );
+            }
+            held.as_ref()
+        }
+        None => {
+            computed = _callbacks(&procedure.unit, known);
+            computed.as_ref()
+        }
+    };
 
     let reference = |one: &Slice| {
         MemRef::reach(
@@ -1366,7 +1477,7 @@ pub fn calls_annotated(
                 effect
             }
             None => {
-                let (reads, writes) = _unknown_visible(procedure, &facts, at, &actual, callbacks.as_ref())?;
+                let (reads, writes) = _unknown_visible(procedure, &facts, at, &actual, callbacks)?;
                 Summary { reads, writes, ..Summary::default() }
             }
         };
