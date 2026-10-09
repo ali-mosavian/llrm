@@ -103,23 +103,17 @@ pub fn folded(body: &LirBody) -> LirBody {
     if changed { body.with_blocks(blocks) } else { body.clone() }
 }
 
-/// The memory form of `name` reading `load`'s cell: `fadd qword ptr [m]`, `fsubr dword ptr [m]`, `fiadd word ptr [m]`; none where x87 has
-/// none for the cell's width (a float or double, a 16- or 32-bit integer). Where the cell is the left operand, the operation reversed.
+/// The memory form of `name` reading `load`'s cell: `fadd qword ptr [m]`, `fsubr dword ptr [m]`; none for an integer or a cell that is not
+/// a float or double. Where the cell is the left operand, the operation reversed.
 fn memory_form(name: &str, cell_is_left: bool, load: &Insn) -> Option<String> {
     let reversed = |name: &str| -> String { match name {
         "fsub" => "fsubr".to_owned(),
         "fdiv" => "fdivr".to_owned(),
         other => other.to_owned(),
     } };
-    let mut name = if cell_is_left { reversed(name) } else { name.to_owned() };
-    let integer = name_is(load.what.as_ref()?, "fild");
-    let width = cell_of(load).width;
-    if integer {
-        if !matches!(width, 2 | 4) {
-            return None;
-        }
-        name = format!("fi{}", &name[1..]);
-    } else if !matches!(width, 4 | 8) {
+    let name = if cell_is_left { reversed(name) } else { name.to_owned() };
+    // An integer load stays: `fild` then `fadd` is faster than `fiadd` on the 486, and the other operand may take the memory form instead.
+    if name_is(load.what.as_ref()?, "fild") || !matches!(cell_of(load).width, 4 | 8) {
         return None;
     }
     Some(name)

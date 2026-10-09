@@ -1,4 +1,4 @@
-reason = "a route that ties or has no byte price is decided by the other measure; lea of a register and its scaled copy is priced: mandel nib -Os instructions -1.3%, code -2 bytes"
+reason = "x87: a float load one arithmetic instruction reads is its memory operand (nbody c -8%/-12.5% Os, fpbench -1.2%, parity/qbsp -6.8%, nbody_single nib -5.3%)"
 blessed = "2026-10-09"
 
 [bas.O2]
