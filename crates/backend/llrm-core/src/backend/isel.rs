@@ -62,8 +62,6 @@ pub(crate) fn _read(what: &ir::Semantics) -> Vec<u32> {
     out
 }
 
-#[cfg(test)]
-mod generator;
 mod matcher;
 mod unwind;
 

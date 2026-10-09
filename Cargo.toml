@@ -48,6 +48,7 @@ llrm-analysis = { path = "crates/opt/llrm-analysis" }
 llrm-transforms = { path = "crates/opt/llrm-transforms" }
 llrm-core = { path = "crates/backend/llrm-core" }
 llrm-driver = { path = "crates/backend/llrm-driver" }
+llrm-iselgen = { path = "crates/backend/llrm-iselgen" }
 llrm-peepgen = { path = "crates/backend/llrm-peepgen" }
 llrm-nib = { path = "crates/frontends/llrm-nib" }
 llrm-qb = { path = "crates/frontends/llrm-qb" }
