@@ -59,6 +59,25 @@ impl Holders {
         Self { cells, buckets }
     }
 
+    /// The first cell held, in the order they are held, that names `cell`'s bytes and whose holder `serves`: what a scan of every cell
+    /// finds, asked only of the cells a write to `cell` can reach (a cell naming the same bytes is one).
+    fn naming(&self, unit: &Unit, cell: &MemRef, serves: impl Fn(&Operand) -> bool) -> Option<(&MemRef, &Operand)> {
+        let reached = overlap_buckets(cell, &self.cells.parts);
+        let displaced = displaced_buckets(cell, &self.cells.parts);
+        let found = self
+            .cells
+            .asked(reached, displaced)
+            .into_iter()
+            .filter(|one| same_bytes(unit, one, cell) && self.get(*one).is_some_and(&serves))
+            .min_by_key(|one| self.get_index_of(*one))
+            .and_then(|one| self.get_key_value(one));
+        if std::env::var_os("LLRM_CHECK_HOLDERS").is_some() {
+            let whole = self.iter().find(|(one, who)| same_bytes(unit, one, cell) && serves(who));
+            assert!(found == whole, "the cell naming these bytes, found through the index, is not the one a scan of every cell finds");
+        }
+        found
+    }
+
     fn insert(&mut self, cell: MemRef, value: Operand) {
         let buckets = Rc::clone(&self.buckets);
         self.cells.insert(cell, value, |cell| (overlap_bucket(&mut buckets.borrow_mut(), cell), overlap_span(cell)));
@@ -238,7 +257,7 @@ pub fn provider(unit: &Unit, accesses: &Accesses, at: InstId, reference: &MemRef
     let mut current = found.into[&cfg::id(block)].clone();
     for &inst in unit.function.block(block).instructions() {
         if inst == at {
-            return current.iter().find(|(one, _)| same_bytes(unit, one, reference)).map(|(_, who)| *who);
+            return current.naming(unit, reference, |_| true).map(|(_, who)| *who);
         }
         current = after(unit, accesses, inst, current, Some(&found.known));
     }
@@ -513,7 +532,7 @@ pub fn forwardable_by(unit: &Unit, accesses: &Accesses, want: &BTreeSet<InstId>,
             if want.contains(&inst)
                 && let Some((cell, result)) = loaded_into(unit, accesses, inst)
             {
-                match current.iter().find(|(one, who)| same_bytes(unit, one, &cell) && serves(unit, **who, result)) {
+                match current.naming(unit, &cell, |who| serves(unit, *who, result)) {
                     Some((_, who)) => found.push(Forward { at: inst, value: *who }),
                     None => missing.push(inst),
                 }
