@@ -28,8 +28,17 @@ fn split_all(body: &str) -> (Module, bool) {
     (module, changed)
 }
 
-fn count(module: &Module, is: impl Fn(&Opcode) -> bool) -> usize {
-    module.functions().flat_map(|(_, _, function)| function.walk().map(|(_, inst)| function.instruction(inst).opcode.clone()).collect::<Vec<_>>()).filter(|one| is(one)).count()
+fn count(
+    module: &Module,
+    is: impl Fn(&Opcode) -> bool,
+) -> usize {
+    module
+        .functions()
+        .flat_map(|(_, _, function)| {
+            function.walk().map(|(_, inst)| function.instruction(inst).opcode.clone()).collect::<Vec<_>>()
+        })
+        .filter(|one| is(one))
+        .count()
 }
 
 fn copies(module: &Module) -> usize {
@@ -126,7 +135,8 @@ fn stays(body: &str) {
 /// A volatile copy is an access in its own right: it is not the loads and stores of leaves.
 #[test]
 fn test_a_volatile_memcpy_stays_whole() {
-    stays("define i16 @f(i16 %x) {
+    stays(
+        "define i16 @f(i16 %x) {
   %from = alloca [8 x i8]
   %to = alloca [8 x i8]
   store i16 %x, ptr %from
@@ -134,13 +144,15 @@ fn test_a_volatile_memcpy_stays_whole() {
   %v = load i16, ptr %to
   ret i16 %v
 }
-");
+",
+    );
 }
 
 /// The leaves are the destination's bytes; a length not known has none.
 #[test]
 fn test_a_memcpy_of_a_length_not_constant_stays_whole() {
-    stays("define i16 @f(i16 %x, i16 %n) {
+    stays(
+        "define i16 @f(i16 %x, i16 %n) {
   %from = alloca [8 x i8]
   %to = alloca [8 x i8]
   store i16 %x, ptr %from
@@ -148,14 +160,16 @@ fn test_a_memcpy_of_a_length_not_constant_stays_whole() {
   %v = load i16, ptr %to
   ret i16 %v
 }
-");
+",
+    );
 }
 
 /// A copy within one object overlaps itself: loads of the destination are
 /// loads of the source's bytes too.
 #[test]
 fn test_a_memcpy_within_one_local_stays_whole() {
-    stays("define i16 @f(i16 %x) {
+    stays(
+        "define i16 @f(i16 %x) {
   %a = alloca [8 x i8]
   store i16 %x, ptr %a
   %q = getelementptr i8, ptr %a, i16 2
@@ -163,13 +177,15 @@ fn test_a_memcpy_within_one_local_stays_whole() {
   %v = load i16, ptr %q
   ret i16 %v
 }
-");
+",
+    );
 }
 
 /// A destination whose address is stored is reachable by whoever loads it.
 #[test]
 fn test_a_memcpy_into_a_captured_local_stays_whole() {
-    stays("@slot = global ptr null
+    stays(
+        "@slot = global ptr null
 define i16 @f(i16 %x) {
   %from = alloca [8 x i8]
   %to = alloca [8 x i8]
@@ -179,5 +195,6 @@ define i16 @f(i16 %x) {
   %v = load i16, ptr %to
   ret i16 %v
 }
-");
+",
+    );
 }

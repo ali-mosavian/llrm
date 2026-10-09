@@ -1,12 +1,10 @@
-use buildprs::buildprs_encoder::{BranchTarget, EncodeConfig, StateDecoder, StateEntry};
 use std::collections::BTreeSet;
 
-use crate::syntax::{
-    Declaration, Expr, Parameter, Procedure, ProcedureKind, Span, Statement, TypeName,
-};
+use buildprs::buildprs_encoder::{BranchTarget, EncodeConfig, StateDecoder, StateEntry};
 
 use super::lexer::{Token, TokenKind};
 use super::tables;
+use crate::syntax::{Declaration, Expr, Parameter, Procedure, ProcedureKind, Span, Statement, TypeName};
 
 const ND_BRANCH: usize = 4;
 const ENCODE1BYTE: u8 = 224;
@@ -28,11 +26,17 @@ impl AstSink {
         self.actions.len()
     }
 
-    fn rollback(&mut self, checkpoint: usize) {
+    fn rollback(
+        &mut self,
+        checkpoint: usize,
+    ) {
         self.actions.truncate(checkpoint);
     }
 
-    fn invoke(&mut self, action: tables::AstAction) {
+    fn invoke(
+        &mut self,
+        action: tables::AstAction,
+    ) {
         self.actions.push(action);
     }
 }
@@ -149,20 +153,21 @@ impl ParseState {
         }
     }
 
-    pub fn rollback(&mut self, checkpoint: Checkpoint) {
+    pub fn rollback(
+        &mut self,
+        checkpoint: Checkpoint,
+    ) {
         self.at = checkpoint.at;
         self.sink.rollback(checkpoint.sink);
         self.expressions.truncate(checkpoint.expressions);
         self.statements.truncate(checkpoint.statements);
         self.declarations.truncate(checkpoint.declarations);
         self.labels.truncate(checkpoint.labels);
-        self.procedure_references
-            .truncate(checkpoint.procedure_references);
+        self.procedure_references.truncate(checkpoint.procedure_references);
         self.type_names.truncate(checkpoint.type_names);
         self.literal_values.truncate(checkpoint.literal_values);
         self.parameters.truncate(checkpoint.parameters);
-        self.procedure_headers
-            .truncate(checkpoint.procedure_headers);
+        self.procedure_headers.truncate(checkpoint.procedure_headers);
         self.procedures.truncate(checkpoint.procedures);
         self.open_procedure = checkpoint.open_procedure;
         self.dynamic_arrays = checkpoint.dynamic_arrays;
@@ -181,7 +186,10 @@ impl ParseState {
         }
     }
 
-    pub fn consume_id(&mut self, id: u16) -> bool {
+    pub fn consume_id(
+        &mut self,
+        id: u16,
+    ) -> bool {
         if self.token_id() == Some(id) {
             self.at += 1;
             true
@@ -190,14 +198,17 @@ impl ParseState {
         }
     }
 
-    fn mark(&mut self, slot: u8) {
-        self.sink.invoke(tables::AstAction::Mark {
-            slot,
-            token: self.at,
-        });
+    fn mark(
+        &mut self,
+        slot: u8,
+    ) {
+        self.sink.invoke(tables::AstAction::Mark { slot, token: self.at });
     }
 
-    fn emit(&mut self, word: u16) {
+    fn emit(
+        &mut self,
+        word: u16,
+    ) {
         for action in tables::emit_actions(word).into_iter().flatten() {
             if matches!(
                 action,
@@ -240,7 +251,11 @@ impl ParserEngine {
         self.ext_base() + self.external.len()
     }
 
-    pub fn parse(&self, state: &mut ParseState, offset: usize) -> ParseResult {
+    pub fn parse(
+        &self,
+        state: &mut ParseState,
+        offset: usize,
+    ) -> ParseResult {
         let parse_entry = state.checkpoint();
         let config = EncodeConfig::new(self.encode1byte);
         let mut decoder = StateDecoder::with_config_at(self.state, config, offset);
@@ -274,20 +289,21 @@ impl ParserEngine {
                         let index = id - self.ext_base();
                         self.external
                             .get(index)
-                            .map_or(ParseResult::NotFound, |name| {
-                                let Some(action) = tables::external_action(name) else {
-                                    state.unsupported_external.insert(name);
-                                    return ParseResult::NotFound;
-                                };
-                                super::ast::external_action(action, self, state)
-                            })
+                            .map_or(
+                                ParseResult::NotFound,
+                                |name| {
+                                    let Some(action) = tables::external_action(name) else {
+                                        state.unsupported_external.insert(name);
+                                        return ParseResult::NotFound;
+                                    };
+                                    super::ast::external_action(action, self, state)
+                                },
+                            )
                     } else if id >= self.int_base() {
                         let index = id - self.int_base();
                         self.internal
                             .get(index)
-                            .map_or(ParseResult::NotFound, |next| {
-                                self.parse(state, usize::from(*next))
-                            })
+                            .map_or(ParseResult::NotFound, |next| self.parse(state, usize::from(*next)))
                     } else {
                         ParseResult::NotFound
                     };
@@ -307,7 +323,10 @@ impl ParserEngine {
     }
 }
 
-fn reject(state: &mut ParseState, entry: Checkpoint) -> ParseResult {
+fn reject(
+    state: &mut ParseState,
+    entry: Checkpoint,
+) -> ParseResult {
     if state.at == entry.at {
         state.rollback(entry);
         ParseResult::NotFound
@@ -318,8 +337,9 @@ fn reject(state: &mut ParseState, entry: Checkpoint) -> ParseResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use buildprs::buildprs_encoder::StateEncoder;
+
+    use super::*;
 
     #[test]
     fn generated_tables_retain_the_recovered_qbasic_dimensions() {
@@ -327,14 +347,8 @@ mod tests {
         assert_eq!(tables::T_INT_NT_DISP.len(), 29);
         assert_eq!(tables::T_EXT_NT_DISP.len(), 49);
         assert_eq!(tables::TOKENS.len(), 246);
-        assert_eq!(
-            tables::emit_actions(0),
-            [Some(tables::AstAction::Unsupported("opBol")), None]
-        );
-        assert_eq!(
-            tables::emit_actions(u16::MAX),
-            [Some(tables::AstAction::OperandPlaceholder), None]
-        );
+        assert_eq!(tables::emit_actions(0), [Some(tables::AstAction::Unsupported("opBol")), None]);
+        assert_eq!(tables::emit_actions(u16::MAX), [Some(tables::AstAction::OperandPlaceholder), None]);
     }
 
     #[test]
@@ -344,30 +358,16 @@ mod tests {
         encoded.emit(0);
         encoded
             .node(
-                u16::try_from(ND_BRANCH + 1 + usize::from(tables::token_id("tkLET").unwrap()))
-                    .unwrap(),
+                u16::try_from(ND_BRANCH + 1 + usize::from(tables::token_id("tkLET").unwrap())).unwrap(),
                 BranchTarget::Accept,
             )
             .unwrap();
         encoded.reject();
         let bytes = Box::leak(encoded.into_bytes().into_boxed_slice());
-        let engine = ParserEngine {
-            state: bytes,
-            internal: &[],
-            external: &[],
-            encode1byte: ENCODE1BYTE,
-        };
-        let tokens =
-            crate::generated_parser::lex("", crate::dialect::Dialect::QuickBasic45).unwrap();
+        let engine = ParserEngine { state: bytes, internal: &[], external: &[], encode1byte: ENCODE1BYTE };
+        let tokens = crate::generated_parser::lex("", crate::dialect::Dialect::QuickBasic45).unwrap();
         let mut state = ParseState::new(tokens);
-        state.expressions.push(Expr::Name(
-            "SENTINEL".into(),
-            crate::syntax::Span {
-                line: 1,
-                start: 0,
-                end: 0,
-            },
-        ));
+        state.expressions.push(Expr::Name("SENTINEL".into(), crate::syntax::Span { line: 1, start: 0, end: 0 }));
 
         assert_eq!(engine.parse(&mut state, 0), ParseResult::NotFound);
         assert!(state.sink.actions.is_empty());
@@ -382,24 +382,12 @@ mod tests {
         encoded.emit(u16::MAX);
         encoded.accept();
         let bytes = Box::leak(encoded.into_bytes().into_boxed_slice());
-        let engine = ParserEngine {
-            state: bytes,
-            internal: &[],
-            external: &[],
-            encode1byte: ENCODE1BYTE,
-        };
-        let tokens =
-            crate::generated_parser::lex("", crate::dialect::Dialect::QuickBasic45).unwrap();
+        let engine = ParserEngine { state: bytes, internal: &[], external: &[], encode1byte: ENCODE1BYTE };
+        let tokens = crate::generated_parser::lex("", crate::dialect::Dialect::QuickBasic45).unwrap();
         let mut state = ParseState::new(tokens);
 
         assert_eq!(engine.parse(&mut state, 0), ParseResult::GoodSyntax);
-        assert_eq!(
-            state.sink.actions,
-            vec![tables::AstAction::Mark {
-                slot: u8::MAX,
-                token: 0
-            }]
-        );
+        assert_eq!(state.sink.actions, vec![tables::AstAction::Mark { slot: u8::MAX, token: 0 }]);
     }
 
     #[test]

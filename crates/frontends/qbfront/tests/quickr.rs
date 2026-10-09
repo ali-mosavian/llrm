@@ -1,14 +1,12 @@
 //! QuickrBASIC's use-before-definition warning.
 
-use qbfront::semantic::{compile_with_warnings, Options};
 use qbfront::generated_parser::{lex, TokenKind};
+use qbfront::semantic::{compile_with_warnings, Options};
 use qbfront::{parse, Dialect};
 
 fn warnings(source: &str) -> Vec<String> {
     let module = parse(source, Dialect::Quickr).expect("parses");
-    compile_with_warnings(&module, "t", Dialect::Quickr, "vbdos", &Options::default())
-        .expect("compiles")
-        .1
+    compile_with_warnings(&module, "t", Dialect::Quickr, "vbdos", &Options::default()).expect("compiles").1
 }
 
 #[test]
@@ -53,15 +51,12 @@ fn module_code_warns_until_a_procedure_may_assign() {
 fn vbdos_does_not_warn() {
     let module = parse("SUB s\nDIM a AS INTEGER\nPRINT a\nEND SUB\n", Dialect::VbDos).expect("parses");
     let (_, found) =
-        compile_with_warnings(&module, "t", Dialect::VbDos, "vbdos", &Options::default())
-            .expect("compiles");
+        compile_with_warnings(&module, "t", Dialect::VbDos, "vbdos", &Options::default()).expect("compiles");
     assert!(found.is_empty(), "{found:?}");
 }
 
 fn select(arms: &str) -> Vec<String> {
-    warnings(&format!(
-        "SUB s (c AS INTEGER)\nDIM a AS INTEGER\nSELECT CASE c\n{arms}END SELECT\nPRINT a\nEND SUB\n"
-    ))
+    warnings(&format!("SUB s (c AS INTEGER)\nDIM a AS INTEGER\nSELECT CASE c\n{arms}END SELECT\nPRINT a\nEND SUB\n"))
 }
 
 #[test]
@@ -76,8 +71,11 @@ fn one_unassigning_path_among_many_warns() {
 #[test]
 fn microsoft_profiles_read_f_before_a_string_as_the_name_f() {
     // PRINT f"x" is PRINT f; "x" in Microsoft BASIC.
-    let kinds = |dialect| lex("f\"x\"", dialect).expect("lexes").into_iter().map(|token| token.kind).collect::<Vec<_>>();
-    assert!(matches!(kinds(Dialect::VbDos).as_slice(), [TokenKind::Identifier(f), TokenKind::String(x), _] if f == "F" && x == "x"));
+    let kinds =
+        |dialect| lex("f\"x\"", dialect).expect("lexes").into_iter().map(|token| token.kind).collect::<Vec<_>>();
+    assert!(
+        matches!(kinds(Dialect::VbDos).as_slice(), [TokenKind::Identifier(f), TokenKind::String(x), _] if f == "F" && x == "x")
+    );
     assert!(matches!(kinds(Dialect::Quickr).as_slice(), [TokenKind::FormatString(_), _]));
 }
 

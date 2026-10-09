@@ -3,10 +3,9 @@
 //! adds a loop invariant to, and sums, differences and invariant multiples
 //! of such. Arithmetic wraps, so each holds modulo its width.
 
-use crate::hash::HashMap;
-
 use crate::context::{ConstantKind, Context};
 use crate::dominators::DominatorTree;
+use crate::hash::HashMap;
 use crate::loops::{Loop, LoopInfo};
 use crate::module::{BlockId, Function, Operand, ValueDef, ValueId};
 use crate::opcode::{BinaryOp, IntPredicate, Opcode};
@@ -33,7 +32,11 @@ pub struct Evolution {
 }
 
 impl Evolution {
-    pub fn new(context: &Context, function: &Function, loops: &LoopInfo) -> Self {
+    pub fn new(
+        context: &Context,
+        function: &Function,
+        loops: &LoopInfo,
+    ) -> Self {
         let mut solver = Solver { context, function, loops, known: HashMap::default() };
         for (block, inst) in function.walk() {
             if let Some(value) = function.instruction(inst).result
@@ -46,14 +49,23 @@ impl Evolution {
     }
 
     /// `value`'s recurrence in the innermost loop defining it.
-    pub fn of(&self, value: ValueId) -> Option<&Recurrence> {
+    pub fn of(
+        &self,
+        value: ValueId,
+    ) -> Option<&Recurrence> {
         self.recurrences.get(&value)
     }
 
     /// How many recurrences the loop `header` heads carries: its integer
     /// header phis that step, and its pointer phis a `getelementptr` of the
     /// phi steps, which are recurrences of an address and no `Recurrence`.
-    pub fn counted(&self, context: &Context, function: &Function, loops: &LoopInfo, header: BlockId) -> usize {
+    pub fn counted(
+        &self,
+        context: &Context,
+        function: &Function,
+        loops: &LoopInfo,
+        header: BlockId,
+    ) -> usize {
         let Some(inside) = loops.loop_of(header).map(|one| &one.blocks) else { return 0 };
         function
             .block(header)
@@ -68,7 +80,10 @@ impl Evolution {
                     && phi.operands.chunks(2).any(|pair| {
                         let (Operand::Value(next), Operand::Block(from)) = (pair[0], pair[1]) else { return false };
                         inside.contains(&from)
-                            && matches!(function.value(next).def, ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. }) && function.instruction(def).operands[0] == Operand::Value(value))
+                            && matches!(
+                                function.value(next).def,
+                                ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. }) && function.instruction(def).operands[0] == Operand::Value(value)
+                            )
                     }),
             })
             .count()
@@ -85,26 +100,42 @@ struct Solver<'a> {
 }
 
 impl Solver<'_> {
-    fn width(&self, value: ValueId) -> Option<u32> {
+    fn width(
+        &self,
+        value: ValueId,
+    ) -> Option<u32> {
         self.context.types.int_bits(self.function.value(value).ty)
     }
 
     /// `operand` as a sum, if `one` does not define it.
-    fn invariant(&self, operand: Operand, one: &Loop, width: u32) -> Option<Linear> {
+    fn invariant(
+        &self,
+        operand: Operand,
+        one: &Loop,
+        width: u32,
+    ) -> Option<Linear> {
         match operand {
             Operand::Constant(id) => match self.context.get(id).kind {
                 ConstantKind::Int(bits) => Some(Linear { terms: Vec::new(), constant: bits & mask(width) }),
                 _ => None,
             },
             Operand::Value(value) => match self.function.value(value).def {
-                ValueDef::Instruction(inst) if self.function.parent(inst).is_some_and(|block| one.blocks.contains(&block)) => None,
+                ValueDef::Instruction(inst)
+                    if self.function.parent(inst).is_some_and(|block| one.blocks.contains(&block)) =>
+                {
+                    None
+                }
                 _ => Some(Linear { terms: vec![(value, 1)], constant: 0 }),
             },
             Operand::Block(_) => None,
         }
     }
 
-    fn recurrence(&mut self, value: ValueId, depth: u32) -> Option<Recurrence> {
+    fn recurrence(
+        &mut self,
+        value: ValueId,
+        depth: u32,
+    ) -> Option<Recurrence> {
         if let Some(known) = self.known.get(&value) {
             return known.clone();
         }
@@ -115,7 +146,11 @@ impl Solver<'_> {
         found
     }
 
-    fn solve(&mut self, value: ValueId, depth: u32) -> Option<Recurrence> {
+    fn solve(
+        &mut self,
+        value: ValueId,
+        depth: u32,
+    ) -> Option<Recurrence> {
         let ValueDef::Instruction(inst) = self.function.value(value).def else { return None };
         let block = self.function.parent(inst)?;
         let one = self.loops.loop_of(block)?;
@@ -136,7 +171,15 @@ impl Solver<'_> {
         };
         let (start, step) = match instruction.opcode {
             Opcode::Phi if block == one.header => {
-                let [Operand::Value(_) | Operand::Constant(_), Operand::Block(first), Operand::Value(_) | Operand::Constant(_), Operand::Block(second)] = operands[..] else { return None };
+                let [
+                    Operand::Value(_) | Operand::Constant(_),
+                    Operand::Block(first),
+                    Operand::Value(_) | Operand::Constant(_),
+                    Operand::Block(second),
+                ] = operands[..]
+                else {
+                    return None;
+                };
                 let (entry, next) = match (one.blocks.contains(&first), one.blocks.contains(&second)) {
                     (false, true) => (operands[0], operands[2]),
                     (true, false) => (operands[2], operands[0]),
@@ -170,7 +213,13 @@ impl Solver<'_> {
     }
 
     /// What `next`, the value a latch hands `phi`, adds to it.
-    fn stepped(&self, phi: ValueId, next: Operand, one: &Loop, width: u32) -> Option<Linear> {
+    fn stepped(
+        &self,
+        phi: ValueId,
+        next: Operand,
+        one: &Loop,
+        width: u32,
+    ) -> Option<Linear> {
         let Operand::Value(next) = next else { return None };
         let ValueDef::Instruction(inst) = self.function.value(next).def else { return None };
         let instruction = self.function.instruction(inst);
@@ -178,7 +227,9 @@ impl Solver<'_> {
         match (op, &instruction.operands[..]) {
             (BinaryOp::Add, &[Operand::Value(a), b]) if a == phi => self.invariant(b, one, width),
             (BinaryOp::Add, &[b, Operand::Value(a)]) if a == phi => self.invariant(b, one, width),
-            (BinaryOp::Sub, &[Operand::Value(a), b]) if a == phi => Some(self.invariant(b, one, width)?.times(mask(width), width)),
+            (BinaryOp::Sub, &[Operand::Value(a), b]) if a == phi => {
+                Some(self.invariant(b, one, width)?.times(mask(width), width))
+            }
             _ => None,
         }
     }
@@ -194,7 +245,12 @@ impl Linear {
     }
 
     /// `self + other * factor`.
-    fn plus(&self, other: &Linear, factor: u128, width: u32) -> Linear {
+    fn plus(
+        &self,
+        other: &Linear,
+        factor: u128,
+        width: u32,
+    ) -> Linear {
         let mut out = self.clone();
         for &(value, coefficient) in &other.terms {
             match out.terms.iter_mut().find(|(one, _)| *one == value) {
@@ -207,21 +263,37 @@ impl Linear {
         out
     }
 
-    fn times(&self, factor: u128, width: u32) -> Linear {
+    fn times(
+        &self,
+        factor: u128,
+        width: u32,
+    ) -> Linear {
         Linear::default().plus(self, factor, width)
     }
 
-    pub fn scaled(&self, factor: u128, width: u32) -> Linear {
+    pub fn scaled(
+        &self,
+        factor: u128,
+        width: u32,
+    ) -> Linear {
         self.times(factor, width)
     }
 
     /// `self + constant`.
-    pub fn shifted(&self, constant: u128, width: u32) -> Linear {
+    pub fn shifted(
+        &self,
+        constant: u128,
+        width: u32,
+    ) -> Linear {
         Linear { terms: self.terms.clone(), constant: self.constant.wrapping_add(constant) & mask(width) }
     }
 
     /// `self * other`, when one side is a constant.
-    fn product(&self, other: &Linear, width: u32) -> Option<Linear> {
+    fn product(
+        &self,
+        other: &Linear,
+        width: u32,
+    ) -> Option<Linear> {
         match (self.as_constant(), other.as_constant()) {
             (_, Some(factor)) => Some(self.times(factor, width)),
             (Some(factor), _) => Some(other.times(factor, width)),
@@ -244,13 +316,21 @@ pub struct Counted {
     pub stays: IntPredicate,
 }
 
-pub fn counted(context: &Context, function: &Function, tree: &DominatorTree, evolution: &Evolution, one: &Loop) -> Option<Counted> {
+pub fn counted(
+    context: &Context,
+    function: &Function,
+    tree: &DominatorTree,
+    evolution: &Evolution,
+    one: &Loop,
+) -> Option<Counted> {
     one.blocks.iter().find_map(|&block| {
         if !one.latches.iter().all(|&latch| tree.dominates(block, latch)) {
             return None;
         }
         let branch = function.instruction(function.terminator(block)?);
-        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(otherwise)] = branch.operands[..] else { return None };
+        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(otherwise)] = branch.operands[..] else {
+            return None;
+        };
         let (stays_on_true, inside) = match (one.blocks.contains(&taken), one.blocks.contains(&otherwise)) {
             (true, false) => (true, taken),
             (false, true) => (false, otherwise),
@@ -285,7 +365,8 @@ pub fn counted(context: &Context, function: &Function, tree: &DominatorTree, evo
         let stays = if stays_on_true { predicate } else { predicate.inverse() };
         let finite = matches!(
             (step, stays),
-            (1, IntPredicate::Slt | IntPredicate::Ult | IntPredicate::Ne) | (-1, IntPredicate::Sgt | IntPredicate::Ugt | IntPredicate::Ne)
+            (1, IntPredicate::Slt | IntPredicate::Ult | IntPredicate::Ne)
+                | (-1, IntPredicate::Sgt | IntPredicate::Ugt | IntPredicate::Ne)
         );
         finite.then_some(Counted { block, inside, counter, step, bound, stays })
     })

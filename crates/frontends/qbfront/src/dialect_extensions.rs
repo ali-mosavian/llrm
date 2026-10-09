@@ -131,58 +131,68 @@ pub fn recognize_statement(tokens: &[Token]) -> Option<ExtensionMatch> {
                 span,
             },
         };
-        return Some(ExtensionMatch {
-            action,
-            consumed: spec.pattern.len(),
-        });
+        return Some(ExtensionMatch { action, consumed: spec.pattern.len() });
     }
     None
 }
 
-fn def_integral(width: u8, signed: bool, span: Span) -> ExtensionAction {
-    ExtensionAction::DefType {
-        type_name: TypeName::Integral { width, signed },
-        span,
-    }
+fn def_integral(
+    width: u8,
+    signed: bool,
+    span: Span,
+) -> ExtensionAction {
+    ExtensionAction::DefType { type_name: TypeName::Integral { width, signed }, span }
 }
 
 fn ends_statement(token: Option<&Token>) -> bool {
     let Some(token) = token else {
         return true;
     };
-    let newline = crate::generated_parser::tables::token_id("tkNewLine")
-        .expect("recovered grammar has tkNewLine");
-    let colon = crate::generated_parser::tables::token_id("tkColon")
-        .expect("recovered grammar has tkColon");
-    matches!(token.kind, TokenKind::Reserved(id) if id == newline || id == colon)
+    let newline = crate::generated_parser::tables::token_id("tkNewLine").expect("recovered grammar has tkNewLine");
+    let colon = crate::generated_parser::tables::token_id("tkColon").expect("recovered grammar has tkColon");
+    matches!(
+        token.kind,
+        TokenKind::Reserved(id) if id == newline || id == colon
+    )
 }
 
-fn pattern_matches(pattern: &[ExtensionPatternToken], tokens: &[Token]) -> bool {
+fn pattern_matches(
+    pattern: &[ExtensionPatternToken],
+    tokens: &[Token],
+) -> bool {
     pattern.len() <= tokens.len()
-        && pattern
-            .iter()
-            .zip(tokens)
-            .all(|(expected, token)| match expected {
-                ExtensionPatternToken::Grammar(id) => {
-                    matches!(token.kind, TokenKind::Reserved(actual) if actual == *id)
-                }
-                ExtensionPatternToken::Keyword(word) => {
-                    matches!(token.kind, TokenKind::ExtensionKeyword(actual) if actual == *word)
-                }
-                ExtensionPatternToken::Label => matches!(
+        && pattern.iter().zip(tokens).all(|(expected, token)| match expected {
+            ExtensionPatternToken::Grammar(id) => {
+                matches!(token.kind, TokenKind::Reserved(actual) if actual == *id)
+            }
+            ExtensionPatternToken::Keyword(word) => {
+                matches!(
+                    token.kind,
+                    TokenKind::ExtensionKeyword(actual) if actual == *word
+                )
+            }
+            ExtensionPatternToken::Label => {
+                matches!(
                     token.kind,
                     TokenKind::Identifier(_) | TokenKind::Integer(0..=65_529, None)
-                ),
-                ExtensionPatternToken::Identifier => matches!(token.kind, TokenKind::Identifier(_)),
-                ExtensionPatternToken::StringLiteral => matches!(token.kind, TokenKind::String(_)),
-            })
+                )
+            }
+            ExtensionPatternToken::Identifier => matches!(token.kind, TokenKind::Identifier(_)),
+            ExtensionPatternToken::StringLiteral => matches!(token.kind, TokenKind::String(_)),
+        })
 }
 
-fn captured_identifier(pattern: &[ExtensionPatternToken], tokens: &[Token]) -> Option<String> {
+fn captured_identifier(
+    pattern: &[ExtensionPatternToken],
+    tokens: &[Token],
+) -> Option<String> {
     captured_text(pattern, tokens, ExtensionPatternToken::Identifier)
 }
 
-fn captured_string(pattern: &[ExtensionPatternToken], tokens: &[Token]) -> Option<String> {
+fn captured_string(
+    pattern: &[ExtensionPatternToken],
+    tokens: &[Token],
+) -> Option<String> {
     captured_text(pattern, tokens, ExtensionPatternToken::StringLiteral)
 }
 
@@ -191,43 +201,44 @@ fn captured_text(
     tokens: &[Token],
     wanted: ExtensionPatternToken,
 ) -> Option<String> {
-    pattern.iter().zip(tokens).find_map(|(expected, token)| {
-        if *expected != wanted {
-            return None;
-        }
-        match &token.kind {
-            TokenKind::Identifier(value) | TokenKind::String(value) => Some(value.clone()),
-            _ => None,
-        }
-    })
-}
-
-fn captured_label(pattern: &[ExtensionPatternToken], tokens: &[Token]) -> Option<String> {
     pattern
         .iter()
         .zip(tokens)
-        .find_map(|(expected, token)| match (expected, &token.kind) {
-            (ExtensionPatternToken::Label, TokenKind::Identifier(name)) => Some(name.clone()),
-            (ExtensionPatternToken::Label, TokenKind::Integer(value, None))
-                if (0..=65_529).contains(value) =>
-            {
-                Some(value.to_string())
-            }
-            _ => None,
-        })
+        .find_map(
+            |(expected, token)| {
+                if *expected != wanted {
+                    return None;
+                }
+                match &token.kind {
+                    TokenKind::Identifier(value) | TokenKind::String(value) => Some(value.clone()),
+                    _ => None,
+                }
+            },
+        )
+}
+
+fn captured_label(
+    pattern: &[ExtensionPatternToken],
+    tokens: &[Token],
+) -> Option<String> {
+    pattern
+        .iter()
+        .zip(tokens)
+        .find_map(
+            |(expected, token)| match (expected, &token.kind) {
+                (ExtensionPatternToken::Label, TokenKind::Identifier(name)) => Some(name.clone()),
+                (ExtensionPatternToken::Label, TokenKind::Integer(value, None)) if (0..=65_529).contains(value) => {
+                    Some(value.to_string())
+                }
+                _ => None,
+            },
+        )
 }
 
 fn statement_span(tokens: &[Token]) -> Span {
-    let first = tokens
-        .first()
-        .expect("matching extension is non-empty")
-        .span;
+    let first = tokens.first().expect("matching extension is non-empty").span;
     let last = tokens.last().expect("matching extension is non-empty").span;
-    Span {
-        line: first.line,
-        start: first.start,
-        end: last.end,
-    }
+    Span { line: first.line, start: first.start, end: last.end }
 }
 
 #[cfg(test)]
@@ -241,40 +252,22 @@ mod tests {
         let tokens = lex("option explicit\n", Dialect::VbDos).unwrap();
         let found = recognize_statement(&tokens).unwrap();
         assert_eq!(found.consumed, 2);
-        assert_eq!(
-            found.action,
-            ExtensionAction::OptionExplicit {
-                span: Span {
-                    line: 1,
-                    start: 0,
-                    end: 15,
-                },
-            }
-        );
+        assert_eq!(found.action, ExtensionAction::OptionExplicit { span: Span { line: 1, start: 0, end: 15 } });
     }
 
     #[test]
     fn option_explicit_is_inherited_by_every_semantic_profile() {
-        for dialect in [
-            Dialect::QBasic11,
-            Dialect::QuickBasic45,
-            Dialect::Pds71,
-            Dialect::VbDos,
-        ] {
+        for dialect in [Dialect::QBasic11, Dialect::QuickBasic45, Dialect::Pds71, Dialect::VbDos] {
             let tokens = lex("option explicit\n", dialect).unwrap();
-            assert!(matches!(
-                recognize_statement(&tokens).unwrap().action,
-                ExtensionAction::OptionExplicit { .. }
-            ));
+            assert!(matches!(recognize_statement(&tokens).unwrap().action, ExtensionAction::OptionExplicit { .. }));
         }
     }
 
     #[test]
     fn on_local_error_captures_symbolic_and_numeric_labels_for_pds_and_vbdos() {
-        for (source, expected) in [
-            ("on local error goto caughtError\n", "CAUGHTERROR"),
-            ("on local error goto 100\n", "100"),
-        ] {
+        for (source, expected) in
+            [("on local error goto caughtError\n", "CAUGHTERROR"), ("on local error goto 100\n", "100")]
+        {
             for dialect in [Dialect::Pds71, Dialect::VbDos] {
                 let tokens = lex(source, dialect).unwrap();
                 let found = recognize_statement(&tokens).unwrap();
@@ -282,11 +275,7 @@ mod tests {
                     found.action,
                     ExtensionAction::OnLocalError {
                         label: expected.into(),
-                        span: Span {
-                            line: 1,
-                            start: 0,
-                            end: source.trim_end().len(),
-                        },
+                        span: Span { line: 1, start: 0, end: source.trim_end().len() },
                     }
                 );
             }

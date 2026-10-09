@@ -1,15 +1,24 @@
-use llrm_core::hir::execute::{Executed, run};
-use crate as nib;
 use llrm_core::hir::codec;
+use llrm_core::hir::execute::{Executed, run};
 use llrm_core::hir::model::Number;
 
-fn execute(source: &str, entry: &str, arguments: &[Number]) -> Executed {
+use crate as nib;
+
+fn execute(
+    source: &str,
+    entry: &str,
+    arguments: &[Number],
+) -> Executed {
     let json = nib::compile(source, "t").expect("compiles");
     let program = codec::decode(&json).expect("decodes");
     run(&program, entry, arguments).expect("runs")
 }
 
-fn value(source: &str, entry: &str, arguments: &[i64]) -> Option<Number> {
+fn value(
+    source: &str,
+    entry: &str,
+    arguments: &[i64],
+) -> Option<Number> {
     let arguments: Vec<Number> = arguments.iter().map(|one| Number::Int(*one)).collect();
     execute(source, entry, &arguments).value
 }
@@ -55,10 +64,7 @@ fn struct_copies_have_value_semantics() {
 #[test]
 fn print_captures_text_integers_floats_and_fixed() {
     let source = "fn main() -> i16:\n    let mut x: f64 = 0.1\n    print(\"hi\")\n    print(f\"{-5} {x * 3.0}\")\n    return 0\n";
-    assert_eq!(
-        execute(source, "main", &[]).output,
-        "hi\n-5 0.30000000000000004\n"
-    );
+    assert_eq!(execute(source, "main", &[]).output, "hi\n-5 0.30000000000000004\n");
     let fixed = include_str!("../../../../tests/fixtures/nib/fixed.nib");
     let executed = execute(fixed, "fixed_literals", &[]);
     assert_eq!(executed.output, "2.25\nfixed=2.25\n");
@@ -67,20 +73,8 @@ fn print_captures_text_integers_floats_and_fixed() {
 
 #[test]
 fn nbody_matches_the_python_reference() {
-    let executed = execute(
-        include_str!("../../../../tests/fixtures/nib/nbody.nib"),
-        "nbody",
-        &[Number::Int(1)],
-    );
-    assert!(
-        executed
-            .output
-            .starts_with("PX=-14.896484375\nPY=-11.92578125\nVX=0.103515625\n")
-    );
-    assert!(
-        executed
-            .output
-            .ends_with("VX=-0.103515625\nVY=-0.07421875\nDONE\n")
-    );
+    let executed = execute(include_str!("../../../../tests/fixtures/nib/nbody.nib"), "nbody", &[Number::Int(1)]);
+    assert!(executed.output.starts_with("PX=-14.896484375\nPY=-11.92578125\nVX=0.103515625\n"));
+    assert!(executed.output.ends_with("VX=-0.103515625\nVY=-0.07421875\nDONE\n"));
     assert_eq!(executed.value, Some(Number::Int(-10_177)));
 }

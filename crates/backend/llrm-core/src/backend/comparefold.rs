@@ -4,10 +4,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::support::hash::{IndexMap, IndexSet};
-
 use crate::model::ir::{self, Held, Loc, Operation};
 use crate::model::lir::{self, Insn};
+use crate::support::hash::{IndexMap, IndexSet};
 
 /// Fold a private load followed by its sole comparison into a memory comparison.
 ///
@@ -16,7 +15,11 @@ use crate::model::lir::{self, Insn};
 /// observe the narrow cell's top bit through SF.
 ///
 /// `users` is Python's `Counter`: a missing value counts zero.
-pub fn selected(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>, exposed: &BTreeSet<u32>) -> Vec<Arc<Insn>> {
+pub fn selected(
+    insns: &[Arc<Insn>],
+    users: &IndexMap<u32, i64>,
+    exposed: &BTreeSet<u32>,
+) -> Vec<Arc<Insn>> {
     let mut out = insns.to_vec();
     for (load_at, load) in insns.iter().enumerate() {
         let mut extension = false;
@@ -100,7 +103,10 @@ pub fn selected(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>, exposed: &BTree
             continue;
         }
         if extension {
-            if !matches!(&other, Loc::Imm(imm) if imm.value == 0 && imm.address.is_none()) {
+            if !matches!(
+                &other,
+                Loc::Imm(imm) if imm.value == 0 && imm.address.is_none()
+            ) {
                 continue;
             }
             let mut branch_at = compare_at + 1;
@@ -111,9 +117,11 @@ pub fn selected(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>, exposed: &BTree
                 continue;
             }
             let branch = &insns[branch_at];
-            if branch.what.as_ref().is_none_or(|what| {
-                what.op != Operation::Branch || !matches!(what.name.as_deref(), Some("je" | "jne"))
-            }) {
+            if branch
+                .what
+                .as_ref()
+                .is_none_or(|what| what.op != Operation::Branch || !matches!(what.name.as_deref(), Some("je" | "jne")))
+            {
                 continue;
             }
             other = Loc::Imm(ir::Imm { value: 0, width: cell.width, address: None });
@@ -134,12 +142,7 @@ pub fn selected(insns: &[Arc<Insn>], users: &IndexMap<u32, i64>, exposed: &BTree
         let mut what = compare.what.clone().expect("matched above");
         what.sources = folded_sources;
         folded.what = Some(what);
-        folded.uses = address_uses
-            .into_iter()
-            .chain(compare_uses)
-            .collect::<IndexSet<u32>>()
-            .into_iter()
-            .collect();
+        folded.uses = address_uses.into_iter().chain(compare_uses).collect::<IndexSet<u32>>().into_iter().collect();
         folded.call = if load.symbol == Some(true) { load.call.clone() } else { compare.call.clone() };
         folded.symbol = if load.symbol == Some(true) { Some(true) } else { compare.symbol };
         out[compare_at] = Arc::new(folded);
@@ -188,11 +191,11 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use crate::support::hash::IndexMap;
 
     use super::selected;
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
     use crate::model::lir::Insn;
+    use crate::support::hash::IndexMap;
 
     #[test]
     fn test_one_use_memory_comparison_is_selected_before_allocation() {
@@ -256,7 +259,11 @@ mod tests {
         assert_eq!(result[2].uses, vec![base, selector, other]);
     }
 
-    fn widened(loaded: u32, cell: &Mem, uses: Vec<u32>) -> [Arc<Insn>; 2] {
+    fn widened(
+        loaded: u32,
+        cell: &Mem,
+        uses: Vec<u32>,
+    ) -> [Arc<Insn>; 2] {
         let load = Insn::new(
             1,
             None,
@@ -293,17 +300,24 @@ mod tests {
         let cell = Mem::new(Some(Addr::new(Space::Frame, 8)), 2);
         let [load, compare] = widened(5, &cell, Vec::new());
         let mut plain = (*load).clone();
-        plain.what = Some(Semantics { name: Some("mov".to_owned()), op: Operation::Move, ..plain.what.clone().unwrap() });
+        plain.what =
+            Some(Semantics { name: Some("mov".to_owned()), op: Operation::Move, ..plain.what.clone().unwrap() });
         plain.rematerialized = true;
         let compare = {
             let mut one = (*compare).clone();
-            one.what = Some(Semantics { sources: vec![Loc::Held(Held { value: 5, width: 2 }), Loc::Held(Held { value: 6, width: 2 })], ..one.what.clone().unwrap() });
+            one.what = Some(Semantics {
+                sources: vec![Loc::Held(Held { value: 5, width: 2 }), Loc::Held(Held { value: 6, width: 2 })],
+                ..one.what.clone().unwrap()
+            });
             one.uses = vec![5, 6];
             Arc::new(one)
         };
         let users: IndexMap<u32, i64> = [(5, 1), (6, 1)].into_iter().collect();
         let result = selected(&[Arc::new(plain), compare], &users, &BTreeSet::new());
-        assert_eq!(result[1].what.as_ref().unwrap().sources, vec![Loc::Mem(cell), Loc::Held(Held { value: 6, width: 2 })]);
+        assert_eq!(
+            result[1].what.as_ref().unwrap().sources,
+            vec![Loc::Mem(cell), Loc::Held(Held { value: 6, width: 2 })]
+        );
     }
 
     fn branch(name: &str) -> Arc<Insn> {
@@ -344,12 +358,8 @@ mod tests {
     fn test_zero_extended_byte_test_keeps_the_load_when_sign_is_observed() {
         // A narrow memory compare exposes bit 7 as SF; a zero-extended word test does not.
         let loaded = 1;
-        let cell = Mem {
-            through: Register::BP,
-            offset: -4,
-            disp_width: 1,
-            ..Mem::new(Some(Addr::new(Space::Frame, -4)), 1)
-        };
+        let cell =
+            Mem { through: Register::BP, offset: -4, disp_width: 1, ..Mem::new(Some(Addr::new(Space::Frame, -4)), 1) };
         let [load, compare] = widened(loaded, &cell, Vec::new());
         let insns = vec![load, compare, branch("jl")];
         let users: IndexMap<u32, i64> = [(loaded, 1)].into_iter().collect();

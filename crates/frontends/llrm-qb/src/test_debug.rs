@@ -9,13 +9,23 @@ use super::driver as qb_driver;
 use super::test_hir::{image, root, written};
 
 /// The rich route's object of `source`, `includes` beside it.
-fn object(source: &str, includes: &[(&str, &str)], dialect: &str, runtime: &str, debug: bool) -> Vec<Rc<omf::Record>> {
+fn object(
+    source: &str,
+    includes: &[(&str, &str)],
+    dialect: &str,
+    runtime: &str,
+    debug: bool,
+) -> Vec<Rc<omf::Record>> {
     let directory = tempfile::tempdir().expect("creates a directory");
     for (name, text) in includes {
         written(&directory, name, text.as_bytes());
     }
     let path = written(&directory, "debug.bas", source.as_bytes());
-    let frontend = qb_driver::Frontend { debug, includes: vec![directory.path().to_path_buf()], ..qb_driver::Frontend::new(dialect, runtime) };
+    let frontend = qb_driver::Frontend {
+        debug,
+        includes: vec![directory.path().to_path_buf()],
+        ..qb_driver::Frontend::new(dialect, runtime)
+    };
     let program = qb_driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{dialect}: {error}"));
     let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
     let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
@@ -56,8 +66,9 @@ fn shape(records: &[Rc<omf::Record>]) -> Vec<String> {
 }
 
 /// Each suite program's procedures, parameters and variables read as BC's
-/// /Zi object of it does, in each dialect: every symbol llrm describes is BC's, spelt as BC spells it. BC describes every variable; llrm
-/// only those the program keeps (`-g` changes no code, and so keeps no variable for a debugger), so a variable nothing reads is BC's alone.
+/// /Zi object of it does, in each dialect: every symbol llrm describes is BC's, spelt as BC spells it. BC describes
+/// every variable; llrm only those the program keeps (`-g` changes no code, and so keeps no variable for a debugger),
+/// so a variable nothing reads is BC's alone.
 #[test]
 fn debug_symbols_read_as_bc_writes_them() {
     for (program, fixture, dialect) in [
@@ -94,22 +105,27 @@ fn a_local_is_where_its_code_keeps_it() {
     for runtime_frames in [true, false] {
         let directory = tempfile::tempdir().expect("creates a directory");
         let path = written(&directory, "local.bas", source.as_bytes());
-        let frontend = qb_driver::Frontend { debug: true, runtime_frames, ..qb_driver::Frontend::new("vbdos", "vbdos") };
+        let frontend =
+            qb_driver::Frontend { debug: true, runtime_frames, ..qb_driver::Frontend::new("vbdos", "vbdos") };
         let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
         // Not optimised: `k` is in its cell (promoted to a register it is left out of CodeView 4, which names a cell).
-        let codegen = llrm_core::driver::Options { pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() }, ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()) };
+        let codegen = llrm_core::driver::Options {
+            pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+        };
         let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
         let info = cvinfo::parse(&omf::parse(&bytes).expect("parses"));
-        let local = info.procedures.iter().flat_map(|one| &one.locals).find(|one| one.name == "k").expect("k is described");
+        let local =
+            info.procedures.iter().flat_map(|one| &one.locals).find(|one| one.name == "k").expect("k is described");
         let listing = super::test_hir::listing_unoptimised(&program);
         let store = format!("mov word ptr [bp{:+}], 12345", local.bp_offset);
         assert!(listing.contains(&store), "runtime frames {runtime_frames}: no {store:?} in\n{listing}");
     }
 }
 
-/// A module variable the program folds away (its one store is read by the call and dead once the program ENDs) is not kept for a
-/// debugger: `-g` changes no code, and CodeView 4 has no record for a variable that is a constant. It was kept, its memory written,
-/// and the object differed from the one built without `-g`.
+/// A module variable the program folds away (its one store is read by the call and dead once the program ENDs) is not
+/// kept for a debugger: `-g` changes no code, and CodeView 4 has no record for a variable that is a constant. It was
+/// kept, its memory written, and the object differed from the one built without `-g`.
 #[test]
 fn a_folded_module_variable_is_left_out_not_kept() {
     let source = "DECLARE SUB s (BYVAL v AS DOUBLE)\nDIM m AS DOUBLE\nm = 2\ns m\nEND\nSUB s (BYVAL v AS DOUBLE)\nPRINT v\nEND SUB\n";

@@ -19,10 +19,10 @@ fn pipeline(arguments: &[&str]) -> Options {
     parsed(arguments).unwrap().pipeline()
 }
 
-/// The allocator tries other shapes of a body at every level but -O0, and `-f[no-]allocation-search` sets it anywhere. (gcc runs IRA
-/// once; turning the search off at -O1 to -Os cuts QCport's compile 26-29% for +0.1% of its bytes and nothing on the 66 m32 programs,
-/// but costs the 16-bit bench kernels 5-20% of their instructions: quicksort -O2 +20%, where `Scoped` keeps a loop's address base in a
-/// register. The default stays; the switch is there.)
+/// The allocator tries other shapes of a body at every level but -O0, and `-f[no-]allocation-search` sets it anywhere.
+/// (gcc runs IRA once; turning the search off at -O1 to -Os cuts QCport's compile 26-29% for +0.1% of its bytes and
+/// nothing on the 66 m32 programs, but costs the 16-bit bench kernels 5-20% of their instructions: quicksort -O2 +20%,
+/// where `Scoped` keeps a loop's address base in a register. The default stays; the switch is there.)
 #[test]
 fn test_allocation_search_is_on_at_every_level_but_o0_and_a_flag_sets_it_anywhere() {
     for (level, on) in [("-O0", false), ("-O1", true), ("-O2", true), ("-Os", true), ("-O3", true), ("-Omax", true)] {
@@ -32,21 +32,25 @@ fn test_allocation_search_is_on_at_every_level_but_o0_and_a_flag_sets_it_anywher
     }
 }
 
-/// A function is made by the allocator alone and by the spiller's route and the cheaper kept at every level but -O0: that choice, not
-/// the search of shapes, is what the single allocation lost at x_dct (+15% clocks), x_ll_arith (+17.6% code) and recmany (+13%) when
-/// both were turned off together.
+/// A function is made by the allocator alone and by the spiller's route and the cheaper kept at every level but -O0:
+/// that choice, not the search of shapes, is what the single allocation lost at x_dct (+15% clocks), x_ll_arith (+17.6%
+/// code) and recmany (+13%) when both were turned off together.
 #[test]
 fn test_the_routes_are_compared_at_every_level_but_o0() {
     for (level, on) in [("-O0", false), ("-O1", true), ("-O2", true), ("-Os", true), ("-O3", true), ("-Omax", true)] {
         assert_eq!(pipeline(&[level]).compares_routes(), on, "{level}");
-        assert_eq!(pipeline(&[level, "-fno-allocation-search"]).compares_routes(), on, "{level}: the search is not the routes");
+        assert_eq!(
+            pipeline(&[level, "-fno-allocation-search"]).compares_routes(),
+            on,
+            "{level}: the search is not the routes"
+        );
     }
     assert!(pipeline(&["-O0", "-fallocation-routes"]).compares_routes());
     assert!(!pipeline(&["-O2", "-fno-allocation-routes"]).compares_routes());
 }
 
-/// Only -Omax tries every shape of a body; the other levels try the one its spills suggest, as the search over all of them
-/// cost 2.7x the compile time for +0.04% of QCport's bytes. `-f[no-]allocation-search-all` sets it at any level.
+/// Only -Omax tries every shape of a body; the other levels try the one its spills suggest, as the search over all of
+/// them cost 2.7x the compile time for +0.04% of QCport's bytes. `-f[no-]allocation-search-all` sets it at any level.
 #[test]
 fn test_only_omax_searches_every_shape() {
     for level in ["-O1", "-O2", "-O3", "-Os"] {
@@ -59,8 +63,8 @@ fn test_only_omax_searches_every_shape() {
 
 /// The passes a level runs are gcc 13.4.0's `default_options_table` (opts.cc 573-694) for the passes this compiler has:
 /// -O1 the scalar ones and the last call inlined, -O2 adds inlining, gcse, sibling calls and pattern fill, -O3 peeling,
-/// unswitching, complete copies of loops that grow the code, and the larger inline threshold. Before, -O1 and -O2 differed
-/// by loop copies alone and -O2 let a complete copy grow the code.
+/// unswitching, complete copies of loops that grow the code, and the larger inline threshold. Before, -O1 and -O2
+/// differed by loop copies alone and -O2 let a complete copy grow the code.
 #[test]
 fn each_level_selects_gcc_s_passes() {
     // (scalar passes, last call inlined, inlines at all, gcse, sibling calls, fill, peel, unswitch, copies may grow)
@@ -88,15 +92,29 @@ fn each_level_selects_gcc_s_passes() {
     assert_eq!(pipeline(&["-Og"]), pipeline(&["-O1"]));
     assert_eq!(pipeline(&[]), pipeline(&["-O2"]));
     // `-fipa-cp-clone` is gcc's -O3 (opts.cc:676).
-    assert_eq!((pipeline(&["-O2"]).inline.cp_clone, pipeline(&["-O3"]).inline.cp_clone, pipeline(&["-O3", "-fno-ipa-cp-clone"]).inline.cp_clone, pipeline(&["-O2", "-fipa-cp-clone"]).inline.cp_clone), (false, true, false, true));
-    assert_eq!((pipeline(&["-O1"]).inline.limit, pipeline(&["-O2"]).inline.limit, pipeline(&["-O3"]).inline.limit), (90, 225, 250));
+    assert_eq!(
+        (
+            pipeline(&["-O2"]).inline.cp_clone,
+            pipeline(&["-O3"]).inline.cp_clone,
+            pipeline(&["-O3", "-fno-ipa-cp-clone"]).inline.cp_clone,
+            pipeline(&["-O2", "-fipa-cp-clone"]).inline.cp_clone
+        ),
+        (false, true, false, true)
+    );
+    assert_eq!(
+        (pipeline(&["-O1"]).inline.limit, pipeline(&["-O2"]).inline.limit, pipeline(&["-O3"]).inline.limit),
+        (90, 225, 250)
+    );
     let max = pipeline(&["-Omax"]);
     assert_eq!(max.limits, Limits { target_percent: 200, ..Limits::default() });
     assert_eq!((max.inline, max.unroll, max.peel), (Threshold { cp_clone: true, ..Threshold::new(250) }, true, true));
     let os = pipeline(&["-Os"]);
     assert_eq!((os.limits.grows, os.inline, os.unroll), (false, Threshold::default().for_size(), true));
     let oz = pipeline(&["-Oz"]);
-    assert_eq!((oz.limits.grows, oz.inline, oz.unroll, oz.peel), (false, Threshold::default().for_size(), false, false));
+    assert_eq!(
+        (oz.limits.grows, oz.inline, oz.unroll, oz.peel),
+        (false, Threshold::default().for_size(), false, false)
+    );
     assert!(parsed(&["-O4"]).is_err());
 }
 
@@ -115,7 +133,10 @@ fn test_no_inline_functions_leaves_called_once_on_as_gcc_does() {
     assert!(pipeline(&["-O2", "-fno-inline-functions"]).inline.last);
     assert!(!pipeline(&["-O2", "-fno-inline-functions-called-once"]).inline.last);
     assert!(!pipeline(&["-O2", "-fno-inline-functions-called-once", "-fno-inline-functions"]).inline.last);
-    assert_eq!(pipeline(&["-O2", "-fno-inline-functions-called-once", "-fno-inline-functions"]).inline, llrm_transforms::inline::Threshold::none());
+    assert_eq!(
+        pipeline(&["-O2", "-fno-inline-functions-called-once", "-fno-inline-functions"]).inline,
+        llrm_transforms::inline::Threshold::none()
+    );
 }
 
 #[test]
@@ -133,7 +154,9 @@ fn a_pass_option_overrides_the_level_wherever_it_stands() {
 #[test]
 fn march_and_mtune_name_the_cpu_profiles() {
     use llrm_target::Target;
-    let on = |arguments: &[&str]| parsed(arguments).unwrap().machine(&llrm_x86_m16::M16, llrm_x86_m16::machine::BUILT_IN.clone());
+    let on = |arguments: &[&str]| {
+        parsed(arguments).unwrap().machine(&llrm_x86_m16::M16, llrm_x86_m16::machine::BUILT_IN.clone())
+    };
     for (gcc, cpu) in [("i386", "386"), ("i486", "486"), ("pentium", "P5"), ("athlon", "K7")] {
         assert_eq!(on(&[&format!("-march={gcc}")]).unwrap().cpu, cpu);
         assert_eq!(on(&[&format!("-mtune={gcc}")]).unwrap().cpu, cpu);
@@ -164,7 +187,15 @@ fn output_and_assembly() {
 /// is not: qcport's sound IRQ calls C on a stack of its own.
 #[test]
 fn stack_is_data_only_when_asked() {
-    let machine = |arguments: &[&str]| parsed(arguments).unwrap().machine(&llrm_x86_m16::M16, llrm_x86_m16::machine::BUILT_IN.clone()).unwrap().segments.unwrap().stack_is_data;
+    let machine = |arguments: &[&str]| {
+        parsed(arguments)
+            .unwrap()
+            .machine(&llrm_x86_m16::M16, llrm_x86_m16::machine::BUILT_IN.clone())
+            .unwrap()
+            .segments
+            .unwrap()
+            .stack_is_data
+    };
     assert!(!machine(&[]));
     assert!(machine(&["-mstack-is-data"]));
     assert!(!machine(&["-mstack-is-data", "-mno-stack-is-data"]));
@@ -174,7 +205,9 @@ fn stack_is_data_only_when_asked() {
 /// (Borland's, Open Watcom's) would otherwise read whatever DOS left there.
 #[test]
 fn far_zero_data_is_stored_unless_the_startup_zeroes_it() {
-    let machine = |arguments: &[&str]| parsed(arguments).unwrap().machine(&llrm_x86_m16::M16, llrm_x86_m16::machine::BUILT_IN.clone()).unwrap().far_bss;
+    let machine = |arguments: &[&str]| {
+        parsed(arguments).unwrap().machine(&llrm_x86_m16::M16, llrm_x86_m16::machine::BUILT_IN.clone()).unwrap().far_bss
+    };
     assert!(!machine(&[]));
     assert!(machine(&["-mfar-bss"]));
     assert!(!machine(&["-mfar-bss", "-mno-far-bss"]));
@@ -188,12 +221,17 @@ fn sanitizers_take_gccs_names() {
     let all = Sanitize { bounds: true, integer_divide_by_zero: true, signed_integer_overflow: true, stack: false };
     assert_eq!(sanitize(&[]), Sanitize::default());
     assert_eq!(sanitize(&["-fsanitize=undefined"]), all);
-    assert_eq!(sanitize(&["-fsanitize=bounds,integer-divide-by-zero"]), Sanitize { signed_integer_overflow: false, ..all });
+    assert_eq!(
+        sanitize(&["-fsanitize=bounds,integer-divide-by-zero"]),
+        Sanitize { signed_integer_overflow: false, ..all }
+    );
     assert_eq!(sanitize(&["-fsanitize=undefined", "-fno-sanitize=bounds"]), Sanitize { bounds: false, ..all });
     assert_eq!(sanitize(&["-ftrapv"]), Sanitize { signed_integer_overflow: true, ..Sanitize::default() });
     assert!(parsed(&["-fsanitize=address"]).is_err());
     // A check that costs code on every call is asked for by name, never by `undefined`.
-    assert!(sanitize(&["-fsanitize=stack"]).stack && !sanitize(&["-fsanitize=undefined"]).stack && !sanitize(&[]).stack);
+    assert!(
+        sanitize(&["-fsanitize=stack"]).stack && !sanitize(&["-fsanitize=undefined"]).stack && !sanitize(&[]).stack
+    );
     assert!(!sanitize(&["-fsanitize=stack", "-fno-sanitize=stack"]).stack);
 }
 
@@ -206,7 +244,11 @@ fn test_stack_usage_options_reach_the_driver() {
         let argv = vec![argument.to_owned()];
         assert!(flags.take(&argv, &mut 0).unwrap(), "{argument}");
     }
-    let options = flags.driver(llrm_x86_m16::machine::BUILT_IN.clone(), std::rc::Rc::new(llrm_x86_m16::M16), crate::backend::isel::m16());
+    let options = flags.driver(
+        llrm_x86_m16::machine::BUILT_IN.clone(),
+        std::rc::Rc::new(llrm_x86_m16::M16),
+        crate::backend::isel::m16(),
+    );
     assert!(options.stack_usage);
     assert_eq!(options.stack_limit, Some(512));
     assert!(Flags::default().take(&["-Wstack-usage=lots".to_owned()], &mut 0).is_err());

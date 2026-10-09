@@ -41,7 +41,9 @@ pub fn removed(module: &mut Module) -> Vec<GlobalId> {
             function.ty
         };
         for &(caller, call) in calls.iter().filter(|&&(caller, _)| caller != id) {
-            let GlobalKind::Function(function) = &mut module.globals[caller.0 as usize].kind else { unreachable!("a caller") };
+            let GlobalKind::Function(function) = &mut module.globals[caller.0 as usize].kind else {
+                unreachable!("a caller")
+            };
             for &parameter in gone.iter().rev() {
                 function.replace_argument(call, parameter, &[], ty);
             }
@@ -56,7 +58,10 @@ pub fn removed(module: &mut Module) -> Vec<GlobalId> {
 /// that nothing reads either: LLVM's DeadArgumentElimination (`MarkValue`/`SurveyUse`: a use as an argument of
 /// the function's own call is live only if that parameter is), taken to its fixed point. `hanoi(n - 1, a, c, b)`
 /// permutes three parameters among themselves and reads none.
-fn dead(module: &Module, id: GlobalId) -> BTreeSet<usize> {
+fn dead(
+    module: &Module,
+    id: GlobalId,
+) -> BTreeSet<usize> {
     let Some(function) = module.global(id).function() else { return BTreeSet::new() };
     let count = function.parameters().len();
     // Where each parameter is passed; none when something else reads it.
@@ -69,14 +74,18 @@ fn dead(module: &Module, id: GlobalId) -> BTreeSet<usize> {
                 .iter()
                 .map(|one| {
                     let call = function.instruction(one.user);
-                    let reads = matches!(call.opcode, Opcode::Call(_)) && memory::callee(&module.context, function, one.user) == Some(id) && (one.index as usize) < count;
+                    let reads = matches!(call.opcode, Opcode::Call(_))
+                        && memory::callee(&module.context, function, one.user) == Some(id)
+                        && (one.index as usize) < count;
                     reads.then_some(one.index as usize)
                 })
                 .collect()
         })
         .collect();
     let mut live: BTreeSet<usize> = (0..count).filter(|&at| passed[at].is_none()).collect();
-    while let Some(at) = (0..count).find(|at| !live.contains(at) && passed[*at].iter().flatten().any(|to| live.contains(to))) {
+    while let Some(at) =
+        (0..count).find(|at| !live.contains(at) && passed[*at].iter().flatten().any(|to| live.contains(to)))
+    {
         live.insert(at);
     }
     (0..count).filter(|at| !live.contains(at)).collect()

@@ -11,17 +11,16 @@
 //! which is what this checks.
 
 use std::collections::BTreeSet;
-use crate::support::hash::HashSet;
 use std::sync::Arc;
 
-use crate::support::hash::IndexMap;
-
-use crate::analysis::loops as loopy;
 use crate::analysis::dataflow::{self, Direction};
+use crate::analysis::loops as loopy;
 use crate::backend::liveness::{_backwards, _declared, _terminator, _universe};
-use crate::backend::peephole::{Lanes, _lanes, _register_effects, id};
+use crate::backend::peephole::{_lanes, _register_effects, Lanes, id};
 use crate::model::ir::{Loc, Operation, Reg};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
+use crate::support::hash::HashSet;
+use crate::support::hash::IndexMap;
 
 fn _plain(one: &Insn) -> bool {
     one.what.is_some()
@@ -53,7 +52,12 @@ pub fn copy_of(one: &Insn) -> Option<(Reg, Reg)> {
 }
 
 /// Whether `one` reads (or writes) any of `lanes`, conservatively.
-pub fn touches(bits: u32, one: &Insn, lanes: &Lanes, reading: bool) -> bool {
+pub fn touches(
+    bits: u32,
+    one: &Insn,
+    lanes: &Lanes,
+    reading: bool,
+) -> bool {
     if _terminator(one.what.as_ref()) {
         return false;
     }
@@ -71,7 +75,12 @@ pub fn touches(bits: u32, one: &Insn, lanes: &Lanes, reading: bool) -> bool {
 ///
 /// A path that comes back to the copy's block runs the copy again, so what it
 /// writes on the way cannot be why the last copy before the exit is wrong.
-fn _between(at_of: &IndexMap<i64, &LirBlock>, inside: &BTreeSet<i64>, copy_at: i64, exit_from: i64) -> Option<BTreeSet<i64>> {
+fn _between(
+    at_of: &IndexMap<i64, &LirBlock>,
+    inside: &BTreeSet<i64>,
+    copy_at: i64,
+    exit_from: i64,
+) -> Option<BTreeSet<i64>> {
     let mut forward = BTreeSet::new();
     let mut queue: Vec<i64> =
         at_of[&copy_at].succ.iter().copied().filter(|to| inside.contains(to) && *to != copy_at).collect();
@@ -106,13 +115,20 @@ fn _between(at_of: &IndexMap<i64, &LirBlock>, inside: &BTreeSet<i64>, copy_at: i
 ///
 /// The exit is left out: a lane only the exit reads is what the sunk copy is
 /// for, and a lane a nested loop reads again is not.
-fn _round(bits: u32, at_of: &IndexMap<i64, &LirBlock>, inside: &BTreeSet<i64>, universe: &Lanes) -> IndexMap<i64, Lanes> {
+fn _round(
+    bits: u32,
+    at_of: &IndexMap<i64, &LirBlock>,
+    inside: &BTreeSet<i64>,
+    universe: &Lanes,
+) -> IndexMap<i64, Lanes> {
     let nodes: Vec<&LirBlock> = inside.iter().map(|at| at_of[at]).collect();
     dataflow::solve(
         &nodes,
         Direction::Backward,
         |_| Lanes::new(),
-        |at, into| at_of[&at].succ.iter().filter(|to| inside.contains(to)).flat_map(|to| into[to].iter().copied()).collect(),
+        |at, into| {
+            at_of[&at].succ.iter().filter(|to| inside.contains(to)).flat_map(|to| into[to].iter().copied()).collect()
+        },
         |at, after| _backwards(bits, at_of[&at], after.clone(), universe),
     )
     .output
@@ -188,10 +204,8 @@ pub fn sunk(body: &LirBody) -> LirBody {
                 let Some(rest) = _between(&at_of, &inside, block.at, source_at) else {
                     continue;
                 };
-                let later: Vec<&Arc<Insn>> = block.insns[index + 1..]
-                    .iter()
-                    .chain(rest.iter().flat_map(|at| at_of[at].insns.iter()))
-                    .collect();
+                let later: Vec<&Arc<Insn>> =
+                    block.insns[index + 1..].iter().chain(rest.iter().flat_map(|at| at_of[at].insns.iter())).collect();
                 let both: Lanes = written.or(&read);
                 if later
                     .iter()
@@ -224,22 +238,30 @@ pub fn sunk(body: &LirBody) -> LirBody {
 
 #[cfg(test)]
 mod tests {
-    use crate::support::hash::HashMap;
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use crate::support::hash::IndexMap;
 
     use super::sunk;
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::HashMap;
+    use crate::support::hash::IndexMap;
 
     fn r(register: Register) -> Loc {
         Loc::Reg(Reg { register, width: 2 })
     }
 
-    fn _insn(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>, target: Option<i64>) -> Arc<Insn> {
-        // Inserted, as the C path's are: an instruction standing for BC's bytes stays where `lir.without` finds no heir.
+    fn _insn(
+        at: i64,
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+        target: Option<i64>,
+    ) -> Arc<Insn> {
+        // Inserted, as the C path's are: an instruction standing for BC's bytes stays where `lir.without` finds no
+        // heir.
         Arc::new(Insn::new(
             at,
             Some((at, at)),
@@ -249,19 +271,34 @@ mod tests {
         ))
     }
 
-    fn _move(at: i64, dest: Register, source: Register) -> Arc<Insn> {
+    fn _move(
+        at: i64,
+        dest: Register,
+        source: Register,
+    ) -> Arc<Insn> {
         _insn(at, Operation::Move, "mov", vec![r(dest)], vec![r(source)], None)
     }
 
-    fn _compare(at: i64, left: Register, right: Register) -> Arc<Insn> {
+    fn _compare(
+        at: i64,
+        left: Register,
+        right: Register,
+    ) -> Arc<Insn> {
         _insn(at, Operation::Compare, "cmp", vec![], vec![r(left), r(right)], None)
     }
 
-    fn _branch(at: i64, name: &str, target: i64) -> Arc<Insn> {
+    fn _branch(
+        at: i64,
+        name: &str,
+        target: i64,
+    ) -> Arc<Insn> {
         _insn(at, Operation::Branch, name, vec![], vec![], Some(target))
     }
 
-    fn _jump(at: i64, target: i64) -> Arc<Insn> {
+    fn _jump(
+        at: i64,
+        target: i64,
+    ) -> Arc<Insn> {
         _insn(at, Operation::Jump, "jmp", vec![], vec![], Some(target))
     }
 
@@ -269,7 +306,11 @@ mod tests {
         _insn(at, Operation::Return, "ret", vec![], vec![], None)
     }
 
-    fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
+    fn block(
+        at: i64,
+        insns: Vec<Arc<Insn>>,
+        succ: Vec<i64>,
+    ) -> LirBlock {
         LirBlock { succ, ..LirBlock::new(at, insns) }
     }
 
@@ -326,7 +367,11 @@ mod tests {
             1,
             vec![
                 block(1, vec![_jump(1, 5)], vec![5]),
-                block(5, vec![_move(5, DX, AX), _move(6, DI, DX), _compare(7, AX, BX), _branch(8, "jl", 5)], vec![5, 9]),
+                block(
+                    5,
+                    vec![_move(5, DX, AX), _move(6, DI, DX), _compare(7, AX, BX), _branch(8, "jl", 5)],
+                    vec![5, 9],
+                ),
                 block(9, vec![_return(9)], vec![]),
             ],
             IndexMap::default(),
@@ -358,11 +403,20 @@ mod tests {
         assert!(copies[&5] == vec![r(DI)] && copies[&9].is_empty(), "{copies:?}");
     }
 
-    fn _raw_insn(at: i64, what: Semantics) -> Arc<Insn> {
+    fn _raw_insn(
+        at: i64,
+        what: Semantics,
+    ) -> Arc<Insn> {
         Arc::new(Insn::new(at, Some((at, at + 2)), Some(what), vec![], vec![]))
     }
 
-    fn sem(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>, target: Option<i64>) -> Semantics {
+    fn sem(
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+        target: Option<i64>,
+    ) -> Semantics {
         Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) }
     }
 
@@ -371,7 +425,10 @@ mod tests {
     }
 
     /// What the pushes along `path` write, running register moves and adds.
-    fn _pushed(body: &LirBody, path: &[i64]) -> Vec<i64> {
+    fn _pushed(
+        body: &LirBody,
+        path: &[i64],
+    ) -> Vec<i64> {
         let mut held: HashMap<Register, i64> = HashMap::default();
         let mut pushed = Vec::new();
         let blocks: HashMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
@@ -404,13 +461,20 @@ mod tests {
             "one",
             0,
             vec![
-                block(0, vec![_raw_insn(0, sem(Operation::Move, "mov", vec![si.clone()], vec![imm(0)], None))], vec![0x10]),
+                block(
+                    0,
+                    vec![_raw_insn(0, sem(Operation::Move, "mov", vec![si.clone()], vec![imm(0)], None))],
+                    vec![0x10],
+                ),
                 block(
                     0x10,
                     vec![
                         _raw_insn(0x10, sem(Operation::Push, "push", vec![], vec![si.clone()], None)),
                         _raw_insn(0x12, sem(Operation::Move, "mov", vec![bx.clone()], vec![si.clone()], None)),
-                        _raw_insn(0x14, sem(Operation::Binary, "add", vec![bx.clone()], vec![bx.clone(), imm(1)], None)),
+                        _raw_insn(
+                            0x14,
+                            sem(Operation::Binary, "add", vec![bx.clone()], vec![bx.clone(), imm(1)], None),
+                        ),
                         _raw_insn(0x16, sem(Operation::Compare, "cmp", vec![], vec![bx.clone(), imm(3)], None)),
                         _raw_insn(0x18, sem(Operation::Move, "mov", vec![si], vec![bx], None)),
                         _raw_insn(0x1A, sem(Operation::Branch, "jl", vec![], vec![], Some(0x10))),

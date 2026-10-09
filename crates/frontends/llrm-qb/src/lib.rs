@@ -1,9 +1,9 @@
 //! Port of `qbopt/frontend/qb`: QB HIR to a BASIC-envelope OMF object.
 
 pub use llrm_core::abi::qb as abi;
+pub mod cli;
 pub mod compile;
 pub mod driver;
-pub mod cli;
 pub mod qbstages;
 mod zero_fill;
 
@@ -41,6 +41,6 @@ mod test_debug;
 mod test_runtime_model;
 
 #[cfg(test)]
-mod test_pipeline;
-#[cfg(test)]
 mod callconv_tests;
+#[cfg(test)]
+mod test_pipeline;

@@ -2,10 +2,9 @@
 //! front end described under -d2, mapped onto `llrm_hir::debug`, which
 //! builds the rest.
 
-use llrm_support::hash::HashMap;
-
 use llrm_core::hir::debug::Builder;
 use llrm_core::hir::model::{Debug, DebugKind, DebugReach, DebugScalar};
+use llrm_support::hash::HashMap;
 
 use super::hir::{self, DebugType};
 use super::raise_hir::{signed, widths};
@@ -21,11 +20,22 @@ pub struct Described<'u> {
 impl<'u> Described<'u> {
     /// None unless the unit was compiled with -d2.
     pub fn of(unit: &'u hir::Unit) -> Option<Self> {
-        Some(Self { unit, debug: unit.debug.as_ref()?, builder: Builder::for_language(llrm_core::hir::model::DebugLanguage::C, llrm_core::hir::model::DebugDialect::Cv4), made: HashMap::default() })
+        Some(Self {
+            unit,
+            debug: unit.debug.as_ref()?,
+            builder: Builder::for_language(
+                llrm_core::hir::model::DebugLanguage::C,
+                llrm_core::hir::model::DebugDialect::Cv4,
+            ),
+            made: HashMap::default(),
+        })
     }
 
     /// A pointer's reach, as the memory model makes a default one.
-    fn reach(&self, cg: &str) -> Option<DebugReach> {
+    fn reach(
+        &self,
+        cg: &str,
+    ) -> Option<DebugReach> {
         Some(match cg {
             "TY_NEAR_POINTER" | "TY_NEAR_CODE_PTR" => DebugReach::Near,
             "TY_LONG_POINTER" | "TY_LONG_CODE_PTR" => DebugReach::Far,
@@ -39,7 +49,10 @@ impl<'u> Described<'u> {
 
     /// C's scalar `name` of the code generator's type `cg`, as wide and
     /// signed as the code keeps it.
-    fn scalar(name: &str, cg: &str) -> Option<DebugScalar> {
+    fn scalar(
+        name: &str,
+        cg: &str,
+    ) -> Option<DebugScalar> {
         if cg == "TY_DEFAULT" && name == "void" {
             return Some(DebugScalar::Void);
         }
@@ -62,7 +75,10 @@ impl<'u> Described<'u> {
     }
 
     /// The bytes a value of `handle` takes.
-    fn size(&self, handle: i64) -> Option<i64> {
+    fn size(
+        &self,
+        handle: i64,
+    ) -> Option<i64> {
         match self.debug.types.get(&handle)? {
             DebugType::Scalar { cg, .. } | DebugType::Enum { cg } => widths(cg).map(i64::from),
             DebugType::Pointer { cg, .. } => match self.reach(cg)? {
@@ -77,7 +93,10 @@ impl<'u> Described<'u> {
     }
 
     /// `handle`'s type, where CodeView has one for it.
-    fn r#type(&mut self, handle: i64) -> Option<i64> {
+    fn r#type(
+        &mut self,
+        handle: i64,
+    ) -> Option<i64> {
         if let Some(&made) = self.made.get(&handle) {
             return made;
         }
@@ -100,7 +119,9 @@ impl<'u> Described<'u> {
             // An aggregate is declared before its members, which may point back to it: the only
             // place a type reaches itself, so the only one that needs this.
             DebugType::Struct { name, union, size, fields } => {
-                let id = self.builder.declare_aggregate(if union { DebugKind::Union } else { DebugKind::Struct }, &name, size);
+                let id = self
+                    .builder
+                    .declare_aggregate(if union { DebugKind::Union } else { DebugKind::Struct }, &name, size);
                 self.made.insert(handle, Some(id));
                 let mut members = Vec::new();
                 for (offset, field, handle, bits) in &fields {
@@ -108,7 +129,10 @@ impl<'u> Described<'u> {
                         members.push((field.clone(), r#type, *offset, *bits));
                     }
                 }
-                let members: Vec<(&str, i64, i64, Option<(i64, i64)>)> = members.iter().map(|(name, r#type, offset, bits)| (name.as_str(), *r#type, *offset, *bits)).collect();
+                let members: Vec<(&str, i64, i64, Option<(i64, i64)>)> = members
+                    .iter()
+                    .map(|(name, r#type, offset, bits)| (name.as_str(), *r#type, *offset, *bits))
+                    .collect();
                 self.builder.define_aggregate(id, &members);
                 Some(id)
             }
@@ -116,7 +140,8 @@ impl<'u> Described<'u> {
                 let void = self.builder.scalar(DebugScalar::Void);
                 let result = self.r#type(result).filter(|&one| one != void);
                 // `(void)`: no parameter.
-                let parameters: Option<Vec<i64>> = parameters.iter().map(|&one| self.r#type(one)).filter(|&one| one != Some(void)).collect();
+                let parameters: Option<Vec<i64>> =
+                    parameters.iter().map(|&one| self.r#type(one)).filter(|&one| one != Some(void)).collect();
                 parameters.map(|parameters| self.builder.procedure(result, &parameters))
             }
             DebugType::Name { target, .. } => target.and_then(|target| self.r#type(target)),
@@ -126,28 +151,50 @@ impl<'u> Described<'u> {
     }
 
     /// The module's variable `name` in data object `object`.
-    pub fn global(&mut self, object: i64, name: &str, handle: i64) {
+    pub fn global(
+        &mut self,
+        object: i64,
+        name: &str,
+        handle: i64,
+    ) {
         if let Some(r#type) = self.r#type(handle) {
             self.builder.global(object, 0, name, r#type);
         }
     }
 
     /// A parameter's or local's `name`, held in `place`.
-    pub fn variable(&mut self, place: i64, name: &str, handle: i64, parameter: bool) {
+    pub fn variable(
+        &mut self,
+        place: i64,
+        name: &str,
+        handle: i64,
+        parameter: bool,
+    ) {
         if let Some(r#type) = self.r#type(handle) {
             self.builder.variable(place, name, r#type, parameter);
         }
     }
 
     /// A parameter's home, `place`, that holds the function's `argument`th argument once it has stored it.
-    pub fn parameter_home(&mut self, place: i64, name: &str, handle: i64, argument: i64) {
+    pub fn parameter_home(
+        &mut self,
+        place: i64,
+        name: &str,
+        handle: i64,
+        argument: i64,
+    ) {
         if let Some(r#type) = self.r#type(handle) {
             self.builder.parameter_home(place, name, r#type, argument);
         }
     }
 
     /// A function's static `name`, in data object `object`.
-    pub fn local_static(&mut self, object: i64, name: &str, handle: i64) {
+    pub fn local_static(
+        &mut self,
+        object: i64,
+        name: &str,
+        handle: i64,
+    ) {
         if let Some(r#type) = self.r#type(handle) {
             self.builder.local_static(object, 0, name, r#type);
         }
@@ -155,13 +202,21 @@ impl<'u> Described<'u> {
 
     /// The function `function` just compiled, `name`, of the procedure type
     /// `handle`.
-    pub fn function(&mut self, function: i64, name: &str, handle: Option<i64>) {
+    pub fn function(
+        &mut self,
+        function: i64,
+        name: &str,
+        handle: Option<i64>,
+    ) {
         let r#type = handle.and_then(|handle| self.r#type(handle)).unwrap_or_else(|| self.builder.procedure(None, &[]));
         self.builder.typed_function(function, name, r#type);
     }
 
     /// The unit's globals, each by the data object `object` gives its symbol.
-    pub fn finish(mut self, object: impl Fn(i64) -> Option<i64>) -> Debug {
+    pub fn finish(
+        mut self,
+        object: impl Fn(i64) -> Option<i64>,
+    ) -> Debug {
         for &(symbol, handle) in &self.debug.globals.clone() {
             let (Some(at), Some(one)) = (object(symbol), self.unit.symbols.get(&symbol)) else { continue };
             let name = one.name.clone();

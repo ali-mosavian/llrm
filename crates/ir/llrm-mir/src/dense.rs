@@ -1,6 +1,6 @@
-//! Maps and sets keyed by dense ids (`ValueId`, `InstId`, `BlockId`): a vector indexed by the id, as gcc's sbitmap and LLVM's
-//! IndexedMap / SparseBitVector are. No hashing, no tree nodes, one allocation that grows by doubling. Iteration is ascending by
-//! id, which is the order a `BTreeMap` of the same keys has.
+//! Maps and sets keyed by dense ids (`ValueId`, `InstId`, `BlockId`): a vector indexed by the id, as gcc's sbitmap and
+//! LLVM's IndexedMap / SparseBitVector are. No hashing, no tree nodes, one allocation that grows by doubling. Iteration
+//! is ascending by id, which is the order a `BTreeMap` of the same keys has.
 
 use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
@@ -56,13 +56,19 @@ impl<K: Dense> IdSet<K> {
         self.len == 0
     }
 
-    pub fn contains(&self, key: &K) -> bool {
+    pub fn contains(
+        &self,
+        key: &K,
+    ) -> bool {
         let at = key.index();
         self.words.get(at / 64).is_some_and(|word| word & (1 << (at % 64)) != 0)
     }
 
     /// Whether `key` was not in the set.
-    pub fn insert(&mut self, key: K) -> bool {
+    pub fn insert(
+        &mut self,
+        key: K,
+    ) -> bool {
         let at = key.index();
         if at / 64 >= self.words.len() {
             self.words.resize((at / 64 + 1).next_power_of_two(), 0);
@@ -75,7 +81,10 @@ impl<K: Dense> IdSet<K> {
     }
 
     /// Whether `key` was in the set.
-    pub fn remove(&mut self, key: &K) -> bool {
+    pub fn remove(
+        &mut self,
+        key: &K,
+    ) -> bool {
         let at = key.index();
         let Some(word) = self.words.get_mut(at / 64) else { return false };
         let had = *word & (1 << (at % 64)) != 0;
@@ -91,16 +100,21 @@ impl<K: Dense> IdSet<K> {
 
     /// The members, ascending.
     pub fn iter(&self) -> impl Iterator<Item = K> + '_ {
-        self.words.iter().enumerate().flat_map(|(at, word)| {
-            let mut left = *word;
-            std::iter::from_fn(move || {
-                (left != 0).then(|| {
-                    let bit = left.trailing_zeros() as usize;
-                    left &= left - 1;
-                    K::at(at * 64 + bit)
-                })
-            })
-        })
+        self.words
+            .iter()
+            .enumerate()
+            .flat_map(
+                |(at, word)| {
+                    let mut left = *word;
+                    std::iter::from_fn(move || {
+                        (left != 0).then(|| {
+                            let bit = left.trailing_zeros() as usize;
+                            left &= left - 1;
+                            K::at(at * 64 + bit)
+                        })
+                    })
+                },
+            )
     }
 }
 
@@ -113,7 +127,10 @@ impl<K: Dense> FromIterator<K> for IdSet<K> {
 }
 
 impl<K: Dense> Extend<K> for IdSet<K> {
-    fn extend<I: IntoIterator<Item = K>>(&mut self, keys: I) {
+    fn extend<I: IntoIterator<Item = K>>(
+        &mut self,
+        keys: I,
+    ) {
         for key in keys {
             self.insert(key);
         }
@@ -121,13 +138,19 @@ impl<K: Dense> Extend<K> for IdSet<K> {
 }
 
 impl<K: Dense + std::fmt::Debug> std::fmt::Debug for IdSet<K> {
-    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         out.debug_set().entries(self.iter()).finish()
     }
 }
 
 impl<K: Dense> PartialEq for IdSet<K> {
-    fn eq(&self, other: &Self) -> bool {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
         self.len == other.len && self.iter().map(Dense::index).eq(other.iter().map(Dense::index))
     }
 }
@@ -166,34 +189,54 @@ impl<K: Dense, V> IdMap<K, V> {
         self.len == 0
     }
 
-    pub fn get(&self, key: &K) -> Option<&V> {
+    pub fn get(
+        &self,
+        key: &K,
+    ) -> Option<&V> {
         self.slots.get(key.index())?.as_ref()
     }
 
-    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+    pub fn get_mut(
+        &mut self,
+        key: &K,
+    ) -> Option<&mut V> {
         self.slots.get_mut(key.index())?.as_mut()
     }
 
-    pub fn contains_key(&self, key: &K) -> bool {
+    pub fn contains_key(
+        &self,
+        key: &K,
+    ) -> bool {
         self.get(key).is_some()
     }
 
     /// The value `key` had.
-    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+    pub fn insert(
+        &mut self,
+        key: K,
+        value: V,
+    ) -> Option<V> {
         let slot = self.slot(key);
         let old = slot.replace(value);
         self.len += usize::from(old.is_none());
         old
     }
 
-    pub fn remove(&mut self, key: &K) -> Option<V> {
+    pub fn remove(
+        &mut self,
+        key: &K,
+    ) -> Option<V> {
         let old = self.slots.get_mut(key.index())?.take();
         self.len -= usize::from(old.is_some());
         old
     }
 
     /// `key`'s value, made by `make` where it has none.
-    pub fn get_or_insert_with(&mut self, key: K, make: impl FnOnce() -> V) -> &mut V {
+    pub fn get_or_insert_with(
+        &mut self,
+        key: K,
+        make: impl FnOnce() -> V,
+    ) -> &mut V {
         let at = key.index();
         if self.get(&key).is_none() {
             self.insert(key, make());
@@ -223,7 +266,10 @@ impl<K: Dense, V> IdMap<K, V> {
         self.slots.iter().flatten()
     }
 
-    fn slot(&mut self, key: K) -> &mut Option<V> {
+    fn slot(
+        &mut self,
+        key: K,
+    ) -> &mut Option<V> {
         let at = key.index();
         if at >= self.slots.len() {
             self.slots.resize_with(at + 1, || None);
@@ -241,7 +287,10 @@ impl<K: Dense, V> FromIterator<(K, V)> for IdMap<K, V> {
 }
 
 impl<K: Dense, V> Extend<(K, V)> for IdMap<K, V> {
-    fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, pairs: I) {
+    fn extend<I: IntoIterator<Item = (K, V)>>(
+        &mut self,
+        pairs: I,
+    ) {
         for (key, value) in pairs {
             self.insert(key, value);
         }
@@ -250,35 +299,53 @@ impl<K: Dense, V> Extend<(K, V)> for IdMap<K, V> {
 
 impl<K: Dense, V> Index<&K> for IdMap<K, V> {
     type Output = V;
-    fn index(&self, key: &K) -> &V {
+    fn index(
+        &self,
+        key: &K,
+    ) -> &V {
         self.get(key).expect("the key is in the map")
     }
 }
 
 impl<K: Dense, V> IndexMut<&K> for IdMap<K, V> {
-    fn index_mut(&mut self, key: &K) -> &mut V {
+    fn index_mut(
+        &mut self,
+        key: &K,
+    ) -> &mut V {
         self.get_mut(key).expect("the key is in the map")
     }
 }
 
 impl<K: Dense + std::fmt::Debug, V: std::fmt::Debug> std::fmt::Debug for IdMap<K, V> {
-    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         out.debug_map().entries(self.iter()).finish()
     }
 }
 
 impl<K: Dense, V: PartialEq> PartialEq for IdMap<K, V> {
-    fn eq(&self, other: &Self) -> bool {
-        self.len == other.len && self.iter().map(|(key, value)| (key.index(), value)).eq(other.iter().map(|(key, value)| (key.index(), value)))
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.len == other.len
+            && self
+                .iter()
+                .map(|(key, value)| (key.index(), value))
+                .eq(other.iter().map(|(key, value)| (key.index(), value)))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::{BTreeMap, BTreeSet};
 
-    /// A set agrees with a `BTreeSet` of the same inserts and removes: membership, count, ascending order, what each call returns.
+    use super::*;
+
+    /// A set agrees with a `BTreeSet` of the same inserts and removes: membership, count, ascending order, what each
+    /// call returns.
     #[test]
     fn a_set_does_what_a_btreeset_does() {
         let (mut ours, mut theirs) = (IdSet::<u32>::new(), BTreeSet::new());

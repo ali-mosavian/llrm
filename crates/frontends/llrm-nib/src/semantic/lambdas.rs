@@ -15,19 +15,25 @@ pub(super) struct Lambda {
 
 impl Lambda {
     /// This lambda as a value of the function type `type_name`.
-    pub(super) fn lifted(&self, compiler: &mut FunctionCompiler<'_>, type_name: TypeName, span: Span) -> Result<TypedOperand, Diagnostic> {
+    pub(super) fn lifted(
+        &self,
+        compiler: &mut FunctionCompiler<'_>,
+        type_name: TypeName,
+        span: Span,
+    ) -> Result<TypedOperand, Diagnostic> {
         compiler.lifted_lambda(&self.parameters, &self.body, &self.scopes, type_name, span)
     }
 }
 
 impl FunctionCompiler<'_> {
     /// `let name = |x| ...`
-    pub(super) fn bind_lambda(&mut self, name: &str, lambda: &Expr) {
+    pub(super) fn bind_lambda(
+        &mut self,
+        name: &str,
+        lambda: &Expr,
+    ) {
         let binding = self.lambda_binding(lambda, self.scopes.clone());
-        self.scopes
-            .last_mut()
-            .expect("scope")
-            .insert(name.into(), binding);
+        self.scopes.last_mut().expect("scope").insert(name.into(), binding);
     }
 
     /// A name for `lambda`, which sees `scopes`.
@@ -36,27 +42,17 @@ impl FunctionCompiler<'_> {
         lambda: &Expr,
         scopes: Vec<BTreeMap<String, Binding>>,
     ) -> Binding {
-        let Expr::Lambda {
-            parameters, body, ..
-        } = lambda
-        else {
-            unreachable!("a lambda")
-        };
+        let Expr::Lambda { parameters, body, .. } = lambda else { unreachable!("a lambda") };
         let index = self.lambdas.len() as u32;
-        self.lambdas.push(Lambda {
-            parameters: parameters.clone(),
-            body: (**body).clone(),
-            scopes,
-        });
-        Binding {
-            type_: BindingType::Scalar(TypeName::Void),
-            mutable: false,
-            storage: Storage::Lambda(index),
-        }
+        self.lambdas.push(Lambda { parameters: parameters.clone(), body: (**body).clone(), scopes });
+        Binding { type_: BindingType::Scalar(TypeName::Void), mutable: false, storage: Storage::Lambda(index) }
     }
 
     /// The lambda a name is bound to.
-    pub(super) fn lambda_named(&self, name: &str) -> Option<u32> {
+    pub(super) fn lambda_named(
+        &self,
+        name: &str,
+    ) -> Option<u32> {
         match self.visible(name)?.storage {
             Storage::Lambda(index) => Some(index),
             _ => None,
@@ -74,17 +70,11 @@ impl FunctionCompiler<'_> {
     ) -> Result<TypedOperand, Diagnostic> {
         let lambda = self.lambdas[index as usize].clone();
         if arguments.len() != lambda.parameters.len() {
-            return Err(Diagnostic::new(
-                span,
-                format!("the lambda takes {} arguments", lambda.parameters.len()),
-            ));
+            return Err(Diagnostic::new(span, format!("the lambda takes {} arguments", lambda.parameters.len())));
         }
         let mut parameters = BTreeMap::new();
         for (parameter, argument) in lambda.parameters.iter().zip(arguments) {
-            parameters.insert(
-                parameter.name.clone(),
-                self.lambda_argument(parameter, argument, span)?,
-            );
+            parameters.insert(parameter.name.clone(), self.lambda_argument(parameter, argument, span)?);
         }
         let mut body = lambda.body.clone();
         self.prepare_expression(&mut body)?;
@@ -105,11 +95,7 @@ impl FunctionCompiler<'_> {
         argument: &Expr,
         span: Span,
     ) -> Result<Binding, Diagnostic> {
-        let declared = parameter
-            .type_
-            .as_ref()
-            .map(|spec| self.types.resolve_element(spec, span))
-            .transpose()?;
+        let declared = parameter.type_.as_ref().map(|spec| self.types.resolve_element(spec, span)).transpose()?;
         let aggregate = match declared {
             Some(ElementType::Struct(id)) => Some(id),
             Some(ElementType::Scalar(_)) => None,
@@ -118,15 +104,10 @@ impl FunctionCompiler<'_> {
         if let Some(struct_id) = aggregate {
             let view = self.struct_view(argument, span)?;
             if view.struct_id != struct_id {
-                return Err(Diagnostic::new(
-                    argument.span(),
-                    "the argument has the wrong struct type",
-                ));
+                return Err(Diagnostic::new(argument.span(), "the argument has the wrong struct type"));
             }
             let pointer = self.address_of(&view);
-            let hir::Operand::Value(pointer) = pointer else {
-                unreachable!("an address is a value")
-            };
+            let hir::Operand::Value(pointer) = pointer else { unreachable!("an address is a value") };
             return Ok(Binding {
                 type_: BindingType::Struct(struct_id),
                 mutable: false,
@@ -139,11 +120,7 @@ impl FunctionCompiler<'_> {
         };
         let type_name = value.type_name;
         let value = self.materialized(required(value, span)?, type_id(type_name));
-        Ok(Binding {
-            type_: BindingType::Scalar(type_name),
-            mutable: false,
-            storage: Storage::Parameter(value),
-        })
+        Ok(Binding { type_: BindingType::Scalar(type_name), mutable: false, storage: Storage::Parameter(value) })
     }
 
     /// The lambda an argument passes, written out, when it passes one.
@@ -169,11 +146,11 @@ impl FunctionCompiler<'_> {
 
 /// The first name `lambda` reads from `scopes` rather than its parameters:
 /// a lambda passed to a function may not capture.
-pub(super) fn captured(lambda: &Expr, scopes: &[BTreeMap<String, Binding>]) -> Option<String> {
-    let Expr::Lambda {
-        parameters, body, ..
-    } = lambda
-    else {
+pub(super) fn captured(
+    lambda: &Expr,
+    scopes: &[BTreeMap<String, Binding>],
+) -> Option<String> {
+    let Expr::Lambda { parameters, body, .. } = lambda else {
         return None;
     };
     let mut body = (**body).clone();

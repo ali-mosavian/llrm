@@ -34,8 +34,15 @@ fn a_built_module_is_the_one_its_text_describes() {
     let mut module = Module::default();
     let i16 = module.context.types.int(16);
     let zero = module.context.int(i16, 0);
-    let count = module.add_variable("count", GlobalVariable { ty: i16, constant: false, initializer: Some(zero), align: None }, Linkage::Internal).unwrap();
-    let binary = module.context.types.intern(Type::Function { returns: i16, parameters: vec![i16, i16], variadic: false });
+    let count = module
+        .add_variable(
+            "count",
+            GlobalVariable { ty: i16, constant: false, initializer: Some(zero), align: None },
+            Linkage::Internal,
+        )
+        .unwrap();
+    let binary =
+        module.context.types.intern(Type::Function { returns: i16, parameters: vec![i16, i16], variadic: false });
     let smax = module.add_function("llvm.smax.i16", binary, Linkage::External).unwrap();
     let unary = module.context.types.intern(Type::Function { returns: i16, parameters: vec![i16], variadic: false });
     let f = module.add_function("f", unary, Linkage::External).unwrap();

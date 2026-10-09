@@ -15,7 +15,11 @@ pub fn sort_state_values(graph: &mut StateGraph) {
     assign_sort_keys(graph);
 }
 
-pub fn duplicate_state(graph: &mut StateGraph, src: NodeId, seen: &mut BTreeSet<NodeId>) {
+pub fn duplicate_state(
+    graph: &mut StateGraph,
+    src: NodeId,
+    seen: &mut BTreeSet<NodeId>,
+) {
     if !seen.insert(src) {
         return;
     }
@@ -32,9 +36,7 @@ pub fn duplicate_state(graph: &mut StateGraph, src: NodeId, seen: &mut BTreeSet<
             }
         }
     } else {
-        if let (Some(true_link), Some(false_link)) =
-            (graph.node(src).true_link, graph.node(src).false_link)
-        {
+        if let (Some(true_link), Some(false_link)) = (graph.node(src).true_link, graph.node(src).false_link) {
             if is_empty_branch(graph, false_link)
                 && target_reachable(graph, true_link, false_link, &mut BTreeSet::new())
             {
@@ -63,7 +65,10 @@ pub fn duplicate_state(graph: &mut StateGraph, src: NodeId, seen: &mut BTreeSet<
     graph.prepend_work(src);
 }
 
-fn is_empty_branch(graph: &StateGraph, id: NodeId) -> bool {
+fn is_empty_branch(
+    graph: &StateGraph,
+    id: NodeId,
+) -> bool {
     graph.node(id).kind == StateKind::Branch && graph.node(id).payload == 4
 }
 
@@ -79,14 +84,8 @@ fn target_reachable(
     if !seen.insert(current) {
         return false;
     }
-    graph
-        .node(current)
-        .true_link
-        .is_some_and(|link| target_reachable(graph, link, target, seen))
-        || graph
-            .node(current)
-            .false_link
-            .is_some_and(|link| target_reachable(graph, link, target, seen))
+    graph.node(current).true_link.is_some_and(|link| target_reachable(graph, link, target, seen))
+        || graph.node(current).false_link.is_some_and(|link| target_reachable(graph, link, target, seen))
 }
 
 pub fn assign_sort_keys(graph: &mut StateGraph) {
@@ -106,8 +105,7 @@ pub fn assign_sort_keys(graph: &mut StateGraph) {
         let mut shrink_count = 0;
         for id in &work_items {
             graph.node_mut(*id).sort_index -= shrink_count;
-            if graph.node(*id).scratch_word == 0 && branch_delta_after_shrink(graph, *id).is_some()
-            {
+            if graph.node(*id).scratch_word == 0 && branch_delta_after_shrink(graph, *id).is_some() {
                 graph.node_mut(*id).encoded_size -= 1;
                 graph.node_mut(*id).scratch_word = 1;
                 shrink_count += 1;
@@ -119,7 +117,10 @@ pub fn assign_sort_keys(graph: &mut StateGraph) {
     }
 }
 
-fn initial_encoded_size(graph: &StateGraph, id: NodeId) -> usize {
+fn initial_encoded_size(
+    graph: &StateGraph,
+    id: NodeId,
+) -> usize {
     let node = graph.node(id);
     match node.kind {
         StateKind::Accept | StateKind::Reject => 1,
@@ -138,15 +139,20 @@ fn node_id_len(node_id: u16) -> usize {
     }
 }
 
-fn can_shrink_branch(graph: &StateGraph, id: NodeId) -> bool {
+fn can_shrink_branch(
+    graph: &StateGraph,
+    id: NodeId,
+) -> bool {
     graph.node(id).kind == StateKind::Branch && graph.node(id).true_link.is_some()
 }
 
-fn branch_delta_after_shrink(graph: &StateGraph, id: NodeId) -> Option<isize> {
+fn branch_delta_after_shrink(
+    graph: &StateGraph,
+    id: NodeId,
+) -> Option<isize> {
     let node = graph.node(id);
     let target = graph.node(node.true_link?);
-    let delta =
-        target.sort_index as isize - node.sort_index as isize - node.encoded_size as isize + 1;
+    let delta = target.sort_index as isize - node.sort_index as isize - node.encoded_size as isize + 1;
     if (-DELTA_LIMIT + 1..DELTA_LIMIT).contains(&delta) {
         Some(delta)
     } else {
@@ -156,9 +162,8 @@ fn branch_delta_after_shrink(graph: &StateGraph, id: NodeId) -> Option<isize> {
 
 #[cfg(test)]
 mod tests {
-    use crate::buildprs_graph::StateNode;
-
     use super::*;
+    use crate::buildprs_graph::StateNode;
 
     #[test]
     fn layout_assigns_contiguous_offsets_for_reachable_graph() {

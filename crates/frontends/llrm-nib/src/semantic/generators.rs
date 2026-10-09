@@ -6,7 +6,10 @@
 use super::*;
 
 pub(super) fn is_generator(function: &Function) -> bool {
-    matches!(&function.result, TypeAnnotation::Value(TypeSpec::Applied { name, .. }) if name == "iter")
+    matches!(
+        &function.result,
+        TypeAnnotation::Value(TypeSpec::Applied { name, .. }) if name == "iter"
+    )
 }
 
 /// A `for` whose generator is being compiled in place.
@@ -34,43 +37,22 @@ impl FunctionCompiler<'_> {
         span: Span,
     ) -> Result<bool, Diagnostic> {
         let (parameters, statements, item) = match iterable {
-            Expr::Generator {
-                element,
-                clauses,
-                span,
-            } => {
-                let produce = vec![Statement::Yield {
-                    value: (**element).clone(),
-                    span: *span,
-                }];
+            Expr::Generator { element, clauses, span } => {
+                let produce = vec![Statement::Yield { value: (**element).clone(), span: *span }];
                 (BTreeMap::new(), Clause::loops(clauses, produce), None)
             }
-            Expr::Call {
-                name: callee,
-                arguments,
-                span,
-                ..
-            } if self.is_generator_call(callee) => {
+            Expr::Call { name: callee, arguments, span, .. } if self.is_generator_call(callee) => {
                 let (parameters, body, item) = self.generator_call(callee, arguments, *span)?;
                 (parameters, body, Some(item))
             }
             _ => return Ok(false),
         };
         if mode != IterationMode::Value {
-            return Err(Diagnostic::new(
-                span,
-                "a generator's items are iterated by value",
-            ));
+            return Err(Diagnostic::new(span, "a generator's items are iterated by value"));
         }
         let depth = self.scopes.len();
         let exit = self.block();
-        self.consumers.push(Consumer {
-            name: name.into(),
-            item,
-            body: body.to_vec(),
-            depth,
-            exit,
-        });
+        self.consumers.push(Consumer { name: name.into(), item, body: body.to_vec(), depth, exit });
         self.scopes.push(parameters);
         let result = self.statements(&statements);
         if result.is_ok() && self.open() {
@@ -86,7 +68,10 @@ impl FunctionCompiler<'_> {
         Ok(true)
     }
 
-    pub(super) fn is_generator_call(&self, name: &str) -> bool {
+    pub(super) fn is_generator_call(
+        &self,
+        name: &str,
+    ) -> bool {
         self.templates.borrow().generator(name).is_some()
     }
 
@@ -98,12 +83,7 @@ impl FunctionCompiler<'_> {
         arguments: &[Expr],
         span: Span,
     ) -> Result<(BTreeMap<String, Binding>, Vec<Statement>, TypeAnnotation), Diagnostic> {
-        let template = self
-            .templates
-            .borrow()
-            .generator(name)
-            .cloned()
-            .expect("a generator");
+        let template = self.templates.borrow().generator(name).cloned().expect("a generator");
         let inferred = self.inferred(&template, arguments, span)?;
         self.chosen(&template, &inferred.bound, span)?;
         let function = instances::substituted_function(&template, name, &inferred.bound);
@@ -113,13 +93,12 @@ impl FunctionCompiler<'_> {
             let binding = self.lambda_binding(&lambda, scopes);
             scope.insert(parameter, binding);
         }
-        let parameters: Vec<_> = function
-            .parameters
-            .iter()
-            .filter(|one| !scope.contains_key(&one.name))
-            .collect();
+        let parameters: Vec<_> = function.parameters.iter().filter(|one| !scope.contains_key(&one.name)).collect();
         let kinds = parameters.iter().map(|one| parameter_kind(self.types, one)).collect::<Result<Vec<_>, _>>()?;
-        borrows::check_disjoint(&self.lent(&inferred.passed, &kinds), &inferred.passed.iter().map(Expr::span).collect::<Vec<_>>())?;
+        borrows::check_disjoint(
+            &self.lent(&inferred.passed, &kinds),
+            &inferred.passed.iter().map(Expr::span).collect::<Vec<_>>(),
+        )?;
         for ((parameter, argument), kind) in parameters.into_iter().zip(&inferred.passed).zip(kinds) {
             let operand = self.argument_operand(argument, &kind)?;
             let value = self.materialized(operand, kind.hir_type());
@@ -138,10 +117,15 @@ impl FunctionCompiler<'_> {
 
     /// `yield value`: the consuming loop's body, with its binding the value.
     /// A `break` there leaves the generator, a `continue` resumes it.
-    pub(super) fn yield_statement(&mut self, value: &Expr, span: Span) -> Result<(), Diagnostic> {
-        let consumer = self.consumers.pop().ok_or_else(|| {
-            Diagnostic::new(span, "yield is only valid in a generator a 'for' consumes")
-        })?;
+    pub(super) fn yield_statement(
+        &mut self,
+        value: &Expr,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        let consumer = self
+            .consumers
+            .pop()
+            .ok_or_else(|| Diagnostic::new(span, "yield is only valid in a generator a 'for' consumes"))?;
         let generator = consumer.depth..self.scopes.len();
         let resume = self.block();
         let result = self.in_scope(|this| {
@@ -156,12 +140,7 @@ impl FunctionCompiler<'_> {
             this.statement(&bind)?;
             this.drop_temporaries();
             this.hidden.push(generator);
-            this.loops.push(Loop {
-                exit: consumer.exit,
-                exit_depth: consumer.depth,
-                next: resume,
-                next_depth: depth,
-            });
+            this.loops.push(Loop { exit: consumer.exit, exit_depth: consumer.depth, next: resume, next_depth: depth });
             let result = this.statements(&consumer.body);
             this.loops.pop();
             this.hidden.pop();
@@ -194,30 +173,19 @@ impl FunctionCompiler<'_> {
     }
 
     /// What `iterable` generates, when it is a generator and that is known.
-    pub(super) fn generated_item(&mut self, iterable: &Expr) -> Option<ElementType> {
+    pub(super) fn generated_item(
+        &mut self,
+        iterable: &Expr,
+    ) -> Option<ElementType> {
         match iterable {
-            Expr::Generator {
-                element, clauses, ..
-            } => {
+            Expr::Generator { element, clauses, .. } => {
                 let depth = self.scopes.len();
-                let hint = self
-                    .clause_scopes(clauses)
-                    .and_then(|()| self.element_hint(element));
+                let hint = self.clause_scopes(clauses).and_then(|()| self.element_hint(element));
                 self.scopes.truncate(depth);
                 hint
             }
-            Expr::Call {
-                name,
-                arguments,
-                span,
-                ..
-            } if self.is_generator_call(name) => {
-                let template = self
-                    .templates
-                    .borrow()
-                    .generator(name)
-                    .cloned()
-                    .expect("a generator");
+            Expr::Call { name, arguments, span, .. } if self.is_generator_call(name) => {
+                let template = self.templates.borrow().generator(name).cloned().expect("a generator");
                 let bound = self.inferred(&template, arguments, *span).ok()?.bound;
                 let TypeAnnotation::Value(TypeSpec::Applied { args, .. }) = &template.result else {
                     return None;
@@ -225,9 +193,7 @@ impl FunctionCompiler<'_> {
                 let [TypeAnnotation::Value(item)] = args.as_slice() else {
                     return None;
                 };
-                self.types
-                    .resolve_element(&generics::substitute(item, &bound), *span)
-                    .ok()
+                self.types.resolve_element(&generics::substitute(item, &bound), *span).ok()
             }
             _ => None,
         }

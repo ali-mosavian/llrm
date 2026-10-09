@@ -11,7 +11,10 @@ use crate::model::lir::Insn;
 pub struct Unlowered(pub String);
 
 impl fmt::Display for Unlowered {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
@@ -40,7 +43,10 @@ impl From<frames::Refused> for Raised {
 }
 
 impl fmt::Display for Raised {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
             Self::Unlowered(error) => error.fmt(formatter),
             Self::Refused(error) => error.fmt(formatter),

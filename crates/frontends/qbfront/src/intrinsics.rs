@@ -40,7 +40,10 @@ pub enum Lowering {
     Random,
     ToInteger,
     ToLong,
-    ToIntegral { width: u8, signed: bool },
+    ToIntegral {
+        width: u8,
+        signed: bool,
+    },
     /// An f-string field's text.
     FormatField,
     ToSingle,
@@ -100,11 +103,17 @@ pub struct Intrinsic {
 }
 
 impl Intrinsic {
-    pub fn accepts(self, arity: usize) -> bool {
+    pub fn accepts(
+        self,
+        arity: usize,
+    ) -> bool {
         (self.min_arity..=self.max_arity).contains(&arity)
     }
 
-    pub fn available_in(self, dialect: Dialect) -> bool {
+    pub fn available_in(
+        self,
+        dialect: Dialect,
+    ) -> bool {
         self.dialects & dialect_bit(dialect) != 0
     }
 }
@@ -149,10 +158,7 @@ macro_rules! sized_conversion {
             max_arity: 1,
             result: ResultClass::SizedInteger,
             effect: Effect::Pure,
-            lowering: Lowering::ToIntegral {
-                width: $width,
-                signed: $signed,
-            },
+            lowering: Lowering::ToIntegral { width: $width, signed: $signed },
             dialects: QUICKR,
         }
     };
@@ -193,33 +199,15 @@ pub static INTRINSICS: &[Intrinsic] = &[
     intrinsic!("FREEFILE", 0..=0, Integer, Runtime, Lowering::RuntimeInteger("B$FREF")),
     intrinsic!("FRE", 1..=1, Long, Runtime, Lowering::HeapFree),
     intrinsic!("INT", 1..=1, DynamicNumeric, Pure, Lowering::Floor),
-    intrinsic!(
-        "INKEY",
-        0..=0,
-        String,
-        Runtime,
-        Lowering::RuntimeString("B$INKY")
-    ),
+    intrinsic!("INKEY", 0..=0, String, Runtime, Lowering::RuntimeString("B$INKY")),
     intrinsic!("INSTR", 2..=3, Integer, Runtime, Lowering::Instr),
-    intrinsic!(
-        "LCASE",
-        1..=1,
-        String,
-        Runtime,
-        Lowering::RuntimeString("B$LCAS")
-    ),
+    intrinsic!("LCASE", 1..=1, String, Runtime, Lowering::RuntimeString("B$LCAS")),
     intrinsic!("LEFT", 2..=2, String, Runtime, Lowering::Left),
     intrinsic!("LEN", 1..=1, Integer, Runtime, Lowering::Length),
     intrinsic!("LBOUND", 1..=2, Integer, Runtime, Lowering::LowerBound),
     intrinsic!("LOF", 1..=1, Long, Runtime, Lowering::FileLength),
     intrinsic!("LOG", 1..=1, DynamicNumeric, Pure, Lowering::Log),
-    intrinsic!(
-        "LTRIM",
-        1..=1,
-        String,
-        Runtime,
-        Lowering::RuntimeString("B$LTRM")
-    ),
+    intrinsic!("LTRIM", 1..=1, String, Runtime, Lowering::RuntimeString("B$LTRM")),
     intrinsic!("MID", 2..=3, String, Runtime, Lowering::Mid),
     intrinsic!("CVI", 1..=1, Integer, Runtime, Lowering::UnpackInteger),
     intrinsic!("CVL", 1..=1, Long, Runtime, Lowering::UnpackLong),
@@ -235,13 +223,7 @@ pub static INTRINSICS: &[Intrinsic] = &[
     intrinsic!("INP", 1..=1, Integer, Device, Lowering::PortIn),
     intrinsic!("POINT", 2..=2, Integer, Runtime, Lowering::Point),
     intrinsic!("POS", 1..=1, Integer, Runtime, Lowering::RuntimeInteger("B$FPOS")),
-    intrinsic!(
-        "RTRIM",
-        1..=1,
-        String,
-        Runtime,
-        Lowering::RuntimeString("B$RTRM")
-    ),
+    intrinsic!("RTRIM", 1..=1, String, Runtime, Lowering::RuntimeString("B$RTRM")),
     intrinsic!("RIGHT", 2..=2, String, Runtime, Lowering::Right),
     intrinsic!("RND", 0..=1, Single, Runtime, Lowering::Random),
     intrinsic!("SGN", 1..=1, DynamicNumeric, Pure, Lowering::Sign),
@@ -253,57 +235,142 @@ pub static INTRINSICS: &[Intrinsic] = &[
     intrinsic!("TAN", 1..=1, DynamicNumeric, Pure, Lowering::Tan),
     intrinsic!("TIMER", 0..=0, Single, Runtime, Lowering::Timer),
     intrinsic!("UBOUND", 1..=2, Integer, Runtime, Lowering::UpperBound),
-    intrinsic!(
-        "UCASE",
-        1..=1,
-        String,
-        Runtime,
-        Lowering::RuntimeString("B$UCAS")
-    ),
+    intrinsic!("UCASE", 1..=1, String, Runtime, Lowering::RuntimeString("B$UCAS")),
     intrinsic!("VAL", 1..=1, Double, Runtime, Lowering::Val),
     intrinsic!("VARPTR", 1..=1, Integer, Pure, Lowering::PointerOffset),
     intrinsic!("VARSEG", 1..=1, Integer, Pure, Lowering::PointerSegment),
 ];
 
-pub fn find(name: &str, dialect: Dialect) -> Option<&'static Intrinsic> {
-    INTRINSICS
-        .iter()
-        .find(|intrinsic| intrinsic.name == name && intrinsic.available_in(dialect))
+pub fn find(
+    name: &str,
+    dialect: Dialect,
+) -> Option<&'static Intrinsic> {
+    INTRINSICS.iter().find(|intrinsic| intrinsic.name == name && intrinsic.available_in(dialect))
 }
 
 /// Every function keyword, as spelled, with the dialects it is one in: QB
 /// 4.5's from its help index (tests/differential/conformance/qb45/coverage.toml), then PDS 7.1's
 /// and VBDOS's own additions. FINANCE.LIB's functions are a library's.
 pub static KEYWORDS: &[(&str, u8)] = &[
-    ("ABS", ALL), ("ASC", ALL), ("ATN", ALL), ("CDBL", ALL), ("CHR$", ALL), ("CINT", ALL),
-    ("CLNG", ALL), ("COMMAND$", ALL), ("COS", ALL), ("CSNG", ALL), ("CSRLIN", ALL), ("CVD", ALL),
-    ("CVDMBF", ALL), ("CVI", ALL), ("CVL", ALL), ("CVS", ALL), ("CVSMBF", ALL), ("DATE$", ALL),
-    ("ENVIRON$", ALL), ("EOF", ALL), ("ERDEV", ALL), ("ERDEV$", ALL), ("ERL", ALL), ("ERR", ALL),
-    ("EXP", ALL), ("FILEATTR", ALL), ("FIX", ALL), ("FRE", ALL), ("FREEFILE", ALL), ("HEX$", ALL),
-    ("INKEY$", ALL), ("INP", ALL), ("INPUT$", ALL), ("INSTR", ALL), ("INT", ALL), ("IOCTL$", ALL),
-    ("LBOUND", ALL), ("LCASE$", ALL), ("LEFT$", ALL), ("LEN", ALL), ("LOC", ALL), ("LOF", ALL),
-    ("LOG", ALL), ("LPOS", ALL), ("LTRIM$", ALL), ("MID$", ALL), ("MKD$", ALL), ("MKDMBF$", ALL),
-    ("MKI$", ALL), ("MKL$", ALL), ("MKS$", ALL), ("MKSMBF$", ALL), ("OCT$", ALL), ("PEEK", ALL),
-    ("PEN", ALL), ("PLAY", ALL), ("PMAP", ALL), ("POINT", ALL), ("POS", ALL), ("RIGHT$", ALL),
-    ("RND", ALL), ("RTRIM$", ALL), ("SADD", ALL), ("SCREEN", ALL), ("SEEK", ALL), ("SETMEM", ALL),
-    ("SGN", ALL), ("SIN", ALL), ("SPACE$", ALL), ("SPC", ALL), ("SQR", ALL), ("STICK", ALL),
-    ("STR$", ALL), ("STRIG", ALL), ("STRING$", ALL), ("TAB", ALL), ("TAN", ALL), ("TIME$", ALL),
-    ("TIMER", ALL), ("UBOUND", ALL), ("UCASE$", ALL), ("VAL", ALL), ("VARPTR", ALL),
-    ("VARPTR$", ALL), ("VARSEG", ALL),
-    ("CCUR", PDS | VBDOS), ("CURDIR$", PDS | VBDOS), ("CVC", PDS | VBDOS), ("DIR$", PDS | VBDOS),
-    ("MKC$", PDS | VBDOS), ("SSEG", PDS | VBDOS), ("SSEGADD", PDS | VBDOS), ("STACK", PDS | VBDOS),
-    ("DATESERIAL", VBDOS), ("DATEVALUE", VBDOS), ("DOEVENTS", VBDOS), ("INPUTBOX$", VBDOS),
-    ("MSGBOX", VBDOS), ("TIMESERIAL", VBDOS), ("TIMEVALUE", VBDOS),
+    ("ABS", ALL),
+    ("ASC", ALL),
+    ("ATN", ALL),
+    ("CDBL", ALL),
+    ("CHR$", ALL),
+    ("CINT", ALL),
+    ("CLNG", ALL),
+    ("COMMAND$", ALL),
+    ("COS", ALL),
+    ("CSNG", ALL),
+    ("CSRLIN", ALL),
+    ("CVD", ALL),
+    ("CVDMBF", ALL),
+    ("CVI", ALL),
+    ("CVL", ALL),
+    ("CVS", ALL),
+    ("CVSMBF", ALL),
+    ("DATE$", ALL),
+    ("ENVIRON$", ALL),
+    ("EOF", ALL),
+    ("ERDEV", ALL),
+    ("ERDEV$", ALL),
+    ("ERL", ALL),
+    ("ERR", ALL),
+    ("EXP", ALL),
+    ("FILEATTR", ALL),
+    ("FIX", ALL),
+    ("FRE", ALL),
+    ("FREEFILE", ALL),
+    ("HEX$", ALL),
+    ("INKEY$", ALL),
+    ("INP", ALL),
+    ("INPUT$", ALL),
+    ("INSTR", ALL),
+    ("INT", ALL),
+    ("IOCTL$", ALL),
+    ("LBOUND", ALL),
+    ("LCASE$", ALL),
+    ("LEFT$", ALL),
+    ("LEN", ALL),
+    ("LOC", ALL),
+    ("LOF", ALL),
+    ("LOG", ALL),
+    ("LPOS", ALL),
+    ("LTRIM$", ALL),
+    ("MID$", ALL),
+    ("MKD$", ALL),
+    ("MKDMBF$", ALL),
+    ("MKI$", ALL),
+    ("MKL$", ALL),
+    ("MKS$", ALL),
+    ("MKSMBF$", ALL),
+    ("OCT$", ALL),
+    ("PEEK", ALL),
+    ("PEN", ALL),
+    ("PLAY", ALL),
+    ("PMAP", ALL),
+    ("POINT", ALL),
+    ("POS", ALL),
+    ("RIGHT$", ALL),
+    ("RND", ALL),
+    ("RTRIM$", ALL),
+    ("SADD", ALL),
+    ("SCREEN", ALL),
+    ("SEEK", ALL),
+    ("SETMEM", ALL),
+    ("SGN", ALL),
+    ("SIN", ALL),
+    ("SPACE$", ALL),
+    ("SPC", ALL),
+    ("SQR", ALL),
+    ("STICK", ALL),
+    ("STR$", ALL),
+    ("STRIG", ALL),
+    ("STRING$", ALL),
+    ("TAB", ALL),
+    ("TAN", ALL),
+    ("TIME$", ALL),
+    ("TIMER", ALL),
+    ("UBOUND", ALL),
+    ("UCASE$", ALL),
+    ("VAL", ALL),
+    ("VARPTR", ALL),
+    ("VARPTR$", ALL),
+    ("VARSEG", ALL),
+    ("CCUR", PDS | VBDOS),
+    ("CURDIR$", PDS | VBDOS),
+    ("CVC", PDS | VBDOS),
+    ("DIR$", PDS | VBDOS),
+    ("MKC$", PDS | VBDOS),
+    ("SSEG", PDS | VBDOS),
+    ("SSEGADD", PDS | VBDOS),
+    ("STACK", PDS | VBDOS),
+    ("DATESERIAL", VBDOS),
+    ("DATEVALUE", VBDOS),
+    ("DOEVENTS", VBDOS),
+    ("INPUTBOX$", VBDOS),
+    ("MSGBOX", VBDOS),
+    ("TIMESERIAL", VBDOS),
+    ("TIMEVALUE", VBDOS),
 ];
 
 /// Whether `name`, as spelled, is a function keyword of `dialect` the table
 /// does not provide: a program naming one must be refused, never read as
 /// an implicit variable.
-pub fn unsupported(name: &str, dialect: Dialect) -> bool {
+pub fn unsupported(
+    name: &str,
+    dialect: Dialect,
+) -> bool {
     let name = name.to_ascii_uppercase();
     let keyword = KEYWORDS.iter().any(|&(one, dialects)| one == name && dialects & dialect_bit(dialect) != 0);
     // A string intrinsic is spelled with its `$`.
-    let spelled = |intrinsic: &Intrinsic| if intrinsic.result == ResultClass::String { format!("{}$", intrinsic.name) } else { intrinsic.name.to_owned() };
+    let spelled = |intrinsic: &Intrinsic| {
+        if intrinsic.result == ResultClass::String {
+            format!("{}$", intrinsic.name)
+        } else {
+            intrinsic.name.to_owned()
+        }
+    };
     keyword && !INTRINSICS.iter().any(|one| one.available_in(dialect) && spelled(one) == name)
 }
 
@@ -318,8 +385,14 @@ mod tests {
         let index = include_str!("../../../../tests/differential/conformance/qb45/coverage.toml");
         let titles = index.lines().filter_map(|line| line.strip_prefix("title = \"")?.strip_suffix('"'));
         let mut missing = Vec::new();
-        for title in titles.filter(|one| one.ends_with("Function QuickSCREEN") || one.ends_with("Functions QuickSCREEN")) {
-            let names = title.trim_end_matches("QuickSCREEN").trim_end().trim_end_matches("Functions").trim_end_matches("Function");
+        for title in
+            titles.filter(|one| one.ends_with("Function QuickSCREEN") || one.ends_with("Functions QuickSCREEN"))
+        {
+            let names = title
+                .trim_end_matches("QuickSCREEN")
+                .trim_end()
+                .trim_end_matches("Functions")
+                .trim_end_matches("Function");
             for name in names.split([',', ' ']).filter(|one| !one.is_empty() && *one != "and") {
                 let name = name.trim_end_matches("(n)");
                 if !KEYWORDS.iter().any(|&(one, dialects)| one == name && dialects & QB45 != 0) {

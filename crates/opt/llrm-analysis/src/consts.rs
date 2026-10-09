@@ -42,8 +42,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
 
-use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::context::{ConstantExpr, ConstantKind};
+use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{FloatKind, Type};
@@ -57,7 +57,10 @@ use crate::constant_cycles;
 use crate::memory::{Addr, MemRef, Provenance, Unit, object_of, unmodeled_write};
 use crate::memoryssa::{self, Accesses};
 use crate::ranges::{self, Interval};
-use crate::regions::{ByteRange, OverlapBucket, OverlapBuckets, displaced_buckets, object_bucket, overlap_buckets, overlap_span, overlapping};
+use crate::regions::{
+    ByteRange, OverlapBucket, OverlapBuckets, displaced_buckets, object_bucket, overlap_buckets, overlap_span,
+    overlapping,
+};
 
 type Binary = fn(&BigInt, &BigInt) -> BigInt;
 
@@ -69,7 +72,9 @@ pub static ARITH: [(BinaryOp, Binary); 8] = [
     (BinaryOp::Or, |a, b| a | b),
     (BinaryOp::Xor, |a, b| a ^ b),
     (BinaryOp::Shl, |a, b| a << u32::try_from(b & BigInt::from(31)).expect("five bits")),
-    (BinaryOp::LShr, |a, b| (a & BigInt::from(0xFFFF_FFFF_u32)) >> u32::try_from(b & BigInt::from(31)).expect("five bits")),
+    (BinaryOp::LShr, |a, b| {
+        (a & BigInt::from(0xFFFF_FFFF_u32)) >> u32::try_from(b & BigInt::from(31)).expect("five bits")
+    }),
     (BinaryOp::Mul, |a, b| a * b),
 ];
 
@@ -86,8 +91,8 @@ pub type HeldCells = IndexMap<InstId, Rc<Cells>>;
 /// nothing.
 pub type Calls = IndexMap<InstId, std::rc::Rc<[MemRef]>>;
 
-/// A reference as resolved for one epoch's queries, with the number it was given: a stable identity to key answers by, where
-/// its address varied from run to run and so did the work of the passes asking (`mir hoist`, up to 0.9%).
+/// A reference as resolved for one epoch's queries, with the number it was given: a stable identity to key answers by,
+/// where its address varied from run to run and so did the work of the passes asking (`mir hoist`, up to 0.9%).
 pub struct Resolved {
     pub id: u32,
     reference: MemRef,
@@ -107,8 +112,9 @@ pub struct _MemoryQueries<'a> {
     pub facts: BTreeMap<ValueId, Interval>,
     /// Each reference asked, resolved, numbered in the order asked: the number is its identity in `overlaps`.
     pub addressed: HashMap<MemRef, Rc<Resolved>>,
-    /// Each call's shared list of references, resolved once: calls with the same effect hold one list, and hashing every
-    /// reference of it again at every call was 12% of through-memory. Keyed by the list's address, which its clone here keeps.
+    /// Each call's shared list of references, resolved once: calls with the same effect hold one list, and hashing
+    /// every reference of it again at every call was 12% of through-memory. Keyed by the list's address, which its
+    /// clone here keeps.
     listed: HashMap<usize, (Rc<[MemRef]>, Rc<[Rc<Resolved>]>)>,
     pub overlaps: HashMap<((Addr, u32), u32), bool>,
     pub places: HashMap<(Addr, u32), (OverlapBucket, Option<ByteRange>)>,
@@ -143,7 +149,10 @@ impl Here {
 }
 
 impl<'a> _MemoryQueries<'a> {
-    pub fn new(unit: Unit<'a>, known: &IndexMap<ValueId, Known>) -> Self {
+    pub fn new(
+        unit: Unit<'a>,
+        known: &IndexMap<ValueId, Known>,
+    ) -> Self {
         Self {
             unit,
             known: known.clone(),
@@ -157,7 +166,10 @@ impl<'a> _MemoryQueries<'a> {
     }
 
     /// `resolve` of every reference of a list `calls` shares among its calls.
-    pub fn resolve_list(&mut self, list: &Rc<[MemRef]>) -> Rc<[Rc<Resolved>]> {
+    pub fn resolve_list(
+        &mut self,
+        list: &Rc<[MemRef]>,
+    ) -> Rc<[Rc<Resolved>]> {
         let key = Rc::as_ptr(list).cast::<MemRef>() as usize;
         if let Some((_, resolved)) = self.listed.get(&key) {
             return Rc::clone(resolved);
@@ -167,23 +179,33 @@ impl<'a> _MemoryQueries<'a> {
         resolved
     }
 
-    pub fn resolve(&mut self, reference: &MemRef) -> Rc<Resolved> {
+    pub fn resolve(
+        &mut self,
+        reference: &MemRef,
+    ) -> Rc<Resolved> {
         #[cfg(test)]
         RESOLVED.with(|asked| asked.set(asked.get() + 1));
         if let Some(saved) = self.addressed.get(reference) {
             return Rc::clone(saved);
         }
-        let made = Rc::new(Resolved { id: self.addressed.len() as u32, reference: _addressed(&self.unit, reference, &self.known) });
+        let made = Rc::new(Resolved {
+            id: self.addressed.len() as u32,
+            reference: _addressed(&self.unit, reference, &self.known),
+        });
         self.addressed.insert(reference.clone(), Rc::clone(&made));
         made
     }
 
     /// The access cell `where_` is, carrying its object.
-    fn cell(&self, where_: (Addr, u32)) -> MemRef {
+    fn cell(
+        &self,
+        where_: (Addr, u32),
+    ) -> MemRef {
         let (addr, width) = where_;
         let mut cell = MemRef { disp: addr.disp, ..MemRef::at(&self.unit, addr.root, width) };
         cell.provenance = object_of(&self.unit, addr.root).map(|object| {
-            Provenance::one_with_slice(object, addr.disp, addr.disp + i64::from(width), 1, 1, BTreeSet::new()).expect("a cell is at least one byte")
+            Provenance::one_with_slice(object, addr.disp, addr.disp + i64::from(width), 1, 1, BTreeSet::new())
+                .expect("a cell is at least one byte")
         });
         cell
     }
@@ -192,25 +214,36 @@ impl<'a> _MemoryQueries<'a> {
     /// its root's object, and its `overlap_span`.
     ///
     /// Remembered: interning a bucket hashes its object.
-    pub fn place(&mut self, where_: (Addr, u32)) -> (OverlapBucket, Option<ByteRange>) {
+    pub fn place(
+        &mut self,
+        where_: (Addr, u32),
+    ) -> (OverlapBucket, Option<ByteRange>) {
         if let Some(place) = self.places.get(&where_) {
             return place.clone();
         }
-        let bucket = object_bucket(&mut self.buckets, object_of(&self.unit, where_.0.root), Some((where_.0.root, None)));
+        let bucket =
+            object_bucket(&mut self.buckets, object_of(&self.unit, where_.0.root), Some((where_.0.root, None)));
         let place = (bucket, overlap_span(&self.cell(where_)));
         self.places.insert(where_, place.clone());
         place
     }
 
     /// `here` indexed by this epoch's buckets, for one operation to change.
-    pub fn owned(&mut self, here: Here) -> IndexedCells {
+    pub fn owned(
+        &mut self,
+        here: Here,
+    ) -> IndexedCells {
         match here {
             Here::Indexed(cells) => cells,
             Here::Plain(cells) => CellMap::new(cells, |where_| self.place(*where_)),
         }
     }
 
-    pub fn may_overlap(&mut self, where_: (Addr, u32), reference: &Resolved) -> bool {
+    pub fn may_overlap(
+        &mut self,
+        where_: (Addr, u32),
+        reference: &Resolved,
+    ) -> bool {
         #[cfg(test)]
         MAY_OVERLAP.with(|asked| asked.set(asked.get() + 1));
         let key = (where_, reference.id);
@@ -222,9 +255,14 @@ impl<'a> _MemoryQueries<'a> {
         answer
     }
 
-    fn _overlap(&mut self, where_: (Addr, u32), reference: &Resolved) -> bool {
+    fn _overlap(
+        &mut self,
+        where_: (Addr, u32),
+        reference: &Resolved,
+    ) -> bool {
         // An answer Rust cannot represent is taken to overlap.
-        overlapping(&self.cell(where_), reference, Some(&self.facts), Some(&self.facts), self.unit.program).unwrap_or(true)
+        overlapping(&self.cell(where_), reference, Some(&self.facts), Some(&self.facts), self.unit.program)
+            .unwrap_or(true)
     }
 }
 
@@ -236,29 +274,45 @@ pub struct Known {
 }
 
 impl Known {
-    pub fn new(n: impl Into<BigInt>, width: u32) -> Self {
+    pub fn new(
+        n: impl Into<BigInt>,
+        width: u32,
+    ) -> Self {
         Self { n: n.into(), width }
     }
 }
 
 impl fmt::Debug for Known {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         write!(formatter, "{:#x}:{}", self.n, self.width)
     }
 }
 
-pub fn masked(n: &BigInt, width: u32) -> BigInt {
+pub fn masked(
+    n: &BigInt,
+    width: u32,
+) -> BigInt {
     n & ((BigInt::from(1) << width) - 1)
 }
 
 /// An integer operand's width in bits.
-fn _width(unit: &Unit, operand: Operand) -> Option<u32> {
+fn _width(
+    unit: &Unit,
+    operand: Operand,
+) -> Option<u32> {
     unit.int_bits(operand)
 }
 
 /// Integer quotient and remainder of the `sdiv`, `udiv`, `srem` or `urem`
 /// `inst`, excluding the faulting cases.
-pub fn division(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>) -> Option<(BigInt, BigInt)> {
+pub fn division(
+    unit: &Unit,
+    inst: InstId,
+    known: &IndexMap<ValueId, Known>,
+) -> Option<(BigInt, BigInt)> {
     let op = unit.function.instruction(inst);
     let signed = match op.opcode {
         Opcode::Binary(BinaryOp::SDiv | BinaryOp::SRem) => true,
@@ -272,11 +326,19 @@ pub fn division(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>) -> 
 
 /// `parts[0]` divided by `parts[1]` at `width`: quotient and remainder,
 /// none where the division faults.
-fn _divided(parts: &[Known], signed: bool, width: u32) -> Option<(BigInt, BigInt)> {
+fn _divided(
+    parts: &[Known],
+    signed: bool,
+    width: u32,
+) -> Option<(BigInt, BigInt)> {
     if parts.iter().any(|fact| fact.width < width) {
         return None;
     }
-    let (dividend, divisor) = if signed { (_signed(&parts[0].n, width), _signed(&parts[1].n, width)) } else { (masked(&parts[0].n, width), masked(&parts[1].n, width)) };
+    let (dividend, divisor) = if signed {
+        (_signed(&parts[0].n, width), _signed(&parts[1].n, width))
+    } else {
+        (masked(&parts[0].n, width), masked(&parts[1].n, width))
+    };
     let zero = BigInt::from(0);
     if divisor == zero || (signed && dividend == -(BigInt::from(1) << (width - 1)) && divisor == BigInt::from(-1)) {
         return None;
@@ -291,7 +353,10 @@ fn _divided(parts: &[Known], signed: bool, width: u32) -> Option<(BigInt, BigInt
 }
 
 /// `n` at `width` read as two's complement.
-fn _signed(n: &BigInt, width: u32) -> BigInt {
+fn _signed(
+    n: &BigInt,
+    width: u32,
+) -> BigInt {
     let sign = BigInt::from(1) << (width - 1);
     (masked(n, width) ^ &sign) - sign
 }
@@ -299,12 +364,19 @@ fn _signed(n: &BigInt, width: u32) -> BigInt {
 /// Whether consts computes `kind` of two known numbers: every integer
 /// operation, a division where it does not fault.
 pub fn folds(kind: BinaryOp) -> bool {
-    !matches!(kind, BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem)
+    !matches!(
+        kind,
+        BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem
+    )
 }
 
 /// What this store puts in its cell, where that is a number: a float's
 /// bits too, which floatfacts supplies for a computed value.
-fn _put(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>) -> Option<Known> {
+fn _put(
+    unit: &Unit,
+    inst: InstId,
+    known: &IndexMap<ValueId, Known>,
+) -> Option<Known> {
     let op = unit.function.instruction(inst);
     if !matches!(op.opcode, Opcode::Store { .. }) {
         return None;
@@ -313,7 +385,11 @@ fn _put(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>) -> Option<K
 }
 
 /// A float operand's bits: a constant's, or what `known` says of a value.
-fn _float_bits(unit: &Unit, operand: Operand, known: &IndexMap<ValueId, Known>) -> Option<Known> {
+fn _float_bits(
+    unit: &Unit,
+    operand: Operand,
+    known: &IndexMap<ValueId, Known>,
+) -> Option<Known> {
     let width = match unit.context.types.get(unit.operand_type(operand)?) {
         Type::Float(FloatKind::Float) => 32,
         Type::Float(FloatKind::Double) => 64,
@@ -330,7 +406,11 @@ fn _float_bits(unit: &Unit, operand: Operand, known: &IndexMap<ValueId, Known>) 
 }
 
 /// The complete value a direct constant store writes to a contained cell.
-pub fn initialized(unit: &Unit, inst: InstId, reference: &MemRef) -> Option<Known> {
+pub fn initialized(
+    unit: &Unit,
+    inst: InstId,
+    reference: &MemRef,
+) -> Option<Known> {
     let op = unit.function.instruction(inst);
     if !matches!(op.opcode, Opcode::Store { volatile: false, .. }) {
         return None;
@@ -342,7 +422,10 @@ pub fn initialized(unit: &Unit, inst: InstId, reference: &MemRef) -> Option<Know
 }
 
 /// `fact` as byte cells at `reference`'s fixed address.
-pub fn _fragments(reference: &MemRef, fact: &Known) -> Cells {
+pub fn _fragments(
+    reference: &MemRef,
+    fact: &Known,
+) -> Cells {
     let addr = reference.addr().expect("a fragment is of an addressed cell");
     (0..reference.width.min(fact.width / 8))
         .map(|offset| ((addr.plus(i64::from(offset)), 1), Known::new((&fact.n >> (offset * 8)) & BigInt::from(255), 8)))
@@ -351,11 +434,19 @@ pub fn _fragments(reference: &MemRef, fact: &Known) -> Cells {
 
 /// A far store's selector, where nothing yet says which segment it is
 /// and it is still one this run may take on faith.
-fn _selector(unit: &Unit, reference: &MemRef, known: &IndexMap<ValueId, Known>, allowed: Option<&BTreeSet<ValueId>>) -> Option<ValueId> {
+fn _selector(
+    unit: &Unit,
+    reference: &MemRef,
+    known: &IndexMap<ValueId, Known>,
+    allowed: Option<&BTreeSet<ValueId>>,
+) -> Option<ValueId> {
     let Some(Operand::Value(segment)) = reference.segment else {
         return None;
     };
-    if reference.space != unit.spaces().far || known.contains_key(&segment) || allowed.is_some_and(|allowed| !allowed.contains(&segment)) {
+    if reference.space != unit.spaces().far
+        || known.contains_key(&segment)
+        || allowed.is_some_and(|allowed| !allowed.contains(&segment))
+    {
         return None;
     }
     Some(segment)
@@ -368,7 +459,10 @@ fn _memory_reads(unit: &Unit) -> HashSet<ValueId> {
     let mut read = HashSet::default();
     for (_, inst) in function.walk() {
         let op = function.instruction(inst);
-        if !matches!(op.opcode, Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)) {
+        if !matches!(
+            op.opcode,
+            Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
+        ) {
             continue;
         }
         read.extend(op.operands.iter().filter_map(|operand| match operand {
@@ -387,17 +481,29 @@ fn _memory_reads(unit: &Unit) -> HashSet<ValueId> {
 
 /// What each value is, as the alias lattice asks for it.
 fn _intervals(known: &IndexMap<ValueId, Known>) -> BTreeMap<ValueId, Interval> {
-    known.iter().map(|(value, fact)| (*value, Interval { low: fact.n.clone(), high: fact.n.clone(), width: fact.width })).collect()
+    known
+        .iter()
+        .map(|(value, fact)| (*value, Interval { low: fact.n.clone(), high: fact.n.clone(), width: fact.width }))
+        .collect()
 }
 
 /// Alias questions about `unit`'s cells, each cell carrying its object.
-pub fn memory_queries<'a>(unit: Unit<'a>, known: &IndexMap<ValueId, Known>) -> _MemoryQueries<'a> {
+pub fn memory_queries<'a>(
+    unit: Unit<'a>,
+    known: &IndexMap<ValueId, Known>,
+) -> _MemoryQueries<'a> {
     _MemoryQueries::new(unit, known)
 }
 
 /// Whether `inst` is a call or invoke.
-fn is_call(unit: &Unit, inst: InstId) -> bool {
-    matches!(unit.function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))
+fn is_call(
+    unit: &Unit,
+    inst: InstId,
+) -> bool {
+    matches!(
+        unit.function.instruction(inst).opcode,
+        Opcode::Call(_) | Opcode::Invoke(_)
+    )
 }
 
 /// The cell facts still standing after this instruction.
@@ -444,7 +550,12 @@ fn _killed(
     let stores: Rc<[Rc<Resolved>]> = match calls.get(&inst) {
         Some(stores) => queries.resolve_list(stores),
         None if call => Rc::from([]),
-        None => unit.reference(inst).filter(|_| matches!(unit.function.instruction(inst).opcode, Opcode::Store { .. })).iter().map(|one| queries.resolve(one)).collect(),
+        None => unit
+            .reference(inst)
+            .filter(|_| matches!(unit.function.instruction(inst).opcode, Opcode::Store { .. }))
+            .iter()
+            .map(|one| queries.resolve(one))
+            .collect(),
     };
     // Only a write changes a cell.
     if stores.is_empty() {
@@ -506,7 +617,12 @@ pub fn cells(
     // Kept indexed: an edge from a lone predecessor hands its map on as it is.
     let graph = cfg::graph(function);
     let mut outof = graph.iter().map(|block| (block.at, None)).collect::<IndexMap<i64, Option<IndexedCells>>>();
-    let preds = graph.iter().map(|block| (block.at, graph.iter().filter(|one| one.succ.contains(&block.at)).map(|one| one.at).collect::<Vec<_>>())).collect::<IndexMap<_, _>>();
+    let preds = graph
+        .iter()
+        .map(|block| {
+            (block.at, graph.iter().filter(|one| one.succ.contains(&block.at)).map(|one| one.at).collect::<Vec<_>>())
+        })
+        .collect::<IndexMap<_, _>>();
     let no_edges = IndexMap::default();
     let edge_map = edges.unwrap_or(&no_edges);
     let edge_facts = edges.is_some_and(|edges| !edges.is_empty());
@@ -530,7 +646,9 @@ pub fn cells(
             }
             let mut here = here
                 .iter()
-                .filter(|(where_, _)| !(0..where_.1).any(|offset| extra.contains_key(&(where_.0.plus(i64::from(offset)), 1))))
+                .filter(|(where_, _)| {
+                    !(0..where_.1).any(|offset| extra.contains_key(&(where_.0.plus(i64::from(offset)), 1)))
+                })
                 .map(|(where_, fact)| (*where_, fact.clone()))
                 .collect::<Cells>();
             for (where_, fact) in extra {
@@ -548,7 +666,11 @@ pub fn cells(
         }
         let first = seen.first()?;
         Some(Here::Plain(
-            first.iter().filter(|(where_, fact)| seen[1..].iter().all(|one| one.get(*where_) == Some(*fact))).map(|(where_, fact)| (*where_, fact.clone())).collect(),
+            first
+                .iter()
+                .filter(|(where_, fact)| seen[1..].iter().all(|one| one.get(*where_) == Some(*fact)))
+                .map(|(where_, fact)| (*where_, fact.clone()))
+                .collect(),
         ))
     };
 
@@ -579,7 +701,9 @@ pub fn cells(
         let mut shared: Option<Rc<Cells>> = None;
         for &inst in function.block(cfg::block(block.at)).instructions() {
             found.insert(inst, Rc::clone(shared.get_or_insert_with(|| Rc::new(here.cells().clone()))));
-            let writes = is_call(unit, inst) || unmodeled_write(unit, inst) || matches!(function.instruction(inst).opcode, Opcode::Store { .. });
+            let writes = is_call(unit, inst)
+                || unmodeled_write(unit, inst)
+                || matches!(function.instruction(inst).opcode, Opcode::Store { .. });
             if writes {
                 shared = None;
             }
@@ -589,11 +713,17 @@ pub fn cells(
     found
 }
 
-fn loops_order(graph: &[cfg::Block], entry: i64) -> Vec<i64> {
+fn loops_order(
+    graph: &[cfg::Block],
+    entry: i64,
+) -> Vec<i64> {
     crate::graph::loops::reverse_postorder(graph, entry)
 }
 
-fn _read(fact: Option<&Known>, width: u32) -> Option<Known> {
+fn _read(
+    fact: Option<&Known>,
+    width: u32,
+) -> Option<Known> {
     let fact = fact?;
     if fact.width < width {
         return None;
@@ -602,7 +732,10 @@ fn _read(fact: Option<&Known>, width: u32) -> Option<Known> {
 }
 
 /// What `here` says the bytes `reference` reads hold, where every one is known.
-pub fn _cell(here: &Cells, reference: &MemRef) -> Option<Known> {
+pub fn _cell(
+    here: &Cells,
+    reference: &MemRef,
+) -> Option<Known> {
     let addr = reference.addr()?;
     let bits = reference.width * 8;
     if let Some(exact) = _read(here.get(&(addr, reference.width)), bits) {
@@ -628,7 +761,11 @@ pub fn _cell(here: &Cells, reference: &MemRef) -> Option<Known> {
 }
 
 /// Resolve one proven constant index using the no-wrap address proof.
-fn _addressed(unit: &Unit, reference: &MemRef, known: &IndexMap<ValueId, Known>) -> MemRef {
+fn _addressed(
+    unit: &Unit,
+    reference: &MemRef,
+    known: &IndexMap<ValueId, Known>,
+) -> MemRef {
     let Some(base) = reference.base else {
         return reference.clone();
     };
@@ -640,7 +777,12 @@ fn _addressed(unit: &Unit, reference: &MemRef, known: &IndexMap<ValueId, Known>)
 }
 
 /// One operand as a number, if it is one.
-pub fn _operand(unit: &Unit, one: Operand, known: &IndexMap<ValueId, Known>, _here: Option<&Cells>) -> Option<Known> {
+pub fn _operand(
+    unit: &Unit,
+    one: Operand,
+    known: &IndexMap<ValueId, Known>,
+    _here: Option<&Cells>,
+) -> Option<Known> {
     let width = _width(unit, one)?;
     if let Some(bits) = unit.int_constant(one) {
         return Some(Known::new(masked(&BigInt::from(bits), width), width));
@@ -653,7 +795,10 @@ pub fn _operand(unit: &Unit, one: Operand, known: &IndexMap<ValueId, Known>, _he
 
 /// A constant pointer as the global it names, if any, and its offset: null,
 /// an integer made a pointer, a global. Two with one global compare by offset.
-fn _address(unit: &Unit, operand: Operand) -> Option<(Option<llrm_mir::context::GlobalId>, u128)> {
+fn _address(
+    unit: &Unit,
+    operand: Operand,
+) -> Option<(Option<llrm_mir::context::GlobalId>, u128)> {
     let Operand::Constant(id) = operand else { return None };
     let context = unit.context;
     match &context.get(id).kind {
@@ -668,13 +813,21 @@ fn _address(unit: &Unit, operand: Operand) -> Option<(Option<llrm_mir::context::
 }
 
 /// The integer value this instruction defines.
-pub fn _defined(unit: &Unit, inst: InstId) -> Option<ValueId> {
+pub fn _defined(
+    unit: &Unit,
+    inst: InstId,
+) -> Option<ValueId> {
     let result = unit.function.instruction(inst).result?;
     _width(unit, Operand::Value(result)).map(|_| result)
 }
 
 /// What this instruction computes, where every input is known.
-pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here: Option<&Cells>) -> Option<Known> {
+pub fn _result(
+    unit: &Unit,
+    inst: InstId,
+    known: &IndexMap<ValueId, Known>,
+    here: Option<&Cells>,
+) -> Option<Known> {
     let result = _defined(unit, inst)?;
     let width = _width(unit, Operand::Value(result))?;
     let op = unit.function.instruction(inst);
@@ -695,19 +848,28 @@ pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here
         return Some(Known::new(u8::from((left.1 == right.1) == (predicate == IntPredicate::Eq)), 1));
     }
     if let Opcode::ICmp(predicate) = op.opcode {
-        let (left, right) = (_operand(unit, op.operands[0], known, here)?, _operand(unit, op.operands[1], known, here)?);
+        let (left, right) =
+            (_operand(unit, op.operands[0], known, here)?, _operand(unit, op.operands[1], known, here)?);
         return Some(Known::new(u8::from(holds(predicate, &left, &right)), 1));
     }
-    if matches!(op.opcode, Opcode::Binary(BinaryOp::Xor | BinaryOp::Sub)) && matches!(op.operands[0], Operand::Value(_)) && op.operands[0] == op.operands[1] {
+    if matches!(op.opcode, Opcode::Binary(BinaryOp::Xor | BinaryOp::Sub))
+        && matches!(op.operands[0], Operand::Value(_))
+        && op.operands[0] == op.operands[1]
+    {
         return Some(Known::new(0, width));
     }
     if let Some(Intrinsic::Fixed { divide }) = unit.intrinsic(inst) {
-        let signed = |at: usize| _operand(unit, op.operands[at], known, here).filter(|one| one.width >= width).and_then(|one| i128::try_from(_signed(&one.n, width)).ok());
+        let signed = |at: usize| {
+            _operand(unit, op.operands[at], known, here)
+                .filter(|one| one.width >= width)
+                .and_then(|one| i128::try_from(_signed(&one.n, width)).ok())
+        };
         let scale = u32::try_from(&_operand(unit, op.operands[2], known, here)?.n).ok()?;
         let value = Intrinsic::fixed(divide, width, signed(0)?, signed(1)?, scale)?;
         return Some(Known::new(masked(&BigInt::from(value), width), width));
     }
-    let supported = matches!(op.opcode, Opcode::Cast(CastOp::SExt | CastOp::ZExt)) || matches!(op.opcode, Opcode::Binary(kind) if folds(kind));
+    let supported = matches!(op.opcode, Opcode::Cast(CastOp::SExt | CastOp::ZExt))
+        || matches!(op.opcode, Opcode::Binary(kind) if folds(kind));
     if !supported {
         return None;
     }
@@ -744,7 +906,10 @@ pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here
     }
     if let BinaryOp::SDiv | BinaryOp::SRem | BinaryOp::UDiv | BinaryOp::URem = kind {
         let (quotient, remainder) = _divided(&parts, matches!(kind, BinaryOp::SDiv | BinaryOp::SRem), width)?;
-        return Some(Known::new(if matches!(kind, BinaryOp::SDiv | BinaryOp::UDiv) { quotient } else { remainder }, width));
+        return Some(Known::new(
+            if matches!(kind, BinaryOp::SDiv | BinaryOp::UDiv) { quotient } else { remainder },
+            width,
+        ));
     }
     let width = parts.iter().map(|one| one.width).min().expect("parts").min(width);
     let (_, arith) = ARITH.iter().find(|(one, _)| *one == kind)?;
@@ -752,7 +917,11 @@ pub fn _result(unit: &Unit, inst: InstId, known: &IndexMap<ValueId, Known>, here
 }
 
 /// Whether `predicate` holds of two known numbers: an `icmp`'s answer.
-pub fn holds(predicate: IntPredicate, left: &Known, right: &Known) -> bool {
+pub fn holds(
+    predicate: IntPredicate,
+    left: &Known,
+    right: &Known,
+) -> bool {
     let width = left.width.max(right.width);
     let signed = |fact: &Known| {
         let top = BigInt::from(1) << (fact.width - 1);
@@ -781,7 +950,12 @@ pub fn holds(predicate: IntPredicate, left: &Known, right: &Known) -> bool {
 /// Optimistic, then shrinking: a run may assume every selector it does not
 /// know is some absolute segment; the ones that came out numbers keep the
 /// assumption and the rest lose it, until every one still assumed resolved.
-pub fn known(unit: &Unit, calls: Option<&Calls>, edges: Option<&IndexMap<(i64, i64), Cells>>, initial: Option<&Cells>) -> IndexMap<ValueId, Known> {
+pub fn known(
+    unit: &Unit,
+    calls: Option<&Calls>,
+    edges: Option<&IndexMap<(i64, i64), Cells>>,
+    initial: Option<&Cells>,
+) -> IndexMap<ValueId, Known> {
     if calls.is_none() {
         REGISTER_DERIVATIONS.with(|count| count.set(count.get() + 1));
     } else {
@@ -838,20 +1012,29 @@ thread_local! {
 }
 
 /// A phi's or an operand's fact.
-fn incoming(unit: &Unit, one: Operand, facts: &IndexMap<ValueId, Known>) -> Option<Known> {
+fn incoming(
+    unit: &Unit,
+    one: Operand,
+    facts: &IndexMap<ValueId, Known>,
+) -> Option<Known> {
     _operand(unit, one, facts, None)
 }
 
 /// Dominating, exact stores supplying loads outside the cell lattice: a
 /// load through a pointer whose one clobber, as MemorySSA walks it, is a
 /// store of its bytes and its type.
-fn _pointer_stores(unit: &Unit, calls: &Calls) -> IndexMap<ValueId, Operand> {
+fn _pointer_stores(
+    unit: &Unit,
+    calls: &Calls,
+) -> IndexMap<ValueId, Operand> {
     let function = unit.function;
     let accesses = Accesses::plain(unit, calls);
     let candidates = function
         .walk()
         .filter_map(|(block, inst)| Some((block, inst, avail::loaded_into(unit, &accesses, inst)?)))
-        .filter(|(_, _, (reference, result))| !(reference.object && reference.addr().is_some()) && _width(unit, Operand::Value(*result)).is_some())
+        .filter(|(_, _, (reference, result))| {
+            !(reference.object && reference.addr().is_some()) && _width(unit, Operand::Value(*result)).is_some()
+        })
         .collect::<Vec<_>>();
     if candidates.is_empty() {
         return IndexMap::default();
@@ -862,7 +1045,9 @@ fn _pointer_stores(unit: &Unit, calls: &Calls) -> IndexMap<ValueId, Operand> {
     let before = |source: InstId, block: BlockId, inst: InstId| {
         let order = function.block(block).instructions();
         match function.parent(source) {
-            Some(at) if at == block => order.iter().position(|&one| one == source) < order.iter().position(|&one| one == inst),
+            Some(at) if at == block => {
+                order.iter().position(|&one| one == source) < order.iter().position(|&one| one == inst)
+            }
             Some(at) => dominance.dominates(cfg::id(at), cfg::id(block)),
             None => false,
         }
@@ -871,7 +1056,8 @@ fn _pointer_stores(unit: &Unit, calls: &Calls) -> IndexMap<ValueId, Operand> {
     for (block, inst, (reference, result)) in candidates {
         let clobbers = graph.clobbers(inst, &reference);
         let single = if clobbers.len() == 1 { clobbers.first().map(|id| graph.access(*id)) } else { None };
-        let Some(source) = single.filter(|access| access.kind == memoryssa::Kind::Def).and_then(|access| access.site) else {
+        let Some(source) = single.filter(|access| access.kind == memoryssa::Kind::Def).and_then(|access| access.site)
+        else {
             continue;
         };
         if let Some((stored, value)) = avail::stored_from(unit, &accesses, source)
@@ -934,7 +1120,10 @@ fn _solved(
             if op.opcode == Opcode::Phi {
                 let seen = op.operands.iter().step_by(2).map(|&one| incoming(unit, one, &facts)).collect::<Vec<_>>();
                 let known = seen.iter().flatten().collect::<Vec<_>>();
-                if seen.is_empty() || known.len() != seen.len() || known.iter().map(|one| (&one.n, one.width)).collect::<BTreeSet<_>>().len() != 1 {
+                if seen.is_empty()
+                    || known.len() != seen.len()
+                    || known.iter().map(|one| (&one.n, one.width)).collect::<BTreeSet<_>>().len() != 1
+                {
                     continue;
                 }
                 let fact = (*known[0]).clone();
@@ -944,7 +1133,8 @@ fn _solved(
                 continue;
             }
             let here = held.get(&inst).map(|here| &**here).unwrap_or(&empty);
-            let found = _result(unit, inst, &facts, Some(here)).or_else(|| _operand(unit, *pointer_stores.get(&target)?, &facts, None));
+            let found = _result(unit, inst, &facts, Some(here))
+                .or_else(|| _operand(unit, *pointer_stores.get(&target)?, &facts, None));
             if let Some(found) = found {
                 learned |= read.contains(&target);
                 facts.insert(target, found);

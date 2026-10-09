@@ -6,12 +6,16 @@ use crate::types::{FloatKind, Type, Types};
 const LAYOUT: &str = "e-p:16:16-p1:32:16:16:16-p3:32:16:16:32-i32:16-i64:16";
 
 fn result(text: &str) -> Result<Val, Trap> {
-    let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n{text}")).unwrap_or_else(|error| panic!("{error}"));
+    let module =
+        parse::module(&format!("target datalayout = \"{LAYOUT}\"\n{text}")).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
     run(&module, "f", Vec::new(), 10_000)
 }
 
-fn int(bits: u128, width: u32) -> Result<Val, Trap> {
+fn int(
+    bits: u128,
+    width: u32,
+) -> Result<Val, Trap> {
     Ok(Val::Int { bits, width })
 }
 
@@ -37,7 +41,10 @@ fn flags_make_poison_where_the_value_does_not_fit() {
 
 #[test]
 fn undefined_behaviour_is_reported_not_run() {
-    assert_eq!(result("define i16 @f() {\n  %x = sdiv i16 1, 0\n  ret i16 %x\n}\n"), Err(Trap::Undefined("a division by zero".to_owned())));
+    assert_eq!(
+        result("define i16 @f() {\n  %x = sdiv i16 1, 0\n  ret i16 %x\n}\n"),
+        Err(Trap::Undefined("a division by zero".to_owned()))
+    );
     let text = "define i16 @f() {\nentry:\n  %c = icmp eq i16 poison, 0\n  br i1 %c, label %a, label %b\na:\n  ret i16 1\nb:\n  ret i16 2\n}\n";
     assert_eq!(result(text), Err(Trap::Undefined("a branch on poison".to_owned())));
 }
@@ -54,7 +61,11 @@ fn a_far_offset_wraps_at_its_index_width() {
 #[test]
 fn a_huge_offset_carries_where_a_far_one_wraps() {
     let moved = |space: u32| {
-        let cast = if space == 1 { "getelementptr i8, ptr addrspace(1) @a, i32 0".to_owned() } else { format!("addrspacecast ptr addrspace(1) @a to ptr addrspace({space})") };
+        let cast = if space == 1 {
+            "getelementptr i8, ptr addrspace(1) @a, i32 0".to_owned()
+        } else {
+            format!("addrspacecast ptr addrspace(1) @a to ptr addrspace({space})")
+        };
         format!(
             "@a = addrspace(1) global [2 x i16] [i16 1, i16 2]\ndefine i32 @f() {{\n  %p = {cast}\n  %q = getelementptr i8, ptr addrspace({space}) %p, i32 65536\n  %base = ptrtoint ptr addrspace({space}) %p to i32\n  %moved = ptrtoint ptr addrspace({space}) %q to i32\n  %d = sub i32 %moved, %base\n  ret i32 %d\n}}\n"
         )
@@ -77,10 +88,18 @@ fn every_fixture_that_states_its_answer_gives_it() {
     for dir in std::fs::read_dir(&root).expect("tests/").flatten() {
         for file in std::fs::read_dir(dir.path()).into_iter().flatten().flatten() {
             let text = std::fs::read_to_string(file.path()).unwrap_or_default();
-            let Some(want) = text.lines().find_map(|line| line.strip_prefix("; expect: ")).and_then(|one| one.parse::<u128>().ok()) else { continue };
+            let Some(want) =
+                text.lines().find_map(|line| line.strip_prefix("; expect: ")).and_then(|one| one.parse::<u128>().ok())
+            else {
+                continue;
+            };
             let module = parse::module(&text).expect("parses");
             let got = run(&module, "main", Vec::new(), 1_000_000);
-            assert!(matches!(got, Ok(Val::Int { bits, .. }) if bits & 0xff == want), "{}: {got:?}", file.path().display());
+            assert!(
+                matches!(got, Ok(Val::Int { bits, .. }) if bits & 0xff == want),
+                "{}: {got:?}",
+                file.path().display()
+            );
             ran += 1;
         }
     }
@@ -97,7 +116,9 @@ fn overflow_intrinsics_wrap_and_say_so() {
              define {{ i16, i1 }} @f() {{\n  %r = call {{ i16, i1 }} @llvm.{intrinsic}.with.overflow.i16(i16 {a}, i16 {b})\n  ret {{ i16, i1 }} %r\n}}\n"
         ))
     };
-    let wrapped = |bits: u128, overflowed: u128| Ok(Val::Aggregate(vec![Val::Int { bits, width: 16 }, Val::Int { bits: overflowed, width: 1 }]));
+    let wrapped = |bits: u128, overflowed: u128| {
+        Ok(Val::Aggregate(vec![Val::Int { bits, width: 16 }, Val::Int { bits: overflowed, width: 1 }]))
+    };
     assert_eq!(pair("sadd", 32767, 1), wrapped(0x8000, 1));
     assert_eq!(pair("uadd", 32767, 1), wrapped(0x8000, 0));
     assert_eq!(pair("uadd", -1, 1), wrapped(0, 1));
@@ -111,12 +132,14 @@ fn overflow_intrinsics_wrap_and_say_so() {
 #[test]
 fn min_max_intrinsics_compare_as_their_names_say() {
     let chosen = |intrinsic: &str, a: i16, b: i16| {
-        result(&format!("declare i16 @llvm.{intrinsic}.i16(i16, i16)
+        result(&format!(
+            "declare i16 @llvm.{intrinsic}.i16(i16, i16)
 define i16 @f() {{
   %r = call i16 @llvm.{intrinsic}.i16(i16 {a}, i16 {b})
   ret i16 %r
 }}
-"))
+"
+        ))
     };
     assert_eq!(chosen("smax", -5, 3), int(3, 16));
     assert_eq!(chosen("smin", -5, 3), int(0xfffb, 16));
@@ -140,7 +163,9 @@ define float @f() {
 #[test]
 fn lrint_rounds_ties_to_even() {
     let rounded = |x: &str| {
-        result(&format!("declare i16 @llvm.lrint.i16.f64(double)\ndefine i16 @f() {{\n  %r = call i16 @llvm.lrint.i16.f64(double {x})\n  ret i16 %r\n}}\n"))
+        result(&format!(
+            "declare i16 @llvm.lrint.i16.f64(double)\ndefine i16 @f() {{\n  %r = call i16 @llvm.lrint.i16.f64(double {x})\n  ret i16 %r\n}}\n"
+        ))
     };
     assert_eq!(rounded("2.500000e+00"), int(2, 16));
     assert_eq!(rounded("3.500000e+00"), int(4, 16));
@@ -151,7 +176,9 @@ fn lrint_rounds_ties_to_even() {
 #[test]
 fn unary_float_intrinsics_compute_their_functions() {
     let applied = |name: &str, x: &str| {
-        result(&format!("declare double @llvm.{name}.f64(double)\ndefine double @f() {{\n  %r = call double @llvm.{name}.f64(double {x})\n  ret double %r\n}}\n"))
+        result(&format!(
+            "declare double @llvm.{name}.f64(double)\ndefine double @f() {{\n  %r = call double @llvm.{name}.f64(double {x})\n  ret double %r\n}}\n"
+        ))
     };
     let double = |x: f64| Ok(Val::Float(FloatKind::Double, x.to_bits()));
     assert_eq!(applied("fabs", "-3.000000e+00"), double(3.0));
@@ -172,7 +199,10 @@ fn fixed_point_intrinsics_are_their_expansions() {
         let top = 1_i128 << (width - 1);
         let values = [0, 1, -1, 7, -7, 300, -300, top - 1, -top];
         for (a, b) in values.iter().flat_map(|&a| values.iter().map(move |&b| (a, b))) {
-            for (name, expansion) in [("smul", "%p = mul i64 %a, %b\n  %s = ashr i64 %p, 8"), ("sdiv", "%u = shl i64 %a, 8\n  %s = sdiv i64 %u, %b")] {
+            for (name, expansion) in [
+                ("smul", "%p = mul i64 %a, %b\n  %s = ashr i64 %p, 8"),
+                ("sdiv", "%u = shl i64 %a, 8\n  %s = sdiv i64 %u, %b"),
+            ] {
                 let wide = |body: &str| body.replace("i64", &format!("i{}", 2 * width));
                 let expanded = result(&format!(
                     "define i{width} @f() {{\n  %a = sext i{width} {a} to i{w2}\n  %b = sext i{width} {b} to i{w2}\n  {}\n  %r = trunc i{w2} %s to i{width}\n  ret i{width} %r\n}}\n",
@@ -184,7 +214,9 @@ fn fixed_point_intrinsics_are_their_expansions() {
                      define i{width} @f() {{\n  %r = call i{width} @llvm.{name}.fix.i{width}(i{width} {a}, i{width} {b}, i32 8)\n  ret i{width} %r\n}}\n"
                 ));
                 match expanded {
-                    Err(Trap::Undefined(_)) => assert!(matches!(called, Err(Trap::Undefined(_))), "{name} {a} {b}: {called:?}"),
+                    Err(Trap::Undefined(_)) => {
+                        assert!(matches!(called, Err(Trap::Undefined(_))), "{name} {a} {b}: {called:?}")
+                    }
                     expanded => assert_eq!(called, expanded, "{name}.i{width} {a} {b}"),
                 }
             }
@@ -204,7 +236,10 @@ fn near_memory_stays_below_64k_whatever_is_far() {
 }
 
 /// Runs `@f` on two pointers to one 4-byte cell, each as given, checked.
-fn aliased(attrs: &str, body: &str) -> Result<Val, Trap> {
+fn aliased(
+    attrs: &str,
+    body: &str,
+) -> Result<Val, Trap> {
     let text = format!(
         "target datalayout = \"{LAYOUT}\"\n@cell = global [2 x i16] zeroinitializer\n\
          define i16 @g(ptr {attrs} %p, ptr {attrs} %q) {{\n{body}}}\n\
@@ -231,12 +266,21 @@ fn a_noalias_parameter_reached_another_way_is_reported() {
 #[test]
 fn aliased_pointers_without_noalias_or_with_only_reads_are_fine() {
     assert_eq!(aliased("", WRITES_THEN_READS), int(1, 16));
-    assert_eq!(aliased("noalias", "  %x = load i16, ptr %p\n  %y = load i16, ptr %q\n  %s = add i16 %x, %y\n  ret i16 %s\n"), int(0, 16));
+    assert_eq!(
+        aliased("noalias", "  %x = load i16, ptr %p\n  %y = load i16, ptr %q\n  %s = add i16 %x, %y\n  ret i16 %s\n"),
+        int(0, 16)
+    );
 }
 
 /// Runs `@g(ptr %p)` checked, with `attrs` on the parameter, on `argument`.
-fn one_pointer(attrs: &str, body: &str, argument: u64) -> Result<Val, Trap> {
-    let text = format!("target datalayout = \"{LAYOUT}\"\n@cell = global [2 x i16] zeroinitializer\ndefine i16 @g(ptr {attrs} %p) {{\n{body}}}\n");
+fn one_pointer(
+    attrs: &str,
+    body: &str,
+    argument: u64,
+) -> Result<Val, Trap> {
+    let text = format!(
+        "target datalayout = \"{LAYOUT}\"\n@cell = global [2 x i16] zeroinitializer\ndefine i16 @g(ptr {attrs} %p) {{\n{body}}}\n"
+    );
     let module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
     crate::interpret::run_checked(&module, "g", vec![Val::Ptr(argument)], 10_000)
@@ -306,8 +350,12 @@ define i16 @f() {{
 }
 
 /// Runs `@g` of `text` checked on `arguments`.
-fn range_run(text: &str, arguments: Vec<Val>) -> Result<Val, Trap> {
-    let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n@cell = global i16 5\n{text}")).unwrap_or_else(|error| panic!("{error}"));
+fn range_run(
+    text: &str,
+    arguments: Vec<Val>,
+) -> Result<Val, Trap> {
+    let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n@cell = global i16 5\n{text}"))
+        .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
     crate::interpret::run_checked(&module, "g", arguments, 10_000)
 }
@@ -323,15 +371,23 @@ fn a_value_outside_its_stated_range_is_reported() {
     let parameter = "define i16 @g(i16 range(i16 0, 2) %p) {\nentry:\n  ret i16 %p\n}\n";
     assert_eq!(range_run(parameter, vec![small(1)]), Ok(small(1)));
     let trapped = range_run(parameter, vec![small(5)]).unwrap_err();
-    assert!(matches!(&trapped, Trap::Undefined(why) if why.contains("parameter 0") && why.contains("[0, 2)")), "{trapped:?}");
+    assert!(
+        matches!(&trapped, Trap::Undefined(why) if why.contains("parameter 0") && why.contains("[0, 2)")),
+        "{trapped:?}"
+    );
     let result = "define range(i16 0, 2) i16 @g(i16 %p) {\nentry:\n  ret i16 %p\n}\n";
     assert_eq!(range_run(result, vec![small(0)]), Ok(small(0)));
-    assert!(matches!(range_run(result, vec![small(7)]).unwrap_err(), Trap::Undefined(why) if why.contains("the result")));
-    let load = "define i16 @g() {\nentry:\n  %v = load i16, ptr @cell, !range !0\n  ret i16 %v\n}\n\n!0 = !{i16 0, i16 2}\n";
+    assert!(
+        matches!(range_run(result, vec![small(7)]).unwrap_err(), Trap::Undefined(why) if why.contains("the result"))
+    );
+    let load =
+        "define i16 @g() {\nentry:\n  %v = load i16, ptr @cell, !range !0\n  ret i16 %v\n}\n\n!0 = !{i16 0, i16 2}\n";
     assert!(matches!(range_run(load, vec![]).unwrap_err(), Trap::Undefined(why) if why.contains("!range")));
     // Two pairs, 0..2 and 10..12: inside the second is inside.
     let by_pair = |value: u128| {
-        let text = format!("define i16 @g() {{\nentry:\n  %v = load i16, ptr @cell3, !range !0\n  ret i16 %v\n}}\n\n@cell3 = global i16 {value}\n!0 = !{{i16 0, i16 2, i16 10, i16 12}}\n");
+        let text = format!(
+            "define i16 @g() {{\nentry:\n  %v = load i16, ptr @cell3, !range !0\n  ret i16 %v\n}}\n\n@cell3 = global i16 {value}\n!0 = !{{i16 0, i16 2, i16 10, i16 12}}\n"
+        );
         range_run(&text, vec![])
     };
     assert_eq!(by_pair(11), Ok(small(11)), "inside the second pair");

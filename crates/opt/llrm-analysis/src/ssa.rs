@@ -12,9 +12,8 @@
 //!
 //! Skipped, with no meaning on SSA IR:
 //! - `renumbered`: variable versions.
-//! - `cloned_pointer_metadata` and `cloned_integer_ranges`: the old body's
-//!   side tables; a pointer is its type here, and an instruction's metadata
-//!   travels with `clone_instruction`.
+//! - `cloned_pointer_metadata` and `cloned_integer_ranges`: the old body's side tables; a pointer is its type here, and
+//!   an instruction's metadata travels with `clone_instruction`.
 //!
 //! Tests skipped: `constructed_matches_blocks_by_identity_not_position` and
 //! `constructed_repairs_existing_phi_inputs_by_predecessor` (test
@@ -45,7 +44,10 @@ pub enum SubstitutionError {
 }
 
 impl fmt::Display for SubstitutionError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
             Self::CyclicValueSubstitution => formatter.write_str("cyclic value substitution"),
         }
@@ -56,10 +58,15 @@ impl std::error::Error for SubstitutionError {}
 
 /// The local values an instruction reads, in operand order.
 fn reads(instruction: &Instruction) -> impl Iterator<Item = ValueId> + '_ {
-    instruction.operands.iter().filter_map(|operand| match operand {
-        Operand::Value(value) => Some(*value),
-        _ => None,
-    })
+    instruction
+        .operands
+        .iter()
+        .filter_map(
+            |operand| match operand {
+                Operand::Value(value) => Some(*value),
+                _ => None,
+            },
+        )
 }
 
 /// Each value's operation users, built in one function traversal.
@@ -68,7 +75,10 @@ fn reads(instruction: &Instruction) -> impl Iterator<Item = ValueId> + '_ {
 /// value's list.
 ///
 /// Direct port of `qbopt.analysis.ssa:use_index`.
-pub fn use_index(function: &Function, values: Option<&BTreeSet<ValueId>>) -> BTreeMap<ValueId, Vec<InstId>> {
+pub fn use_index(
+    function: &Function,
+    values: Option<&BTreeSet<ValueId>>,
+) -> BTreeMap<ValueId, Vec<InstId>> {
     let mut users = BTreeMap::<ValueId, Vec<InstId>>::new();
     for (occurrence, _, operation) in operations(function) {
         let mut read: BTreeSet<ValueId> = reads(operation).collect();
@@ -86,7 +96,10 @@ pub fn use_index(function: &Function, values: Option<&BTreeSet<ValueId>>) -> BTr
 /// Whether any went.
 ///
 /// Direct port of `qbopt.analysis.ssa:pruned_phis`.
-pub fn pruned_phis(function: &mut Function, roots: &BTreeSet<ValueId>) -> bool {
+pub fn pruned_phis(
+    function: &mut Function,
+    roots: &BTreeSet<ValueId>,
+) -> bool {
     let mut needed: BTreeSet<ValueId> = roots.clone();
     for (_, _, op) in operations(function) {
         needed.extend(reads(op));
@@ -100,7 +113,8 @@ pub fn pruned_phis(function: &mut Function, roots: &BTreeSet<ValueId>) -> bool {
         needed.extend(incoming.iter().copied());
         pending.extend(incoming.into_iter().filter(|value| found.contains_key(value)));
     }
-    let removed: Vec<InstId> = found.iter().filter(|(value, _)| !needed.contains(value)).map(|(_, &inst)| inst).collect();
+    let removed: Vec<InstId> =
+        found.iter().filter(|(value, _)| !needed.contains(value)).map(|(_, &inst)| inst).collect();
     // Only removed phis read removed phis; drop those reads before erasing.
     for &inst in &removed {
         function.set_operands(inst, Vec::new());
@@ -114,7 +128,10 @@ pub fn pruned_phis(function: &mut Function, roots: &BTreeSet<ValueId>) -> bool {
 /// Follow a substitution until its provider is unchanged.
 ///
 /// Direct port of `qbopt.analysis.ssa:provider`.
-pub fn provider(value: Operand, swap: &BTreeMap<ValueId, Operand>) -> Result<Operand, SubstitutionError> {
+pub fn provider(
+    value: Operand,
+    swap: &BTreeMap<ValueId, Operand>,
+) -> Result<Operand, SubstitutionError> {
     let mut value = value;
     let mut seen = BTreeSet::new();
     while let Operand::Value(id) = value
@@ -135,7 +152,10 @@ pub fn provider(value: Operand, swap: &BTreeMap<ValueId, Operand>) -> Result<Ope
 ///
 /// The definition is deliberately not rewritten.  Direct port of
 /// `qbopt.analysis.ssa:substituted`.
-pub fn substituted(instruction: &Instruction, swap: &BTreeMap<ValueId, Operand>) -> Result<Vec<Operand>, SubstitutionError> {
+pub fn substituted(
+    instruction: &Instruction,
+    swap: &BTreeMap<ValueId, Operand>,
+) -> Result<Vec<Operand>, SubstitutionError> {
     instruction.operands.iter().map(|&operand| provider(operand, swap)).collect()
 }
 
@@ -144,10 +164,14 @@ pub fn substituted(instruction: &Instruction, swap: &BTreeMap<ValueId, Operand>)
 ///
 /// Direct port of `qbopt.analysis.ssa:values`.
 pub fn values(function: &Function) -> impl Iterator<Item = ValueId> + '_ {
-    function.walk().flat_map(|(_, one)| {
-        let instruction = function.instruction(one);
-        instruction.result.into_iter().chain(reads(instruction))
-    })
+    function
+        .walk()
+        .flat_map(
+            |(_, one)| {
+                let instruction = function.instruction(one);
+                instruction.result.into_iter().chain(reads(instruction))
+            },
+        )
 }
 
 /// One value defined in several blocks, as LLVM's SSAUpdater: each
@@ -170,7 +194,10 @@ pub struct SsaUpdater {
 
 impl SsaUpdater {
     /// A value of type `ty`; its phis are named `name`.
-    pub fn new(ty: TypeId, name: Option<&str>) -> Self {
+    pub fn new(
+        ty: TypeId,
+        name: Option<&str>,
+    ) -> Self {
         Self {
             ty,
             name: name.map(str::to_owned),
@@ -183,17 +210,29 @@ impl SsaUpdater {
     }
 
     /// `value` is the definition at the end of `block`.
-    pub fn add_available_value(&mut self, block: BlockId, value: Operand) {
+    pub fn add_available_value(
+        &mut self,
+        block: BlockId,
+        value: Operand,
+    ) {
         self.available.insert(block, value);
         self.entered.clear();
     }
 
-    pub fn has_value_for_block(&self, block: BlockId) -> bool {
+    pub fn has_value_for_block(
+        &self,
+        block: BlockId,
+    ) -> bool {
         self.available.contains_key(&block)
     }
 
     /// The value at the end of `block`.
-    pub fn value_at_end_of_block(&mut self, context: &mut Context, function: &mut Function, block: BlockId) -> Operand {
+    pub fn value_at_end_of_block(
+        &mut self,
+        context: &mut Context,
+        function: &mut Function,
+        block: BlockId,
+    ) -> Operand {
         match self.available.get(&block) {
             Some(&value) => value,
             None => self.value_in_middle_of_block(context, function, block),
@@ -201,7 +240,12 @@ impl SsaUpdater {
     }
 
     /// The value on entry to `block`, before any definition in it.
-    pub fn value_in_middle_of_block(&mut self, context: &mut Context, function: &mut Function, block: BlockId) -> Operand {
+    pub fn value_in_middle_of_block(
+        &mut self,
+        context: &mut Context,
+        function: &mut Function,
+        block: BlockId,
+    ) -> Operand {
         if let Some(&value) = self.entered.get(&block) {
             return value;
         }
@@ -238,7 +282,9 @@ impl SsaUpdater {
         for predecessor in predecessors {
             let value = self.value_at_end_of_block(context, function, predecessor);
             // One input for each edge: a switch may reach the block by several.
-            let edges = function.terminator(predecessor).map_or(1, |end| function.instruction(end).operands.iter().filter(|&&one| one == Operand::Block(block)).count().max(1));
+            let edges = function.terminator(predecessor).map_or(1, |end| {
+                function.instruction(end).operands.iter().filter(|&&one| one == Operand::Block(block)).count().max(1)
+            });
             for _ in 0..edges {
                 operands.push(value);
                 operands.push(Operand::Block(predecessor));
@@ -257,10 +303,17 @@ impl SsaUpdater {
 
     /// Makes `one` read the value where it reads: a phi's input at the end
     /// of the block it comes from.
-    pub fn rewrite_use(&mut self, context: &mut Context, function: &mut Function, one: Use) {
+    pub fn rewrite_use(
+        &mut self,
+        context: &mut Context,
+        function: &mut Function,
+        one: Use,
+    ) {
         let user = function.instruction(one.user);
         let value = if user.opcode == Opcode::Phi {
-            let Operand::Block(from) = user.operands[one.index as usize + 1] else { unreachable!("a phi's block operand") };
+            let Operand::Block(from) = user.operands[one.index as usize + 1] else {
+                unreachable!("a phi's block operand")
+            };
             self.value_at_end_of_block(context, function, from)
         } else {
             let block = function.parent(one.user).expect("a placed user");
@@ -274,12 +327,21 @@ impl SsaUpdater {
         &self.inserted
     }
 
-    fn poison(&self, context: &mut Context) -> Operand {
+    fn poison(
+        &self,
+        context: &mut Context,
+    ) -> Operand {
         Operand::Constant(context.constant(Constant { ty: self.ty, kind: ConstantKind::Poison }))
     }
 
     /// `single` in place of the trivial `phi`.
-    fn replaced(&mut self, function: &mut Function, phi: InstId, result: Operand, single: Operand) -> Operand {
+    fn replaced(
+        &mut self,
+        function: &mut Function,
+        phi: InstId,
+        result: Operand,
+        single: Operand,
+    ) -> Operand {
         let Operand::Value(value) = result else { unreachable!("a phi's value") };
         function.replace_value(value, single);
         function.set_operands(phi, Vec::new());
@@ -298,11 +360,12 @@ impl SsaUpdater {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use llrm_mir::module::Use;
     use llrm_mir::module::{Operand, ValueId};
 
-    use llrm_mir::module::Use;
-
-    use super::{SsaUpdater, SubstitutionError, operations, phis, provider, pruned_phis, substituted, use_index, values};
+    use super::{
+        SsaUpdater, SubstitutionError, operations, phis, provider, pruned_phis, substituted, use_index, values,
+    };
     use crate::testing::{block, function, parsed, value};
 
     #[test]
@@ -405,7 +468,8 @@ b1:
 ",
         );
         let function = function(&module, "f");
-        let [old, middle, replacement, defined] = ["old", "middle", "replacement", "defined"].map(|name| value(function, name));
+        let [old, middle, replacement, defined] =
+            ["old", "middle", "replacement", "defined"].map(|name| value(function, name));
         let swaps = BTreeMap::from([
             (old, Operand::Value(middle)),
             (middle, Operand::Value(replacement)),
@@ -545,12 +609,18 @@ b0:
 
     /// @f of `text` with the value `name` reads rewritten as the updater
     /// given `defined` (block, value) says, and the phis it placed.
-    fn updated(text: &str, reader: &str, defined: &[(&str, &str)]) -> (String, usize) {
+    fn updated(
+        text: &str,
+        reader: &str,
+        defined: &[(&str, &str)],
+    ) -> (String, usize) {
         let mut module = parsed(text);
         let f = function(&module, "f");
-        let definitions = defined.iter().map(|(at, name)| (block(f, at), Operand::Value(value(f, name)))).collect::<Vec<_>>();
+        let definitions =
+            defined.iter().map(|(at, name)| (block(f, at), Operand::Value(value(f, name)))).collect::<Vec<_>>();
         let reader = value(f, reader);
-        let user = f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(reader)).expect("defined");
+        let user =
+            f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(reader)).expect("defined");
         let ty = f.value(reader).ty;
         let (context, f) = module.function_mut("f").unwrap();
         let mut updater = SsaUpdater::new(ty, Some("v"));

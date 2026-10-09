@@ -45,7 +45,16 @@ pub struct Room {
 
 impl Room {
     pub fn of(outer: &Outer) -> Room {
-        Room { registers: outer.target().registers(), across_call: outer.target().call_registers(), far_access: outer.target().far_access_registers(), segments: outer.target().segment_registers(), addresses: outer.target().address_registers(), two_address: outer.target().two_address(), spaces: outer.target().spaces(), index_scales: index_scales(&outer.target().address_forms()) }
+        Room {
+            registers: outer.target().registers(),
+            across_call: outer.target().call_registers(),
+            far_access: outer.target().far_access_registers(),
+            segments: outer.target().segment_registers(),
+            addresses: outer.target().address_registers(),
+            two_address: outer.target().two_address(),
+            spaces: outer.target().spaces(),
+            index_scales: index_scales(&outer.target().address_forms()),
+        }
     }
 
     pub fn priced(&self) -> bool {
@@ -56,7 +65,13 @@ impl Room {
 /// The scales the native form takes, where any register may be its base and its index (the others cost a
 /// prefix and bytes), as `Room::index_scales` has them.
 fn index_scales(forms: &[llrm_mir::target::AddressForm]) -> u8 {
-    forms.iter().take(1).filter(|form| form.bases.is_none() && form.indices.is_none()).flat_map(|form| form.scales.iter()).filter_map(|&scale| [1, 2, 4, 8].iter().position(|&one| one == scale)).fold(0, |bits, at| bits | 1 << at)
+    forms
+        .iter()
+        .take(1)
+        .filter(|form| form.bases.is_none() && form.indices.is_none())
+        .flat_map(|form| form.scales.iter())
+        .filter_map(|&scale| [1, 2, 4, 8].iter().position(|&one| one == scale))
+        .fold(0, |bits, at| bits | 1 << at)
 }
 
 /// A value's traffic in memory, each count weighted by its block's frequency.
@@ -70,7 +85,10 @@ pub struct Traffic {
 }
 
 impl Traffic {
-    pub fn price(&self, costs: &OperationCosts) -> i64 {
+    pub fn price(
+        &self,
+        costs: &OperationCosts,
+    ) -> i64 {
         let cell = self.stores * costs.store + self.updates * costs.memory_update + self.loads * costs.load;
         self.rebuild.map_or(cell, |each| cell.min(self.loads * each))
     }
@@ -93,53 +111,87 @@ pub struct Forecast<S> {
 
 /// The cells spilled so far.
 pub trait Spilled<K>: Default {
-    fn has(&self, cell: &K) -> bool;
-    fn add(&mut self, cell: K);
+    fn has(
+        &self,
+        cell: &K,
+    ) -> bool;
+    fn add(
+        &mut self,
+        cell: K,
+    );
 }
 
 impl<K: Ord> Spilled<K> for BTreeSet<K> {
-    fn has(&self, cell: &K) -> bool {
+    fn has(
+        &self,
+        cell: &K,
+    ) -> bool {
         self.contains(cell)
     }
-    fn add(&mut self, cell: K) {
+    fn add(
+        &mut self,
+        cell: K,
+    ) {
         self.insert(cell);
     }
 }
 
 impl<K: Eq + std::hash::Hash> Spilled<K> for llrm_support::hash::HashSet<K> {
-    fn has(&self, cell: &K) -> bool {
+    fn has(
+        &self,
+        cell: &K,
+    ) -> bool {
         self.contains(cell)
     }
-    fn add(&mut self, cell: K) {
+    fn add(
+        &mut self,
+        cell: K,
+    ) {
         self.insert(cell);
     }
 }
 
 impl<K: Dense> Spilled<K> for IdSet<K> {
-    fn has(&self, cell: &K) -> bool {
+    fn has(
+        &self,
+        cell: &K,
+    ) -> bool {
         self.contains(cell)
     }
-    fn add(&mut self, cell: K) {
+    fn add(
+        &mut self,
+        cell: K,
+    ) {
         self.insert(cell);
     }
 }
 
 /// What spilling costs to fit `points`, in order: at each, the cheapest
 /// residents past its registers are spilled, and stay spilled.
-pub fn spilled<K: Ord + std::hash::Hash + Copy>(points: impl IntoIterator<Item = Point<K>>, price: impl Fn(K) -> i64) -> i64 {
+pub fn spilled<K: Ord + std::hash::Hash + Copy>(
+    points: impl IntoIterator<Item = Point<K>>,
+    price: impl Fn(K) -> i64,
+) -> i64 {
     fitted::<K, llrm_support::hash::HashSet<K>>(points, price).cost
 }
 
 /// `spilled`, and which cells it spills and how far past its registers the pressure goes.
-pub fn forecast<K: Ord + Dense>(points: impl IntoIterator<Item = Point<K>>, price: impl Fn(K) -> i64) -> Forecast<IdSet<K>> {
+pub fn forecast<K: Ord + Dense>(
+    points: impl IntoIterator<Item = Point<K>>,
+    price: impl Fn(K) -> i64,
+) -> Forecast<IdSet<K>> {
     fitted(points, price)
 }
 
-fn fitted<K: Ord + Copy, S: Spilled<K>>(points: impl IntoIterator<Item = Point<K>>, price: impl Fn(K) -> i64) -> Forecast<S> {
+fn fitted<K: Ord + Copy, S: Spilled<K>>(
+    points: impl IntoIterator<Item = Point<K>>,
+    price: impl Fn(K) -> i64,
+) -> Forecast<S> {
     let mut spilled = S::default();
     let (mut cost, mut peak) = (0, 0);
     for point in points {
-        // Sorted and without repeats, as a set would hold them: a set built per point was most of lsr's work on a loop of many uses.
+        // Sorted and without repeats, as a set would hold them: a set built per point was most of lsr's work on a loop
+        // of many uses.
         let mut resident = point.residents.into_iter().filter(|one| !spilled.has(one)).collect::<Vec<_>>();
         resident.sort_unstable();
         resident.dedup();
@@ -164,13 +216,24 @@ fn fitted<K: Ord + Copy, S: Spilled<K>>(points: impl IntoIterator<Item = Point<K
 }
 
 /// Whether `inst` leaves only the registers a call does.
-pub fn calls(function: &Function, inst: InstId) -> bool {
-    matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))
+pub fn calls(
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    matches!(
+        function.instruction(inst).opcode,
+        Opcode::Call(_) | Opcode::Invoke(_)
+    )
 }
 
 /// How many registers call `inst` keeps: its callee's own count where the
 /// call is direct.
-pub fn kept_across(outer: &Outer, context: &Context, function: &Function, inst: InstId) -> i64 {
+pub fn kept_across(
+    outer: &Outer,
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> i64 {
     outer.kept_across(llrm_mir::memory::callee(context, function, inst))
 }
 
@@ -181,7 +244,14 @@ pub fn kept_across(outer: &Outer, context: &Context, function: &Function, inst: 
 /// live already. Any other address is a value, live, in a register. A
 /// symbol or frame object is a displacement. A far pointer takes its
 /// selector besides.
-pub fn transient(context: &Context, layout: &DataLayout, function: &Function, inst: InstId, room: Room, live: &BTreeSet<ValueId>) -> i64 {
+pub fn transient(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    inst: InstId,
+    room: Room,
+    live: &BTreeSet<ValueId>,
+) -> i64 {
     let op = function.instruction(inst);
     let address = match op.opcode {
         Opcode::Load { .. } => op.operands.first(),
@@ -190,7 +260,8 @@ pub fn transient(context: &Context, layout: &DataLayout, function: &Function, in
     };
     let Some(Operand::Value(pointer)) = address else { return 0 };
     let read = address_values_in(context, function, *pointer, room.index_scales);
-    read.iter().filter(|value| !live.contains(value)).count() as i64 + if words(context, layout, function, *pointer) > 1 { room.far_access } else { 0 }
+    read.iter().filter(|value| !live.contains(value)).count() as i64
+        + if words(context, layout, function, *pointer) > 1 { room.far_access } else { 0 }
 }
 
 /// The register a result takes besides those live before it: where it is made in
@@ -199,14 +270,30 @@ pub fn transient(context: &Context, layout: &DataLayout, function: &Function, in
 /// after `mov cx, dx` holds both `dx` and `cx`: a 7th value where six registers
 /// held six. A commutative operation takes either operand's; one of them dying
 /// is enough. A shift is two-address too: `sar r, imm` makes its result in the first operand's register.
-pub fn copied(function: &Function, inst: InstId, past: &BTreeSet<ValueId>, room: Room, counted: &dyn Fn(ValueId) -> bool) -> i64 {
+pub fn copied(
+    function: &Function,
+    inst: InstId,
+    past: &BTreeSet<ValueId>,
+    room: Room,
+    counted: &dyn Fn(ValueId) -> bool,
+) -> i64 {
     let op = function.instruction(inst);
-    let (Opcode::Binary(kind), Some(result), [first, second]) = (&op.opcode, op.result, &op.operands[..]) else { return 0 };
+    let (Opcode::Binary(kind), Some(result), [first, second]) = (&op.opcode, op.result, &op.operands[..]) else {
+        return 0;
+    };
     if !room.two_address || !counted(result) {
         return 0;
     }
     let stays = |operand: &Operand| matches!(operand, Operand::Value(value) if past.contains(value));
-    let tied = if matches!(kind, BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) { !(matches!(first, Operand::Value(_)) && !stays(first)) && !(matches!(second, Operand::Value(_)) && !stays(second)) } else { stays(first) };
+    let tied = if matches!(
+        kind,
+        BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor
+    ) {
+        !(matches!(first, Operand::Value(_)) && !stays(first))
+            && !(matches!(second, Operand::Value(_)) && !stays(second))
+    } else {
+        stays(first)
+    };
     i64::from(tied)
 }
 
@@ -218,11 +305,18 @@ pub fn addressed(function: &Function) -> BTreeSet<ValueId> {
 }
 
 /// `addressed` where an address takes `scales`.
-pub fn addressed_in(context: &Context, function: &Function, scales: u8) -> BTreeSet<ValueId> {
+pub fn addressed_in(
+    context: &Context,
+    function: &Function,
+    scales: u8,
+) -> BTreeSet<ValueId> {
     addressed_by(function, &mut |value| folded_in(context, function, value, scales))
 }
 
-fn addressed_by(function: &Function, is_folded: &mut dyn FnMut(ValueId) -> bool) -> BTreeSet<ValueId> {
+fn addressed_by(
+    function: &Function,
+    is_folded: &mut dyn FnMut(ValueId) -> bool,
+) -> BTreeSet<ValueId> {
     let mut found = BTreeSet::new();
     // Whether a pointer is folded depends on all its users, and a frame slot has one user for each access
     // to it: asked once for each pointer, not once for each access.
@@ -236,7 +330,9 @@ fn addressed_by(function: &Function, is_folded: &mut dyn FnMut(ValueId) -> bool)
                 _ => None,
             };
             if let Some(Operand::Value(pointer)) = address {
-                found.extend(address_values_by(function, *pointer, &mut |value| *memo.entry(value).or_insert_with(|| is_folded(value))));
+                found.extend(address_values_by(function, *pointer, &mut |value| {
+                    *memo.entry(value).or_insert_with(|| is_folded(value))
+                }));
             }
         }
     }
@@ -248,18 +344,30 @@ fn addressed_by(function: &Function, is_folded: &mut dyn FnMut(ValueId) -> bool)
 /// are made of: each variable index and the pointer they are offsets from,
 /// unless that is a symbol or frame object, a displacement. Any other
 /// `pointer` is itself a value.
-pub fn address_values(function: &Function, pointer: ValueId) -> Vec<ValueId> {
+pub fn address_values(
+    function: &Function,
+    pointer: ValueId,
+) -> Vec<ValueId> {
     address_values_by(function, pointer, &mut |value| folded(function, value))
 }
 
 /// `address_values` where an address takes `scales` (`Room::index_scales`).
-pub fn address_values_in(context: &Context, function: &Function, pointer: ValueId, scales: u8) -> Vec<ValueId> {
+pub fn address_values_in(
+    context: &Context,
+    function: &Function,
+    pointer: ValueId,
+    scales: u8,
+) -> Vec<ValueId> {
     address_values_by(function, pointer, &mut |value| folded_in(context, function, value, scales))
 }
 
 /// `address_values`, asking `folded` of each value through `is_folded`, which a caller that asks of many
 /// pointers can answer from what it has found.
-fn address_values_by(function: &Function, pointer: ValueId, is_folded: &mut dyn FnMut(ValueId) -> bool) -> Vec<ValueId> {
+fn address_values_by(
+    function: &Function,
+    pointer: ValueId,
+    is_folded: &mut dyn FnMut(ValueId) -> bool,
+) -> Vec<ValueId> {
     let defined = |operand: Operand| match operand {
         Operand::Value(value) => match function.value(value).def {
             ValueDef::Instruction(def) => Some(function.instruction(def)),
@@ -274,14 +382,20 @@ fn address_values_by(function: &Function, pointer: ValueId, is_folded: &mut dyn 
         && let Some(op) = defined(base)
         && let (Opcode::GetElementPtr { .. }, [from, indices @ ..]) = (&op.opcode, &op.operands[..])
     {
-        read.extend(indices.iter().filter_map(|index| if let Operand::Value(value) = index { Some(*value) } else { None }));
+        read.extend(
+            indices.iter().filter_map(|index| if let Operand::Value(value) = index { Some(*value) } else { None }),
+        );
         base = *from;
     }
     // A constant displacement from a symbol or frame object needs none.
     let symbolic = loop {
         match base {
             Operand::Value(_) => match defined(base).map(|op| (&op.opcode, &op.operands[..])) {
-                Some((Opcode::GetElementPtr { .. }, [from, indices @ ..])) if indices.iter().all(|index| matches!(index, Operand::Constant(_))) => base = *from,
+                Some((Opcode::GetElementPtr { .. }, [from, indices @ ..]))
+                    if indices.iter().all(|index| matches!(index, Operand::Constant(_))) =>
+                {
+                    base = *from
+                }
                 Some((Opcode::Cast(CastOp::AddrSpaceCast), [from])) => base = *from,
                 Some((Opcode::Alloca { .. }, _)) => break true,
                 _ => break false,
@@ -297,26 +411,50 @@ fn address_values_by(function: &Function, pointer: ValueId, is_folded: &mut dyn 
 
 /// Whether `value` is a far pointer of offset zero, a selector cast to the
 /// far space: held in a segment register, where the target has one.
-pub fn segment_view(context: &Context, layout: &DataLayout, spaces: llrm_mir::spaces::Spaces, function: &Function, value: ValueId) -> bool {
+pub fn segment_view(
+    context: &Context,
+    layout: &DataLayout,
+    spaces: llrm_mir::spaces::Spaces,
+    function: &Function,
+    value: ValueId,
+) -> bool {
     let ValueDef::Instruction(def) = function.value(value).def else { return false };
     let op = function.instruction(def);
     let (Opcode::Cast(CastOp::AddrSpaceCast), [from]) = (&op.opcode, &op.operands[..]) else { return false };
-    let space = |operand: Operand| function.operand_type(context, operand).and_then(|ty| match context.types.get(ty) {
-        Type::Pointer(space) => Some(*space),
-        _ => None,
-    });
+    let space = |operand: Operand| {
+        function
+            .operand_type(context, operand)
+            .and_then(
+                |ty| match context.types.get(ty) {
+                    Type::Pointer(space) => Some(*space),
+                    _ => None,
+                },
+            )
+    };
     let far = |space: u32| layout.pointer(space).bits > layout.pointer(space).index_bits;
-    matches!((space(Operand::Value(value)), space(*from)), (Some(to), Some(from)) if far(to) && from != spaces.near && !far(from))
+    matches!(
+        (space(Operand::Value(value)), space(*from)),
+        (Some(to), Some(from)) if far(to) && from != spaces.near && !far(from)
+    )
 }
 
 /// Whether `value` takes an integer register: floating values do not, nor
 /// does a truth value only its own block's branch reads, which is flags.
-pub fn integer(context: &Context, function: &Function, value: ValueId) -> bool {
+pub fn integer(
+    context: &Context,
+    function: &Function,
+    value: ValueId,
+) -> bool {
     integer_in(context, function, value, 0)
 }
 
 /// `integer` where an address takes `scales`.
-pub fn integer_in(context: &Context, function: &Function, value: ValueId, scales: u8) -> bool {
+pub fn integer_in(
+    context: &Context,
+    function: &Function,
+    value: ValueId,
+    scales: u8,
+) -> bool {
     match context.types.get(function.value(value).ty) {
         Type::Int(1) => !_flags(function, value),
         Type::Int(_) | Type::Pointer(_) => !folded_in(context, function, value, scales),
@@ -327,15 +465,24 @@ pub fn integer_in(context: &Context, function: &Function, value: ValueId, scales
 /// Whether `value` is read only as an address: by loads and stores through
 /// it and `getelementptr`s that are such addresses. Each takes it in an
 /// addressing form; a register to hold it across blocks is the allocator's.
-pub fn address_only(function: &Function, value: ValueId, depth: u32) -> bool {
+pub fn address_only(
+    function: &Function,
+    value: ValueId,
+    depth: u32,
+) -> bool {
     let users = function.users(value);
     !users.is_empty()
         && users.iter().all(|one| {
             let user = function.instruction(one.user);
             match user.opcode {
                 Opcode::Load { .. } => user.operands.first() == Some(&Operand::Value(value)),
-                Opcode::Store { .. } => user.operands.get(1) == Some(&Operand::Value(value)) && user.operands.first() != Some(&Operand::Value(value)),
-                Opcode::GetElementPtr { .. } => depth > 0 && user.result.is_some_and(|result| address_only(function, result, depth - 1)),
+                Opcode::Store { .. } => {
+                    user.operands.get(1) == Some(&Operand::Value(value))
+                        && user.operands.first() != Some(&Operand::Value(value))
+                }
+                Opcode::GetElementPtr { .. } => {
+                    depth > 0 && user.result.is_some_and(|result| address_only(function, result, depth - 1))
+                }
                 _ => false,
             }
         })
@@ -354,28 +501,49 @@ pub fn folded_runs() -> usize {
 /// Whether `value` is an address only memory accesses of its own block, and
 /// `getelementptr`s that are such addresses, take: folded into their
 /// addressing modes, it takes no register.
-pub fn folded(function: &Function, value: ValueId) -> bool {
+pub fn folded(
+    function: &Function,
+    value: ValueId,
+) -> bool {
     folded_with(None, function, value, 0)
 }
 
 /// `folded` where an address takes `scales` (`Room::index_scales`): a frame object indexed by a scaled
 /// integer is `[ebp+esi*8+disp]` wherever it is read, as it is where its offset is a constant.
-pub fn folded_in(context: &Context, function: &Function, value: ValueId, scales: u8) -> bool {
+pub fn folded_in(
+    context: &Context,
+    function: &Function,
+    value: ValueId,
+    scales: u8,
+) -> bool {
     folded_with(Some(context), function, value, scales)
 }
 
-fn folded_with(context: Option<&Context>, function: &Function, value: ValueId, scales: u8) -> bool {
+fn folded_with(
+    context: Option<&Context>,
+    function: &Function,
+    value: ValueId,
+    scales: u8,
+) -> bool {
     FOLDED.with(|runs| runs.set(runs.get() + 1));
     let ValueDef::Instruction(def) = function.value(value).def else { return false };
     let block = function.parent(def);
     let users = function.users(value);
     // A constant offset into a frame object is a displacement wherever it is read.
-    let displacement = _frame_object(function, value) || _frame_offset(function, value) || context.is_some_and(|context| scales != 0 && _frame_indexed(context, function, value, scales));
+    let displacement = _frame_object(function, value)
+        || _frame_offset(function, value)
+        || context.is_some_and(|context| scales != 0 && _frame_indexed(context, function, value, scales));
     // The stack space's view of one is made where it is read, by whatever reads it.
-    if displacement && matches!(function.instruction(def).opcode, Opcode::Cast(CastOp::AddrSpaceCast)) {
+    if displacement && matches!(
+        function.instruction(def).opcode,
+        Opcode::Cast(CastOp::AddrSpaceCast)
+    ) {
         return !users.is_empty();
     }
-    if !matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. } | Opcode::Alloca { .. }) {
+    if !matches!(
+        function.instruction(def).opcode,
+        Opcode::GetElementPtr { .. } | Opcode::Alloca { .. }
+    ) {
         return false;
     }
     !users.is_empty()
@@ -383,29 +551,43 @@ fn folded_with(context: Option<&Context>, function: &Function, value: ValueId, s
             let op = function.instruction(one.user);
             (displacement || function.parent(one.user) == block)
                 && match op.opcode {
-                    Opcode::GetElementPtr { .. } => op.operands.first() == Some(&Operand::Value(value)) && folded_with(context, function, op.result.expect("a getelementptr's result"), scales),
+                    Opcode::GetElementPtr { .. } => {
+                        op.operands.first() == Some(&Operand::Value(value))
+                            && folded_with(context, function, op.result.expect("a getelementptr's result"), scales)
+                    }
                     Opcode::Load { .. } => op.operands.first() == Some(&Operand::Value(value)),
-                    Opcode::Store { .. } => op.operands.get(1) == Some(&Operand::Value(value)) && op.operands.first() != Some(&Operand::Value(value)),
+                    Opcode::Store { .. } => {
+                        op.operands.get(1) == Some(&Operand::Value(value))
+                            && op.operands.first() != Some(&Operand::Value(value))
+                    }
                     _ => false,
                 }
         })
 }
 
 /// Whether `value` is a frame object's address: a displacement from BP in each access.
-fn _frame_object(function: &Function, value: ValueId) -> bool {
+fn _frame_object(
+    function: &Function,
+    value: ValueId,
+) -> bool {
     match function.value(value).def {
-        ValueDef::Instruction(def) => match (&function.instruction(def).opcode, &function.instruction(def).operands[..]) {
-            (Opcode::Alloca { .. }, _) => true,
-            // The same address in the stack's space.
-            (Opcode::Cast(CastOp::AddrSpaceCast), [Operand::Value(from)]) => _frame_object(function, *from),
-            _ => false,
-        },
+        ValueDef::Instruction(def) => {
+            match (&function.instruction(def).opcode, &function.instruction(def).operands[..]) {
+                (Opcode::Alloca { .. }, _) => true,
+                // The same address in the stack's space.
+                (Opcode::Cast(CastOp::AddrSpaceCast), [Operand::Value(from)]) => _frame_object(function, *from),
+                _ => false,
+            }
+        }
         _ => false,
     }
 }
 
 /// Whether `value` is a frame object's or a symbol's address plus constants.
-fn _frame_offset(function: &Function, value: ValueId) -> bool {
+fn _frame_offset(
+    function: &Function,
+    value: ValueId,
+) -> bool {
     let ValueDef::Instruction(def) = function.value(value).def else { return false };
     let op = function.instruction(def);
     let Opcode::GetElementPtr { .. } = op.opcode else { return false };
@@ -420,12 +602,20 @@ fn _frame_offset(function: &Function, value: ValueId) -> bool {
 
 /// Whether `value` is a frame object's address plus one index scaled by what an address takes (`x * 8`, a
 /// `mul` or a `shl`), and constants.
-fn _frame_indexed(context: &Context, function: &Function, value: ValueId, scales: u8) -> bool {
+fn _frame_indexed(
+    context: &Context,
+    function: &Function,
+    value: ValueId,
+    scales: u8,
+) -> bool {
     let ValueDef::Instruction(def) = function.value(value).def else { return false };
     let op = function.instruction(def);
     let Opcode::GetElementPtr { .. } = op.opcode else { return false };
     let [Operand::Value(base), indexes @ ..] = op.operands.as_slice() else { return false };
-    if !(_frame_object(function, *base) || _frame_offset(function, *base) || _frame_indexed(context, function, *base, scales)) {
+    if !(_frame_object(function, *base)
+        || _frame_offset(function, *base)
+        || _frame_indexed(context, function, *base, scales))
+    {
         return false;
     }
     let variable = indexes.iter().filter(|one| !matches!(one, Operand::Constant(_))).collect::<Vec<_>>();
@@ -445,22 +635,37 @@ fn _frame_indexed(context: &Context, function: &Function, value: ValueId, scales
     };
     let scale = match (&made.opcode, &made.operands[..]) {
         (Opcode::Binary(BinaryOp::Mul), [_, factor]) => number(factor),
-        (Opcode::Binary(BinaryOp::Shl), [_, amount]) => number(amount).and_then(|amount| 1u128.checked_shl(u32::try_from(amount).ok()?)),
+        (Opcode::Binary(BinaryOp::Shl), [_, amount]) => {
+            number(amount).and_then(|amount| 1u128.checked_shl(u32::try_from(amount).ok()?))
+        }
         _ => None,
     };
-    scale.is_some_and(|scale| [1u128, 2, 4, 8].iter().position(|&one| one == scale).is_some_and(|at| scales >> at & 1 == 1))
+    scale.is_some_and(|scale| {
+        [1u128, 2, 4, 8].iter().position(|&one| one == scale).is_some_and(|at| scales >> at & 1 == 1)
+    })
 }
 
-fn _flags(function: &Function, value: ValueId) -> bool {
+fn _flags(
+    function: &Function,
+    value: ValueId,
+) -> bool {
     let ValueDef::Instruction(def) = function.value(value).def else { return false };
     let block = function.parent(def);
     let users = function.users(value);
-    !users.is_empty() && users.iter().all(|one| function.instruction(one.user).opcode == Opcode::Br && function.parent(one.user) == block)
+    !users.is_empty()
+        && users
+            .iter()
+            .all(|one| function.instruction(one.user).opcode == Opcode::Br && function.parent(one.user) == block)
 }
 
 /// How many stores spill `value`: a pointer wider than its offset, a
 /// segment and an offset, takes one each.
-pub fn words(context: &Context, layout: &DataLayout, function: &Function, value: ValueId) -> i64 {
+pub fn words(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    value: ValueId,
+) -> i64 {
     match context.types.get(function.value(value).ty) {
         Type::Pointer(space) => {
             let spec = layout.pointer(*space);
@@ -491,18 +696,29 @@ pub fn cells(function: &Function) -> BTreeMap<ValueId, ValueId> {
 }
 
 /// The counter `value` steps by a constant, if it does.
-fn _steps(function: &Function, value: ValueId) -> Option<ValueId> {
+fn _steps(
+    function: &Function,
+    value: ValueId,
+) -> Option<ValueId> {
     let ValueDef::Instruction(inst) = function.value(value).def else { return None };
     let instruction = function.instruction(inst);
     let constant = |operand: Operand| matches!(operand, Operand::Constant(_));
     match (&instruction.opcode, &instruction.operands[..]) {
-        (Opcode::Binary(BinaryOp::Add), [Operand::Value(counter), other]) | (Opcode::Binary(BinaryOp::Add), [other, Operand::Value(counter)]) if constant(*other) => Some(*counter),
+        (Opcode::Binary(BinaryOp::Add), [Operand::Value(counter), other])
+        | (Opcode::Binary(BinaryOp::Add), [other, Operand::Value(counter)])
+            if constant(*other) =>
+        {
+            Some(*counter)
+        }
         (Opcode::Binary(BinaryOp::Sub), [Operand::Value(counter), other]) if constant(*other) => Some(*counter),
         _ => None,
     }
 }
 
-fn _cell(cells: &BTreeMap<ValueId, ValueId>, value: ValueId) -> ValueId {
+fn _cell(
+    cells: &BTreeMap<ValueId, ValueId>,
+    value: ValueId,
+) -> ValueId {
     cells.get(&value).copied().unwrap_or(value)
 }
 
@@ -578,7 +794,11 @@ pub fn traffic(
 /// What making `value` again costs, where one instruction does from
 /// nothing kept: a frame or symbol address, or a far view of one, which
 /// also loads its segment.
-fn _rebuild(function: &Function, value: ValueId, costs: &OperationCosts) -> Option<i64> {
+fn _rebuild(
+    function: &Function,
+    value: ValueId,
+    costs: &OperationCosts,
+) -> Option<i64> {
     let ValueDef::Instruction(inst) = function.value(value).def else { return None };
     let instruction = function.instruction(inst);
     let constant = instruction.operands.iter().all(|operand| matches!(operand, Operand::Constant(_)));
@@ -620,16 +840,45 @@ pub fn sites(
     addressed: &dyn Fn(ValueId) -> bool,
 ) -> Vec<Site> {
     let viewed = |one: ValueId| room.segments > 0 && segment(one);
-    let residents = |live: BTreeSet<ValueId>| live.into_iter().filter(|&one| counted(one) && !viewed(one)).map(|one| _cell(cells, one)).collect::<BTreeSet<_>>().into_iter().collect();
-    let held = |live: &BTreeSet<ValueId>| live.iter().copied().filter(|&one| counted(one) && viewed(one)).map(|one| _cell(cells, one)).collect::<BTreeSet<_>>().into_iter().collect();
-    let routed = |live: &BTreeSet<ValueId>| live.iter().copied().filter(|&one| counted(one) && !viewed(one) && addressed(one)).map(|one| _cell(cells, one)).collect::<BTreeSet<_>>().into_iter().collect();
+    let residents = |live: BTreeSet<ValueId>| {
+        live.into_iter()
+            .filter(|&one| counted(one) && !viewed(one))
+            .map(|one| _cell(cells, one))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    };
+    let held = |live: &BTreeSet<ValueId>| {
+        live.iter()
+            .copied()
+            .filter(|&one| counted(one) && viewed(one))
+            .map(|one| _cell(cells, one))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    };
+    let routed = |live: &BTreeSet<ValueId>| {
+        live.iter()
+            .copied()
+            .filter(|&one| counted(one) && !viewed(one) && addressed(one))
+            .map(|one| _cell(cells, one))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    };
     liveness::live_points(function, found, block)
         .into_iter()
         .map(|(inst, before, past)| Site {
             inst,
-            addresses: Point { registers: room.addresses, residents: if room.addresses > 0 { routed(&before) } else { Vec::new() } },
+            addresses: Point {
+                registers: room.addresses,
+                residents: if room.addresses > 0 { routed(&before) } else { Vec::new() },
+            },
             segments: Point { registers: room.segments, residents: held(&before) },
-            before: Point { registers: room.registers - transient(inst, &before) - copied(function, inst, &past, room, counted), residents: residents(before) },
+            before: Point {
+                registers: room.registers - transient(inst, &before) - copied(function, inst, &past, room, counted),
+                residents: residents(before),
+            },
             across: calls(function, inst).then(|| Point { registers: across(inst), residents: residents(past) }),
         })
         .collect()
@@ -638,7 +887,10 @@ pub fn sites(
 impl Site {
     /// Its points, in order.
     pub fn points(self) -> impl Iterator<Item = Point<ValueId>> {
-        std::iter::once(self.before).chain(self.across).chain((!self.segments.residents.is_empty()).then_some(self.segments)).chain((!self.addresses.residents.is_empty()).then_some(self.addresses))
+        std::iter::once(self.before)
+            .chain(self.across)
+            .chain((!self.segments.residents.is_empty()).then_some(self.segments))
+            .chain((!self.addresses.residents.is_empty()).then_some(self.addresses))
     }
 }
 
@@ -655,11 +907,18 @@ pub struct Pressure {
 
 impl Pressure {
     /// `function`'s, for an address that takes `scales` (`Room::index_scales`).
-    pub fn of(context: &Context, function: &Function, scales: u8) -> Self {
+    pub fn of(
+        context: &Context,
+        function: &Function,
+        scales: u8,
+    ) -> Self {
         Self {
             found: liveness::live(function),
             cells: cells(function),
-            counted: (0..function.value_count() as u32).map(ValueId).filter(|&value| integer_in(context, function, value, scales)).collect(),
+            counted: (0..function.value_count() as u32)
+                .map(ValueId)
+                .filter(|&value| integer_in(context, function, value, scales))
+                .collect(),
             addressed: addressed_in(context, function, scales),
         }
     }
@@ -680,7 +939,12 @@ impl Pressure {
 impl llrm_mir::passes::Analysis for Pressure {
     type Result = Pressure;
     const NAME: &'static str = "pressure";
-    fn run(context: &Context, _: &DataLayout, function: &Function, analyses: &mut llrm_mir::passes::Analyses) -> Self::Result {
+    fn run(
+        context: &Context,
+        _: &DataLayout,
+        function: &Function,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> Self::Result {
         Pressure::of(context, function, Room::of(analyses.outer()).index_scales)
     }
 }
@@ -698,17 +962,41 @@ pub struct View<'a> {
 
 impl<'a> View<'a> {
     /// Over a function the manager has `pressure` of.
-    pub fn over(pressure: &'a Pressure, context: &'a Context, layout: &'a DataLayout, function: &'a Function, room: Room, across: &'a dyn Fn(InstId) -> i64) -> Self {
+    pub fn over(
+        pressure: &'a Pressure,
+        context: &'a Context,
+        layout: &'a DataLayout,
+        function: &'a Function,
+        room: Room,
+        across: &'a dyn Fn(InstId) -> i64,
+    ) -> Self {
         Self { context, layout, function, room, across, pressure: std::borrow::Cow::Borrowed(pressure) }
     }
 
     /// Over a function made to be asked about once, a candidate's.
-    pub fn of(context: &'a Context, layout: &'a DataLayout, function: &'a Function, room: Room, across: &'a dyn Fn(InstId) -> i64) -> Self {
-        Self { context, layout, function, room, across, pressure: std::borrow::Cow::Owned(Pressure::of(context, function, room.index_scales)) }
+    pub fn of(
+        context: &'a Context,
+        layout: &'a DataLayout,
+        function: &'a Function,
+        room: Room,
+        across: &'a dyn Fn(InstId) -> i64,
+    ) -> Self {
+        Self {
+            context,
+            layout,
+            function,
+            room,
+            across,
+            pressure: std::borrow::Cow::Owned(Pressure::of(context, function, room.index_scales)),
+        }
     }
 
     /// Each instruction's site in `block`, without the values `hide` names.
-    pub fn sites(&self, block: BlockId, hide: &dyn Fn(ValueId) -> bool) -> Vec<Site> {
+    pub fn sites(
+        &self,
+        block: BlockId,
+        hide: &dyn Fn(ValueId) -> bool,
+    ) -> Vec<Site> {
         let (context, layout, function, room) = (self.context, self.layout, self.function, self.room);
         sites(
             function,
@@ -725,9 +1013,16 @@ impl<'a> View<'a> {
     }
 
     /// What fitting the function spills, each cell priced by its traffic.
-    pub fn forecast(&self, costs: &OperationCosts, frequency: &BTreeMap<i64, i64>) -> Forecast<IdSet<ValueId>> {
-        let traffic = traffic(self.function, frequency, &self.pressure.cells, costs, &|_| true, &|value| words(self.context, self.layout, self.function, value));
-        let points = self.function.layout().iter().flat_map(|&block| self.sites(block, &|_| false)).flat_map(Site::points);
+    pub fn forecast(
+        &self,
+        costs: &OperationCosts,
+        frequency: &BTreeMap<i64, i64>,
+    ) -> Forecast<IdSet<ValueId>> {
+        let traffic = traffic(self.function, frequency, &self.pressure.cells, costs, &|_| true, &|value| {
+            words(self.context, self.layout, self.function, value)
+        });
+        let points =
+            self.function.layout().iter().flat_map(|&block| self.sites(block, &|_| false)).flat_map(Site::points);
         forecast(points, |cell| traffic.get(&cell).map_or(0, |one| one.price(costs)))
     }
 }

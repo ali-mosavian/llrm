@@ -27,7 +27,10 @@ impl<T: Node> Node for &T {
 /// Blocks in reverse postorder from `entry`, then those it cannot reach in body order:
 /// the order a forward dataflow worklist drains in, predecessors before successors
 /// but for back edges.
-pub fn reverse_postorder<N: Node>(blocks: &[N], entry: i64) -> Vec<i64> {
+pub fn reverse_postorder<N: Node>(
+    blocks: &[N],
+    entry: i64,
+) -> Vec<i64> {
     let known = blocks.iter().map(|block| (block.at(), block)).collect::<BTreeMap<_, _>>();
     let mut seen = BTreeSet::from([entry]);
     let mut post = Vec::with_capacity(blocks.len());
@@ -66,23 +69,40 @@ pub fn predecessors<N: Node>(blocks: &[N]) -> BTreeMap<i64, BTreeSet<i64>> {
 ///
 /// A block unreachable from the entry gets the empty set rather than "every
 /// block".
-pub fn dominators<N: Node>(blocks: &[N], entry: Option<i64>) -> BTreeMap<i64, BTreeSet<i64>> {
+pub fn dominators<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeMap<i64, BTreeSet<i64>> {
     dominance(blocks, entry).named()
 }
 
 /// Dominance as the walks here read it: nothing dominates a block the entry
 /// does not reach.
 pub trait Dominates {
-    fn reachable(&self, at: i64) -> bool;
-    fn dominates(&self, dominator: i64, at: i64) -> bool;
+    fn reachable(
+        &self,
+        at: i64,
+    ) -> bool;
+    fn dominates(
+        &self,
+        dominator: i64,
+        at: i64,
+    ) -> bool;
 }
 
 impl Dominates for Dominance {
-    fn reachable(&self, at: i64) -> bool {
+    fn reachable(
+        &self,
+        at: i64,
+    ) -> bool {
         Dominance::reachable(self, at)
     }
 
-    fn dominates(&self, dominator: i64, at: i64) -> bool {
+    fn dominates(
+        &self,
+        dominator: i64,
+        at: i64,
+    ) -> bool {
         Dominance::dominates(self, dominator, at)
     }
 }
@@ -95,16 +115,26 @@ pub struct Dominance {
 }
 
 impl Dominance {
-    fn slot(&self, at: i64) -> Option<usize> {
+    fn slot(
+        &self,
+        at: i64,
+    ) -> Option<usize> {
         self.ats.binary_search(&at).ok()
     }
 
     /// Whether the entry reaches `at`: only then does anything dominate it.
-    pub fn reachable(&self, at: i64) -> bool {
+    pub fn reachable(
+        &self,
+        at: i64,
+    ) -> bool {
         self.slot(at).is_some_and(|slot| !self.doms[slot].is_empty())
     }
 
-    pub fn dominates(&self, dominator: i64, at: i64) -> bool {
+    pub fn dominates(
+        &self,
+        dominator: i64,
+        at: i64,
+    ) -> bool {
         match (self.slot(dominator), self.slot(at)) {
             (Some(dominator), Some(at)) => self.doms[at].contains(dominator),
             _ => false,
@@ -117,11 +147,17 @@ impl Dominance {
     }
 }
 
-pub fn dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Rc<Dominance> {
+pub fn dominance<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> Rc<Dominance> {
     Rc::new(_dominance(blocks, entry))
 }
 
-fn _dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Dominance {
+fn _dominance<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> Dominance {
     if blocks.is_empty() {
         return Dominance { ats: Vec::new(), doms: Vec::new() };
     }
@@ -157,12 +193,13 @@ fn _dominance<N: Node>(blocks: &[N], entry: Option<i64>) -> Dominance {
         doms[slot(&start)] = own;
     }
     let reaching = |at: i64| preds[&at].iter().map(slot).collect::<Vec<_>>();
-    let reaching = blocks
-        .iter()
-        .map(|block| {
-            if block.at() == start || !reachable.contains(&block.at()) { Vec::new() } else { reaching(block.at()) }
-        })
-        .collect::<Vec<_>>();
+    let reaching =
+        blocks
+            .iter()
+            .map(|block| {
+                if block.at() == start || !reachable.contains(&block.at()) { Vec::new() } else { reaching(block.at()) }
+            })
+            .collect::<Vec<_>>();
 
     let mut changing = true;
     while changing {

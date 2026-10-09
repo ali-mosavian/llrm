@@ -16,7 +16,10 @@ pub struct Description {
 
 impl Description {
     /// The text of file `name`, which the description's fields name.
-    pub fn file(&self, name: &str) -> Option<&'static str> {
+    pub fn file(
+        &self,
+        name: &str,
+    ) -> Option<&'static str> {
         self.files.iter().find(|(one, _)| *one == name).map(|(_, text)| *text)
     }
 
@@ -35,7 +38,10 @@ impl Description {
             .into_iter()
             .flatten()
             .map(|entry| {
-                let (field, symbol) = entry.as_str().and_then(|one| one.split_once(':')).ok_or("assembler_defines are \"field:SYMBOL\"")?;
+                let (field, symbol) = entry
+                    .as_str()
+                    .and_then(|one| one.split_once(':'))
+                    .ok_or("assembler_defines are \"field:SYMBOL\"")?;
                 let value = match table.get(field) {
                     Some(toml::Value::Integer(number)) => number.to_string(),
                     Some(toml::Value::String(text)) => text.clone(),
@@ -47,8 +53,15 @@ impl Description {
     }
 
     /// The string field `key` of the description.
-    pub fn string(&self, key: &str) -> Result<String, String> {
-        self.table()?.get(key).and_then(|one| one.as_str()).map(str::to_owned).ok_or_else(|| format!("the runtime description has no string {key}"))
+    pub fn string(
+        &self,
+        key: &str,
+    ) -> Result<String, String> {
+        self.table()?
+            .get(key)
+            .and_then(|one| one.as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| format!("the runtime description has no string {key}"))
     }
 }
 
@@ -56,7 +69,11 @@ impl Description {
 mod tests {
     use super::*;
 
-    const ONE: Description = Description { directory: "/x", text: "os = \"os.nib\"\nfar_bss = false\n", files: &[("os.nib", "pub fn f() -> void: pass")] };
+    const ONE: Description = Description {
+        directory: "/x",
+        text: "os = \"os.nib\"\nfar_bss = false\n",
+        files: &[("os.nib", "pub fn f() -> void: pass")],
+    };
 
     #[test]
     fn a_description_names_its_files_and_they_are_embedded() {

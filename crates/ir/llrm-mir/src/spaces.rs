@@ -36,7 +36,8 @@ impl Default for Spaces {
 impl Spaces {
     /// One space, none of the others: a target with no segments, and the one a pass is
     /// given when no target is named.
-    pub const FLAT: Self = Self { near: 0, far: 0, data: 0, stack: 0, segment: None, huge: None, fixed: None, segment_bytes: None };
+    pub const FLAT: Self =
+        Self { near: 0, far: 0, data: 0, stack: 0, segment: None, huge: None, fixed: None, segment_bytes: None };
 
     /// Whether `far` is the `near` space: the target is flat, and a far or huge pointer is a near one.
     pub fn far_is_near(&self) -> bool {
@@ -44,12 +45,18 @@ impl Spaces {
     }
 
     /// Whether `space` is the selector-alone space: never where the target has none.
-    pub fn is_segment(&self, space: Option<u32>) -> bool {
+    pub fn is_segment(
+        &self,
+        space: Option<u32>,
+    ) -> bool {
         space.is_some() && space == self.segment
     }
 
     /// Whether `space` is the fixed-address space.
-    pub fn is_fixed(&self, space: u32) -> bool {
+    pub fn is_fixed(
+        &self,
+        space: u32,
+    ) -> bool {
         self.fixed == Some(space)
     }
 

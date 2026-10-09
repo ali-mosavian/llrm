@@ -78,7 +78,10 @@ fn windowed(text: &str) -> String {
 }
 
 /// `text` windowed computes what it did for each `n`.
-fn same(text: &str, inputs: &[&[i128]]) -> String {
+fn same(
+    text: &str,
+    inputs: &[&[i128]],
+) -> String {
     let before = parsed(&format!("{DOS}{text}"));
     let got = windowed(text);
     assert_eq!(results(&parsed(&got), inputs), results(&before, inputs), "{got}");

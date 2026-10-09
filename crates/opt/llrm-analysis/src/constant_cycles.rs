@@ -34,7 +34,10 @@ pub enum State {
 /// branch.
 pub type Successors<'a> = &'a dyn Fn(i64, &IndexMap<ValueId, Known>, &IndexMap<ValueId, State>) -> Option<Vec<i64>>;
 
-fn _meet(first: State, second: State) -> State {
+fn _meet(
+    first: State,
+    second: State,
+) -> State {
     if first == State::Pending {
         return second;
     }
@@ -44,7 +47,11 @@ fn _meet(first: State, second: State) -> State {
     State::Overdefined
 }
 
-pub fn propagated(unit: &Unit, seeds: &IndexMap<ValueId, Known>, successors: Option<Successors<'_>>) -> IndexMap<ValueId, Known> {
+pub fn propagated(
+    unit: &Unit,
+    seeds: &IndexMap<ValueId, Known>,
+    successors: Option<Successors<'_>>,
+) -> IndexMap<ValueId, Known> {
     let function = unit.function;
     let Some(entry) = function.entry().map(cfg::id) else {
         return seeds.clone();
@@ -61,7 +68,10 @@ pub fn propagated(unit: &Unit, seeds: &IndexMap<ValueId, Known>, successors: Opt
             }
         }
     }
-    let mut states = recipes.keys().map(|value| (*value, seeds.get(value).cloned().map_or(State::Pending, State::Known))).collect::<IndexMap<_, _>>();
+    let mut states = recipes
+        .keys()
+        .map(|value| (*value, seeds.get(value).cloned().map_or(State::Pending, State::Known)))
+        .collect::<IndexMap<_, _>>();
     for (value, fact) in seeds {
         states.insert(*value, State::Known(fact.clone()));
     }
@@ -87,17 +97,25 @@ pub fn propagated(unit: &Unit, seeds: &IndexMap<ValueId, Known>, successors: Opt
     let mut pending = recipes.keys().copied().filter(|value| live.contains(&owners[value])).collect::<VecDeque<_>>();
     let mut queued = pending.iter().copied().collect::<BTreeSet<_>>();
 
-    let enqueue = |values: Vec<ValueId>, live: &PySet<i64>, pending: &mut VecDeque<ValueId>, queued: &mut BTreeSet<ValueId>| {
-        for value in values {
-            if !queued.contains(&value) && live.contains(&owners[&value]) {
-                pending.push_back(value);
-                queued.insert(value);
+    let enqueue =
+        |values: Vec<ValueId>, live: &PySet<i64>, pending: &mut VecDeque<ValueId>, queued: &mut BTreeSet<ValueId>| {
+            for value in values {
+                if !queued.contains(&value) && live.contains(&owners[&value]) {
+                    pending.push_back(value);
+                    queued.insert(value);
+                }
             }
-        }
+        };
+    let consumers_of = |value: &ValueId| {
+        consumers.get(value).map(|users| users.iter().copied().collect::<Vec<_>>()).unwrap_or_default()
     };
-    let consumers_of = |value: &ValueId| consumers.get(value).map(|users| users.iter().copied().collect::<Vec<_>>()).unwrap_or_default();
 
-    let activate = |source: i64, target: i64, live: &mut PySet<i64>, edges: &mut BTreeSet<(i64, i64)>, pending: &mut VecDeque<ValueId>, queued: &mut BTreeSet<ValueId>| {
+    let activate = |source: i64,
+                    target: i64,
+                    live: &mut PySet<i64>,
+                    edges: &mut BTreeSet<(i64, i64)>,
+                    pending: &mut VecDeque<ValueId>,
+                    queued: &mut BTreeSet<ValueId>| {
         if !blocks.contains_key(&target) || edges.contains(&(source, target)) {
             return false;
         }
@@ -107,7 +125,11 @@ pub fn propagated(unit: &Unit, seeds: &IndexMap<ValueId, Known>, successors: Opt
             let values = recipes.keys().copied().filter(|value| owners[value] == target).collect();
             enqueue(values, live, pending, queued);
         } else {
-            let values = recipes.iter().filter(|(value, inst)| owners[*value] == target && is_phi(**inst)).map(|(value, _)| *value).collect();
+            let values = recipes
+                .iter()
+                .filter(|(value, inst)| owners[*value] == target && is_phi(**inst))
+                .map(|(value, _)| *value)
+                .collect();
             enqueue(values, live, pending, queued);
         }
         true
@@ -145,7 +167,11 @@ pub fn propagated(unit: &Unit, seeds: &IndexMap<ValueId, Known>, successors: Opt
             if !pending.is_empty() || changed {
                 continue;
             }
-            let unresolved = recipes.keys().copied().filter(|value| live.contains(&owners[value]) && states[value] == State::Pending).collect::<Vec<_>>();
+            let unresolved = recipes
+                .keys()
+                .copied()
+                .filter(|value| live.contains(&owners[value]) && states[value] == State::Pending)
+                .collect::<Vec<_>>();
             for value in &unresolved {
                 states.insert(*value, State::Overdefined);
                 enqueue(consumers_of(value), &live, &mut pending, &mut queued);
@@ -171,7 +197,9 @@ pub fn propagated(unit: &Unit, seeds: &IndexMap<ValueId, Known>, successors: Opt
         let op = function.instruction(recipe);
         let state = |one: Operand| match one {
             Operand::Value(one) => states.get(&one).cloned().unwrap_or(State::Overdefined),
-            constant => consts::_operand(unit, constant, &IndexMap::default(), None).map_or(State::Overdefined, State::Known),
+            constant => {
+                consts::_operand(unit, constant, &IndexMap::default(), None).map_or(State::Overdefined, State::Known)
+            }
         };
         let mut candidate = State::Pending;
         if is_phi(recipe) {
@@ -200,8 +228,17 @@ pub fn propagated(unit: &Unit, seeds: &IndexMap<ValueId, Known>, successors: Opt
             candidate = match consts::_result(unit, recipe, &facts, None) {
                 Some(fact) => State::Known(fact),
                 None => {
-                    let inputs = op.operands.iter().filter(|one| matches!(one, Operand::Value(_))).map(|&one| state(one)).collect::<Vec<_>>();
-                    if inputs.contains(&State::Pending) && !inputs.contains(&State::Overdefined) { State::Pending } else { State::Overdefined }
+                    let inputs = op
+                        .operands
+                        .iter()
+                        .filter(|one| matches!(one, Operand::Value(_)))
+                        .map(|&one| state(one))
+                        .collect::<Vec<_>>();
+                    if inputs.contains(&State::Pending) && !inputs.contains(&State::Overdefined) {
+                        State::Pending
+                    } else {
+                        State::Overdefined
+                    }
                 }
             };
         }

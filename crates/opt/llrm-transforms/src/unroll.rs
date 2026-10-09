@@ -32,10 +32,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_analysis::graph::loops::{self, Loop};
 use llrm_analysis::manager::Registers;
 use llrm_analysis::peelsize::{self, Limits};
 use llrm_analysis::{cfg, induction, memory};
-use llrm_analysis::graph::loops::{self, Loop};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -59,7 +59,11 @@ impl FunctionPass for Unroll {
         "unroll"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         match optimized(unit, analyses, &self.limits) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
@@ -70,7 +74,11 @@ impl FunctionPass for Unroll {
 
 /// Every exact loop `peelsize::admitted` prices as worth it expanded, once
 /// each; whether any was.
-pub fn optimized(unit: &mut passes::Unit, analyses: &Analyses, limits: &Limits) -> Result<bool, String> {
+pub fn optimized(
+    unit: &mut passes::Unit,
+    analyses: &Analyses,
+    limits: &Limits,
+) -> Result<bool, String> {
     let costs = &profit::costs(analyses.outer());
     let limits = &limits.on(costs.unroll_budget);
     if !profit::priced(unit.context, unit.layout, unit.function, analyses.outer().callees(), costs) {
@@ -97,21 +105,38 @@ struct Shape {
 
 /// The first loop of the expandable shape with an exact count `peelsize`
 /// admits, expanded in place; whether there was one.
-pub fn expanded(context: &Context, layout: &DataLayout, function: &mut Function, analyses: &Analyses, limits: &Limits) -> Result<bool, String> {
+pub fn expanded(
+    context: &Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &Analyses,
+    limits: &Limits,
+) -> Result<bool, String> {
     let facts = analyses.fresh().get::<Registers>(context, layout, function);
     let graph = cfg::graph(function);
     let mut found = None;
     let found_shape = cfg::Shape::of(function);
     let frequencies = profit::Frequencies::default();
     for loop_ in found_shape.loops.clone() {
-        let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_registers(&facts).with_shape(&found_shape);
+        let unit = memory::Unit::within(context, layout, function, analyses.outer())
+            .with_registers(&facts)
+            .with_shape(&found_shape);
         let Some(shape) = _shape(&unit, &graph, &loop_) else {
             continue;
         };
         let Some(count) = induction::trip_count(&unit, &loop_, &facts) else {
             continue;
         };
-        if count < BigInt::from(2) || !peelsize::admitted(&unit, &loop_, &count, &facts, limits, profit::site(&unit, analyses.outer(), &loop_, &frequencies)) {
+        if count < BigInt::from(2)
+            || !peelsize::admitted(
+                &unit,
+                &loop_,
+                &count,
+                &facts,
+                limits,
+                profit::site(&unit, analyses.outer(), &loop_, &frequencies),
+            )
+        {
             continue;
         }
         if let Some(count) = count.to_i64() {
@@ -126,24 +151,48 @@ pub fn expanded(context: &Context, layout: &DataLayout, function: &mut Function,
     Ok(true)
 }
 
-fn _phis(function: &Function, block: BlockId) -> Vec<InstId> {
-    function.block(block).instructions().iter().copied().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect()
+fn _phis(
+    function: &Function,
+    block: BlockId,
+) -> Vec<InstId> {
+    function
+        .block(block)
+        .instructions()
+        .iter()
+        .copied()
+        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+        .collect()
 }
 
 /// A block's instructions, its phis and terminator aside.
-fn _work(function: &Function, block: BlockId) -> Vec<InstId> {
+fn _work(
+    function: &Function,
+    block: BlockId,
+) -> Vec<InstId> {
     operations(function, block).into_iter().filter(|&inst| !function.instruction(inst).opcode.is_terminator()).collect()
 }
 
 /// Whether `inst` may run once a trip in a straight line: no control, no
 /// call out, no volatile access.
-fn _repeatable(unit: &memory::Unit, inst: InstId) -> bool {
+fn _repeatable(
+    unit: &memory::Unit,
+    inst: InstId,
+) -> bool {
     let op = unit.function.instruction(inst);
-    !unit.calls_out(inst) && !matches!(op.opcode, Opcode::LandingPad { .. } | Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }) && !op.opcode.is_terminator()
+    !unit.calls_out(inst)
+        && !matches!(
+            op.opcode,
+            Opcode::LandingPad { .. } | Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
+        )
+        && !op.opcode.is_terminator()
 }
 
 /// `loop_`'s shape, where it is one this can expand.
-fn _shape(unit: &memory::Unit, graph: &[cfg::Block], loop_: &Loop) -> Option<Shape> {
+fn _shape(
+    unit: &memory::Unit,
+    graph: &[cfg::Block],
+    loop_: &Loop,
+) -> Option<Shape> {
     let function = unit.function;
     let blocks = graph.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
     let predecessors = loops::predecessors(graph);
@@ -169,7 +218,9 @@ fn _shape(unit: &memory::Unit, graph: &[cfg::Block], loop_: &Loop) -> Option<Sha
         return None;
     }
     let bridges = loop_.body.iter().copied().filter(|at| *at != header && *at != latch).collect::<BTreeSet<_>>();
-    if bridges.iter().any(|&at| blocks[&at].succ.len() != 1 || !_phis(function, cfg::block(at)).is_empty()) || !_phis(function, cfg::block(latch)).is_empty() {
+    if bridges.iter().any(|&at| blocks[&at].succ.len() != 1 || !_phis(function, cfg::block(at)).is_empty())
+        || !_phis(function, cfg::block(latch)).is_empty()
+    {
         return None;
     }
     let mut path = Vec::new();
@@ -189,20 +240,37 @@ fn _shape(unit: &memory::Unit, graph: &[cfg::Block], loop_: &Loop) -> Option<Sha
     let tested = _work(function, cfg::block(header));
     if tested.iter().any(|&inst| {
         let op = function.instruction(inst);
-        !_repeatable(unit, inst) || matches!(op.opcode, Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Alloca { .. })
+        !_repeatable(unit, inst)
+            || matches!(
+                op.opcode,
+                Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Alloca { .. }
+            )
     }) {
         return None;
     }
     let sides = BTreeSet::from([entry, latch]);
-    if _phis(function, cfg::block(header)).into_iter().any(|phi| arms(function, phi).into_iter().map(|(_, from)| cfg::id(from)).collect::<BTreeSet<_>>() != sides) {
+    if _phis(function, cfg::block(header))
+        .into_iter()
+        .any(|phi| arms(function, phi).into_iter().map(|(_, from)| cfg::id(from)).collect::<BTreeSet<_>>() != sides)
+    {
         return None;
     }
     let block = cfg::block;
-    Some(Shape { header: block(header), entry: block(entry), latch: block(latch), first: block(first), exit: block(exit), path: path.into_iter().map(block).collect() })
+    Some(Shape {
+        header: block(header),
+        entry: block(entry),
+        latch: block(latch),
+        first: block(first),
+        exit: block(exit),
+        path: path.into_iter().map(block).collect(),
+    })
 }
 
 /// `operand`, as the trip `swap` describes reads it.
-fn _provided(operand: Operand, swap: &HashMap<ValueId, Operand>) -> Operand {
+fn _provided(
+    operand: Operand,
+    swap: &HashMap<ValueId, Operand>,
+) -> Operand {
     match operand {
         Operand::Value(value) => swap.get(&value).copied().unwrap_or(operand),
         other => other,
@@ -210,12 +278,21 @@ fn _provided(operand: Operand, swap: &HashMap<ValueId, Operand>) -> Operand {
 }
 
 /// The phi's value from `from`.
-fn _from(function: &Function, phi: InstId, from: BlockId) -> Operand {
+fn _from(
+    function: &Function,
+    phi: InstId,
+    from: BlockId,
+) -> Operand {
     arms(function, phi).into_iter().find(|&(_, source)| source == from).expect("an arm from each side").0
 }
 
 /// `count` trips of `shape`'s loop, straight in its latch.
-fn _expanded(function: &mut Function, shape: &Shape, body: &BTreeSet<i64>, count: i64) -> Result<(), String> {
+fn _expanded(
+    function: &mut Function,
+    shape: &Shape,
+    body: &BTreeSet<i64>,
+    count: i64,
+) -> Result<(), String> {
     let header_phis = _phis(function, shape.header);
     let header_work = _work(function, shape.header);
     let repeated = shape.path.iter().chain([&shape.latch]).flat_map(|&at| _work(function, at)).collect::<Vec<_>>();
@@ -223,7 +300,10 @@ fn _expanded(function: &mut Function, shape: &Shape, body: &BTreeSet<i64>, count
     let branch = function.terminator(shape.header).expect("a terminated header");
     let value = |function: &Function, inst: InstId| function.instruction(inst).result;
 
-    let initial = header_phis.iter().map(|&phi| (value(function, phi).expect("a phi's value"), _from(function, phi, shape.entry))).collect::<HashMap<_, _>>();
+    let initial = header_phis
+        .iter()
+        .map(|&phi| (value(function, phi).expect("a phi's value"), _from(function, phi, shape.entry)))
+        .collect::<HashMap<_, _>>();
     let mut swap = initial.clone();
     let clone = |function: &mut Function, inst: InstId, swap: &mut HashMap<ValueId, Operand>| -> Result<(), String> {
         let copy = function.clone_instruction(inst);
@@ -244,7 +324,9 @@ fn _expanded(function: &mut Function, shape: &Shape, body: &BTreeSet<i64>, count
         }
         let carried = header_phis
             .iter()
-            .map(|&phi| (value(function, phi).expect("a phi's value"), _provided(_from(function, phi, shape.latch), &swap)))
+            .map(|&phi| {
+                (value(function, phi).expect("a phi's value"), _provided(_from(function, phi, shape.latch), &swap))
+            })
             .collect::<Vec<_>>();
         swap.extend(carried);
     }
@@ -253,7 +335,8 @@ fn _expanded(function: &mut Function, shape: &Shape, body: &BTreeSet<i64>, count
         clone(function, inst, &mut swap)?;
     }
 
-    let header_values = header_phis.iter().chain(&header_work).filter_map(|&inst| value(function, inst)).collect::<Vec<_>>();
+    let header_values =
+        header_phis.iter().chain(&header_work).filter_map(|&inst| value(function, inst)).collect::<Vec<_>>();
     for &defined in &header_values {
         for one in function.users(defined).to_vec() {
             let outside = function.parent(one.user).is_some_and(|block| !body.contains(&cfg::id(block)));

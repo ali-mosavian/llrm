@@ -6,19 +6,30 @@ use llrm_core::hir::model::Number;
 use super::driver as qb_driver;
 use super::test_hir::written;
 
-fn program_on(source: &str, dialect: &str, runtime: &str) -> llrm_core::hir::model::Program {
+fn program_on(
+    source: &str,
+    dialect: &str,
+    runtime: &str,
+) -> llrm_core::hir::model::Program {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "model.bas", source.as_bytes());
     qb_driver::parsed(&path, &qb_driver::Frontend::new(dialect, runtime), None)
         .unwrap_or_else(|error| panic!("{error}"))
 }
 
-fn program(source: &str, dialect: &str) -> llrm_core::hir::model::Program {
+fn program(
+    source: &str,
+    dialect: &str,
+) -> llrm_core::hir::model::Program {
     program_on(source, dialect, "vbdos")
 }
 
 /// What the module-level code prints, under `runtime`.
-pub(super) fn printed_on(source: &str, dialect: &str, runtime: &str) -> String {
+pub(super) fn printed_on(
+    source: &str,
+    dialect: &str,
+    runtime: &str,
+) -> String {
     let executed = execute::run(&program_on(source, dialect, runtime), "__main", &[]).expect("runs");
     assert_eq!(executed.panic, None, "{}", executed.output);
     executed.output
@@ -74,7 +85,6 @@ fn floats_print_as_measured() {
     assert_eq!(printed("DIM x AS SINGLE\nx = 2.5\nPRINT x * 2\n"), " 5 \n");
 }
 
-
 #[test]
 fn int_floors_beyond_long() {
     // INT went through a LONG: INT(4000000000#) printed -294967296.
@@ -94,7 +104,8 @@ fn fix_truncates_toward_zero() {
 #[test]
 fn convert_rounds_to_nearest_even() {
     // The executor truncated CONVERT, where the x87 rounds: CLNG(2.7) read 2.
-    let source = "DIM a AS DOUBLE, b AS DOUBLE, c AS DOUBLE\na = 2.7#: b = 2.5#: c = 3.5#\nPRINT CLNG(a); CINT(b); CINT(c)\n";
+    let source =
+        "DIM a AS DOUBLE, b AS DOUBLE, c AS DOUBLE\na = 2.7#: b = 2.5#: c = 3.5#\nPRINT CLNG(a); CINT(b); CINT(c)\n";
     assert_eq!(printed(source), " 3  2  4 \n");
 }
 
@@ -160,7 +171,10 @@ fn on_goto_and_on_gosub_pick_the_nth_label() {
 /// tests/run/qb/flags.bas did not compile.
 #[test]
 fn a_print_item_before_else_prints_the_right_branch() {
-    assert_eq!(printed("DEFINT A-Z\nr = 0\nIF r = 0 THEN PRINT r ELSE PRINT 7\nr = 1\nIF r = 0 THEN PRINT r ELSE PRINT 7\n"), " 0 \n 7 \n");
+    assert_eq!(
+        printed("DEFINT A-Z\nr = 0\nIF r = 0 THEN PRINT r ELSE PRINT 7\nr = 1\nIF r = 0 THEN PRINT r ELSE PRINT 7\n"),
+        " 0 \n 7 \n"
+    );
 }
 
 /// ON n outside 0..255 is ERROR 5 raised by the ON itself (tests/run/qb/onrange.bas
@@ -178,7 +192,13 @@ fn on_goto_out_of_range_raises_error_5() {
 /// The runtime routines the module-level code calls, in order.
 fn called(source: &str) -> Vec<String> {
     let program = program(source, "qb45");
-    program.modules[0].functions.iter().flat_map(|one| &one.blocks).flat_map(|one| &one.instructions).filter_map(|one| one.callee.clone()).collect()
+    program.modules[0]
+        .functions
+        .iter()
+        .flat_map(|one| &one.blocks)
+        .flat_map(|one| &one.instructions)
+        .filter_map(|one| one.callee.clone())
+        .collect()
 }
 
 /// LPRINT and WRITE were refused: BC 4.5 calls B$LPRT before the items of an
@@ -187,5 +207,8 @@ fn called(source: &str) -> Vec<String> {
 #[test]
 fn lprint_and_write_call_their_preambles_as_bc_does() {
     assert_eq!(called("LPRINT \"a\"; 5\nLPRINT\n"), ["B$LPRT", "B$PSSD", "B$PEI2", "B$LPRT", "B$PESD"]);
-    assert_eq!(called("DEFINT A-Z\nWRITE \"x\", 3\nWRITE\nWRITE #1, 2\n"), ["B$WRIT", "B$PSSD", "B$PEI2", "B$PESD", "B$CHOU", "B$WRIT", "B$PEI2"]);
+    assert_eq!(
+        called("DEFINT A-Z\nWRITE \"x\", 3\nWRITE\nWRITE #1, 2\n"),
+        ["B$WRIT", "B$PSSD", "B$PEI2", "B$PESD", "B$CHOU", "B$WRIT", "B$PEI2"]
+    );
 }

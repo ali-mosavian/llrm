@@ -94,7 +94,10 @@ impl<T: PyHash + PartialEq> PySet<T> {
     }
 
     /// `set_add_entry`.
-    pub fn add(&mut self, key: T) {
+    pub fn add(
+        &mut self,
+        key: T,
+    ) {
         let hash = key.py_hash();
         let mask = self.mask();
         let mut perturb = hash as u64;
@@ -135,7 +138,10 @@ impl<T: PyHash + PartialEq> PySet<T> {
     }
 
     /// `set_table_resize`: reinsert the active entries in slot order.
-    fn resize(&mut self, minused: usize) {
+    fn resize(
+        &mut self,
+        minused: usize,
+    ) {
         let mut size = MINSIZE;
         while size <= minused {
             size <<= 1;
@@ -150,7 +156,11 @@ impl<T: PyHash + PartialEq> PySet<T> {
     }
 
     /// `set_insert_clean`.
-    fn insert_clean(&mut self, hash: i64, key: T) {
+    fn insert_clean(
+        &mut self,
+        hash: i64,
+        key: T,
+    ) {
         let mask = self.mask();
         let mut perturb = hash as u64;
         let mut i = (hash as u64 as usize) & mask;
@@ -172,16 +182,23 @@ impl<T: PyHash + PartialEq> PySet<T> {
         }
     }
 
-    pub fn contains(&self, key: &T) -> bool {
+    pub fn contains(
+        &self,
+        key: &T,
+    ) -> bool {
         self.iter().any(|one| one == key)
     }
 
     /// Iteration in slot order.
     pub fn iter(&self) -> impl Iterator<Item = &T> {
-        self.table.iter().filter_map(|slot| match slot {
-            Slot::Active(_, key) => Some(key),
-            _ => None,
-        })
+        self.table
+            .iter()
+            .filter_map(
+                |slot| match slot {
+                    Slot::Active(_, key) => Some(key),
+                    _ => None,
+                },
+            )
     }
 }
 

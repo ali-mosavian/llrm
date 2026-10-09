@@ -3,10 +3,10 @@
 use std::collections::BTreeSet;
 
 use iced_x86::Register;
-use crate::support::hash::IndexMap;
 
 use crate::model::ir::Loc;
 use crate::model::lir::LirBody;
+use crate::support::hash::IndexMap;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Entry {
@@ -25,11 +25,13 @@ pub struct Plan {
     pub return_depth: i64,
 }
 
-impl Plan {
-}
+impl Plan {}
 
 #[must_use]
-pub fn pins(body: &LirBody, layout: &Plan) -> IndexMap<u32, Register> {
+pub fn pins(
+    body: &LirBody,
+    layout: &Plan,
+) -> IndexMap<u32, Register> {
     let registers: IndexMap<i64, Register> = layout.registers.iter().copied().collect();
     let mut result = IndexMap::default();
     for one in body.insns() {

@@ -7,15 +7,22 @@ use std::sync::LazyLock;
 pub use llrm_target::machine::*;
 
 /// `dos.toml` and the PC ports it shares with every PC platform.
-pub const DOS: &str = concat!(include_str!("machines/dos.toml"), include_str!("../../llrm-target/src/machines/pc-ports.toml"));
+pub const DOS: &str =
+    concat!(include_str!("machines/dos.toml"), include_str!("../../llrm-target/src/machines/pc-ports.toml"));
 
 /// The built-in description, which nothing can change.
-pub static BUILT_IN: LazyLock<Machine> = LazyLock::new(|| Machine::parse(DOS, crate::timings::TABLE.default_cpu().expect("timings.times states a default CPU")).expect("the built-in DOS description parses").with_layout(crate::layout()));
+pub static BUILT_IN: LazyLock<Machine> = LazyLock::new(|| {
+    Machine::parse(DOS, crate::timings::TABLE.default_cpu().expect("timings.times states a default CPU"))
+        .expect("the built-in DOS description parses")
+        .with_layout(crate::layout())
+});
 
 /// The built-in description as a BASIC runtime runs it: compiled code only
 /// ever runs on the program's stack, which is in the data group.
-pub static BASIC: LazyLock<Machine> =
-    LazyLock::new(|| Machine { segments: BUILT_IN.segments.clone().map(|segments| Segments { stack_is_data: true, ..segments }), ..BUILT_IN.clone() });
+pub static BASIC: LazyLock<Machine> = LazyLock::new(|| Machine {
+    segments: BUILT_IN.segments.clone().map(|segments| Segments { stack_is_data: true, ..segments }),
+    ..BUILT_IN.clone()
+});
 
 /// The processors the target prices: the columns of `timings.times`.
 pub static CPUS: LazyLock<Vec<&'static str>> = LazyLock::new(|| crate::timings::TABLE.cpus());
@@ -45,7 +52,15 @@ mod tests {
     fn test_dos_has_its_ports_from_the_shared_file() {
         let dos = Machine::parse(DOS, "486").unwrap();
         assert_eq!((dos.ports.len(), dos.foreign.len()), (21, 4));
-        assert_eq!(dos.ports, Machine::parse(&format!("addressing = \"flat\"\nsegment_end_faults = false\n{}", llrm_target::PC_PORTS), "486").unwrap().ports);
+        assert_eq!(
+            dos.ports,
+            Machine::parse(
+                &format!("addressing = \"flat\"\nsegment_end_faults = false\n{}", llrm_target::PC_PORTS),
+                "486"
+            )
+            .unwrap()
+            .ports
+        );
     }
 
     /// What m16's consumers read from the built-in description, stated
@@ -54,11 +69,17 @@ mod tests {
     #[test]
     fn test_the_built_in_description_states_what_the_backend_reads() {
         let dos = &*BUILT_IN;
-        assert_eq!((dos.addressing, dos.cpu.as_str(), dos.segment_end_faults, dos.far_bss), (Addressing::Real, "486", true, false));
+        assert_eq!(
+            (dos.addressing, dos.cpu.as_str(), dos.segment_end_faults, dos.far_bss),
+            (Addressing::Real, "486", true, false)
+        );
         assert_eq!(dos.protected_huge_shift, None);
         assert_eq!(dos.huge_shift(), Some(12));
         let segments = |machine: &Machine| machine.segments.clone().unwrap();
-        assert_eq!(segments(dos), Segments { data: "ds".into(), stack: "ss".into(), code: "cs".into(), stack_is_data: false });
+        assert_eq!(
+            segments(dos),
+            Segments { data: "ds".into(), stack: "ss".into(), code: "cs".into(), stack_is_data: false }
+        );
         assert!(segments(&BASIC).stack_is_data);
         assert_eq!(dos.foreign, [(0x0, 0x700), (0xA0000, 0xC0000), (0xC0000, 0xC8000), (0xF0000, 0x10FFF0)]);
         assert_eq!(dos.ports.len(), 21);
@@ -97,7 +118,12 @@ mod tests {
     #[test]
     fn test_only_an_access_that_may_cross_offset_ffff_traps() {
         let dos = Machine::parse(DOS, "486").unwrap();
-        assert!(!dos.access_may_trap(1, 1) && !dos.access_may_trap(2, 2) && !dos.access_may_trap(4, 4) && !dos.access_may_trap(2, 8));
+        assert!(
+            !dos.access_may_trap(1, 1)
+                && !dos.access_may_trap(2, 2)
+                && !dos.access_may_trap(4, 4)
+                && !dos.access_may_trap(2, 8)
+        );
         assert!(dos.access_may_trap(2, 1) && dos.access_may_trap(4, 2) && dos.access_may_trap(10, 8));
         let wrapping = Machine { segment_end_faults: false, ..dos.clone() };
         assert!(!wrapping.access_may_trap(4, 1));

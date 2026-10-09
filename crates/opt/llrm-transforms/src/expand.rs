@@ -2,7 +2,7 @@
 //! built of its terms scaled and added once each, before one instruction,
 //! and the least of several as compares and selects.
 
-use llrm_analysis::induction::{Scev, Monomial};
+use llrm_analysis::induction::{Monomial, Scev};
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand};
@@ -14,7 +14,10 @@ use num_bigint::BigInt;
 use crate::counting;
 
 /// `value`, a `width`-bit pattern, as a signed number.
-pub fn signed(value: &BigInt, width: u32) -> BigInt {
+pub fn signed(
+    value: &BigInt,
+    width: u32,
+) -> BigInt {
     let modulus = BigInt::from(1) << width;
     if value >= &(&modulus >> 1) { value - modulus } else { value.clone() }
 }
@@ -32,12 +35,24 @@ impl Expander {
     }
 
     /// `sum` as an integer of its width.
-    pub fn int(&mut self, context: &mut Context, function: &mut Function, sum: &Scev) -> Operand {
+    pub fn int(
+        &mut self,
+        context: &mut Context,
+        function: &mut Function,
+        sum: &Scev,
+    ) -> Operand {
         sum_of(context, function, sum, Position::Before(self.at), &mut self.made)
     }
 
     /// `pointer + sum`, of type `ty`, or the integer sum where no pointer.
-    pub fn value(&mut self, context: &mut Context, function: &mut Function, pointer: Option<Operand>, sum: &Scev, ty: TypeId) -> Operand {
+    pub fn value(
+        &mut self,
+        context: &mut Context,
+        function: &mut Function,
+        pointer: Option<Operand>,
+        sum: &Scev,
+        ty: TypeId,
+    ) -> Operand {
         let Some(pointer) = pointer else { return self.int(context, function, sum) };
         if sum.is_zero() {
             return pointer;
@@ -48,13 +63,25 @@ impl Expander {
         }
         let offset = self.int(context, function, sum);
         let i8 = context.types.int(8);
-        let made = placed(context, function, Opcode::GetElementPtr { source: i8 }, ty, vec![pointer, offset], Position::Before(self.at));
+        let made = placed(
+            context,
+            function,
+            Opcode::GetElementPtr { source: i8 },
+            ty,
+            vec![pointer, offset],
+            Position::Before(self.at),
+        );
         self.made.insert(key, made);
         made
     }
 
     /// The least of `sums` as unsigned numbers, each of their one width.
-    pub fn least(&mut self, context: &mut Context, function: &mut Function, sums: &[Scev]) -> Operand {
+    pub fn least(
+        &mut self,
+        context: &mut Context,
+        function: &mut Function,
+        sums: &[Scev],
+    ) -> Operand {
         let at = Position::Before(self.at);
         let mut least = self.int(context, function, &sums[0]);
         for sum in &sums[1..] {
@@ -69,7 +96,13 @@ impl Expander {
 }
 
 /// `sum` placed at `at`, reusing what `made` holds.
-fn sum_of(context: &mut Context, function: &mut Function, sum: &Scev, at: Position, made: &mut HashMap<(Option<Operand>, Scev, TypeId), Operand>) -> Operand {
+fn sum_of(
+    context: &mut Context,
+    function: &mut Function,
+    sum: &Scev,
+    at: Position,
+    made: &mut HashMap<(Option<Operand>, Scev, TypeId), Operand>,
+) -> Operand {
     let ty = context.types.int(sum.width);
     if let Some(&one) = made.get(&(None, sum.clone(), ty)) {
         return one;
@@ -117,7 +150,14 @@ fn sum_of(context: &mut Context, function: &mut Function, sum: &Scev, at: Positi
 
 /// The unknowns of `product` multiplied once, a product of invariants in
 /// the block `at` is in: each factor is its value's low bits.
-fn product_of(context: &mut Context, function: &mut Function, product: &Monomial, width: u32, at: Position, made: &mut HashMap<(Option<Operand>, Scev, TypeId), Operand>) -> Operand {
+fn product_of(
+    context: &mut Context,
+    function: &mut Function,
+    product: &Monomial,
+    width: u32,
+    at: Position,
+    made: &mut HashMap<(Option<Operand>, Scev, TypeId), Operand>,
+) -> Operand {
     let ty = context.types.int(width);
     let key = (None, Scev::monomial(product.clone(), BigInt::from(1), width), ty);
     if let Some(&one) = made.get(&key) {
@@ -126,7 +166,11 @@ fn product_of(context: &mut Context, function: &mut Function, product: &Monomial
     let mut made_product = None;
     for &value in product.values() {
         let bits = context.types.int_bits(function.value(value).ty).unwrap_or(width);
-        let factor = if bits > width { placed(context, function, Opcode::Cast(CastOp::Trunc), ty, vec![Operand::Value(value)], at) } else { Operand::Value(value) };
+        let factor = if bits > width {
+            placed(context, function, Opcode::Cast(CastOp::Trunc), ty, vec![Operand::Value(value)], at)
+        } else {
+            Operand::Value(value)
+        };
         made_product = Some(match made_product {
             Some(so_far) => placed(context, function, Opcode::Binary(BinaryOp::Mul), ty, vec![so_far, factor], at),
             None => factor,
@@ -138,7 +182,14 @@ fn product_of(context: &mut Context, function: &mut Function, product: &Monomial
 }
 
 /// `value * k`, `k` positive: itself, a shift or a multiply.
-pub fn scaled(context: &mut Context, function: &mut Function, value: Operand, k: &BigInt, width: u32, at: Position) -> Operand {
+pub fn scaled(
+    context: &mut Context,
+    function: &mut Function,
+    value: Operand,
+    k: &BigInt,
+    width: u32,
+    at: Position,
+) -> Operand {
     let ty = context.types.int(width);
     if *k == BigInt::from(1) {
         return value;
@@ -151,13 +202,19 @@ pub fn scaled(context: &mut Context, function: &mut Function, value: Operand, k:
     placed(context, function, Opcode::Binary(BinaryOp::Mul), ty, vec![value, by], at)
 }
 
-pub fn placed(context: &mut Context, function: &mut Function, opcode: Opcode, ty: TypeId, operands: Vec<Operand>, at: Position) -> Operand {
+pub fn placed(
+    context: &mut Context,
+    function: &mut Function,
+    opcode: Opcode,
+    ty: TypeId,
+    operands: Vec<Operand>,
+    at: Position,
+) -> Operand {
     let _ = context;
     let inst = function.create_instruction(opcode, ty, operands, Flags::default(), None);
     function.insert(inst, at).expect("a placed position");
     Operand::Value(function.instruction(inst).result.expect("a value"))
 }
-
 
 #[cfg(test)]
 #[path = "expand_tests.rs"]

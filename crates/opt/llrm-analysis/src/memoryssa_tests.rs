@@ -34,15 +34,25 @@ const CELL: &str = "getelementptr (i8, ptr @g, i16 32)";
 const OTHER: &str = "getelementptr (i8, ptr @g, i16 48)";
 
 /// Instruction `index` of block `name`.
-fn site(unit: &Unit, name: &str, index: usize) -> InstId {
+fn site(
+    unit: &Unit,
+    name: &str,
+    index: usize,
+) -> InstId {
     unit.function.block(block(unit.function, name)).instructions()[index]
 }
 
-fn at(unit: &Unit, name: &str) -> i64 {
+fn at(
+    unit: &Unit,
+    name: &str,
+) -> i64 {
     cfg::id(block(unit.function, name))
 }
 
-fn cell(unit: &Unit, inst: InstId) -> MemRef {
+fn cell(
+    unit: &Unit,
+    inst: InstId,
+) -> MemRef {
     MemRef::of(unit, inst).expect("a load or store")
 }
 
@@ -130,7 +140,13 @@ fn test_a_join_gets_one_memory_phi() {
     let phi = &graph.phis[&at(&unit, "b3")];
 
     assert_eq!(phi.kind, Kind::Phi);
-    assert_eq!(incoming(phi), vec![(Some(at(&unit, "b1")), graph.at(site(&unit, "b1", 0)).id), (Some(at(&unit, "b2")), graph.at(site(&unit, "b2", 0)).id)]);
+    assert_eq!(
+        incoming(phi),
+        vec![
+            (Some(at(&unit, "b1")), graph.at(site(&unit, "b1", 0)).id),
+            (Some(at(&unit, "b2")), graph.at(site(&unit, "b2", 0)).id)
+        ]
+    );
     assert_eq!(graph.at(site(&unit, "b3", 0)).defining, Some(phi.id));
 }
 
@@ -164,7 +180,13 @@ fn test_a_loop_header_phi_carries_the_backedge_definition() {
     let graph = graph(&unit);
     let phi = &graph.phis[&at(&unit, "b1")];
 
-    assert_eq!(incoming(phi), vec![(Some(at(&unit, "b0")), graph.at(site(&unit, "b0", 0)).id), (Some(at(&unit, "b2")), graph.at(site(&unit, "b2", 0)).id)]);
+    assert_eq!(
+        incoming(phi),
+        vec![
+            (Some(at(&unit, "b0")), graph.at(site(&unit, "b0", 0)).id),
+            (Some(at(&unit, "b2")), graph.at(site(&unit, "b2", 0)).id)
+        ]
+    );
     assert_eq!(graph.at(site(&unit, "b1", 0)).defining, Some(phi.id));
 }
 
@@ -184,7 +206,11 @@ fn test_a_volatile_access_touches_only_its_own_bytes() {
         let graph = graph(&unit);
         assert_eq!(graph.at(site(&unit, "b0", 0)).kind, kind, "{write}");
         let load = site(&unit, "b0", 1);
-        assert_eq!(graph.clobbers(load, &cell(&unit, load)).contains(&graph.at(site(&unit, "b0", 0)).id), clobbers, "{write}");
+        assert_eq!(
+            graph.clobbers(load, &cell(&unit, load)).contains(&graph.at(site(&unit, "b0", 0)).id),
+            clobbers,
+            "{write}"
+        );
     }
 }
 
@@ -274,7 +300,10 @@ fn test_clobber_stops_at_an_aliasing_loop_backedge() {
     let unit = parsed.unit();
     let graph = graph(&unit);
     let load = site(&unit, "b1", 0);
-    assert_eq!(graph.clobbers(load, &cell(&unit, load)), BTreeSet::from([graph.at(site(&unit, "b0", 0)).id, graph.at(site(&unit, "b2", 0)).id]));
+    assert_eq!(
+        graph.clobbers(load, &cell(&unit, load)),
+        BTreeSet::from([graph.at(site(&unit, "b0", 0)).id, graph.at(site(&unit, "b2", 0)).id])
+    );
 }
 
 #[test]
@@ -301,19 +330,27 @@ b3:
     let unit = parsed.unit();
     let graph = graph(&unit);
     let load = site(&unit, "b3", 0);
-    assert_eq!(graph.clobbers(load, &cell(&unit, load)), BTreeSet::from([graph.at(site(&unit, "b1", 0)).id, graph.at(site(&unit, "b2", 0)).id]));
+    assert_eq!(
+        graph.clobbers(load, &cell(&unit, load)),
+        BTreeSet::from([graph.at(site(&unit, "b1", 0)).id, graph.at(site(&unit, "b2", 0)).id])
+    );
 }
 
 #[test]
 fn test_clobber_preserves_partial_and_unknown_writes_and_calls() {
     // A word write at +1 changes one byte of the word being loaded; a
     // pointer argument may point anywhere.
-    for write in ["store i16 0, ptr getelementptr (i8, ptr @g, i16 33)", "store i16 0, ptr %p", "call void @anything()"] {
+    for write in ["store i16 0, ptr getelementptr (i8, ptr @g, i16 33)", "store i16 0, ptr %p", "call void @anything()"]
+    {
         let parsed = written(write);
         let unit = parsed.unit();
         let graph = graph(&unit);
         let load = site(&unit, "b0", 1);
-        assert_eq!(graph.clobbers(load, &cell(&unit, load)), BTreeSet::from([graph.at(site(&unit, "b0", 0)).id]), "{write}");
+        assert_eq!(
+            graph.clobbers(load, &cell(&unit, load)),
+            BTreeSet::from([graph.at(site(&unit, "b0", 0)).id]),
+            "{write}"
+        );
     }
 }
 
@@ -363,7 +400,10 @@ b0:
     let unit = parsed.unit();
     let (store, call, load) = (site(&unit, "b0", 0), site(&unit, "b0", 1), site(&unit, "b0", 2));
     for (footprint, clobber) in [(site(&unit, "b0", 3), store), (load, call)] {
-        let graph = built(&unit, &Accesses::plain(&unit, &Calls::from_iter([(call, std::rc::Rc::from(vec![cell(&unit, footprint)]))])));
+        let graph = built(
+            &unit,
+            &Accesses::plain(&unit, &Calls::from_iter([(call, std::rc::Rc::from(vec![cell(&unit, footprint)]))])),
+        );
         assert_eq!(graph.clobbers(load, &cell(&unit, load)), BTreeSet::from([graph.at(clobber).id]));
     }
 }
@@ -454,7 +494,10 @@ b3:
     let memory = cell(&unit, load);
     for (arm, pointer) in [("b1", "%a"), ("b2", "%b")] {
         let translated = cell(&unit, site(&unit, arm, 0));
-        assert!(!graph.available_on_edge(site(&unit, arm, 0), load, at(&unit, arm), &memory, Some(&translated)), "{pointer}");
+        assert!(
+            !graph.available_on_edge(site(&unit, arm, 0), load, at(&unit, arm), &memory, Some(&translated)),
+            "{pointer}"
+        );
     }
 }
 
@@ -545,9 +588,14 @@ b0:
 "
     ));
     let unit = parsed.unit();
-    let seth = Procedure::of(crate::testing::with_registers(Unit::of(&parsed.module, &parsed.layout, function(&parsed.module, "seth"))));
+    let seth = Procedure::of(crate::testing::with_registers(Unit::of(
+        &parsed.module,
+        &parsed.layout,
+        function(&parsed.module, "seth"),
+    )));
     let known = alias::summaries(&IndexMap::from_iter([("seth".to_owned(), seth)]), None).unwrap();
-    let (first, second, call, load) = (site(&unit, "b0", 0), site(&unit, "b0", 1), site(&unit, "b0", 2), site(&unit, "b0", 3));
+    let (first, second, call, load) =
+        (site(&unit, "b0", 0), site(&unit, "b0", 1), site(&unit, "b0", 2), site(&unit, "b0", 3));
     for (accesses, clobber) in [
         (Accesses::plain(&unit, &Calls::default()), call),
         (Accesses::resolved(&unit, &IndexMap::default()).unwrap(), call),
@@ -557,7 +605,11 @@ b0:
         assert_eq!(graph.clobbers(load, &accesses.references[&load]), BTreeSet::from([graph.at(clobber).id]));
     }
     let plain = Accesses::plain(&unit, &Calls::from_iter([(call, std::rc::Rc::from([]))]));
-    assert_eq!(built(&unit, &plain).clobbers(load, &plain.references[&load]), BTreeSet::from([graph(&unit).at(second).id]), "unresolved, @h may be @g");
+    assert_eq!(
+        built(&unit, &plain).clobbers(load, &plain.references[&load]),
+        BTreeSet::from([graph(&unit).at(second).id]),
+        "unresolved, @h may be @g"
+    );
 }
 
 /// `Accesses`, `memory::unmodeled_write` and `effects::unmodeled` each say
@@ -585,10 +637,17 @@ b0:
         let own = crate::memory::own_bytes(&unit.function.instruction(inst).opcode).expect("an access");
         let mine = [cell(&unit, inst)];
         let named = |does: bool| Some(if does { &mine[..] } else { &[][..] });
-        assert_eq!((accesses.reads(inst), accesses.writes(inst)), (named(own.reads), named(own.writes)), "Accesses, access {index}");
+        assert_eq!(
+            (accesses.reads(inst), accesses.writes(inst)),
+            (named(own.reads), named(own.writes)),
+            "Accesses, access {index}"
+        );
         assert!(!crate::memory::unmodeled_write(&unit, inst), "memory::unmodeled_write, access {index}");
         let context = &parsed.module.context;
-        let unmodeled = (crate::effects::unmodeled_read(context, &declarations, unit.function, inst), crate::effects::unmodeled_write(context, &declarations, unit.function, inst));
+        let unmodeled = (
+            crate::effects::unmodeled_read(context, &declarations, unit.function, inst),
+            crate::effects::unmodeled_write(context, &declarations, unit.function, inst),
+        );
         assert_eq!(unmodeled, (false, false), "effects::unmodeled, access {index}");
     }
 }
@@ -598,8 +657,10 @@ b0:
 /// worked out once.
 #[test]
 fn test_loads_of_one_address_ask_each_store_whether_it_clobbers_once() {
-    let steps: String = (0..30).map(|at| format!("  store i16 {at}, ptr {OTHER}\n  %y{at} = load i16, ptr {CELL}\n")).collect();
-    let parsed = Parsed::new(&format!("define void @f() {{\nb0:\n  %x = load i16, ptr {CELL}\n{steps}  ret void\n}}\n"));
+    let steps: String =
+        (0..30).map(|at| format!("  store i16 {at}, ptr {OTHER}\n  %y{at} = load i16, ptr {CELL}\n")).collect();
+    let parsed =
+        Parsed::new(&format!("define void @f() {{\nb0:\n  %x = load i16, ptr {CELL}\n{steps}  ret void\n}}\n"));
     let unit = parsed.unit();
     let graph = graph(&unit);
     let first = site(&unit, "b0", 0);
@@ -611,9 +672,9 @@ fn test_loads_of_one_address_ask_each_store_whether_it_clobbers_once() {
     assert!(clobber_runs() - before <= 30, "{} clobber questions for 30 stores", clobber_runs() - before);
 }
 
-/// The walk back from a load stopped at every access and asked of it. A chain of uses and defs that leave the cell alone ends in the
-/// same place for every load of the cell, so a walk remembers where and jumps there. It must find what the walk step by step finds,
-/// from every load, for every cell, with and without a boundary.
+/// The walk back from a load stopped at every access and asked of it. A chain of uses and defs that leave the cell
+/// alone ends in the same place for every load of the cell, so a walk remembers where and jumps there. It must find
+/// what the walk step by step finds, from every load, for every cell, with and without a boundary.
 #[test]
 fn test_a_walk_that_jumps_finds_what_a_walk_step_by_step_finds() {
     let stores: String = (0..12).map(|n| format!("  store i8 {n}, ptr getelementptr (i8, ptr @g, i16 {})\n  %v{n} = load i8, ptr getelementptr (i8, ptr @g, i16 {})\n", 8 + n % 3 * 16, 8 + (n + 1) % 3 * 16)).collect();
@@ -622,13 +683,25 @@ fn test_a_walk_that_jumps_finds_what_a_walk_step_by_step_finds() {
     ));
     let unit = parsed.unit();
     let graph = graph(&unit);
-    let loads: Vec<InstId> = graph.sites.keys().copied().filter(|&site| matches!(unit.function.instruction(site).opcode, llrm_mir::opcode::Opcode::Load { .. })).collect();
+    let loads: Vec<InstId> = graph
+        .sites
+        .keys()
+        .copied()
+        .filter(|&site| matches!(
+            unit.function.instruction(site).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
+        .collect();
     assert!(loads.len() >= 14);
     for &site in &loads {
         for &asked in &loads {
             let cell = cell(&unit, asked);
             for boundary in [None, graph.at(site).defining] {
-                assert_eq!(graph.walked(site, &cell, boundary, None, None, true), graph.walked(site, &cell, boundary, None, None, false), "{site:?} for {asked:?}");
+                assert_eq!(
+                    graph.walked(site, &cell, boundary, None, None, true),
+                    graph.walked(site, &cell, boundary, None, None, false),
+                    "{site:?} for {asked:?}"
+                );
             }
         }
     }

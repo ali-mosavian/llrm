@@ -10,12 +10,12 @@
 use std::sync::Arc;
 
 use iced_x86::Register;
-use crate::support::hash::IndexMap;
 
 use crate::backend::peephole::{_branch_reads, _flag_lanes, _lanes, _moved_lanes, _register_effects, Lane, Lanes};
 use crate::backend::target;
 use crate::model::ir::{Held, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::support::hash::IndexMap;
 
 pub fn _terminator(what: Option<&Semantics>) -> bool {
     what.is_some_and(|what| {
@@ -57,16 +57,25 @@ pub struct Effect {
 
 impl Effect {
     /// The lanes live before it, given those live after.
-    pub fn live_before(&self, live: &Lanes) -> Lanes {
+    pub fn live_before(
+        &self,
+        live: &Lanes,
+    ) -> Lanes {
         live.minus(&self.writes).or(&self.read(|lane| live.contains(lane)))
     }
 
     /// The lanes dead before it, given those dead after.
-    pub fn dead_before(&self, dead: &Lanes) -> Lanes {
+    pub fn dead_before(
+        &self,
+        dead: &Lanes,
+    ) -> Lanes {
         dead.or(&self.writes).minus(&self.read(|lane| !dead.contains(lane)))
     }
 
-    fn read(&self, live: impl Fn(&Lane) -> bool) -> Lanes {
+    fn read(
+        &self,
+        live: impl Fn(&Lane) -> bool,
+    ) -> Lanes {
         let mut reads = self.reads;
         // A shift's flags come from the bits it moves.
         let flagged = self.writes.iter().any(|lane| lane.0 == Register::None && live(lane));
@@ -83,33 +92,44 @@ thread_local! {
     static EFFECT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many effects this thread has worked out by `effect`, for a test that a pass does not ask of an instruction it has seen.
+/// How many effects this thread has worked out by `effect`, for a test that a pass does not ask of an instruction it
+/// has seen.
 pub fn effects_worked_out() -> usize {
     EFFECT_CALLS.with(std::cell::Cell::get)
 }
 
 /// `with` given `one`'s effect, as `effect` has it but without a copy of it.
-pub fn with_effect<R>(bits: u32, one: &Insn, with: impl FnOnce(Option<&Effect>) -> R) -> R {
+pub fn with_effect<R>(
+    bits: u32,
+    one: &Insn,
+    with: impl FnOnce(Option<&Effect>) -> R,
+) -> R {
     let (was, answer) = one.effect.get_or_init(|| (bits, worked_out(bits, one)));
-    if *was == bits {
-        with(answer.as_ref())
-    } else {
-        with(worked_out(bits, one).as_ref())
-    }
+    if *was == bits { with(answer.as_ref()) } else { with(worked_out(bits, one).as_ref()) }
 }
 
-/// `one`'s effect as it decodes, else as its contract declares; None when unknown. Worked out once for the instruction, whoever asks.
-pub fn effect(bits: u32, one: &Insn) -> Option<Effect> {
+/// `one`'s effect as it decodes, else as its contract declares; None when unknown. Worked out once for the instruction,
+/// whoever asks.
+pub fn effect(
+    bits: u32,
+    one: &Insn,
+) -> Option<Effect> {
     let (was, answer) = one.effect.get_or_init(|| (bits, worked_out(bits, one)));
     // Asked at another width than the first time: not the answer kept.
     let found = if *was == bits { answer.clone() } else { worked_out(bits, one) };
     if llrm_support::env_set("LLRM_CHECK_EFFECT") {
-        assert!(format!("{found:?}") == format!("{:?}", worked_out(bits, one)), "an instruction's kept effect is not the one its fields give");
+        assert!(
+            format!("{found:?}") == format!("{:?}", worked_out(bits, one)),
+            "an instruction's kept effect is not the one its fields give"
+        );
     }
     found
 }
 
-fn worked_out(bits: u32, one: &Insn) -> Option<Effect> {
+fn worked_out(
+    bits: u32,
+    one: &Insn,
+) -> Option<Effect> {
     EFFECT_CALLS.with(|count| count.set(count.get() + 1));
     if _terminator(one.what.as_ref()) {
         // A jump or branch writes nothing; a branch reads its flags.
@@ -125,20 +145,35 @@ fn worked_out(bits: u32, one: &Insn) -> Option<Effect> {
 }
 
 /// Each instruction's effect in `block`, decoded once for a fixed point to reuse.
-pub fn _effects(bits: u32, block: &LirBlock) -> Vec<Option<Effect>> {
+pub fn _effects(
+    bits: u32,
+    block: &LirBlock,
+) -> Vec<Option<Effect>> {
     block.insns.iter().map(|one| effect(bits, one)).collect()
 }
 
 /// The lanes live before `effects`, given those live after them. An unknown
 /// instruction may read anything.
-pub fn _before(effects: &[Option<Effect>], live: Lanes, universe: &Lanes) -> Lanes {
+pub fn _before(
+    effects: &[Option<Effect>],
+    live: Lanes,
+    universe: &Lanes,
+) -> Lanes {
     effects.iter().rev().fold(live, |live, one| one.as_ref().map_or_else(|| *universe, |one| one.live_before(&live)))
 }
 
 /// The lanes live before `block`, given those live after it.
-pub fn _backwards(bits: u32, block: &LirBlock, live: Lanes, universe: &Lanes) -> Lanes {
-    // Each effect is read where it is kept: a copy of every instruction's, for each round of a fixed point, was a tenth of peephole.
-    block.insns.iter().rev().fold(live, |live, one| with_effect(bits, one, |effect| effect.map_or_else(|| *universe, |effect| effect.live_before(&live))))
+pub fn _backwards(
+    bits: u32,
+    block: &LirBlock,
+    live: Lanes,
+    universe: &Lanes,
+) -> Lanes {
+    // Each effect is read where it is kept: a copy of every instruction's, for each round of a fixed point, was a tenth
+    // of peephole.
+    block.insns.iter().rev().fold(live, |live, one| {
+        with_effect(bits, one, |effect| effect.map_or_else(|| *universe, |effect| effect.live_before(&live)))
+    })
 }
 
 /// What a call says it reads and writes, for an instruction no decoder covers.
@@ -150,9 +185,7 @@ pub fn _backwards(bits: u32, block: &LirBlock, live: Lanes, universe: &Lanes) ->
 pub fn _declared(one: &Insn) -> Option<(Lanes, Lanes)> {
     let held_lanes = |held: &Held, register: Register| _lanes(target::named(register, i64::from(held.width)));
 
-    if one.what.as_ref().is_some_and(|what| what.op == Operation::Return)
-        && one.reads_complete()
-    {
+    if one.what.as_ref().is_some_and(|what| what.op == Operation::Return) && one.reads_complete() {
         // Nothing runs after it: it reads explicit results and only the
         // architectural state its generated epilogue itself needs.
         let mut reads: Lanes = one.requires.iter().flat_map(|(held, register)| held_lanes(held, *register)).collect();
@@ -222,7 +255,8 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
         .collect();
     let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut into: IndexMap<i64, Lanes> = blocks.keys().map(|at| (*at, Lanes::new())).collect();
-    let effects: IndexMap<i64, Vec<Option<Effect>>> = blocks.iter().map(|(at, block)| (*at, _effects(body.bits, block))).collect();
+    let effects: IndexMap<i64, Vec<Option<Effect>>> =
+        blocks.iter().map(|(at, block)| (*at, _effects(body.bits, block))).collect();
     // The least fixed point of a backward problem, found by a worklist that starts from the last block: a
     // block is recomputed when a successor's lanes changed. Taken round the layout from the first block, each
     // round carried a change one block back, and a chain of n blocks took n rounds.
@@ -261,26 +295,34 @@ thread_local! {
     static EXITS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has worked out a body's dead lanes at its blocks' exits, for a test that asking again of a body
-/// no pass changed does not.
+/// How many times this thread has worked out a body's dead lanes at its blocks' exits, for a test that asking again of
+/// a body no pass changed does not.
 pub fn exits_computed() -> usize {
     EXITS_COMPUTED.with(std::cell::Cell::get)
 }
 
 /// Whether `body` is `kept` over again: the same blocks of the same instructions, which are immutable.
-fn unchanged(kept: &LirBody, body: &LirBody) -> bool {
+fn unchanged(
+    kept: &LirBody,
+    body: &LirBody,
+) -> bool {
     kept.bits == body.bits
         && kept.blocks.len() == body.blocks.len()
         && kept.blocks.iter().zip(&body.blocks).all(|(one, other)| {
-            one.at == other.at && one.succ == other.succ && one.insns.len() == other.insns.len() && one.insns.iter().zip(&other.insns).all(|(a, b)| Arc::ptr_eq(a, b))
+            one.at == other.at
+                && one.succ == other.succ
+                && one.insns.len() == other.insns.len()
+                && one.insns.iter().zip(&other.insns).all(|(a, b)| Arc::ptr_eq(a, b))
         })
 }
 
-/// Per block, the lanes nothing reads again after it. Ten passes of the peephole ask in turn, most leaving the body as it was
-/// (the same instructions, shared): the last answer stands for a body that is the same (#924: 500,000 decodes of 16,000
-/// instructions in one module).
+/// Per block, the lanes nothing reads again after it. Ten passes of the peephole ask in turn, most leaving the body as
+/// it was (the same instructions, shared): the last answer stands for a body that is the same (#924: 500,000 decodes of
+/// 16,000 instructions in one module).
 pub fn dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
-    if let Some(answer) = EXITS.with(|held| held.borrow().as_ref().filter(|(kept, _)| unchanged(kept, body)).map(|(_, answer)| answer.clone())) {
+    if let Some(answer) = EXITS
+        .with(|held| held.borrow().as_ref().filter(|(kept, _)| unchanged(kept, body)).map(|(_, answer)| answer.clone()))
+    {
         return answer;
     }
     EXITS_COMPUTED.with(|count| count.set(count.get() + 1));
@@ -308,17 +350,23 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use crate::support::hash::IndexMap;
 
     use super::live_into;
     use crate::backend::peephole::_lanes;
     use crate::model::ir::{Held, Loc, Operation, Reg, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
 
     const AX: Reg = Reg { register: Register::AX, width: 2 };
     const DX: Reg = Reg { register: Register::DX, width: 2 };
 
-    fn _insn(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Arc<Insn> {
+    fn _insn(
+        at: i64,
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Arc<Insn> {
         Arc::new(Insn::new(
             at,
             Some((at, at)),
@@ -351,7 +399,11 @@ mod tests {
         let bx = Reg { register: Register::BX, width: 2 };
         let blocks: Vec<LirBlock> = (1..=blocks)
             .map(|at| {
-                let insns = if at == blocks { vec![_insn(at, Operation::Move, "mov", vec![Loc::Reg(DX)], vec![Loc::Reg(AX)])] } else { vec![_insn(at, Operation::Move, "mov", vec![Loc::Reg(bx)], vec![Loc::Reg(DX)])] };
+                let insns = if at == blocks {
+                    vec![_insn(at, Operation::Move, "mov", vec![Loc::Reg(DX)], vec![Loc::Reg(AX)])]
+                } else {
+                    vec![_insn(at, Operation::Move, "mov", vec![Loc::Reg(bx)], vec![Loc::Reg(DX)])]
+                };
                 LirBlock { succ: if at == blocks { vec![] } else { vec![at + 1] }, ..LirBlock::new(at, insns) }
             })
             .collect();
@@ -367,7 +419,10 @@ mod tests {
         let before = super::visits();
         let (into, _successors, _universe) = live_into(&body);
         assert!(super::visits() - before <= 3 * 200, "{} block visits for 200 blocks", super::visits() - before);
-        assert!(_lanes(Register::AX).is_subset(&into[&1]), "AX is read at the end of the chain and written nowhere before");
+        assert!(
+            _lanes(Register::AX).is_subset(&into[&1]),
+            "AX is read at the end of the chain and written nowhere before"
+        );
     }
 
     #[test]

@@ -3,15 +3,15 @@
 //! register. Built from the selected target (`RegisterClasses::of`) and handed
 //! down beside `Segments`; no pass reads another target's.
 
-use std::collections::{BTreeSet};
-use crate::support::hash::HashMap;
+use std::collections::BTreeSet;
 
 use iced_x86::Register;
 use llrm_target::Target;
 use llrm_x86_m16::instructions::{self, Side};
 
-use crate::backend::target::{Occurrence, SEGMENTS, _on_the_stack};
+use crate::backend::target::{_on_the_stack, Occurrence, SEGMENTS};
 use crate::model::ir::{Loc, Operation, Semantics};
+use crate::support::hash::HashMap;
 use crate::support::hash::IndexMap;
 
 type Key = (String, &'static str, usize, usize);
@@ -42,35 +42,71 @@ impl RegisterClasses {
     pub fn of(arch: &dyn Target) -> Self {
         // A form that pins nothing has no requirement to give, and the description is read at every compile.
         let forms = instructions::parse::pinned(&arch.forms_text()).expect("the target's forms parse");
-        let operations: HashMap<&str, &'static str> = Operation::ALL.iter().map(|op| (op.as_str(), op.as_str())).collect();
+        let operations: HashMap<&str, &'static str> =
+            Operation::ALL.iter().map(|op| (op.as_str(), op.as_str())).collect();
         let mut pins: HashMap<Key, Vec<(Side, usize, Register)>> = HashMap::default();
         for form in &forms {
             let chosen = |side: Side, index: usize, root: &str| {
-                forms.iter().any(|other| {
-                    other.operation == form.operation && other.dests == form.dests && other.sources == form.sources && other.fixed.iter().any(|(s, i, r)| *s == side && *i == index && r != root)
-                })
+                forms
+                    .iter()
+                    .any(
+                        |other| other.operation == form.operation
+                            && other.dests == form.dests
+                            && other.sources == form.sources
+                            && other.fixed.iter().any(|(s, i, r)| *s == side && *i == index && r != root),
+                    )
             };
-            let required = form.fixed.iter().filter(|(side, index, root)| !chosen(*side, *index, root)).map(|(side, index, root)| (*side, *index, root_register(root))).collect();
-            pins.entry((form.name.clone(), operations[form.operation.as_str()], form.dests.len(), form.sources.len())).or_insert(required);
+            let required = form
+                .fixed
+                .iter()
+                .filter(|(side, index, root)| !chosen(*side, *index, root))
+                .map(|(side, index, root)| (*side, *index, root_register(root)))
+                .collect();
+            pins.entry((form.name.clone(), operations[form.operation.as_str()], form.dests.len(), form.sources.len()))
+                .or_insert(required);
         }
-        let mut by_name: crate::support::hash::HashMap<String, Vec<(&'static str, usize, usize, Vec<(Side, usize, Register)>)>> = crate::support::hash::HashMap::default();
+        let mut by_name: crate::support::hash::HashMap<
+            String,
+            Vec<(&'static str, usize, usize, Vec<(Side, usize, Register)>)>,
+        > = crate::support::hash::HashMap::default();
         for ((name, operation, dests, sources), required) in pins {
             by_name.entry(name).or_default().push((operation, dests, sources, required));
         }
         let pins = by_name;
         let file = llrm_target::registers::parse(&arch.registers_text()).expect("the target's registers parse");
         let named = |name: &str| iced(name);
-        let word = |root: &str| file.iter().find(|one| one.root == root && one.bits == 16).map(|one| iced(&one.name)).expect("a register has a word view");
-        let held = |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(named).collect::<Vec<_>>();
-        let words = |class: &str| llrm_target::registers::of_class(&file, class).into_iter().filter(|root| !file.iter().any(|one| one.name == *root && one.is("reserved"))).map(word).collect();
-        let every = |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(word).collect::<BTreeSet<_>>();
+        let word = |root: &str| {
+            file.iter()
+                .find(|one| one.root == root && one.bits == 16)
+                .map(|one| iced(&one.name))
+                .expect("a register has a word view")
+        };
+        let held =
+            |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(named).collect::<Vec<_>>();
+        let words = |class: &str| {
+            llrm_target::registers::of_class(&file, class)
+                .into_iter()
+                .filter(|root| !file.iter().any(|one| one.name == *root && one.is("reserved")))
+                .map(word)
+                .collect()
+        };
+        let every =
+            |class: &str| llrm_target::registers::of_class(&file, class).into_iter().map(word).collect::<BTreeSet<_>>();
         let (encodable_bases, indexes) = (every("base"), every("index"));
         let addressing = encodable_bases.union(&indexes).copied().collect();
-        Self { pins, available: held("gpr"), word_bases: words("base"), word_indexes: words("index"), frame: arch.frame_register(), addressing, encodable_bases }
+        Self {
+            pins,
+            available: held("gpr"),
+            word_bases: words("base"),
+            word_indexes: words("index"),
+            frame: arch.frame_register(),
+            addressing,
+            encodable_bases,
+        }
     }
 
-    /// These classes for a function with no frame register (LLVM's `hasFP` false): the frame register is one more general register, the
-    /// last to be given out, and an address may be made of its word.
+    /// These classes for a function with no frame register (LLVM's `hasFP` false): the frame register is one more
+    /// general register, the last to be given out, and an address may be made of its word.
     pub fn with_frame_free(&self) -> Self {
         let whole = self.frame;
         let mut free = self.clone();
@@ -97,14 +133,28 @@ impl RegisterClasses {
     /// immediate is no register: a shift's count or an `in`'s port written as one pins
     /// nothing, and a segment register is pinned only while it is a held value, a placed
     /// one being where it is.
-    pub fn requirements(&self, what: &Semantics) -> IndexMap<Occurrence, Register> {
+    pub fn requirements(
+        &self,
+        what: &Semantics,
+    ) -> IndexMap<Occurrence, Register> {
         let mut out = IndexMap::default();
         if _on_the_stack(what) {
             return out;
         }
         let Some(name) = what.name.as_deref() else { return out };
         let operation = what.op.as_str();
-        let Some(pins) = self.pins.get(name).and_then(|forms| forms.iter().find(|(op, dests, sources, _)| *op == operation && *dests == what.dests.len() && *sources == what.sources.len())).map(|(_, _, _, pins)| pins) else { return out };
+        let Some(pins) = self
+            .pins
+            .get(name)
+            .and_then(|forms| {
+                forms.iter().find(|(op, dests, sources, _)| {
+                    *op == operation && *dests == what.dests.len() && *sources == what.sources.len()
+                })
+            })
+            .map(|(_, _, _, pins)| pins)
+        else {
+            return out;
+        };
         for (side, index, register) in pins {
             let places = match side {
                 Side::Dest => &what.dests,
@@ -144,7 +194,9 @@ fn root_register(root: &str) -> Register {
 
 /// The iced register a description names.
 fn iced(name: &str) -> Register {
-    Register::values().find(|one| format!("{one:?}").eq_ignore_ascii_case(name)).unwrap_or_else(|| panic!("no register {name}"))
+    Register::values()
+        .find(|one| format!("{one:?}").eq_ignore_ascii_case(name))
+        .unwrap_or_else(|| panic!("no register {name}"))
 }
 
 #[cfg(test)]

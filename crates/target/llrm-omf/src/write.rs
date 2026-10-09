@@ -1,10 +1,9 @@
 //! An [`Object`] as OMF records: LNAMES, SEGDEF, GRPDEF, EXTDEF, PUBDEF, LEDATA and FIXUPP, and
 //! LINNUM and a CodeView marker where it carries debug information.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::rc::Rc;
-
-use std::borrow::Cow;
 
 use llrm_object::{Definition, Kind, Object, Role, Section, Target};
 
@@ -40,7 +39,10 @@ pub enum Error {
 }
 
 impl fmt::Display for Error {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         match self {
             Error::Unencodable(text) => formatter.write_str(text),
             Error::Value(one) => formatter.write_str(&one.0),
@@ -90,7 +92,9 @@ fn location(kind: Kind) -> Result<(u8, bool), Error> {
         Kind::Abs { width: 4 } => (OFFSET32, false),
         Kind::SegmentBase => (BASE, false),
         Kind::FarPointer => (POINTER, false),
-        Kind::PcRel { width, from } if width == from && matches!(width, 2 | 4) => (if width == 2 { OFFSET } else { OFFSET32 }, true),
+        Kind::PcRel { width, from } if width == from && matches!(width, 2 | 4) => {
+            (if width == 2 { OFFSET } else { OFFSET32 }, true)
+        }
         Kind::Branch { width: 2 } => (OFFSET, true),
         Kind::Branch { width: 4 } => (OFFSET32, true),
         other => return Err(unencodable(format!("OMF has no fixup for {other:?}"))),
@@ -106,7 +110,12 @@ fn packed(kind: Kind) -> usize {
 }
 
 /// `value` into the field of `width` bytes at `at`, wrapped to it.
-fn pack_field(buffer: &mut [u8], at: usize, width: usize, value: i64) {
+fn pack_field(
+    buffer: &mut [u8],
+    at: usize,
+    width: usize,
+    value: i64,
+) {
     if width == 4 {
         buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
     } else {
@@ -121,7 +130,12 @@ struct Resolved {
     value: i64,
 }
 
-fn resolved(object: &Object, extern_index: &[usize], section: &Section, at: usize) -> Result<Resolved, Error> {
+fn resolved(
+    object: &Object,
+    extern_index: &[usize],
+    section: &Section,
+    at: usize,
+) -> Result<Resolved, Error> {
     let reloc = section.relocs.iter().find(|one| one.at == at).expect("the caller names a fixup");
     let (loc, relative) = location(reloc.kind)?;
     let in_group = |section: usize| object.omf_groups.iter().position(|group| group.members.contains(&section));
@@ -142,7 +156,9 @@ fn resolved(object: &Object, extern_index: &[usize], section: &Section, at: usiz
     };
     let own = if matches!(loc, OFFSET | POINTER | OFFSET32) && !relative { local.unwrap_or(0) } else { 0 };
     let subrecord = match group {
-        Some(group) if matches!(loc, OFFSET | OFFSET32) && !relative => [vec![GROUP_FRAME << 4 | 4 | method], omf::as_index(group as i64 + 1)?, omf::as_index(datum)?].concat(),
+        Some(group) if matches!(loc, OFFSET | OFFSET32) && !relative => {
+            [vec![GROUP_FRAME << 4 | 4 | method], omf::as_index(group as i64 + 1)?, omf::as_index(datum)?].concat()
+        }
         _ => [vec![TARGET_FRAME << 4 | 4 | method], omf::as_index(datum)?].concat(),
     };
     Ok(Resolved { subrecord, value: reloc.addend + own })
@@ -154,13 +170,19 @@ fn names(indices: &[i64]) -> Result<Vec<u8>, omf::ValueError> {
 
 /// A counted string, as the records spell names.
 fn string(text: &str) -> Vec<u8> {
-    let encoded: Vec<u8> = text.chars().map(|one| u8::try_from(u32::from(one)).unwrap_or_else(|_| panic!("UnicodeEncodeError: 'latin-1' codec"))).collect();
+    let encoded: Vec<u8> = text
+        .chars()
+        .map(|one| u8::try_from(u32::from(one)).unwrap_or_else(|_| panic!("UnicodeEncodeError: 'latin-1' codec")))
+        .collect();
     let length = u8::try_from(encoded.len()).unwrap_or_else(|_| panic!("ValueError: bytes must be in range(0, 256)"));
     [vec![length], encoded].concat()
 }
 
 /// Segment `index`'s LINNUM records: no base group, then (line, offset) pairs.
-fn linnum(index: usize, lines: &[(u32, usize)]) -> Result<Vec<Rc<omf::Record>>, Error> {
+fn linnum(
+    index: usize,
+    lines: &[(u32, usize)],
+) -> Result<Vec<Rc<omf::Record>>, Error> {
     let mut head = vec![0];
     head.extend(omf::as_index(index as i64)?);
     lines
@@ -180,7 +202,11 @@ fn linnum(index: usize, lines: &[(u32, usize)]) -> Result<Vec<Rc<omf::Record>>, 
 }
 
 /// Section `index`'s LEDATA and FIXUPP records.
-fn ledata(object: &Object, extern_index: &[usize], index: usize) -> Result<Vec<Rc<omf::Record>>, Error> {
+fn ledata(
+    object: &Object,
+    extern_index: &[usize],
+    index: usize,
+) -> Result<Vec<Rc<omf::Record>>, Error> {
     let bits = object.arch.bits();
     let section = &object.sections[index];
     let mut at_sorted: Vec<usize> = section.relocs.iter().map(|one| one.at).collect();
@@ -206,7 +232,11 @@ fn ledata(object: &Object, extern_index: &[usize], index: usize) -> Result<Vec<R
                 }
             }
             let payload = &image[start..stop];
-            out.push(if bits == 32 { omf::ledata_record32(index as i64 + 1, start as i64, payload)? } else { omf::ledata_record(index as i64 + 1, start as i64, payload)? });
+            out.push(if bits == 32 {
+                omf::ledata_record32(index as i64 + 1, start as i64, payload)?
+            } else {
+                omf::ledata_record(index as i64 + 1, start as i64, payload)?
+            });
             let located: Vec<Vec<u8>> = at_sorted
                 .iter()
                 .filter(|&&at| start <= at && at < stop)
@@ -233,7 +263,10 @@ fn ledata(object: &Object, extern_index: &[usize], index: usize) -> Result<Vec<R
 
 /// `object` as an OMF object file.
 pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
-    let turbo = matches!(&object.debug, Some(info) if info.format == llrm_object::debug::Format::TurboDebugger);
+    let turbo = matches!(
+        &object.debug,
+        Some(info) if info.format == llrm_object::debug::Format::TurboDebugger
+    );
     let debug = object.debug.is_some() && !turbo;
     // Turbo Debugger's records go among the object's own; CodeView's two segments are this writer's,
     // made from the object's debug information.
@@ -243,7 +276,9 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
     };
     let (object, lines): (Cow<Object>, Vec<Vec<(u32, usize)>>) = match &object.debug {
         None => (Cow::Borrowed(object), Vec::new()),
-        Some(info) if turbo => (Cow::Owned(Object { debug: None, ..object.clone() }), crate::codeview::lines(object, info)?),
+        Some(info) if turbo => {
+            (Cow::Owned(Object { debug: None, ..object.clone() }), crate::codeview::lines(object, info)?)
+        }
         Some(info) => {
             let mut lines = crate::codeview::lines(object, info)?;
             let described = crate::codeview::sections(object, info)?;
@@ -269,9 +304,17 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         let (klass, name) = (lname(class(section)), lname(&section.name));
         let size = section.image.len();
         // A USE32 segment is dword aligned at least: its offsets are 32-bit.
-        let alignment = if selector(section) { PARAGRAPH } else { alignment_for(if bits == 32 { section.align.max(4) } else { section.align }) };
+        let alignment = if selector(section) {
+            PARAGRAPH
+        } else {
+            alignment_for(if bits == 32 { section.align.max(4) } else { section.align })
+        };
         let alignment = if section.role == Role::Stack { STACK_SEGMENT } else { alignment };
-        let (acbp, record) = if bits == 32 { (alignment | 1, omf::SEGDEF + 1) } else { (alignment | if size == 0x10000 { 2 } else { 0 }, omf::SEGDEF) };
+        let (acbp, record) = if bits == 32 {
+            (alignment | 1, omf::SEGDEF + 1)
+        } else {
+            (alignment | if size == 0x10000 { 2 } else { 0 }, omf::SEGDEF)
+        };
         let mut body = vec![acbp];
         if bits == 32 {
             body.extend((size as u32).to_le_bytes());
@@ -319,7 +362,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
     }
     records.extend(segdefs);
     records.extend(grpdefs);
-    let declared: Vec<&llrm_object::Symbol> = object.symbols.iter().filter(|symbol| symbol.definition == Definition::Undefined).collect();
+    let declared: Vec<&llrm_object::Symbol> =
+        object.symbols.iter().filter(|symbol| symbol.definition == Definition::Undefined).collect();
     if !declared.is_empty() {
         let body = declared.iter().flat_map(|symbol| [string(&symbol.name), vec![0]].concat()).collect();
         records.push(Rc::new(omf::Record::new(omf::EXTDEF, body)));
@@ -330,7 +374,11 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
             .iter()
             .enumerate()
             .filter_map(|(at, symbol)| match symbol.definition {
-                Definition::Defined { section, offset } if section == index && symbol.binding == llrm_object::Binding::Public => Some((at, symbol.name.as_str(), offset)),
+                Definition::Defined { section, offset }
+                    if section == index && symbol.binding == llrm_object::Binding::Public =>
+                {
+                    Some((at, symbol.name.as_str(), offset))
+                }
                 _ => None,
             })
             .collect();
@@ -343,7 +391,9 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         // One PUBDEF a symbol where Turbo Debugger's type record follows it.
         let mut pubdefs = vec![head.clone()];
         for &(symbol, name, at) in &defined {
-            if td.as_ref().is_some_and(|one| one.publics.contains_key(&symbol)) && pubdefs.last().is_some_and(|last| last.len() > head.len()) {
+            if td.as_ref().is_some_and(|one| one.publics.contains_key(&symbol))
+                && pubdefs.last().is_some_and(|last| last.len() > head.len())
+            {
                 pubdefs.push(head.clone());
             }
             let last = pubdefs.last_mut().expect("a record");
@@ -351,12 +401,16 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
             if bits == 32 {
                 last.extend((at as u32).to_le_bytes());
             } else {
-                let at = u16::try_from(at).unwrap_or_else(|_| panic!("struct.error: 'H' format requires 0 <= number <= 65535"));
+                let at = u16::try_from(at)
+                    .unwrap_or_else(|_| panic!("struct.error: 'H' format requires 0 <= number <= 65535"));
                 last.extend(at.to_le_bytes());
             }
             last.push(0);
             if let Some(typed) = td.as_ref().and_then(|one| one.publics.get(&symbol)) {
-                records.push(Rc::new(omf::Record::new(if bits == 32 { omf::PUBDEF + 1 } else { omf::PUBDEF }, pubdefs.pop().expect("a record"))));
+                records.push(Rc::new(omf::Record::new(
+                    if bits == 32 { omf::PUBDEF + 1 } else { omf::PUBDEF },
+                    pubdefs.pop().expect("a record"),
+                )));
                 records.extend(typed.iter().cloned());
                 pubdefs.push(head.clone());
             }
@@ -383,16 +437,27 @@ mod tests {
 
     use super::*;
 
-    fn symbol(name: &str, definition: Definition) -> Symbol {
+    fn symbol(
+        name: &str,
+        definition: Definition,
+    ) -> Symbol {
         Symbol { name: name.into(), binding: Binding::Public, definition, group: None }
     }
 
-    fn section(name: &str, image: Vec<u8>, relocs: Vec<Reloc>) -> Section {
+    fn section(
+        name: &str,
+        image: Vec<u8>,
+        relocs: Vec<Reloc>,
+    ) -> Section {
         let spans = vec![[0, image.len()]];
-        Section { name: name.into(), role: Role::Text, near: true, align: 1, image, spans, relocs, }
+        Section { name: name.into(), role: Role::Text, near: true, align: 1, image, spans, relocs }
     }
 
-    fn object(arch: Arch, sections: Vec<Section>, symbols: Vec<Symbol>) -> Object {
+    fn object(
+        arch: Arch,
+        sections: Vec<Section>,
+        symbols: Vec<Symbol>,
+    ) -> Object {
         Object { name: "t.c".into(), arch, sections, symbols, omf_groups: Vec::new(), debug: None }
     }
 
@@ -402,14 +467,22 @@ mod tests {
     fn a_fixup_is_never_split_between_ledata_records() {
         let size = CHUNK * 3;
         let starts = [CHUNK - 1, 2 * CHUNK - 2];
-        let relocs = starts.iter().map(|&at| Reloc { at, kind: Kind::FarPointer, target: Target::Symbol(0), addend: 0 }).collect();
-        let made = object(Arch::I8086, vec![section("T", vec![0; size], relocs)], vec![symbol("f", Definition::Undefined)]);
+        let relocs = starts
+            .iter()
+            .map(|&at| Reloc { at, kind: Kind::FarPointer, target: Target::Symbol(0), addend: 0 })
+            .collect();
+        let made =
+            object(Arch::I8086, vec![section("T", vec![0; size], relocs)], vec![symbol("f", Definition::Undefined)]);
         let bytes = write(&made).unwrap();
         let records = crate::omf::parse(&bytes).unwrap();
-        let cuts: Vec<usize> = records.iter().filter(|one| one.r#type == omf::LEDATA).scan(0, |end, one| {
-            *end += one.body.len() - 3;
-            Some(*end)
-        }).collect();
+        let cuts: Vec<usize> = records
+            .iter()
+            .filter(|one| one.r#type == omf::LEDATA)
+            .scan(0, |end, one| {
+                *end += one.body.len() - 3;
+                Some(*end)
+            })
+            .collect();
         assert_eq!(cuts.last(), Some(&size));
         assert!(!cuts.iter().any(|cut| starts.iter().any(|low| low < cut && *cut < low + 4)), "{cuts:?}");
     }
@@ -418,7 +491,11 @@ mod tests {
     #[test]
     fn a_call_is_a_self_relative_fixup_against_an_extern() {
         let call = Reloc { at: 1, kind: Kind::PcRel { width: 4, from: 4 }, target: Target::Symbol(0), addend: -2 };
-        let made = object(Arch::I386, vec![section("T", vec![0xE8, 0, 0, 0, 0], vec![call])], vec![symbol("f", Definition::Undefined)]);
+        let made = object(
+            Arch::I386,
+            vec![section("T", vec![0xE8, 0, 0, 0, 0], vec![call])],
+            vec![symbol("f", Definition::Undefined)],
+        );
         let records = crate::omf::parse(&write(&made).unwrap()).unwrap();
         let ledata = records.iter().find(|one| one.r#type == omf::LEDATA + 1).unwrap();
         assert_eq!(&ledata.body[ledata.body.len() - 5..], [0xE8, 0xFE, 0xFF, 0xFF, 0xFF]);
@@ -439,7 +516,8 @@ mod tests {
     #[test]
     fn a_pc_relative_field_omf_cannot_say_is_refused() {
         let jump = Reloc { at: 1, kind: Kind::PcRel { width: 4, from: 8 }, target: Target::Symbol(0), addend: 0 };
-        let made = object(Arch::I386, vec![section("T", vec![0; 8], vec![jump])], vec![symbol("f", Definition::Undefined)]);
+        let made =
+            object(Arch::I386, vec![section("T", vec![0; 8], vec![jump])], vec![symbol("f", Definition::Undefined)]);
         assert!(matches!(write(&made), Err(Error::Unencodable(_))));
     }
 }

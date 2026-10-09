@@ -1,11 +1,10 @@
 //! The DIE tree as bytes: abbreviations found, offsets laid out, references resolved.
 
-use llrm_support::hash::HashMap;
-
 use llrm_object::debug::Info;
 use llrm_object::{Object, Unsupported};
+use llrm_support::hash::HashMap;
 
-use crate::buffer::{uleb, Buf, Done, Strings};
+use crate::buffer::{Buf, Done, Strings, uleb};
 
 pub const TAG_COMPILE_UNIT: u16 = 0x11;
 pub const AT_NAME: u16 = 0x03;
@@ -39,14 +38,20 @@ pub enum Value {
     /// Another DIE, by its index in the tree.
     Ref(usize),
     /// An address `delta` bytes from `symbol`.
-    Addr { symbol: usize, delta: i64 },
+    Addr {
+        symbol: usize,
+        delta: i64,
+    },
     /// `high_pc` as a length.
     Len(u32),
     /// The start of the line program.
     Line,
     Expr(Vec<u8>),
     /// `DW_OP_addr`: an address `delta` bytes from `symbol`.
-    ExprAddr { symbol: usize, delta: i64 },
+    ExprAddr {
+        symbol: usize,
+        delta: i64,
+    },
     /// A location list, at this offset of the section of them.
     LocList(u32),
 }
@@ -84,7 +89,11 @@ pub struct Out {
 }
 
 impl Out {
-    pub fn new(version: u16, address: u8, places: Places) -> Self {
+    pub fn new(
+        version: u16,
+        address: u8,
+        places: Places,
+    ) -> Self {
         Self { version, address, places, strings: Strings::default(), line_strings: Strings::default() }
     }
 }
@@ -105,7 +114,10 @@ fn form(value: &Value) -> u16 {
     }
 }
 
-fn size(value: &Value, address: usize) -> usize {
+fn size(
+    value: &Value,
+    address: usize,
+) -> usize {
     match value {
         Value::Str(_) | Value::Len(_) | Value::Ref(_) | Value::Line | Value::LocList(_) => 4,
         Value::U8(_) => 1,
@@ -126,11 +138,21 @@ fn shape(die: &Die) -> Shape {
 }
 
 /// The unit's `.debug_info` and `.debug_abbrev`.
-pub fn unit(object: &Object, info: &Info, out: &mut Out) -> Result<(Done, Done, Done), Unsupported> {
+pub fn unit(
+    object: &Object,
+    info: &Info,
+    out: &mut Out,
+) -> Result<(Done, Done, Done), Unsupported> {
     let (dies, locations) = crate::types::tree(object, info, out.version, usize::from(out.address))?;
     let address = usize::from(out.address);
     // Abbreviations in the order DIEs are first met, and each DIE's offset.
-    let mut layout = Layout { codes: HashMap::default(), order: Vec::new(), code_of: vec![0; dies.len()], offsets: vec![0; dies.len()], address };
+    let mut layout = Layout {
+        codes: HashMap::default(),
+        order: Vec::new(),
+        code_of: vec![0; dies.len()],
+        offsets: vec![0; dies.len()],
+        address,
+    };
     let header = if out.version >= 5 { 12 } else { 11 };
     layout.place(&dies, 0, header);
     let Layout { order, code_of, offsets, .. } = layout;
@@ -176,7 +198,12 @@ struct Layout {
 
 impl Layout {
     /// DIE `index` at `at`; where the next one starts.
-    fn place(&mut self, dies: &[Die], index: usize, mut at: usize) -> usize {
+    fn place(
+        &mut self,
+        dies: &[Die],
+        index: usize,
+        mut at: usize,
+    ) -> usize {
         let die = &dies[index];
         let key = shape(die);
         let next = self.order.len() as u64 + 1;
@@ -194,7 +221,14 @@ impl Layout {
     }
 }
 
-fn write(dies: &[Die], codes: &[u64], offsets: &[usize], index: usize, out: &mut Out, buf: &mut Buf) -> Result<(), Unsupported> {
+fn write(
+    dies: &[Die],
+    codes: &[u64],
+    offsets: &[usize],
+    index: usize,
+    out: &mut Out,
+    buf: &mut Buf,
+) -> Result<(), Unsupported> {
     let die = &dies[index];
     debug_assert_eq!(buf.at(), offsets[index], "the layout and the writing agree");
     buf.uleb(codes[index]);
@@ -236,7 +270,11 @@ fn write(dies: &[Die], codes: &[u64], offsets: &[usize], index: usize, out: &mut
 }
 
 /// `.debug_aranges`: the module's code.
-pub fn aranges(object: &Object, info: &Info, out: &Out) -> Result<Done, Unsupported> {
+pub fn aranges(
+    object: &Object,
+    info: &Info,
+    out: &Out,
+) -> Result<Done, Unsupported> {
     let mut buf = Buf::default();
     buf.u32(0);
     buf.u16(2);

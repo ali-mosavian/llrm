@@ -25,14 +25,18 @@ pub struct LoopInfo {
 }
 
 impl LoopInfo {
-    pub fn new(function: &Function, tree: &DominatorTree) -> Self {
+    pub fn new(
+        function: &Function,
+        tree: &DominatorTree,
+    ) -> Self {
         let mut latches: BTreeMap<BlockId, Vec<BlockId>> = BTreeMap::new();
         for &block in function.layout() {
             if !tree.is_reachable(block) {
                 continue;
             }
             for successor in function.successors(block) {
-                if tree.dominates(successor, block) && !latches.get(&successor).is_some_and(|one| one.contains(&block)) {
+                if tree.dominates(successor, block) && !latches.get(&successor).is_some_and(|one| one.contains(&block))
+                {
                     latches.entry(successor).or_default().push(block);
                 }
             }
@@ -63,13 +67,20 @@ impl LoopInfo {
     }
 
     /// The innermost loop holding `block`.
-    pub fn loop_of(&self, block: BlockId) -> Option<&Loop> {
+    pub fn loop_of(
+        &self,
+        block: BlockId,
+    ) -> Option<&Loop> {
         self.innermost.get(&block).map(|&at| &self.loops[at])
     }
 
     /// Whether going from `from` to `to` leaves a loop: one holds `from`
     /// and not `to`.
-    pub fn leaves(&self, from: BlockId, to: BlockId) -> bool {
+    pub fn leaves(
+        &self,
+        from: BlockId,
+        to: BlockId,
+    ) -> bool {
         let mut at = self.innermost.get(&from).copied();
         while let Some(one) = at {
             if !self.loops[one].blocks.contains(&to) {
@@ -81,7 +92,10 @@ impl LoopInfo {
     }
 
     /// How many loops hold `block`: 0 outside any.
-    pub fn depth(&self, block: BlockId) -> u32 {
+    pub fn depth(
+        &self,
+        block: BlockId,
+    ) -> u32 {
         let mut depth = 0;
         let mut at = self.innermost.get(&block).copied();
         while let Some(one) = at {
@@ -93,19 +107,38 @@ impl LoopInfo {
 }
 
 /// Whether `one` has an edge out: a loop with none never ends, whatever marks it.
-pub fn exits(function: &Function, one: &Loop) -> bool {
-    !one.latches.is_empty() && one.blocks.iter().any(|&block| function.successors(block).iter().any(|next| !one.blocks.contains(next)))
+pub fn exits(
+    function: &Function,
+    one: &Loop,
+) -> bool {
+    !one.latches.is_empty()
+        && one.blocks.iter().any(|&block| function.successors(block).iter().any(|next| !one.blocks.contains(next)))
 }
 
 /// Whether the loop `latch` closes carries `llvm.loop.mustprogress`.
-pub fn marked(metadata: &[MetadataNode], function: &Function, latch: BlockId) -> bool {
+pub fn marked(
+    metadata: &[MetadataNode],
+    function: &Function,
+    latch: BlockId,
+) -> bool {
     let Some(branch) = function.terminator(latch) else { return false };
-    let Some((_, node)) = function.instruction(branch).metadata.iter().find(|(kind, _)| kind == "llvm.loop") else { return false };
+    let Some((_, node)) = function.instruction(branch).metadata.iter().find(|(kind, _)| kind == "llvm.loop") else {
+        return false;
+    };
     let Some(node) = metadata.get(node.0 as usize) else { return false };
-    node.operands.iter().any(|one| match one {
-        MetadataOperand::Node(id) => metadata.get(id.0 as usize).is_some_and(|property| matches!(property.operands.first(), Some(MetadataOperand::String(name)) if name == "llvm.loop.mustprogress")),
-        _ => false,
-    })
+    node.operands
+        .iter()
+        .any(
+            |one| match one {
+                MetadataOperand::Node(id) => metadata.get(id.0 as usize).is_some_and(|property| {
+                    matches!(
+                        property.operands.first(),
+                        Some(MetadataOperand::String(name)) if name == "llvm.loop.mustprogress"
+                    )
+                }),
+                _ => false,
+            },
+        )
 }
 
 /// Whether the language promises every loop of `function` ends: each has an
@@ -113,7 +146,16 @@ pub fn marked(metadata: &[MetadataNode], function: &Function, latch: BlockId) ->
 /// is marked on all its latches (`llvm.loop.mustprogress`, as C11 6.8.5p6
 /// gives only the loops whose controlling expression is not constant:
 /// `for (;;)` hangs).
-pub fn ends_by_promise(metadata: &[MetadataNode], function: &Function, whole: bool) -> bool {
+pub fn ends_by_promise(
+    metadata: &[MetadataNode],
+    function: &Function,
+    whole: bool,
+) -> bool {
     let tree = DominatorTree::new(function);
-    LoopInfo::new(function, &tree).loops.iter().all(|one| exits(function, one) && (whole || one.latches.iter().all(|&latch| marked(metadata, function, latch))))
+    LoopInfo::new(function, &tree)
+        .loops
+        .iter()
+        .all(
+            |one| exits(function, one) && (whole || one.latches.iter().all(|&latch| marked(metadata, function, latch))),
+        )
 }

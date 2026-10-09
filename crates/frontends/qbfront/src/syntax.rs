@@ -17,7 +17,10 @@ pub enum TypeName {
     String,
     Named(String),
     /// `SIGNED` or `UNSIGNED` before `BYTE`, `INTEGER` or `LONG`.
-    Integral { width: u8, signed: bool },
+    Integral {
+        width: u8,
+        signed: bool,
+    },
     /// QuickrBASIC's `AS (t1, t2, …)`, a FUNCTION's several results.
     Tuple(Vec<TypeName>),
     /// QuickrBASIC's `AS t()`, a FUNCTION's array result.
@@ -398,19 +401,9 @@ impl Statement {
     /// The statement lists nested directly inside this one, to change.
     pub fn bodies_mut(&mut self) -> Vec<&mut Vec<Statement>> {
         match self {
-            Self::If {
-                then_branch,
-                else_branch,
-                ..
-            } => vec![then_branch, else_branch],
+            Self::If { then_branch, else_branch, .. } => vec![then_branch, else_branch],
             Self::For { body, .. } | Self::While { body, .. } | Self::Do { body, .. } => vec![body],
-            Self::Select {
-                arms, otherwise, ..
-            } => arms
-                .iter_mut()
-                .map(|(_, body)| body)
-                .chain([otherwise])
-                .collect(),
+            Self::Select { arms, otherwise, .. } => arms.iter_mut().map(|(_, body)| body).chain([otherwise]).collect(),
             _ => Vec::new(),
         }
     }
@@ -418,19 +411,11 @@ impl Statement {
     /// The statement lists nested directly inside this one.
     pub fn bodies(&self) -> Vec<&[Statement]> {
         match self {
-            Self::If {
-                then_branch,
-                else_branch,
-                ..
-            } => vec![then_branch, else_branch],
+            Self::If { then_branch, else_branch, .. } => vec![then_branch, else_branch],
             Self::For { body, .. } | Self::While { body, .. } | Self::Do { body, .. } => vec![body],
-            Self::Select {
-                arms, otherwise, ..
-            } => arms
-                .iter()
-                .map(|(_, body)| body.as_slice())
-                .chain([otherwise.as_slice()])
-                .collect(),
+            Self::Select { arms, otherwise, .. } => {
+                arms.iter().map(|(_, body)| body.as_slice()).chain([otherwise.as_slice()]).collect()
+            }
             _ => Vec::new(),
         }
     }
@@ -438,23 +423,9 @@ impl Statement {
     pub fn span(&self) -> Span {
         match self {
             Self::Dim(items) | Self::Static(items) | Self::Shared(items) | Self::Redim(items) => {
-                items.first().map_or(
-                    Span {
-                        line: 0,
-                        start: 0,
-                        end: 0,
-                    },
-                    |item| item.span,
-                )
+                items.first().map_or(Span { line: 0, start: 0, end: 0 }, |item| item.span)
             }
-            Self::Erase(items) => items.first().map_or(
-                Span {
-                    line: 0,
-                    start: 0,
-                    end: 0,
-                },
-                Expr::span,
-            ),
+            Self::Erase(items) => items.first().map_or(Span { line: 0, start: 0, end: 0 }, Expr::span),
             Self::DefType { span, .. }
             | Self::TypeDecl { span, .. }
             | Self::Const { span, .. }

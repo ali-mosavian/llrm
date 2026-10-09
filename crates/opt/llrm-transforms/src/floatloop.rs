@@ -6,14 +6,11 @@
 //! loop's effects.
 //!
 //! What changed with the IR:
-//! - The seeds go first in the latch, where the old ones followed its
-//!   first float load, the x87 checkpoint.
-//! - The counter's value after the loop is its final number, placed by
-//!   `SsaUpdater` for every use outside the loop, a phi's included.
-//! - Header phis lose the latch's arm and, left with one, are that value.
-//!   What the loop no longer reads is Dead's.
-//! - A seed's pointer must be there before the latch: a constant or a
-//!   value from outside it.
+//! - The seeds go first in the latch, where the old ones followed its first float load, the x87 checkpoint.
+//! - The counter's value after the loop is its final number, placed by `SsaUpdater` for every use outside the loop, a
+//!   phi's included.
+//! - Header phis lose the latch's arm and, left with one, are that value. What the loop no longer reads is Dead's.
+//! - A seed's pointer must be there before the latch: a constant or a value from outside it.
 //!
 //! Dropped, no rich MIR analogue: the checkpoint and `floatfacts::checkpoint`
 //! (the rich MIR observes no FP exception), `strength::_made` (the final
@@ -59,8 +56,13 @@ impl FunctionPass for FloatLoop {
         "floatloop"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
-        // With no float in the body no loop is a float loop. LLRM_CHECK_FLOATSKIP runs the pass anyway and says if it changed anything.
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        // With no float in the body no loop is a float loop. LLRM_CHECK_FLOATSKIP runs the pass anyway and says if it
+        // changed anything.
         let none = !floatfacts::touches(unit.context, unit.function);
         if none && !llrm_support::env_set("LLRM_CHECK_FLOATSKIP") {
             return PreservedAnalyses::all();
@@ -68,17 +70,34 @@ impl FunctionPass for FloatLoop {
         let before = none.then(|| unit.function.clone());
         let preserved = self.floated(unit, analyses);
         if let Some(before) = before {
-            assert!(preserved.are_all_preserved() && llrm_mir::print::body(unit.context, unit.function) == llrm_mir::print::body(unit.context, &before), "LLRM_CHECK_FLOATSKIP: floatloop changed a body with no float in it");
+            assert!(
+                preserved.are_all_preserved()
+                    && llrm_mir::print::body(unit.context, unit.function)
+                        == llrm_mir::print::body(unit.context, &before),
+                "LLRM_CHECK_FLOATSKIP: floatloop changed a body with no float in it"
+            );
         }
         preserved
     }
 }
 
 impl FloatLoop {
-    fn floated(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn floated(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         let calls = manager::writes(unit.context, unit.layout, unit.function, analyses);
         let solved = analyses.get::<FloatFacts>(unit.context, unit.layout, unit.function);
-        if specialized(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), &calls, &solved) {
+        if specialized(
+            unit.context,
+            unit.layout,
+            analyses.outer().callees(),
+            unit.function,
+            analyses.outer(),
+            &calls,
+            &solved,
+        ) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -107,12 +126,23 @@ struct _Plan {
 /// The first counted exact float loop run as its last trip alone, given
 /// `solved`, floatfacts' solve of `function` with `calls`. Whether one was.
 #[allow(clippy::too_many_arguments)]
-pub fn specialized(context: &mut Context, layout: &DataLayout, callees: &Callees, function: &mut Function, outer: &Outer, calls: &Calls, solved: &Solved) -> bool {
+pub fn specialized(
+    context: &mut Context,
+    layout: &DataLayout,
+    callees: &Callees,
+    function: &mut Function,
+    outer: &Outer,
+    calls: &Calls,
+    solved: &Solved,
+) -> bool {
     let plan = {
         let shape = llrm_analysis::cfg::Shape::of(function);
         let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
         let alive = live(context, callees, function);
-        floatfacts::exits(&unit, calls, solved).into_iter().filter(|proof| proof.count > BigInt::from(1)).find_map(|proof| _planned(&unit, calls, solved, &alive, &proof))
+        floatfacts::exits(&unit, calls, solved)
+            .into_iter()
+            .filter(|proof| proof.count > BigInt::from(1))
+            .find_map(|proof| _planned(&unit, calls, solved, &alive, &proof))
     };
     let Some(plan) = plan else {
         return false;
@@ -122,34 +152,64 @@ pub fn specialized(context: &mut Context, layout: &DataLayout, callees: &Callees
 }
 
 /// Whether `reference` is read in `insts` before a store covers it.
-fn _carried(unit: &Unit, reference: &MemRef, insts: &[InstId]) -> bool {
+fn _carried(
+    unit: &Unit,
+    reference: &MemRef,
+    insts: &[InstId],
+) -> bool {
     for &inst in insts {
         let Some(access) = MemRef::of(unit, inst) else {
             continue;
         };
         match unit.function.instruction(inst).opcode {
-            Opcode::Load { .. } if regions::overlapping(reference, &access, None, None, unit.program).unwrap_or(true) => return true,
-            Opcode::Store { .. } if access.addr().is_some() && access.addr() == reference.addr() && access.width == reference.width => return false,
+            Opcode::Load { .. }
+                if regions::overlapping(reference, &access, None, None, unit.program).unwrap_or(true) =>
+            {
+                return true;
+            }
+            Opcode::Store { .. }
+                if access.addr().is_some() && access.addr() == reference.addr() && access.width == reference.width =>
+            {
+                return false;
+            }
             _ => {}
         }
     }
     false
 }
 
-fn _planned(unit: &Unit, calls: &Calls, solved: &Solved, alive: &BTreeSet<ValueId>, proof: &LoopExit) -> Option<_Plan> {
+fn _planned(
+    unit: &Unit,
+    calls: &Calls,
+    solved: &Solved,
+    alive: &BTreeSet<ValueId>,
+    proof: &LoopExit,
+) -> Option<_Plan> {
     let function = unit.function;
     let loop_ = unit.shape().loops.iter().find(|one| one.header == proof.header)?.clone();
     let (header, latch) = (cfg::block(loop_.header), cfg::block(*loop_.latches.first()?));
-    let [exit] = function.successors(header).into_iter().filter(|one| !loop_.body.contains(&cfg::id(*one))).collect::<Vec<_>>()[..] else {
+    let [exit] =
+        function.successors(header).into_iter().filter(|one| !loop_.body.contains(&cfg::id(*one))).collect::<Vec<_>>()
+            [..]
+    else {
         return None;
     };
-    if function.predecessors(exit) != [header] || function.block(exit).instructions().iter().any(|&inst| function.instruction(inst).opcode == Opcode::Phi) {
+    if function.predecessors(exit) != [header]
+        || function.block(exit).instructions().iter().any(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+    {
         return None;
     }
     let header_insts = function.block(header).instructions();
     let latch_insts = function.block(latch).instructions();
-    let phis = header_insts.iter().copied().filter(|&inst| function.instruction(inst).opcode == Opcode::Phi).collect::<Vec<_>>();
-    let [phi] = phis.iter().copied().filter(|&inst| alive.contains(&function.instruction(inst).result.expect("a phi's value")))
+    let phis = header_insts
+        .iter()
+        .copied()
+        .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+        .collect::<Vec<_>>();
+    let [phi] = phis
+        .iter()
+        .copied()
+        .filter(|&inst| alive.contains(&function.instruction(inst).result.expect("a phi's value")))
         .collect::<Vec<_>>()[..]
     else {
         return None;
@@ -187,28 +247,57 @@ fn _planned(unit: &Unit, calls: &Calls, solved: &Solved, alive: &BTreeSet<ValueI
     }
     // Nothing the loop computes but its counter is read outside it.
     let inside = |inst: InstId| function.parent(inst).is_some_and(|block| loop_.body.contains(&cfg::id(block)));
-    let leaves = header_insts.iter().chain(latch_insts).filter_map(|&inst| function.instruction(inst).result).filter(|&value| value != counter);
+    let leaves = header_insts
+        .iter()
+        .chain(latch_insts)
+        .filter_map(|&inst| function.instruction(inst).result)
+        .filter(|&value| value != counter);
     for value in leaves.collect::<Vec<_>>() {
         if function.users(value).iter().any(|one| !inside(one.user)) {
             return None;
         }
     }
-    let [preheader] = function.predecessors(header).into_iter().filter(|one| !loop_.body.contains(&cfg::id(*one))).collect::<Vec<_>>()[..] else {
+    let [preheader] = function
+        .predecessors(header)
+        .into_iter()
+        .filter(|one| !loop_.body.contains(&cfg::id(*one)))
+        .collect::<Vec<_>>()[..]
+    else {
         return None;
     };
     let before = function.terminator(preheader)?;
     let mut asked = consts::memory_queries(*unit, &solved.integers);
-    let initial = consts::_kills((*solved.cells[&before]).clone(), before, &solved.integers, calls, None, None, false, &mut asked);
-    let before_last = floatfacts::repeated(unit, latch_insts, &(&proof.count - 1), &initial, Some(&solved.integers), Some(&mut asked))?;
+    let initial = consts::_kills(
+        (*solved.cells[&before]).clone(),
+        before,
+        &solved.integers,
+        calls,
+        None,
+        None,
+        false,
+        &mut asked,
+    );
+    let before_last = floatfacts::repeated(
+        unit,
+        latch_insts,
+        &(&proof.count - 1),
+        &initial,
+        Some(&solved.integers),
+        Some(&mut asked),
+    )?;
     let mut seeds = Vec::new();
     for (reference, _) in &proof.stores {
         if !_carried(unit, reference, latch_insts) {
             continue;
         }
         let fact = consts::_cell(&before_last, &asked.resolve(reference))?;
-        let owner = latch_insts.iter().copied().find(|&inst| {
-            matches!(function.instruction(inst).opcode, Opcode::Store { .. }) && MemRef::of(unit, inst).as_ref() == Some(reference)
-        })?;
+        let owner = latch_insts
+            .iter()
+            .copied()
+            .find(
+                |&inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. })
+                    && MemRef::of(unit, inst).as_ref() == Some(reference),
+            )?;
         let (value, pointer) = (function.instruction(owner).operands[0], function.instruction(owner).operands[1]);
         let outside = match pointer {
             Operand::Value(one) => match function.value(one).def {
@@ -225,19 +314,35 @@ fn _planned(unit: &Unit, calls: &Calls, solved: &Solved, alive: &BTreeSet<ValueI
     }
     let last = consts::masked(&(start + step * &proof.count), width);
     let last = u128::try_from(&last).expect("a masked number");
-    let finals = finals.into_iter().map(|(pointer, ty)| _Store { pointer, ty, constant: ConstantKind::Int(last) }).collect();
+    let finals =
+        finals.into_iter().map(|(pointer, ty)| _Store { pointer, ty, constant: ConstantKind::Int(last) }).collect();
     Some(_Plan { header, latch, exit, counter, seeds, finals, last })
 }
 
 /// A store of `store`'s constant at `position`.
-fn _store(context: &mut Context, function: &mut Function, store: _Store, position: Position) {
+fn _store(
+    context: &mut Context,
+    function: &mut Function,
+    store: _Store,
+    position: Position,
+) {
     let value = context.constant(Constant { ty: store.ty, kind: store.constant });
     let void = context.types.void();
-    let made = function.create_instruction(Opcode::Store { align: None, volatile: false }, void, vec![Operand::Constant(value), store.pointer], Flags::default(), None);
+    let made = function.create_instruction(
+        Opcode::Store { align: None, volatile: false },
+        void,
+        vec![Operand::Constant(value), store.pointer],
+        Flags::default(),
+        None,
+    );
     function.insert(made, position).expect("a placed block");
 }
 
-fn _rewritten(context: &mut Context, function: &mut Function, plan: _Plan) {
+fn _rewritten(
+    context: &mut Context,
+    function: &mut Function,
+    plan: _Plan,
+) {
     let _Plan { header, latch, exit, counter, seeds, finals, last } = plan;
     let first = function.block(latch).instructions()[0];
     for seed in seeds {
@@ -258,7 +363,12 @@ fn _rewritten(context: &mut Context, function: &mut Function, plan: _Plan) {
     let mut updater = SsaUpdater::new(ty, function.value(counter).name.as_deref());
     updater.add_available_value(latch, final_);
     let within = [header, latch];
-    let outside = function.users(counter).iter().copied().filter(|one| !function.parent(one.user).is_some_and(|block| within.contains(&block))).collect::<Vec<_>>();
+    let outside = function
+        .users(counter)
+        .iter()
+        .copied()
+        .filter(|one| !function.parent(one.user).is_some_and(|block| within.contains(&block)))
+        .collect::<Vec<_>>();
     for one in outside {
         updater.rewrite_use(context, function, one);
     }

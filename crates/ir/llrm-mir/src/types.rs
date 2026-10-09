@@ -47,13 +47,26 @@ pub enum Type {
     Float(FloatKind),
     /// Opaque, in an address space.
     Pointer(u32),
-    Array { element: TypeId, count: u64 },
-    Vector { element: TypeId, count: u32 },
+    Array {
+        element: TypeId,
+        count: u64,
+    },
+    Vector {
+        element: TypeId,
+        count: u32,
+    },
     /// A literal struct: identified by its fields.
-    Struct { fields: Vec<TypeId>, packed: bool },
+    Struct {
+        fields: Vec<TypeId>,
+        packed: bool,
+    },
     /// An identified struct: `%name`, its body in the context.
     Named(String),
-    Function { returns: TypeId, parameters: Vec<TypeId>, variadic: bool },
+    Function {
+        returns: TypeId,
+        parameters: Vec<TypeId>,
+        variadic: bool,
+    },
 }
 
 /// An identified struct's body; `None` while opaque.
@@ -72,7 +85,10 @@ pub struct Types {
 }
 
 impl Types {
-    pub fn intern(&mut self, ty: Type) -> TypeId {
+    pub fn intern(
+        &mut self,
+        ty: Type,
+    ) -> TypeId {
         if let Some(&id) = self.interned.get(&ty) {
             return id;
         }
@@ -82,18 +98,28 @@ impl Types {
         id
     }
 
-    pub fn get(&self, id: TypeId) -> &Type {
+    pub fn get(
+        &self,
+        id: TypeId,
+    ) -> &Type {
         &self.types[id.0 as usize]
     }
 
     /// `ty` of `from`, interned here: none for an identified struct, whose
     /// body is `from`'s own.
-    pub fn imported(&mut self, from: &Types, ty: TypeId) -> Option<TypeId> {
+    pub fn imported(
+        &mut self,
+        from: &Types,
+        ty: TypeId,
+    ) -> Option<TypeId> {
         let one = match from.get(ty).clone() {
             Type::Named(_) => return None,
             Type::Array { element, count } => Type::Array { element: self.imported(from, element)?, count },
             Type::Vector { element, count } => Type::Vector { element: self.imported(from, element)?, count },
-            Type::Struct { fields, packed } => Type::Struct { fields: fields.iter().map(|&one| self.imported(from, one)).collect::<Option<_>>()?, packed },
+            Type::Struct { fields, packed } => Type::Struct {
+                fields: fields.iter().map(|&one| self.imported(from, one)).collect::<Option<_>>()?,
+                packed,
+            },
             Type::Function { returns, parameters, variadic } => Type::Function {
                 returns: self.imported(from, returns)?,
                 parameters: parameters.iter().map(|&one| self.imported(from, one)).collect::<Option<_>>()?,
@@ -108,31 +134,49 @@ impl Types {
         self.intern(Type::Void)
     }
 
-    pub fn int(&mut self, bits: u32) -> TypeId {
+    pub fn int(
+        &mut self,
+        bits: u32,
+    ) -> TypeId {
         self.intern(Type::Int(bits))
     }
 
-    pub fn ptr(&mut self, space: u32) -> TypeId {
+    pub fn ptr(
+        &mut self,
+        space: u32,
+    ) -> TypeId {
         self.intern(Type::Pointer(space))
     }
 
-    pub fn int_bits(&self, id: TypeId) -> Option<u32> {
+    pub fn int_bits(
+        &self,
+        id: TypeId,
+    ) -> Option<u32> {
         match self.get(id) {
             Type::Int(bits) => Some(*bits),
             _ => None,
         }
     }
 
-    pub fn is_void(&self, id: TypeId) -> bool {
+    pub fn is_void(
+        &self,
+        id: TypeId,
+    ) -> bool {
         matches!(self.get(id), Type::Void)
     }
 
-    pub fn body(&self, name: &str) -> Option<&StructBody> {
+    pub fn body(
+        &self,
+        name: &str,
+    ) -> Option<&StructBody> {
         self.named.iter().find(|(one, _)| one == name).and_then(|(_, body)| body.as_ref())
     }
 
     /// A struct's fields, literal or identified.
-    pub fn fields(&self, id: TypeId) -> Option<&[TypeId]> {
+    pub fn fields(
+        &self,
+        id: TypeId,
+    ) -> Option<&[TypeId]> {
         match self.get(id) {
             Type::Struct { fields, .. } => Some(fields),
             Type::Named(name) => self.body(name).map(|body| body.fields.as_slice()),
@@ -141,7 +185,11 @@ impl Types {
     }
 
     /// The type an aggregate's `index`th member has.
-    pub fn member(&self, id: TypeId, index: u64) -> Option<TypeId> {
+    pub fn member(
+        &self,
+        id: TypeId,
+        index: u64,
+    ) -> Option<TypeId> {
         match self.get(id) {
             Type::Array { element, count } => (index < *count).then_some(*element),
             Type::Vector { element, count } => (index < u64::from(*count)).then_some(*element),
@@ -150,7 +198,10 @@ impl Types {
     }
 
     /// LLVM's spelling.
-    pub fn display(&self, id: TypeId) -> String {
+    pub fn display(
+        &self,
+        id: TypeId,
+    ) -> String {
         let list = |ids: &[TypeId]| ids.iter().map(|&one| self.display(one)).collect::<Vec<_>>().join(", ");
         match self.get(id) {
             Type::Void => "void".to_owned(),
@@ -180,7 +231,10 @@ impl Types {
 }
 
 /// `{ a, b }`, `<{ a, b }>`, or `{}` with nothing inside.
-pub fn struct_text(fields: &str, packed: bool) -> String {
+pub fn struct_text(
+    fields: &str,
+    packed: bool,
+) -> String {
     let inner = if fields.is_empty() { "{}".to_owned() } else { format!("{{ {fields} }}") };
     if packed { format!("<{inner}>") } else { inner }
 }

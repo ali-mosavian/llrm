@@ -38,21 +38,39 @@ const CELL: &str = "getelementptr (i8, ptr @g, i16 32)";
 const OTHER: &str = "getelementptr (i8, ptr @g, i16 48)";
 
 /// Instruction `index` of block `name`.
-fn site(unit: &Unit, name: &str, index: usize) -> InstId {
+fn site(
+    unit: &Unit,
+    name: &str,
+    index: usize,
+) -> InstId {
     unit.function.block(block(unit.function, name)).instructions()[index]
 }
 
-fn named(unit: &Unit, name: &str) -> Operand {
+fn named(
+    unit: &Unit,
+    name: &str,
+) -> Operand {
     Operand::Value(value(unit.function, name))
 }
 
-fn cell(unit: &Unit, inst: InstId) -> MemRef {
+fn cell(
+    unit: &Unit,
+    inst: InstId,
+) -> MemRef {
     MemRef::of(unit, inst).expect("a load or store")
 }
 
 /// What forwarding offers each load of `@f`.
-fn forwarded(unit: &Unit, calls: &Calls) -> Vec<Forward> {
-    let loads = unit.function.walk().map(|(_, inst)| inst).filter(|&inst| unit.function.instruction(inst).opcode.mnemonic() == "load").collect();
+fn forwarded(
+    unit: &Unit,
+    calls: &Calls,
+) -> Vec<Forward> {
+    let loads = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| unit.function.instruction(inst).opcode.mnemonic() == "load")
+        .collect();
     forwardable(unit, &Accesses::plain(unit, calls), &loads)
 }
 
@@ -77,7 +95,11 @@ fn test_current_mir_decides_whether_a_call_invalidates_memory() {
         let parsed = around(between);
         let unit = parsed.unit();
         let load = site(&unit, "b0", 2);
-        assert_eq!(provider(&unit, &Accesses::plain(&unit, &Calls::default()), load, &cell(&unit, load)), kept.then(|| named(&unit, "v")), "{between}");
+        assert_eq!(
+            provider(&unit, &Accesses::plain(&unit, &Calls::default()), load, &cell(&unit, load)),
+            kept.then(|| named(&unit, "v")),
+            "{between}"
+        );
     }
 }
 
@@ -111,10 +133,20 @@ spare:
         let call = site(&unit, "b0", 1);
         let calls: Calls = match footprint {
             None => Calls::default(),
-            Some(at) => Calls::from_iter([(call, std::rc::Rc::from(vec![cell(&unit, if at == CELL { site(&unit, "b0", 0) } else { site(&unit, "spare", 0) })]))]),
+            Some(at) => Calls::from_iter([(
+                call,
+                std::rc::Rc::from(vec![cell(
+                    &unit,
+                    if at == CELL { site(&unit, "b0", 0) } else { site(&unit, "spare", 0) },
+                )]),
+            )]),
         };
         let found = forwarded(&unit, &calls);
-        assert_eq!(found, if reused { vec![Forward { at: site(&unit, "b0", 2), value: named(&unit, "v") }] } else { vec![] }, "{footprint:?}");
+        assert_eq!(
+            found,
+            if reused { vec![Forward { at: site(&unit, "b0", 2), value: named(&unit, "v") }] } else { vec![] },
+            "{footprint:?}"
+        );
     }
 }
 
@@ -135,7 +167,11 @@ b0:
 "
         ));
         let unit = parsed.unit();
-        let calls = if disjoint { Calls::from_iter([(site(&unit, "b0", 1), std::rc::Rc::from(vec![cell(&unit, site(&unit, "b0", 3))]))]) } else { Calls::default() };
+        let calls = if disjoint {
+            Calls::from_iter([(site(&unit, "b0", 1), std::rc::Rc::from(vec![cell(&unit, site(&unit, "b0", 3))]))])
+        } else {
+            Calls::default()
+        };
         let removed = dead_stores(&unit, &Accesses::plain(&unit, &calls), None);
         assert_eq!(removed, if disjoint { vec![site(&unit, "b0", 0)] } else { vec![] }, "{disjoint}");
     }
@@ -176,7 +212,10 @@ b0:
     let unit = parsed.unit();
     let slot = named(&unit, "s");
     let private = |one: &MemRef| one.root == Some(slot);
-    assert_eq!(dead_stores(&unit, &Accesses::plain(&unit, &Calls::default()), Some(&private)), vec![site(&unit, "b0", 1)]);
+    assert_eq!(
+        dead_stores(&unit, &Accesses::plain(&unit, &Calls::default()), Some(&private)),
+        vec![site(&unit, "b0", 1)]
+    );
     assert_eq!(dead_stores(&unit, &Accesses::plain(&unit, &Calls::default()), None), vec![], "the caller may read it");
 }
 
@@ -209,7 +248,10 @@ b3:
 fn test_preheader_store_serves_a_loop_read() {
     let parsed = looped(&format!("store i16 0, ptr {OTHER}"));
     let unit = parsed.unit();
-    assert_eq!(forwarded(&unit, &Calls::default()), vec![Forward { at: site(&unit, "b1", 0), value: named(&unit, "v") }]);
+    assert_eq!(
+        forwarded(&unit, &Calls::default()),
+        vec![Forward { at: site(&unit, "b1", 0), value: named(&unit, "v") }]
+    );
 }
 
 #[test]
@@ -273,7 +315,11 @@ b2:
         ));
         let unit = parsed.unit();
         let found = forwarded(&unit, &Calls::default());
-        assert_eq!(found, if reused { vec![Forward { at: site(&unit, "b1", 0), value: named(&unit, "a") }] } else { vec![] }, "{write}");
+        assert_eq!(
+            found,
+            if reused { vec![Forward { at: site(&unit, "b1", 0), value: named(&unit, "a") }] } else { vec![] },
+            "{write}"
+        );
     }
 }
 
@@ -304,7 +350,11 @@ b3:
         ));
         let unit = parsed.unit();
         let load = site(&unit, "b3", 0);
-        assert_eq!(provider(&unit, &Accesses::plain(&unit, &Calls::default()), load, &cell(&unit, load)), kept.then(|| named(&unit, "v")), "{right}");
+        assert_eq!(
+            provider(&unit, &Accesses::plain(&unit, &Calls::default()), load, &cell(&unit, load)),
+            kept.then(|| named(&unit, "v")),
+            "{right}"
+        );
     }
 }
 
@@ -326,7 +376,13 @@ b0:
     let unit = parsed.unit();
     let found = forwarded(&unit, &Calls::default());
     let seven = unit.function.instruction(site(&unit, "b0", 0)).operands[0];
-    assert_eq!(found, vec![Forward { at: site(&unit, "b0", 1), value: seven }, Forward { at: site(&unit, "b0", 3), value: named(&unit, "y") }]);
+    assert_eq!(
+        found,
+        vec![
+            Forward { at: site(&unit, "b0", 1), value: seven },
+            Forward { at: site(&unit, "b0", 3), value: named(&unit, "y") }
+        ]
+    );
 }
 
 /// Neither a volatile read nor a read of another type is served.
@@ -365,7 +421,11 @@ b0:
         ));
         let unit = parsed.unit();
         let load = site(&unit, "b0", 2);
-        assert_eq!(provider(&unit, &Accesses::plain(&unit, &Calls::default()), load, &cell(&unit, load)), kept.then(|| named(&unit, "v")), "{write}");
+        assert_eq!(
+            provider(&unit, &Accesses::plain(&unit, &Calls::default()), load, &cell(&unit, load)),
+            kept.then(|| named(&unit, "v")),
+            "{write}"
+        );
     }
 }
 
@@ -382,8 +442,9 @@ fn test_a_store_is_dead_only_when_overwritten_before_any_read() {
         // A volatile store writes only its own bytes.
         ("store volatile i16 3, ptr OTHER", "store i16 2, ptr CELL", true),
     ] {
-        let parsed = Parsed::new(&format!(
-            "define void @f(ptr %p) {{
+        let parsed = Parsed::new(
+            &format!(
+                "define void @f(ptr %p) {{
 b0:
   store i16 1, ptr CELL
   {between}
@@ -391,9 +452,10 @@ b0:
   ret void
 }}
 "
-        )
-        .replace("CELL", CELL)
-        .replace("OTHER", OTHER));
+            )
+            .replace("CELL", CELL)
+            .replace("OTHER", OTHER),
+        );
         let unit = parsed.unit();
         let removed = dead_stores(&unit, &Accesses::plain(&unit, &Calls::default()), None);
         assert_eq!(removed, if dead { vec![site(&unit, "b0", 0)] } else { vec![] }, "{between} / {last}");
@@ -404,8 +466,9 @@ b0:
 #[test]
 fn test_a_store_is_dead_across_a_branch_only_when_every_path_overwrites_it() {
     for (right, dead) in [("store i16 3, ptr CELL", true), ("%y = load i16, ptr CELL", false), ("", false)] {
-        let parsed = Parsed::new(&format!(
-            "define void @f(i1 %c) {{
+        let parsed = Parsed::new(
+            &format!(
+                "define void @f(i1 %c) {{
 b0:
   store i16 1, ptr CELL
   br i1 %c, label %b1, label %b2
@@ -419,8 +482,9 @@ b2:
   ret void
 }}
 "
-        )
-        .replace("CELL", CELL));
+            )
+            .replace("CELL", CELL),
+        );
         let unit = parsed.unit();
         let removed = dead_stores(&unit, &Accesses::plain(&unit, &Calls::default()), None);
         assert_eq!(removed.contains(&site(&unit, "b0", 0)), dead, "{right}");
@@ -476,7 +540,11 @@ pad:
         let invoke = site(&unit, "b0", 2);
         let slot = named(&unit, "s");
         let private = |one: &MemRef| one.root == Some(slot);
-        let removed = dead_stores(&unit, &Accesses::plain(&unit, &Calls::from_iter([(invoke, std::rc::Rc::from([]))])), Some(&private));
+        let removed = dead_stores(
+            &unit,
+            &Accesses::plain(&unit, &Calls::from_iter([(invoke, std::rc::Rc::from([]))])),
+            Some(&private),
+        );
         assert_eq!(removed.contains(&site(&unit, "b0", 1)), dead, "{handler}");
     }
 }
@@ -487,7 +555,9 @@ pad:
 fn test_loads_of_one_address_are_compared_with_a_missing_one_once() {
     let before_loop: String = (0..20).map(|at| format!("  %a{at} = load i16, ptr {CELL}\n")).collect();
     let in_loop: String = (0..20).map(|at| format!("  %b{at} = load i16, ptr {CELL}\n")).collect();
-    let parsed = Parsed::new(&format!("define i16 @f(i1 %c) {{\nb0:\n{before_loop}  br label %b1\n\nb1:\n{in_loop}  store i16 0, ptr {OTHER}\n  br i1 %c, label %b1, label %b2\n\nb2:\n  ret i16 %b0\n}}\n"));
+    let parsed = Parsed::new(&format!(
+        "define i16 @f(i1 %c) {{\nb0:\n{before_loop}  br label %b1\n\nb1:\n{in_loop}  store i16 0, ptr {OTHER}\n  br i1 %c, label %b1, label %b2\n\nb2:\n  ret i16 %b0\n}}\n"
+    ));
     let unit = parsed.unit();
     let before = same_runs();
     let found = forwarded(&unit, &Calls::default());
@@ -499,8 +569,11 @@ fn test_loads_of_one_address_are_compared_with_a_missing_one_once() {
 /// where the bytes a write meets hold one cell.
 #[test]
 fn test_a_store_asks_only_the_cells_it_can_reach() {
-    let stores: String = (0..200).map(|at| format!("  store i16 %v, ptr getelementptr (i8, ptr @big, i16 {})\n", at * 2)).collect();
-    let parsed = Parsed::new(&format!("@big = global [400 x i8] zeroinitializer\n\ndefine void @f(i16 %v) {{\nb0:\n{stores}  ret void\n}}\n"));
+    let stores: String =
+        (0..200).map(|at| format!("  store i16 %v, ptr getelementptr (i8, ptr @big, i16 {})\n", at * 2)).collect();
+    let parsed = Parsed::new(&format!(
+        "@big = global [400 x i8] zeroinitializer\n\ndefine void @f(i16 %v) {{\nb0:\n{stores}  ret void\n}}\n"
+    ));
     let unit = parsed.unit();
     let accesses = Accesses::plain(&unit, &Calls::default());
     let before = clobber_asks();
@@ -510,8 +583,9 @@ fn test_a_store_asks_only_the_cells_it_can_reach() {
     assert!(asked <= 1_000, "{asked} clobber questions for 200 stores to disjoint cells");
 }
 
-/// The cell naming a load's bytes was found by a scan of every cell held. It is asked of the cells a write to the load's address can
-/// reach, and must be the one the scan finds (the first held), at every point of a function whose cells overlap and are rewritten.
+/// The cell naming a load's bytes was found by a scan of every cell held. It is asked of the cells a write to the
+/// load's address can reach, and must be the one the scan finds (the first held), at every point of a function whose
+/// cells overlap and are rewritten.
 #[test]
 fn test_the_held_cell_naming_a_loads_bytes_is_the_one_a_scan_finds() {
     let parsed = Parsed::new(&format!(
@@ -520,7 +594,8 @@ fn test_the_held_cell_naming_a_loads_bytes_is_the_one_a_scan_finds() {
     let unit = parsed.unit();
     let accesses = Accesses::plain(&unit, &Calls::default());
     let held = holders(&unit, &accesses);
-    let loads: Vec<_> = unit.function.walk().map(|(_, inst)| inst).filter_map(|inst| loaded_into(&unit, &accesses, inst)).collect();
+    let loads: Vec<_> =
+        unit.function.walk().map(|(_, inst)| inst).filter_map(|inst| loaded_into(&unit, &accesses, inst)).collect();
     assert!(loads.len() >= 5);
     let mut asked = 0;
     for into in held.into.values().chain(held.outof.values()) {

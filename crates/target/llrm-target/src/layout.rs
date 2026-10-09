@@ -37,14 +37,17 @@ pub struct Layout {
     /// LLVM's datalayout string.
     pub datalayout: String,
     pub spaces: AddressSpaces,
-    /// The operations (`select`, `fptoui.i64`) the machine has no instruction for, which the compiler expands before selection:
-    /// LLVM's `setOperationAction(..., Expand)`. An operation not listed is native.
+    /// The operations (`select`, `fptoui.i64`) the machine has no instruction for, which the compiler expands before
+    /// selection: LLVM's `setOperationAction(..., Expand)`. An operation not listed is native.
     pub expand: Vec<String>,
 }
 
 impl AddressSpaces {
     /// The space of an unmarked pointer `width` bytes wide.
-    pub fn unmarked(&self, width: i64) -> Result<u32, String> {
+    pub fn unmarked(
+        &self,
+        width: i64,
+    ) -> Result<u32, String> {
         match self.unmarked.get(&width) {
             Some(Kind::Near) => Ok(self.near),
             Some(Kind::Far) => Ok(self.far),
@@ -54,8 +57,12 @@ impl AddressSpaces {
 }
 
 impl Layout {
-    /// Whether the machine lacks an instruction for `operation`, so the compiler expands it (`expand` in the description).
-    pub fn expands(&self, operation: &str) -> bool {
+    /// Whether the machine lacks an instruction for `operation`, so the compiler expands it (`expand` in the
+    /// description).
+    pub fn expands(
+        &self,
+        operation: &str,
+    ) -> bool {
         self.expand.iter().any(|one| one == operation)
     }
 
@@ -69,13 +76,23 @@ impl Layout {
     /// to `"near"` or `"far"`).
     pub fn parse(text: &str) -> Result<Self, String> {
         let value: toml::Table = text.parse().map_err(|error: toml::de::Error| error.to_string())?;
-        let mode = value.get("mode").and_then(|one| one.as_integer()).and_then(|one| u32::try_from(one).ok()).filter(|one| *one > 0).ok_or("mode is not a positive number")?;
-        let datalayout = value.get("datalayout").and_then(|one| one.as_str()).ok_or("datalayout is not a string")?.to_owned();
+        let mode = value
+            .get("mode")
+            .and_then(|one| one.as_integer())
+            .and_then(|one| u32::try_from(one).ok())
+            .filter(|one| *one > 0)
+            .ok_or("mode is not a positive number")?;
+        let datalayout =
+            value.get("datalayout").and_then(|one| one.as_str()).ok_or("datalayout is not a string")?.to_owned();
         let spaces = value.get("spaces").and_then(|one| one.as_table()).ok_or("[spaces] is missing")?;
         let number = |name: &str| -> Result<Option<u32>, String> {
             match spaces.get(name) {
                 None => Ok(None),
-                Some(one) => one.as_integer().and_then(|one| u32::try_from(one).ok()).map(Some).ok_or(format!("spaces.{name} is not an address space number")),
+                Some(one) => one
+                    .as_integer()
+                    .and_then(|one| u32::try_from(one).ok())
+                    .map(Some)
+                    .ok_or(format!("spaces.{name} is not an address space number")),
             }
         };
         let required = |name: &str| number(name)?.ok_or(format!("spaces.{name} is missing"));
@@ -93,18 +110,35 @@ impl Layout {
         }
         let segment_bytes = match spaces.get("segment_bytes") {
             None => None,
-            Some(one) => Some(one.as_integer().and_then(|one| u64::try_from(one).ok()).filter(|one| *one > 0).ok_or("spaces.segment_bytes is not a positive size")?),
+            Some(one) => Some(
+                one.as_integer()
+                    .and_then(|one| u64::try_from(one).ok())
+                    .filter(|one| *one > 0)
+                    .ok_or("spaces.segment_bytes is not a positive size")?,
+            ),
         };
         let expand = match value.get("expand") {
             None => Vec::new(),
-            Some(list) => list.as_array().and_then(|list| list.iter().map(|one| one.as_str().map(str::to_owned)).collect()).ok_or("expand is not a list of operation names")?,
+            Some(list) => list
+                .as_array()
+                .and_then(|list| list.iter().map(|one| one.as_str().map(str::to_owned)).collect())
+                .ok_or("expand is not a list of operation names")?,
         };
         Ok(Self {
             mode,
             datalayout,
             expand,
             spaces: AddressSpaces {
-                roles: Spaces { near: required("near")?, far: required("far")?, data: required("data")?, stack: required("stack")?, segment: number("segment")?, huge: number("huge")?, fixed: number("fixed")?, segment_bytes },
+                roles: Spaces {
+                    near: required("near")?,
+                    far: required("far")?,
+                    data: required("data")?,
+                    stack: required("stack")?,
+                    segment: number("segment")?,
+                    huge: number("huge")?,
+                    fixed: number("fixed")?,
+                    segment_bytes,
+                },
                 unmarked,
             },
         })
@@ -121,7 +155,10 @@ mod tests {
     fn a_flat_layout_has_one_space_and_none_of_the_pair_kinds() {
         let flat = Layout::parse(FLAT).unwrap();
         assert_eq!((flat.spaces.data, flat.spaces.stack), (0, 0));
-        assert_eq!((flat.spaces.near, flat.spaces.far, flat.spaces.segment, flat.spaces.huge, flat.spaces.fixed), (0, 0, None, None, None));
+        assert_eq!(
+            (flat.spaces.near, flat.spaces.far, flat.spaces.segment, flat.spaces.huge, flat.spaces.fixed),
+            (0, 0, None, None, None)
+        );
         assert_eq!(flat.spaces.unmarked(4), Ok(0));
         assert!(flat.spaces.unmarked(2).is_err());
     }
@@ -130,8 +167,15 @@ mod tests {
     #[test]
     fn a_segment_size_is_the_layouts_and_a_flat_one_has_none() {
         assert_eq!(Layout::parse(FLAT).unwrap().segment_bytes(), None);
-        assert_eq!(Layout::parse(&FLAT.replace("near = 0\n", "near = 0\nsegment_bytes = 65536\n")).unwrap().segment_bytes(), Some(65536));
-        assert!(Layout::parse(&FLAT.replace("near = 0\n", "near = 0\nsegment_bytes = 0\n")).unwrap_err().contains("segment_bytes"));
+        assert_eq!(
+            Layout::parse(&FLAT.replace("near = 0\n", "near = 0\nsegment_bytes = 65536\n")).unwrap().segment_bytes(),
+            Some(65536)
+        );
+        assert!(
+            Layout::parse(&FLAT.replace("near = 0\n", "near = 0\nsegment_bytes = 0\n"))
+                .unwrap_err()
+                .contains("segment_bytes")
+        );
     }
 
     #[test]
@@ -145,6 +189,9 @@ mod tests {
     #[test]
     fn a_malformed_layout_is_refused_with_what_is_wrong() {
         assert_eq!(Layout::parse("mode = 16\ndatalayout = \"e\"\n[pointers]\n").unwrap_err(), "[spaces] is missing");
-        assert_eq!(Layout::parse(&FLAT.replace("near = 0", "near = \"x\"")).unwrap_err(), "spaces.near is not an address space number");
+        assert_eq!(
+            Layout::parse(&FLAT.replace("near = 0", "near = \"x\"")).unwrap_err(),
+            "spaces.near is not an address space number"
+        );
     }
 }

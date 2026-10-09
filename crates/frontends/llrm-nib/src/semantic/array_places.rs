@@ -9,12 +9,18 @@ use super::*;
 impl FunctionCompiler<'_> {
     /// The element and shape of the fixed array `expression` is: one it
     /// holds, or one a `&T[N]` value it computes refers to.
-    pub(super) fn fixed_array_hint(&self, expression: &Expr) -> Option<(ElementType, Shape)> {
+    pub(super) fn fixed_array_hint(
+        &self,
+        expression: &Expr,
+    ) -> Option<(ElementType, Shape)> {
         self.held_array(expression).or_else(|| self.referenced_array(expression))
     }
 
     /// The array a `&T[N]` value `expression` computes refers to.
-    fn referenced_array(&self, expression: &Expr) -> Option<(ElementType, Shape)> {
+    fn referenced_array(
+        &self,
+        expression: &Expr,
+    ) -> Option<(ElementType, Shape)> {
         match self.types.referent(self.expression_type_hint(expression)?)? {
             ElementType::Struct(id) => self.types.array_of(id),
             ElementType::Scalar(_) => None,
@@ -22,14 +28,21 @@ impl FunctionCompiler<'_> {
     }
 
     /// A local array, an array field, or a call's array result.
-    fn held_array(&self, expression: &Expr) -> Option<(ElementType, Shape)> {
+    fn held_array(
+        &self,
+        expression: &Expr,
+    ) -> Option<(ElementType, Shape)> {
         match expression {
             Expr::Name(name, _) => match self.visible(name)?.type_ {
                 BindingType::Array { element, shape } => Some((element, shape)),
                 _ => None,
             },
             Expr::Member { base, field, span } => {
-                let parent = self.struct_expression_type(base, *span).ok().flatten().or_else(|| self.struct_type_hint(base, *span))?;
+                let parent = self
+                    .struct_expression_type(base, *span)
+                    .ok()
+                    .flatten()
+                    .or_else(|| self.struct_type_hint(base, *span))?;
                 let field = self.types.structure(parent)?.fields.get(field)?;
                 Some((field.type_, field.shape?))
             }
@@ -41,7 +54,11 @@ impl FunctionCompiler<'_> {
 
     /// Where the fixed array `expression` names keeps its elements, with its
     /// element and shape; `None` when it names none.
-    pub(super) fn array_view(&mut self, expression: &Expr, span: Span) -> Result<Option<(StructView, ElementType, Shape)>, Diagnostic> {
+    pub(super) fn array_view(
+        &mut self,
+        expression: &Expr,
+        span: Span,
+    ) -> Result<Option<(StructView, ElementType, Shape)>, Diagnostic> {
         let Some((element, shape)) = self.fixed_array_hint(expression) else {
             return Ok(None);
         };
@@ -49,11 +66,17 @@ impl FunctionCompiler<'_> {
         if self.held_array(expression).is_none() {
             // A `&T[N]` value: the array behind it.
             let value = self.expression(expression, None)?;
-            let TypeName::Pointer { mutable, .. } = value.type_name else {
-                unreachable!("a reference is a pointer")
-            };
+            let TypeName::Pointer { mutable, .. } = value.type_name else { unreachable!("a reference is a pointer") };
             let pointer = self.materialized(required(value.clone(), span)?, type_id(value.type_name));
-            let view = StructView { struct_id: array, place: 0, pointer: Some(pointer), indices: Vec::new(), offset: 0, mutable, owner: format!("$reference{pointer}") };
+            let view = StructView {
+                struct_id: array,
+                place: 0,
+                pointer: Some(pointer),
+                indices: Vec::new(),
+                offset: 0,
+                mutable,
+                owner: format!("$reference{pointer}"),
+            };
             return Ok(Some((view, element, shape)));
         }
         let view = match expression {
@@ -64,7 +87,15 @@ impl FunctionCompiler<'_> {
                     Storage::Reference(pointer) => (0, Some(pointer)),
                     _ => return Ok(None),
                 };
-                StructView { struct_id: array, place, pointer, indices: Vec::new(), offset: 0, mutable: binding.mutable, owner: name.clone() }
+                StructView {
+                    struct_id: array,
+                    place,
+                    pointer,
+                    indices: Vec::new(),
+                    offset: 0,
+                    mutable: binding.mutable,
+                    owner: name.clone(),
+                }
             }
             Expr::Member { base, field, .. } => {
                 let parent = self.struct_view(base, span)?;
@@ -86,7 +117,11 @@ impl FunctionCompiler<'_> {
 
     /// The array field or call result `expression` is, as a binding reached
     /// through its address, as a `&T[N]` is.
-    pub(super) fn unnamed_array_binding(&mut self, expression: &Expr, span: Span) -> Result<Option<(Binding, String)>, Diagnostic> {
+    pub(super) fn unnamed_array_binding(
+        &mut self,
+        expression: &Expr,
+        span: Span,
+    ) -> Result<Option<(Binding, String)>, Diagnostic> {
         if matches!(expression, Expr::Name(..)) {
             return Ok(None);
         }
@@ -94,21 +129,29 @@ impl FunctionCompiler<'_> {
             return Ok(None);
         };
         let pointer = self.array_address(&view);
-        let binding = Binding { type_: BindingType::Array { element, shape }, mutable: view.mutable, storage: Storage::Reference(pointer) };
+        let binding = Binding {
+            type_: BindingType::Array { element, shape },
+            mutable: view.mutable,
+            storage: Storage::Reference(pointer),
+        };
         Ok(Some((binding, view.owner)))
     }
 
     /// The far address of the array at `view`, typed as a `&T[N]`.
-    pub(super) fn array_address(&mut self, view: &StructView) -> u32 {
-        let hir::Operand::Value(address) = self.address_of(view) else {
-            unreachable!("an address is a value")
-        };
+    pub(super) fn array_address(
+        &mut self,
+        view: &StructView,
+    ) -> u32 {
+        let hir::Operand::Value(address) = self.address_of(view) else { unreachable!("an address is a value") };
         address
     }
 
     /// `view`, projectable at any byte: a whole array place, which is
     /// projected per element, is reached through its address.
-    pub(super) fn byte_view(&mut self, view: &StructView) -> StructView {
+    pub(super) fn byte_view(
+        &mut self,
+        view: &StructView,
+    ) -> StructView {
         if !self.whole_place(view, view.struct_id) {
             return view.clone();
         }
@@ -117,7 +160,11 @@ impl FunctionCompiler<'_> {
     }
 
     /// Whether `view` is the whole of a place of type `array`.
-    fn whole_place(&self, view: &StructView, array: u32) -> bool {
+    fn whole_place(
+        &self,
+        view: &StructView,
+        array: u32,
+    ) -> bool {
         view.pointer.is_none()
             && view.indices.is_empty()
             && view.offset == 0
@@ -127,7 +174,13 @@ impl FunctionCompiler<'_> {
     /// Element `index`, counted row-major, of the array of `element` and
     /// `shape` at `array`: a view whose `struct_id` is the element's type. A
     /// place that is the array itself is addressed by its indices.
-    pub(super) fn element_view(&self, array: &StructView, element: ElementType, shape: Shape, index: u32) -> StructView {
+    pub(super) fn element_view(
+        &self,
+        array: &StructView,
+        element: ElementType,
+        shape: Shape,
+        index: u32,
+    ) -> StructView {
         if self.whole_place(array, array.struct_id) {
             let indices = shape
                 .strides()
@@ -142,7 +195,12 @@ impl FunctionCompiler<'_> {
     }
 
     /// A far pointer to the first element of the fixed array `binding` holds.
-    pub(super) fn array_data(&mut self, binding: &Binding, element: ElementType, span: Span) -> Result<u32, Diagnostic> {
+    pub(super) fn array_data(
+        &mut self,
+        binding: &Binding,
+        element: ElementType,
+        span: Span,
+    ) -> Result<u32, Diagnostic> {
         let data_type = self.types.pointer(element.id(), 0);
         let data = self.value_type(data_type);
         match binding.storage {
@@ -181,7 +239,10 @@ impl FunctionCompiler<'_> {
             Expr::Repeat { value: item, counts, .. } => {
                 let counts = repeat_counts(counts)?;
                 if counts != shape.dims() {
-                    return Err(Diagnostic::new(span, format!("array expects dimensions {:?}, got {counts:?}", shape.dims())));
+                    return Err(Diagnostic::new(
+                        span,
+                        format!("array expects dimensions {:?}, got {counts:?}", shape.dims()),
+                    ));
                 }
                 self.check_repeatable(element, span)?;
                 // One value, stored to every element.
@@ -197,7 +258,10 @@ impl FunctionCompiler<'_> {
             }
             _ => {
                 let Some((source, found, found_shape)) = self.array_view(value, value.span())? else {
-                    return Err(Diagnostic::new(value.span(), format!("expected an array of dimensions {:?}", shape.dims())));
+                    return Err(Diagnostic::new(
+                        value.span(),
+                        format!("expected an array of dimensions {:?}", shape.dims()),
+                    ));
                 };
                 if (found, found_shape) != (element, shape) {
                     return Err(Diagnostic::new(value.span(), "the array has the wrong element type or dimensions"));
@@ -217,7 +281,11 @@ impl FunctionCompiler<'_> {
     }
 
     /// Refuses a repeat of an owned value, which would have many owners.
-    pub(super) fn check_repeatable(&self, element: ElementType, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn check_repeatable(
+        &self,
+        element: ElementType,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         if self.element_needs_drop(element) {
             return Err(Diagnostic::new(span, "a repeated owned value would have many owners; write each element"));
         }
@@ -238,7 +306,15 @@ impl FunctionCompiler<'_> {
         span: Span,
     ) -> Result<(), Diagnostic> {
         let array = self.types.array(element, shape);
-        let destination = StructView { struct_id: array, place, pointer: None, indices: Vec::new(), offset: 0, mutable: true, owner: name.into() };
+        let destination = StructView {
+            struct_id: array,
+            place,
+            pointer: None,
+            indices: Vec::new(),
+            offset: 0,
+            mutable: true,
+            owner: name.into(),
+        };
         if let Expr::Array(..) = value {
             // No value reads the new place: each element is stored as it is made.
             let slot = FieldLayout { type_: element, offset: 0, shape: None };
@@ -263,17 +339,31 @@ impl FunctionCompiler<'_> {
     }
 
     /// Makes the prepared `stores`, in order.
-    pub(super) fn emit_stores(&mut self, stores: Vec<Store>, span: Span) -> Result<(), Diagnostic> {
+    pub(super) fn emit_stores(
+        &mut self,
+        stores: Vec<Store>,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         for store in stores {
             match store {
                 Store::One(place, value) => {
                     self.emit("store", Vec::new(), vec![place, value], None);
                 }
                 Store::Bytes { destination, source, count } => {
-                    let (to, from) = (self.projected_place(&destination, 0, self.word()), self.projected_place(&source, 0, self.word()));
-                    self.emit("copy_bytes", Vec::new(), vec![to, from, hir::Operand::Constant(type_id(self.word()), i64::from(count))], None);
+                    let (to, from) = (
+                        self.projected_place(&destination, 0, self.word()),
+                        self.projected_place(&source, 0, self.word()),
+                    );
+                    self.emit(
+                        "copy_bytes",
+                        Vec::new(),
+                        vec![to, from, hir::Operand::Constant(type_id(self.word()), i64::from(count))],
+                        None,
+                    );
                 }
-                Store::Run { destination, element, count, source } => self.emit_run(&destination, element, count, source, span)?,
+                Store::Run { destination, element, count, source } => {
+                    self.emit_run(&destination, element, count, source, span)?
+                }
             }
         }
         Ok(())
@@ -282,7 +372,14 @@ impl FunctionCompiler<'_> {
     /// Stores a run of cells as a local fill does, a counted loop over
     /// `cells[at] = source`, which the optimizer prices as a string fill,
     /// a loop, or unrolled stores.
-    fn emit_run(&mut self, destination: &StructView, element: ElementType, count: u32, source: RunSource, span: Span) -> Result<(), Diagnostic> {
+    fn emit_run(
+        &mut self,
+        destination: &StructView,
+        element: ElementType,
+        count: u32,
+        source: RunSource,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         let (cells, at) = (self.hidden("cells"), self.hidden("cell"));
         let mut bindings = vec![(cells.clone(), self.cells_binding(destination, element, count, true))];
         let named = self.hidden("source");
@@ -290,17 +387,37 @@ impl FunctionCompiler<'_> {
             RunSource::Value(operand) => {
                 let value = self.materialized(operand, element.id());
                 let ElementType::Scalar(type_name) = element else { unreachable!("a value fills scalar cells") };
-                bindings.push((named.clone(), Binding { type_: BindingType::Scalar(type_name), mutable: false, storage: Storage::Parameter(value) }));
+                bindings.push((
+                    named.clone(),
+                    Binding {
+                        type_: BindingType::Scalar(type_name),
+                        mutable: false,
+                        storage: Storage::Parameter(value),
+                    },
+                ));
                 Expr::Name(named, span)
             }
             RunSource::Struct(view) => {
-                let hir::Operand::Value(pointer) = self.address_of(&view) else { unreachable!("an address is a value") };
-                bindings.push((named.clone(), Binding { type_: BindingType::Struct(view.struct_id), mutable: false, storage: Storage::Reference(pointer) }));
+                let hir::Operand::Value(pointer) = self.address_of(&view) else {
+                    unreachable!("an address is a value")
+                };
+                bindings.push((
+                    named.clone(),
+                    Binding {
+                        type_: BindingType::Struct(view.struct_id),
+                        mutable: false,
+                        storage: Storage::Reference(pointer),
+                    },
+                ));
                 Expr::Name(named, span)
             }
             RunSource::Cells(view) => {
                 bindings.push((named.clone(), self.cells_binding(&view, element, count, false)));
-                Expr::Index { base: Box::new(Expr::Name(named, span)), indices: vec![Expr::Name(at.clone(), span)], span }
+                Expr::Index {
+                    base: Box::new(Expr::Name(named, span)),
+                    indices: vec![Expr::Name(at.clone(), span)],
+                    span,
+                }
             }
         };
         let store = Statement::Assign {
@@ -309,7 +426,13 @@ impl FunctionCompiler<'_> {
             value,
             span,
         };
-        let walk = Statement::ForRange { name: at, start: Expr::Integer(0, span), end: Expr::Integer(i64::from(count), span), body: vec![store], span };
+        let walk = Statement::ForRange {
+            name: at,
+            start: Expr::Integer(0, span),
+            end: Expr::Integer(i64::from(count), span),
+            body: vec![store],
+            span,
+        };
         self.in_scope(|this| {
             this.scopes.last_mut().expect("scope").extend(bindings);
             // Its index runs over the cells, so none is checked.
@@ -318,7 +441,13 @@ impl FunctionCompiler<'_> {
     }
 
     /// `count` cells of `element` from `view` on, as a one-dimensional array.
-    fn cells_binding(&mut self, view: &StructView, element: ElementType, count: u32, mutable: bool) -> Binding {
+    fn cells_binding(
+        &mut self,
+        view: &StructView,
+        element: ElementType,
+        count: u32,
+        mutable: bool,
+    ) -> Binding {
         let shape = Shape::new(&[count]);
         let array = self.types.array(element, shape);
         let storage = if self.whole_place(view, array) {

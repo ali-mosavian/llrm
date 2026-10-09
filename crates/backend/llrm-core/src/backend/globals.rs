@@ -10,7 +10,10 @@ use crate::model::ir::Space;
 use crate::support::hash::IndexMap;
 
 /// Where a global's symbol is: defined here, or outside the module.
-pub fn space(module: &Module, global: GlobalId) -> Space {
+pub fn space(
+    module: &Module,
+    global: GlobalId,
+) -> Space {
     match &module.global(global).kind {
         GlobalKind::Variable(variable) if variable.initializer.is_some() => Space::Segment,
         GlobalKind::Function(function) if !function.is_declaration() => Space::Segment,
@@ -30,7 +33,10 @@ pub fn segment_of(global: GlobalId) -> i64 {
 /// Where `segment_of` numbers start: above DGROUP's.
 const SEGMENTS: i64 = 1 << 22;
 
-pub fn names(module: &Module, linked: &dyn Fn(&str) -> String) -> Result<IndexMap<(Space, i64), String>, String> {
+pub fn names(
+    module: &Module,
+    linked: &dyn Fn(&str) -> String,
+) -> Result<IndexMap<(Space, i64), String>, String> {
     let mut out = IndexMap::default();
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
@@ -54,7 +60,11 @@ pub fn names(module: &Module, linked: &dyn Fn(&str) -> String) -> Result<IndexMa
 
 /// A far global's segment, named for `symbol`: a far pointer to code, as
 /// ON ERROR registers its handler, takes it.
-pub fn segment_name(module: &Module, id: GlobalId, symbol: &str) -> Option<((Space, i64), String)> {
+pub fn segment_name(
+    module: &Module,
+    id: GlobalId,
+    symbol: &str,
+) -> Option<((Space, i64), String)> {
     (module.global(id).address_space != 0).then(|| ((Space::Group, segment_of(id)), format!("seg {symbol}")))
 }
 
@@ -72,10 +82,19 @@ pub const DGROUP: &str = "DGROUP";
 /// a single POINTER fixup would take the target segment's own selector,
 /// which code pairing it with a near offset (a BASIC array descriptor's
 /// AD_fhd and AD_oAdjusted) reads the wrong cells through.
-pub fn far_pointer(name: String, offset: i64, near: bool, layout: &DataLayout, space: u32) -> Vec<Datum> {
+pub fn far_pointer(
+    name: String,
+    offset: i64,
+    near: bool,
+    layout: &DataLayout,
+    space: u32,
+) -> Vec<Datum> {
     let bytes = layout.pointer(space).bits / 8;
     if near {
-        vec![Datum::Pointer(Pointer { name, offset, far: false, bytes: layout.offset_bits(space) / 8 }), Datum::SegmentWord(DGROUP.to_owned())]
+        vec![
+            Datum::Pointer(Pointer { name, offset, far: false, bytes: layout.offset_bits(space) / 8 }),
+            Datum::SegmentWord(DGROUP.to_owned()),
+        ]
     } else {
         vec![Datum::Pointer(Pointer { name, offset, far: true, bytes })]
     }
@@ -83,8 +102,14 @@ pub fn far_pointer(name: String, offset: i64, near: bool, layout: &DataLayout, s
 
 /// A defined variable's data: its label, then its initializer's bytes and
 /// relocations.
-pub fn datums(module: &Module, global: GlobalId, names: &IndexMap<(Space, i64), String>) -> Result<Vec<Datum>, String> {
-    let GlobalKind::Variable(variable) = &module.global(global).kind else { return Err("a function has no data".to_owned()) };
+pub fn datums(
+    module: &Module,
+    global: GlobalId,
+    names: &IndexMap<(Space, i64), String>,
+) -> Result<Vec<Datum>, String> {
+    let GlobalKind::Variable(variable) = &module.global(global).kind else {
+        return Err("a function has no data".to_owned());
+    };
     let initializer = variable.initializer.ok_or("a declaration has no data")?;
     let layout = DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
     let name = names[&(Space::Segment, i64::from(global.0))].clone();
@@ -101,7 +126,10 @@ struct Initializer<'a> {
 }
 
 impl Initializer<'_> {
-    fn bytes(&mut self, bytes: &[u8]) {
+    fn bytes(
+        &mut self,
+        bytes: &[u8],
+    ) {
         if bytes.is_empty() {
             return;
         }
@@ -112,11 +140,17 @@ impl Initializer<'_> {
         }
     }
 
-    fn symbol(&self, global: GlobalId) -> String {
+    fn symbol(
+        &self,
+        global: GlobalId,
+    ) -> String {
         self.names[&(space(self.module, global), i64::from(global.0))].clone()
     }
 
-    fn constant(&mut self, id: ConstantId) -> Result<(), String> {
+    fn constant(
+        &mut self,
+        id: ConstantId,
+    ) -> Result<(), String> {
         let context = &self.module.context;
         let types = &context.types;
         let constant = context.get(id);
@@ -128,7 +162,9 @@ impl Initializer<'_> {
                 Type::Float(FloatKind::X86Fp80) => self.bytes(&llrm_mir::types::x87_extended(*bits)),
                 _ => self.bytes(&bits.to_le_bytes()[..size]),
             },
-            ConstantKind::Null | ConstantKind::Zero => self.bytes(&vec![0; self.layout.alloc_size(types, constant.ty) as usize]),
+            ConstantKind::Null | ConstantKind::Zero => {
+                self.bytes(&vec![0; self.layout.alloc_size(types, constant.ty) as usize])
+            }
             ConstantKind::Bytes(bytes) => self.bytes(bytes),
             ConstantKind::Aggregate(members) => match types.get(constant.ty).clone() {
                 Type::Struct { .. } | Type::Named(_) => {
@@ -137,7 +173,8 @@ impl Initializer<'_> {
                     for (member, offset) in members.clone().into_iter().zip(offsets) {
                         self.bytes(&vec![0; (offset - at) as usize]);
                         self.constant(member)?;
-                        at = offset + self.layout.store_size(&self.module.context.types, self.module.context.get(member).ty);
+                        at = offset
+                            + self.layout.store_size(&self.module.context.types, self.module.context.get(member).ty);
                     }
                     self.bytes(&vec![0; (total - at) as usize]);
                 }
@@ -155,17 +192,26 @@ impl Initializer<'_> {
 
     /// A relocated address: a near or far pointer, a segment, or a far
     /// pointer's offset word.
-    fn address(&mut self, id: ConstantId) -> Result<(), String> {
+    fn address(
+        &mut self,
+        id: ConstantId,
+    ) -> Result<(), String> {
         let context = &self.module.context;
         let constant = context.get(id);
         let datum = match (&constant.kind, context.types.get(constant.ty)) {
             (_, Type::Pointer(0)) => {
                 let (global, offset) = target(self.module, self.layout, id)?;
-                Datum::Pointer(Pointer { name: self.symbol(global), offset, far: false, bytes: self.layout.pointer(0).bits / 8 })
+                Datum::Pointer(Pointer {
+                    name: self.symbol(global),
+                    offset,
+                    far: false,
+                    bytes: self.layout.pointer(0).bits / 8,
+                })
             }
             (_, Type::Pointer(space)) if self.layout.is_pair(*space) => {
                 let (global, offset) = target(self.module, self.layout, id)?;
-                let near = self.module.global(global).address_space == 0 && matches!(self.module.global(global).kind, GlobalKind::Variable(_));
+                let near = self.module.global(global).address_space == 0
+                    && matches!(self.module.global(global).kind, GlobalKind::Variable(_));
                 self.out.extend(far_pointer(self.symbol(global), offset, near, self.layout, *space));
                 return Ok(());
             }
@@ -185,7 +231,11 @@ impl Initializer<'_> {
 }
 
 /// The global an address constant points into, and how far.
-pub fn target(module: &Module, layout: &DataLayout, id: ConstantId) -> Result<(GlobalId, i64), String> {
+pub fn target(
+    module: &Module,
+    layout: &DataLayout,
+    id: ConstantId,
+) -> Result<(GlobalId, i64), String> {
     let context = &module.context;
     match &context.get(id).kind {
         ConstantKind::Global(global) => Ok((*global, 0)),
@@ -200,23 +250,34 @@ pub fn target(module: &Module, layout: &DataLayout, id: ConstantId) -> Result<(G
 
 /// The address a constant is, where it names no global: null, an integer
 /// made a pointer, and a constant offset from either.
-pub fn absolute(module: &Module, layout: &DataLayout, id: ConstantId) -> Option<i64> {
+pub fn absolute(
+    module: &Module,
+    layout: &DataLayout,
+    id: ConstantId,
+) -> Option<i64> {
     let context = &module.context;
     match &context.get(id).kind {
         ConstantKind::Null | ConstantKind::Zero => Some(0),
         ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => match context.get(*value).kind {
-            ConstantKind::Int(bits) => Some(llrm_mir::context::signed(bits, context.types.int_bits(context.get(*value).ty)?) as i64),
+            ConstantKind::Int(bits) => {
+                Some(llrm_mir::context::signed(bits, context.types.int_bits(context.get(*value).ty)?) as i64)
+            }
             _ => None,
         },
-        ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => {
-            Some(absolute(module, layout, operands[0])? + constant_offset(module, layout, *source, &operands[1..]).ok()?)
-        }
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => Some(
+            absolute(module, layout, operands[0])? + constant_offset(module, layout, *source, &operands[1..]).ok()?,
+        ),
         _ => None,
     }
 }
 
 /// What a constant GEP's `indices` into `source` add.
-fn constant_offset(module: &Module, layout: &DataLayout, source: TypeId, indices: &[ConstantId]) -> Result<i64, String> {
+fn constant_offset(
+    module: &Module,
+    layout: &DataLayout,
+    source: TypeId,
+    indices: &[ConstantId],
+) -> Result<i64, String> {
     let context = &module.context;
     let indices: Vec<Option<i128>> = indices
         .iter()

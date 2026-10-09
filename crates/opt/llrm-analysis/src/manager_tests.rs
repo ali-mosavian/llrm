@@ -5,7 +5,9 @@ use std::rc::Rc;
 
 use llrm_mir::module::{Module, Operand};
 use llrm_mir::opcode::Opcode;
-use llrm_mir::passes::{Analyses, Analysis, FunctionPass, ModuleAnalyses, Outer, PassManager, PreservedAnalyses, Unit as PassUnit};
+use llrm_mir::passes::{
+    Analyses, Analysis, FunctionPass, ModuleAnalyses, Outer, PassManager, PreservedAnalyses, Unit as PassUnit,
+};
 use llrm_mir::target::{Machine, Neutral};
 use llrm_support::hash::IndexMap;
 
@@ -21,7 +23,10 @@ use crate::testing::{DOS, corpus, function, layout, parsed, value};
 /// A pass that does its first and preserves its second.
 struct Step(Box<dyn FnMut(&mut PassUnit, &mut Analyses)>, PreservedAnalyses);
 
-fn step(what: impl FnMut(&mut PassUnit, &mut Analyses) + 'static, preserved: PreservedAnalyses) -> Step {
+fn step(
+    what: impl FnMut(&mut PassUnit, &mut Analyses) + 'static,
+    preserved: PreservedAnalyses,
+) -> Step {
     Step(Box::new(what), preserved)
 }
 
@@ -30,7 +35,11 @@ impl FunctionPass for Step {
         "step"
     }
 
-    fn run(&mut self, unit: &mut PassUnit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut PassUnit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         (self.0)(unit, analyses);
         self.1.clone()
     }
@@ -42,7 +51,12 @@ type Seen = Rc<RefCell<Vec<Rc<Answer>>>>;
 /// Records what `Annotated` answers, and keeps everything.
 fn ask(seen: &Seen) -> Step {
     let seen = Rc::clone(seen);
-    step(move |unit, analyses| seen.borrow_mut().push(analyses.get::<Annotated>(unit.context, unit.layout, unit.function)), PreservedAnalyses::all())
+    step(
+        move |unit, analyses| {
+            seen.borrow_mut().push(analyses.get::<Annotated>(unit.context, unit.layout, unit.function))
+        },
+        PreservedAnalyses::all(),
+    )
 }
 
 /// Sends @f's store to `%b`, which was to `%a`.
@@ -50,7 +64,11 @@ fn redirect(preserved: PreservedAnalyses) -> Step {
     step(
         |unit, _| {
             let function = &mut *unit.function;
-            let store = function.walk().map(|(_, inst)| inst).find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. })).unwrap();
+            let store = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
+                .unwrap();
             let b = value(function, "b");
             function.set_operand(store, 1, Operand::Value(b));
         },
@@ -103,7 +121,8 @@ fn a_pass_that_drops_an_analysis_has_it_answer_for_its_edit() {
 
 #[test]
 fn a_pass_that_preserves_an_analysis_leaves_it_as_it_was() {
-    let (seen, _) = seen(|seen| vec![ask(seen), redirect(PreservedAnalyses::none().preserve::<Annotated>()), ask(seen)]);
+    let (seen, _) =
+        seen(|seen| vec![ask(seen), redirect(PreservedAnalyses::none().preserve::<Annotated>()), ask(seen)]);
     assert!(Rc::ptr_eq(&seen[0], &seen[1]));
 }
 
@@ -163,14 +182,36 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
             let at = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
             let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
             let mut analyses = Analyses::new(Rc::clone(&outer));
-            assert_eq!(*analyses.get::<Pointers>(&module.context, &layout, function), alias::points_to(&unit, None, None), "{at}");
+            assert_eq!(
+                *analyses.get::<Pointers>(&module.context, &layout, function),
+                alias::points_to(&unit, None, None),
+                "{at}"
+            );
             assert_eq!(*analyses.get::<Annotated>(&module.context, &layout, function), alias::annotated(&unit), "{at}");
-            assert_eq!(*analyses.get::<Registers>(&module.context, &layout, function), consts::known(&unit, None, None, None), "{at}");
-            assert_eq!(analyses.get::<DominatedEdges>(&module.context, &layout, function).as_ref().as_ref().map(|states| states.blocks(function)).map_err(String::clone), ranges::dominated_edges(&unit), "{at}");
+            assert_eq!(
+                *analyses.get::<Registers>(&module.context, &layout, function),
+                consts::known(&unit, None, None, None),
+                "{at}"
+            );
+            assert_eq!(
+                analyses
+                    .get::<DominatedEdges>(&module.context, &layout, function)
+                    .as_ref()
+                    .as_ref()
+                    .map(|states| states.blocks(function))
+                    .map_err(String::clone),
+                ranges::dominated_edges(&unit),
+                "{at}"
+            );
             let effects = alias::calls_annotated(&Procedure::of(unit), summaries);
             assert_eq!(*analyses.get::<CallEffects>(&module.context, &layout, function), effects, "{at}");
-            let calls: Calls = effects.unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect::<IndexMap<_, _>>();
-            assert_eq!(*analyses.get::<ThroughMemory>(&module.context, &layout, function), Ok(consts::known(&unit, Some(&calls), None, None)), "{at}");
+            let calls: Calls =
+                effects.unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect::<IndexMap<_, _>>();
+            assert_eq!(
+                *analyses.get::<ThroughMemory>(&module.context, &layout, function),
+                Ok(consts::known(&unit, Some(&calls), None, None)),
+                "{at}"
+            );
         }
     }
 }
@@ -202,14 +243,23 @@ b2:
     let seen = Rc::new(RefCell::new(Vec::<Rc<Shape>>::new()));
     let look = |seen: &Rc<RefCell<Vec<Rc<Shape>>>>| {
         let seen = Rc::clone(seen);
-        step(move |unit, analyses| seen.borrow_mut().push(analyses.get::<Shape>(unit.context, unit.layout, unit.function)), PreservedAnalyses::all())
+        step(
+            move |unit, analyses| {
+                seen.borrow_mut().push(analyses.get::<Shape>(unit.context, unit.layout, unit.function))
+            },
+            PreservedAnalyses::all(),
+        )
     };
     // Swaps the add's operands: no edge moves.
     let swap = |preserved: PreservedAnalyses| {
         step(
             |unit, _| {
                 let function = &mut *unit.function;
-                let add = function.walk().map(|(_, inst)| inst).find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary(_))).unwrap();
+                let add = function
+                    .walk()
+                    .map(|(_, inst)| inst)
+                    .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary(_)))
+                    .unwrap();
                 let operands = function.instruction(add).operands.iter().rev().copied().collect();
                 function.set_operands(add, operands);
             },
@@ -273,7 +323,10 @@ entry:
     let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
     let found = analyses.get::<Summaries>(&module);
     let summaries = Result::as_ref(&*found).expect("summarized");
-    let reaches_g = |name: &str| summaries[name].unknown_write || summaries[name].writes.iter().any(|one| one.object.kind == crate::memory::MemoryKind::Global);
+    let reaches_g = |name: &str| {
+        summaries[name].unknown_write
+            || summaries[name].writes.iter().any(|one| one.object.kind == crate::memory::MemoryKind::Global)
+    };
     assert!(reaches_g("entry"), "the entry writes @g through @h");
     assert!(reaches_g("p"), "@p's unknown call may call back into @entry");
 }
@@ -283,8 +336,11 @@ entry:
 /// compile of 300 (#557). The manager finds a function's exposed frames once.
 #[test]
 fn test_a_functions_exposed_frames_are_found_once_not_per_access() {
-    let accesses: String = (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
-    let module = parsed(&format!("{DOS}declare void @out(ptr)\n\ndefine i16 @f() {{\nentry:\n  %slot = alloca i16\n  %hidden = alloca i16\n{accesses}  call void @out(ptr %hidden)\n  ret i16 %v39\n}}\n"));
+    let accesses: String =
+        (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
+    let module = parsed(&format!(
+        "{DOS}declare void @out(ptr)\n\ndefine i16 @f() {{\nentry:\n  %slot = alloca i16\n  %hidden = alloca i16\n{accesses}  call void @out(ptr %hidden)\n  ret i16 %v39\n}}\n"
+    ));
     let layout = layout(&module);
     let function = function(&module, "f");
     let mut analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
@@ -296,18 +352,25 @@ fn test_a_functions_exposed_frames_are_found_once_not_per_access() {
     assert_eq!(names.len(), 1, "only @hidden's address is handed out: {names:?}");
 }
 
-/// The observers analysis (dse) built its unit without the exposure table, so every access it resolved scanned its alloca's uses:
-/// slope 2 in a function's accesses, 4% of compiling 2,000 stores at -O2 (#924).
+/// The observers analysis (dse) built its unit without the exposure table, so every access it resolved scanned its
+/// alloca's uses: slope 2 in a function's accesses, 4% of compiling 2,000 stores at -O2 (#924).
 #[test]
 fn test_the_published_objects_analysis_asks_the_exposed_frames_once() {
-    let accesses: String = (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
-    let module = parsed(&format!("{DOS}declare void @out(ptr)\n\ndefine i16 @f() {{\nentry:\n  %slot = alloca i16\n  %hidden = alloca i16\n{accesses}  call void @out(ptr %hidden)\n  ret i16 %v39\n}}\n"));
+    let accesses: String =
+        (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
+    let module = parsed(&format!(
+        "{DOS}declare void @out(ptr)\n\ndefine i16 @f() {{\nentry:\n  %slot = alloca i16\n  %hidden = alloca i16\n{accesses}  call void @out(ptr %hidden)\n  ret i16 %v39\n}}\n"
+    ));
     let layout = layout(&module);
     let function = function(&module, "f");
     let mut analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
     analyses.get::<super::ExposedFrames>(&module.context, &layout, function);
     let before = crate::frameescape::scans();
-    analyses.get::<crate::observers::Published>(&module.context, &layout, function).as_ref().as_ref().expect("publishes");
+    analyses
+        .get::<crate::observers::Published>(&module.context, &layout, function)
+        .as_ref()
+        .as_ref()
+        .expect("publishes");
     assert_eq!(crate::frameescape::scans() - before, 0, "an access scanned its alloca's uses");
 }
 
@@ -315,8 +378,11 @@ fn test_the_published_objects_analysis_asks_the_exposed_frames_once() {
 /// uses: 34% of compiling a function of 1600 statements (#560). The table is made once per body.
 #[test]
 fn test_globals_aa_asks_each_bodys_exposed_frames_once() {
-    let accesses: String = (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
-    let module = parsed(&format!("{DOS}@g = global i16 0\n\ndefine i16 @f() {{\nentry:\n  %slot = alloca i16\n{accesses}  store i16 %v39, ptr @g\n  ret i16 %v39\n}}\n"));
+    let accesses: String =
+        (0..40).map(|at| format!("  store i16 {at}, ptr %slot\n  %v{at} = load i16, ptr %slot\n")).collect();
+    let module = parsed(&format!(
+        "{DOS}@g = global i16 0\n\ndefine i16 @f() {{\nentry:\n  %slot = alloca i16\n{accesses}  store i16 %v39, ptr @g\n  ret i16 %v39\n}}\n"
+    ));
     let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
     let before = crate::frameescape::scans();
     analyses.get::<super::GlobalsAA>(&module);
@@ -374,7 +440,8 @@ fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
         let before = analyses.get::<super::Counted>(context, &layout, function);
         assert_eq!(trips(&before, "h1", function), Some(num_bigint::BigInt::from(5)));
         let lim = value(function, "lim");
-        let lim = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(lim)).unwrap();
+        let lim =
+            function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(lim)).unwrap();
         let seven = Operand::Value(value(function, "seven"));
         function.set_operand(lim, 0, seven);
         analyses.invalidate(&PreservedAnalyses::none());
@@ -386,8 +453,16 @@ fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
     if std::env::var_os("LLRM_CHECK_REPLAY").is_none() {
         assert_eq!(crate::induction::proved() - proved, 1, "only the loop the change reaches is proved again");
     }
-    assert_eq!(trips(&after, "h1", function), Some(num_bigint::BigInt::from(7)), "the loop that reads the changed bound");
-    assert_eq!(*after, *Analyses::new(outer).get::<super::Counted>(context, &layout, function), "what was brought up to date is what deriving it afresh gives");
+    assert_eq!(
+        trips(&after, "h1", function),
+        Some(num_bigint::BigInt::from(7)),
+        "the loop that reads the changed bound"
+    );
+    assert_eq!(
+        *after,
+        *Analyses::new(outer).get::<super::Counted>(context, &layout, function),
+        "what was brought up to date is what deriving it afresh gives"
+    );
 }
 
 /// A branch's bound changed outside the blocks it narrows: the edge facts of the blocks past it were kept stale. Only
@@ -400,13 +475,20 @@ fn a_change_to_a_branch_bound_reworks_the_blocks_past_it() {
     let mut analyses = Analyses::new(Rc::clone(&outer));
     let states = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
         let function = function(module, "f");
-        analyses.get::<DominatedEdges>(&module.context, &layout, function).as_ref().as_ref().map(|states| states.blocks(function)).map_err(String::clone).unwrap()
+        analyses
+            .get::<DominatedEdges>(&module.context, &layout, function)
+            .as_ref()
+            .as_ref()
+            .map(|states| states.blocks(function))
+            .map_err(String::clone)
+            .unwrap()
     };
     let before = states(&mut analyses, &module);
     {
         let (_, function) = module.function_mut("f").unwrap();
         let lim = value(function, "lim");
-        let lim = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(lim)).unwrap();
+        let lim =
+            function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(lim)).unwrap();
         let seven = Operand::Value(value(function, "seven"));
         function.set_operand(lim, 0, seven);
         analyses.invalidate(&PreservedAnalyses::none());
@@ -415,7 +497,12 @@ fn a_change_to_a_branch_bound_reworks_the_blocks_past_it() {
     let after = states(&mut analyses, &module);
     // The check works them all again to compare, and is counted.
     if std::env::var_os("LLRM_CHECK_REPLAY").is_none() {
-        assert!(ranges::blocks_solved() - solved < function(&module, "f").layout().len(), "{} blocks worked of {}", ranges::blocks_solved() - solved, function(&module, "f").layout().len());
+        assert!(
+            ranges::blocks_solved() - solved < function(&module, "f").layout().len(),
+            "{} blocks worked of {}",
+            ranges::blocks_solved() - solved,
+            function(&module, "f").layout().len()
+        );
     }
     assert_ne!(before, after, "the bound the change reached");
     let fresh = Analyses::new(outer);
@@ -466,20 +553,31 @@ fn a_change_to_a_loop_reworks_the_loop_that_starts_from_it() {
     let mut analyses = Analyses::new(Rc::clone(&outer));
     let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
         let function = function(module, "f");
-        analyses.get::<super::Bounded>(&module.context, &layout, function).as_ref().as_ref().map(ranges::Bounds::facts).map_err(String::clone).unwrap()
+        analyses
+            .get::<super::Bounded>(&module.context, &layout, function)
+            .as_ref()
+            .as_ref()
+            .map(ranges::Bounds::facts)
+            .map_err(String::clone)
+            .unwrap()
     };
     let before = facts(&mut analyses, &module);
     {
         let (_, function) = module.function_mut("f").unwrap();
         let t = value(function, "t");
-        let t = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(t)).unwrap();
+        let t =
+            function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(t)).unwrap();
         let four = Operand::Value(value(function, "four"));
         function.set_operand(t, 1, four);
         analyses.invalidate(&PreservedAnalyses::none());
     }
     let after = facts(&mut analyses, &module);
     assert_ne!(before, after, "the value the change reached");
-    assert_eq!(after, facts(&mut Analyses::new(outer), &module), "what was brought up to date is what working every loop gives");
+    assert_eq!(
+        after,
+        facts(&mut Analyses::new(outer), &module),
+        "what was brought up to date is what working every loop gives"
+    );
 }
 
 /// A loop carries what is known of the values made above it, whether it reads them or not: an instruction erased there,
@@ -492,7 +590,13 @@ fn an_instruction_erased_above_a_loop_leaves_the_loops_facts() {
     let mut analyses = Analyses::new(Rc::clone(&outer));
     let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
         let function = function(module, "f");
-        analyses.get::<super::Bounded>(&module.context, &layout, function).as_ref().as_ref().map(ranges::Bounds::facts).map_err(String::clone).unwrap()
+        analyses
+            .get::<super::Bounded>(&module.context, &layout, function)
+            .as_ref()
+            .as_ref()
+            .map(ranges::Bounds::facts)
+            .map_err(String::clone)
+            .unwrap()
     };
     let seven = {
         let function = function(&module, "f");
@@ -502,22 +606,34 @@ fn an_instruction_erased_above_a_loop_leaves_the_loops_facts() {
     assert!(before.values().any(|known| known.contains_key(&seven)), "a loop carries it");
     {
         let (_, function) = module.function_mut("f").unwrap();
-        let made = function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(seven)).unwrap();
+        let made = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| function.instruction(inst).result == Some(seven))
+            .unwrap();
         function.erase(made).unwrap();
         analyses.invalidate(&PreservedAnalyses::none());
     }
     let after = facts(&mut analyses, &module);
     assert!(after.values().all(|known| !known.contains_key(&seven)), "gone from every loop");
-    assert_eq!(after, facts(&mut Analyses::new(outer), &module), "what was brought up to date is what working every loop gives");
+    assert_eq!(
+        after,
+        facts(&mut Analyses::new(outer), &module),
+        "what was brought up to date is what working every loop gives"
+    );
 }
 
-/// Every pass that said it changed something dropped the pointer analyses, though five in six of them (twelve call-effects
-/// runs a function in QCport) were true after it: the change was to integers.
+/// Every pass that said it changed something dropped the pointer analyses, though five in six of them (twelve
+/// call-effects runs a function in QCport) were true after it: the change was to integers.
 #[test]
 fn an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_does_not() {
-    let mut module = parsed("declare void @use(ptr)\ndefine i32 @f(ptr %p, i32 %a) {\nentry:\n  %x = add i32 %a, 1\n  %y = mul i32 %x, 3\n  %q = getelementptr i32, ptr %p, i32 1\n  call void @use(ptr %q)\n  ret i32 %y\n}\n");
+    let mut module = parsed(
+        "declare void @use(ptr)\ndefine i32 @f(ptr %p, i32 %a) {\nentry:\n  %x = add i32 %a, 1\n  %y = mul i32 %x, 3\n  %q = getelementptr i32, ptr %p, i32 1\n  call void @use(ptr %q)\n  ret i32 %y\n}\n",
+    );
     let id = module.named("f").expect("f");
-    let llrm_mir::module::GlobalKind::Function(f) = &mut module.globals[id.0 as usize].kind else { panic!("a function") };
+    let llrm_mir::module::GlobalKind::Function(f) = &mut module.globals[id.0 as usize].kind else {
+        panic!("a function")
+    };
     let (x, y, q) = {
         let named = |name: &str| value(f, name);
         (named("x"), named("y"), named("q"))
@@ -529,15 +645,22 @@ fn an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_d
     let changes = f.changes_since(before).expect("on the log").to_vec();
     assert!(!changes.is_empty());
     for scalars_matter in [true, false] {
-        assert!(super::pointers_unaffected(&changes, &module.context, function(&module, "f"), scalars_matter), "an integer edit moved the pointer analyses");
+        assert!(
+            super::pointers_unaffected(&changes, &module.context, function(&module, "f"), scalars_matter),
+            "an integer edit moved the pointer analyses"
+        );
     }
     let (f, _) = (function(&module, "f"), y);
     let gep = f.walk().map(|(_, one)| one).find(|one| f.instruction(*one).result == Some(q)).expect("the gep");
-    assert!(!super::pointers_unaffected(&[llrm_mir::module::Change::Rewritten(gep)], &module.context, f, false), "an edit to an address left the pointer analyses as they were");
+    assert!(
+        !super::pointers_unaffected(&[llrm_mir::module::Change::Rewritten(gep)], &module.context, f, false),
+        "an edit to an address left the pointer analyses as they were"
+    );
 }
 
-/// Every edit found every body's calls, actuals and exposed frames again (`Procedure::of` and `exposed_frames` per body per run,
-/// O(module) for an edit to one: 190 M instructions of excess work at chain-32). A body not edited since keeps them.
+/// Every edit found every body's calls, actuals and exposed frames again (`Procedure::of` and `exposed_frames` per body
+/// per run, O(module) for an edit to one: 190 M instructions of excess work at chain-32). A body not edited since keeps
+/// them.
 #[test]
 fn an_edit_to_one_body_finds_that_bodys_calls_alone() {
     let mut module = parsed(&format!(
@@ -575,8 +698,9 @@ b0:
     assert!(!Rc::ptr_eq(&before.0, memo.facts[&f].calls.as_ref().unwrap()), "an edited body's calls were kept");
 }
 
-/// The calls kept were found as a plain unit sees them, which knows less than the unit a body is summarized in (its globals' facts):
-/// screen.c's summaries came out broader and the compile cost 4.6% more. What is kept is what the summarized unit finds.
+/// The calls kept were found as a plain unit sees them, which knows less than the unit a body is summarized in (its
+/// globals' facts): screen.c's summaries came out broader and the compile cost 4.6% more. What is kept is what the
+/// summarized unit finds.
 #[test]
 fn the_calls_kept_are_those_the_summarized_unit_finds() {
     let module = parsed(&format!(
@@ -611,9 +735,10 @@ b0:
     assert_eq!(kept, format!("{:?}", crate::alias::CallFacts::of(&unit)));
 }
 
-/// Call facts found under one unit were served to a body summarized under another (screen.c: +4.6% compile cost, found by the
-/// gate's worst-file rule). What the memo kept was found under the globals' facts of the run before: when those are other facts the
-/// entry is dropped and found again under the unit of this run, and the answer is a fresh computation under its own unit.
+/// Call facts found under one unit were served to a body summarized under another (screen.c: +4.6% compile cost, found
+/// by the gate's worst-file rule). What the memo kept was found under the globals' facts of the run before: when those
+/// are other facts the entry is dropped and found again under the unit of this run, and the answer is a fresh
+/// computation under its own unit.
 #[test]
 fn call_facts_found_under_other_globals_facts_are_found_again() {
     let module = parsed(&format!(
@@ -640,7 +765,10 @@ b0:
     analyses.invalidate(&PreservedAnalyses::none());
     analyses.get::<super::GlobalsAA>(&module);
     analyses.get::<super::Summaries>(&module);
-    assert!(Rc::ptr_eq(&kept, analyses.memo::<super::SummariesMemo>().facts[&f].calls.as_ref().unwrap()), "same facts, found again");
+    assert!(
+        Rc::ptr_eq(&kept, analyses.memo::<super::SummariesMemo>().facts[&f].calls.as_ref().unwrap()),
+        "same facts, found again"
+    );
     // Other globals' facts than the entry was made under: found again.
     analyses.memo::<super::SummariesMemo>().globals = Some(Rc::new(Ok(super::Globals::default())));
     analyses.invalidate(&PreservedAnalyses::none());

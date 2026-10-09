@@ -14,8 +14,7 @@ use llrm_qbruntime::INLINE_TABLE;
 
 use crate::abi::{callsite, events, handlers};
 use crate::frontends::bc::blocks::{
-    Block, CodeMap, ENTRY, Ends, code_map, event_stub, has_header, local_call_target,
-    partition as block_partition,
+    Block, CodeMap, ENTRY, Ends, code_map, event_stub, has_header, local_call_target, partition as block_partition,
 };
 use crate::frontends::bc::raising_control;
 use crate::objectfile::module::Module;
@@ -82,8 +81,7 @@ pub struct Body {
     pub entry_ranges: Vec<Vec<(usize, usize)>>,
 }
 
-impl Body {
-}
+impl Body {}
 
 /// `repr(tuple[tuple[int, int], ...])`.
 fn spans(ranges: &[(usize, usize)]) -> String {
@@ -142,7 +140,11 @@ impl Repr for Partition {
 /// Only an INLINE_TABLE call (B$OGTA) is a real jump table with entries worth
 /// following; anything else `_table_at` matches -- the /X RESUME map -- is
 /// data nothing here jumps into, so only the byte past it is a successor.
-pub fn _table_targets(module: &Module, table: (usize, usize), call_name: Option<&str>) -> Vec<usize> {
+pub fn _table_targets(
+    module: &Module,
+    table: (usize, usize),
+    call_name: Option<&str>,
+) -> Vec<usize> {
     let (lo, hi) = table;
     if !call_name.is_some_and(|name| INLINE_TABLE.contains(name)) {
         return vec![hi];
@@ -154,11 +156,18 @@ pub fn _table_targets(module: &Module, table: (usize, usize), call_name: Option<
     out
 }
 
-pub fn _table_at(mapped: &CodeMap, end: usize) -> Option<(usize, usize)> {
+pub fn _table_at(
+    mapped: &CodeMap,
+    end: usize,
+) -> Option<(usize, usize)> {
     mapped.tables.iter().copied().find(|table| table.0 == end)
 }
 
-pub fn _successors(module: &Module, mapped: &CodeMap, block: &Block) -> Vec<usize> {
+pub fn _successors(
+    module: &Module,
+    mapped: &CodeMap,
+    block: &Block,
+) -> Vec<usize> {
     if block.ends != Ends::Table {
         return block.succ.clone();
     }
@@ -205,7 +214,11 @@ pub fn _merge(spans: &[(usize, usize)]) -> Vec<(usize, usize)> {
     out
 }
 
-pub fn _ranges(mapped: &CodeMap, blocks_by_at: &IndexMap<usize, Block>, owned: &BTreeSet<usize>) -> Vec<(usize, usize)> {
+pub fn _ranges(
+    mapped: &CodeMap,
+    blocks_by_at: &IndexMap<usize, Block>,
+    owned: &BTreeSet<usize>,
+) -> Vec<(usize, usize)> {
     let mut spans: Vec<(usize, usize)> = owned.iter().map(|at| (blocks_by_at[at].at, blocks_by_at[at].end)).collect();
     for &(lo, hi) in &mapped.tables {
         let owner = blocks_by_at.values().find(|block| block.end == lo);
@@ -253,9 +266,7 @@ pub fn partition(module: &Module) -> Result<Partition, String> {
     }
 
     let timers: BTreeSet<usize> = events::handler_entries(module).iter().map(|&at| at as usize).collect();
-    seeds.extend(
-        timers.difference(&publics).map(|&at| (BodyKind::EventHandler, at, Some("timer handler".to_owned()))),
-    );
+    seeds.extend(timers.difference(&publics).map(|&at| (BodyKind::EventHandler, at, Some("timer handler".to_owned()))));
 
     let handlers: BTreeSet<usize> = handlers::error_entries(module).iter().map(|&at| at as usize).collect();
     let occupied: BTreeSet<usize> = seeds.iter().map(|(_, seed, _)| *seed).collect();
@@ -282,8 +293,11 @@ pub fn partition(module: &Module) -> Result<Partition, String> {
             .map(|&at| at as usize)
             .filter(|at| blocks_by_at.contains_key(at) && !owned.contains(at))
             .collect();
-        let bodies: BTreeSet<usize> =
-            seeds.iter().filter(|(kind, _, _)| matches!(kind, BodyKind::Main | BodyKind::Procedure)).map(|(_, seed, _)| *seed).collect();
+        let bodies: BTreeSet<usize> = seeds
+            .iter()
+            .filter(|(kind, _, _)| matches!(kind, BodyKind::Main | BodyKind::Procedure))
+            .map(|(_, seed, _)| *seed)
+            .collect();
         for &entry in &resumable {
             let Some(&owner) = bodies.range(..=entry).next_back() else { continue };
             let mut others: BTreeSet<usize> = owned.union(&resumable).copied().collect();
@@ -308,8 +322,15 @@ pub fn partition(module: &Module) -> Result<Partition, String> {
             seed: *seed,
             name: name.clone(),
             ranges: _ranges(&mapped, &blocks_by_at, &reached[seed]),
-            entries: entries.get(seed).map_or_else(Vec::new, |entries| entries.iter().map(|(entry, _)| *entry).collect()),
-            entry_ranges: entries.get(seed).map_or_else(Vec::new, |entries| entries.iter().map(|(_, reach)| _ranges(&mapped, &blocks_by_at, reach)).collect()),
+            entries: entries
+                .get(seed)
+                .map_or_else(Vec::new, |entries| entries.iter().map(|(entry, _)| *entry).collect()),
+            entry_ranges: entries
+                .get(seed)
+                .map_or_else(
+                    Vec::new,
+                    |entries| entries.iter().map(|(_, reach)| _ranges(&mapped, &blocks_by_at, reach)).collect(),
+                ),
         })
         .collect();
     let owned_by = |at: &usize| owners.get(at).copied().unwrap_or(0);

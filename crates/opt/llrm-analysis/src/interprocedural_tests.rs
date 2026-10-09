@@ -7,11 +7,17 @@ use llrm_mir::module::Module;
 use super::*;
 use crate::testing::{function, parsed};
 
-fn names(module: &Module, items: &[&str]) -> BTreeSet<GlobalId> {
+fn names(
+    module: &Module,
+    items: &[&str],
+) -> BTreeSet<GlobalId> {
     items.iter().map(|one| module.named(one).unwrap_or_else(|| panic!("no @{one}"))).collect()
 }
 
-fn number(module: &Module, constant: ConstantId) -> u128 {
+fn number(
+    module: &Module,
+    constant: ConstantId,
+) -> u128 {
     match module.context.get(constant).kind {
         ConstantKind::Int(bits) => bits,
         ref other => panic!("{other:?} is not an integer"),
@@ -19,17 +25,27 @@ fn number(module: &Module, constant: ConstantId) -> u128 {
 }
 
 /// Each map entry by its function's name, its constants as numbers.
-fn named(module: &Module, facts: &Parameters) -> Vec<(String, Vec<Option<u128>>)> {
+fn named(
+    module: &Module,
+    facts: &Parameters,
+) -> Vec<(String, Vec<Option<u128>>)> {
     facts
         .iter()
         .map(|(&id, values)| {
-            (module.global(id).name.clone().unwrap(), values.iter().map(|value| value.map(|one| number(module, one))).collect())
+            (
+                module.global(id).name.clone().unwrap(),
+                values.iter().map(|value| value.map(|one| number(module, one))).collect(),
+            )
         })
         .collect()
 }
 
 fn calls(function: &Function) -> Vec<InstId> {
-    function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_))).collect()
+    function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_)))
+        .collect()
 }
 
 #[test]
@@ -240,7 +256,10 @@ b:
 }
 ",
     );
-    assert_eq!(noreturn_procedures(&module, &module.declarations(), &names(&module, &["first", "second"])), BTreeSet::new());
+    assert_eq!(
+        noreturn_procedures(&module, &module.declarations(), &names(&module, &["first", "second"])),
+        BTreeSet::new()
+    );
 }
 
 #[test]
@@ -330,7 +349,10 @@ b:
 }
 ",
     );
-    assert_eq!(named(&module, &constant_parameters(&module, &names(&module, &["take"]))), [("take".to_owned(), vec![None, Some(3)])]);
+    assert_eq!(
+        named(&module, &constant_parameters(&module, &names(&module, &["take"]))),
+        [("take".to_owned(), vec![None, Some(3)])]
+    );
 }
 
 #[test]

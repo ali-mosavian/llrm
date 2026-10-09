@@ -52,7 +52,9 @@ fn test_a_stored_loop_carried_value_is_its_cells() {
 /// A write to the cell while the phi is live: `%s` is read after it, so the cell no longer holds it.
 #[test]
 fn test_a_cell_written_while_the_value_is_live_is_not_its_home() {
-    let after = homed(&SUM.replace("  store double %d, ptr %other\n", "  store double %d, ptr %cell\n  %u = fadd double %s, %d\n"));
+    let after = homed(
+        &SUM.replace("  store double %d, ptr %other\n", "  store double %d, ptr %cell\n  %u = fadd double %s, %d\n"),
+    );
     let phi = after.lines().find(|line| line.contains("%s = phi")).unwrap();
     assert!(!phi.contains("!llrm.home"), "{after}");
 }

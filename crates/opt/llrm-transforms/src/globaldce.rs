@@ -17,7 +17,11 @@ impl ProgramPass for GlobalDce {
         "globaldce"
     }
 
-    fn run(&mut self, program: &mut Program, analyses: &mut ProgramAnalyses) -> Result<(), String> {
+    fn run(
+        &mut self,
+        program: &mut Program,
+        analyses: &mut ProgramAnalyses,
+    ) -> Result<(), String> {
         let live = live(program);
         let mut changed = false;
         for (at, module) in program.modules.iter_mut().enumerate() {
@@ -65,7 +69,9 @@ pub fn live(program: &Program) -> BTreeSet<Defined> {
         let module = &program.modules[at];
         let mut named = BTreeSet::new();
         match &module.global(id).kind {
-            GlobalKind::Variable(variable) => variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut named)),
+            GlobalKind::Variable(variable) => {
+                variable.initializer.iter().for_each(|&one| embedded(&module.context, one, &mut named))
+            }
             GlobalKind::Function(function) => {
                 function.personality.iter().for_each(|&one| embedded(&module.context, one, &mut named));
                 for (_, inst) in function.walk() {

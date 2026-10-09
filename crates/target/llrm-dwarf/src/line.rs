@@ -58,7 +58,11 @@ struct Row {
     epilogue_begin: bool,
 }
 
-pub fn program(object: &Object, info: &Info, out: &mut Out) -> Result<Done, Unsupported> {
+pub fn program(
+    object: &Object,
+    info: &Info,
+    out: &mut Out,
+) -> Result<Done, Unsupported> {
     let (dirs, files) = directories(info);
     let mut buf = Buf::default();
     buf.u32(0);
@@ -78,7 +82,13 @@ pub fn program(object: &Object, info: &Info, out: &mut Out) -> Result<Done, Unsu
     buf.u8(LINE_RANGE);
     buf.u8(OPCODE_BASE);
     buf.bytes.extend(STANDARD_LENGTHS);
-    let md5 = !info.files.is_empty() && info.files.iter().all(|one| matches!(&one.checksum, Some((ChecksumKind::Md5, sum)) if sum.len() == 16));
+    let md5 = !info.files.is_empty()
+        && info.files.iter().all(|one| {
+            matches!(
+                &one.checksum,
+                Some((ChecksumKind::Md5, sum)) if sum.len() == 16
+            )
+        });
     if info.files.iter().any(|one| one.checksum.is_some()) && !(md5 && out.version >= 5) {
         return refused("a file checksum needs DWARF 5 and an MD5 of every file");
     }
@@ -144,7 +154,19 @@ pub fn program(object: &Object, info: &Info, out: &mut Out) -> Result<Done, Unsu
     }
     let address = usize::from(out.address);
     for section in sections {
-        let mut rows: Vec<Row> = info.lines.iter().filter(|one| one.section == section).map(|one| Row { offset: one.offset, file: one.file, line: one.line, column: one.column, prologue_end: false, epilogue_begin: false }).collect();
+        let mut rows: Vec<Row> = info
+            .lines
+            .iter()
+            .filter(|one| one.section == section)
+            .map(|one| Row {
+                offset: one.offset,
+                file: one.file,
+                line: one.line,
+                column: one.column,
+                prologue_end: false,
+                epilogue_begin: false,
+            })
+            .collect();
         rows.sort_by_key(|one| one.offset);
         // Where each body starts and ends is a row, however the source's lines fall.
         for function in &info.functions {
@@ -207,7 +229,13 @@ pub fn program(object: &Object, info: &Info, out: &mut Out) -> Result<Done, Unsu
             buf.u8(LNS_COPY);
         }
         // The sequence ends where the code does.
-        let end = info.code.iter().filter(|range| range.section == section).map(|range| range.offset + range.length).max().unwrap_or(object.sections[section].image.len());
+        let end = info
+            .code
+            .iter()
+            .filter(|range| range.section == section)
+            .map(|range| range.offset + range.length)
+            .max()
+            .unwrap_or(object.sections[section].image.len());
         buf.u8(LNS_ADVANCE_PC);
         buf.uleb(end.saturating_sub(at) as u64);
         buf.u8(0);

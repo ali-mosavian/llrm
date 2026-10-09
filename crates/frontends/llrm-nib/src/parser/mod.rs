@@ -8,14 +8,15 @@ use super::lexer::TokenKind;
 use super::lexer::lex;
 use super::syntax::Abi;
 use super::syntax::AssignTarget;
-use super::syntax::{Asm, AsmTarget};
 use super::syntax::BinaryOp;
 use super::syntax::Clause;
 use super::syntax::Const;
 use super::syntax::Enum;
-use super::syntax::Expr;
 use super::syntax::Export;
+use super::syntax::Expr;
 use super::syntax::Extern;
+use super::syntax::FOREIGN;
+use super::syntax::FUNCTION;
 use super::syntax::FixedStorage;
 use super::syntax::FixedType;
 use super::syntax::Function;
@@ -31,18 +32,17 @@ use super::syntax::ParameterType;
 use super::syntax::Pattern;
 use super::syntax::Protocol;
 use super::syntax::Span;
-use super::syntax::Static;
 use super::syntax::Statement;
+use super::syntax::Static;
 use super::syntax::Struct;
 use super::syntax::StructField;
 use super::syntax::TUPLE;
-use super::syntax::FUNCTION;
-use super::syntax::FOREIGN;
 use super::syntax::TypeAnnotation;
 use super::syntax::TypeName;
 use super::syntax::TypeSpec;
 use super::syntax::UnaryOp;
 use super::syntax::Variant;
+use super::syntax::{Asm, AsmTarget};
 use super::syntax::{FStringPart, Format};
 
 mod enums;
@@ -53,7 +53,10 @@ pub fn parse(tokens: Vec<Token>) -> Result<Module, Diagnostic> {
 }
 
 /// `parse` for a target whose near pointer is `near_bytes` wide: what `usize` is.
-pub fn parse_for(tokens: Vec<Token>, near_bytes: u32) -> Result<Module, Diagnostic> {
+pub fn parse_for(
+    tokens: Vec<Token>,
+    near_bytes: u32,
+) -> Result<Module, Diagnostic> {
     parse_after(tokens, 0, &BTreeMap::new(), near_bytes, &BTreeMap::new())
 }
 
@@ -62,7 +65,13 @@ pub fn parse_for(tokens: Vec<Token>, near_bytes: u32) -> Result<Module, Diagnost
 /// declaration. `imported` holds the public constants of the modules it
 /// imports, folded, each by its path here: `alias.NAME`. The target's near pointer is `near_bytes`
 /// wide: `usize` and `isize` are the integers that wide, and `NEAR_BYTES` the constant.
-pub fn parse_after(tokens: Vec<Token>, fixed_before: u16, imported: &BTreeMap<String, Expr>, near_bytes: u32, seeded: &BTreeMap<String, Expr>) -> Result<Module, Diagnostic> {
+pub fn parse_after(
+    tokens: Vec<Token>,
+    fixed_before: u16,
+    imported: &BTreeMap<String, Expr>,
+    near_bytes: u32,
+    seeded: &BTreeMap<String, Expr>,
+) -> Result<Module, Diagnostic> {
     let mut parser = Parser::new(tokens, fixed_before);
     parser.seeded = 2;
     parser.fixed_types.insert("usize".to_owned(), TypeName::usize(near_bytes));
@@ -72,10 +81,14 @@ pub fn parse_after(tokens: Vec<Token>, fixed_before: u16, imported: &BTreeMap<St
     imported.extend(seeded.iter().map(|(name, value)| (name.clone(), value.clone())));
     imported.insert("NEAR_BYTES".to_owned(), Expr::Integer(i64::from(near_bytes), Span::new(1, 1, 1)));
     parser.module_constants(&imported)?;
-    parser.module().map(|mut module| {
-        super::desugar::local_declarations(&mut module);
-        module
-    })
+    parser
+        .module()
+        .map(
+            |mut module| {
+                super::desugar::local_declarations(&mut module);
+                module
+            },
+        )
 }
 
 /// What `tokens` imports, read before the module is parsed: its constants
@@ -109,15 +122,11 @@ struct Parser {
 }
 
 impl Parser {
-    fn new(tokens: Vec<Token>, fixed_before: u16) -> Self {
-        Self {
-            tokens,
-            at: 0,
-            fixed_types: BTreeMap::new(),
-            fixed_before,
-            seeded: 0,
-            consts: BTreeMap::new(),
-        }
+    fn new(
+        tokens: Vec<Token>,
+        fixed_before: u16,
+    ) -> Self {
+        Self { tokens, at: 0, fixed_types: BTreeMap::new(), fixed_before, seeded: 0, consts: BTreeMap::new() }
     }
 
     fn module(&mut self) -> Result<Module, Diagnostic> {
@@ -133,10 +142,7 @@ impl Parser {
         let mut externs = Vec::new();
         let mut exports = BTreeMap::new();
         while !matches!(self.peek().kind, TokenKind::Eof) {
-            if self
-                .take(|kind| matches!(kind, TokenKind::Newline))
-                .is_some()
-            {
+            if self.take(|kind| matches!(kind, TokenKind::Newline)).is_some() {
                 continue;
             }
             if matches!(self.peek().kind, TokenKind::Import) {
@@ -146,8 +152,17 @@ impl Parser {
             let attributes = self.attributes()?;
             let foreign = foreign(&attributes)?;
             // `@repr` takes a struct, `@extern` a function header and `@export` a function.
-            let next = if matches!(self.peek().kind, TokenKind::Pub) { self.tokens.get(self.at + 1) } else { Some(self.peek()) }.map(|one| &one.kind);
-            let header = matches!(next, Some(TokenKind::Fn)) || matches!(next, Some(TokenKind::Identifier(distance)) if distance == "far" || distance == "near");
+            let next = if matches!(self.peek().kind, TokenKind::Pub) {
+                self.tokens.get(self.at + 1)
+            } else {
+                Some(self.peek())
+            }
+            .map(|one| &one.kind);
+            let header = matches!(next, Some(TokenKind::Fn))
+                || matches!(
+                    next,
+                    Some(TokenKind::Identifier(distance)) if distance == "far" || distance == "near"
+                );
             for attribute in &attributes {
                 let applies = match attribute.name.as_str() {
                     "repr" => matches!(next, Some(TokenKind::Struct)),
@@ -188,10 +203,7 @@ impl Parser {
                 TokenKind::Bits => {
                     self.bump();
                     if !matches!(self.peek().kind, TokenKind::Struct) {
-                        return Err(Diagnostic::new(
-                            self.peek().span,
-                            "expected 'struct' after 'bits'",
-                        ));
+                        return Err(Diagnostic::new(self.peek().span, "expected 'struct' after 'bits'"));
                     }
                     structs.push(self.structure(true)?);
                     structs.last().map(|one| one.name.clone())
@@ -212,7 +224,13 @@ impl Parser {
                     statics.push(self.static_variable(false)?);
                     statics.last().map(|one| one.name.clone())
                 }
-                TokenKind::Identifier(qualifier) if qualifier == "huge" && matches!(self.tokens.get(self.at + 1).map(|one| &one.kind), Some(TokenKind::Var)) => {
+                TokenKind::Identifier(qualifier)
+                    if qualifier == "huge"
+                        && matches!(
+                            self.tokens.get(self.at + 1).map(|one| &one.kind),
+                            Some(TokenKind::Var)
+                        ) =>
+                {
                     self.bump();
                     statics.push(self.static_variable(true)?);
                     statics.last().map(|one| one.name.clone())
@@ -247,7 +265,10 @@ impl Parser {
     /// Folds the module's constants before anything else is parsed, so a
     /// constant or an array length may name one declared further down. One
     /// that does not parse here is reported where the module parse meets it.
-    fn module_constants(&mut self, imported: &BTreeMap<String, Expr>) -> Result<(), Diagnostic> {
+    fn module_constants(
+        &mut self,
+        imported: &BTreeMap<String, Expr>,
+    ) -> Result<(), Diagnostic> {
         let mut declared = BTreeMap::new();
         for at in self.top_level(|kind| matches!(kind, TokenKind::Const)) {
             self.at = at;
@@ -261,7 +282,10 @@ impl Parser {
     }
 
     /// Where each top-level token `wanted` accepts is.
-    fn top_level(&self, wanted: fn(&TokenKind) -> bool) -> Vec<usize> {
+    fn top_level(
+        &self,
+        wanted: fn(&TokenKind) -> bool,
+    ) -> Vec<usize> {
         let mut depth = 0_i32;
         let mut found = Vec::new();
         for (at, token) in self.tokens.iter().enumerate() {
@@ -284,10 +308,7 @@ impl Parser {
         } else {
             None
         };
-        self.expect(
-            |kind| matches!(kind, TokenKind::Equal),
-            "a constant requires a value",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::Equal), "a constant requires a value")?;
         let value = self.expression(0)?;
         self.line_end()?;
         Ok((name, annotation, value, span))
@@ -296,16 +317,18 @@ impl Parser {
     /// `const NAME[: T] = value`, the `const` next; the value must fold.
     fn constant(&mut self) -> Result<Const, Diagnostic> {
         let (name, annotation, value, span) = self.constant_parts()?;
-        let literal = consts::folded(&value, &self.consts).ok_or_else(|| {
-            Diagnostic::new(value.span(), format!("{name} is not a compile-time value"))
-        })?;
+        let literal = consts::folded(&value, &self.consts)
+            .ok_or_else(|| Diagnostic::new(value.span(), format!("{name} is not a compile-time value")))?;
         let value = consts::typed(literal, annotation.as_ref());
         self.consts.insert(name.clone(), value.clone());
         Ok(Const { name, value, span })
     }
 
     /// `var NAME: T = value`, the `var` next; `huge` when `huge var`.
-    fn static_variable(&mut self, huge: bool) -> Result<Static, Diagnostic> {
+    fn static_variable(
+        &mut self,
+        huge: bool,
+    ) -> Result<Static, Diagnostic> {
         let span = self.bump().span;
         let (name, _) = self.identifier("expected a variable name")?;
         self.expect(|kind| matches!(kind, TokenKind::Colon), "a module variable declares its type")?;
@@ -319,10 +342,7 @@ impl Parser {
     /// `@name(arguments)` lines before a declaration.
     fn attributes(&mut self) -> Result<Vec<Attribute>, Diagnostic> {
         let mut attributes = Vec::new();
-        while let Some(at) = self
-            .take(|kind| matches!(kind, TokenKind::At))
-            .map(|one| one.span)
-        {
+        while let Some(at) = self.take(|kind| matches!(kind, TokenKind::At)).map(|one| one.span) {
             let name = if self.take(|kind| matches!(kind, TokenKind::Extern)).is_some() {
                 "extern".to_owned()
             } else {
@@ -337,11 +357,7 @@ impl Parser {
                 Vec::new()
             };
             self.line_end()?;
-            attributes.push(Attribute {
-                name,
-                arguments,
-                span: at,
-            });
+            attributes.push(Attribute { name, arguments, span: at });
         }
         Ok(attributes)
     }
@@ -398,124 +414,69 @@ impl Parser {
         let span = self.bump().span;
         let (name, name_span) = self.identifier("expected fixed-point type name")?;
         if self.fixed_types.contains_key(&name) {
-            return Err(Diagnostic::new(
-                name_span,
-                format!("type {name:?} is declared more than once"),
-            ));
+            return Err(Diagnostic::new(name_span, format!("type {name:?} is declared more than once")));
         }
-        self.expect(
-            |kind| matches!(kind, TokenKind::Equal),
-            "expected '=' after type name",
-        )?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Fixed),
-            "expected 'fixed' numeric type",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::Equal), "expected '=' after type name")?;
+        self.expect(|kind| matches!(kind, TokenKind::Fixed), "expected 'fixed' numeric type")?;
         let storage = match self.bump().clone() {
-            Token {
-                kind: TokenKind::I16,
-                ..
-            } => FixedStorage::I16,
-            Token {
-                kind: TokenKind::I32,
-                ..
-            } => FixedStorage::I32,
+            Token { kind: TokenKind::I16, .. } => FixedStorage::I16,
+            Token { kind: TokenKind::I32, .. } => FixedStorage::I32,
             token => {
-                return Err(Diagnostic::new(
-                    token.span,
-                    "fixed-point storage must be i16 or i32",
-                ));
+                return Err(Diagnostic::new(token.span, "fixed-point storage must be i16 or i32"));
             }
         };
-        self.expect(
-            |kind| matches!(kind, TokenKind::Comma),
-            "expected ',' before fixed-point fraction",
-        )?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Fraction),
-            "expected 'fraction'",
-        )?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Equal),
-            "expected '=' after 'fraction'",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::Comma), "expected ',' before fixed-point fraction")?;
+        self.expect(|kind| matches!(kind, TokenKind::Fraction), "expected 'fraction'")?;
+        self.expect(|kind| matches!(kind, TokenKind::Equal), "expected '=' after 'fraction'")?;
         let fraction_token = self.bump().clone();
         let TokenKind::Integer(fraction) = fraction_token.kind else {
-            return Err(Diagnostic::new(
-                fraction_token.span,
-                "fraction must be an integer literal",
-            ));
+            return Err(Diagnostic::new(fraction_token.span, "fraction must be an integer literal"));
         };
         let storage_bits = match storage {
             FixedStorage::I16 => 16,
             FixedStorage::I32 => 32,
         };
-        let fraction = u8::try_from(fraction)
-            .ok()
-            .filter(|one| *one > 0 && u32::from(*one) < storage_bits)
-            .ok_or_else(|| {
-                Diagnostic::new(
-                    fraction_token.span,
-                    format!("fraction must be between 1 and {}", storage_bits - 1),
-                )
+        let fraction =
+            u8::try_from(fraction).ok().filter(|one| *one > 0 && u32::from(*one) < storage_bits).ok_or_else(|| {
+                Diagnostic::new(fraction_token.span, format!("fraction must be between 1 and {}", storage_bits - 1))
             })?;
         self.line_end()?;
         let declaration = u16::try_from(self.fixed_types.len() - self.seeded)
             .ok()
             .and_then(|own| own.checked_add(self.fixed_before))
             .ok_or_else(|| Diagnostic::new(span, "too many fixed-point types"))?;
-        let type_name = TypeName::Fixed {
-            storage,
-            fraction,
-            declaration,
-        };
+        let type_name = TypeName::Fixed { storage, fraction, declaration };
         self.fixed_types.insert(name.clone(), type_name);
-        Ok(FixedType {
-            name,
-            type_name,
-            span,
-        })
+        Ok(FixedType { name, type_name, span })
     }
 
     /// `struct Name:`, or with `packed`, `bits struct Name: u8`.
-    fn structure(&mut self, packed: bool) -> Result<Struct, Diagnostic> {
+    fn structure(
+        &mut self,
+        packed: bool,
+    ) -> Result<Struct, Diagnostic> {
         let span = self.bump().span;
         let (name, _) = self.identifier("expected struct name")?;
         let generics = self.generics()?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Colon),
-            "expected ':' after struct name",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::Colon), "expected ':' after struct name")?;
         let bits = if packed {
             let at = self.peek().span;
             match self.type_name()? {
                 one @ (TypeName::U8 | TypeName::U16 | TypeName::U32) => Some(one),
                 _ => {
-                    return Err(Diagnostic::new(
-                        at,
-                        "a bits struct is backed by u8, u16, or u32",
-                    ));
+                    return Err(Diagnostic::new(at, "a bits struct is backed by u8, u16, or u32"));
                 }
             }
         } else {
             None
         };
-        self.expect(
-            |kind| matches!(kind, TokenKind::Newline),
-            "expected newline before struct fields",
-        )?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Indent),
-            "expected indented struct fields",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::Newline), "expected newline before struct fields")?;
+        self.expect(|kind| matches!(kind, TokenKind::Indent), "expected indented struct fields")?;
         let mut fields = Vec::new();
         while !matches!(self.peek().kind, TokenKind::Dedent | TokenKind::Eof) {
             let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
             let (field_name, field_span) = self.identifier("expected field name")?;
-            self.expect(
-                |kind| matches!(kind, TokenKind::Colon),
-                "expected ':' after field name",
-            )?;
+            self.expect(|kind| matches!(kind, TokenKind::Colon), "expected ':' after field name")?;
             let (type_spec, dims) = self.field_type()?;
             if type_spec == TypeSpec::Primitive(TypeName::Void) {
                 return Err(Diagnostic::new(field_span, "a struct field cannot be void"));
@@ -524,29 +485,13 @@ impl Parser {
                 return Err(Diagnostic::new(field_span, "a bits struct field cannot be an array"));
             }
             self.line_end()?;
-            fields.push(StructField {
-                name: field_name,
-                mutable,
-                type_spec,
-                dims,
-                span: field_span,
-            });
+            fields.push(StructField { name: field_name, mutable, type_spec, dims, span: field_span });
         }
-        self.expect(
-            |kind| matches!(kind, TokenKind::Dedent),
-            "unterminated struct",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::Dedent), "unterminated struct")?;
         if fields.is_empty() {
             return Err(Diagnostic::new(span, "struct must have at least one field"));
         }
-        Ok(Struct {
-            name,
-            generics,
-            bits,
-            pack: None,
-            fields,
-            span,
-        })
+        Ok(Struct { name, generics, bits, pack: None, fields, span })
     }
 
     fn function(&mut self) -> Result<Function, Diagnostic> {
@@ -560,42 +505,22 @@ impl Parser {
         let span = self.bump().span;
         let (name, _) = self.identifier("expected protocol name")?;
         let generics = self.generics()?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Colon),
-            "expected ':' after protocol name",
-        )?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Newline),
-            "expected newline before protocol methods",
-        )?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Indent),
-            "expected indented protocol methods",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::Colon), "expected ':' after protocol name")?;
+        self.expect(|kind| matches!(kind, TokenKind::Newline), "expected newline before protocol methods")?;
+        self.expect(|kind| matches!(kind, TokenKind::Indent), "expected indented protocol methods")?;
         let mut methods = Vec::new();
         while !matches!(self.peek().kind, TokenKind::Dedent | TokenKind::Eof) {
             methods.push(self.function_header()?);
             self.line_end()?;
         }
-        self.expect(
-            |kind| matches!(kind, TokenKind::Dedent),
-            "unterminated protocol",
-        )?;
-        Ok(Protocol {
-            name,
-            generics,
-            methods,
-            span,
-        })
+        self.expect(|kind| matches!(kind, TokenKind::Dedent), "unterminated protocol")?;
+        Ok(Protocol { name, generics, methods, span })
     }
 
     /// `[T, W: Writer]` after a function's name.
     fn generic_parameters(&mut self) -> Result<Vec<GenericParameter>, Diagnostic> {
         let mut parameters = Vec::new();
-        if self
-            .take(|kind| matches!(kind, TokenKind::LeftBracket))
-            .is_none()
-        {
+        if self.take(|kind| matches!(kind, TokenKind::LeftBracket)).is_none() {
             return Ok(parameters);
         }
         loop {
@@ -614,18 +539,13 @@ impl Parser {
                 break;
             }
         }
-        self.expect(
-            |kind| matches!(kind, TokenKind::RightBracket),
-            "expected ']' after type parameters",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::RightBracket), "expected ']' after type parameters")?;
         Ok(parameters)
     }
 
     /// `fn name[generics](parameters) -> result`, without a body.
     fn function_header(&mut self) -> Result<Function, Diagnostic> {
-        let start = self
-            .expect(|kind| matches!(kind, TokenKind::Fn), "expected 'fn'")?
-            .span;
+        let start = self.expect(|kind| matches!(kind, TokenKind::Fn), "expected 'fn'")?.span;
         // A built-in type's methods are the library's (section 3).
         let mut name = match primitive(&self.peek().kind) {
             Some(type_name) => {
@@ -643,66 +563,38 @@ impl Parser {
             name = format!("{name}.{method}");
         }
         let generics = self.generic_parameters()?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::LeftParen),
-            "expected '(' after function name",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::LeftParen), "expected '(' after function name")?;
         let mut parameters = Vec::new();
         if !matches!(self.peek().kind, TokenKind::RightParen) {
             loop {
                 let (parameter_name, span) = self.identifier("expected parameter name")?;
-                self.expect(
-                    |kind| matches!(kind, TokenKind::Colon),
-                    "expected ':' after parameter name",
-                )?;
+                self.expect(|kind| matches!(kind, TokenKind::Colon), "expected ':' after parameter name")?;
                 let type_ = self.parameter_type(span)?;
                 let default = if self.take(|kind| matches!(kind, TokenKind::Equal)).is_some() {
                     Some(self.expression(0)?)
                 } else {
                     None
                 };
-                if default.is_none()
-                    && parameters
-                        .iter()
-                        .any(|one: &Parameter| one.default.is_some())
-                {
-                    return Err(Diagnostic::new(
-                        span,
-                        "a parameter without a default follows one with a default",
-                    ));
+                if default.is_none() && parameters.iter().any(|one: &Parameter| one.default.is_some()) {
+                    return Err(Diagnostic::new(span, "a parameter without a default follows one with a default"));
                 }
-                parameters.push(Parameter {
-                    name: parameter_name,
-                    type_,
-                    default,
-                    span,
-                });
+                parameters.push(Parameter { name: parameter_name, type_, default, span });
                 if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none() {
                     break;
                 }
             }
         }
-        self.expect(
-            |kind| matches!(kind, TokenKind::RightParen),
-            "expected ')' after parameters",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::RightParen), "expected ')' after parameters")?;
         let result = self.result_type(start)?;
-        Ok(Function {
-            name,
-            generics,
-            parameters,
-            result,
-            body: Vec::new(),
-            span: start,
-        })
+        Ok(Function { name, generics, parameters, result, body: Vec::new(), span: start })
     }
 
     /// `-> T`, after a function's parameters or a function type's.
-    fn result_type(&mut self, start: Span) -> Result<TypeAnnotation, Diagnostic> {
-        self.expect(
-            |kind| matches!(kind, TokenKind::Arrow),
-            "expected '->' and a result type",
-        )?;
+    fn result_type(
+        &mut self,
+        start: Span,
+    ) -> Result<TypeAnnotation, Diagnostic> {
+        self.expect(|kind| matches!(kind, TokenKind::Arrow), "expected '->' and a result type")?;
         if self.take(|kind| matches!(kind, TokenKind::Ampersand)).is_none() {
             return self.type_annotation();
         }
@@ -714,35 +606,25 @@ impl Parser {
             TypeAnnotation::Value(TypeSpec::Primitive(TypeName::String)) if !mutable => {
                 TypeAnnotation::Slice { element: TypeSpec::Primitive(TypeName::Char), rank: 1 }
             }
-            target @ (TypeAnnotation::Value(_) | TypeAnnotation::Array { .. }) => TypeAnnotation::Value(TypeSpec::Applied {
-                name: if mutable { "&mut" } else { "&" }.into(),
-                args: vec![target],
-            }),
+            target @ (TypeAnnotation::Value(_) | TypeAnnotation::Array { .. }) => {
+                TypeAnnotation::Value(TypeSpec::Applied {
+                    name: if mutable { "&mut" } else { "&" }.into(),
+                    args: vec![target],
+                })
+            }
             _ => return Err(Diagnostic::new(start, "a view result is shared: '&[T]' or '&string'")),
         })
     }
 
     fn suite(&mut self) -> Result<Vec<Statement>, Diagnostic> {
-        self.expect(
-            |kind| matches!(kind, TokenKind::Colon),
-            "expected ':' before block",
-        )?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Newline),
-            "expected newline before block",
-        )?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Indent),
-            "expected an indented block",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::Colon), "expected ':' before block")?;
+        self.expect(|kind| matches!(kind, TokenKind::Newline), "expected newline before block")?;
+        self.expect(|kind| matches!(kind, TokenKind::Indent), "expected an indented block")?;
         let mut statements = Vec::new();
         while !matches!(self.peek().kind, TokenKind::Dedent | TokenKind::Eof) {
             statements.push(self.statement()?);
         }
-        self.expect(
-            |kind| matches!(kind, TokenKind::Dedent),
-            "unterminated block",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::Dedent), "unterminated block")?;
         if statements.is_empty() {
             return Err(Diagnostic::new(self.peek().span, "block cannot be empty"));
         }
@@ -751,12 +633,10 @@ impl Parser {
 
     fn statement(&mut self) -> Result<Statement, Diagnostic> {
         match self.peek().kind {
-            TokenKind::Let
-                if matches!(
-                    self.tokens.get(self.at + 1).map(|one| &one.kind),
-                    Some(TokenKind::Const)
-                ) =>
-            {
+            TokenKind::Let if matches!(
+                self.tokens.get(self.at + 1).map(|one| &one.kind),
+                Some(TokenKind::Const)
+            ) => {
                 self.bump();
                 self.local_constant()
             }
@@ -772,11 +652,7 @@ impl Parser {
             TokenKind::Loop => {
                 let span = self.bump().span;
                 let body = self.suite()?;
-                Ok(Statement::While {
-                    condition: Expr::Boolean(true, span),
-                    body,
-                    span,
-                })
+                Ok(Statement::While { condition: Expr::Boolean(true, span), body, span })
             }
             TokenKind::Return => self.return_statement(),
             TokenKind::Yield => {
@@ -790,19 +666,10 @@ impl Parser {
                 let span = self.bump().span;
                 let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
                 let (name, _) = self.identifier("expected a name after 'with'")?;
-                self.expect(
-                    |kind| matches!(kind, TokenKind::Equal),
-                    "expected '=' after the 'with' name",
-                )?;
+                self.expect(|kind| matches!(kind, TokenKind::Equal), "expected '=' after the 'with' name")?;
                 let value = self.expression(0)?;
                 let body = self.suite()?;
-                Ok(Statement::With {
-                    mutable,
-                    name,
-                    value,
-                    body,
-                    span,
-                })
+                Ok(Statement::With { mutable, name, value, body, span })
             }
             TokenKind::If => self.if_statement(),
             TokenKind::While => self.while_statement(),
@@ -837,16 +704,10 @@ impl Parser {
                 if let Some(operation) = operation {
                     self.bump();
                     let span = expression.span();
-                    let target = AssignTarget::of(expression)
-                        .map_err(|message| Diagnostic::new(span, message))?;
+                    let target = AssignTarget::of(expression).map_err(|message| Diagnostic::new(span, message))?;
                     let value = self.expression(0)?;
                     self.line_end()?;
-                    Ok(Statement::Assign {
-                        target,
-                        operation,
-                        value,
-                        span,
-                    })
+                    Ok(Statement::Assign { target, operation, value, span })
                 } else {
                     self.line_end()?;
                     Ok(Statement::Expr(expression))
@@ -876,7 +737,9 @@ impl Parser {
                         } else {
                             let place = self.expression(0)?;
                             let where_ = place.span();
-                            AsmTarget::Place(AssignTarget::of(place).map_err(|message| Diagnostic::new(where_, message))?)
+                            AsmTarget::Place(
+                                AssignTarget::of(place).map_err(|message| Diagnostic::new(where_, message))?,
+                            )
                         };
                         asm.outputs.push((register, target, at));
                         if self.take(|kind| matches!(kind, TokenKind::Comma)).is_none() {
@@ -923,13 +786,13 @@ impl Parser {
         // `let [mut] name[: T] = value` binds a name; anything else is a pattern.
         let named = matches!(self.peek().kind, TokenKind::Mut)
             || (matches!(&self.peek().kind, TokenKind::Identifier(name) if name != "_")
-                && matches!(self.tokens.get(self.at + 1).map(|one| &one.kind), Some(TokenKind::Colon | TokenKind::Equal)));
+                && matches!(
+                    self.tokens.get(self.at + 1).map(|one| &one.kind),
+                    Some(TokenKind::Colon | TokenKind::Equal)
+                ));
         if !named {
             let pattern = self.pattern()?;
-            self.expect(
-                |kind| matches!(kind, TokenKind::Equal),
-                "a binding requires an initializer",
-            )?;
+            self.expect(|kind| matches!(kind, TokenKind::Equal), "a binding requires an initializer")?;
             let value = self.expression(0)?;
             let otherwise = if self.take(|kind| matches!(kind, TokenKind::Else)).is_some() {
                 Some(self.suite()?)
@@ -941,40 +804,23 @@ impl Parser {
             if let (Pattern::Wildcard(_), None) = (&pattern, &otherwise) {
                 return Ok(Statement::Expr(value));
             }
-            return Ok(Statement::Destructure {
-                pattern,
-                value,
-                otherwise,
-                span: token.span,
-            });
+            return Ok(Statement::Destructure { pattern, value, otherwise, span: token.span });
         }
         let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
         let (name, _) = self.identifier("expected binding name")?;
         let annotation = if self.take(|kind| matches!(kind, TokenKind::Colon)).is_some() {
             let annotation = self.type_annotation()?;
             if annotation == TypeAnnotation::Value(TypeSpec::Primitive(TypeName::Void)) {
-                return Err(Diagnostic::new(
-                    token.span,
-                    "a binding cannot have type void",
-                ));
+                return Err(Diagnostic::new(token.span, "a binding cannot have type void"));
             }
             Some(annotation)
         } else {
             None
         };
-        self.expect(
-            |kind| matches!(kind, TokenKind::Equal),
-            "a binding requires an initializer",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::Equal), "a binding requires an initializer")?;
         let value = self.expression(0)?;
         self.line_end()?;
-        Ok(Statement::Bind {
-            mutable,
-            name,
-            annotation,
-            value,
-            span: token.span,
-        })
+        Ok(Statement::Bind { mutable, name, annotation, value, span: token.span })
     }
 
     /// A constant in a function: a binding of its literal.
@@ -984,11 +830,7 @@ impl Parser {
 
     fn return_statement(&mut self) -> Result<Statement, Diagnostic> {
         let span = self.bump().span;
-        let value = if matches!(self.peek().kind, TokenKind::Newline) {
-            None
-        } else {
-            Some(self.expression(0)?)
-        };
+        let value = if matches!(self.peek().kind, TokenKind::Newline) { None } else { Some(self.expression(0)?) };
         self.line_end()?;
         Ok(Statement::Return { value, span })
     }
@@ -999,49 +841,26 @@ impl Parser {
         let then_branch = self.suite()?;
         let else_branch = if self.take(|kind| matches!(kind, TokenKind::Else)).is_some() {
             // `else if` is an `else` holding one `if`.
-            if matches!(self.peek().kind, TokenKind::If) {
-                vec![self.if_statement()?]
-            } else {
-                self.suite()?
-            }
+            if matches!(self.peek().kind, TokenKind::If) { vec![self.if_statement()?] } else { self.suite()? }
         } else {
             Vec::new()
         };
-        Ok(Statement::If {
-            condition,
-            then_branch,
-            else_branch,
-            span,
-        })
+        Ok(Statement::If { condition, then_branch, else_branch, span })
     }
 
     fn while_statement(&mut self) -> Result<Statement, Diagnostic> {
         let span = self.bump().span;
         let condition = self.expression(0)?;
         let body = self.suite()?;
-        Ok(Statement::While {
-            condition,
-            body,
-            span,
-        })
+        Ok(Statement::While { condition, body, span })
     }
 
     fn for_statement(&mut self) -> Result<Statement, Diagnostic> {
-        let Clause::For {
-            pattern,
-            refutable,
-            mode,
-            iterable,
-            end,
-            span,
-        } = self.for_clause()?
-        else {
+        let Clause::For { pattern, refutable, mode, iterable, end, span } = self.for_clause()? else {
             unreachable!("a for clause")
         };
         let body = self.suite()?;
-        Ok(Statement::for_pattern(
-            &pattern, refutable, mode, iterable, end, body, span,
-        ))
+        Ok(Statement::for_pattern(&pattern, refutable, mode, iterable, end, body, span))
     }
 
     /// `for [case] pattern in [&[mut]] iterable`, or `for name in start..end`.
@@ -1049,14 +868,8 @@ impl Parser {
         let span = self.bump().span;
         let refutable = self.take(|kind| matches!(kind, TokenKind::Case)).is_some();
         let mut pattern = self.pattern()?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::In),
-            "expected 'in' after the loop pattern",
-        )?;
-        let mode = if self
-            .take(|kind| matches!(kind, TokenKind::Ampersand))
-            .is_some()
-        {
+        self.expect(|kind| matches!(kind, TokenKind::In), "expected 'in' after the loop pattern")?;
+        let mode = if self.take(|kind| matches!(kind, TokenKind::Ampersand)).is_some() {
             if self.take(|kind| matches!(kind, TokenKind::Mut)).is_some() {
                 IterationMode::Mutable
             } else {
@@ -1066,9 +879,7 @@ impl Parser {
             IterationMode::Value
         };
         let iterable = self.expression(0)?;
-        let end = if mode == IterationMode::Value
-            && self.take(|kind| matches!(kind, TokenKind::Range)).is_some()
-        {
+        let end = if mode == IterationMode::Value && self.take(|kind| matches!(kind, TokenKind::Range)).is_some() {
             if let Pattern::Wildcard(at) = pattern {
                 pattern = Pattern::Binding(format!("$ignored{}_{}", at.line, at.column), at);
             }
@@ -1079,14 +890,7 @@ impl Parser {
         } else {
             None
         };
-        Ok(Clause::For {
-            pattern,
-            refutable,
-            mode,
-            iterable,
-            end,
-            span,
-        })
+        Ok(Clause::For { pattern, refutable, mode, iterable, end, span })
     }
 
     /// The clauses after a comprehension's value: a `for`, then any `for`s and `if`s.
@@ -1104,7 +908,10 @@ impl Parser {
         }
     }
 
-    fn expression(&mut self, minimum_binding: u8) -> Result<Expr, Diagnostic> {
+    fn expression(
+        &mut self,
+        minimum_binding: u8,
+    ) -> Result<Expr, Diagnostic> {
         let mut left = self.prefix(minimum_binding)?;
         let mut compared = false;
         loop {
@@ -1121,10 +928,7 @@ impl Parser {
                 }
                 let at = self.bump().span;
                 let start = left.span();
-                left = Expr::Try {
-                    operand: Box::new(left),
-                    span: start.to(at.end_column),
-                };
+                left = Expr::Try { operand: Box::new(left), span: start.to(at.end_column) };
                 continue;
             }
             let postfix = matches!(
@@ -1158,9 +962,7 @@ impl Parser {
             }
             let at = self.bump().span;
             if operation == BinaryOp::Is
-                && self
-                    .take(|kind| matches!(kind, TokenKind::Identifier(word) if word == "not"))
-                    .is_some()
+                && self.take(|kind| matches!(kind, TokenKind::Identifier(word) if word == "not")).is_some()
             {
                 operation = BinaryOp::IsNot;
             }
@@ -1171,25 +973,20 @@ impl Parser {
             left = if left_binding == COMPARE && compared {
                 chained(left, operation, right, span, at)?
             } else {
-                Expr::Binary {
-                    op: operation,
-                    left: Box::new(left),
-                    right: Box::new(right),
-                    span,
-                }
+                Expr::Binary { op: operation, left: Box::new(left), right: Box::new(right), span }
             };
             compared |= left_binding == COMPARE;
         }
         Ok(left)
     }
 
-    fn prefix(&mut self, minimum_binding: u8) -> Result<Expr, Diagnostic> {
+    fn prefix(
+        &mut self,
+        minimum_binding: u8,
+    ) -> Result<Expr, Diagnostic> {
         let token = self.bump().clone();
         if matches!(token.kind, TokenKind::Bang) && minimum_binding > NOT {
-            return Err(Diagnostic::new(
-                token.span,
-                "'!' binds looser than this operator; parenthesize it",
-            ));
+            return Err(Diagnostic::new(token.span, "'!' binds looser than this operator; parenthesize it"));
         }
         match token.kind {
             TokenKind::Integer(value) => Ok(Expr::Integer(value, token.span)),
@@ -1201,9 +998,8 @@ impl Parser {
                 let (name, name_span) = self.identifier("expected variant name after '.'")?;
                 let mut end = name_span.end_column;
                 let arguments = if matches!(self.peek().kind, TokenKind::LeftParen) {
-                    let Expr::Call {
-                        arguments, span, ..
-                    } = self.call(Expr::Name(name.clone(), name_span), Vec::new())?
+                    let Expr::Call { arguments, span, .. } =
+                        self.call(Expr::Name(name.clone(), name_span), Vec::new())?
                     else {
                         unreachable!("a name's call is a call")
                     };
@@ -1212,12 +1008,7 @@ impl Parser {
                 } else {
                     Vec::new()
                 };
-                Ok(Expr::Variant {
-                    enum_name: None,
-                    name,
-                    arguments,
-                    span: token.span.to(end),
-                })
+                Ok(Expr::Variant { enum_name: None, name, arguments, span: token.span.to(end) })
             }
             TokenKind::True => Ok(Expr::Boolean(true, token.span)),
             TokenKind::False => Ok(Expr::Boolean(false, token.span)),
@@ -1230,16 +1021,10 @@ impl Parser {
             }
             TokenKind::LeftBrace if self.brace_has_comprehension() => {
                 let key = self.expression(0)?;
-                self.expect(
-                    |kind| matches!(kind, TokenKind::Colon),
-                    "expected ':' between dictionary key and value",
-                )?;
+                self.expect(|kind| matches!(kind, TokenKind::Colon), "expected ':' between dictionary key and value")?;
                 let value = self.expression(0)?;
                 if !matches!(self.peek().kind, TokenKind::For) {
-                    return Err(Diagnostic::new(
-                        self.peek().span,
-                        "expected 'for' in dictionary comprehension",
-                    ));
+                    return Err(Diagnostic::new(self.peek().span, "expected 'for' in dictionary comprehension"));
                 }
                 let clauses = self.comprehension_clauses()?;
                 let close = self.expect(
@@ -1266,21 +1051,15 @@ impl Parser {
                         break;
                     }
                 }
-                let close = self.expect(
-                    |kind| matches!(kind, TokenKind::RightBrace),
-                    "expected '}' after dictionary entries",
-                )?;
+                let close =
+                    self.expect(|kind| matches!(kind, TokenKind::RightBrace), "expected '}' after dictionary entries")?;
                 Ok(Expr::Dict(entries, token.span.to(close.span.end_column)))
             }
             TokenKind::Ampersand => {
                 let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
                 let operand = self.expression(UNARY)?;
                 let end = operand.span().end_column;
-                Ok(Expr::Borrow {
-                    mutable,
-                    operand: Box::new(operand),
-                    span: token.span.to(end),
-                })
+                Ok(Expr::Borrow { mutable, operand: Box::new(operand), span: token.span.to(end) })
             }
             TokenKind::LeftBracket => {
                 let mut values = Vec::new();
@@ -1309,14 +1088,9 @@ impl Parser {
                         values.push(self.expression(0)?);
                     }
                 }
-                let close = self.expect(
-                    |kind| matches!(kind, TokenKind::RightBracket),
-                    "expected ']' after array literal",
-                )?;
-                Ok(Expr::Array(
-                    values,
-                    token.span.to(close.span.end_column),
-                ))
+                let close =
+                    self.expect(|kind| matches!(kind, TokenKind::RightBracket), "expected ']' after array literal")?;
+                Ok(Expr::Array(values, token.span.to(close.span.end_column)))
             }
             TokenKind::Minus | TokenKind::Tilde | TokenKind::Bang | TokenKind::Star => {
                 let (operation, binding) = match token.kind {
@@ -1327,23 +1101,16 @@ impl Parser {
                 };
                 let operand = self.expression(binding)?;
                 let end = operand.span().end_column;
-                Ok(Expr::Unary {
-                    op: operation,
-                    operand: Box::new(operand),
-                    span: token.span.to(end),
-                })
+                Ok(Expr::Unary { op: operation, operand: Box::new(operand), span: token.span.to(end) })
             }
-            kind if primitive(&kind).is_some() => {
-                self.conversion(primitive(&kind).expect("matched"), token.span)
-            }
+            kind if primitive(&kind).is_some() => self.conversion(primitive(&kind).expect("matched"), token.span),
             // `|x: i16, y| body`, or `|| body` with no parameters.
             TokenKind::Pipe | TokenKind::OrOr => {
                 let mut parameters = Vec::new();
                 if matches!(token.kind, TokenKind::Pipe) {
                     while self.take(|kind| matches!(kind, TokenKind::Pipe)).is_none() {
                         let (name, _) = self.identifier("expected a lambda parameter")?;
-                        let type_ = if self.take(|kind| matches!(kind, TokenKind::Colon)).is_some()
-                        {
+                        let type_ = if self.take(|kind| matches!(kind, TokenKind::Colon)).is_some() {
                             Some(self.type_spec()?)
                         } else {
                             None
@@ -1360,20 +1127,14 @@ impl Parser {
                 }
                 let body = self.expression(0)?;
                 let end = body.span().end_column;
-                Ok(Expr::Lambda {
-                    parameters,
-                    body: Box::new(body),
-                    span: token.span.to(end),
-                })
+                Ok(Expr::Lambda { parameters, body: Box::new(body), span: token.span.to(end) })
             }
             TokenKind::LeftParen => {
                 let expression = self.expression(0)?;
                 if matches!(self.peek().kind, TokenKind::For) {
                     let clauses = self.comprehension_clauses()?;
-                    let close = self.expect(
-                        |kind| matches!(kind, TokenKind::RightParen),
-                        "expected ')' after generator",
-                    )?;
+                    let close =
+                        self.expect(|kind| matches!(kind, TokenKind::RightParen), "expected ')' after generator")?;
                     return Ok(Expr::Generator {
                         element: Box::new(expression),
                         clauses,
@@ -1388,19 +1149,11 @@ impl Parser {
                             break;
                         }
                     }
-                    let close = self.expect(
-                        |kind| matches!(kind, TokenKind::RightParen),
-                        "expected ')' after a tuple",
-                    )?;
-                    return Ok(Expr::Tuple(
-                        items,
-                        token.span.to(close.span.end_column),
-                    ));
+                    let close =
+                        self.expect(|kind| matches!(kind, TokenKind::RightParen), "expected ')' after a tuple")?;
+                    return Ok(Expr::Tuple(items, token.span.to(close.span.end_column)));
                 }
-                self.expect(
-                    |kind| matches!(kind, TokenKind::RightParen),
-                    "expected ')' after expression",
-                )?;
+                self.expect(|kind| matches!(kind, TokenKind::RightParen), "expected ')' after expression")?;
                 Ok(expression)
             }
             _ => Err(Diagnostic::new(token.span, "expected expression")),
@@ -1408,21 +1161,16 @@ impl Parser {
     }
 
     /// `T(value)`, after the type's name.
-    fn conversion(&mut self, target: TypeName, start: Span) -> Result<Expr, Diagnostic> {
-        self.expect(
-            |kind| matches!(kind, TokenKind::LeftParen),
-            "expected '(' after a conversion's type",
-        )?;
+    fn conversion(
+        &mut self,
+        target: TypeName,
+        start: Span,
+    ) -> Result<Expr, Diagnostic> {
+        self.expect(|kind| matches!(kind, TokenKind::LeftParen), "expected '(' after a conversion's type")?;
         let value = self.expression(0)?;
-        let close = self.expect(
-            |kind| matches!(kind, TokenKind::RightParen),
-            "expected ')' after a conversion's value",
-        )?;
-        Ok(Expr::Conversion {
-            target,
-            value: Box::new(value),
-            span: start.to(close.span.end_column),
-        })
+        let close =
+            self.expect(|kind| matches!(kind, TokenKind::RightParen), "expected ')' after a conversion's value")?;
+        Ok(Expr::Conversion { target, value: Box::new(value), span: start.to(close.span.end_column) })
     }
 
     fn brace_has_comprehension(&self) -> bool {
@@ -1442,7 +1190,10 @@ impl Parser {
 
     /// `[T, ...]` ahead of a named callee's `(`: its type arguments. The
     /// tokens are left as they were when they are not.
-    fn type_arguments(&mut self, callee: &Expr) -> Option<Vec<TypeSpec>> {
+    fn type_arguments(
+        &mut self,
+        callee: &Expr,
+    ) -> Option<Vec<TypeSpec>> {
         if !matches!(callee, Expr::Name(..) | Expr::Member { .. }) {
             return None;
         }
@@ -1463,7 +1214,11 @@ impl Parser {
         types
     }
 
-    fn call(&mut self, callee: Expr, type_arguments: Vec<TypeSpec>) -> Result<Expr, Diagnostic> {
+    fn call(
+        &mut self,
+        callee: Expr,
+        type_arguments: Vec<TypeSpec>,
+    ) -> Result<Expr, Diagnostic> {
         let start = callee.span();
         self.bump();
         let mut arguments = Vec::new();
@@ -1478,50 +1233,31 @@ impl Parser {
                 }
             }
         }
-        let close = self.expect(
-            |kind| matches!(kind, TokenKind::RightParen),
-            "expected ')' after arguments",
-        )?;
+        let close = self.expect(|kind| matches!(kind, TokenKind::RightParen), "expected ')' after arguments")?;
         let span = start.to(close.span.end_column);
         match callee {
-            Expr::Name(name, _) => Ok(Expr::Call {
-                name,
-                type_arguments,
-                arguments,
-                span,
-            }),
-            Expr::Member { base, field, .. } => Ok(Expr::MethodCall {
-                receiver: base,
-                name: field,
-                type_arguments,
-                arguments,
-                span,
-            }),
-            other => Err(Diagnostic::new(
-                other.span(),
-                "only named functions and methods can be called",
-            )),
+            Expr::Name(name, _) => Ok(Expr::Call { name, type_arguments, arguments, span }),
+            Expr::Member { base, field, .. } => {
+                Ok(Expr::MethodCall { receiver: base, name: field, type_arguments, arguments, span })
+            }
+            other => Err(Diagnostic::new(other.span(), "only named functions and methods can be called")),
         }
     }
 
-    fn index(&mut self, base: Expr) -> Result<Expr, Diagnostic> {
+    fn index(
+        &mut self,
+        base: Expr,
+    ) -> Result<Expr, Diagnostic> {
         let start = base.span();
         self.bump();
-        let first = if matches!(self.peek().kind, TokenKind::Colon) {
-            None
-        } else {
-            Some(self.expression(0)?)
-        };
+        let first = if matches!(self.peek().kind, TokenKind::Colon) { None } else { Some(self.expression(0)?) };
         if self.take(|kind| matches!(kind, TokenKind::Colon)).is_some() {
             let end = if matches!(self.peek().kind, TokenKind::RightBracket) {
                 None
             } else {
                 Some(Box::new(self.expression(0)?))
             };
-            let close = self.expect(
-                |kind| matches!(kind, TokenKind::RightBracket),
-                "expected ']' after slice",
-            )?;
+            let close = self.expect(|kind| matches!(kind, TokenKind::RightBracket), "expected ']' after slice")?;
             return Ok(Expr::Slice {
                 base: Box::new(base),
                 start: first.map(Box::new),
@@ -1534,34 +1270,27 @@ impl Parser {
             indices.push(self.expression(0)?);
         }
         if indices.len() > MAX_RANK {
-            return Err(Diagnostic::new(
-                start,
-                format!("an array has at most {MAX_RANK} dimensions"),
-            ));
+            return Err(Diagnostic::new(start, format!("an array has at most {MAX_RANK} dimensions")));
         }
-        let close = self.expect(
-            |kind| matches!(kind, TokenKind::RightBracket),
-            "expected ']' after index",
-        )?;
-        Ok(Expr::Index {
-            base: Box::new(base),
-            indices,
-            span: start.to(close.span.end_column),
-        })
+        let close = self.expect(|kind| matches!(kind, TokenKind::RightBracket), "expected ']' after index")?;
+        Ok(Expr::Index { base: Box::new(base), indices, span: start.to(close.span.end_column) })
     }
 
-    fn member(&mut self, base: Expr) -> Result<Expr, Diagnostic> {
+    fn member(
+        &mut self,
+        base: Expr,
+    ) -> Result<Expr, Diagnostic> {
         let start = base.span();
         self.bump();
         let (field, field_span) = self.identifier("expected field name after '.'")?;
-        Ok(Expr::Member {
-            base: Box::new(base),
-            field,
-            span: start.to(field_span.end_column),
-        })
+        Ok(Expr::Member { base: Box::new(base), field, span: start.to(field_span.end_column) })
     }
 
-    fn fstring(&self, value: Vec<u8>, span: Span) -> Result<Expr, Diagnostic> {
+    fn fstring(
+        &self,
+        value: Vec<u8>,
+        span: Span,
+    ) -> Result<Expr, Diagnostic> {
         let mut parts = Vec::new();
         let mut text = Vec::new();
         let mut at = 0;
@@ -1580,20 +1309,14 @@ impl Parser {
                         parts.push(FStringPart::Text(std::mem::take(&mut text)));
                     }
                     let Some(close) = value[at + 1..].iter().position(|one| *one == b'}') else {
-                        return Err(Diagnostic::new(
-                            span,
-                            "f-string has an unclosed interpolation",
-                        ));
+                        return Err(Diagnostic::new(span, "f-string has an unclosed interpolation"));
                     };
                     let close = at + 1 + close;
                     let source = std::str::from_utf8(&value[at + 1..close])
                         .map_err(|_| Diagnostic::new(span, "f-string interpolation must be ASCII"))?
                         .trim();
                     if source.is_empty() {
-                        return Err(Diagnostic::new(
-                            span,
-                            "f-string interpolation cannot be empty",
-                        ));
+                        return Err(Diagnostic::new(span, "f-string interpolation cannot be empty"));
                     }
                     parts.push(self.interpolation(source, span)?);
                     at = close + 1;
@@ -1615,10 +1338,7 @@ impl Parser {
     /// `[A, B]` after a declared type's name; none when absent.
     fn generics(&mut self) -> Result<Vec<String>, Diagnostic> {
         let mut names = Vec::new();
-        if self
-            .take(|kind| matches!(kind, TokenKind::LeftBracket))
-            .is_none()
-        {
+        if self.take(|kind| matches!(kind, TokenKind::LeftBracket)).is_none() {
             return Ok(names);
         }
         loop {
@@ -1627,47 +1347,33 @@ impl Parser {
                 break;
             }
         }
-        self.expect(
-            |kind| matches!(kind, TokenKind::RightBracket),
-            "expected ']' after type parameters",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::RightBracket), "expected ']' after type parameters")?;
         Ok(names)
     }
 
     fn type_annotation(&mut self) -> Result<TypeAnnotation, Diagnostic> {
-        let mut element = if self
-            .take(|kind| matches!(kind, TokenKind::LeftParen))
-            .is_some()
-        {
+        let mut element = if self.take(|kind| matches!(kind, TokenKind::LeftParen)).is_some() {
             // `(A, B)`: a tuple type.
             let mut args = vec![self.type_annotation()?];
             while self.take(|kind| matches!(kind, TokenKind::Comma)).is_some() {
                 args.push(self.type_annotation()?);
             }
-            self.expect(
-                |kind| matches!(kind, TokenKind::RightParen),
-                "expected ')' after tuple element types",
-            )?;
-            TypeSpec::Applied {
-                name: TUPLE.into(),
-                args,
-            }
+            self.expect(|kind| matches!(kind, TokenKind::RightParen), "expected ')' after tuple element types")?;
+            TypeSpec::Applied { name: TUPLE.into(), args }
         } else {
             self.type_spec()?
         };
         // `Name[T, ...]` applies a generic; `T[N, ...]` is an array.
         while matches!(self.peek().kind, TokenKind::LeftBracket) && !self.dimension_next() {
             let TypeSpec::Named(name) = element else {
-                return Err(Diagnostic::new(
-                    self.peek().span,
-                    "only a named type takes type arguments",
-                ));
+                return Err(Diagnostic::new(self.peek().span, "only a named type takes type arguments"));
             };
             self.bump();
             let mut args = vec![self.type_annotation()?];
             while self.take(|kind| matches!(kind, TokenKind::Comma)).is_some() {
                 // `Name[T, N]`: an element type and its rank, as in `[T, N]`.
-                if let (TokenKind::Integer(_), Some(TypeAnnotation::Value(element))) = (&self.peek().kind, args.last()) {
+                if let (TokenKind::Integer(_), Some(TypeAnnotation::Value(element))) = (&self.peek().kind, args.last())
+                {
                     let element = element.clone();
                     let span = self.peek().span;
                     let rank = self.dimension("rank")?;
@@ -1679,81 +1385,54 @@ impl Parser {
                 }
                 args.push(self.type_annotation()?);
             }
-            self.expect(
-                |kind| matches!(kind, TokenKind::RightBracket),
-                "expected ']' after type arguments",
-            )?;
+            self.expect(|kind| matches!(kind, TokenKind::RightBracket), "expected ']' after type arguments")?;
             element = TypeSpec::Applied { name, args };
         }
-        if self
-            .take(|kind| matches!(kind, TokenKind::LeftBracket))
-            .is_none()
-        {
+        if self.take(|kind| matches!(kind, TokenKind::LeftBracket)).is_none() {
             return Ok(TypeAnnotation::Value(element));
         }
         if element == TypeSpec::Primitive(TypeName::Void) {
-            return Err(Diagnostic::new(
-                self.peek().span,
-                "an array element cannot be void",
-            ));
+            return Err(Diagnostic::new(self.peek().span, "an array element cannot be void"));
         }
         let mut dims = vec![self.dimension("array length")?];
         while self.take(|kind| matches!(kind, TokenKind::Comma)).is_some() {
             dims.push(self.dimension("array length")?);
         }
         if dims.len() > MAX_RANK {
-            return Err(Diagnostic::new(
-                self.peek().span,
-                format!("an array has at most {MAX_RANK} dimensions"),
-            ));
+            return Err(Diagnostic::new(self.peek().span, format!("an array has at most {MAX_RANK} dimensions")));
         }
-        self.expect(
-            |kind| matches!(kind, TokenKind::RightBracket),
-            "expected ']' after array type",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::RightBracket), "expected ']' after array type")?;
         Ok(TypeAnnotation::Array { element, dims })
     }
 
     /// What follows `&` or `&mut`: `[T]`, `[T, rank]`, `T[d0, ...]`, or `T`.
     fn borrowed_annotation(&mut self) -> Result<TypeAnnotation, Diagnostic> {
-        if self
-            .take(|kind| matches!(kind, TokenKind::LeftBracket))
-            .is_none()
-        {
+        if self.take(|kind| matches!(kind, TokenKind::LeftBracket)).is_none() {
             // A borrowed fixed array keeps its dimensions: a far pointer (section 13).
             return self.type_annotation();
         }
         let element = self.type_spec()?;
         if element == TypeSpec::Primitive(TypeName::Void) {
-            return Err(Diagnostic::new(
-                self.peek().span,
-                "an array element cannot be void",
-            ));
+            return Err(Diagnostic::new(self.peek().span, "an array element cannot be void"));
         }
         let rank = if self.take(|kind| matches!(kind, TokenKind::Comma)).is_some() {
             let rank = self.dimension("a view's rank")?;
             if !(1..=MAX_RANK as u32).contains(&rank) {
-                return Err(Diagnostic::new(
-                    self.peek().span,
-                    format!("a view's rank is 1 to {MAX_RANK}"),
-                ));
+                return Err(Diagnostic::new(self.peek().span, format!("a view's rank is 1 to {MAX_RANK}")));
             }
             rank as u8
         } else {
             1
         };
-        self.expect(
-            |kind| matches!(kind, TokenKind::RightBracket),
-            "expected ']' after a view's element type",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::RightBracket), "expected ']' after a view's element type")?;
         Ok(TypeAnnotation::Slice { element, rank })
     }
 
-    fn parameter_type(&mut self, span: Span) -> Result<ParameterType, Diagnostic> {
-        if self
-            .take(|kind| matches!(kind, TokenKind::Ampersand))
-            .is_some()
-        {
+    fn parameter_type(
+        &mut self,
+        span: Span,
+    ) -> Result<ParameterType, Diagnostic> {
+        if self.take(|kind| matches!(kind, TokenKind::Ampersand)).is_some() {
             let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
             let target = self.borrowed_annotation()?;
             if target == TypeAnnotation::Value(TypeSpec::Primitive(TypeName::Void)) {
@@ -1771,10 +1450,7 @@ impl Parser {
     /// A call argument: `value`, or `name=value`.
     fn argument(&mut self) -> Result<Expr, Diagnostic> {
         let named = matches!(self.peek().kind, TokenKind::Identifier(_))
-            && self
-                .tokens
-                .get(self.at + 1)
-                .is_some_and(|token| matches!(token.kind, TokenKind::Equal));
+            && self.tokens.get(self.at + 1).is_some_and(|token| matches!(token.kind, TokenKind::Equal));
         if !named {
             return self.expression(0);
         }
@@ -1782,11 +1458,7 @@ impl Parser {
         self.bump();
         let value = self.expression(0)?;
         let end = value.span().end_column;
-        Ok(Expr::NamedArgument {
-            name,
-            value: Box::new(value),
-            span: span.to(end),
-        })
+        Ok(Expr::NamedArgument { name, value: Box::new(value), span: span.to(end) })
     }
 
     /// Whether the `?` ahead opens `? then : otherwise` rather than
@@ -1805,7 +1477,10 @@ impl Parser {
                     depth -= 1;
                 }
                 TokenKind::Colon if depth == 0 => {
-                    return !matches!(rest.get(index + 1).map(|next| &next.kind), Some(TokenKind::Newline | TokenKind::Eof));
+                    return !matches!(
+                        rest.get(index + 1).map(|next| &next.kind),
+                        Some(TokenKind::Newline | TokenKind::Eof)
+                    );
                 }
                 TokenKind::Comma if depth == 0 => return false,
                 TokenKind::Newline | TokenKind::Eof => return false,
@@ -1815,14 +1490,14 @@ impl Parser {
         false
     }
 
-    fn conditional(&mut self, condition: Expr) -> Result<Expr, Diagnostic> {
+    fn conditional(
+        &mut self,
+        condition: Expr,
+    ) -> Result<Expr, Diagnostic> {
         self.bump();
         // `?` and `:` bracket the middle, so it may be any expression.
         let then = self.expression(0)?;
-        self.expect(
-            |kind| matches!(kind, TokenKind::Colon),
-            "expected ':' in a conditional expression",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::Colon), "expected ':' in a conditional expression")?;
         let otherwise = self.expression(TERNARY)?;
         let start = condition.span();
         let end = otherwise.span().end_column;
@@ -1844,14 +1519,20 @@ impl Parser {
     }
 
     /// The names from `at` joined by dots, `alias.NAME`, and how many tokens spell it.
-    fn path_at(&self, at: usize) -> Option<(String, usize)> {
+    fn path_at(
+        &self,
+        at: usize,
+    ) -> Option<(String, usize)> {
         let name = |at: usize| match self.tokens.get(at).map(|one| &one.kind) {
             Some(TokenKind::Identifier(name)) => Some(name.clone()),
             _ => None,
         };
         let mut path = name(at)?;
         let mut length = 1;
-        while matches!(self.tokens.get(at + length).map(|one| &one.kind), Some(TokenKind::Dot)) {
+        while matches!(
+            self.tokens.get(at + length).map(|one| &one.kind),
+            Some(TokenKind::Dot)
+        ) {
             let Some(part) = name(at + length + 1) else { break };
             path = format!("{path}.{part}");
             length += 2;
@@ -1859,7 +1540,10 @@ impl Parser {
         Some((path, length))
     }
 
-    fn dimension(&mut self, what: &str) -> Result<u32, Diagnostic> {
+    fn dimension(
+        &mut self,
+        what: &str,
+    ) -> Result<u32, Diagnostic> {
         let path = self.path_at(self.at);
         let token = self.bump().clone();
         let value = match (&token.kind, path) {
@@ -1871,17 +1555,12 @@ impl Parser {
             _ => None,
         };
         let Some(value) = value else {
-            return Err(Diagnostic::new(
-                token.span,
-                format!("{what} must be an integer literal or constant"),
-            ));
+            return Err(Diagnostic::new(token.span, format!("{what} must be an integer literal or constant")));
         };
         u32::try_from(value)
             .ok()
             .filter(|one| *one > 0)
-            .ok_or_else(|| {
-                Diagnostic::new(token.span, format!("{what} must be positive and fit u32"))
-            })
+            .ok_or_else(|| Diagnostic::new(token.span, format!("{what} must be positive and fit u32")))
     }
 
     fn type_name(&mut self) -> Result<TypeName, Diagnostic> {
@@ -1890,9 +1569,11 @@ impl Parser {
             return Ok(type_name);
         }
         match token.kind {
-            TokenKind::Identifier(name) => self.fixed_types.get(&name).copied().ok_or_else(|| {
-                Diagnostic::new(token.span, format!("unknown scalar type {name:?}"))
-            }),
+            TokenKind::Identifier(name) => self
+                .fixed_types
+                .get(&name)
+                .copied()
+                .ok_or_else(|| Diagnostic::new(token.span, format!("unknown scalar type {name:?}"))),
             _ => Err(Diagnostic::new(token.span, "expected a type name")),
         }
     }
@@ -1947,10 +1628,7 @@ impl Parser {
             let mutable = self.take(|kind| matches!(kind, TokenKind::Mut)).is_some();
             // `&[T]` is a view, which a field or a type argument keeps.
             let target = self.borrowed_annotation()?;
-            return Ok(TypeSpec::Applied {
-                name: if mutable { "&mut" } else { "&" }.into(),
-                args: vec![target],
-            });
+            return Ok(TypeSpec::Applied { name: if mutable { "&mut" } else { "&" }.into(), args: vec![target] });
         }
         // `*far T`, `*near mut T`: a raw pointer.
         if self.take(|kind| matches!(kind, TokenKind::Star)).is_some() {
@@ -1961,11 +1639,7 @@ impl Parser {
                 }
                 _ => "near".to_owned(),
             };
-            let mutable = if self.take(|kind| matches!(kind, TokenKind::Mut)).is_some() {
-                " mut"
-            } else {
-                ""
-            };
+            let mutable = if self.take(|kind| matches!(kind, TokenKind::Mut)).is_some() { " mut" } else { "" };
             let target = self.type_spec()?;
             return Ok(TypeSpec::Applied {
                 name: format!("*{distance}{mutable}"),
@@ -1981,26 +1655,21 @@ impl Parser {
                 let (part, _) = self.identifier("expected a type name after '.'")?;
                 name = format!("{name}.{part}");
             }
-            Ok(self
-                .fixed_types
-                .get(&name)
-                .copied()
-                .map(TypeSpec::Primitive)
-                .unwrap_or(TypeSpec::Named(name)))
+            Ok(self.fixed_types.get(&name).copied().map(TypeSpec::Primitive).unwrap_or(TypeSpec::Named(name)))
         } else {
             self.type_name().map(TypeSpec::Primitive)
         }
     }
 
     fn line_end(&mut self) -> Result<(), Diagnostic> {
-        self.expect(
-            |kind| matches!(kind, TokenKind::Newline),
-            "expected end of line",
-        )?;
+        self.expect(|kind| matches!(kind, TokenKind::Newline), "expected end of line")?;
         Ok(())
     }
 
-    fn identifier(&mut self, message: &str) -> Result<(String, Span), Diagnostic> {
+    fn identifier(
+        &mut self,
+        message: &str,
+    ) -> Result<(String, Span), Diagnostic> {
         let token = self.bump();
         if let TokenKind::Identifier(name) = &token.kind {
             Ok((name.clone(), token.span))
@@ -2014,14 +1683,13 @@ impl Parser {
         predicate: impl FnOnce(&TokenKind) -> bool,
         message: &str,
     ) -> Result<&Token, Diagnostic> {
-        if predicate(&self.peek().kind) {
-            Ok(self.bump())
-        } else {
-            Err(Diagnostic::new(self.peek().span, message))
-        }
+        if predicate(&self.peek().kind) { Ok(self.bump()) } else { Err(Diagnostic::new(self.peek().span, message)) }
     }
 
-    fn take(&mut self, predicate: impl FnOnce(&TokenKind) -> bool) -> Option<&Token> {
+    fn take(
+        &mut self,
+        predicate: impl FnOnce(&TokenKind) -> bool,
+    ) -> Option<&Token> {
         predicate(&self.peek().kind).then(|| self.bump())
     }
 
@@ -2049,35 +1717,29 @@ fn chained(
     let (mut operands, mut operations) = match left {
         Expr::Chain { operands, operations, .. } => (operands, operations),
         Expr::Binary { op, left, right, .. } => (vec![*left, *right], vec![op]),
-        _ => {
-            return Err(Diagnostic::new(
-                at,
-                "a chained comparison needs a comparison before it",
-            ))
-        }
+        _ => return Err(Diagnostic::new(at, "a chained comparison needs a comparison before it")),
     };
     operands.push(right);
     operations.push(operation);
     Ok(Expr::Chain { operands, operations, span })
 }
 
-
 impl Parser {
     /// `value` or `value:code`. A colon splits off a code only when what
     /// precedes it parses on its own, so a conditional's colon stays.
-    fn interpolation(&self, source: &str, span: Span) -> Result<FStringPart, Diagnostic> {
+    fn interpolation(
+        &self,
+        source: &str,
+        span: Span,
+    ) -> Result<FStringPart, Diagnostic> {
         if let Some((value, code)) = source.rsplit_once(':') {
-            if let (Some(format), Ok(value)) = (
-                Format::parse(code.trim()),
-                parse_inline_expression(value, span, &self.fixed_types),
-            ) {
+            if let (Some(format), Ok(value)) =
+                (Format::parse(code.trim()), parse_inline_expression(value, span, &self.fixed_types))
+            {
                 return Ok(FStringPart::Value(value, format));
             }
         }
-        Ok(FStringPart::Value(
-            parse_inline_expression(source, span, &self.fixed_types)?,
-            Format::default(),
-        ))
+        Ok(FStringPart::Value(parse_inline_expression(source, span, &self.fixed_types)?, Format::default()))
     }
 }
 
@@ -2090,17 +1752,9 @@ fn parse_inline_expression(
     for token in &mut tokens {
         token.span.module = outer.module;
     }
-    let mut parser = Parser {
-        tokens,
-        at: 0,
-        fixed_types: fixed_types.clone(),
-        fixed_before: 0,
-        seeded: 0,
-        consts: BTreeMap::new(),
-    };
-    let expression = parser
-        .expression(0)
-        .map_err(|error| Diagnostic::new(outer, error.message))?;
+    let mut parser =
+        Parser { tokens, at: 0, fixed_types: fixed_types.clone(), fixed_before: 0, seeded: 0, consts: BTreeMap::new() };
+    let expression = parser.expression(0).map_err(|error| Diagnostic::new(outer, error.message))?;
     if !matches!(parser.peek().kind, TokenKind::Newline | TokenKind::Eof) {
         return Err(Diagnostic::new(outer, "invalid f-string interpolation"));
     }
@@ -2164,7 +1818,6 @@ fn infix(kind: &TokenKind) -> Option<(u8, u8, BinaryOp)> {
 #[cfg(test)]
 mod tests {
     use super::super::lexer::lex;
-
     use super::*;
 
     #[test]
@@ -2173,7 +1826,10 @@ mod tests {
         let module = parse(lex(source).unwrap()).unwrap();
         let Statement::Unsafe { body, .. } = &module.functions[0].body[0] else { panic!("an unsafe block") };
         let Statement::Asm(asm) = &body[0] else { panic!("an asm block: {:?}", body[0]) };
-        assert_eq!(asm.inputs.iter().map(|(name, value, _)| (name.as_str(), value)).collect::<Vec<_>>(), [("al", &Expr::Integer(1, Span::new(3, 16, 17)))]);
+        assert_eq!(
+            asm.inputs.iter().map(|(name, value, _)| (name.as_str(), value)).collect::<Vec<_>>(),
+            [("al", &Expr::Integer(1, Span::new(3, 16, 17)))]
+        );
         assert_eq!(
             asm.outputs.iter().map(|(name, target, _)| (name.as_str(), target.clone())).collect::<Vec<_>>(),
             [
@@ -2184,7 +1840,10 @@ mod tests {
         assert_eq!(asm.clobbers.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(), ["flags", "memory"]);
         assert_eq!(
             asm.lines,
-            [("mov ah, 0   ; sub-function".to_owned(), Span::new(4, 13, 39)), ("again: int 1Ah".to_owned(), Span::new(6, 11, 25))]
+            [
+                ("mov ah, 0   ; sub-function".to_owned(), Span::new(4, 13, 39)),
+                ("again: int 1Ah".to_owned(), Span::new(6, 11, 25))
+            ]
         );
         assert!(matches!(&body[1], Statement::Return { .. }));
     }
@@ -2202,24 +1861,12 @@ mod tests {
         .unwrap();
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.functions[0].body.len(), 1);
-        let Statement::If { else_branch, .. } = &module.functions[0].body[0] else {
-            panic!("expected if")
-        };
-        let Statement::Return {
-            value: Some(Expr::Binary { op, right, .. }),
-            ..
-        } = &else_branch[0]
-        else {
+        let Statement::If { else_branch, .. } = &module.functions[0].body[0] else { panic!("expected if") };
+        let Statement::Return { value: Some(Expr::Binary { op, right, .. }), .. } = &else_branch[0] else {
             panic!("expected return expression")
         };
         assert_eq!(*op, BinaryOp::Add);
-        assert!(matches!(
-            right.as_ref(),
-            Expr::Binary {
-                op: BinaryOp::Multiply,
-                ..
-            }
-        ));
+        assert!(matches!(right.as_ref(), Expr::Binary { op: BinaryOp::Multiply, .. }));
     }
 
     #[test]
@@ -2233,23 +1880,13 @@ mod tests {
         )
         .unwrap();
         let Statement::Bind {
-            annotation:
-                Some(TypeAnnotation::Array {
-                    element: TypeSpec::Primitive(TypeName::I32),
-                    ..
-                }),
+            annotation: Some(TypeAnnotation::Array { element: TypeSpec::Primitive(TypeName::I32), .. }),
             ..
         } = &module.functions[0].body[0]
         else {
             panic!("expected fixed-array binding")
         };
-        assert!(matches!(
-            &module.functions[0].body[1],
-            Statement::Assign {
-                target: AssignTarget::Index { .. },
-                ..
-            }
-        ));
+        assert!(matches!(&module.functions[0].body[1], Statement::Assign { target: AssignTarget::Index { .. }, .. }));
         let Statement::Expr(Expr::Call { arguments, .. }) = &module.functions[0].body[2] else {
             panic!("expected print call")
         };
@@ -2267,21 +1904,12 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        let Statement::ForRange {
-            name, start, end, ..
-        } = &module.functions[0].body[1]
-        else {
+        let Statement::ForRange { name, start, end, .. } = &module.functions[0].body[1] else {
             panic!("expected range loop")
         };
         assert_eq!(name, "step_no");
         assert!(matches!(start, Expr::Integer(0, _)));
-        assert!(matches!(
-            end,
-            Expr::Binary {
-                op: BinaryOp::Subtract,
-                ..
-            }
-        ));
+        assert!(matches!(end, Expr::Binary { op: BinaryOp::Subtract, .. }));
     }
 
     #[test]
@@ -2297,17 +1925,11 @@ mod tests {
         assert_eq!(module.fixed_types[0].name, "fixed8");
         assert!(matches!(
             module.fixed_types[0].type_name,
-            TypeName::Fixed {
-                storage: FixedStorage::I16,
-                fraction: 8,
-                declaration: 0,
-            }
+            TypeName::Fixed { storage: FixedStorage::I16, fraction: 8, declaration: 0 }
         ));
         assert_eq!(
             module.functions[0].parameters[0].type_,
-            ParameterType::Owned(TypeAnnotation::Value(TypeSpec::Primitive(
-                module.fixed_types[0].type_name
-            )))
+            ParameterType::Owned(TypeAnnotation::Value(TypeSpec::Primitive(module.fixed_types[0].type_name)))
         );
         assert_eq!(
             module.functions[0].result,
@@ -2324,7 +1946,10 @@ struct Attribute {
 }
 
 /// The ABI `name` spells.
-fn abi_named(name: &[u8], span: Span) -> Result<Abi, Diagnostic> {
+fn abi_named(
+    name: &[u8],
+    span: Span,
+) -> Result<Abi, Diagnostic> {
     let name = String::from_utf8_lossy(name).into_owned();
     Abi::named(&name).ok_or_else(|| {
         Diagnostic::new(
@@ -2392,10 +2017,7 @@ fn repr_pack(attributes: &[Attribute]) -> Result<Option<u32>, Diagnostic> {
                 _ => return Err(Diagnostic::new(*span, if target { "pack is 1, 2 or 4" } else { "pack is 1 or 2" })),
             },
             other => {
-                return Err(Diagnostic::new(
-                    other.span(),
-                    "@repr takes a layout and pack=N",
-                ));
+                return Err(Diagnostic::new(other.span(), "@repr takes a layout and pack=N"));
             }
         }
     }

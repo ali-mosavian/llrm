@@ -18,16 +18,8 @@ use regex::Regex;
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 const BASELINE: &str = "tests/target_facts.baseline";
 /// Shared code: everything but the target crates, the tests and the build products.
-const SHARED: [&str; 8] = [
-    "crates/backend",
-    "crates/ir",
-    "crates/opt",
-    "crates/support",
-    "crates/bc",
-    "crates/frontends",
-    "src",
-    "tools",
-];
+const SHARED: [&str; 8] =
+    ["crates/backend", "crates/ir", "crates/opt", "crates/support", "crates/bc", "crates/frontends", "src", "tools"];
 
 /// `a1b2` as a case-insensitive pattern that accepts `_` between digits.
 fn number(value: u64) -> String {
@@ -94,12 +86,29 @@ fn is_test_file(path: &Path) -> bool {
 }
 
 /// The shared code git tracks: not a virtualenv, a build or an editor's leavings beside it.
-fn files(root: &Path, directory: &str, into: &mut Vec<PathBuf>) {
-    let listed = std::process::Command::new("git").arg("-C").arg(root).arg("ls-files").arg("--").arg(directory).output().expect("git runs");
+fn files(
+    root: &Path,
+    directory: &str,
+    into: &mut Vec<PathBuf>,
+) {
+    let listed = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("ls-files")
+        .arg("--")
+        .arg(directory)
+        .output()
+        .expect("git runs");
     assert!(listed.status.success(), "git ls-files: {}", String::from_utf8_lossy(&listed.stderr));
     for line in String::from_utf8_lossy(&listed.stdout).lines() {
         let path = root.join(line);
-        if matches!(path.extension().and_then(|ext| ext.to_str()), Some("rs" | "py" | "sh")) && !is_test_file(path.strip_prefix(root).unwrap()) && line != REGISTRY {
+        if matches!(
+            path.extension().and_then(|ext| ext.to_str()),
+            Some("rs" | "py" | "sh")
+        )
+            && !is_test_file(path.strip_prefix(root).unwrap())
+            && line != REGISTRY
+        {
             into.push(path);
         }
     }
@@ -112,16 +121,20 @@ fn code(path: &Path) -> Vec<String> {
     code_of(&text, comment)
 }
 
-/// `code`, of the text. A `#[cfg(test)]` takes the item after it (a module, a static, a function: to the end of its brackets or its `;`),
-/// not the rest of the file: a test static once hid a target's spelling further down.
-fn code_of(text: &str, comment: &str) -> Vec<String> {
+/// `code`, of the text. A `#[cfg(test)]` takes the item after it (a module, a static, a function: to the end of its
+/// brackets or its `;`), not the rest of the file: a test static once hid a target's spelling further down.
+fn code_of(
+    text: &str,
+    comment: &str,
+) -> Vec<String> {
     let mut lines = Vec::new();
     let mut skipping = false;
     let mut depth = 0i32;
     let mut started = false;
     for line in text.lines() {
         if skipping {
-            // Attributes and doc lines between the cfg and the item are part of it; so is everything to the end of the item.
+            // Attributes and doc lines between the cfg and the item are part of it; so is everything to the end of the
+            // item.
             let code = line.split("//").next().unwrap_or("");
             for c in code.chars() {
                 match c {
@@ -191,7 +204,10 @@ fn baseline() -> BTreeMap<String, usize> {
 }
 
 /// What is wrong in the tree at `root` given the `allowed` copies per file.
-fn problems(root: &Path, allowed: &BTreeMap<String, usize>) -> Vec<String> {
+fn problems(
+    root: &Path,
+    allowed: &BTreeMap<String, usize>,
+) -> Vec<String> {
     let found = counts(root);
     let mut wrong = Vec::new();
     for (path, n) in &found {
@@ -212,7 +228,8 @@ fn problems(root: &Path, allowed: &BTreeMap<String, usize>) -> Vec<String> {
 fn shared_code_holds_no_copy_of_a_target_fact() {
     let root = Path::new(ROOT);
     if std::env::var_os("LLRM_BLESS").is_some() {
-        let mut text = String::from("# Copies of target facts left in shared code, per file: count path. Only shrinks.\n");
+        let mut text =
+            String::from("# Copies of target facts left in shared code, per file: count path. Only shrinks.\n");
         for (path, n) in &counts(root) {
             text += &format!("{n} {path}\n");
         }
@@ -220,13 +237,19 @@ fn shared_code_holds_no_copy_of_a_target_fact() {
         return;
     }
     let twice = listed_twice(&fs::read_to_string(root.join(BASELINE)).unwrap_or_default());
-    assert!(twice.is_empty(), "the baseline lists {twice:?} twice, as a merge of two lowerings leaves it: LLRM_BLESS=1 cargo test --test target_facts");
+    assert!(
+        twice.is_empty(),
+        "the baseline lists {twice:?} twice, as a merge of two lowerings leaves it: LLRM_BLESS=1 cargo test --test target_facts"
+    );
     let wrong = problems(root, &baseline());
     assert!(wrong.is_empty(), "read the target's description instead of copying it:\n{}", wrong.join("\n"));
 }
 
 /// A tree of one shared file holding `source`, under the build's scratch directory.
-fn tree(name: &str, source: &str) -> PathBuf {
+fn tree(
+    name: &str,
+    source: &str,
+) -> PathBuf {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("target_facts").join(name);
     let _ = fs::remove_dir_all(&root);
     let directory = root.join("crates/ir/sample/src");
@@ -257,15 +280,22 @@ fn a_copy_added_to_shared_code_fails_the_guard() {
 fn a_copy_removed_without_shrinking_the_baseline_fails_the_guard() {
     let allowed = BTreeMap::from([(SAMPLE.to_string(), 2)]);
     let root = tree("removed", "fn f() { let _ = \"ax\"; }\n");
-    assert_eq!(problems(&root, &allowed), vec![format!("{SAMPLE}: 1 copies, baseline says 2: lower it (LLRM_BLESS=1)")]);
+    assert_eq!(
+        problems(&root, &allowed),
+        vec![format!("{SAMPLE}: 1 copies, baseline says 2: lower it (LLRM_BLESS=1)")]
+    );
     let root = tree("gone", "fn f() {}\n");
-    assert_eq!(problems(&root, &allowed), vec![format!("{SAMPLE}: none left, remove it from the baseline (LLRM_BLESS=1)")]);
+    assert_eq!(
+        problems(&root, &allowed),
+        vec![format!("{SAMPLE}: none left, remove it from the baseline (LLRM_BLESS=1)")]
+    );
 }
 
 /// Copies in a comment or a test module are not copies in the code.
 #[test]
 fn comments_and_test_modules_are_not_counted() {
-    let root = tree("quiet", "// the \"ax\" register\nfn f() {}\n#[cfg(test)]\nmod tests { fn g() { let _ = \"bx\"; } }\n");
+    let root =
+        tree("quiet", "// the \"ax\" register\nfn f() {}\n#[cfg(test)]\nmod tests { fn g() { let _ = \"bx\"; } }\n");
     assert!(problems(&root, &BTreeMap::new()).is_empty());
 }
 
@@ -274,7 +304,17 @@ fn comments_and_test_modules_are_not_counted() {
 #[test]
 fn the_search_is_built_from_the_descriptions() {
     let facts = facts();
-    for sample in ["\"x86-m16\"", "llrm_x86_m32::M32", "\"486\"", "\"ax\"", "Register::BX", "0x10000", "0x1_0000", "65535", "0xFFFF"] {
+    for sample in [
+        "\"x86-m16\"",
+        "llrm_x86_m32::M32",
+        "\"486\"",
+        "\"ax\"",
+        "Register::BX",
+        "0x10000",
+        "0x1_0000",
+        "65535",
+        "0xFFFF",
+    ] {
         assert!(facts.is_match(sample), "{sample} is a target fact and is not found");
     }
     for sample in ["let x = 4;", "\"ordinary\"", "65537"] {
@@ -299,8 +339,9 @@ fn a_file_listed_twice_is_found() {
     assert!(listed_twice("3 a.rs\n2 b.rs\n").is_empty());
 }
 
-/// `#[cfg(test)]` once ended the file's code: a test static in #1091 hid copyprop's ESP spelling below it, and the ceiling was blessed down by
-/// mistake. It takes the item it attributes, a module or a static or a function, and no more.
+/// `#[cfg(test)]` once ended the file's code: a test static in #1091 hid copyprop's ESP spelling below it, and the
+/// ceiling was blessed down by mistake. It takes the item it attributes, a module or a static or a function, and no
+/// more.
 #[test]
 fn test_cfg_test_hides_its_item_and_not_the_rest_of_the_file() {
     let text = r#"fn a() { "shared"; }

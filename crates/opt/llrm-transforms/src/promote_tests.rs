@@ -28,11 +28,11 @@
 use std::collections::BTreeSet;
 
 use llrm_analysis::cfg;
-use llrm_analysis::testing::{DOS, corpus};
 use llrm_analysis::graph::loops;
+use llrm_analysis::manager::Summaries;
+use llrm_analysis::testing::{DOS, corpus};
 use llrm_mir::module::{Module, Operand};
 use llrm_mir::opcode::Opcode;
-use llrm_analysis::manager::Summaries;
 use llrm_mir::passes::{Outer, PassManager};
 
 use super::{Promote, Sroa, promoted};
@@ -45,7 +45,10 @@ fn module(body: &str) -> Module {
 
 /// Every body of `module` promoted, or with `aggregate_only` its
 /// aggregates' leaves.
-fn promote_all(module: &mut Module, aggregate_only: bool) -> Result<(), String> {
+fn promote_all(
+    module: &mut Module,
+    aggregate_only: bool,
+) -> Result<(), String> {
     let (layout, outer) = (llrm_analysis::testing::layout(module), Outer::of(module, None));
     for id in bodies(module) {
         let (context, function) = function_mut(module, id);
@@ -56,7 +59,10 @@ fn promote_all(module: &mut Module, aggregate_only: bool) -> Result<(), String> 
 
 /// `body` promoted, or with `aggregate_only` its aggregates' leaves; it
 /// must verify.
-fn run(body: &str, aggregate_only: bool) -> Module {
+fn run(
+    body: &str,
+    aggregate_only: bool,
+) -> Module {
     let mut module = module(body);
     promote_all(&mut module, aggregate_only).unwrap();
     printed(&module);
@@ -69,8 +75,17 @@ fn promote(body: &str) -> String {
 }
 
 /// How many instructions of `module` `is` picks.
-fn count(module: &Module, is: impl Fn(&Opcode) -> bool) -> usize {
-    module.functions().flat_map(|(_, _, function)| function.walk().map(|(_, inst)| function.instruction(inst).opcode.clone()).collect::<Vec<_>>()).filter(|one| is(one)).count()
+fn count(
+    module: &Module,
+    is: impl Fn(&Opcode) -> bool,
+) -> usize {
+    module
+        .functions()
+        .flat_map(|(_, _, function)| {
+            function.walk().map(|(_, inst)| function.instruction(inst).opcode.clone()).collect::<Vec<_>>()
+        })
+        .filter(|one| is(one))
+        .count()
 }
 
 fn loads(module: &Module) -> usize {
@@ -88,7 +103,10 @@ fn untouched(body: &str) {
 
 /// `body`'s loads promoted away, its stores kept, and what it returns for
 /// each of `inputs` as before.
-fn forwarded(body: &str, inputs: &[&[i128]]) -> Module {
+fn forwarded(
+    body: &str,
+    inputs: &[&[i128]],
+) -> Module {
     let after = run(body, false);
     let before = module(body);
     assert_eq!(loads(&after), 0, "{}", printed(&after));
@@ -192,7 +210,11 @@ b3:
 #[test]
 fn test_stores_on_both_arms_join_in_a_phi() {
     forwarded(DIAMOND, INPUTS);
-    assert!(promote(DIAMOND).contains("b3:\n  %0 = phi i16 [ 7, %b1 ], [ %d, %b2 ]\n  %y = add i16 %0, 1\n"), "{}", promote(DIAMOND));
+    assert!(
+        promote(DIAMOND).contains("b3:\n  %0 = phi i16 [ 7, %b1 ], [ %d, %b2 ]\n  %y = add i16 %0, 1\n"),
+        "{}",
+        promote(DIAMOND)
+    );
 }
 
 /// A path the cell was not stored on leaves the load reading memory.
@@ -224,7 +246,12 @@ b0:
 #[test]
 fn test_frame_promotion_respects_unknown_and_overlapping_writes() {
     let escaped = "store ptr %a, ptr @slot\n  ";
-    for (escape, call, reused) in [("", "@g(ptr %b)", true), ("", "@peek(ptr %a)", true), ("", "@g(ptr %a)", false), (escaped, "@g(ptr null)", false)] {
+    for (escape, call, reused) in [
+        ("", "@g(ptr %b)", true),
+        ("", "@peek(ptr %a)", true),
+        ("", "@g(ptr %a)", false),
+        (escaped, "@g(ptr null)", false),
+    ] {
         let text = format!(
             "@slot = internal global ptr null
 
@@ -408,7 +435,9 @@ b0:
         assert_eq!(loads(&run(&plain, true)), 0, "{object}: an aggregate's leaf is scalarized");
         untouched(&body("store i32 %v, ptr %first, !tbaa !2\n  %x = load i32, ptr %second, !tbaa !4"));
         let upper = "%upper = getelementptr i8, ptr %object, i16 6\n  ";
-        untouched(&body(&format!("store i32 %v, ptr %first\n  {upper}store i16 0, ptr %upper\n  %x = load i32, ptr %second")));
+        untouched(&body(&format!(
+            "store i32 %v, ptr %first\n  {upper}store i16 0, ptr %upper\n  %x = load i32, ptr %second"
+        )));
     }
 }
 
@@ -551,7 +580,10 @@ b0:
 fn globals_loaded_in_loops(module: &Module) -> usize {
     let mut found = 0;
     for (_, _, function) in module.functions().filter(|(_, _, one)| !one.is_declaration()) {
-        let inside = loops::loops(&cfg::graph(function), function.entry().map(cfg::id)).into_iter().flat_map(|one| one.body).collect::<BTreeSet<_>>();
+        let inside = loops::loops(&cfg::graph(function), function.entry().map(cfg::id))
+            .into_iter()
+            .flat_map(|one| one.body)
+            .collect::<BTreeSet<_>>();
         found += function
             .walk()
             .filter(|(block, _)| inside.contains(&cfg::id(*block)))
@@ -739,9 +771,10 @@ b0:
     assert!(across("!2").contains("load i16"), "{}", across("!2"));
 }
 
-/// A declared variable the promotion makes values of is told to the debugger as it goes: the value each store gives it, from the
-/// instruction after the store, and the phi that merges the paths, from the top of the block. Without them the variable's stores
-/// (which dead-store elimination removes) were its only record, and `-g` kept them by making them volatile.
+/// A declared variable the promotion makes values of is told to the debugger as it goes: the value each store gives it,
+/// from the instruction after the store, and the phi that merges the paths, from the top of the block. Without them the
+/// variable's stores (which dead-store elimination removes) were its only record, and `-g` kept them by making them
+/// volatile.
 #[test]
 fn a_promoted_variable_is_named_by_the_value_of_each_store_and_the_phi_that_joins_them() {
     let mut module = module(
@@ -753,6 +786,10 @@ fn a_promoted_variable_is_named_by_the_value_of_each_store_and_the_phi_that_join
     assert_eq!(values.len(), 3, "{text}");
     assert!(values.contains(&"#dbg_value(i16 1, !0)") && values.contains(&"#dbg_value(i16 2, !0)"), "{text}");
     // The third names the phi, which the return reads.
-    let phi = text.lines().map(str::trim).find_map(|line| line.split_once(" = phi i16 ").map(|(result, _)| result.to_owned())).expect("a phi");
+    let phi = text
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.split_once(" = phi i16 ").map(|(result, _)| result.to_owned()))
+        .expect("a phi");
     assert!(values.contains(&format!("#dbg_value(i16 {phi}, !0)").as_str()), "{phi} in {text}");
 }

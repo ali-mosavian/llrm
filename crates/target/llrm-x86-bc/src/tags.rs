@@ -25,7 +25,10 @@ type Descriptor = (Operand, i64);
 /// The descriptors of far arrays `function`'s DIM requests name: their
 /// attributes, the high byte of the word pushed before the descriptor,
 /// say far (1) or huge (2). A near array's data is in DGROUP.
-fn descriptors(module: &Module, function: &Function) -> Vec<Descriptor> {
+fn descriptors(
+    module: &Module,
+    function: &Function,
+) -> Vec<Descriptor> {
     let mut out = Vec::new();
     for (_, inst) in function.walk() {
         let one = function.instruction(inst);
@@ -38,18 +41,29 @@ fn descriptors(module: &Module, function: &Function) -> Vec<Descriptor> {
             continue;
         }
         let (shape, descriptor) = (one.operands[one.operands.len() - 3], one.operands[one.operands.len() - 2]);
-        let far = crate::addresses::constant(&module.context, shape).is_some_and(|shape| (1..=3).contains(&((shape >> 8) & 0xff)));
+        let far = crate::addresses::constant(&module.context, shape)
+            .is_some_and(|shape| (1..=3).contains(&((shape >> 8) & 0xff)));
         if !far {
             continue;
         }
-        if let Some(parts) = offset_parts(function, &module.context, descriptor, 0).filter(|parts| parts.terms.is_empty()) {
+        if let Some(parts) =
+            offset_parts(function, &module.context, descriptor, 0).filter(|parts| parts.terms.is_empty())
+        {
             out.push((parts.root, parts.constant));
         }
     }
     out
 }
 
-fn class(function: &Function, context: &Context, segment: u32, spaces: &[u32], hary: Option<Operand>, pointer: Operand, descriptors: &[Descriptor]) -> Option<Class> {
+fn class(
+    function: &Function,
+    context: &Context,
+    segment: u32,
+    spaces: &[u32],
+    hary: Option<Operand>,
+    pointer: Operand,
+    descriptors: &[Descriptor],
+) -> Option<Class> {
     let root = pointer_parts(function, context, pointer).root;
     if let Operand::Constant(id) = root
         && let ConstantKind::Global(global) = context.get(id).kind
@@ -63,7 +77,9 @@ fn class(function: &Function, context: &Context, segment: u32, spaces: &[u32], h
             match context.types.get(from) {
                 llrm_mir::Type::Pointer(0) => class(function, context, segment, spaces, hary, operands[0], descriptors),
                 llrm_mir::Type::Pointer(space) if *space == segment => {
-                    let (Opcode::Cast(CastOp::IntToPtr), selector) = made(function, context, operands[0])? else { return None };
+                    let (Opcode::Cast(CastOp::IntToPtr), selector) = made(function, context, operands[0])? else {
+                        return None;
+                    };
                     let descriptor = match made(function, context, selector[0])? {
                         // The selector a descriptor holds, two bytes in.
                         (Opcode::Load { .. }, loaded) => (pointer_parts(function, context, loaded[0]), 2),
@@ -79,7 +95,8 @@ fn class(function: &Function, context: &Context, segment: u32, spaces: &[u32], h
                         _ => return None,
                     };
                     let (field, at) = descriptor;
-                    (field.terms.is_empty() && descriptors.contains(&(field.root, field.constant - at))).then_some(Class::Allocation)
+                    (field.terms.is_empty() && descriptors.contains(&(field.root, field.constant - at)))
+                        .then_some(Class::Allocation)
                 }
                 _ => None,
             }
@@ -89,14 +106,19 @@ fn class(function: &Function, context: &Context, segment: u32, spaces: &[u32], h
 }
 
 /// Tags every access in `module` whose provenance says what it reaches.
-pub fn tag(module: &mut Module, segment: u32) {
+pub fn tag(
+    module: &mut Module,
+    segment: u32,
+) {
     let spaces: Vec<u32> = module.globals.iter().map(|one| one.address_space).collect();
     let hary = module.named(&crate::access::declared()).map(|one| Operand::Constant(module.reference(one)));
-    let bodies: Vec<GlobalId> = module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, _)| id).collect();
+    let bodies: Vec<GlobalId> =
+        module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, _)| id).collect();
     let mut global: Vec<Descriptor> = Vec::new();
     for &id in &bodies {
         let function = module.global(id).function().expect("a function");
-        global.extend(descriptors(module, function).into_iter().filter(|(root, _)| matches!(root, Operand::Constant(_))));
+        global
+            .extend(descriptors(module, function).into_iter().filter(|(root, _)| matches!(root, Operand::Constant(_))));
     }
     let mut tags: Option<Tags> = None;
     for id in bodies {
@@ -120,7 +142,9 @@ pub fn tag(module: &mut Module, segment: u32) {
         }
         let tags = tags.get_or_insert_with(|| Tags::new(module));
         let (place, allocation) = (tags.place, tags.allocation);
-        let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else { unreachable!("a function") };
+        let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else {
+            unreachable!("a function")
+        };
         for (inst, class) in classes {
             function.annotate(inst, "tbaa", if class == Class::Place { place } else { allocation });
         }

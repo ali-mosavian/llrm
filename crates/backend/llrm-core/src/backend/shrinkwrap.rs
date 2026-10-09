@@ -27,7 +27,8 @@ pub struct Wrap {
 
 /// The registers `one` names, and those the call it is disturbs by its convention.
 pub fn named(one: &Insn) -> BTreeSet<Register> {
-    let mut found: BTreeSet<Register> = one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(ir::root)).collect();
+    let mut found: BTreeSet<Register> =
+        one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(ir::root)).collect();
     let Some(what) = &one.what else { return found };
     for place in what.dests.iter().chain(&what.sources) {
         match place {
@@ -47,25 +48,42 @@ pub fn named(one: &Insn) -> BTreeSet<Register> {
 /// or an instruction the printer cannot read.
 fn touches_frame(one: &Insn) -> bool {
     let Some(what) = &one.what else { return false };
-    if matches!(what.op, ir::Operation::Push | ir::Operation::Pop | ir::Operation::Leave | ir::Operation::Escape)
-        || (what.op == ir::Operation::Nothing && what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")))
+    if matches!(
+        what.op,
+        ir::Operation::Push | ir::Operation::Pop | ir::Operation::Leave | ir::Operation::Escape
+    )
+        || (what.op == ir::Operation::Nothing
+            && what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")))
     {
         return true;
     }
-    what.dests.iter().chain(&what.sources).any(|place| match place {
-        Loc::Mem(cell) => cell.in_frame(),
-        Loc::Address(cell) => cell.in_frame(),
-        _ => false,
-    })
+    what.dests
+        .iter()
+        .chain(&what.sources)
+        .any(
+            |place| match place {
+                Loc::Mem(cell) => cell.in_frame(),
+                Loc::Address(cell) => cell.in_frame(),
+                _ => false,
+            },
+        )
 }
 
 /// The wrap of `body` for the registers `kept`, and for the frame where `frame` names the frame register and the stack
 /// pointer, if one is worth having. A frame that cannot be wrapped leaves the registers to be.
-pub fn wrapped(body: &LirBody, kept: &BTreeSet<Register>, frame: Option<(Register, Register)>) -> Option<Wrap> {
+pub fn wrapped(
+    body: &LirBody,
+    kept: &BTreeSet<Register>,
+    frame: Option<(Register, Register)>,
+) -> Option<Wrap> {
     frame.and_then(|registers| placed(body, kept, Some(registers))).or_else(|| placed(body, kept, None))
 }
 
-fn placed(body: &LirBody, kept: &BTreeSet<Register>, frame: Option<(Register, Register)>) -> Option<Wrap> {
+fn placed(
+    body: &LirBody,
+    kept: &BTreeSet<Register>,
+    frame: Option<(Register, Register)>,
+) -> Option<Wrap> {
     if body.noreturn || (kept.is_empty() && frame.is_none()) {
         return None;
     }
@@ -78,7 +96,16 @@ fn placed(body: &LirBody, kept: &BTreeSet<Register>, frame: Option<(Register, Re
         return None;
     }
     let idom = immediate_dominators(&body.blocks, entry);
-    let uses: Vec<i64> = body.blocks.iter().filter(|block| block.insns.iter().any(|one| (frame.is_some() && touches_frame(one)) || named(one).iter().any(|register| kept.contains(register)))).map(|block| block.at).collect();
+    let uses: Vec<i64> = body
+        .blocks
+        .iter()
+        .filter(|block| {
+            block.insns.iter().any(|one| {
+                (frame.is_some() && touches_frame(one)) || named(one).iter().any(|register| kept.contains(register))
+            })
+        })
+        .map(|block| block.at)
+        .collect();
     let first = *uses.first()?;
     let above = |block: i64| {
         let mut chain = vec![block];
@@ -90,7 +117,10 @@ fn placed(body: &LirBody, kept: &BTreeSet<Register>, frame: Option<(Register, Re
     // The nearest block above every use: the first of one's ancestors every other use is below.
     let mut home = first;
     for &other in &uses[1..] {
-        home = above(home).into_iter().find(|&candidate| from_entry.dominates(candidate, other)).expect("the entry dominates every block");
+        home = above(home)
+            .into_iter()
+            .find(|&candidate| from_entry.dominates(candidate, other))
+            .expect("the entry dominates every block");
     }
     // Not in a loop: a save there would run each trip.
     let cycles = loops(&body.blocks, entry);
@@ -102,12 +132,16 @@ fn placed(body: &LirBody, kept: &BTreeSet<Register>, frame: Option<(Register, Re
     }
     let from_home = dominance(&body.blocks, Some(home));
     let mut restored = BTreeSet::new();
-    // The frame is set up at `home`, so a block it reaches that something else also reaches would be entered at two depths.
-    if frame.is_some() && body.blocks.iter().any(|block| from_home.reachable(block.at) && !from_entry.dominates(home, block.at)) {
+    // The frame is set up at `home`, so a block it reaches that something else also reaches would be entered at two
+    // depths.
+    if frame.is_some()
+        && body.blocks.iter().any(|block| from_home.reachable(block.at) && !from_entry.dominates(home, block.at))
+    {
         return None;
     }
     for block in &body.blocks {
-        let returns = block.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == ir::Operation::Return));
+        let returns =
+            block.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == ir::Operation::Return));
         if !returns || !from_home.reachable(block.at) {
             continue;
         }

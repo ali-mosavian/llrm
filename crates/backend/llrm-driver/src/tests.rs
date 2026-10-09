@@ -101,7 +101,10 @@ fn a_target_states_its_default_cpu_and_names_its_cpus_when_asked_for_another() {
     }
     let flags = flags(&["-m32", "-march=i386"]);
     let bound = target(&flags, Some(&["x86-m32"])).unwrap();
-    assert_eq!(flags.machine(&*bound.target, bound.target.machine()).unwrap_err(), "unknown -march=i386; x86-m32 has i486, pentium");
+    assert_eq!(
+        flags.machine(&*bound.target, bound.target.machine()).unwrap_err(),
+        "unknown -march=i386; x86-m32 has i486, pentium"
+    );
 }
 
 /// Real-mode DOS said `cpu = "486"` and timings.times said `default_cpu 386`: a target had two
@@ -158,7 +161,10 @@ fn a_targets_registers_come_from_its_description() {
     use llrm_core::backend::classes::RegisterClasses;
 
     let flat = RegisterClasses::of(&llrm_x86_m32::M32);
-    assert_eq!(flat.available, [Register::EAX, Register::ECX, Register::EDX, Register::EBX, Register::ESI, Register::EDI]);
+    assert_eq!(
+        flat.available,
+        [Register::EAX, Register::ECX, Register::EDX, Register::EBX, Register::ESI, Register::EDI]
+    );
     assert_eq!(flat.frame, Register::EBP);
 }
 

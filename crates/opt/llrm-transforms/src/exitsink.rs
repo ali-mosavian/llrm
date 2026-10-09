@@ -48,8 +48,15 @@ fn _sinkable(function: &Function) -> Option<(Loop, InstId, InstId)> {
                 let inside = |inst: InstId| function.parent(inst).is_some_and(|at| loop_.body.contains(&cfg::id(at)));
                 if loop_.body.contains(&cfg::id(from))
                     && inside(op)
-                    && matches!(function.instruction(op).opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) | Opcode::Cast(CastOp::SExt | CastOp::ZExt | CastOp::Trunc))
-                    && function.users(value).iter().all(|one| function.instruction(one.user).opcode == Opcode::Phi && function.parent(one.user).is_some_and(|at| !loop_.body.contains(&cfg::id(at))))
+                    && matches!(
+                        function.instruction(op).opcode,
+                        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub)
+                            | Opcode::Cast(CastOp::SExt | CastOp::ZExt | CastOp::Trunc)
+                    )
+                    && function.users(value).iter().all(|one| {
+                        function.instruction(one.user).opcode == Opcode::Phi
+                            && function.parent(one.user).is_some_and(|at| !loop_.body.contains(&cfg::id(at)))
+                    })
                 {
                     return Some((loop_, phi, op));
                 }
@@ -61,14 +68,21 @@ fn _sinkable(function: &Function) -> Option<(Loop, InstId, InstId)> {
 
 /// `op` computed in place of `phi`, its operands the loop defines read
 /// through the exit's phis.
-fn _sink(function: &mut Function, loop_: &Loop, phi: InstId, op: InstId) {
+fn _sink(
+    function: &mut Function,
+    loop_: &Loop,
+    phi: InstId,
+    op: InstId,
+) {
     let exit = function.parent(phi).expect("a placed phi");
     let [(_, from)] = arms(function, phi)[..] else { unreachable!("one input") };
     let mut operands = Vec::new();
     for operand in function.instruction(op).operands.clone() {
         let defined = match operand {
             Operand::Value(value) => match function.value(value).def {
-                ValueDef::Instruction(inst) => function.parent(inst).filter(|at| loop_.body.contains(&cfg::id(*at))).map(|_| value),
+                ValueDef::Instruction(inst) => {
+                    function.parent(inst).filter(|at| loop_.body.contains(&cfg::id(*at))).map(|_| value)
+                }
                 ValueDef::Argument(_) => None,
             },
             _ => None,
@@ -78,20 +92,27 @@ fn _sink(function: &mut Function, loop_: &Loop, phi: InstId, op: InstId) {
             continue;
         };
         let incoming = from_arms(&[(Operand::Value(value), from)]);
-        let exported = match edges::phis(function, exit).into_iter().find(|&one| function.instruction(one).operands == incoming) {
-            Some(existing) => existing,
-            None => {
-                let export = exit_phi(function, value);
-                function.set_operands(export, incoming);
-                place_phi(function, exit, export).expect("a placed exit");
-                export
-            }
-        };
+        let exported =
+            match edges::phis(function, exit).into_iter().find(|&one| function.instruction(one).operands == incoming) {
+                Some(existing) => existing,
+                None => {
+                    let export = exit_phi(function, value);
+                    function.set_operands(export, incoming);
+                    place_phi(function, exit, export).expect("a placed exit");
+                    export
+                }
+            };
         operands.push(Operand::Value(function.instruction(exported).result.expect("a phi's value")));
     }
     let instruction = function.instruction(op);
-    let moved = function.create_instruction(instruction.opcode.clone(), instruction.ty, operands, instruction.flags, None);
-    let first = *function.block(exit).instructions().iter().find(|&&one| function.instruction(one).opcode != Opcode::Phi).expect("a terminator");
+    let moved =
+        function.create_instruction(instruction.opcode.clone(), instruction.ty, operands, instruction.flags, None);
+    let first = *function
+        .block(exit)
+        .instructions()
+        .iter()
+        .find(|&&one| function.instruction(one).opcode != Opcode::Phi)
+        .expect("a terminator");
     function.insert(moved, Position::Before(first)).expect("a placed block");
     let result = function.instruction(phi).result.expect("a phi's value");
     function.replace_all_uses_with(result, Operand::Value(function.instruction(moved).result.expect("a value")));

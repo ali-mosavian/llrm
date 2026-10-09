@@ -21,28 +21,47 @@ pub enum Known {
 
 impl FunctionCompiler<'_> {
     /// Keeps what the name at `span` is, when the caller asked for facts.
-    pub(super) fn learn(&self, span: Span, name: &str, known: impl FnOnce() -> Known) {
+    pub(super) fn learn(
+        &self,
+        span: Span,
+        name: &str,
+        known: impl FnOnce() -> Known,
+    ) {
         if let Some(facts) = self.facts {
             facts.borrow_mut().push(Fact { span, name: name.to_owned(), known: known() });
         }
     }
 
     /// The member `name`, at the end of `span`, of the type `owner`.
-    pub(super) fn learn_member(&self, span: Span, name: &str, owner: &str) {
+    pub(super) fn learn_member(
+        &self,
+        span: Span,
+        name: &str,
+        owner: &str,
+    ) {
         let at = Span { column: span.end_column.saturating_sub(name.len()), ..span };
         self.learn(at, name, || Known::Member(self.types.template_of(owner).to_owned()));
     }
 
     /// The method `name` called on `receiver`, which is of the type `owner`.
-    pub(super) fn learn_method(&self, receiver: &Expr, name: &str, owner: &str) {
+    pub(super) fn learn_method(
+        &self,
+        receiver: &Expr,
+        name: &str,
+        owner: &str,
+    ) {
         let before = receiver.span();
         let at = Span { column: before.end_column + 1, end_column: before.end_column + 1 + name.len(), ..before };
         self.learn(at, name, || Known::Member(self.types.template_of(owner).to_owned()));
     }
 
     /// `type_` as the source spells it.
-    pub(super) fn spelled(&self, type_: BindingType) -> String {
-        let named = |id: u32| self.types.types.iter().find(|one| one.id == id).map_or_else(String::new, |one| one.name.clone());
+    pub(super) fn spelled(
+        &self,
+        type_: BindingType,
+    ) -> String {
+        let named =
+            |id: u32| self.types.types.iter().find(|one| one.id == id).map_or_else(String::new, |one| one.name.clone());
         match type_ {
             BindingType::Scalar(type_name) => named(type_id(type_name)),
             BindingType::Struct(id) => named(id),

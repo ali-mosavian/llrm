@@ -1,13 +1,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::context::Context;
 use crate::context::GlobalId;
+use crate::datalayout::DataLayout;
+use crate::module::Function;
 use crate::module::{GlobalKind, Linkage, Module};
 use crate::opcode::Attribute;
 use crate::parse;
-use crate::context::Context;
-use crate::datalayout::DataLayout;
-use crate::module::Function;
 use crate::passes::{Analyses, Analysis, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager, PreservedAnalyses};
 use crate::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramPass};
 use crate::target::Neutral;
@@ -18,7 +18,8 @@ fn module(text: &str) -> Module {
 
 fn program() -> Program {
     let caller = module("declare i16 @g()\n\ndefine i16 @f() {\nentry:\n  %x = call i16 @g()\n  ret i16 %x\n}\n");
-    let callee = module("define i16 @g() {\nentry:\n  ret i16 1\n}\n\ndefine internal i16 @h() {\nentry:\n  ret i16 2\n}\n");
+    let callee =
+        module("define i16 @g() {\nentry:\n  ret i16 1\n}\n\ndefine internal i16 @h() {\nentry:\n  ret i16 2\n}\n");
     Program::new(vec![caller, callee], Rc::new(Neutral)).unwrap()
 }
 
@@ -45,8 +46,16 @@ struct Defined;
 impl ProgramAnalysis for Defined {
     type Result = usize;
     const NAME: &'static str = "defined";
-    fn run(program: &Program, _: &mut ProgramAnalyses) -> usize {
-        program.modules.iter().flat_map(|one| one.functions()).filter(|(_, _, function)| !function.is_declaration()).count()
+    fn run(
+        program: &Program,
+        _: &mut ProgramAnalyses,
+    ) -> usize {
+        program
+            .modules
+            .iter()
+            .flat_map(|one| one.functions())
+            .filter(|(_, _, function)| !function.is_declaration())
+            .count()
     }
 }
 
@@ -64,7 +73,11 @@ impl ModulePass for Mark {
         "mark"
     }
 
-    fn run(&mut self, module: &mut Module, analyses: &mut ModuleAnalyses) -> Vec<GlobalId> {
+    fn run(
+        &mut self,
+        module: &mut Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> Vec<GlobalId> {
         SEEN.with_borrow_mut(|seen| seen.push(analyses.program().cached::<Defined>().map(|one| *one)));
         let Some(id) = module.named(self.0) else { return Vec::new() };
         let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else { panic!("a function") };
@@ -103,7 +116,10 @@ struct Globals;
 impl ModuleAnalysis for Globals {
     type Result = usize;
     const NAME: &'static str = "globals";
-    fn run(module: &Module, _: &mut ModuleAnalyses) -> usize {
+    fn run(
+        module: &Module,
+        _: &mut ModuleAnalyses,
+    ) -> usize {
         COUNTED.with_borrow_mut(|one| *one += 1);
         module.globals.len()
     }
@@ -115,7 +131,10 @@ struct Twice;
 impl ModuleAnalysis for Twice {
     type Result = usize;
     const NAME: &'static str = "twice";
-    fn run(module: &Module, analyses: &mut ModuleAnalyses) -> usize {
+    fn run(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> usize {
         2 * *analyses.get::<Globals>(module)
     }
 }
@@ -140,7 +159,12 @@ struct Blocks;
 impl Analysis for Blocks {
     type Result = usize;
     const NAME: &'static str = "blocks";
-    fn run(_: &Context, _: &DataLayout, function: &Function, _: &mut Analyses) -> usize {
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> usize {
         BLOCKS.with_borrow_mut(|one| *one += 1);
         function.layout().len()
     }
@@ -152,8 +176,12 @@ struct AllBlocks;
 impl ModuleAnalysis for AllBlocks {
     type Result = usize;
     const NAME: &'static str = "all-blocks";
-    fn run(module: &Module, analyses: &mut ModuleAnalyses) -> usize {
-        let ids: Vec<GlobalId> = module.functions().filter(|(_, _, one)| !one.is_declaration()).map(|(id, _, _)| id).collect();
+    fn run(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> usize {
+        let ids: Vec<GlobalId> =
+            module.functions().filter(|(_, _, one)| !one.is_declaration()).map(|(id, _, _)| id).collect();
         ids.into_iter().map(|id| *analyses.function::<Blocks>(module, id)).sum()
     }
 }
@@ -162,7 +190,9 @@ impl ModuleAnalysis for AllBlocks {
 /// manager; a body changed is computed again.
 #[test]
 fn a_module_analysis_reads_function_results_from_their_managers() {
-    let module = module("define i16 @f() {\nentry:\n  br label %done\ndone:\n  ret i16 0\n}\n\ndefine i16 @g() {\nentry:\n  ret i16 1\n}\n");
+    let module = module(
+        "define i16 @f() {\nentry:\n  br label %done\ndone:\n  ret i16 0\n}\n\ndefine i16 @g() {\nentry:\n  ret i16 1\n}\n",
+    );
     let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
     BLOCKS.set(0);
     assert_eq!(*analyses.get::<AllBlocks>(&module), 3);

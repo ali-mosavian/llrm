@@ -16,15 +16,22 @@
 
 use std::path::PathBuf;
 
+use llrm_core::backend::masm;
+use llrm_core::backend::objbuild::CodeLayout;
+use llrm_core::driver::{
+    self as codegen,
+    flags::{self, Flags},
+};
+
 use super::compile as nib;
 use super::driver;
 use super::nibstages;
-use llrm_core::backend::masm;
-use llrm_core::backend::objbuild::CodeLayout;
-use llrm_core::driver::{self as codegen, flags::{self, Flags}};
 
 fn usage() -> String {
-    format!("usage: llrm-nib [-h] [--entry ENTRY] [--dump DUMP] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] {} source", flags::USAGE)
+    format!(
+        "usage: llrm-nib [-h] [--entry ENTRY] [--dump DUMP] [--procedure-segments] [--used-by OBJ]... [--unchecked-bounds] {} source",
+        flags::USAGE
+    )
 }
 
 struct Arguments {
@@ -73,7 +80,11 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--entry" => entry = value("--entry")?,
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--procedure-segments" => layout = CodeLayout::PerProcedure,
-            "--declare" => declare = Some(super::declarations::Language::named(&value("--declare")?).ok_or("--declare takes h, bi or inc")?),
+            "--declare" => {
+                declare = Some(
+                    super::declarations::Language::named(&value("--declare")?).ok_or("--declare takes h, bi or inc")?,
+                )
+            }
             "--os-layer" => os_layer = Some(value("--os-layer")?),
             "-Wno-target-width" => warn_target_width = false,
             "--used-by" => used_by.push(PathBuf::from(value("--used-by")?)),
@@ -91,14 +102,31 @@ fn parse_args(argv: &[String]) -> Result<Arguments, String> {
         (None, None) => return Err("the following arguments are required: source".to_owned()),
     };
     let bound = llrm_driver::target(&flags, None)?;
-    let frontend = super::Frontend { debug: flags.debug, checked_stack: flags.sanitize.stack, unchecked_bounds, warn_target_width, symbols: super::Frontend::symbols_for(&*bound.target, flags.format(&*bound.target)?.name()), native_name: flags.convention(&*bound.target)?.name.clone(), ..super::Frontend::for_target(&*bound.target)? };
+    let frontend = super::Frontend {
+        debug: flags.debug,
+        checked_stack: flags.sanitize.stack,
+        unchecked_bounds,
+        warn_target_width,
+        symbols: super::Frontend::symbols_for(&*bound.target, flags.format(&*bound.target)?.name()),
+        native_name: flags.convention(&*bound.target)?.name.clone(),
+        ..super::Frontend::for_target(&*bound.target)?
+    };
     let codegen = bound.options(&flags, flags.machine(&*bound.target, nib::machine(&*bound.target, &frontend.os))?);
-    let os_layer = field.map(|field| bound.target.os_layer().ok_or_else(|| "this target has no OS layer".to_owned()).and_then(|layer| layer.report(&bound.target.runtime("nib").ok_or("this target has no Nib runtime")?, &field)));
+    let os_layer = field.map(|field| {
+        bound
+            .target
+            .os_layer()
+            .ok_or_else(|| "this target has no OS layer".to_owned())
+            .and_then(
+                |layer| layer.report(&bound.target.runtime("nib").ok_or("this target has no Nib runtime")?, &field),
+            )
+    });
     Ok(Arguments { source, flags, entry, dump, layout, used_by, frontend, codegen, os_layer, declare })
 }
 
 /// The frontend for the target `-m<N>` among `arguments` names, those arguments taken out of
-/// them: for the tools that run or declare a program and take no other target flag (`-mabi=` too: it says what `"c"` is).
+/// them: for the tools that run or declare a program and take no other target flag (`-mabi=` too: it says what `"c"`
+/// is).
 pub fn frontend_with_mode(arguments: &mut Vec<String>) -> Result<super::Frontend, String> {
     let mut flags = llrm_core::driver::flags::Flags::default();
     let mut rest = Vec::new();
@@ -129,7 +157,8 @@ fn used(objects: &[PathBuf]) -> Result<std::collections::BTreeSet<String>, Strin
     let mut names = std::collections::BTreeSet::new();
     for object in objects {
         let bytes = std::fs::read(object).map_err(|error| format!("{}: {error}", object.display()))?;
-        let records = llrm_core::objectfile::omf::parse(&bytes).map_err(|error| format!("{}: {error:?}", object.display()))?;
+        let records =
+            llrm_core::objectfile::omf::parse(&bytes).map_err(|error| format!("{}: {error:?}", object.display()))?;
         names.extend(llrm_core::objectfile::omf::externals(&records).into_iter().skip(1));
     }
     Ok(names)
@@ -176,7 +205,9 @@ pub fn main(argv: &[String]) -> i32 {
             (None, None) => args.source.with_extension(if args.flags.assembly { "asm" } else { "obj" }),
             (None, Some(_)) => return Ok(()),
         };
-        let mut program = llrm_core::support::debug::timed("frontend", || driver::parsed(&args.source, &args.frontend, None)).map_err(|error| error.0)?;
+        let mut program =
+            llrm_core::support::debug::timed("frontend", || driver::parsed(&args.source, &args.frontend, None))
+                .map_err(|error| error.0)?;
         for (file, warning) in args.frontend.reported.borrow().iter() {
             eprintln!("{}", driver::refused(file, warning).0);
         }
@@ -184,13 +215,18 @@ pub fn main(argv: &[String]) -> i32 {
             nib::keep_exports(&mut program, &used(&args.used_by)?);
         }
         // A library cut to what some objects name has no entry to want, even when the cut leaves it no export.
-        let module = if args.used_by.is_empty() { nib::assembled(&program, &args.entry, &args.codegen, &args.frontend.os)? } else { nib::assembled_library(&program, &args.codegen, &args.frontend.os)? };
+        let module = if args.used_by.is_empty() {
+            nib::assembled(&program, &args.entry, &args.codegen, &args.frontend.os)?
+        } else {
+            nib::assembled_library(&program, &args.codegen, &args.frontend.os)?
+        };
         let bytes = if args.flags.assembly {
             masm::text(&module).map_err(|error| error.to_string())?.into_bytes()
         } else {
             nib::object(&module, &args.source, args.layout, args.flags.format(&*args.codegen.arch)?)?
         };
-        llrm_core::support::debug::timed("write output", || std::fs::write(&output, &bytes)).map_err(|error| error.to_string())?;
+        llrm_core::support::debug::timed("write output", || std::fs::write(&output, &bytes))
+            .map_err(|error| error.to_string())?;
         println!("{} ({} bytes)", output.display(), bytes.len());
         Ok(())
     })();
@@ -211,32 +247,107 @@ mod tests {
     struct Bare(llrm_x86_m16::M16);
 
     impl Target for Bare {
-        fn name(&self) -> &'static str { self.0.name() }
-        fn machine(&self) -> llrm_core::abi::machine::Machine { self.0.machine() }
-        fn cpus(&self) -> &'static [&'static str] { self.0.cpus() }
-        fn march(&self, name: &str) -> Option<&'static str> { self.0.march(name) }
-        fn marches(&self) -> Vec<&'static str> { self.0.marches() }
-        fn layout(&self) -> llrm_target::layout::Layout { self.0.layout() }
-        fn stack_slot_bytes(&self) -> i64 { self.0.stack_slot_bytes() }
-        fn frame_register(&self) -> iced_x86::Register { self.0.frame_register() }
-        fn first_argument_offset(&self, far: bool) -> i64 { self.0.first_argument_offset(far) }
-        fn return_address_bytes(&self, far: bool) -> i64 { self.0.return_address_bytes(far) }
-        fn results(&self, width: u32) -> Vec<iced_x86::Register> { self.0.results(width) }
-        fn stack_pointer(&self) -> iced_x86::Register { self.0.stack_pointer() }
-        fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)> { self.0.callee_saved() }
-        fn cpu_table(&self, name: &str) -> Option<llrm_target::timings::CpuTable> { self.0.cpu_table(name) }
-        fn forms_text(&self) -> String { self.0.forms_text() }
-        fn registers_text(&self) -> String { self.0.registers_text() }
-        fn operand_bytes(&self) -> i64 { self.0.operand_bytes() }
-        fn default_cpu(&self) -> &'static str { self.0.default_cpu() }
-        fn operation_costs(&self, price: &dyn Fn(&str) -> i64, prefix: i64) -> llrm_mir::target::OperationCosts { self.0.operation_costs(price, prefix) }
-        fn register_capacity(&self) -> i64 { self.0.register_capacity() }
-        fn float_stack(&self) -> usize { self.0.float_stack() }
-        fn address_forms(&self, costs: &llrm_mir::target::OperationCosts, address_stall: i64) -> Vec<llrm_mir::target::AddressForm> { self.0.address_forms(costs, address_stall) }
-        fn cost_model(&self) -> llrm_target::CostModel { self.0.cost_model() }
-        fn calling(&self) -> &'static llrm_target::calling::Calling { self.0.calling() }
-        fn conventions(&self) -> &'static [&'static str] { self.0.conventions() }
-        fn object(&self) -> llrm_target::object::ObjectFormat { self.0.object() }
+        fn name(&self) -> &'static str {
+            self.0.name()
+        }
+        fn machine(&self) -> llrm_core::abi::machine::Machine {
+            self.0.machine()
+        }
+        fn cpus(&self) -> &'static [&'static str] {
+            self.0.cpus()
+        }
+        fn march(
+            &self,
+            name: &str,
+        ) -> Option<&'static str> {
+            self.0.march(name)
+        }
+        fn marches(&self) -> Vec<&'static str> {
+            self.0.marches()
+        }
+        fn layout(&self) -> llrm_target::layout::Layout {
+            self.0.layout()
+        }
+        fn stack_slot_bytes(&self) -> i64 {
+            self.0.stack_slot_bytes()
+        }
+        fn frame_register(&self) -> iced_x86::Register {
+            self.0.frame_register()
+        }
+        fn first_argument_offset(
+            &self,
+            far: bool,
+        ) -> i64 {
+            self.0.first_argument_offset(far)
+        }
+        fn return_address_bytes(
+            &self,
+            far: bool,
+        ) -> i64 {
+            self.0.return_address_bytes(far)
+        }
+        fn results(
+            &self,
+            width: u32,
+        ) -> Vec<iced_x86::Register> {
+            self.0.results(width)
+        }
+        fn stack_pointer(&self) -> iced_x86::Register {
+            self.0.stack_pointer()
+        }
+        fn callee_saved(&self) -> Vec<(iced_x86::Register, iced_x86::Register)> {
+            self.0.callee_saved()
+        }
+        fn cpu_table(
+            &self,
+            name: &str,
+        ) -> Option<llrm_target::timings::CpuTable> {
+            self.0.cpu_table(name)
+        }
+        fn forms_text(&self) -> String {
+            self.0.forms_text()
+        }
+        fn registers_text(&self) -> String {
+            self.0.registers_text()
+        }
+        fn operand_bytes(&self) -> i64 {
+            self.0.operand_bytes()
+        }
+        fn default_cpu(&self) -> &'static str {
+            self.0.default_cpu()
+        }
+        fn operation_costs(
+            &self,
+            price: &dyn Fn(&str) -> i64,
+            prefix: i64,
+        ) -> llrm_mir::target::OperationCosts {
+            self.0.operation_costs(price, prefix)
+        }
+        fn register_capacity(&self) -> i64 {
+            self.0.register_capacity()
+        }
+        fn float_stack(&self) -> usize {
+            self.0.float_stack()
+        }
+        fn address_forms(
+            &self,
+            costs: &llrm_mir::target::OperationCosts,
+            address_stall: i64,
+        ) -> Vec<llrm_mir::target::AddressForm> {
+            self.0.address_forms(costs, address_stall)
+        }
+        fn cost_model(&self) -> llrm_target::CostModel {
+            self.0.cost_model()
+        }
+        fn calling(&self) -> &'static llrm_target::calling::Calling {
+            self.0.calling()
+        }
+        fn conventions(&self) -> &'static [&'static str] {
+            self.0.conventions()
+        }
+        fn object(&self) -> llrm_target::object::ObjectFormat {
+            self.0.object()
+        }
     }
 
     /// `-m` was a list the frontend kept by hand; a target without a Nib runtime is refused

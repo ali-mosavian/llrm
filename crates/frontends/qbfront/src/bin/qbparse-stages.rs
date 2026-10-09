@@ -29,39 +29,27 @@ fn main() -> ExitCode {
 
     let input = PathBuf::from(input_name);
     let output = PathBuf::from(output_name);
-    let source =
-        match source::load_with_map(&input, &[input.parent().unwrap_or(Path::new(".")).into()]) {
-            Ok(source) => source,
-            Err(error) => {
-                eprintln!("qbparse-stages: {}: {error}", input.display());
-                return ExitCode::FAILURE;
-            }
-        };
+    let source = match source::load_with_map(&input, &[input.parent().unwrap_or(Path::new(".")).into()]) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("qbparse-stages: {}: {error}", input.display());
+            return ExitCode::FAILURE;
+        }
+    };
     let parsed = match parse_vertical_slice(&source.text, dialect) {
         Ok(parsed) => parsed,
         Err(error) => {
             let location = source.location(error.span.line);
             let path = location.map_or_else(|| input.as_path(), |location| location.path.as_path());
             let line = location.map_or(error.span.line, |location| location.line);
-            eprintln!(
-                "qbparse-stages: {}:{}:{}: {}",
-                path.display(),
-                line,
-                error.span.start + 1,
-                error.message
-            );
+            eprintln!("qbparse-stages: {}:{}:{}: {}", path.display(), line, error.span.start + 1, error.message);
             return ExitCode::FAILURE;
         }
     };
 
     if let Err(error) = fs::create_dir_all(&output)
         .and_then(|()| fs::write(output.join("00-input.bas"), &source.text))
-        .and_then(|()| {
-            fs::write(
-                output.join("10-actions.txt"),
-                format!("{:#?}\n", parsed.actions),
-            )
-        })
+        .and_then(|()| fs::write(output.join("10-actions.txt"), format!("{:#?}\n", parsed.actions)))
         .and_then(|()| fs::write(output.join("20-ast.txt"), format!("{:#?}\n", parsed.module)))
     {
         eprintln!("qbparse-stages: {}: {error}", output.display());

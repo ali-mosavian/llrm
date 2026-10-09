@@ -23,9 +23,13 @@ fn printed(module: &Module) -> String {
 }
 
 /// The block named `name` of @f.
-fn at(module: &Module, name: &str) -> i64 {
+fn at(
+    module: &Module,
+    name: &str,
+) -> i64 {
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-    let block = function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some(name)).expect("a block");
+    let block =
+        function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some(name)).expect("a block");
     cfg::id(*block)
 }
 
@@ -177,9 +181,17 @@ b3:
 }
 
 /// `f` run on each of `inputs`, every argument an `i16`.
-fn results(module: &Module, inputs: &[&[u128]]) -> Vec<llrm_mir::interpret::Val> {
+fn results(
+    module: &Module,
+    inputs: &[&[u128]],
+) -> Vec<llrm_mir::interpret::Val> {
     let int = |bits| llrm_mir::interpret::Val::Int { bits, width: 16 };
-    inputs.iter().map(|one| llrm_mir::interpret::run(module, "f", one.iter().map(|&bits| int(bits)).collect(), 100_000).expect("runs")).collect()
+    inputs
+        .iter()
+        .map(|one| {
+            llrm_mir::interpret::run(module, "f", one.iter().map(|&bits| int(bits)).collect(), 100_000).expect("runs")
+        })
+        .collect()
 }
 
 /// `text` before and after the pass, run under the pass manager's verifier
@@ -196,7 +208,10 @@ fn simplify(text: &str) -> (Module, Module) {
 
 /// The loop headed by `header` in @f: how many predecessors enter it from
 /// outside, how many latches it has, and whether every exit is dedicated.
-fn shape(module: &Module, header: &str) -> (usize, usize, bool) {
+fn shape(
+    module: &Module,
+    header: &str,
+) -> (usize, usize, bool) {
     let header = at(module, header);
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
     let graph = cfg::graph(function);
@@ -363,7 +378,8 @@ out:
 
 #[test]
 fn a_function_without_loops_is_left_alone() {
-    let mut module = parsed("define i16 @f(i1 %c) {
+    let mut module = parsed(
+        "define i16 @f(i1 %c) {
 b0:
   br i1 %c, label %b1, label %b2
 
@@ -374,7 +390,8 @@ b2:
   %r = phi i16 [ 1, %b0 ], [ 2, %b1 ]
   ret i16 %r
 }
-");
+",
+    );
     let (_, function) = module.function_mut("f").expect("@f");
     let before = function.clone();
     assert!(!simplified(function));
@@ -415,10 +432,16 @@ out:
 fn corpus_simplified() -> Vec<(String, Vec<usize>, Vec<usize>, bool)> {
     let mut out = Vec::new();
     for (name, mut module) in llrm_analysis::testing::corpus() {
-        let names: Vec<String> = module.functions().filter(|(_, _, one)| one.entry().is_some()).filter_map(|(_, global, _)| global.name.clone()).collect();
+        let names: Vec<String> = module
+            .functions()
+            .filter(|(_, _, one)| one.entry().is_some())
+            .filter_map(|(_, global, _)| global.name.clone())
+            .collect();
         for function_name in names {
             let (_, function) = module.function_mut(&function_name).unwrap();
-            let latches = |function: &llrm_mir::module::Function| loops::loops(&cfg::graph(function), None).iter().map(|one| one.latches.len()).collect::<Vec<_>>();
+            let latches = |function: &llrm_mir::module::Function| {
+                loops::loops(&cfg::graph(function), None).iter().map(|one| one.latches.len()).collect::<Vec<_>>()
+            };
             let before = latches(function);
             simplified(function);
             let after = latches(function);
@@ -437,7 +460,10 @@ fn corpus_simplified() -> Vec<(String, Vec<usize>, Vec<usize>, bool)> {
 #[test]
 fn every_corpus_loop_ends_with_one_latch_at_a_fixed_point() {
     let results = corpus_simplified();
-    assert!(results.iter().any(|(_, before, _, _)| before.iter().any(|&latches| latches > 1)), "the corpus has a loop with two latches");
+    assert!(
+        results.iter().any(|(_, before, _, _)| before.iter().any(|&latches| latches > 1)),
+        "the corpus has a loop with two latches"
+    );
     for (name, _, after, again) in results {
         assert!(after.iter().all(|&latches| latches == 1), "{name}: {after:?}");
         assert!(!again, "{name}: a second run changed it");
@@ -455,14 +481,18 @@ fn loops_already_in_simplified_form_make_no_copy_of_the_function() {
         let next = if at + 1 == loops { "done".to_owned() } else { format!("p{}", at + 1) };
         let before = if at == 0 { "p0".to_owned() } else { format!("h{}", at - 1) };
         let _ = before;
-        text += &format!("p{at}:\n  br label %h{at}\nh{at}:\n  %i{at} = phi i16 [ 0, %p{at} ], [ %n{at}, %b{at} ]\n  %c{at} = icmp slt i16 %i{at}, %x\n  br i1 %c{at}, label %b{at}, label %{next}\nb{at}:\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n");
+        text += &format!(
+            "p{at}:\n  br label %h{at}\nh{at}:\n  %i{at} = phi i16 [ 0, %p{at} ], [ %n{at}, %b{at} ]\n  %c{at} = icmp slt i16 %i{at}, %x\n  br i1 %c{at}, label %b{at}, label %{next}\nb{at}:\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n"
+        );
     }
     text += "done:\n  ret i16 0\n}\n";
     let mut module = parsed(&text);
     let before = super::copies();
     let function = module.named("f").expect("@f");
     let changed = {
-        let llrm_mir::GlobalKind::Function(function) = &mut module.globals[function.0 as usize].kind else { panic!("a function") };
+        let llrm_mir::GlobalKind::Function(function) = &mut module.globals[function.0 as usize].kind else {
+            panic!("a function")
+        };
         simplified(function)
     };
     assert!(!changed, "a loop in the form was changed");

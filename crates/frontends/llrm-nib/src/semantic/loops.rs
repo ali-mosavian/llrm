@@ -22,10 +22,7 @@ impl<'a> FunctionCompiler<'a> {
             ));
         };
         if source_name == name {
-            return Err(Diagnostic::new(
-                span,
-                "a comprehension cannot replace its own source",
-            ));
+            return Err(Diagnostic::new(span, "a comprehension cannot replace its own source"));
         }
         let source = self.binding(source_name, iterable.span())?.clone();
         let Some((source_element, Some(length))) = source.type_.array() else {
@@ -42,10 +39,7 @@ impl<'a> FunctionCompiler<'a> {
         let source_scalar = match source_element {
             ElementType::Scalar(type_name) => type_name,
             ElementType::Struct(_) => {
-                return Err(Diagnostic::new(
-                    span,
-                    "struct comprehension elements must select a scalar field",
-                ));
+                return Err(Diagnostic::new(span, "struct comprehension elements must select a scalar field"));
             }
         };
 
@@ -59,10 +53,12 @@ impl<'a> FunctionCompiler<'a> {
         )]));
         let inferred = self
             .expression_type_hint(expression)
-            .or_else(|| match expression {
-                Expr::Integer(value, _) => self.rules.literal(*value),
-                _ => None,
-            });
+            .or_else(
+                || match expression {
+                    Expr::Integer(value, _) => self.rules.literal(*value),
+                    _ => None,
+                },
+            );
         self.scopes.pop();
 
         let annotated = match annotation {
@@ -72,18 +68,13 @@ impl<'a> FunctionCompiler<'a> {
                 if dims.len() != 1 || annotated_length != length {
                     return Err(Diagnostic::new(
                         span,
-                        format!(
-                            "comprehension has {length} elements, annotation expects {annotated_length}"
-                        ),
+                        format!("comprehension has {length} elements, annotation expects {annotated_length}"),
                     ));
                 }
                 Some(self.types.resolve_element(element, span)?)
             }
             Some(_) => {
-                return Err(Diagnostic::new(
-                    span,
-                    "a comprehension binding needs an array annotation or inference",
-                ));
+                return Err(Diagnostic::new(span, "a comprehension binding needs an array annotation or inference"));
             }
         };
         let result_type = match (annotated, inferred) {
@@ -92,10 +83,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             (Some(ElementType::Scalar(type_name)), _) | (None, Some(type_name)) => type_name,
             (Some(ElementType::Struct(_)), _) => {
-                return Err(Diagnostic::new(
-                    span,
-                    "struct-valued comprehensions are not in this slice",
-                ));
+                return Err(Diagnostic::new(span, "struct-valued comprehensions are not in this slice"));
             }
             (None, None) => {
                 return Err(Diagnostic::new(
@@ -108,17 +96,17 @@ impl<'a> FunctionCompiler<'a> {
         let shape = Shape::new(&[length]);
         let type_id = self.types.array(result_element, shape);
         let place = self.array_place(name, type_id, result_element, shape, mutable);
-        self.scopes.last_mut().expect("scope").insert(
-            name.into(),
-            Binding {
-                type_: BindingType::Array {
-                    element: result_element,
-                    shape: Shape::new(&[length]),
+        self.scopes
+            .last_mut()
+            .expect("scope")
+            .insert(
+                name.into(),
+                Binding {
+                    type_: BindingType::Array { element: result_element, shape: Shape::new(&[length]) },
+                    mutable: true,
+                    storage: Storage::Place(place),
                 },
-                mutable: true,
-                storage: Storage::Place(place),
-            },
-        );
+            );
         let counter_name = format!("$comprehension_{name}");
         let counter = self.place(&counter_name, self.word(), true);
         self.emit(
@@ -128,14 +116,13 @@ impl<'a> FunctionCompiler<'a> {
             None,
         );
         let word = self.word();
-        self.scopes.last_mut().expect("scope").insert(
-            counter_name.clone(),
-            Binding {
-                type_: BindingType::Scalar(word),
-                mutable: true,
-                storage: Storage::Place(counter),
-            },
-        );
+        self.scopes
+            .last_mut()
+            .expect("scope")
+            .insert(
+                counter_name.clone(),
+                Binding { type_: BindingType::Scalar(word), mutable: true, storage: Storage::Place(counter) },
+            );
         let body = vec![
             Statement::Assign {
                 target: AssignTarget::Index {
@@ -154,12 +141,7 @@ impl<'a> FunctionCompiler<'a> {
             },
         ];
         self.for_statement(mode, item_name, iterable, &body, span)?;
-        self.scopes
-            .last_mut()
-            .expect("scope")
-            .get_mut(name)
-            .expect("comprehension result")
-            .mutable = mutable;
+        self.scopes.last_mut().expect("scope").get_mut(name).expect("comprehension result").mutable = mutable;
         Ok(())
     }
 
@@ -201,7 +183,9 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(call) = self.method_as_call(iterable) {
             return self.for_walk(mode, name, &call, body, span);
         }
-        if self.for_generated(mode, name, iterable, body, span)? || self.for_protocol(mode, name, iterable, body, span)? {
+        if self.for_generated(mode, name, iterable, body, span)?
+            || self.for_protocol(mode, name, iterable, body, span)?
+        {
             return Ok(());
         }
         let array_name = match iterable {
@@ -242,37 +226,24 @@ impl<'a> FunctionCompiler<'a> {
                 let ranked = array.type_.ranked().is_some();
                 Diagnostic::new(
                     iterable.span(),
-                    if ranked {
-                        "a ranked array is iterated by index"
-                    } else {
-                        "for requires an array or string"
-                    },
+                    if ranked { "a ranked array is iterated by index" } else { "for requires an array or string" },
                 )
             })?
         };
         if string && mode == IterationMode::Mutable {
-            return Err(Diagnostic::new(
-                span,
-                "strings are immutable byte sequences",
-            ));
+            return Err(Diagnostic::new(span, "strings are immutable byte sequences"));
         }
         if mode == IterationMode::Mutable {
             self.place_writable(iterable, span)?;
         }
-        let string_pointer = if heap.is_some() {
-            Some(self.string_pointer(&array, iterable.span())?)
-        } else {
-            None
-        };
+        let string_pointer = if heap.is_some() { Some(self.string_pointer(&array, iterable.span())?) } else { None };
         let length = match length {
             Some(length) => hir::Operand::Constant(
                 self.word_id(),
-                i64::try_from(length).ok().filter(|&length| length >> (8 * self.word_bytes()) == 0).ok_or_else(|| {
-                    Diagnostic::new(
-                        iterable.span(),
-                        "for array length exceeds the target's word",
-                    )
-                })?,
+                i64::try_from(length)
+                    .ok()
+                    .filter(|&length| length >> (8 * self.word_bytes()) == 0)
+                    .ok_or_else(|| Diagnostic::new(iterable.span(), "for array length exceeds the target's word"))?,
             ),
             None => {
                 let pointer = if let Some(pointer) = string_pointer {
@@ -286,11 +257,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.emit(
                     "load",
                     vec![value],
-                    vec![hir::Operand::DescriptorPlace {
-                        base: pointer,
-                        field: "length",
-                        type_id: self.word_id(),
-                    }],
+                    vec![hir::Operand::DescriptorPlace { base: pointer, field: "length", type_id: self.word_id() }],
                     None,
                 );
                 hir::Operand::Value(value)
@@ -301,10 +268,7 @@ impl<'a> FunctionCompiler<'a> {
         self.emit(
             "store",
             Vec::new(),
-            vec![
-                hir::Operand::Place(index_place),
-                hir::Operand::Constant(self.word_id(), 0),
-            ],
+            vec![hir::Operand::Place(index_place), hir::Operand::Constant(self.word_id(), 0)],
             None,
         );
         let condition_block = self.block();
@@ -315,19 +279,9 @@ impl<'a> FunctionCompiler<'a> {
 
         self.current = condition_block;
         let index = self.value(self.word());
-        self.emit(
-            "load",
-            vec![index],
-            vec![hir::Operand::Place(index_place)],
-            None,
-        );
+        self.emit("load", vec![index], vec![hir::Operand::Place(index_place)], None);
         let condition = self.value(TypeName::Bool);
-        self.emit(
-            "below",
-            vec![condition],
-            vec![hir::Operand::Value(index), length],
-            None,
-        );
+        self.emit("below", vec![condition], vec![hir::Operand::Value(index), length], None);
         self.terminate(hir::Terminator {
             kind: "branch",
             operands: vec![hir::Operand::Value(condition)],
@@ -337,18 +291,10 @@ impl<'a> FunctionCompiler<'a> {
         self.current = body_block;
         let element_width = self.types.width(element.id());
         let view_storage = if let Some(pointer) = string_pointer {
-            Storage::Reference(self.indexed_pointer(
-                pointer,
-                hir::Operand::Value(index),
-                element_width,
-                span,
-            )?)
+            Storage::Reference(self.indexed_pointer(pointer, hir::Operand::Value(index), element_width, span)?)
         } else {
             match array.storage {
-                Storage::Place(place) => Storage::ArrayView {
-                    place,
-                    index: hir::Operand::Value(index),
-                },
+                Storage::Place(place) => Storage::ArrayView { place, index: hir::Operand::Value(index) },
                 Storage::Slice(descriptor) => Storage::Reference(self.view_element(
                     descriptor,
                     element,
@@ -378,19 +324,21 @@ impl<'a> FunctionCompiler<'a> {
             self.walking.insert(borrows::BorrowKey::Value(pointer));
         }
         self.scopes.push(BTreeMap::new());
-        self.scopes.last_mut().expect("scope").insert(
-            name.into(),
-            Binding {
-                type_: match element {
-                    ElementType::Scalar(type_name) => BindingType::Scalar(type_name),
-                    ElementType::Struct(id) => BindingType::Struct(id),
+        self.scopes
+            .last_mut()
+            .expect("scope")
+            .insert(
+                name.into(),
+                Binding {
+                    type_: match element {
+                        ElementType::Scalar(type_name) => BindingType::Scalar(type_name),
+                        ElementType::Struct(id) => BindingType::Struct(id),
+                    },
+                    mutable: mode == IterationMode::Mutable,
+                    storage: view_storage,
                 },
-                mutable: mode == IterationMode::Mutable,
-                storage: view_storage,
-            },
-        );
-        self.loops
-            .push(Loop::new(exit_block, increment_block, self.scopes.len()));
+            );
+        self.loops.push(Loop::new(exit_block, increment_block, self.scopes.len()));
         let result = self.scoped(body);
         self.loops.pop();
         self.scopes.pop();
@@ -401,31 +349,15 @@ impl<'a> FunctionCompiler<'a> {
 
         self.current = increment_block;
         let old_index = self.value(self.word());
-        self.emit(
-            "load",
-            vec![old_index],
-            vec![hir::Operand::Place(index_place)],
-            None,
-        );
+        self.emit("load", vec![old_index], vec![hir::Operand::Place(index_place)], None);
         let next_index = self.value(self.word());
         self.emit(
             "add",
             vec![next_index],
-            vec![
-                hir::Operand::Value(old_index),
-                hir::Operand::Constant(self.word_id(), 1),
-            ],
+            vec![hir::Operand::Value(old_index), hir::Operand::Constant(self.word_id(), 1)],
             None,
         );
-        self.emit(
-            "store",
-            Vec::new(),
-            vec![
-                hir::Operand::Place(index_place),
-                hir::Operand::Value(next_index),
-            ],
-            None,
-        );
+        self.emit("store", Vec::new(), vec![hir::Operand::Place(index_place), hir::Operand::Value(next_index)], None);
         self.terminate(jump(condition_block));
         self.current = exit_block;
         Ok(())
@@ -444,12 +376,7 @@ impl<'a> FunctionCompiler<'a> {
             .rules
             .common(start_value.type_name, end_value.type_name)
             .filter(|one| is_integer(*one))
-            .ok_or_else(|| {
-                Diagnostic::new(
-                    end.span(),
-                    "range bounds must be integers with a common type",
-                )
-            })?;
+            .ok_or_else(|| Diagnostic::new(end.span(), "range bounds must be integers with a common type"))?;
         let start_value = self.implicit(start_value, type_name, start.span())?;
         let end_value = self.implicit(end_value, type_name, end.span())?;
         let counter_place = self.place(&format!("$range_{name}"), type_name, true);
@@ -457,21 +384,10 @@ impl<'a> FunctionCompiler<'a> {
         self.emit(
             "store",
             Vec::new(),
-            vec![
-                hir::Operand::Place(counter_place),
-                required(start_value, start.span())?,
-            ],
+            vec![hir::Operand::Place(counter_place), required(start_value, start.span())?],
             None,
         );
-        self.emit(
-            "store",
-            Vec::new(),
-            vec![
-                hir::Operand::Place(limit_place),
-                required(end_value, end.span())?,
-            ],
-            None,
-        );
+        self.emit("store", Vec::new(), vec![hir::Operand::Place(limit_place), required(end_value, end.span())?], None);
 
         let condition_block = self.block();
         let body_block = self.block();
@@ -481,26 +397,12 @@ impl<'a> FunctionCompiler<'a> {
 
         self.current = condition_block;
         let current = self.value(type_name);
-        self.emit(
-            "load",
-            vec![current],
-            vec![hir::Operand::Place(counter_place)],
-            None,
-        );
+        self.emit("load", vec![current], vec![hir::Operand::Place(counter_place)], None);
         let limit = self.value(type_name);
-        self.emit(
-            "load",
-            vec![limit],
-            vec![hir::Operand::Place(limit_place)],
-            None,
-        );
+        self.emit("load", vec![limit], vec![hir::Operand::Place(limit_place)], None);
         let condition = self.value(TypeName::Bool);
         self.emit(
-            if is_unsigned(type_name) {
-                "below"
-            } else {
-                "lt"
-            },
+            if is_unsigned(type_name) { "below" } else { "lt" },
             vec![condition],
             vec![hir::Operand::Value(current), hir::Operand::Value(limit)],
             None,
@@ -515,14 +417,9 @@ impl<'a> FunctionCompiler<'a> {
         self.scopes.push(BTreeMap::new());
         self.scopes.last_mut().expect("scope").insert(
             name.into(),
-            Binding {
-                type_: BindingType::Scalar(type_name),
-                mutable: false,
-                storage: Storage::Place(counter_place),
-            },
+            Binding { type_: BindingType::Scalar(type_name), mutable: false, storage: Storage::Place(counter_place) },
         );
-        self.loops
-            .push(Loop::new(exit_block, increment_block, self.scopes.len()));
+        self.loops.push(Loop::new(exit_block, increment_block, self.scopes.len()));
         let result = self.scoped(body);
         self.loops.pop();
         self.scopes.pop();
@@ -533,41 +430,35 @@ impl<'a> FunctionCompiler<'a> {
 
         self.current = increment_block;
         let old_value = self.value(type_name);
-        self.emit(
-            "load",
-            vec![old_value],
-            vec![hir::Operand::Place(counter_place)],
-            None,
-        );
+        self.emit("load", vec![old_value], vec![hir::Operand::Place(counter_place)], None);
         let next_value = self.value(type_name);
         let add = self.emit(
             "add",
             vec![next_value],
-            vec![
-                hir::Operand::Value(old_value),
-                hir::Operand::Constant(type_id(type_name), 1),
-            ],
+            vec![hir::Operand::Value(old_value), hir::Operand::Constant(type_id(type_name), 1)],
             None,
         );
         // The counter was below the limit before this body ran and nothing
         // else writes it, so one more stays within its type.
-        let wrap = if is_unsigned(type_name) { llrm_mir::facts::Fact::NoUnsignedWrap } else { llrm_mir::facts::Fact::NoSignedWrap };
-        self.stated.state(llrm_core::hir::facts::Subject::Instruction { function: i64::from(self.signature.id), id: i64::from(add) }, wrap);
-        self.emit(
-            "store",
-            Vec::new(),
-            vec![
-                hir::Operand::Place(counter_place),
-                hir::Operand::Value(next_value),
-            ],
-            None,
+        let wrap = if is_unsigned(type_name) {
+            llrm_mir::facts::Fact::NoUnsignedWrap
+        } else {
+            llrm_mir::facts::Fact::NoSignedWrap
+        };
+        self.stated.state(
+            llrm_core::hir::facts::Subject::Instruction { function: i64::from(self.signature.id), id: i64::from(add) },
+            wrap,
         );
+        self.emit("store", Vec::new(), vec![hir::Operand::Place(counter_place), hir::Operand::Value(next_value)], None);
         self.terminate(jump(condition_block));
         self.current = exit_block;
         Ok(())
     }
 
-    pub(super) fn scoped(&mut self, statements: &[Statement]) -> Result<(), Diagnostic> {
+    pub(super) fn scoped(
+        &mut self,
+        statements: &[Statement],
+    ) -> Result<(), Diagnostic> {
         self.in_scope(|this| this.statements(statements))
     }
 

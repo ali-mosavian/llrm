@@ -3,7 +3,6 @@
 
 use llrm_object::debug::{Info, Reach, Scalar, Type, TypeId};
 use llrm_object::{Object, Unsupported};
-
 use llrm_support::leaf::{numeric, pad};
 
 use super::{name, put16, put32, record, refused};
@@ -79,13 +78,22 @@ struct Builder<'a> {
 }
 
 impl Builder<'_> {
-    fn add(&mut self, kind: u16, data: &[u8]) -> Result<u32, Unsupported> {
+    fn add(
+        &mut self,
+        kind: u16,
+        data: &[u8],
+    ) -> Result<u32, Unsupported> {
         record(&mut self.records, kind, data, pad)?;
         self.count += 1;
         Ok(FIRST + self.count - 1)
     }
 
-    fn pointer(&mut self, target: u32, bytes: u8, mode: u32) -> Result<u32, Unsupported> {
+    fn pointer(
+        &mut self,
+        target: u32,
+        bytes: u8,
+        mode: u32,
+    ) -> Result<u32, Unsupported> {
         let kind = match bytes {
             4 => 0x0A,
             8 => 0x0C,
@@ -98,11 +106,19 @@ impl Builder<'_> {
     }
 
     /// `id`'s index, writing it and what it names first.
-    fn of(&mut self, id: TypeId) -> Result<u32, Unsupported> {
+    fn of(
+        &mut self,
+        id: TypeId,
+    ) -> Result<u32, Unsupported> {
         if let Some(done) = self.index[id] {
             return Ok(done);
         }
-        let one = self.info.types.get(id).ok_or_else(|| Unsupported(format!("CodeView: type {id} is not in the model")))?.clone();
+        let one = self
+            .info
+            .types
+            .get(id)
+            .ok_or_else(|| Unsupported(format!("CodeView: type {id} is not in the model")))?
+            .clone();
         let made = match one {
             Type::Scalar(scalar) | Type::Basic { scalar, .. } => primitive(scalar)?,
             Type::Typedef { target, .. } => self.of(target)?,
@@ -157,7 +173,9 @@ impl Builder<'_> {
                 name(&mut data, &label);
                 self.add(LF_ENUM, &data)?
             }
-            Type::Struct { name: label, bytes, fields, union } => return self.structure(id, &label, bytes, &fields, union),
+            Type::Struct { name: label, bytes, fields, union } => {
+                return self.structure(id, &label, bytes, &fields, union);
+            }
             Type::Procedure { result, parameters, convention: called } => {
                 let result = result.map(|one| self.of(one)).transpose()?.unwrap_or(T_VOID);
                 let parameters = parameters.iter().map(|&one| self.of(one)).collect::<Result<Vec<_>, _>>()?;
@@ -180,7 +198,14 @@ impl Builder<'_> {
 
     /// A struct that is reached again while its fields are being written (a list's `next`) is its
     /// forward reference; the whole struct has the same name, which is how a reader joins them.
-    fn structure(&mut self, id: TypeId, label: &str, bytes: u32, fields: &[llrm_object::debug::Field], union: bool) -> Result<u32, Unsupported> {
+    fn structure(
+        &mut self,
+        id: TypeId,
+        label: &str,
+        bytes: u32,
+        fields: &[llrm_object::debug::Field],
+        union: bool,
+    ) -> Result<u32, Unsupported> {
         if self.started[id] {
             if let Some(forward) = self.forward[id] {
                 return Ok(forward);
@@ -236,11 +261,25 @@ impl Builder<'_> {
     }
 }
 
-pub fn encode(object: &Object, info: &Info) -> Result<Types, Unsupported> {
+pub fn encode(
+    object: &Object,
+    info: &Info,
+) -> Result<Types, Unsupported> {
     let n = info.types.len();
-    let mut builder = Builder { object, info, records: Vec::new(), count: 0, index: vec![None; n], started: vec![false; n], forward: vec![None; n] };
+    let mut builder = Builder {
+        object,
+        info,
+        records: Vec::new(),
+        count: 0,
+        index: vec![None; n],
+        started: vec![false; n],
+        forward: vec![None; n],
+    };
     for id in 0..n {
         builder.of(id)?;
     }
-    Ok(Types { records: builder.records, index: builder.index.into_iter().map(|one| one.expect("every type was written")).collect() })
+    Ok(Types {
+        records: builder.records,
+        index: builder.index.into_iter().map(|one| one.expect("every type was written")).collect(),
+    })
 }

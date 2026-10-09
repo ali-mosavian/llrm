@@ -9,7 +9,10 @@ fn run(text: &str) -> String {
     on(text, llrm_x86_m16::spaces())
 }
 
-fn on(text: &str, spaces: llrm_mir::spaces::Spaces) -> String {
+fn on(
+    text: &str,
+    spaces: llrm_mir::spaces::Spaces,
+) -> String {
     let mut module = parsed(&format!("{}{text}", llrm_analysis::testing::DOS));
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("parses");
     narrowed(&mut module, &layout, spaces);
@@ -36,13 +39,15 @@ out:
 /// them back with `les`: DGROUP's selector is no news to anyone.
 #[test]
 fn a_far_parameter_every_call_fills_from_a_global_is_near() {
-    let after = run(&format!("{CALLEE}define i16 @top() {{
+    let after = run(&format!(
+        "{CALLEE}define i16 @top() {{
 b0:
   %w = addrspacecast ptr @g to ptr addrspace(1)
   %r = call i16 @sum(ptr addrspace(1) %w, i16 3)
   ret i16 %r
 }}
-"));
+"
+    ));
     assert!(after.contains("@sum(ptr %") && after.contains("i16 %n)"), "{after}");
     // The recursive call passes the near pointer it was given.
     assert!(!after.contains("call i16 @sum(ptr addrspace(1)"), "{after}");
@@ -51,21 +56,24 @@ b0:
 /// A stack object's selector is SS, which no DGROUP pointer says: the parameter is the stack's.
 #[test]
 fn a_far_parameter_every_call_fills_from_the_stack_is_a_stack_pointer() {
-    let after = run(&format!("{CALLEE}define i16 @top() {{
+    let after = run(&format!(
+        "{CALLEE}define i16 @top() {{
 b0:
   %s = alloca [16 x i16]
   %w = addrspacecast ptr %s to ptr addrspace(1)
   %r = call i16 @sum(ptr addrspace(1) %w, i16 3)
   ret i16 %r
 }}
-"));
+"
+    ));
     assert!(after.contains("@sum(ptr addrspace(5) %") && !after.contains("call i16 @sum(ptr addrspace(1)"), "{after}");
 }
 
 /// One call from the stack and one from a global: no one space holds both.
 #[test]
 fn a_parameter_filled_from_the_stack_and_from_a_global_stays_far() {
-    let after = run(&format!("{CALLEE}define i16 @top() {{
+    let after = run(&format!(
+        "{CALLEE}define i16 @top() {{
 b0:
   %s = alloca [16 x i16]
   %w = addrspacecast ptr %s to ptr addrspace(1)
@@ -75,14 +83,16 @@ b0:
   %t = add i16 %r, %q
   ret i16 %t
 }}
-"));
+"
+    ));
     assert!(after.contains("@sum(ptr addrspace(1) %a"), "{after}");
 }
 
 /// One call from elsewhere (a far pointer that came in) keeps it far for all.
 #[test]
 fn one_far_actual_keeps_the_parameter_far() {
-    let after = run(&format!("{CALLEE}define i16 @top(ptr addrspace(1) %p) {{
+    let after = run(&format!(
+        "{CALLEE}define i16 @top(ptr addrspace(1) %p) {{
 b0:
   %w = addrspacecast ptr @g to ptr addrspace(1)
   %r = call i16 @sum(ptr addrspace(1) %w, i16 3)
@@ -90,20 +100,24 @@ b0:
   %s = add i16 %r, %q
   ret i16 %s
 }}
-"));
+"
+    ));
     assert!(after.contains("@sum(ptr addrspace(1) %a"), "{after}");
 }
 
 /// Code outside the module may pass any pointer.
 #[test]
 fn an_exported_function_keeps_a_far_parameter() {
-    let after = run(&format!("{}define i16 @top() {{
+    let after = run(&format!(
+        "{}define i16 @top() {{
 b0:
   %w = addrspacecast ptr @g to ptr addrspace(1)
   %r = call i16 @sum(ptr addrspace(1) %w, i16 3)
   ret i16 %r
 }}
-", CALLEE.replace("internal ", "")));
+",
+        CALLEE.replace("internal ", "")
+    ));
     assert!(after.contains("@sum(ptr addrspace(1) %a"), "{after}");
 }
 
@@ -112,13 +126,18 @@ b0:
 #[test]
 fn a_target_names_the_space_of_the_stack_a_parameter_narrows_to() {
     let spaces = llrm_mir::spaces::Spaces { stack: 6, ..llrm_x86_m16::spaces() };
-    let after = on(&format!("{CALLEE}define i16 @top() {{
+    let after = on(
+        &format!(
+            "{CALLEE}define i16 @top() {{
 b0:
   %s = alloca [16 x i16]
   %w = addrspacecast ptr %s to ptr addrspace(1)
   %r = call i16 @sum(ptr addrspace(1) %w, i16 3)
   ret i16 %r
 }}
-"), spaces);
+"
+        ),
+        spaces,
+    );
     assert!(after.contains("@sum(ptr addrspace(6) %"), "{after}");
 }

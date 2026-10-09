@@ -38,7 +38,12 @@ b0:
   ret i16 %v
 }
 ");
-    assert!(after.contains("load i16, ptr addrspace(5)") && !after.contains("load i16, ptr addrspace(1)") && !after.contains("load i16, ptr %"), "{after}");
+    assert!(
+        after.contains("load i16, ptr addrspace(5)")
+            && !after.contains("load i16, ptr addrspace(1)")
+            && !after.contains("load i16, ptr %"),
+        "{after}"
+    );
 }
 
 /// The stack's space was 5 in the pass: a target that numbers it 6 got its stack object's near
@@ -55,7 +60,8 @@ b0:
 }
 ";
     let spaces = Some(llrm_mir::spaces::Spaces { stack: 6, ..llrm_x86_m16::spaces() });
-    let after = managed_on(&mut parsed(&format!("{HEAD}{text}")), InferAddressSpaces, Tuned { spaces, ..Tuned::default() });
+    let after =
+        managed_on(&mut parsed(&format!("{HEAD}{text}")), InferAddressSpaces, Tuned { spaces, ..Tuned::default() });
     assert!(after.contains("load i16, ptr addrspace(6)") && !after.contains("addrspace(5)"), "{after}");
 }
 
@@ -87,7 +93,10 @@ b0:
   ret i16 %v
 }
 ");
-    assert!(after.contains("call void @sink(ptr addrspace(1) %a)") && !after.contains("load i16, ptr addrspace(1)"), "{after}");
+    assert!(
+        after.contains("call void @sink(ptr addrspace(1) %a)") && !after.contains("load i16, ptr addrspace(1)"),
+        "{after}"
+    );
 }
 
 /// A walking pointer: its phi and its step are near where nothing reads them whole but a load.

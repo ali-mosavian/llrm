@@ -9,10 +9,10 @@ mod lexer;
 pub mod tables;
 
 pub use ast::parse;
-pub use ast::FORMAT_FIELD;
-pub use ast::{AUGMENTED, EACH, ON_SELECTOR, TUPLE};
 pub use ast::parse_vertical_slice;
 pub use ast::ParseOutput;
+pub use ast::FORMAT_FIELD;
+pub use ast::{AUGMENTED, EACH, ON_SELECTOR, TUPLE};
 pub use engine::ParseResult;
 pub use lexer::lex;
 pub use lexer::LexError;

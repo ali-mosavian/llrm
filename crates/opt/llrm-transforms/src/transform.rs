@@ -5,23 +5,17 @@
 //! What `gvn` reads -- `_PURE`, `_computation`, `_reaches`, `_undisturbed`
 //! and `subexpressions` -- came with it. Left behind, each of the old
 //! representation:
-//! - `_widths`, `_full`, `_width` and `_copied`: a value was split into
-//!   word halves and copied between registers; here every value is whole
-//!   and nothing is a copy, so `stands` (what a copy numbered as) is the
-//!   substitution itself.
-//! - `halves`: which half of a value was read; a value here is whole.
-//!   `live` is here for Dead.
-//! - `reused_divides`, `divided_twice`: one divide had two answers, one
-//!   dead. `sdiv` and `srem` are separate here, and two equal divides are
-//!   one expression `subexpressions` finds.
+//! - `_widths`, `_full`, `_width` and `_copied`: a value was split into word halves and copied between registers; here
+//!   every value is whole and nothing is a copy, so `stands` (what a copy numbered as) is the substitution itself.
+//! - `halves`: which half of a value was read; a value here is whole. `live` is here for Dead.
+//! - `reused_divides`, `divided_twice`: one divide had two answers, one dead. `sdiv` and `srem` are separate here, and
+//!   two equal divides are one expression `subexpressions` finds.
 //! - `_read` and the `flags` checks: no value is the machine's flags.
-//! - `_reusable_float_path`, `_exact_floating`, `_exact_stored_load`,
-//!   `_unchanged_float_environment`, `_erased_floating`: x87 exceptions,
-//!   precision and the float environment. Floating arithmetic has no
-//!   exceptions here (see `llrm_analysis::effects`), so it is as pure as
-//!   integer arithmetic.
-//! - `_phi_reading`, `_reclaimed`, `_empty_operation`: an erased
-//!   operation's source bytes. `replace_all_uses_with` reaches phis too.
+//! - `_reusable_float_path`, `_exact_floating`, `_exact_stored_load`, `_unchanged_float_environment`,
+//!   `_erased_floating`: x87 exceptions, precision and the float environment. Floating arithmetic has no exceptions
+//!   here (see `llrm_analysis::effects`), so it is as pure as integer arithmetic.
+//! - `_phi_reading`, `_reclaimed`, `_empty_operation`: an erased operation's source bytes. `replace_all_uses_with`
+//!   reaches phis too.
 //!
 //! `_undisturbed` asks `memoryssa::Accesses` what a store or call writes;
 //! the old one refused every call. `forwarded` serves only a load: no
@@ -35,16 +29,15 @@
 //! constant. `test_a_third_equal_divide_reads_the_answer_the_first_computed`
 //! tests `subexpressions`, which serves a divide here. Stay behind:
 //! - test_cse_propagates_a_complete_narrow_copy_to_an_opaque_reader and
-//!   test_cse_refuses_an_operand_that_is_only_half_its_value: halves and
-//!   copies.
+//!   test_cse_refuses_an_operand_that_is_only_half_its_value: halves and copies.
 //! - test_deferred_runtime_float_reuse_respects_environment,
-//!   test_unknown_integer_loads_share_a_value_but_unknown_floats_do_not
-//!   and test_proven_copy_unlocks_strict_floating_cse (ignored there): the
-//!   x87 environment and exactness, the last two reading BC fixtures.
+//!   test_unknown_integer_loads_share_a_value_but_unknown_floats_do_not and
+//!   test_proven_copy_unlocks_strict_floating_cse (ignored there): the x87 environment and exactness, the last two
+//!   reading BC fixtures.
 //! - test_both_lngmix_divides_absorb: a BC corpus through `wholeseg`.
 //! - test_value_reuse_is_one_gvn_pre_pass: the pipeline is not ported.
-//! - test_a_served_read_names_the_value_and_not_a_register: a BC corpus,
-//!   and a load here is replaced by its value outright.
+//! - test_a_served_read_names_the_value_and_not_a_register: a BC corpus, and a load here is replaced by its value
+//!   outright.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -65,14 +58,27 @@ use crate::edges;
 use crate::lcssa::{arms, from_arms};
 
 /// Values something that stays reads, to a fixed point.
-pub fn live(context: &Context, callees: &Callees, function: &Function) -> BTreeSet<ValueId> {
+pub fn live(
+    context: &Context,
+    callees: &Callees,
+    function: &Function,
+) -> BTreeSet<ValueId> {
     live_except(context, callees, function, |_| false)
 }
 
 /// `live`, as if the instructions `skipped` picks did not stay.
-pub fn live_except(context: &Context, callees: &Callees, function: &Function, skipped: impl Fn(InstId) -> bool) -> BTreeSet<ValueId> {
+pub fn live_except(
+    context: &Context,
+    callees: &Callees,
+    function: &Function,
+    skipped: impl Fn(InstId) -> bool,
+) -> BTreeSet<ValueId> {
     let mut alive = BTreeSet::new();
-    let mut pending = function.walk().map(|(_, inst)| inst).filter(|&inst| !skipped(inst) && crate::dead::_kept(context, callees, function, inst)).collect::<Vec<_>>();
+    let mut pending = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| !skipped(inst) && crate::dead::_kept(context, callees, function, inst))
+        .collect::<Vec<_>>();
     while let Some(inst) = pending.pop() {
         for &operand in &function.instruction(inst).operands {
             if let Operand::Value(value) = operand
@@ -92,7 +98,11 @@ pub fn live_except(context: &Context, callees: &Callees, function: &Function, sk
 /// The old one found the flag-setting `cmp`, or a `test`-like and/or/xor
 /// read for equality, whose flags the branch read; both are an `icmp` here.
 /// A float compare was refused as floating work, so `fcmp` is not one.
-pub fn _comparison(function: &Function, block: BlockId, branch: InstId) -> Option<InstId> {
+pub fn _comparison(
+    function: &Function,
+    block: BlockId,
+    branch: InstId,
+) -> Option<InstId> {
     let instruction = function.instruction(branch);
     if instruction.opcode != Opcode::Br || instruction.operands.len() != 3 {
         return None;
@@ -114,14 +124,22 @@ pub fn _comparison(function: &Function, block: BlockId, branch: InstId) -> Optio
 /// value, and one with an earlier phi's arms is that phi (LLVM's
 /// `EliminateDuplicatePHINodes`).
 pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
-    let predecessors = function.layout().iter().map(|&block| (block, function.predecessors(block))).collect::<BTreeMap<_, _>>();
+    let predecessors =
+        function.layout().iter().map(|&block| (block, function.predecessors(block))).collect::<BTreeMap<_, _>>();
     loop {
         let mut changed = false;
         for block in function.layout().to_vec() {
             for phi in edges::phis(function, block) {
                 let result = function.instruction(phi).result.expect("a phi's value");
-                let incoming = arms(function, phi).into_iter().filter(|(_, at)| predecessors[&block].contains(at)).collect::<Vec<_>>();
-                let mut values = incoming.iter().map(|&(value, _)| value).filter(|&value| value != Operand::Value(result)).collect::<Vec<_>>();
+                let incoming = arms(function, phi)
+                    .into_iter()
+                    .filter(|(_, at)| predecessors[&block].contains(at))
+                    .collect::<Vec<_>>();
+                let mut values = incoming
+                    .iter()
+                    .map(|&(value, _)| value)
+                    .filter(|&value| value != Operand::Value(result))
+                    .collect::<Vec<_>>();
                 values.dedup();
                 if let [value] = values[..] {
                     function.replace_value(result, value);
@@ -174,8 +192,28 @@ fn _duplicate_phis(function: &mut Function) -> Result<bool, String> {
 // machine idioms with no one instruction; Copy has none. The pointer casts
 // are the rich MIR's own: a segment made a pointer twice is one pointer.
 pub const _PURE: [&str; 22] = [
-    "add", "sub", "mul", "getelementptr", "udiv", "sdiv", "urem", "srem", "and", "or", "xor", "shl", "lshr", "ashr",
-    "trunc", "zext", "sext", "icmp", "inttoptr", "ptrtoint", "bitcast", "addrspacecast",
+    "add",
+    "sub",
+    "mul",
+    "getelementptr",
+    "udiv",
+    "sdiv",
+    "urem",
+    "srem",
+    "and",
+    "or",
+    "xor",
+    "shl",
+    "lshr",
+    "ashr",
+    "trunc",
+    "zext",
+    "sext",
+    "icmp",
+    "inttoptr",
+    "ptrtoint",
+    "bitcast",
+    "addrspacecast",
 ];
 
 /// The old `op.floating` kinds `_computation` took: arithmetic and the
@@ -184,7 +222,9 @@ pub fn _floating(opcode: &Opcode) -> bool {
     matches!(
         opcode,
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv)
-            | Opcode::Cast(CastOp::FPTrunc | CastOp::FPExt | CastOp::FPToUI | CastOp::FPToSI | CastOp::UIToFP | CastOp::SIToFP)
+            | Opcode::Cast(
+                CastOp::FPTrunc | CastOp::FPExt | CastOp::FPToUI | CastOp::FPToSI | CastOp::UIToFP | CastOp::SIToFP
+            )
     )
 }
 
@@ -192,9 +232,16 @@ pub fn _floating(opcode: &Opcode) -> bool {
 /// whether any went.
 ///
 /// `avoid_store_crossing` keeps a load from being served across a store.
-pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_crossing: bool, program: Option<&ProgramProxy>, crossed: &std::cell::Cell<bool>) -> Result<bool, String> {
+pub fn subexpressions(
+    function: &mut Function,
+    accesses: &Accesses,
+    avoid_store_crossing: bool,
+    program: Option<&ProgramProxy>,
+    crossed: &std::cell::Cell<bool>,
+) -> Result<bool, String> {
     let doms = cfg::Dominance::of(function).dominators(function);
-    let order: IndexMap<BlockId, usize> = function.layout().iter().enumerate().map(|(index, &block)| (block, index)).collect();
+    let order: IndexMap<BlockId, usize> =
+        function.layout().iter().enumerate().map(|(index, &block)| (block, index)).collect();
 
     let mut seen: IndexMap<_Computation, Vec<(usize, usize, InstId)>> = IndexMap::default();
     // What a name is rewritten to, and so what it numbers as.
@@ -223,9 +270,13 @@ pub fn subexpressions(function: &mut Function, accesses: &Accesses, avoid_store_
                 candidates.push((here, index, inst));
                 continue;
             }
-            if loads && instructions[where_ + 1..index].iter().any(|&between| matches!(function.instruction(between).opcode, Opcode::Store { .. })) {
-                // The one place `avoid_store_crossing` changes what is numbered: told, so a caller that runs this both ways can see
-                // when the second way is the first.
+            if loads
+                && instructions[where_ + 1..index]
+                    .iter()
+                    .any(|&between| matches!(function.instruction(between).opcode, Opcode::Store { .. }))
+            {
+                // The one place `avoid_store_crossing` changes what is numbered: told, so a caller that runs this both
+                // ways can see when the second way is the first.
                 crossed.set(true);
                 if avoid_store_crossing {
                     candidates.push((here, index, inst));
@@ -272,7 +323,10 @@ pub struct _Computation {
 ///
 /// A load is its pointer's bytes, as an old load was its cell's; a
 /// volatile one is the old barrier.
-pub fn _computation(op: &Instruction, stands: &BTreeMap<ValueId, Operand>) -> Option<_Computation> {
+pub fn _computation(
+    op: &Instruction,
+    stands: &BTreeMap<ValueId, Operand>,
+) -> Option<_Computation> {
     let floating = _floating(&op.opcode);
     let load = matches!(op.opcode, Opcode::Load { volatile: false, .. });
     if !(_PURE.contains(&op.opcode.mnemonic()) || load) && !floating {
@@ -328,7 +382,8 @@ thread_local! {
     static UNDISTURBED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has asked whether a load is undisturbed by a set of writes, for a test that a pass asks it once.
+/// How many times this thread has asked whether a load is undisturbed by a set of writes, for a test that a pass asks
+/// it once.
 pub fn undisturbed_asked() -> usize {
     UNDISTURBED.with(std::cell::Cell::get)
 }
@@ -339,7 +394,12 @@ pub fn undisturbed_asked() -> usize {
 /// `accesses` says what each writes; a call writes its footprint.
 /// `regions::overlapping` decides against each write, on `program`, and an
 /// answer it cannot give overlaps.
-pub fn _undisturbed(one: InstId, between: &[InstId], accesses: &Accesses, program: Option<&ProgramProxy>) -> bool {
+pub fn _undisturbed(
+    one: InstId,
+    between: &[InstId],
+    accesses: &Accesses,
+    program: Option<&ProgramProxy>,
+) -> bool {
     UNDISTURBED.with(|asked| asked.set(asked.get() + 1));
     let Some(read) = accesses.references.get(&one) else {
         return false;
@@ -350,19 +410,35 @@ pub fn _undisturbed(one: InstId, between: &[InstId], accesses: &Accesses, progra
 /// Store-to-load forwarding: each load a known value serves becomes that
 /// value; whether any did. `accesses` are `function`'s as it stands.
 ///
-/// `crossed` is set when a value serves a load across a store, the one thing `avoid_store_crossing` changes: where it is not set the
-/// run is the same either way.
+/// `crossed` is set when a value serves a load across a store, the one thing `avoid_store_crossing` changes: where it
+/// is not set the run is the same either way.
 ///
 /// `avoid_store_crossing` keeps a value from serving a load when a store
 /// lies on a path from its definition to the load.
-pub fn forwarded(context: &Context, layout: &DataLayout, function: &mut Function, outer: &Outer, accesses: &Accesses, registers: &IndexMap<ValueId, llrm_analysis::consts::Known>, shape: &llrm_analysis::cfg::Shape, avoid_store_crossing: bool, held: &std::cell::OnceCell<avail::Held>, crossed: &std::cell::Cell<bool>) -> Result<bool, String> {
-    let want = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Load { .. })).collect::<BTreeSet<_>>();
+pub fn forwarded(
+    context: &Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    accesses: &Accesses,
+    registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
+    shape: &llrm_analysis::cfg::Shape,
+    avoid_store_crossing: bool,
+    held: &std::cell::OnceCell<avail::Held>,
+    crossed: &std::cell::Cell<bool>,
+) -> Result<bool, String> {
+    let want = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Load { .. }))
+        .collect::<BTreeSet<_>>();
     if want.is_empty() {
         return Ok(false);
     }
     let unit = memory::Unit::within(context, layout, function, outer).with_registers(registers).with_shape(shape);
     let crossings = Crossings::of(function);
-    // What each block holds is a fact of the instructions `function` has now, which a caller that runs this twice on one function works out once.
+    // What each block holds is a fact of the instructions `function` has now, which a caller that runs this twice on
+    // one function works out once.
     let served = avail::forwardable_by(&unit, accesses, &want, held.get_or_init(|| avail::holders(&unit, accesses)))
         .into_iter()
         .filter(|one| {
@@ -375,7 +451,10 @@ pub fn forwarded(context: &Context, layout: &DataLayout, function: &mut Function
         return Ok(false);
     }
     // A load may be served by another served load.
-    let replacements = served.iter().map(|one| (function.instruction(one.at).result.expect("a load's value"), one.value)).collect::<BTreeMap<_, _>>();
+    let replacements = served
+        .iter()
+        .map(|one| (function.instruction(one.at).result.expect("a load's value"), one.value))
+        .collect::<BTreeMap<_, _>>();
     for (&value, &with) in &replacements {
         function.replace_value(value, ssa::provider(with, &replacements).map_err(|error| error.to_string())?);
     }
@@ -385,9 +464,10 @@ pub fn forwarded(context: &Context, layout: &DataLayout, function: &mut Function
     Ok(true)
 }
 
-/// Whether stores lie on paths between instructions, asked many times of one function: where each instruction is and how many stores
-/// each block holds before each position are found once, and the blocks that reach a block once for each block asked of. Each ask was
-/// a scan of a block for the instruction, twice, and of the function for what reaches the load: quadratic in a large function.
+/// Whether stores lie on paths between instructions, asked many times of one function: where each instruction is and
+/// how many stores each block holds before each position are found once, and the blocks that reach a block once for
+/// each block asked of. Each ask was a scan of a block for the instruction, twice, and of the function for what reaches
+/// the load: quadratic in a large function.
 struct Crossings<'f> {
     function: &'f Function,
     places: BTreeMap<InstId, (BlockId, i64)>,
@@ -404,7 +484,9 @@ impl<'f> Crossings<'f> {
             let mut counted = vec![0u32];
             for (index, &inst) in function.block(block).instructions().iter().enumerate() {
                 places.insert(inst, (block, index as i64));
-                counted.push(counted[index] + u32::from(matches!(function.instruction(inst).opcode, Opcode::Store { .. })));
+                counted.push(
+                    counted[index] + u32::from(matches!(function.instruction(inst).opcode, Opcode::Store { .. })),
+                );
             }
             stores.insert(block, counted);
         }
@@ -412,7 +494,10 @@ impl<'f> Crossings<'f> {
     }
 
     /// The blocks with a path to `to`, itself included.
-    fn reaching(&self, to: BlockId) -> std::rc::Rc<BTreeSet<BlockId>> {
+    fn reaching(
+        &self,
+        to: BlockId,
+    ) -> std::rc::Rc<BTreeSet<BlockId>> {
         std::rc::Rc::clone(self.reaching.borrow_mut().entry(to).or_insert_with(|| {
             let mut reaching = BTreeSet::from([to]);
             let mut work = vec![to];
@@ -427,9 +512,13 @@ impl<'f> Crossings<'f> {
         }))
     }
 
-    /// Whether a store lies on some path from `holder`'s definition to `load`, or `holder` is defined where no path from it reaches
-    /// `load` first.
-    fn crosses(&self, holder: Operand, load: InstId) -> bool {
+    /// Whether a store lies on some path from `holder`'s definition to `load`, or `holder` is defined where no path
+    /// from it reaches `load` first.
+    fn crosses(
+        &self,
+        holder: Operand,
+        load: InstId,
+    ) -> bool {
         let function = self.function;
         let Operand::Value(holder) = holder else {
             return false;
@@ -475,33 +564,39 @@ impl<'f> Crossings<'f> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use llrm_analysis::memory::Unit;
+    use llrm_analysis::memoryssa::Accesses;
     use llrm_mir::datalayout::DataLayout;
     use llrm_mir::module::Module;
-
-    use crate::testing::{f, parsed, printed, results};
-
-    use llrm_analysis::memoryssa::Accesses;
+    use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+    use llrm_mir::opcode::Opcode;
     use llrm_mir::passes::Outer;
     use llrm_support::hash::IndexMap;
 
-    use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-    use llrm_mir::opcode::Opcode;
-    use std::collections::BTreeSet;
-
-    use super::{Crossings, _trivial_phis, forwarded, subexpressions};
+    use super::{_trivial_phis, Crossings, forwarded, subexpressions};
+    use crate::testing::{f, parsed, printed, results};
 
     /// `module`'s @f numbered.
     fn subexpressions_of(module: &mut Module) -> bool {
         let layout = DataLayout::default();
-        let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-        let accesses = Accesses::resolved(&llrm_analysis::testing::with_registers(Unit::of(module, &layout, function)), &IndexMap::default()).unwrap();
+        let (_, _, function) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+        let accesses = Accesses::resolved(
+            &llrm_analysis::testing::with_registers(Unit::of(module, &layout, function)),
+            &IndexMap::default(),
+        )
+        .unwrap();
         subexpressions(f(module), &accesses, false, None, &std::cell::Cell::new(false)).unwrap()
     }
 
     /// `text` numbered: its printed form, and whether anything went. What
     /// `@f` returns for `inputs` is what it returned before.
-    fn numbered(text: &str, inputs: &[&[i128]]) -> (String, bool) {
+    fn numbered(
+        text: &str,
+        inputs: &[&[i128]],
+    ) -> (String, bool) {
         let before = parsed(text);
         let mut module: Module = before.clone();
         let changed = subexpressions_of(&mut module);
@@ -545,27 +640,56 @@ b0:
             let layout = llrm_analysis::testing::layout(&module);
             let program = llrm_mir::program::ProgramProxy::of(&module, std::rc::Rc::new(llrm_x86_m16::Dos::default()));
             let program = dos.then_some(&*program);
-            let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-            let accesses = Accesses::resolved(&Unit { program, ..llrm_analysis::testing::with_registers(Unit::of(&module, &layout, function)) }, &IndexMap::default()).unwrap();
+            let (_, _, function) =
+                module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+            let accesses = Accesses::resolved(
+                &Unit { program, ..llrm_analysis::testing::with_registers(Unit::of(&module, &layout, function)) },
+                &IndexMap::default(),
+            )
+            .unwrap();
             subexpressions(f(&mut module), &accesses, false, program, &std::cell::Cell::new(false)).unwrap()
         };
         assert!(reused(true) && !reused(false));
     }
 
-
     /// `text`'s @f forwarded, printed; what it returns for `XY` stays.
-    fn forwarded_of(text: &str, avoid_store_crossing: bool) -> String {
+    fn forwarded_of(
+        text: &str,
+        avoid_store_crossing: bool,
+    ) -> String {
         let before = parsed(text);
         let mut module = before.clone();
         let (layout, outer) = (llrm_analysis::testing::layout(&module), Outer::of(&module, None));
         let accesses = {
-            let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-            Accesses::resolved(&llrm_analysis::testing::with_registers(Unit::within(&module.context, &layout, function, &outer)), &IndexMap::default()).unwrap()
+            let (_, _, function) =
+                module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+            Accesses::resolved(
+                &llrm_analysis::testing::with_registers(Unit::within(&module.context, &layout, function, &outer)),
+                &IndexMap::default(),
+            )
+            .unwrap()
         };
         let (context, function) = module.function_mut("f").expect("@f");
-        let registers = llrm_analysis::consts::known(&llrm_analysis::testing::with_registers(Unit::within(context, &layout, function, &outer)), None, None, None);
+        let registers = llrm_analysis::consts::known(
+            &llrm_analysis::testing::with_registers(Unit::within(context, &layout, function, &outer)),
+            None,
+            None,
+            None,
+        );
         let shape = llrm_analysis::cfg::Shape::of(function);
-        let changed = forwarded(context, &layout, function, &outer, &accesses, &registers, &shape, avoid_store_crossing, &std::cell::OnceCell::new(), &std::cell::Cell::new(false)).unwrap();
+        let changed = forwarded(
+            context,
+            &layout,
+            function,
+            &outer,
+            &accesses,
+            &registers,
+            &shape,
+            avoid_store_crossing,
+            &std::cell::OnceCell::new(),
+            &std::cell::Cell::new(false),
+        )
+        .unwrap();
         let text = printed(&module);
         assert_eq!(changed, text != printed(&before), "{text}");
         assert_eq!(results(&module, XY), results(&before, XY), "{text}");
@@ -591,11 +715,16 @@ b0:
 ",
             false,
         );
-        assert!(text.contains("  store i16 %x, ptr @g
+        assert!(
+            text.contains(
+                "  store i16 %x, ptr @g
   %o = getelementptr i8, ptr @g, i16 8
   %b = load i16, ptr %o
   %r = add i16 %x, %b
-"), "{text}");
+"
+            ),
+            "{text}"
+        );
     }
 
     const CROSSING: &str = "@g = global [8 x i16] zeroinitializer
@@ -616,8 +745,13 @@ b0:
     fn test_a_value_crosses_a_store_only_when_allowed() {
         for store in ["store i16 %y, ptr %o", "store volatile i16 %y, ptr %o"] {
             let text = CROSSING.replace("STORE", store);
-            assert!(forwarded_of(&text, false).contains("  ret i16 %x
-"), "{store}");
+            assert!(
+                forwarded_of(&text, false).contains(
+                    "  ret i16 %x
+"
+                ),
+                "{store}"
+            );
             assert_eq!(forwarded_of(&text, true), printed(&parsed(&text)), "{store}");
         }
     }
@@ -625,8 +759,16 @@ b0:
     /// What may write the cell between stops the value.
     #[test]
     fn test_a_value_is_not_forwarded_past_what_may_write_its_cell() {
-        for between in ["%v = getelementptr i8, ptr @g, i16 %y\n  store i16 %y, ptr %v", "store i8 1, ptr @g", "call void @h()", "store volatile i8 1, ptr @g"] {
-            let text = format!("{}\ndefine void @h() {{\nb0:\n  store i16 3, ptr @g\n  ret void\n}}\n", CROSSING.replace("STORE", between));
+        for between in [
+            "%v = getelementptr i8, ptr @g, i16 %y\n  store i16 %y, ptr %v",
+            "store i8 1, ptr @g",
+            "call void @h()",
+            "store volatile i8 1, ptr @g",
+        ] {
+            let text = format!(
+                "{}\ndefine void @h() {{\nb0:\n  store i16 3, ptr @g\n  ret void\n}}\n",
+                CROSSING.replace("STORE", between)
+            );
             assert_eq!(forwarded_of(&text, false), printed(&parsed(&text)), "{between}");
         }
     }
@@ -891,7 +1033,11 @@ b0:
 
     /// `%a` and `%b` load `%p` with `between` in between, in @f of `head`,
     /// which starts with `pointers`.
-    fn loads(head: &str, pointers: &str, between: &str) -> String {
+    fn loads(
+        head: &str,
+        pointers: &str,
+        between: &str,
+    ) -> String {
         format!(
             "{head}
 define i16 @f(i16 %x, i16 %y{pointers}) {{
@@ -940,7 +1086,10 @@ b0:
     /// noalias pointer against a plain one.
     #[test]
     fn test_a_load_through_a_noalias_pointer_is_reused_across_a_store_through_another() {
-        let mut module = parsed(&loads("", "", "  store i16 %y, ptr %q\n").replace("i16 %y) {", "i16 %y, ptr noalias %p, ptr noalias %q) {"));
+        let mut module = parsed(
+            &loads("", "", "  store i16 %y, ptr %q\n")
+                .replace("i16 %y) {", "i16 %y, ptr noalias %p, ptr noalias %q) {"),
+        );
         assert!(subexpressions_of(&mut module), "{}", printed(&module));
         assert!(printed(&module).contains("%r = add i16 %a, %a"));
     }
@@ -948,13 +1097,22 @@ b0:
     /// Neither alloca escaped, so the callee cannot reach them.
     #[test]
     fn test_a_load_is_reused_across_a_call_that_cannot_reach_it() {
-        reused(loads("define void @g(ptr %s) {\nb0:\n  store i16 9, ptr %s\n  ret void\n}\n", "", "  call void @g(ptr %q)\n"));
+        reused(loads(
+            "define void @g(ptr %s) {\nb0:\n  store i16 9, ptr %s\n  ret void\n}\n",
+            "",
+            "  call void @g(ptr %q)\n",
+        ));
     }
 
     #[test]
     fn test_a_load_is_refused_across_what_may_write_it() {
         let pointers = |between: &str| loads("declare void @g(ptr)\n", ", ptr %p, ptr %q", between);
-        for between in ["  store i16 %y, ptr %q\n", "  call void @g(ptr %q)\n", "  call void @g(ptr %p)\n", "  store volatile i16 %y, ptr %q\n"] {
+        for between in [
+            "  store i16 %y, ptr %q\n",
+            "  call void @g(ptr %q)\n",
+            "  call void @g(ptr %p)\n",
+            "  store volatile i16 %y, ptr %q\n",
+        ] {
             kept(&pointers(between));
         }
         kept(&pointers("").replace("%b = load i16", "%b = load volatile i16"));
@@ -1095,16 +1253,23 @@ b2:
         let after = printed(&module);
         assert!(after.matches("phi").count() == 1 && after.contains("add i16 %r, %t"), "{after}");
     }
-    /// The scan the pass made for every served load (a block searched for the instruction twice, the function for what reaches the load),
-    /// kept here as the reference: `Crossings` answers the same for every definition and load of a function with a diamond, a loop and
-    /// stores in every block, and finds each position once.
-    fn reference_crosses_store(function: &Function, holder: Operand, load: InstId) -> bool {
+    /// The scan the pass made for every served load (a block searched for the instruction twice, the function for what
+    /// reaches the load), kept here as the reference: `Crossings` answers the same for every definition and load of
+    /// a function with a diamond, a loop and stores in every block, and finds each position once.
+    fn reference_crosses_store(
+        function: &Function,
+        holder: Operand,
+        load: InstId,
+    ) -> bool {
         let Operand::Value(holder) = holder else {
             return false;
         };
         let place = |inst: InstId| {
             let block = function.parent(inst).expect("placed");
-            (block, function.block(block).instructions().iter().position(|&one| one == inst).expect("in its block") as i64)
+            (
+                block,
+                function.block(block).instructions().iter().position(|&one| one == inst).expect("in its block") as i64,
+            )
         };
         let source = match function.value(holder).def {
             ValueDef::Instruction(inst) => place(inst),
@@ -1114,7 +1279,11 @@ b2:
         let stores_in = |block: BlockId, low: i64, high: i64| {
             let instructions = function.block(block).instructions();
             let range = low.max(0) as usize..(high.max(0) as usize).min(instructions.len());
-            instructions.get(range).is_some_and(|run| run.iter().any(|&one| matches!(function.instruction(one).opcode, Opcode::Store { .. })))
+            instructions
+                .get(range)
+                .is_some_and(
+                    |run| run.iter().any(|&one| matches!(function.instruction(one).opcode, Opcode::Store { .. })),
+                )
         };
         if source.0 == destination.0 {
             return source.1 >= destination.1 || stores_in(source.0, source.1 + 1, destination.1);
@@ -1190,14 +1359,24 @@ b4:
         let function = f(&mut module);
         let crossings = Crossings::of(function);
         let values: Vec<_> = function.walk().filter_map(|(_, inst)| function.instruction(inst).result).collect();
-        let loads: Vec<_> = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, llrm_mir::opcode::Opcode::Load { .. })).collect();
+        let loads: Vec<_> = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .filter(|&inst| matches!(
+                function.instruction(inst).opcode,
+                llrm_mir::opcode::Opcode::Load { .. }
+            ))
+            .collect();
         assert!(loads.len() >= 5 && values.len() >= 8);
         for &holder in &values {
             for &load in &loads {
                 let operand = llrm_mir::module::Operand::Value(holder);
-                assert_eq!(crossings.crosses(operand, load), reference_crosses_store(function, operand, load), "{holder:?} to {load:?}");
+                assert_eq!(
+                    crossings.crosses(operand, load),
+                    reference_crosses_store(function, operand, load),
+                    "{holder:?} to {load:?}"
+                );
             }
         }
     }
-
 }

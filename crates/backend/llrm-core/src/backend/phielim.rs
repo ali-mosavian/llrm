@@ -7,11 +7,10 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::support::hash::IndexMap;
-
 use crate::model::ir::{self, Held, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::LIRTransform;
+use crate::support::hash::IndexMap;
 
 pub struct PhiElimination;
 
@@ -24,7 +23,10 @@ impl LIRTransform for PhiElimination {
         "phielim"
     }
 
-    fn transform(&mut self, body: LirBody) -> Result<LirBody, String> {
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
         eliminated(&body)
     }
 }
@@ -37,7 +39,10 @@ pub enum Split {
     Selected(Vec<Arc<Insn>>),
 }
 
-fn move_of(into: Held, out_of: Held) -> Semantics {
+fn move_of(
+    into: Held,
+    out_of: Held,
+) -> Semantics {
     Semantics {
         name: Some("mov".to_owned()),
         dests: vec![Loc::Held(into)],
@@ -47,11 +52,7 @@ fn move_of(into: Held, out_of: Held) -> Semantics {
 }
 
 fn jump_to(target: i64) -> Semantics {
-    Semantics {
-        name: Some("jmp".to_owned()),
-        target: Some(target),
-        ..Semantics::new(Operation::Jump)
-    }
+    Semantics { name: Some("jmp".to_owned()), target: Some(target), ..Semantics::new(Operation::Jump) }
 }
 
 /// `body` with every phi it can lower replaced by copies.
@@ -95,7 +96,9 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
                 // its own predecessor and read by nothing but this phi, having
                 // it define the phi's result outright says what the phi said.
                 if edges.iter().all(|&(w, v)| {
-                    _defined_in(at_of[&w], v) && once.get(&v).copied() == Some(1) && !_live_after(&at_of, block.at, w, v, phi.result)
+                    _defined_in(at_of[&w], v)
+                        && once.get(&v).copied() == Some(1)
+                        && !_live_after(&at_of, block.at, w, v, phi.result)
                 }) {
                     for &(_where, value) in &edges {
                         rename.insert(value, phi.result);
@@ -109,26 +112,36 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
                         crossing.entry(where_).or_default().push((phi.result, value));
                     } else {
                         let group = edge_group(where_, block.at);
-                        copies.entry(where_).or_default().push(_copy(
-                            at_of[&where_],
-                            phi.result,
-                            value,
-                            Some(group),
-                            widths[&phi.result],
-                        ));
+                        copies
+                            .entry(where_)
+                            .or_default()
+                            .push(
+                                _copy(
+                                    at_of[&where_],
+                                    phi.result,
+                                    value,
+                                    Some(group),
+                                    widths[&phi.result],
+                                ),
+                            );
                     }
                 }
                 continue;
             }
             for &(where_, value) in &edges {
                 let group = edge_group(where_, block.at);
-                copies.entry(where_).or_default().push(_copy(
-                    at_of[&where_],
-                    phi.result,
-                    value,
-                    Some(group),
-                    widths[&phi.result],
-                ));
+                copies
+                    .entry(where_)
+                    .or_default()
+                    .push(
+                        _copy(
+                            at_of[&where_],
+                            phi.result,
+                            value,
+                            Some(group),
+                            widths[&phi.result],
+                        ),
+                    );
             }
         }
         for (&where_, pairs) in &crossing {
@@ -149,7 +162,15 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
                 copies
                     .entry(where_)
                     .or_default()
-                    .push(_copy(at_of[&where_], result, value, Some(group), widths[&result]));
+                    .push(
+                        _copy(
+                            at_of[&where_],
+                            result,
+                            value,
+                            Some(group),
+                            widths[&result],
+                        ),
+                    );
             }
         }
         kept.insert(block.at, stays);
@@ -222,14 +243,18 @@ fn _exits_copied(body: &LirBody) -> LirBody {
 /// Whether `value` can be read after leaving `where` other than into `into`.
 ///
 /// `into` defines it, so a path through `into` reads a new one.
-pub fn _observed(body: &LirBody, at_of: &IndexMap<i64, &LirBlock>, where_: i64, into: i64, value: u32) -> bool {
+pub fn _observed(
+    body: &LirBody,
+    at_of: &IndexMap<i64, &LirBlock>,
+    where_: i64,
+    into: i64,
+    value: u32,
+) -> bool {
     let _ = body;
     let mut pending: Vec<i64> = at_of[&where_].succ.iter().copied().filter(|&at| at != into).collect();
     // A phi reads on the incoming edge, before any instruction in its block.
     if pending.iter().any(|at| {
-        at_of
-            .get(at)
-            .is_some_and(|block| block.phis.iter().any(|phi| phi.incoming.contains(&(where_, value))))
+        at_of.get(at).is_some_and(|block| block.phis.iter().any(|phi| phi.incoming.contains(&(where_, value))))
     }) {
         return true;
     }
@@ -238,16 +263,18 @@ pub fn _observed(body: &LirBody, at_of: &IndexMap<i64, &LirBlock>, where_: i64, 
         let Some(block) = at_of.get(&at) else {
             return true;
         };
-        if block.insns.iter().any(|one| {
-            one.uses.contains(&value) || one.requires.iter().any(|(held, _)| held.value == value)
-        }) {
+        if block
+            .insns
+            .iter()
+            .any(|one| one.uses.contains(&value) || one.requires.iter().any(|(held, _)| held.value == value))
+        {
             return true;
         }
         for &successor in &block.succ {
             let follower = at_of.get(&successor);
-            if follower.is_some_and(|follower| {
-                follower.phis.iter().any(|phi| phi.incoming.contains(&(block.at, value)))
-            }) {
+            if follower
+                .is_some_and(|follower| follower.phis.iter().any(|phi| phi.incoming.contains(&(block.at, value))))
+            {
                 return true;
             }
             if successor != into && !seen.contains(&successor) {
@@ -281,13 +308,20 @@ fn _read_once(body: &LirBody) -> IndexMap<u32, i64> {
 /// is defined in predecessor `from`: later there, by another phi on the edge
 /// into `phi_block`, or down another path. Defining `result` where `value`
 /// was would then overwrite what that read wants.
-fn _live_after(at_of: &IndexMap<i64, &LirBlock>, phi_block: i64, from: i64, value: u32, result: u32) -> bool {
+fn _live_after(
+    at_of: &IndexMap<i64, &LirBlock>,
+    phi_block: i64,
+    from: i64,
+    value: u32,
+    result: u32,
+) -> bool {
     let block = at_of[&from];
     let defined = block.insns.iter().position(|one| one.defines.contains(&value)).expect("defined here");
     if block.insns[defined + 1..].iter().any(|one| one.uses.contains(&result)) {
         return true;
     }
-    let read_on_edge = |from: i64, into: i64| at_of[&into].phis.iter().any(|phi| phi.incoming.contains(&(from, result)));
+    let read_on_edge =
+        |from: i64, into: i64| at_of[&into].phis.iter().any(|phi| phi.incoming.contains(&(from, result)));
     // Live into a block: read before redefined, or passed on.
     let mut seen = BTreeSet::new();
     let mut work: Vec<(i64, i64)> = block.succ.iter().map(|&into| (from, into)).collect();
@@ -319,12 +353,18 @@ fn _live_after(at_of: &IndexMap<i64, &LirBlock>, phi_block: i64, from: i64, valu
 }
 
 /// Whether exactly one instruction in this block defines the value.
-fn _defined_in(block: &LirBlock, value: u32) -> bool {
+fn _defined_in(
+    block: &LirBlock,
+    value: u32,
+) -> bool {
     block.insns.iter().filter(|one| one.defines.contains(&value)).count() == 1
 }
 
 /// One instruction defining the phi's result where it defined its own.
-fn _renamed(one: &Arc<Insn>, rename: &IndexMap<u32, u32>) -> Result<Arc<Insn>, String> {
+fn _renamed(
+    one: &Arc<Insn>,
+    rename: &IndexMap<u32, u32>,
+) -> Result<Arc<Insn>, String> {
     if rename.is_empty() {
         return Ok(Arc::clone(one));
     }
@@ -347,16 +387,16 @@ fn _renamed(one: &Arc<Insn>, rename: &IndexMap<u32, u32>) -> Result<Arc<Insn>, S
         .iter()
         .map(|(held, register)| Ok((Held { value: _name(held.value, rename)?, width: held.width }, *register)))
         .collect::<Result<_, String>>()?;
-    out.widths = one
-        .widths
-        .iter()
-        .map(|&(value, width)| Ok((_name(value, rename)?, width)))
-        .collect::<Result<_, String>>()?;
+    out.widths =
+        one.widths.iter().map(|&(value, width)| Ok((_name(value, rename)?, width))).collect::<Result<_, String>>()?;
     Ok(Arc::new(out))
 }
 
 /// The final identity after chained trivial phis are unified.
-fn _name(mut value: u32, rename: &IndexMap<u32, u32>) -> Result<u32, String> {
+fn _name(
+    mut value: u32,
+    rename: &IndexMap<u32, u32>,
+) -> Result<u32, String> {
     let mut seen = BTreeSet::new();
     while let Some(&next) = rename.get(&value) {
         if next == value {
@@ -375,7 +415,10 @@ fn _name(mut value: u32, rename: &IndexMap<u32, u32>) -> Result<u32, String> {
 ///
 /// Through `ir::mapped` rather than a case per operand shape: a cell names
 /// the value that computed its address.
-pub fn _settled(where_: &Loc, rename: &IndexMap<u32, u32>) -> Result<Loc, String> {
+pub fn _settled(
+    where_: &Loc,
+    rename: &IndexMap<u32, u32>,
+) -> Result<Loc, String> {
     let mut error = None;
     let out = ir::mapped(where_, |one| match _name(one.value, rename) {
         Ok(value) => Held { value, width: one.width },
@@ -388,7 +431,10 @@ pub fn _settled(where_: &Loc, rename: &IndexMap<u32, u32>) -> Result<Loc, String
 }
 
 /// A surviving phi with every trivial-phi identity made final.
-fn _renamed_phi(phi: &Phi, rename: &IndexMap<u32, u32>) -> Result<Phi, String> {
+fn _renamed_phi(
+    phi: &Phi,
+    rename: &IndexMap<u32, u32>,
+) -> Result<Phi, String> {
     Ok(Phi {
         result: _name(phi.result, rename)?,
         incoming: phi
@@ -407,11 +453,7 @@ fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
             if let Some(what) = &op.what {
                 operands.extend(what.dests.iter().chain(&what.sources).flat_map(ir::values));
             }
-            for (value, width) in op
-                .widths
-                .iter()
-                .copied()
-                .chain(operands.iter().map(|held| (held.value, held.width)))
+            for (value, width) in op.widths.iter().copied().chain(operands.iter().map(|held| (held.value, held.width)))
             {
                 let known = widths.get(&value).copied().unwrap_or(0);
                 widths.insert(value, known.max(width));
@@ -425,11 +467,8 @@ fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
         for phi in &phis {
             let values: Vec<u32> =
                 std::iter::once(phi.result).chain(phi.incoming.iter().map(|&(_, value)| value)).collect();
-            let width = values
-                .iter()
-                .map(|value| widths.get(value).copied().unwrap_or(2))
-                .max()
-                .expect("a phi has a result");
+            let width =
+                values.iter().map(|value| widths.get(value).copied().unwrap_or(2)).max().expect("a phi has a result");
             for value in values {
                 if widths.get(&value).copied() != Some(width) {
                     widths.insert(value, width);
@@ -445,7 +484,13 @@ fn _widths(body: &LirBody) -> IndexMap<u32, u32> {
 ///
 /// Placed on the predecessor's last instruction's address and claiming none
 /// of its bytes.
-fn _copy(where_: &LirBlock, into: u32, out_of: u32, group: Option<i64>, width: u32) -> Arc<Insn> {
+fn _copy(
+    where_: &LirBlock,
+    into: u32,
+    out_of: u32,
+    group: Option<i64>,
+    width: u32,
+) -> Arc<Insn> {
     let last = where_.insns.last();
     let at = last.map_or(where_.at, |last| last.at);
     let edge = _nothing(last.map(|last| &**last), at);
@@ -465,13 +510,19 @@ fn _copy(where_: &LirBlock, into: u32, out_of: u32, group: Option<i64>, width: u
 ///
 /// Never None: that would mean "ask the node", whose bytes the neighbour
 /// already claims.
-fn _nothing(beside: Option<&Insn>, at: i64) -> (i64, i64) {
+fn _nothing(
+    beside: Option<&Insn>,
+    at: i64,
+) -> (i64, i64) {
     let start = beside.and_then(|beside| beside.covers).map_or(at, |covers| covers.0);
     (start, start)
 }
 
 /// The copies at the end of the block, but ahead of what leaves it.
-fn _before_the_terminator(block: &LirBlock, added: &[Arc<Insn>]) -> Vec<Arc<Insn>> {
+fn _before_the_terminator(
+    block: &LirBlock,
+    added: &[Arc<Insn>],
+) -> Vec<Arc<Insn>> {
     if added.is_empty() {
         return block.insns.to_vec();
     }
@@ -487,11 +538,19 @@ fn _before_the_terminator(block: &LirBlock, added: &[Arc<Insn>]) -> Vec<Arc<Insn
 fn _leaves(one: &Insn) -> bool {
     one.what
         .as_ref()
-        .is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch | Operation::Return))
+        .is_some_and(
+            |what| matches!(
+                what.op,
+                Operation::Jump | Operation::Branch | Operation::Return
+            ),
+        )
 }
 
 /// Place already selected parallel transfers on their exact CFG edges.
-pub fn placed_on_edges(body: &LirBody, transfers: &IndexMap<(i64, i64), Vec<Arc<Insn>>>) -> LirBody {
+pub fn placed_on_edges(
+    body: &LirBody,
+    transfers: &IndexMap<(i64, i64), Vec<Arc<Insn>>>,
+) -> LirBody {
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut copies: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut split: IndexMap<(i64, i64), Split> = IndexMap::default();
@@ -582,11 +641,8 @@ pub fn _split_edges(
 
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let succ: Vec<i64> = block
-            .succ
-            .iter()
-            .map(|&one| landing.get(&(block.at, one)).copied().unwrap_or(one))
-            .collect();
+        let succ: Vec<i64> =
+            block.succ.iter().map(|&one| landing.get(&(block.at, one)).copied().unwrap_or(one)).collect();
         let mut insns: Vec<Arc<Insn>> =
             _before_the_terminator(block, copies.get(&block.at).map_or(&[][..], Vec::as_slice))
                 .iter()
@@ -637,14 +693,24 @@ pub fn _split_edges(
 }
 
 /// One instruction in a split block, claiming none of BC's own bytes.
-fn _made(beside: &Insn, at: i64, what: Semantics, defines: Vec<u32>, uses: Vec<u32>) -> Arc<Insn> {
+fn _made(
+    beside: &Insn,
+    at: i64,
+    what: Semantics,
+    defines: Vec<u32>,
+    uses: Vec<u32>,
+) -> Arc<Insn> {
     let mut one = Insn::new(at, Some((at, at)), Some(what), defines, uses);
     one.call = beside.call.clone();
     Arc::new(one)
 }
 
 /// A branch or jump pointing at the split block instead of the successor.
-fn _retargeted(one: &Arc<Insn>, landing: &IndexMap<(i64, i64), i64>, here: i64) -> Arc<Insn> {
+fn _retargeted(
+    one: &Arc<Insn>,
+    landing: &IndexMap<(i64, i64), i64>,
+    here: i64,
+) -> Arc<Insn> {
     let Some(what) = &one.what else {
         return Arc::clone(one);
     };
@@ -655,10 +721,7 @@ fn _retargeted(one: &Arc<Insn>, landing: &IndexMap<(i64, i64), i64>, here: i64) 
         return Arc::clone(one);
     };
     let mut out = (**one).clone();
-    out.what = Some(Semantics {
-        target: Some(at),
-        ..what.clone()
-    });
+    out.what = Some(Semantics { target: Some(at), ..what.clone() });
     Arc::new(out)
 }
 
@@ -720,10 +783,7 @@ pub fn unsplit(body: &LirBody) -> LirBody {
             .map(|one| match &one.what {
                 Some(what) if what.target.is_some_and(|target| bypass.contains_key(&target)) => {
                     let mut out = (**one).clone();
-                    out.what = Some(Semantics {
-                        target: what.target.map(where_),
-                        ..what.clone()
-                    });
+                    out.what = Some(Semantics { target: what.target.map(where_), ..what.clone() });
                     Arc::new(out)
                 }
                 _ => Arc::clone(one),
@@ -756,39 +816,67 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use crate::support::hash::IndexMap;
 
-    use super::{Split, _observed, _settled, _split_edges, eliminated, unsplit};
+    use super::{_observed, _settled, _split_edges, Split, eliminated, unsplit};
+    use crate::analysis::frequency::Frequency;
     use crate::backend::verify;
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
-    use crate::analysis::frequency::Frequency;
     use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody, Phi};
+    use crate::support::hash::IndexMap;
 
-    fn what(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>, target: Option<i64>) -> Option<Semantics> {
+    fn what(
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+        target: Option<i64>,
+    ) -> Option<Semantics> {
         Some(Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) })
     }
 
-    fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>, phis: Vec<Phi>) -> LirBlock {
+    fn block(
+        at: i64,
+        insns: Vec<Arc<Insn>>,
+        succ: Vec<i64>,
+        phis: Vec<Phi>,
+    ) -> LirBlock {
         LirBlock { at, insns: insns.into(), succ, phis, cold: false }
     }
 
-    fn body(name: &str, blocks: Vec<LirBlock>) -> LirBody {
+    fn body(
+        name: &str,
+        blocks: Vec<LirBlock>,
+    ) -> LirBody {
         LirBody::new(name, 0, blocks, IndexMap::default(), IndexMap::default())
     }
 
-    fn held(value: u32, width: u32) -> Loc {
+    fn held(
+        value: u32,
+        width: u32,
+    ) -> Loc {
         Loc::Held(Held { value, width })
     }
 
-    fn imm(value: i64, width: u32) -> Loc {
+    fn imm(
+        value: i64,
+        width: u32,
+    ) -> Loc {
         Loc::Imm(Imm { value, width, address: None })
     }
 
-    fn branch(at: i64, covers: Option<(i64, i64)>, name: &str, target: i64) -> Arc<Insn> {
+    fn branch(
+        at: i64,
+        covers: Option<(i64, i64)>,
+        name: &str,
+        target: i64,
+    ) -> Arc<Insn> {
         Arc::new(Insn::new(at, covers, what(Operation::Branch, name, vec![], vec![], Some(target)), vec![], vec![]))
     }
 
-    fn values(done: &LirBody, pick: fn(&Insn) -> &Vec<u32>) -> BTreeSet<u32> {
+    fn values(
+        done: &LirBody,
+        pick: fn(&Insn) -> &Vec<u32>,
+    ) -> BTreeSet<u32> {
         done.insns().iter().flat_map(|one| pick(one).clone()).collect()
     }
 
@@ -797,7 +885,8 @@ mod tests {
         // qcport's snd_mix lost value#259 when unsplit treated two no-byte
         // edge-copy anchors as empty and bypassed the blocks defining the phi.
         let jump_branch = branch(1, None, "je", 1 << 33);
-        let anchor = Arc::new(Insn::new(2, None, what(Operation::Nothing, "", vec![], vec![], None), vec![259], vec![85]));
+        let anchor =
+            Arc::new(Insn::new(2, None, what(Operation::Nothing, "", vec![], vec![], None), vec![259], vec![85]));
         let jump = Arc::new(Insn::new(3, None, what(Operation::Jump, "jmp", vec![], vec![], Some(33)), vec![], vec![]));
         let compare = Arc::new(Insn::new(
             4,
@@ -857,10 +946,28 @@ mod tests {
         // edge critical: `b` took the latch's `b + 1` as its own register, so
         // `a`'s copy on the back edge read the new `b`, not the old one.
         let mov = |at: i64, value: u32, n: i64| {
-            Arc::new(Insn::new(at, Some((at, at + 1)), what(Operation::Move, "mov", vec![held(value, 2)], vec![imm(n, 2)], None), vec![value], vec![]))
+            Arc::new(Insn::new(
+                at,
+                Some((at, at + 1)),
+                what(Operation::Move, "mov", vec![held(value, 2)], vec![imm(n, 2)], None),
+                vec![value],
+                vec![],
+            ))
         };
-        let test = Arc::new(Insn::new(10, Some((10, 11)), what(Operation::Compare, "cmp", vec![], vec![held(4, 2), imm(9, 2)], None), vec![], vec![4]));
-        let step = Arc::new(Insn::new(20, Some((20, 21)), what(Operation::Binary, "add", vec![held(5, 2)], vec![held(4, 2), imm(1, 2)], None), vec![5], vec![4]));
+        let test = Arc::new(Insn::new(
+            10,
+            Some((10, 11)),
+            what(Operation::Compare, "cmp", vec![], vec![held(4, 2), imm(9, 2)], None),
+            vec![],
+            vec![4],
+        ));
+        let step = Arc::new(Insn::new(
+            20,
+            Some((20, 21)),
+            what(Operation::Binary, "add", vec![held(5, 2)], vec![held(4, 2), imm(1, 2)], None),
+            vec![5],
+            vec![4],
+        ));
         let looped = body(
             "looped",
             vec![
@@ -869,7 +976,10 @@ mod tests {
                     10,
                     vec![test],
                     vec![20, 30],
-                    vec![Phi { result: 3, incoming: vec![(0, 1), (20, 4)] }, Phi { result: 4, incoming: vec![(0, 2), (20, 5)] }],
+                    vec![
+                        Phi { result: 3, incoming: vec![(0, 1), (20, 4)] },
+                        Phi { result: 4, incoming: vec![(0, 2), (20, 5)] },
+                    ],
                 ),
                 block(20, vec![step], vec![10], vec![]),
                 block(30, vec![], vec![], vec![]),
@@ -923,7 +1033,8 @@ mod tests {
     #[test]
     fn test_phi_on_a_single_predecessor_exit_does_not_split_the_edge() {
         // HARR gained an empty jump trampoline after LCSSA closed its loop exit.
-        let mut use_ = Insn::new(2, Some((2, 3)), what(Operation::Move, "mov", vec![], vec![held(3, 2)], None), vec![], vec![3]);
+        let mut use_ =
+            Insn::new(2, Some((2, 3)), what(Operation::Move, "mov", vec![], vec![held(3, 2)], None), vec![], vec![3]);
         use_.widths = vec![(3, 2)];
         let exit = body(
             "exit",
@@ -948,7 +1059,13 @@ mod tests {
     fn test_phi_source_live_on_the_other_branch_gets_an_edge_copy() {
         // nbody spilled its inner counter after exit copies extended both accumulators.
         let push = |at: i64, value: u32| {
-            Arc::new(Insn::new(at, Some((at, at + 1)), what(Operation::Push, "push", vec![], vec![held(value, 2)], None), vec![], vec![value]))
+            Arc::new(Insn::new(
+                at,
+                Some((at, at + 1)),
+                what(Operation::Push, "push", vec![], vec![held(value, 2)], None),
+                vec![],
+                vec![value],
+            ))
         };
         let live = body(
             "live-source",
@@ -975,7 +1092,13 @@ mod tests {
     #[test]
     fn test_splitting_both_edges_of_a_branch_keeps_its_odds() {
         let define = |at: i64, result: u32| {
-            Arc::new(Insn::new(at, Some((at, at + 1)), what(Operation::Move, "mov", vec![held(result, 4)], vec![imm(1, 4)], None), vec![result], vec![]))
+            Arc::new(Insn::new(
+                at,
+                Some((at, at + 1)),
+                what(Operation::Move, "mov", vec![held(result, 4)], vec![imm(1, 4)], None),
+                vec![result],
+                vec![],
+            ))
         };
         let both = |value: u32| vec![Phi { result: value, incoming: vec![(0, 1), (4, 2)] }];
         let mut branching = body(
@@ -996,7 +1119,12 @@ mod tests {
         assert!(done.blocks.len() > branching.blocks.len() + 1, "both edges of block 0 are split");
         let (before, after) = (Frequency::of(&branching), Frequency::of(&done));
         for at in [1, 2] {
-            assert!((before.block(at) - after.block(at)).abs() < 1e-6, "block {at}: {} split into {}", before.block(at), after.block(at));
+            assert!(
+                (before.block(at) - after.block(at)).abs() < 1e-6,
+                "block {at}: {} split into {}",
+                before.block(at),
+                after.block(at)
+            );
         }
     }
 
@@ -1009,16 +1137,32 @@ mod tests {
                 Loc::Held(held) => vec![held.value],
                 _ => vec![],
             };
-            Arc::new(Insn::new(at, Some((at, at + 1)), what(Operation::Move, "mov", vec![held(result, 4)], vec![source], None), vec![result], uses))
+            Arc::new(Insn::new(
+                at,
+                Some((at, at + 1)),
+                what(Operation::Move, "mov", vec![held(result, 4)], vec![source], None),
+                vec![result],
+                uses,
+            ))
         };
         let trivial = body(
             "trivial-before-critical",
             vec![
                 block(0, vec![move_(0, 1, imm(7, 4))], vec![1], vec![]),
-                block(1, vec![branch(1, Some((1, 2)), "jz", 3)], vec![2, 3], vec![Phi { result: 2, incoming: vec![(0, 1)] }]),
+                block(
+                    1,
+                    vec![branch(1, Some((1, 2)), "jz", 3)],
+                    vec![2, 3],
+                    vec![Phi { result: 2, incoming: vec![(0, 1)] }],
+                ),
                 // Reading the source down the other arm requires a real edge copy.
                 block(2, vec![move_(2, 4, held(2, 4))], vec![], vec![]),
-                block(3, vec![move_(3, 7, held(6, 4))], vec![], vec![Phi { result: 6, incoming: vec![(1, 2), (4, 5)] }]),
+                block(
+                    3,
+                    vec![move_(3, 7, held(6, 4))],
+                    vec![],
+                    vec![Phi { result: 6, incoming: vec![(1, 2), (4, 5)] }],
+                ),
                 block(4, vec![move_(4, 5, imm(9, 4))], vec![3], vec![]),
             ],
         );

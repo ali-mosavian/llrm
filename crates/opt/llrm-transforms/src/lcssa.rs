@@ -12,8 +12,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use llrm_analysis::{cfg, ssa};
 use llrm_analysis::graph::loops::{self, Loop};
+use llrm_analysis::{cfg, ssa};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
@@ -28,7 +28,11 @@ impl FunctionPass for LoopClosedSSA {
         "lcssa"
     }
 
-    fn run(&mut self, unit: &mut Unit, _: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
         match closed(unit.function) {
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
@@ -50,12 +54,24 @@ pub fn closed(function: &mut Function) -> Result<bool, String> {
 }
 
 /// `block`'s instructions other than its phis, in order.
-pub(crate) fn operations(function: &Function, block: BlockId) -> Vec<InstId> {
-    function.block(block).instructions().iter().copied().filter(|&one| function.instruction(one).opcode != Opcode::Phi).collect()
+pub(crate) fn operations(
+    function: &Function,
+    block: BlockId,
+) -> Vec<InstId> {
+    function
+        .block(block)
+        .instructions()
+        .iter()
+        .copied()
+        .filter(|&one| function.instruction(one).opcode != Opcode::Phi)
+        .collect()
 }
 
 /// A phi's inputs, each value with the block it comes from.
-pub(crate) fn arms(function: &Function, phi: InstId) -> Vec<(Operand, BlockId)> {
+pub(crate) fn arms(
+    function: &Function,
+    phi: InstId,
+) -> Vec<(Operand, BlockId)> {
     function
         .instruction(phi)
         .operands
@@ -72,7 +88,10 @@ pub(crate) fn from_arms(arms: &[(Operand, BlockId)]) -> Vec<Operand> {
 }
 
 /// The values defined in `blocks`, each with its block.
-pub(crate) fn definitions(function: &Function, blocks: &BTreeSet<i64>) -> BTreeMap<ValueId, i64> {
+pub(crate) fn definitions(
+    function: &Function,
+    blocks: &BTreeSet<i64>,
+) -> BTreeMap<ValueId, i64> {
     let mut defined = BTreeMap::new();
     for &block in function.layout().iter().filter(|&&one| blocks.contains(&cfg::id(one))) {
         for &inst in function.block(block).instructions() {
@@ -85,14 +104,21 @@ pub(crate) fn definitions(function: &Function, blocks: &BTreeSet<i64>) -> BTreeM
 }
 
 /// A new, unplaced phi of `value`'s type and name, without inputs yet.
-pub(crate) fn exit_phi(function: &mut Function, value: ValueId) -> InstId {
+pub(crate) fn exit_phi(
+    function: &mut Function,
+    value: ValueId,
+) -> InstId {
     let data = function.value(value);
     let name = data.name.as_ref().map(|name| format!("{name}.lcssa"));
     function.create_instruction(Opcode::Phi, data.ty, Vec::new(), Flags::default(), name.as_deref())
 }
 
 /// Places `phi` after `block`'s phis.
-pub(crate) fn place_phi(function: &mut Function, block: BlockId, phi: InstId) -> Result<(), String> {
+pub(crate) fn place_phi(
+    function: &mut Function,
+    block: BlockId,
+    phi: InstId,
+) -> Result<(), String> {
     let first = operations(function, block).first().copied();
     function.insert(phi, first.map_or(Position::End(block), Position::Before))
 }
@@ -127,7 +153,10 @@ fn _opened(function: &mut Function) -> Result<bool, String> {
     Ok(!swap.is_empty())
 }
 
-pub fn _closed_loop(function: &mut Function, loop_: &Loop) -> Result<bool, String> {
+pub fn _closed_loop(
+    function: &mut Function,
+    loop_: &Loop,
+) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let exiting = graph
         .iter()

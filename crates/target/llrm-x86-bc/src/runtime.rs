@@ -12,16 +12,15 @@
 use std::collections::BTreeMap;
 
 use iced_x86::Register;
+use llrm_mir::{Attribute, ConstantId, GlobalId, Linkage, Module, Type, TypeId};
 use llrm_qbruntime::{self as runtime, Contract, Control, Memory};
-
 use llrm_x86_bcmachine::model::ir::nodes::{Node, span};
 use llrm_x86_bcmachine::support::hash::IndexMap;
-use llrm_mir::{Attribute, ConstantId, GlobalId, Linkage, Module, Type, TypeId};
 
+use crate::RUNTIME;
 pub use crate::machine::{Answer, Interface};
 use crate::machine::{FLAGS, FRAME_ENTRY, FRAME_EXIT, Facts, Registers, TRACKED, Word, Words, from_contract};
 use crate::sites;
-use crate::RUNTIME;
 
 /// A callee, declared.
 #[derive(Clone, Debug)]
@@ -48,15 +47,14 @@ pub struct Callees {
 
 /// Each procedure's interface, by name.
 pub fn interfaces(facts: &Facts) -> BTreeMap<String, Result<Interface, String>> {
-    facts
-        .bodies
-        .iter()
-        .filter_map(|body| Some((body.body.name.clone()?, body.interface.clone()?)))
-        .collect()
+    facts.bodies.iter().filter_map(|body| Some((body.body.name.clone()?, body.interface.clone()?))).collect()
 }
 
 /// The type an answer is.
-pub fn answer_type(module: &mut Module, answer: &Answer) -> TypeId {
+pub fn answer_type(
+    module: &mut Module,
+    answer: &Answer,
+) -> TypeId {
     let types = &mut module.context.types;
     match answer {
         Answer::None => types.void(),
@@ -77,7 +75,10 @@ pub fn answer_type(module: &mut Module, answer: &Answer) -> TypeId {
 /// since MIR passes them by value.
 /// One that writes a named cell (`cells`) writes memory whatever its
 /// contract says.
-fn memory(contract: &Contract, writes_named: bool) -> Option<Attribute> {
+fn memory(
+    contract: &Contract,
+    writes_named: bool,
+) -> Option<Attribute> {
     let quiet = |one: Memory| one <= Memory::Arguments;
     let effect = match (quiet(contract.reads), quiet(contract.writes) && !writes_named) {
         (true, true) => "none",
@@ -89,7 +90,11 @@ fn memory(contract: &Contract, writes_named: bool) -> Option<Attribute> {
 }
 
 /// Declares every runtime routine the module's bodies call.
-pub fn declare(facts: &Facts, module: &mut Module, procedures: &BTreeMap<String, Result<Interface, String>>) -> Callees {
+pub fn declare(
+    facts: &Facts,
+    module: &mut Module,
+    procedures: &BTreeMap<String, Result<Interface, String>>,
+) -> Callees {
     let mut sites_of: IndexMap<String, Vec<(usize, &Contract, Words)>> = IndexMap::default();
     let mut dispatches = false;
     for body in &facts.bodies {
@@ -105,7 +110,13 @@ pub fn declare(facts: &Facts, module: &mut Module, procedures: &BTreeMap<String,
                 dispatches = true;
                 continue;
             }
-            if procedures.contains_key(name) || [FRAME_ENTRY, FRAME_EXIT].contains(&name) || crate::emit::owns(name) || sites::meaning(name).is_some() || crate::floats::absorbed(name) || name == crate::access::ADDRESS {
+            if procedures.contains_key(name)
+                || [FRAME_ENTRY, FRAME_EXIT].contains(&name)
+                || crate::emit::owns(name)
+                || sites::meaning(name).is_some()
+                || crate::floats::absorbed(name)
+                || name == crate::access::ADDRESS
+            {
                 continue;
             }
             let Some(contract) = facts.contract(at) else { continue };
@@ -121,8 +132,15 @@ pub fn declare(facts: &Facts, module: &mut Module, procedures: &BTreeMap<String,
     }
     // A dispatch out of its table's range is B$SERR's error.
     if dispatches {
-        let contract = runtime::per_call(&IndexMap::from_iter([(0, ERROR.to_owned())]), facts.family().value(), &Default::default()).swap_remove(&0).expect("one contract");
-        let made = declared(module, facts.spaces.far, ERROR, &[(0, &contract, Words::new())], family.value(), facts.handlers);
+        let contract = runtime::per_call(
+            &IndexMap::from_iter([(0, ERROR.to_owned())]),
+            facts.family().value(),
+            &Default::default(),
+        )
+        .swap_remove(&0)
+        .expect("one contract");
+        let made =
+            declared(module, facts.spaces.far, ERROR, &[(0, &contract, Words::new())], family.value(), facts.handlers);
         callees.named.insert(ERROR.to_owned(), made);
     }
     callees
@@ -135,7 +153,14 @@ pub const ERROR: &str = "B$SERR";
 /// Illegal function call's error number.
 pub const ILLEGAL_FUNCTION_CALL: i128 = 5;
 
-fn declared(module: &mut Module, far: u32, name: &str, sites: &[(usize, &Contract, Words)], family: &str, handlers: bool) -> Result<Callee, String> {
+fn declared(
+    module: &mut Module,
+    far: u32,
+    name: &str,
+    sites: &[(usize, &Contract, Words)],
+    family: &str,
+    handlers: bool,
+) -> Result<Callee, String> {
     let contract = sites[0].1;
     if !contract.established {
         return Err(format!("{name}'s contract is not established"));
@@ -177,7 +202,9 @@ fn declared(module: &mut Module, far: u32, name: &str, sites: &[(usize, &Contrac
                 Word::Low(root) if disturbed.contains(&root) => {
                     results.insert(root);
                 }
-                Word::High(root) if disturbed.contains(&root) => return Err(format!("reads the high word of {root:?} after {name}")),
+                Word::High(root) if disturbed.contains(&root) => {
+                    return Err(format!("reads the high word of {root:?} after {name}"));
+                }
                 _ => {}
             }
         }
@@ -203,7 +230,9 @@ fn declared(module: &mut Module, far: u32, name: &str, sites: &[(usize, &Contrac
         one.address_space = far;
         let llrm_mir::GlobalKind::Function(function) = &mut one.kind else { unreachable!("a function") };
         function.calling_convention = convention;
-        function.attrs.extend(memory(contract, runtime::named_writes(name, family).is_some_and(|cells| !cells.is_empty())));
+        function
+            .attrs
+            .extend(memory(contract, runtime::named_writes(name, family).is_some_and(|cells| !cells.is_empty())));
         if !contract.raises_error {
             function.attrs.push(llrm_mir::facts::Fact::NoUnwind.carrier());
         }

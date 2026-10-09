@@ -14,15 +14,14 @@ use iced_x86::Register;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops;
-use crate::backend::{liveness, target};
 use crate::backend::peephole::{_register_effects, id};
+use crate::backend::{liveness, target};
 use crate::model::ir::{Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::support::hash::{HashMap, IndexMap};
 
 /// The roots a general register names, one bit each.
-pub const ROOTS: [Register; 7] =
-    llrm_x86::registers::ROOTS;
+pub const ROOTS: [Register; 7] = llrm_x86::registers::ROOTS;
 
 /// A set of roots, one bit per `ROOTS` entry.
 pub type Roots = u8;
@@ -53,14 +52,19 @@ fn zeroing(one: &Insn) -> Roots {
     let zeroes = match (what.op, what.name.as_deref(), what.sources.as_slice()) {
         (Operation::Extend, Some("movzx"), [Loc::Reg(Reg { width: 1 | 2, .. }) | Loc::Mem(_)]) => true,
         (_, Some("xor" | "sub"), [left, right]) => left == destination && right == destination,
-        (Operation::Move, Some("mov"), [Loc::Imm(constant)]) => constant.address.is_none() && (0..=0xFFFF).contains(&constant.value),
+        (Operation::Move, Some("mov"), [Loc::Imm(constant)]) => {
+            constant.address.is_none() && (0..=0xFFFF).contains(&constant.value)
+        }
         _ => false,
     };
     if zeroes { root } else { 0 }
 }
 
 /// The roots whose upper half `one` may leave other than it found it.
-fn disturbed(bits: u32, one: &Insn) -> Roots {
+fn disturbed(
+    bits: u32,
+    one: &Insn,
+) -> Roots {
     // A jump or branch writes no register; no decoder answers for it.
     if liveness::_terminator(one.what.as_ref()) {
         return 0;
@@ -77,7 +81,11 @@ fn disturbed(bits: u32, one: &Insn) -> Roots {
 }
 
 /// What `one` makes of `zero`, the roots known zero before it.
-pub fn after(bits: u32, one: &Insn, zero: Roots) -> Roots {
+pub fn after(
+    bits: u32,
+    one: &Insn,
+    zero: Roots,
+) -> Roots {
     if let Some(swapped) = exchanged(one, zero) {
         return swapped;
     }
@@ -86,11 +94,15 @@ pub fn after(bits: u32, one: &Insn, zero: Roots) -> Roots {
 }
 
 /// `zero` after `xchg a, b` of two whole registers: each now holds the other's upper half.
-fn exchanged(one: &Insn, zero: Roots) -> Option<Roots> {
+fn exchanged(
+    one: &Insn,
+    zero: Roots,
+) -> Option<Roots> {
     let Some(Semantics { op: Operation::Exchange, dests, .. }) = &one.what else {
         return None;
     };
-    let [Loc::Reg(Reg { register: left, width: 4 }), Loc::Reg(Reg { register: right, width: 4 })] = dests.as_slice() else {
+    let [Loc::Reg(Reg { register: left, width: 4 }), Loc::Reg(Reg { register: right, width: 4 })] = dests.as_slice()
+    else {
         return None;
     };
     let (left, right) = (bit(*left)?, bit(*right)?);
@@ -100,15 +112,20 @@ fn exchanged(one: &Insn, zero: Roots) -> Option<Roots> {
 }
 
 /// The root a whole-register copy writes, where the root it copies from has a zero upper half.
-fn copied(one: &Insn, zero: Roots) -> Roots {
+fn copied(
+    one: &Insn,
+    zero: Roots,
+) -> Roots {
     let Some(Semantics { op: Operation::Move, dests, sources, .. }) = &one.what else {
         return 0;
     };
     match (dests.as_slice(), sources.as_slice()) {
-        ([Loc::Reg(Reg { register: into, width: 4 })], [Loc::Reg(Reg { register: from, width: 4 })]) => match (bit(*into), bit(*from)) {
-            (Some(into), Some(from)) if zero & from != 0 => into,
-            _ => 0,
-        },
+        ([Loc::Reg(Reg { register: into, width: 4 })], [Loc::Reg(Reg { register: from, width: 4 })]) => {
+            match (bit(*into), bit(*from)) {
+                (Some(into), Some(from)) if zero & from != 0 => into,
+                _ => 0,
+            }
+        }
         _ => 0,
     }
 }
@@ -145,10 +162,17 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
 }
 
 /// `movzx root,word` for each root in `roots`, before `block`'s terminator.
-pub fn extended(block: &LirBlock, roots: Roots) -> LirBlock {
+pub fn extended(
+    block: &LirBlock,
+    roots: Roots,
+) -> LirBlock {
     let mut insns = block.insns.to_vec();
     let at = insns.last().map_or(block.at, |one| one.at);
-    let position = if insns.last().is_some_and(|one| liveness::_terminator(one.what.as_ref())) { insns.len() - 1 } else { insns.len() };
+    let position = if insns.last().is_some_and(|one| liveness::_terminator(one.what.as_ref())) {
+        insns.len() - 1
+    } else {
+        insns.len()
+    };
     for (index, root) in ROOTS.iter().enumerate() {
         if roots & 1 << index == 0 {
             continue;
@@ -168,7 +192,11 @@ pub fn extended(block: &LirBlock, roots: Roots) -> LirBlock {
 /// `body` with the upper half of each loop's `roots` zeroed on entry, where
 /// every way in may take it: one successor, and those lanes dead there
 /// unless `held` says no value lives in them.
-pub fn preheaded(body: &LirBody, wanted: &IndexMap<i64, Roots>, held: bool) -> (LirBody, IndexMap<i64, Roots>) {
+pub fn preheaded(
+    body: &LirBody,
+    wanted: &IndexMap<i64, Roots>,
+    held: bool,
+) -> (LirBody, IndexMap<i64, Roots>) {
     let graph = &body.blocks;
     let found = loops::loops(&graph, Some(body.entry));
     let predecessors = loops::predecessors(&graph);
@@ -179,7 +207,8 @@ pub fn preheaded(body: &LirBody, wanted: &IndexMap<i64, Roots>, held: bool) -> (
         let Some(inside) = found.iter().find(|one| one.header == *header).map(|one| &one.body) else {
             continue;
         };
-        let entries: Vec<i64> = predecessors.get(header).into_iter().flatten().copied().filter(|at| !inside.contains(at)).collect();
+        let entries: Vec<i64> =
+            predecessors.get(header).into_iter().flatten().copied().filter(|at| !inside.contains(at)).collect();
         let mut allowed = *roots;
         for (index, root) in ROOTS.iter().enumerate() {
             let upper = [(*root, 2), (*root, 3)];
@@ -217,12 +246,16 @@ fn unheld(one: &Insn) -> Roots {
     let Some(what) = &one.what else {
         return 0;
     };
-    let wide = |register: Register, held: bool| if !held && target::width_of(register) == Some(4) { bit(register).unwrap_or(0) } else { 0 };
+    let wide = |register: Register, held: bool| {
+        if !held && target::width_of(register) == Some(4) { bit(register).unwrap_or(0) } else { 0 }
+    };
     what.dests
         .iter()
         .chain(&what.sources)
         .filter_map(|operand| match operand {
-            Loc::Mem(cell) => Some(wide(cell.through, cell.base.is_some()) | wide(cell.index_through, cell.index.is_some())),
+            Loc::Mem(cell) => {
+                Some(wide(cell.through, cell.base.is_some()) | wide(cell.index_through, cell.index.is_some()))
+            }
             _ => None,
         })
         .fold(0, |roots, one| roots | one)
@@ -236,11 +269,19 @@ pub fn established(body: &LirBody) -> LirBody {
     let graph = &body.blocks;
     let natural = loops::loops(&graph, Some(body.entry));
     let untouched = |inside: &BTreeSet<i64>, roots: Roots| {
-        body.blocks.iter().filter(|block| inside.contains(&block.at)).all(|block| block.insns.iter().all(|one| disturbed(body.bits, one) & roots == 0))
+        body.blocks
+            .iter()
+            .filter(|block| inside.contains(&block.at))
+            .all(|block| block.insns.iter().all(|one| disturbed(body.bits, one) & roots == 0))
     };
     let outermost = |at: i64, roots: Roots| {
         let around = natural.iter().filter(|one| one.body.contains(&at));
-        around.clone().filter(|one| untouched(&one.body, roots)).max_by_key(|one| one.body.len()).or_else(|| around.min_by_key(|one| one.body.len())).map(|one| one.header)
+        around
+            .clone()
+            .filter(|one| untouched(&one.body, roots))
+            .max_by_key(|one| one.body.len())
+            .or_else(|| around.min_by_key(|one| one.body.len()))
+            .map(|one| one.header)
     };
     let mut body = body.clone();
     let mut preheaders = true;
@@ -302,7 +343,14 @@ mod tests {
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
-    fn one(at: i64, op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>, target: Option<i64>) -> Arc<Insn> {
+    fn one(
+        at: i64,
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+        target: Option<i64>,
+    ) -> Arc<Insn> {
         let what = Semantics { name: Some(name.to_owned()), dests, sources, target, ..Semantics::new(op) };
         Arc::new(Insn::new(at, Some((at, at)), Some(what), vec![], vec![]))
     }
@@ -311,22 +359,29 @@ mod tests {
     fn test_a_zeroed_upper_half_survives_word_writes_and_jumps() {
         // A `jmp` decoded as unknown lost every root, so no loop kept the
         // preheader's `movzx`.
-        let (ebx, bx) = (Loc::Reg(Reg { register: Register::EBX, width: 4 }), Loc::Reg(Reg { register: Register::BX, width: 2 }));
+        let (ebx, bx) =
+            (Loc::Reg(Reg { register: Register::EBX, width: 4 }), Loc::Reg(Reg { register: Register::BX, width: 2 }));
         let word = || Loc::Imm(Imm { value: 5, width: 2, address: None });
         let entry = LirBlock {
             succ: vec![1],
-            ..LirBlock::new(0, vec![
-                one(0, Operation::Extend, "movzx", vec![ebx], vec![bx.clone()], None),
-                one(1, Operation::Jump, "jmp", vec![], vec![], Some(1)),
-            ])
+            ..LirBlock::new(
+                0,
+                vec![
+                    one(0, Operation::Extend, "movzx", vec![ebx], vec![bx.clone()], None),
+                    one(1, Operation::Jump, "jmp", vec![], vec![], Some(1)),
+                ],
+            )
         };
         let looped = LirBlock {
             succ: vec![1, 2],
-            ..LirBlock::new(1, vec![
-                one(2, Operation::Move, "mov", vec![bx.clone()], vec![word()], None),
-                one(3, Operation::Compare, "cmp", vec![], vec![bx.clone(), word()], None),
-                one(4, Operation::Branch, "jne", vec![], vec![], Some(1)),
-            ])
+            ..LirBlock::new(
+                1,
+                vec![
+                    one(2, Operation::Move, "mov", vec![bx.clone()], vec![word()], None),
+                    one(3, Operation::Compare, "cmp", vec![], vec![bx.clone(), word()], None),
+                    one(4, Operation::Branch, "jne", vec![], vec![], Some(1)),
+                ],
+            )
         };
         let exit = LirBlock::new(2, vec![one(5, Operation::Move, "mov", vec![bx], vec![word()], None)]);
         let body = LirBody::new("zero", 0, vec![entry, looped, exit], IndexMap::default(), IndexMap::default());
@@ -341,17 +396,28 @@ mod tests {
         }
     }
 
-    /// `xchg esi, ecx` lost both registers' zero upper halves, so a counter that began as `mov ecx, 2` was copied by `movzx` before
-    /// it indexed (bench/sieve with EBP free: one more instruction a trip).
+    /// `xchg esi, ecx` lost both registers' zero upper halves, so a counter that began as `mov ecx, 2` was copied by
+    /// `movzx` before it indexed (bench/sieve with EBP free: one more instruction a trip).
     #[test]
     fn test_an_exchange_swaps_the_zero_upper_halves() {
-        let (ecx, esi) = (Loc::Reg(Reg { register: Register::ECX, width: 4 }), Loc::Reg(Reg { register: Register::ESI, width: 4 }));
+        let (ecx, esi) =
+            (Loc::Reg(Reg { register: Register::ECX, width: 4 }), Loc::Reg(Reg { register: Register::ESI, width: 4 }));
         let two = Loc::Imm(Imm { value: 2, width: 4, address: None });
-        let entry = LirBlock::new(0, vec![
-            one(0, Operation::Move, "mov", vec![ecx.clone()], vec![two], None),
-            one(1, Operation::Exchange, "xchg", vec![esi.clone(), ecx.clone()], vec![ecx.clone(), esi.clone()], None),
-            one(2, Operation::Nothing, "nop", vec![], vec![], None),
-        ]);
+        let entry = LirBlock::new(
+            0,
+            vec![
+                one(0, Operation::Move, "mov", vec![ecx.clone()], vec![two], None),
+                one(
+                    1,
+                    Operation::Exchange,
+                    "xchg",
+                    vec![esi.clone(), ecx.clone()],
+                    vec![ecx.clone(), esi.clone()],
+                    None,
+                ),
+                one(2, Operation::Nothing, "nop", vec![], vec![], None),
+            ],
+        );
         let body = LirBody::new("swap", 0, vec![entry], IndexMap::default(), IndexMap::default());
 
         let zero = before(&body);

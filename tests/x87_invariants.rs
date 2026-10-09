@@ -39,10 +39,19 @@ fn test_a_stored_loop_carried_float_is_spilled_to_the_cell_the_program_stores_it
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).args(["-m32", "-O3", "-march=i486", "-S", "-o", "a.s", "a.c"]).output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(directory)
+        .args(["-m32", "-O3", "-march=i486", "-S", "-o", "a.s", "a.c"])
+        .output()
+        .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let listing = std::fs::read_to_string(directory.join("a.s")).unwrap();
-    let stores = listing.lines().filter(|line| line.trim_start().starts_with("fstp qword ptr [") || line.trim_start().starts_with("fst qword ptr [")).count();
+    let stores = listing
+        .lines()
+        .filter(|line| {
+            line.trim_start().starts_with("fstp qword ptr [") || line.trim_start().starts_with("fst qword ptr [")
+        })
+        .count();
     assert_eq!(stores, 12, "{listing}");
 }
 
@@ -53,7 +62,11 @@ fn test_os_does_not_hold_floats_across_a_loop_for_the_release_they_cost() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).args(["-m32", "-Os", "-march=i486", "-S", "-o", "a.s", "a.c"]).output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(directory)
+        .args(["-m32", "-Os", "-march=i486", "-S", "-o", "a.s", "a.c"])
+        .output()
+        .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let listing = std::fs::read_to_string(directory.join("a.s")).unwrap();
     assert_eq!(listing.matches("fstp st(0)").count(), 0, "{listing}");
@@ -66,12 +79,23 @@ fn test_a_constant_nothing_reads_is_not_loaded_and_popped() {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c")).current_dir(directory).args(["-m32", "-O3", "-march=i486", "-S", "-o", "a.s", "a.c"]).output().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(directory)
+        .args(["-m32", "-O3", "-march=i486", "-S", "-o", "a.s", "a.c"])
+        .output()
+        .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let listing = std::fs::read_to_string(directory.join("a.s")).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
-    let stores = lines.iter().filter(|line| line.starts_with("fstp qword ptr [") || line.starts_with("fst qword ptr [")).count();
+    let stores =
+        lines.iter().filter(|line| line.starts_with("fstp qword ptr [") || line.starts_with("fst qword ptr [")).count();
     assert_eq!(stores, 12, "premise: the nest is copied out, as in the test above\n{listing}");
-    let pairs = lines.windows(2).filter(|pair| (pair[0] == "fld1" || pair[0] == "fldz" || pair[0].starts_with("fld dword ptr $K")) && pair[1] == "fstp st(0)").count();
+    let pairs = lines
+        .windows(2)
+        .filter(|pair| {
+            (pair[0] == "fld1" || pair[0] == "fldz" || pair[0].starts_with("fld dword ptr $K"))
+                && pair[1] == "fstp st(0)"
+        })
+        .count();
     assert_eq!(pairs, 0, "{listing}");
 }

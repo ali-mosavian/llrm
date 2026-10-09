@@ -6,7 +6,7 @@ use llrm_object::debug::{ChecksumKind, Function, Info, Kind, Location, Range, Ty
 use llrm_object::{Binding, Definition, Kind as Fixup, Object, Reloc, Target, Unsupported};
 
 use super::types::Types;
-use super::{machine, name, put16, put32, record, refused, Registers, Section, SIGNATURE};
+use super::{Registers, SIGNATURE, Section, machine, name, put16, put32, record, refused};
 
 const DEBUG_S_SYMBOLS: u32 = 0xF1;
 const DEBUG_S_LINES: u32 = 0xF2;
@@ -42,18 +42,39 @@ struct Data {
 }
 
 impl Data {
-    fn secrel(&mut self, symbol: usize, addend: i64) {
-        self.relocs.push(Reloc { at: self.bytes.len(), kind: Fixup::SectionOffset { width: 4 }, target: Target::Symbol(symbol), addend });
+    fn secrel(
+        &mut self,
+        symbol: usize,
+        addend: i64,
+    ) {
+        self.relocs.push(Reloc {
+            at: self.bytes.len(),
+            kind: Fixup::SectionOffset { width: 4 },
+            target: Target::Symbol(symbol),
+            addend,
+        });
         put32(&mut self.bytes, 0);
     }
 
-    fn section(&mut self, symbol: usize) {
-        self.relocs.push(Reloc { at: self.bytes.len(), kind: Fixup::SectionIndex, target: Target::Symbol(symbol), addend: 0 });
+    fn section(
+        &mut self,
+        symbol: usize,
+    ) {
+        self.relocs.push(Reloc {
+            at: self.bytes.len(),
+            kind: Fixup::SectionIndex,
+            target: Target::Symbol(symbol),
+            addend: 0,
+        });
         put16(&mut self.bytes, 0);
     }
 
     /// A symbol record, `kind` and what `build` writes into its data.
-    fn symbol(&mut self, kind: u16, build: impl FnOnce(&mut Data) -> Result<(), Unsupported>) -> Result<(), Unsupported> {
+    fn symbol(
+        &mut self,
+        kind: u16,
+        build: impl FnOnce(&mut Data) -> Result<(), Unsupported>,
+    ) -> Result<(), Unsupported> {
         // The record is written whole, then moved: its relocations are rebased to where it lands.
         let mut inner = Data::default();
         build(&mut inner)?;
@@ -72,7 +93,10 @@ struct Strings {
 }
 
 impl Strings {
-    fn add(&mut self, text: &str) -> u32 {
+    fn add(
+        &mut self,
+        text: &str,
+    ) -> u32 {
         let at = self.bytes.len() as u32;
         name(&mut self.bytes, text);
         at
@@ -87,7 +111,11 @@ fn pad4(bytes: &mut Vec<u8>) {
 
 /// The offset of `symbol` from the first byte of `range`, as the addend that makes a relocation
 /// against the symbol reach it.
-fn anchor(object: &Object, symbol: usize, range: Range) -> Result<i64, Unsupported> {
+fn anchor(
+    object: &Object,
+    symbol: usize,
+    range: Range,
+) -> Result<i64, Unsupported> {
     match object.symbols[symbol].definition {
         Definition::Defined { section, offset } if section == range.section => Ok(range.offset as i64 - offset as i64),
         _ => refused(format!("{} is not defined in the section of the code it names", object.symbols[symbol].name)),
@@ -95,7 +123,9 @@ fn anchor(object: &Object, symbol: usize, range: Range) -> Result<i64, Unsupport
 }
 
 fn pieces(range: Range) -> Vec<Range> {
-    (0..range.length.div_ceil(PIECE).max(1)).map(|at| Range { offset: range.offset + at * PIECE, length: (range.length - at * PIECE).min(PIECE), ..range }).collect()
+    (0..range.length.div_ceil(PIECE).max(1))
+        .map(|at| Range { offset: range.offset + at * PIECE, length: (range.length - at * PIECE).min(PIECE), ..range })
+        .collect()
 }
 
 struct Writer<'a> {
@@ -107,12 +137,20 @@ struct Writer<'a> {
 }
 
 impl Writer<'_> {
-    fn register(&self, register: &str) -> Result<u16, Unsupported> {
+    fn register(
+        &self,
+        register: &str,
+    ) -> Result<u16, Unsupported> {
         self.registers.number(register)
     }
 
     /// `S_DEFRANGE_*` for `location` over each piece of `ranges`.
-    fn defined(&self, out: &mut Data, location: &Location, ranges: &[Range]) -> Result<(), Unsupported> {
+    fn defined(
+        &self,
+        out: &mut Data,
+        location: &Location,
+        ranges: &[Range],
+    ) -> Result<(), Unsupported> {
         for &range in ranges {
             for piece in pieces(range) {
                 let anchored = anchor(self.object, self.function, piece)?;
@@ -125,14 +163,24 @@ impl Writer<'_> {
                     Location::Frame { disp } => out.symbol(S_DEFRANGE_REGISTER_REL, |out| {
                         put16(&mut out.bytes, self.registers.frame()?);
                         put16(&mut out.bytes, 0);
-                        put32(&mut out.bytes, i32::try_from(*disp).or_else(|_| refused(format!("a frame offset {disp} does not fit its field")))? as u32);
+                        put32(
+                            &mut out.bytes,
+                            i32::try_from(*disp)
+                                .or_else(|_| refused(format!("a frame offset {disp} does not fit its field")))?
+                                as u32,
+                        );
                         at(out);
                         Ok(())
                     })?,
                     Location::Relative { register, disp } => out.symbol(S_DEFRANGE_REGISTER_REL, |out| {
                         put16(&mut out.bytes, self.register(register)?);
                         put16(&mut out.bytes, 0);
-                        put32(&mut out.bytes, i32::try_from(*disp).or_else(|_| refused(format!("a stack offset {disp} does not fit its field")))? as u32);
+                        put32(
+                            &mut out.bytes,
+                            i32::try_from(*disp)
+                                .or_else(|_| refused(format!("a stack offset {disp} does not fit its field")))?
+                                as u32,
+                        );
                         at(out);
                         Ok(())
                     })?,
@@ -142,15 +190,23 @@ impl Writer<'_> {
                         at(out);
                         Ok(())
                     })?,
-                    Location::List(_) | Location::Static { .. } | Location::Constant(_) | Location::Pieces(_) => return refused("a location list holds only registers and frame cells"),
+                    Location::List(_) | Location::Static { .. } | Location::Constant(_) | Location::Pieces(_) => {
+                        return refused("a location list holds only registers and frame cells");
+                    }
                 }
             }
         }
         Ok(())
     }
 
-    fn data(&self, out: &mut Data, variable: &Variable) -> Result<(), Unsupported> {
-        let Location::Static { symbol, disp } = &variable.location else { return refused(format!("{} is not in data", variable.name)) };
+    fn data(
+        &self,
+        out: &mut Data,
+        variable: &Variable,
+    ) -> Result<(), Unsupported> {
+        let Location::Static { symbol, disp } = &variable.location else {
+            return refused(format!("{} is not in data", variable.name));
+        };
         let public = self.object.symbols[*symbol].binding == Binding::Public;
         out.symbol(if public { S_GDATA32 } else { S_LDATA32 }, |out| {
             put32(&mut out.bytes, self.types.index[variable.r#type]);
@@ -162,7 +218,12 @@ impl Writer<'_> {
     }
 
     /// A variable of a scope covering `ranges`.
-    fn variable(&self, out: &mut Data, variable: &Variable, ranges: &[Range]) -> Result<(), Unsupported> {
+    fn variable(
+        &self,
+        out: &mut Data,
+        variable: &Variable,
+        ranges: &[Range],
+    ) -> Result<(), Unsupported> {
         if matches!(variable.location, Location::Static { .. }) {
             return self.data(out, variable);
         }
@@ -183,7 +244,11 @@ impl Writer<'_> {
         }
     }
 
-    fn block(&self, out: &mut Data, block: &llrm_object::debug::Block) -> Result<(), Unsupported> {
+    fn block(
+        &self,
+        out: &mut Data,
+        block: &llrm_object::debug::Block,
+    ) -> Result<(), Unsupported> {
         let [range] = block.ranges[..] else { return refused("a block scope in several ranges") };
         let anchored = anchor(self.object, self.function, range)?;
         out.symbol(S_BLOCK32, |out| {
@@ -205,8 +270,14 @@ impl Writer<'_> {
         Ok(())
     }
 
-    fn procedure(&mut self, out: &mut Data, function: &Function) -> Result<(), Unsupported> {
-        let [range] = function.ranges[..] else { return refused(format!("{} is in {} ranges", function.name, function.ranges.len())) };
+    fn procedure(
+        &mut self,
+        out: &mut Data,
+        function: &Function,
+    ) -> Result<(), Unsupported> {
+        let [range] = function.ranges[..] else {
+            return refused(format!("{} is in {} ranges", function.name, function.ranges.len()));
+        };
         if function.far {
             return refused(format!("{} is a far function", function.name));
         }
@@ -218,7 +289,10 @@ impl Writer<'_> {
             for _ in 0..3 {
                 put32(&mut out.bytes, 0);
             }
-            put32(&mut out.bytes, u32::try_from(range.length).or_else(|_| refused(format!("{}'s length", function.name)))?);
+            put32(
+                &mut out.bytes,
+                u32::try_from(range.length).or_else(|_| refused(format!("{}'s length", function.name)))?,
+            );
             put32(&mut out.bytes, start as u32);
             put32(&mut out.bytes, end as u32);
             put32(&mut out.bytes, self.types.index[function.r#type]);
@@ -240,7 +314,11 @@ impl Writer<'_> {
 }
 
 /// One subsection, its data padded to four bytes, appended to `section` with its relocations.
-fn subsection(section: &mut Section, kind: u32, mut data: Data) {
+fn subsection(
+    section: &mut Section,
+    kind: u32,
+    mut data: Data,
+) {
     pad4(&mut data.bytes);
     put32(&mut section.image, kind);
     put32(&mut section.image, data.bytes.len() as u32);
@@ -250,8 +328,18 @@ fn subsection(section: &mut Section, kind: u32, mut data: Data) {
 }
 
 /// The line table of `range`: its header, then a block for each run of lines in one file.
-fn lines(object: &Object, info: &Info, function: usize, range: Range, offsets: &[u32]) -> Result<Option<Data>, Unsupported> {
-    let mut inside: Vec<_> = info.lines.iter().filter(|one| one.section == range.section && (range.offset..range.offset + range.length).contains(&one.offset)).collect();
+fn lines(
+    object: &Object,
+    info: &Info,
+    function: usize,
+    range: Range,
+    offsets: &[u32],
+) -> Result<Option<Data>, Unsupported> {
+    let mut inside: Vec<_> = info
+        .lines
+        .iter()
+        .filter(|one| one.section == range.section && (range.offset..range.offset + range.length).contains(&one.offset))
+        .collect();
     if inside.is_empty() {
         return Ok(None);
     }
@@ -269,7 +357,9 @@ fn lines(object: &Object, info: &Info, function: usize, range: Range, offsets: &
     while at < inside.len() {
         let file = inside[at].file;
         let run = inside[at..].iter().take_while(|one| one.file == file).count();
-        let Some(&checksum) = offsets.get(file) else { return refused(format!("a line is in file {file}, which the module does not list")) };
+        let Some(&checksum) = offsets.get(file) else {
+            return refused(format!("a line is in file {file}, which the module does not list"));
+        };
         put32(&mut out.bytes, checksum);
         put32(&mut out.bytes, run as u32);
         put32(&mut out.bytes, 12 + run as u32 * if columns { 12 } else { 8 });
@@ -288,7 +378,12 @@ fn lines(object: &Object, info: &Info, function: usize, range: Range, offsets: &
     Ok(Some(out))
 }
 
-pub fn encode(object: &Object, info: &Info, registers: &Registers<'_>, types: &Types) -> Result<Section, Unsupported> {
+pub fn encode(
+    object: &Object,
+    info: &Info,
+    registers: &Registers<'_>,
+    types: &Types,
+) -> Result<Section, Unsupported> {
     let mut strings = Strings { bytes: vec![0] };
     let mut checksums = Data::default();
     let mut offsets = Vec::new();
@@ -299,11 +394,15 @@ pub fn encode(object: &Object, info: &Info, registers: &Registers<'_>, types: &T
             None => checksums.bytes.extend([0, 0]),
             Some((kind, sum)) => {
                 checksums.bytes.push(sum.len() as u8);
-                checksums.bytes.push(match kind {
-                    ChecksumKind::Md5 => 1,
-                    ChecksumKind::Sha1 => 2,
-                    ChecksumKind::Sha256 => 3,
-                });
+                checksums
+                    .bytes
+                    .push(
+                        match kind {
+                            ChecksumKind::Md5 => 1,
+                            ChecksumKind::Sha1 => 2,
+                            ChecksumKind::Sha256 => 3,
+                        },
+                    );
                 checksums.bytes.extend(sum);
             }
         }
@@ -335,7 +434,9 @@ pub fn encode(object: &Object, info: &Info, registers: &Registers<'_>, types: &T
     }
     for (id, one) in info.types.iter().enumerate() {
         let label = match one {
-            Type::Struct { name, .. } | Type::Enum { name, .. } | Type::Typedef { name, .. } if !name.is_empty() => name,
+            Type::Struct { name, .. } | Type::Enum { name, .. } | Type::Typedef { name, .. } if !name.is_empty() => {
+                name
+            }
             _ => continue,
         };
         symbols.symbol(S_UDT, |out| {

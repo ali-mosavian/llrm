@@ -10,12 +10,11 @@
 //! all three shipped libraries share. Those are stored here, so what reads
 //! them later reads known values.
 
+use llrm_mir::{BinaryOp, CastOp};
 use llrm_support::hash::HashMap;
-
 use llrm_x86_bcmachine::model::ir::nodes::Node;
 use llrm_x86_bcmachine::model::ir::{Imm, Loc, Operation};
 use llrm_x86_bcmachine::objectfile::module::{Family, Space};
-use llrm_mir::{BinaryOp, CastOp};
 
 use crate::emit::{Emit, Emitter};
 use crate::machine::{Facts, tracked};
@@ -32,7 +31,11 @@ pub fn sized(name: &str) -> bool {
 pub struct Dims;
 
 impl Recognizer for Dims {
-    fn node(&self, emitter: &mut Emitter, node: &Node) -> Option<Emit<()>> {
+    fn node(
+        &self,
+        emitter: &mut Emitter,
+        node: &Node,
+    ) -> Option<Emit<()>> {
         let Node::Call(call) = node else { return None };
         if !sized(&call.name) || emitter.unit.procedures.contains_key(&call.name) {
             return None;
@@ -42,7 +45,11 @@ impl Recognizer for Dims {
 }
 
 /// One DIM request: the call, then what its normal return leaves.
-fn dim(emitter: &mut Emitter, name: &str, at: usize) -> Emit<()> {
+fn dim(
+    emitter: &mut Emitter,
+    name: &str,
+    at: usize,
+) -> Emit<()> {
     let depth = emitter.depth();
     let descriptor = emitter.stack_word(depth, 2)?;
     let shape = emitter.stack_word(depth - 2, 2)?;
@@ -62,7 +69,10 @@ fn dim(emitter: &mut Emitter, name: &str, at: usize) -> Emit<()> {
     }
     emitter.runtime_call(name, at, Some(2 * words))?;
     let family = emitter.unit.facts.family();
-    if name != DIM || !(0..=3).contains(&attributes) || !matches!(family, Family::Quickbasic | Family::Pds | Family::Vbdos) {
+    if name != DIM
+        || !(0..=3).contains(&attributes)
+        || !matches!(family, Family::Quickbasic | Family::Pds | Family::Vbdos)
+    {
         return Ok(());
     }
     let mut fields = vec![(8, rank, 8), (9, attributes, 8)];
@@ -113,9 +123,15 @@ pub fn requests(facts: &Facts) -> Vec<Request> {
                 let what = node.semantics();
                 if let Node::Call(call) = &**node {
                     if let (true, [.., Some(shape), Some(descriptor)]) = (sized(&call.name), pushed.as_slice())
-                        && let Some(address) = descriptor.address.filter(|one| one.space == Space::Segment && shape.address.is_none())
+                        && let Some(address) =
+                            descriptor.address.filter(|one| one.space == Space::Segment && shape.address.is_none())
                     {
-                        out.push(Request { segment: address.index, start: address.disp, rank: shape.value & 0xff, attributes: (shape.value >> 8) & 0xff });
+                        out.push(Request {
+                            segment: address.index,
+                            start: address.disp,
+                            rank: shape.value & 0xff,
+                            attributes: (shape.value >> 8) & 0xff,
+                        });
                     }
                     held.clear();
                     pushed.clear();
@@ -123,7 +139,9 @@ pub fn requests(facts: &Facts) -> Vec<Request> {
                 }
                 match (what.op, what.sources.first()) {
                     (Operation::Push, Some(Loc::Imm(imm))) => pushed.push(Some(imm.clone())),
-                    (Operation::Push, Some(Loc::Reg(reg))) => pushed.push(tracked(reg.register).and_then(|root| held.get(&root).cloned()).filter(|_| reg.width == 2)),
+                    (Operation::Push, Some(Loc::Reg(reg))) => pushed.push(
+                        tracked(reg.register).and_then(|root| held.get(&root).cloned()).filter(|_| reg.width == 2),
+                    ),
                     (Operation::Push, _) => pushed.push(None),
                     _ => {}
                 }
@@ -137,7 +155,8 @@ pub fn requests(facts: &Facts) -> Vec<Request> {
                     }
                     None => held.clear(),
                 }
-                if let (Operation::Move, [Loc::Reg(reg)], [Loc::Imm(imm)]) = (what.op, what.dests.as_slice(), what.sources.as_slice())
+                if let (Operation::Move, [Loc::Reg(reg)], [Loc::Imm(imm)]) =
+                    (what.op, what.dests.as_slice(), what.sources.as_slice())
                     && reg.width == 2
                     && let Some(root) = tracked(reg.register)
                 {
@@ -153,4 +172,3 @@ pub fn requests(facts: &Facts) -> Vec<Request> {
 pub fn allocates(callee: &str) -> bool {
     callee.strip_prefix(crate::RUNTIME).is_some_and(sized)
 }
-

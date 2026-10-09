@@ -22,7 +22,11 @@ pub(super) struct FunctionType {
 
 impl TypeRegistry {
     /// `fn(A) -> R` as written: the type of a function declared so.
-    pub(super) fn function_type_spelled(&mut self, args: &[TypeAnnotation], span: Span) -> Result<TypeName, Diagnostic> {
+    pub(super) fn function_type_spelled(
+        &mut self,
+        args: &[TypeAnnotation],
+        span: Span,
+    ) -> Result<TypeName, Diagnostic> {
         let (result, parameters) = args.split_last().expect("a function type has a result");
         let parameters = parameters
             .iter()
@@ -30,23 +34,32 @@ impl TypeRegistry {
             .map(|(index, one)| Parameter {
                 name: format!("${index}"),
                 type_: match one {
-                    TypeAnnotation::Value(TypeSpec::Applied { name, args }) if name.starts_with('&') => ParameterType::Borrowed {
-                        mutable: name == "&mut",
-                        target: args[0].clone(),
-                    },
+                    TypeAnnotation::Value(TypeSpec::Applied { name, args }) if name.starts_with('&') => {
+                        ParameterType::Borrowed { mutable: name == "&mut", target: args[0].clone() }
+                    }
                     other => ParameterType::Owned(other.clone()),
                 },
                 default: None,
                 span,
             })
             .collect();
-        let declared = Function { name: String::new(), generics: Vec::new(), parameters, result: result.clone(), body: Vec::new(), span };
+        let declared = Function {
+            name: String::new(),
+            generics: Vec::new(),
+            parameters,
+            result: result.clone(),
+            body: Vec::new(),
+            span,
+        };
         let signature = signature(self, &declared, 0)?;
         Ok(self.function_type(&signature))
     }
 
     /// The type of a function with `signature`, registered on first use.
-    pub(super) fn function_type(&mut self, signature: &Signature) -> TypeName {
+    pub(super) fn function_type(
+        &mut self,
+        signature: &Signature,
+    ) -> TypeName {
         if let Some(found) = self.function_type_of(signature) {
             return found;
         }
@@ -59,7 +72,10 @@ impl TypeRegistry {
     }
 
     /// The type of a function with `signature`, if one was registered.
-    pub(super) fn function_type_of(&self, signature: &Signature) -> Option<TypeName> {
+    pub(super) fn function_type_of(
+        &self,
+        signature: &Signature,
+    ) -> Option<TypeName> {
         let (parameters, result) = self.signature_syntax(signature);
         let name = spelled(&parameters, &result).text();
         self.function_types
@@ -69,25 +85,37 @@ impl TypeRegistry {
     }
 
     /// The value naming `function` among `type_name`'s functions.
-    fn member(&mut self, type_name: TypeName, function: &str) -> i64 {
-        let TypeName::Function { type_id } = type_name else {
-            unreachable!("a function type")
-        };
+    fn member(
+        &mut self,
+        type_name: TypeName,
+        function: &str,
+    ) -> i64 {
+        let TypeName::Function { type_id } = type_name else { unreachable!("a function type") };
         let members = &mut self.function_types.get_mut(&type_id).expect("registered").members;
-        let index = members.iter().position(|one| one == function).unwrap_or_else(|| {
-            members.push(function.into());
-            members.len() - 1
-        });
+        let index = members
+            .iter()
+            .position(|one| one == function)
+            .unwrap_or_else(
+                || {
+                    members.push(function.into());
+                    members.len() - 1
+                },
+            );
         index as i64
     }
 
     /// How a header spells `signature`'s parameters and result.
-    fn signature_syntax(&self, signature: &Signature) -> (Vec<ParameterType>, TypeAnnotation) {
+    fn signature_syntax(
+        &self,
+        signature: &Signature,
+    ) -> (Vec<ParameterType>, TypeAnnotation) {
         let annotation = |binding: BindingType| match binding {
             BindingType::Scalar(type_name) => TypeAnnotation::Value(TypeSpec::Primitive(type_name)),
             BindingType::Struct(id) => TypeAnnotation::Value(self.spec_of(ElementType::Struct(id))),
             BindingType::Slice { element, rank } => TypeAnnotation::Slice { element: self.spec_of(element), rank },
-            BindingType::Array { element, shape } => TypeAnnotation::Array { element: self.spec_of(element), dims: shape.dims().to_vec() },
+            BindingType::Array { element, shape } => {
+                TypeAnnotation::Array { element: self.spec_of(element), dims: shape.dims().to_vec() }
+            }
         };
         let parameters = signature
             .parameters
@@ -96,8 +124,12 @@ impl TypeRegistry {
                 SignatureParameter::Scalar(type_name) | SignatureParameter::Adapter { pointer: type_name, .. } => {
                     ParameterType::Owned(annotation(BindingType::Scalar(type_name)))
                 }
-                SignatureParameter::Owned { struct_id, .. } => ParameterType::Owned(annotation(BindingType::Struct(struct_id))),
-                SignatureParameter::Borrowed { mutable, target, .. } => ParameterType::Borrowed { mutable, target: annotation(target) },
+                SignatureParameter::Owned { struct_id, .. } => {
+                    ParameterType::Owned(annotation(BindingType::Struct(struct_id)))
+                }
+                SignatureParameter::Borrowed { mutable, target, .. } => {
+                    ParameterType::Borrowed { mutable, target: annotation(target) }
+                }
             })
             .collect();
         let result = match (signature.view, signature.slot) {
@@ -111,7 +143,10 @@ impl TypeRegistry {
     /// Each dispatcher a call needs whose body is not built yet, built: a
     /// `match` of the value over the type's functions, each called with the
     /// dispatcher's arguments.
-    pub(super) fn dispatcher_bodies(&mut self, span: Span) -> Vec<Function> {
+    pub(super) fn dispatcher_bodies(
+        &mut self,
+        span: Span,
+    ) -> Vec<Function> {
         let mut built = Vec::new();
         for (&type_id, kind) in &mut self.function_types {
             let Some((name, false)) = kind.dispatcher.clone() else {
@@ -119,22 +154,43 @@ impl TypeRegistry {
             };
             kind.dispatcher = Some((name.clone(), true));
             let mut function = dispatcher(&name, kind, type_id, span);
-            let arguments: Vec<Expr> = (0..kind.parameters.len()).map(|index| Expr::Name(format!("${index}"), span)).collect();
+            let arguments: Vec<Expr> =
+                (0..kind.parameters.len()).map(|index| Expr::Name(format!("${index}"), span)).collect();
             let call = |member: &String| Statement::Return {
-                value: Some(Expr::Call { name: member.clone(), type_arguments: Vec::new(), arguments: arguments.clone(), span }),
+                value: Some(Expr::Call {
+                    name: member.clone(),
+                    type_arguments: Vec::new(),
+                    arguments: arguments.clone(),
+                    span,
+                }),
                 span,
             };
             let count = kind.members.len();
-            let arms = kind.members.iter().enumerate().map(|(index, member)| MatchArm {
-                // The last is any value, so that the match is complete.
-                pattern: if index + 1 == count { Pattern::Wildcard(span) } else { Pattern::Literal(Expr::Integer(index as i64, span)) },
-                body: vec![call(member)],
-                span,
-            });
-            let subject = Expr::Conversion { target: TypeName::U16, value: Box::new(Expr::Name("$function".into(), span)), span };
+            let arms = kind
+                .members
+                .iter()
+                .enumerate()
+                .map(
+                    |(index, member)| MatchArm {
+                        // The last is any value, so that the match is complete.
+                        pattern: if index + 1 == count {
+                            Pattern::Wildcard(span)
+                        } else {
+                            Pattern::Literal(Expr::Integer(index as i64, span))
+                        },
+                        body: vec![call(member)],
+                        span,
+                    },
+                );
+            let subject =
+                Expr::Conversion { target: TypeName::U16, value: Box::new(Expr::Name("$function".into(), span)), span };
             function.body = if count == 0 {
                 // No function has this type: no value of it exists to call.
-                vec![Statement::While { condition: Expr::Boolean(true, span), body: vec![Statement::Continue(span)], span }]
+                vec![Statement::While {
+                    condition: Expr::Boolean(true, span),
+                    body: vec![Statement::Continue(span)],
+                    span,
+                }]
             } else {
                 vec![Statement::Match { subject, arms: arms.collect(), span }]
             };
@@ -145,7 +201,10 @@ impl TypeRegistry {
 }
 
 /// `fn(A) -> R` for these parameters and result.
-fn spelled(parameters: &[ParameterType], result: &TypeAnnotation) -> TypeSpec {
+fn spelled(
+    parameters: &[ParameterType],
+    result: &TypeAnnotation,
+) -> TypeSpec {
     let args = parameters
         .iter()
         .map(|one| match one {
@@ -161,19 +220,30 @@ fn spelled(parameters: &[ParameterType], result: &TypeAnnotation) -> TypeSpec {
 }
 
 /// A dispatcher's header: the value, then the type's parameters.
-fn dispatcher(name: &str, kind: &FunctionType, type_id: u32, span: Span) -> Function {
+fn dispatcher(
+    name: &str,
+    kind: &FunctionType,
+    type_id: u32,
+    span: Span,
+) -> Function {
     let value = Parameter {
         name: "$function".into(),
         type_: ParameterType::Owned(TypeAnnotation::Value(TypeSpec::Primitive(TypeName::Function { type_id }))),
         default: None,
         span,
     };
-    let parameters = kind.parameters.iter().enumerate().map(|(index, one)| Parameter {
-        name: format!("${index}"),
-        type_: one.clone(),
-        default: None,
-        span,
-    });
+    let parameters = kind
+        .parameters
+        .iter()
+        .enumerate()
+        .map(
+            |(index, one)| Parameter {
+                name: format!("${index}"),
+                type_: one.clone(),
+                default: None,
+                span,
+            },
+        );
     Function {
         name: name.into(),
         generics: Vec::new(),
@@ -186,7 +256,12 @@ fn dispatcher(name: &str, kind: &FunctionType, type_id: u32, span: Span) -> Func
 
 impl FunctionCompiler<'_> {
     /// The function `name` as a value of its type, if it names a function.
-    pub(super) fn function_value(&mut self, name: &str, expected: Option<TypeName>, span: Span) -> Option<Result<TypedOperand, Diagnostic>> {
+    pub(super) fn function_value(
+        &mut self,
+        name: &str,
+        expected: Option<TypeName>,
+        span: Span,
+    ) -> Option<Result<TypedOperand, Diagnostic>> {
         let signature = self.signatures.get(name)?.clone();
         if signature.abi.interrupt() {
             return Some(self.foreign_address(&signature, expected, span));
@@ -200,7 +275,10 @@ impl FunctionCompiler<'_> {
     }
 
     /// The type of the function `name` names, as a value, if one was made.
-    pub(super) fn function_value_hint(&self, name: &str) -> Option<TypeName> {
+    pub(super) fn function_value_hint(
+        &self,
+        name: &str,
+    ) -> Option<TypeName> {
         let signature = self.signatures.get(name)?;
         let function = self.types.function_type_of(signature)?;
         if signature.abi.interrupt() {
@@ -219,12 +297,18 @@ impl FunctionCompiler<'_> {
         type_name: TypeName,
         span: Span,
     ) -> Result<TypedOperand, Diagnostic> {
-        let TypeName::Function { type_id: kind } = type_name else {
-            unreachable!("a function type")
-        };
+        let TypeName::Function { type_id: kind } = type_name else { unreachable!("a function type") };
         let kind = self.types.function_types[&kind].clone();
         if parameters.len() != kind.parameters.len() {
-            return Err(Diagnostic::new(span, format!("the lambda takes {} arguments; {} takes {}", parameters.len(), type_name_text(type_name), kind.parameters.len())));
+            return Err(Diagnostic::new(
+                span,
+                format!(
+                    "the lambda takes {} arguments; {} takes {}",
+                    parameters.len(),
+                    type_name_text(type_name),
+                    kind.parameters.len()
+                ),
+            ));
         }
         let lambda = Expr::Lambda { parameters: parameters.to_vec(), body: Box::new(body.clone()), span };
         if let Some(name) = lambdas::captured(&lambda, scopes) {
@@ -250,8 +334,14 @@ impl FunctionCompiler<'_> {
 
     /// `name(arguments)` where `name` holds a function value: a call of its
     /// type's dispatcher, which is declared when first called.
-    pub(super) fn dispatched_call(&mut self, name: &str, arguments: &[Expr], span: Span) -> Result<Option<Expr>, Diagnostic> {
-        let Some(Binding { type_: BindingType::Scalar(TypeName::Function { type_id: kind }), .. }) = self.visible(name) else {
+    pub(super) fn dispatched_call(
+        &mut self,
+        name: &str,
+        arguments: &[Expr],
+        span: Span,
+    ) -> Result<Option<Expr>, Diagnostic> {
+        let Some(Binding { type_: BindingType::Scalar(TypeName::Function { type_id: kind }), .. }) = self.visible(name)
+        else {
             return Ok(None);
         };
         let kind = *kind;
@@ -261,7 +351,8 @@ impl FunctionCompiler<'_> {
                 let declared = format!("$call{kind}");
                 let header = dispatcher(&declared, &self.types.function_types[&kind], kind, span);
                 self.templates.borrow_mut().declared(header, self.types)?;
-                self.types.function_types.get_mut(&kind).expect("registered").dispatcher = Some((declared.clone(), false));
+                self.types.function_types.get_mut(&kind).expect("registered").dispatcher =
+                    Some((declared.clone(), false));
                 declared
             }
         };

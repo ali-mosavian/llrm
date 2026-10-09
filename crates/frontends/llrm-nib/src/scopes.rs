@@ -6,17 +6,26 @@ use super::syntax::{AsmTarget, AssignTarget, Clause, Expr, Pattern, Span, Statem
 
 /// A local as a caller of the walk keeps it: its name, or also where it is bound.
 pub trait Local {
-    fn bound(name: &str, span: Span) -> Self;
+    fn bound(
+        name: &str,
+        span: Span,
+    ) -> Self;
 }
 
 impl Local for String {
-    fn bound(name: &str, _: Span) -> Self {
+    fn bound(
+        name: &str,
+        _: Span,
+    ) -> Self {
         name.to_owned()
     }
 }
 
 impl Local for (String, Span) {
-    fn bound(name: &str, span: Span) -> Self {
+    fn bound(
+        name: &str,
+        span: Span,
+    ) -> Self {
         (name.to_owned(), span)
     }
 }
@@ -130,9 +139,7 @@ fn assigned<E, L: Local>(
 ) -> Result<(), E> {
     let mut named = Expr::Name(std::mem::take(name), span);
     visit(&mut named, locals)?;
-    let Expr::Name(renamed, _) = named else {
-        unreachable!("a name stays a name")
-    };
+    let Expr::Name(renamed, _) = named else { unreachable!("a name stays a name") };
     *name = renamed;
     Ok(())
 }

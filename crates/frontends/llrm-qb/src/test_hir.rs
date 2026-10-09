@@ -9,25 +9,34 @@
 
 use std::path::{Path, PathBuf};
 
-use super::compile::{self as qb_compile, CompileError};
-use super::driver as qb_driver;
 use llrm_core::backend::masm;
 use llrm_core::hir::model::Program;
 use llrm_core::objectfile::omf;
+
+use super::compile::{self as qb_compile, CompileError};
+use super::driver as qb_driver;
 
 pub(super) fn root() -> PathBuf {
     PathBuf::from(env!("LLRM_ROOT"))
 }
 
 /// `tmp_path / name` holding `bytes`, in a directory that lives as long as the test.
-pub(super) fn written(directory: &tempfile::TempDir, name: &str, bytes: &[u8]) -> PathBuf {
+pub(super) fn written(
+    directory: &tempfile::TempDir,
+    name: &str,
+    bytes: &[u8],
+) -> PathBuf {
     let path = directory.path().join(name);
     std::fs::write(&path, bytes).expect("writes the source");
     path
 }
 
 /// `qb_driver.parsed(source, dialect=..., runtime=...)` with every other default.
-pub(super) fn parsed_as(source: &Path, dialect: &str, runtime: &str) -> Program {
+pub(super) fn parsed_as(
+    source: &Path,
+    dialect: &str,
+    runtime: &str,
+) -> Program {
     qb_driver::parsed(source, &qb_driver::Frontend::new(dialect, runtime), None)
         .unwrap_or_else(|error| panic!("{}: {error}", source.display()))
 }
@@ -91,23 +100,36 @@ pub(super) fn optimized_mir(program: &Program) -> String {
 }
 
 /// `qb_compile.object_bytes(program, name)`.
-pub(super) fn object_bytes(program: &Program, name: &str) -> Result<Vec<u8>, CompileError> {
+pub(super) fn object_bytes(
+    program: &Program,
+    name: &str,
+) -> Result<Vec<u8>, CompileError> {
     qb_compile::object_bytes(program, Path::new(name), None, &codegen())
 }
 
 /// `omf.parse(qb_compile.object_bytes(program, name))`.
-pub(super) fn records(program: &Program, name: &str) -> Vec<std::rc::Rc<omf::Record>> {
+pub(super) fn records(
+    program: &Program,
+    name: &str,
+) -> Vec<std::rc::Rc<omf::Record>> {
     omf::parse(&object_bytes(program, name).expect("emits")).expect("parses")
 }
 
 /// `text.split(start, 1)[1].split(end, 1)[0]`.
-pub(super) fn between<'t>(text: &'t str, start: &str, end: &str) -> &'t str {
+pub(super) fn between<'t>(
+    text: &'t str,
+    start: &str,
+    end: &str,
+) -> &'t str {
     let after = text.split_once(start).unwrap_or_else(|| panic!("{start:?} not in listing")).1;
     after.split_once(end).map_or(after, |(inside, _)| inside)
 }
 
 /// `(index, size)` of the named segment: `next(... if name == ...)`.
-pub(super) fn segment(records: &[std::rc::Rc<omf::Record>], wanted: &str) -> (i64, i64) {
+pub(super) fn segment(
+    records: &[std::rc::Rc<omf::Record>],
+    wanted: &str,
+) -> (i64, i64) {
     omf::segments(records)
         .iter()
         .enumerate()
@@ -119,7 +141,10 @@ pub(super) fn segment(records: &[std::rc::Rc<omf::Record>], wanted: &str) -> (i6
 }
 
 /// `omf.segment_image(records, index, size)` of the named segment.
-pub(super) fn image(records: &[std::rc::Rc<omf::Record>], wanted: &str) -> Vec<u8> {
+pub(super) fn image(
+    records: &[std::rc::Rc<omf::Record>],
+    wanted: &str,
+) -> Vec<u8> {
     let (index, size) = segment(records, wanted);
     omf::segment_image(records, index, size)
 }

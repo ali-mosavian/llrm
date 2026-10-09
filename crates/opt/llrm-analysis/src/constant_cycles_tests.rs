@@ -8,7 +8,10 @@ use crate::testing::{DOS, function, layout, parsed, value};
 
 /// A loop whose header joins 7 with `source + step`; `source` is the join
 /// itself, or a value from outside the loop.
-fn body_with_cycle(step: i64, external: bool) -> String {
+fn body_with_cycle(
+    step: i64,
+    external: bool,
+) -> String {
     let source = if external { "%incoming" } else { "%joined" };
     format!(
         "define void @f(i32 %incoming, i1 %more) {{

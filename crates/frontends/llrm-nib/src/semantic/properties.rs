@@ -24,20 +24,31 @@ impl FunctionCompiler<'_> {
         Some((base, name, arguments))
     }
 
-    fn is_sequence(&self, expression: &Expr) -> bool {
+    fn is_sequence(
+        &self,
+        expression: &Expr,
+    ) -> bool {
         let Expr::Name(name, span) = expression else {
             return self.fixed_array_hint(expression).is_some()
                 || self.view_type_of(expression).is_some()
                 || self.expression_type_hint(expression).is_some_and(|one| self.types.owned_element(one).is_some());
         };
         self.binding(name, *span).is_ok_and(|one| {
-            matches!(one.type_, BindingType::Scalar(type_name) if self.types.owned_element(type_name).is_some())
-                || matches!(one.type_, BindingType::Array { .. } | BindingType::Slice { .. })
+            matches!(
+                one.type_,
+                BindingType::Scalar(type_name) if self.types.owned_element(type_name).is_some()
+            ) || matches!(
+                one.type_,
+                BindingType::Array { .. } | BindingType::Slice { .. }
+            )
         })
     }
 
     /// `s.empty()` of a sequence, as the `s.len == 0` it means.
-    pub(super) fn emptiness(&self, expression: &Expr) -> Option<Expr> {
+    pub(super) fn emptiness(
+        &self,
+        expression: &Expr,
+    ) -> Option<Expr> {
         let Expr::MethodCall { receiver, name, arguments, span, .. } = expression else {
             return None;
         };

@@ -9,7 +9,10 @@ fn main() -> ExitCode {
         eprintln!("usage: hir-mir HIR.json [DATALAYOUT.toml]");
         return ExitCode::from(2);
     };
-    let program = match std::fs::read_to_string(&path).map_err(|error| error.to_string()).and_then(|text| llrm_hir::codec::decode(&text).map_err(|error| error.to_string())) {
+    let program = match std::fs::read_to_string(&path)
+        .map_err(|error| error.to_string())
+        .and_then(|text| llrm_hir::codec::decode(&text).map_err(|error| error.to_string()))
+    {
         Ok(program) => program,
         Err(error) => {
             eprintln!("{path}: {error}");

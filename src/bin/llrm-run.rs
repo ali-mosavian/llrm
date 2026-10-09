@@ -25,11 +25,7 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
     let entry = arguments.get(1).map_or("main", String::as_str);
-    let Ok(values) = arguments
-        .iter()
-        .skip(2)
-        .map(|one| one.parse().map(Number::Int))
-        .collect::<Result<Vec<_>, _>>()
+    let Ok(values) = arguments.iter().skip(2).map(|one| one.parse().map(Number::Int)).collect::<Result<Vec<_>, _>>()
     else {
         eprintln!("llrm-run: arguments are integers");
         return ExitCode::from(2);
@@ -37,25 +33,22 @@ fn main() -> ExitCode {
     let hir = match llrm_nib::compile_file(std::path::Path::new(input), &frontend) {
         Ok(hir) => hir,
         Err((path, error)) => {
-            eprintln!(
-                "{}:{}:{}: {}",
-                path.display(),
-                error.span.line,
-                error.span.column,
-                error.message
-            );
+            eprintln!("{}:{}:{}: {}", path.display(), error.span.line, error.span.column, error.message);
             return ExitCode::FAILURE;
         }
     };
     let result = codec::decode(&hir)
         .map_err(|error| error.to_string())
-        .and_then(|program| {
-            let mut input = Vec::new();
-            if !std::io::stdin().is_terminal() {
-                std::io::stdin().read_to_end(&mut input).map_err(|error| error.to_string())?;
-            }
-            execute::run_with_input(&program, entry, &values, execute::STEP_LIMIT, &input).map_err(|error| error.to_string())
-        });
+        .and_then(
+            |program| {
+                let mut input = Vec::new();
+                if !std::io::stdin().is_terminal() {
+                    std::io::stdin().read_to_end(&mut input).map_err(|error| error.to_string())?;
+                }
+                execute::run_with_input(&program, entry, &values, execute::STEP_LIMIT, &input)
+                    .map_err(|error| error.to_string())
+            },
+        );
     match result {
         Ok(executed) => {
             print!("{}", executed.output);

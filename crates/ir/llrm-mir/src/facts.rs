@@ -150,7 +150,10 @@ macro_rules! facts {
 /// A fact's value as one number on the wire, or a pair.
 pub trait Wire: Sized {
     fn wire(self) -> (i64, Option<i64>);
-    fn unwire(value: i64, second: Option<i64>) -> Option<Self>;
+    fn unwire(
+        value: i64,
+        second: Option<i64>,
+    ) -> Option<Self>;
 }
 
 /// What a call may do to memory, as `memory(...)` states it.
@@ -199,8 +202,13 @@ impl Wire for Inlining {
         (self as i64, None)
     }
 
-    fn unwire(value: i64, second: Option<i64>) -> Option<Inlining> {
-        [Inlining::Never, Inlining::Hint, Inlining::Always].into_iter().find(|one| *one as i64 == value && second.is_none())
+    fn unwire(
+        value: i64,
+        second: Option<i64>,
+    ) -> Option<Inlining> {
+        [Inlining::Never, Inlining::Hint, Inlining::Always]
+            .into_iter()
+            .find(|one| *one as i64 == value && second.is_none())
     }
 }
 
@@ -278,13 +286,25 @@ impl Fact {
     /// instruction flag.
     pub fn attribute(self) -> Option<Attribute> {
         match self {
-            Fact::Memory(Effect::Inaccessible) => Some(Attribute::Memory(vec![(Some("inaccessiblemem".to_owned()), "readwrite".to_owned())])),
+            Fact::Memory(Effect::Inaccessible) => {
+                Some(Attribute::Memory(vec![(Some("inaccessiblemem".to_owned()), "readwrite".to_owned())]))
+            }
             Fact::Dereferenceable(value) | Fact::Align(value) => Some(Attribute::Int(self.key().to_owned(), value)),
             Fact::Memory(effect) => Some(Attribute::Memory(vec![(None, effect.spelled().to_owned())])),
             Fact::Initializes(bytes) => Some(Attribute::Initializes(vec![(0, bytes as i64)])),
             Fact::Inline(how) => Some(Attribute::Flag(how.flag().to_owned())),
             // A range wants the width of what it bounds: `typed_attribute`.
-            Fact::Invariant | Fact::Unroll(_) | Fact::Range(_) | Fact::NoSignedWrap | Fact::NoUnsignedWrap | Fact::InBounds | Fact::Reassoc | Fact::NoNaNs | Fact::NoInfs | Fact::NoSignedZeros | Fact::AllowReciprocal => None,
+            Fact::Invariant
+            | Fact::Unroll(_)
+            | Fact::Range(_)
+            | Fact::NoSignedWrap
+            | Fact::NoUnsignedWrap
+            | Fact::InBounds
+            | Fact::Reassoc
+            | Fact::NoNaNs
+            | Fact::NoInfs
+            | Fact::NoSignedZeros
+            | Fact::AllowReciprocal => None,
             _ => Some(Attribute::Flag(self.key().to_owned())),
         }
     }
@@ -302,7 +322,11 @@ impl Fact {
 
     /// The attribute of an integer of `bits` that carries the fact: as
     /// `attribute`, and a range as LLVM's half-open `[lo, hi + 1)` modulo 2^bits.
-    pub fn typed_attribute(self, ty: TypeId, bits: u32) -> Option<Attribute> {
+    pub fn typed_attribute(
+        self,
+        ty: TypeId,
+        bits: u32,
+    ) -> Option<Attribute> {
         match self {
             Fact::Range(Bounds { lo, hi }) => {
                 let wrap = |value: i128| (value as u128) & (u128::MAX >> (128 - bits.clamp(1, 128)));
@@ -314,7 +338,12 @@ impl Fact {
 
     /// The fact a range attribute of an integer of `bits` states. `signed`
     /// reads its bounds as signed, as a frontend that stated `-1..=1` meant them.
-    pub fn of_range(lower: u128, upper: u128, bits: u32, signed: bool) -> Option<Fact> {
+    pub fn of_range(
+        lower: u128,
+        upper: u128,
+        bits: u32,
+        signed: bool,
+    ) -> Option<Fact> {
         let mask = u128::MAX >> (128 - bits.clamp(1, 128));
         let value = |one: u128| {
             let one = one & mask;
@@ -341,7 +370,9 @@ impl Fact {
             },
             Attribute::Memory(locations) => match locations[..] {
                 [(None, ref access)] => Effect::of_spelling(access).map(Fact::Memory),
-                [(Some(ref location), ref access)] if location == "inaccessiblemem" && access == "readwrite" => Some(Fact::Memory(Effect::Inaccessible)),
+                [(Some(ref location), ref access)] if location == "inaccessiblemem" && access == "readwrite" => {
+                    Some(Fact::Memory(Effect::Inaccessible))
+                }
                 _ => None,
             },
             _ => None,
@@ -354,8 +385,13 @@ impl Wire for Effect {
         (self as i64, None)
     }
 
-    fn unwire(value: i64, second: Option<i64>) -> Option<Effect> {
-        [Effect::None, Effect::Read, Effect::Write, Effect::Inaccessible].into_iter().find(|one| *one as i64 == value && second.is_none())
+    fn unwire(
+        value: i64,
+        second: Option<i64>,
+    ) -> Option<Effect> {
+        [Effect::None, Effect::Read, Effect::Write, Effect::Inaccessible]
+            .into_iter()
+            .find(|one| *one as i64 == value && second.is_none())
     }
 }
 
@@ -372,7 +408,10 @@ impl Wire for Bounds {
         (self.lo, Some(self.hi))
     }
 
-    fn unwire(value: i64, second: Option<i64>) -> Option<Bounds> {
+    fn unwire(
+        value: i64,
+        second: Option<i64>,
+    ) -> Option<Bounds> {
         second.filter(|&hi| value <= hi).map(|hi| Bounds { lo: value, hi })
     }
 }
@@ -421,7 +460,11 @@ impl Facts {
 
     /// As `of`, and the ranges too, which need the width of the integer `bits_of` names;
     /// read as signed where `signed` says.
-    pub fn of_typed(attributes: &[Attribute], bits_of: impl Fn(TypeId) -> Option<u32>, signed: bool) -> Facts {
+    pub fn of_typed(
+        attributes: &[Attribute],
+        bits_of: impl Fn(TypeId) -> Option<u32>,
+        signed: bool,
+    ) -> Facts {
         let mut facts = Facts::of(attributes);
         for attribute in attributes {
             if let Attribute::Range { ty, lower, upper } = attribute
@@ -441,19 +484,30 @@ impl Facts {
 
     /// What the metadata of the terminator `branch` states: `Unroll`, from the
     /// `!llvm.loop` of the loop it closes (`llvm.loop.unroll.{disable,full,count}`).
-    pub fn of_terminator(context: &Context, metadata: &[MetadataNode], function: &Function, branch: InstId) -> Facts {
+    pub fn of_terminator(
+        context: &Context,
+        metadata: &[MetadataNode],
+        function: &Function,
+        branch: InstId,
+    ) -> Facts {
         let mut facts = Vec::new();
-        let Some((_, node)) = function.instruction(branch).metadata.iter().find(|(kind, _)| kind == "llvm.loop") else { return Facts(facts) };
+        let Some((_, node)) = function.instruction(branch).metadata.iter().find(|(kind, _)| kind == "llvm.loop") else {
+            return Facts(facts);
+        };
         for operand in metadata.get(node.0 as usize).map_or(&[][..], |node| &node.operands[..]) {
             let MetadataOperand::Node(property) = operand else { continue };
             let Some(property) = metadata.get(property.0 as usize) else { continue };
             let copies = match property.operands.as_slice() {
                 [MetadataOperand::String(name)] if name == "llvm.loop.unroll.disable" => Some(0),
                 [MetadataOperand::String(name)] if name == "llvm.loop.unroll.full" => Some(u32::MAX),
-                [MetadataOperand::String(name), MetadataOperand::Constant(count)] if name == "llvm.loop.unroll.count" => match context.get(*count).kind {
-                    ConstantKind::Int(count) => u32::try_from(count).ok(),
-                    _ => None,
-                },
+                [MetadataOperand::String(name), MetadataOperand::Constant(count)]
+                    if name == "llvm.loop.unroll.count" =>
+                {
+                    match context.get(*count).kind {
+                        ConstantKind::Int(count) => u32::try_from(count).ok(),
+                        _ => None,
+                    }
+                }
                 _ => None,
             };
             if let Some(copies) = copies {
@@ -464,16 +518,33 @@ impl Facts {
     }
 
     /// What the metadata of `inst` states: `Invariant`, from `!invariant.load`.
-    pub fn of_instruction(function: &Function, inst: InstId) -> Facts {
-        Facts::from_facts(function.instruction(inst).metadata.iter().filter(|(kind, _)| kind == "invariant.load").map(|_| Fact::Invariant).collect())
+    pub fn of_instruction(
+        function: &Function,
+        inst: InstId,
+    ) -> Facts {
+        Facts::from_facts(
+            function
+                .instruction(inst)
+                .metadata
+                .iter()
+                .filter(|(kind, _)| kind == "invariant.load")
+                .map(|_| Fact::Invariant)
+                .collect(),
+        )
     }
 
     /// Those of `function`'s `index`th parameter.
-    pub fn param(function: &Function, index: usize) -> Facts {
+    pub fn param(
+        function: &Function,
+        index: usize,
+    ) -> Facts {
         Facts::of(function.parameter_attrs.get(index).map(Vec::as_slice).unwrap_or_default())
     }
 
-    pub fn contains(&self, fact: Fact) -> bool {
+    pub fn contains(
+        &self,
+        fact: Fact,
+    ) -> bool {
         self.0.contains(&fact)
     }
 
@@ -496,7 +567,16 @@ mod tests {
                 None => assert!(Fact::of_flags(fact.flags()).contains(&fact), "{} is a flag", fact.key()),
             }
             assert!(Fact::is_named(fact.key()));
-            assert_eq!(Fact::from_wire(fact.key(), fact.wire_value().map(|one| one.0), fact.wire_value().and_then(|one| one.1)), Some(fact), "{} on the wire", fact.key());
+            assert_eq!(
+                Fact::from_wire(
+                    fact.key(),
+                    fact.wire_value().map(|one| one.0),
+                    fact.wire_value().and_then(|one| one.1)
+                ),
+                Some(fact),
+                "{} on the wire",
+                fact.key()
+            );
             assert!(!fact.kinds().is_empty(), "{} is of no subject", fact.key());
         }
     }
@@ -504,7 +584,11 @@ mod tests {
     /// A pass asks the fact, not the attribute's spelling.
     #[test]
     fn facts_are_read_from_attributes_and_others_are_ignored() {
-        let attributes = vec![Attribute::Flag("noalias".to_owned()), Attribute::Flag("builtin".to_owned()), Attribute::Flag("noalias".to_owned())];
+        let attributes = vec![
+            Attribute::Flag("noalias".to_owned()),
+            Attribute::Flag("builtin".to_owned()),
+            Attribute::Flag("noalias".to_owned()),
+        ];
         let facts = Facts::of(&attributes);
         assert!(facts.no_alias());
         assert_eq!(facts.iter().count(), 1);
@@ -518,7 +602,10 @@ mod tests {
         let fact = Fact::Memory(Effect::Inaccessible);
         let attribute = fact.attribute().expect("an attribute");
         assert_eq!(Fact::of_attribute(&attribute), Some(fact));
-        assert_eq!(Fact::from_wire(fact.key(), fact.wire_value().map(|one| one.0), fact.wire_value().and_then(|one| one.1)), Some(fact));
+        assert_eq!(
+            Fact::from_wire(fact.key(), fact.wire_value().map(|one| one.0), fact.wire_value().and_then(|one| one.1)),
+            Some(fact)
+        );
     }
 
     /// A range reaches LLVM half-open and at its integer's width, and comes
@@ -544,7 +631,11 @@ mod tests {
     #[test]
     fn no_pass_reads_a_fact_by_the_name_of_its_attribute() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let keys: Vec<&str> = Fact::examples().into_iter().filter(|fact| matches!(fact.attribute(), Some(Attribute::Flag(_)))).map(|fact| fact.key()).collect();
+        let keys: Vec<&str> = Fact::examples()
+            .into_iter()
+            .filter(|fact| matches!(fact.attribute(), Some(Attribute::Flag(_))))
+            .map(|fact| fact.key())
+            .collect();
         let mut found = Vec::new();
         let mut directories = vec![root];
         while let Some(directory) = directories.pop() {
@@ -555,12 +646,19 @@ mod tests {
                     if !matches!(name.as_str(), "target" | "tests" | "fixtures") {
                         directories.push(path);
                     }
-                } else if name.ends_with(".rs") && !name.contains("test") && !matches!(name.as_str(), "facts.rs" | "parse.rs" | "print.rs" | "opcode.rs") {
+                } else if name.ends_with(".rs")
+                    && !name.contains("test")
+                    && !matches!(
+                        name.as_str(),
+                        "facts.rs" | "parse.rs" | "print.rs" | "opcode.rs"
+                    )
+                {
                     let text = std::fs::read_to_string(&path).expect("source");
                     // Test modules sit at the end of a file.
                     let source = text.split("#[cfg(test)]").next().unwrap_or_default();
                     for (at, line) in source.lines().enumerate() {
-                        let reads = line.contains("Attribute::Flag(") || line.contains("has(") || line.contains("states(");
+                        let reads =
+                            line.contains("Attribute::Flag(") || line.contains("has(") || line.contains("states(");
                         if reads && keys.iter().any(|key| line.contains(&format!("\"{key}\""))) {
                             found.push(format!("{}:{}: {}", path.display(), at + 1, line.trim()));
                         }
@@ -574,10 +672,15 @@ mod tests {
     /// Each way to state inlining is its own attribute, reads back, and `Never` outranks.
     #[test]
     fn each_inlining_has_its_attribute() {
-        for (how, name) in [(Inlining::Never, "noinline"), (Inlining::Hint, "inlinehint"), (Inlining::Always, "alwaysinline")] {
+        for (how, name) in
+            [(Inlining::Never, "noinline"), (Inlining::Hint, "inlinehint"), (Inlining::Always, "alwaysinline")]
+        {
             assert_eq!(Fact::Inline(how).attribute(), Some(Attribute::Flag(name.to_owned())));
             assert_eq!(Facts::of(&[Attribute::Flag(name.to_owned())]).inline(), Some(how));
-            assert_eq!(Fact::from_wire("inline", Fact::Inline(how).wire_value().map(|one| one.0), None), Some(Fact::Inline(how)));
+            assert_eq!(
+                Fact::from_wire("inline", Fact::Inline(how).wire_value().map(|one| one.0), None),
+                Some(Fact::Inline(how))
+            );
         }
         assert!(Inlining::Never < Inlining::Hint && Inlining::Hint < Inlining::Always);
     }
@@ -590,11 +693,19 @@ mod tests {
                 "define void @f(i16 %n) {{\nb0:\n  br label %b1\n\nb1:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]\n  %j = add i16 %i, 1\n  %c = icmp ult i16 %j, %n\n  br i1 %c, label %b1, label %b2, !llvm.loop !0\n\nb2:\n  ret void\n}}\n\n!0 = distinct !{{!0, !1}}\n!1 = !{{{hint}}}\n"
             )
         };
-        for (hint, copies) in [("!\"llvm.loop.unroll.disable\"", 0), ("!\"llvm.loop.unroll.full\"", u32::MAX), ("!\"llvm.loop.unroll.count\", i32 6", 6)] {
+        for (hint, copies) in [
+            ("!\"llvm.loop.unroll.disable\"", 0),
+            ("!\"llvm.loop.unroll.full\"", u32::MAX),
+            ("!\"llvm.loop.unroll.count\", i32 6", 6),
+        ] {
             let module = crate::parse::module(&text(hint)).expect("parses");
             let function = module.global(module.named("f").expect("@f")).function().expect("a function");
             let branch = function.terminator(function.layout()[1]).expect("a branch");
-            assert_eq!(Facts::of_terminator(&module.context, &module.metadata, function, branch).unroll(), Some(copies), "{hint}");
+            assert_eq!(
+                Facts::of_terminator(&module.context, &module.metadata, function, branch).unroll(),
+                Some(copies),
+                "{hint}"
+            );
         }
         let module = crate::parse::module(&text("!\"llvm.loop.mustprogress\"")).expect("parses");
         let function = module.global(module.named("f").expect("@f")).function().expect("a function");
@@ -607,7 +718,17 @@ mod tests {
     fn a_loads_invariance_is_read_from_its_metadata() {
         let module = crate::parse::module("@g = global i16 0\n\ndefine i16 @f() {\nb0:\n  %a = load i16, ptr @g, !invariant.load !0\n  %b = load i16, ptr @g\n  %r = add i16 %a, %b\n  ret i16 %r\n}\n\n!0 = !{}\n").expect("parses");
         let function = module.global(module.named("f").expect("@f")).function().expect("a function");
-        let loads: Vec<_> = function.walk().map(|(_, inst)| inst).filter(|&inst| matches!(function.instruction(inst).opcode, crate::opcode::Opcode::Load { .. })).collect();
-        assert_eq!(loads.iter().map(|&inst| Facts::of_instruction(function, inst).invariant()).collect::<Vec<_>>(), [true, false]);
+        let loads: Vec<_> = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .filter(|&inst| matches!(
+                function.instruction(inst).opcode,
+                crate::opcode::Opcode::Load { .. }
+            ))
+            .collect();
+        assert_eq!(
+            loads.iter().map(|&inst| Facts::of_instruction(function, inst).invariant()).collect::<Vec<_>>(),
+            [true, false]
+        );
     }
 }

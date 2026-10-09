@@ -1,7 +1,10 @@
 use crate::callgraph::CallGraph;
 use crate::parse;
 
-fn id(module: &crate::Module, name: &str) -> crate::GlobalId {
+fn id(
+    module: &crate::Module,
+    name: &str,
+) -> crate::GlobalId {
     module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).map(|(id, _, _)| id).expect(name)
 }
 
@@ -38,7 +41,8 @@ b0:
 fn an_indirect_call_reaches_what_callees_lists_and_otherwise_any() {
     let module = parse::module(CALLS).expect("parses");
     let graph = CallGraph::new(&module);
-    let (leaf, listed, unlisted, direct) = (id(&module, "leaf"), id(&module, "listed"), id(&module, "unlisted"), id(&module, "direct"));
+    let (leaf, listed, unlisted, direct) =
+        (id(&module, "leaf"), id(&module, "listed"), id(&module, "unlisted"), id(&module, "direct"));
     assert!(graph.reaches(listed, leaf) && graph.reaches(listed, direct), "its listed callees");
     assert!(!graph.calls_unknown(listed), "a list bounds the call");
     assert!(graph.calls_unknown(unlisted), "no list: any function");

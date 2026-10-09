@@ -19,7 +19,10 @@ pub struct Register {
 }
 
 impl Register {
-    pub fn is(&self, class: &str) -> bool {
+    pub fn is(
+        &self,
+        class: &str,
+    ) -> bool {
         self.classes.iter().any(|one| one == class)
     }
 }
@@ -40,7 +43,8 @@ pub fn parse(text: &str) -> Result<Vec<Register>, String> {
         let [name, bits, root, lane, classes, dwarf, codeview] = columns[..] else {
             return Err(format!("registers.regs:{}: {} columns, not 7", index + 1, columns.len()));
         };
-        let number = |text: &str, what: &str| text.parse().map_err(|_| format!("registers.regs:{}: {what} `{text}`", index + 1));
+        let number =
+            |text: &str, what: &str| text.parse().map_err(|_| format!("registers.regs:{}: {what} `{text}`", index + 1));
         registers.push(Register {
             name: name.to_owned(),
             bits: number(bits, "bits")?,
@@ -60,7 +64,10 @@ pub fn allocatable(registers: &[Register]) -> usize {
 }
 
 /// The roots of class `class`, in file order.
-pub fn of_class<'a>(registers: &'a [Register], class: &str) -> Vec<&'a str> {
+pub fn of_class<'a>(
+    registers: &'a [Register],
+    class: &str,
+) -> Vec<&'a str> {
     registers.iter().filter(|one| one.is(class) && one.root == one.name).map(|one| one.name.as_str()).collect()
 }
 

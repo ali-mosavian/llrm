@@ -20,9 +20,15 @@ fn recompiled(name: &str) -> Vec<Rc<Record>> {
 }
 
 /// A segment's index and image, by name.
-fn segment(records: &[Rc<Record>], name: &str) -> (i64, Vec<u8>) {
+fn segment(
+    records: &[Rc<Record>],
+    name: &str,
+) -> (i64, Vec<u8>) {
     let segments = omf::segments(records);
-    let index = segments.iter().position(|one| one.as_ref().is_some_and(|(named, _)| named == name)).unwrap_or_else(|| panic!("no {name}"));
+    let index = segments
+        .iter()
+        .position(|one| one.as_ref().is_some_and(|(named, _)| named == name))
+        .unwrap_or_else(|| panic!("no {name}"));
     let size = segments[index].as_ref().expect("named").1;
     (index as i64, omf::segment_image(records, index as i64, size))
 }
@@ -36,7 +42,12 @@ fn a_recompiled_module_keeps_its_header() {
         let (before, after) = (records(name), recompiled(name));
         let (_, code_name, _) = omf::code_segment(&before).expect("code");
         let (old, new) = (segment(&before, &code_name).1, segment(&after, &code_name).1);
-        let kept = |image: &[u8]| -> Vec<u8> { (0..0x30).filter(|&at| !relocated.iter().any(|&word| word == at || word + 1 == at)).map(|at| image[at]).collect() };
+        let kept = |image: &[u8]| -> Vec<u8> {
+            (0..0x30)
+                .filter(|&at| !relocated.iter().any(|&word| word == at || word + 1 == at))
+                .map(|at| image[at])
+                .collect()
+        };
         assert_eq!(kept(&new), kept(&old), "{name}");
     }
 }
@@ -53,7 +64,9 @@ fn a_header_word_keeps_its_offset_into_its_segment() {
             let segments = omf::segments(records);
             let mut words: Vec<(i64, String, i64)> = omf::fixups(records)
                 .into_iter()
-                .filter(|one| one.seg == Some(code) && one.offset < 0x30 && one.target == "segment" && one.index != code)
+                .filter(|one| {
+                    one.seg == Some(code) && one.offset < 0x30 && one.target == "segment" && one.index != code
+                })
                 .map(|one| {
                     let at = one.offset as usize;
                     let segment = segments[one.index as usize].as_ref().expect("named").0.clone();
@@ -79,12 +92,19 @@ fn a_data_row_keeps_its_original_key() {
         let (index, old) = segment(&before, "BC_DS");
         let word = |image: &[u8], at: i64| i64::from(u16::from_le_bytes([image[at as usize], image[at as usize + 1]]));
         // The field holds the addend LINK adds the target's offset to.
-        let keys: Vec<(i64, i64)> = omf::fixups(&before).into_iter().filter(|one| one.seg == Some(index) && one.target == "segment" && one.index == code).map(|one| (one.offset, one.disp + word(&old, one.offset))).collect();
+        let keys: Vec<(i64, i64)> = omf::fixups(&before)
+            .into_iter()
+            .filter(|one| one.seg == Some(index) && one.target == "segment" && one.index == code)
+            .map(|one| (one.offset, one.disp + word(&old, one.offset)))
+            .collect();
         assert!(!keys.is_empty(), "{name} keys no DATA row");
         let (written, image) = segment(&after, "BC_DS");
         for (at, key) in keys {
             assert_eq!(word(&image, at), key, "{name} at {at:#x}");
-            assert!(!omf::fixups(&after).iter().any(|one| one.seg == Some(written) && one.offset == at), "{name} relocates the key at {at:#x}");
+            assert!(
+                !omf::fixups(&after).iter().any(|one| one.seg == Some(written) && one.offset == at),
+                "{name} relocates the key at {at:#x}"
+            );
         }
     }
 }
@@ -105,7 +125,8 @@ fn a_refusal_writes_nothing() {
     let out = std::env::temp_dir().join(format!("bcdriver-refusal-{}", std::process::id()));
     std::fs::create_dir_all(&out).expect("made");
     // Refused: INTO is unmodelled.
-    let refused = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/arridx-bounds-p-g2.obj");
+    let refused =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/omf/regressions/arridx-bounds-p-g2.obj");
     assert!(refused.exists());
     let argv: Vec<String> = [fixture("cmpord-p-g2.obj"), refused]
         .iter()
@@ -131,8 +152,16 @@ fn a_far_pointer_to_dgroup_names_dgroup() {
             let segments = omf::segments(records);
             // CodeView's segments are not written again.
             let debug = |index: i64| segments[index as usize].as_ref().is_some_and(|(name, _)| name.starts_with("$$"));
-            let data: Vec<_> = omf::fixups(records).into_iter().filter(|one| one.seg.is_some_and(|seg| seg != code && !debug(seg))).collect();
-            let pointers = data.iter().filter(|one| one.loc == omf::LOC_PTR32 && one.target == "segment" && found.dgroup.members.contains(&one.index)).count();
+            let data: Vec<_> = omf::fixups(records)
+                .into_iter()
+                .filter(|one| one.seg.is_some_and(|seg| seg != code && !debug(seg)))
+                .collect();
+            let pointers = data
+                .iter()
+                .filter(|one| {
+                    one.loc == omf::LOC_PTR32 && one.target == "segment" && found.dgroup.members.contains(&one.index)
+                })
+                .count();
             let selectors = data.iter().filter(|one| one.loc == omf::LOC_BASE && one.target == "group").count();
             (pointers, selectors)
         };
@@ -146,8 +175,11 @@ fn a_far_pointer_to_dgroup_names_dgroup() {
 /// runtime, as MIR text.
 fn fpdeep(name: &str) -> String {
     let found = llrm_omf::module::load(&fixture(name)).expect("reads").expect("an object");
-    let raised = llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
-    let mut program = llrm_mir::program::Program::new(vec![raised.module], Rc::new(llrm_x86_m16::Dos::default())).and_then(|one| one.with_runtime(raised.runtime)).unwrap();
+    let raised =
+        llrm_x86_bc::raise(&found, &llrm_x86_m16::machine::BUILT_IN).unwrap_or_else(|refusal| panic!("{refusal}"));
+    let mut program = llrm_mir::program::Program::new(vec![raised.module], Rc::new(llrm_x86_m16::Dos::default()))
+        .and_then(|one| one.with_runtime(raised.runtime))
+        .unwrap();
     llrm_transforms::pipeline::applied(&mut program, &llrm_transforms::pipeline::Applied::default()).unwrap();
     let text = llrm_mir::print::module(&program.modules[0]);
     text[text.find("define void @main").expect("main")..].to_owned()
@@ -176,9 +208,18 @@ fn fpdeep_keeps_its_print_loop_rolled() {
 fn fpdeep_prints_constants_after_its_loop_and_computes_no_float_there() {
     let main = fpdeep("fpdeep-q-o.obj");
     let (_, tail) = main.rsplit_once("br i1").expect("the loop's back edge");
-    let printed: Vec<&str> = tail.lines().filter_map(|line| line.split("@llrm.qb.B$PEI4(i16 0, i16 ").nth(1)).map(|rest| rest.trim_end_matches(')')).collect();
+    let printed: Vec<&str> = tail
+        .lines()
+        .filter_map(|line| line.split("@llrm.qb.B$PEI4(i16 0, i16 ").nth(1))
+        .map(|rest| rest.trim_end_matches(')'))
+        .collect();
     assert_eq!(printed, ["144", "6"], "{main}");
-    assert!(!["fmul", "fdiv", "fadd", "fsub", "load float", "load double"].iter().any(|op| tail.contains(&format!(" {op} "))), "{main}");
+    assert!(
+        !["fmul", "fdiv", "fadd", "fsub", "load float", "load double"]
+            .iter()
+            .any(|op| tail.contains(&format!(" {op} "))),
+        "{main}"
+    );
 }
 
 /// ON ERROR's landing stub, its inline helper and ERR's word are the
@@ -201,7 +242,8 @@ fn every_procedure_starts_a_statement_table_row() {
     let module = llrm_omf::module::of(&records).expect("a module");
     let word = |at: i64| i64::from(u16::from_le_bytes([module.code[at as usize], module.code[at as usize + 1]]));
     let start = word(0x0A);
-    let rows: Vec<i64> = (0..).map(|row| start + 4 * row).take_while(|&at| module.operands.contains_key(&at)).map(word).collect();
+    let rows: Vec<i64> =
+        (0..).map(|row| start + 4 * row).take_while(|&at| module.operands.contains_key(&at)).map(word).collect();
     assert!(rows.len() >= 2 && rows.iter().min() < rows.iter().max(), "{rows:x?}");
 }
 
@@ -233,7 +275,8 @@ fn instructions(name: &str) -> Vec<iced_x86::Instruction> {
     let records = recompiled(name);
     let (_, code_name, _) = omf::code_segment(&records).expect("code");
     let (_, image) = segment(&records, &code_name);
-    let decoded: Vec<iced_x86::Instruction> = iced_x86::Decoder::with_ip(16, &image[0x30..], 0x30, iced_x86::DecoderOptions::NONE).into_iter().collect();
+    let decoded: Vec<iced_x86::Instruction> =
+        iced_x86::Decoder::with_ip(16, &image[0x30..], 0x30, iced_x86::DecoderOptions::NONE).into_iter().collect();
     assert!(!decoded.iter().any(iced_x86::Instruction::is_invalid), "{name}: the code decodes");
     decoded
 }
@@ -242,7 +285,12 @@ fn instructions(name: &str) -> Vec<iced_x86::Instruction> {
 #[test]
 fn pressx_has_no_jump_to_the_following_instruction() {
     for insn in instructions("pressx-p-g2.obj") {
-        if insn.mnemonic() == iced_x86::Mnemonic::Jmp && matches!(insn.op0_kind(), iced_x86::OpKind::NearBranch16 | iced_x86::OpKind::NearBranch32) {
+        if insn.mnemonic() == iced_x86::Mnemonic::Jmp
+            && matches!(
+                insn.op0_kind(),
+                iced_x86::OpKind::NearBranch16 | iced_x86::OpKind::NearBranch32
+            )
+        {
             assert_ne!(insn.near_branch_target(), insn.next_ip(), "{insn}");
         }
     }
@@ -252,6 +300,9 @@ fn pressx_has_no_jump_to_the_following_instruction() {
 #[test]
 fn a_removed_floating_loop_is_emitted_in_execution_order() {
     for tag in ["p-g2", "q-o", "v-g3"] {
-        assert!(!instructions(&format!("fpcse-{tag}.obj")).iter().any(|insn| insn.mnemonic() == iced_x86::Mnemonic::Jmp), "{tag}");
+        assert!(
+            !instructions(&format!("fpcse-{tag}.obj")).iter().any(|insn| insn.mnemonic() == iced_x86::Mnemonic::Jmp),
+            "{tag}"
+        );
     }
 }

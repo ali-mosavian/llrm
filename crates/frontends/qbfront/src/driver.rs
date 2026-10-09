@@ -34,7 +34,8 @@ pub struct Compiled {
 /// `args.input` as HIR text, or why not: the message as the program prints it.
 pub fn compile(args: &Args) -> Result<Compiled, String> {
     let input = args.input.display().to_string();
-    let source = source::load_with_map(&args.input, &args.include_dirs).map_err(|error| format!("qbfront: {input}: {error}"))?;
+    let source =
+        source::load_with_map(&args.input, &args.include_dirs).map_err(|error| format!("qbfront: {input}: {error}"))?;
     if let Some(path) = &args.dump_source {
         fs::write(path, &source.text).map_err(|error| format!("qbfront: {}: {error}", path.display()))?;
     }
@@ -45,7 +46,8 @@ pub fn compile(args: &Args) -> Result<Compiled, String> {
         format!("{path}:{}:{}: {}", line, error.span.start + 1, error.message)
     })?;
     if args.syntax {
-        let text = format!("ok: {} module statements, {} procedures\n", module.statements.len(), module.procedures.len());
+        let text =
+            format!("ok: {} module statements, {} procedures\n", module.statements.len(), module.procedures.len());
         return Ok(Compiled { text, warnings: Vec::new() });
     }
     let name = Path::new(&input).file_stem().and_then(|one| one.to_str()).unwrap_or("module");
@@ -55,6 +57,7 @@ pub fn compile(args: &Args) -> Result<Compiled, String> {
         lines: (1..=expanded).map(|line| source.location(line).map_or(0, |one| one.main_line)).collect(),
         debug: args.debug,
     });
-    let (text, warnings) = compile_debugged(&module, name, args.dialect, &args.runtime, &args.options, debugged).map_err(|error| format!("{input}: {}", error.message))?;
+    let (text, warnings) = compile_debugged(&module, name, args.dialect, &args.runtime, &args.options, debugged)
+        .map_err(|error| format!("{input}: {}", error.message))?;
     Ok(Compiled { text, warnings: warnings.into_iter().map(|one| format!("{input}: {one}")).collect() })
 }

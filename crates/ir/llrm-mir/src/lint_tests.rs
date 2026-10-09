@@ -20,7 +20,11 @@ fn a_read_before_the_first_store_is_found() {
 #[test]
 fn a_memset_of_the_whole_alloca_stores_it() {
     let head = "target datalayout = \"e-p:16:16\"\ndeclare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n";
-    let body = |size: u32| format!("{head}define i8 @f() {{\nentry:\n  %x = alloca [4 x i8]\n  call void @llvm.memset.p0.i16(ptr %x, i8 0, i16 {size}, i1 false)\n  %v = load i8, ptr %x\n  ret i8 %v\n}}\n");
+    let body = |size: u32| {
+        format!(
+            "{head}define i8 @f() {{\nentry:\n  %x = alloca [4 x i8]\n  call void @llvm.memset.p0.i16(ptr %x, i8 0, i16 {size}, i1 false)\n  %v = load i8, ptr %x\n  ret i8 %v\n}}\n"
+        )
+    };
     assert_eq!(findings(&body(4)), Vec::<String>::new());
     assert_eq!(findings(&body(3)), ["@f: load uses %x before it is stored"]);
 }
@@ -53,10 +57,16 @@ fn an_array_filled_by_element_stores_is_stored_before_it_is_read() {
 #[test]
 fn a_value_read_whole_after_only_part_of_it_was_stored_is_found() {
     let head = "target datalayout = \"e-p:16:16\"\n";
-    let tag_only = format!("{head}define i32 @f() {{\nentry:\n  %x = alloca [4 x i8]\n  store i8 1, ptr %x\n  %v = load i32, ptr %x\n  ret i32 %v\n}}\n");
+    let tag_only = format!(
+        "{head}define i32 @f() {{\nentry:\n  %x = alloca [4 x i8]\n  store i8 1, ptr %x\n  %v = load i32, ptr %x\n  ret i32 %v\n}}\n"
+    );
     assert_eq!(findings(&tag_only), ["@f: load uses %x before it is stored"]);
-    let all_bytes = format!("{head}define i32 @f() {{\nentry:\n  %x = alloca [4 x i8]\n  store i16 1, ptr %x\n  %p = getelementptr i8, ptr %x, i16 2\n  store i16 0, ptr %p\n  %v = load i32, ptr %x\n  ret i32 %v\n}}\n");
+    let all_bytes = format!(
+        "{head}define i32 @f() {{\nentry:\n  %x = alloca [4 x i8]\n  store i16 1, ptr %x\n  %p = getelementptr i8, ptr %x, i16 2\n  store i16 0, ptr %p\n  %v = load i32, ptr %x\n  ret i32 %v\n}}\n"
+    );
     assert_eq!(findings(&all_bytes), Vec::<String>::new());
-    let some_bytes = format!("{head}define i16 @f() {{\nentry:\n  %x = alloca [4 x i8]\n  store i16 1, ptr %x\n  %v = load i16, ptr %x\n  ret i16 %v\n}}\n");
+    let some_bytes = format!(
+        "{head}define i16 @f() {{\nentry:\n  %x = alloca [4 x i8]\n  store i16 1, ptr %x\n  %v = load i16, ptr %x\n  ret i16 %v\n}}\n"
+    );
     assert_eq!(findings(&some_bytes), Vec::<String>::new(), "a read of the part that was stored");
 }

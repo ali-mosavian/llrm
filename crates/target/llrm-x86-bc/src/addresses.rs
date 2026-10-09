@@ -19,7 +19,11 @@ use crate::objects::Objects;
 
 /// What an operand is made of: an instruction's or a constant
 /// expression's opcode and operands.
-pub(crate) fn made(function: &Function, context: &Context, operand: Operand) -> Option<(Opcode, Vec<Operand>)> {
+pub(crate) fn made(
+    function: &Function,
+    context: &Context,
+    operand: Operand,
+) -> Option<(Opcode, Vec<Operand>)> {
     match operand {
         Operand::Value(value) => match function.value(value).def {
             ValueDef::Instruction(inst) => {
@@ -29,17 +33,23 @@ pub(crate) fn made(function: &Function, context: &Context, operand: Operand) -> 
             ValueDef::Argument(_) => None,
         },
         Operand::Constant(id) => match &context.get(id).kind {
-            ConstantKind::Expr(ConstantExpr::Cast { op, value }) => Some((Opcode::Cast(*op), vec![Operand::Constant(*value)])),
-            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => {
-                Some((Opcode::GetElementPtr { source: *source }, operands.iter().map(|&one| Operand::Constant(one)).collect()))
+            ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
+                Some((Opcode::Cast(*op), vec![Operand::Constant(*value)]))
             }
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => Some((
+                Opcode::GetElementPtr { source: *source },
+                operands.iter().map(|&one| Operand::Constant(one)).collect(),
+            )),
             _ => None,
         },
         Operand::Block(_) => None,
     }
 }
 
-pub(crate) fn constant(context: &Context, operand: Operand) -> Option<i64> {
+pub(crate) fn constant(
+    context: &Context,
+    operand: Operand,
+) -> Option<i64> {
     let Operand::Constant(id) = operand else { return None };
     let one = context.get(id);
     match one.kind {
@@ -48,7 +58,11 @@ pub(crate) fn constant(context: &Context, operand: Operand) -> Option<i64> {
     }
 }
 
-fn space(function: &Function, context: &Context, operand: Operand) -> Option<u32> {
+fn space(
+    function: &Function,
+    context: &Context,
+    operand: Operand,
+) -> Option<u32> {
     match context.types.get(function.operand_type(context, operand)?) {
         Type::Pointer(space) => Some(*space),
         _ => None,
@@ -64,7 +78,11 @@ pub(crate) struct Parts {
 }
 
 /// A pointer through its byte GEPs.
-pub(crate) fn pointer_parts(function: &Function, context: &Context, pointer: Operand) -> Parts {
+pub(crate) fn pointer_parts(
+    function: &Function,
+    context: &Context,
+    pointer: Operand,
+) -> Parts {
     let mut parts = Parts { root: pointer, constant: 0, terms: Vec::new() };
     while let Some((Opcode::GetElementPtr { source }, operands)) = made(function, context, parts.root) {
         if context.types.get(source) != &Type::Int(8) || operands.len() != 2 {
@@ -80,15 +98,25 @@ pub(crate) fn pointer_parts(function: &Function, context: &Context, pointer: Ope
 }
 
 /// The pointer a 16-bit offset was formed from, and what was added to it.
-pub(crate) fn offset_parts(function: &Function, context: &Context, offset: Operand, depth: u32) -> Option<Parts> {
+pub(crate) fn offset_parts(
+    function: &Function,
+    context: &Context,
+    offset: Operand,
+    depth: u32,
+) -> Option<Parts> {
     if depth > 16 {
         return None;
     }
     let (opcode, operands) = made(function, context, offset)?;
     match opcode {
-        Opcode::Cast(CastOp::PtrToInt) if space(function, context, operands[0]) == Some(0) => Some(pointer_parts(function, context, operands[0])),
+        Opcode::Cast(CastOp::PtrToInt) if space(function, context, operands[0]) == Some(0) => {
+            Some(pointer_parts(function, context, operands[0]))
+        }
         Opcode::Binary(op @ (BinaryOp::Add | BinaryOp::Sub)) => {
-            let (left, right) = (offset_parts(function, context, operands[0], depth + 1), offset_parts(function, context, operands[1], depth + 1));
+            let (left, right) = (
+                offset_parts(function, context, operands[0], depth + 1),
+                offset_parts(function, context, operands[1], depth + 1),
+            );
             let (mut parts, other) = match (left, right, op) {
                 (Some(parts), None, _) => (parts, operands[1]),
                 (None, Some(parts), BinaryOp::Add) => (parts, operands[0]),
@@ -107,7 +135,13 @@ pub(crate) fn offset_parts(function: &Function, context: &Context, offset: Opera
 }
 
 /// Whether `segment`, an `addrspace(2)` value, is DGROUP's selector.
-fn dgroup(function: &Function, context: &Context, objects: &Objects, segment: Operand, depth: u32) -> bool {
+fn dgroup(
+    function: &Function,
+    context: &Context,
+    objects: &Objects,
+    segment: Operand,
+    depth: u32,
+) -> bool {
     if depth > 8 {
         return false;
     }
@@ -119,7 +153,10 @@ fn dgroup(function: &Function, context: &Context, objects: &Objects, segment: Op
         Some((Opcode::Cast(CastOp::AddrSpaceCast), operands)) => match made(function, context, operands[0]) {
             Some((Opcode::Cast(CastOp::AddrSpaceCast), inner)) if space(function, context, inner[0]) == Some(0) => {
                 let root = pointer_parts(function, context, inner[0]).root;
-                matches!(root, Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Global(global) if objects.placed(global).is_some()))
+                matches!(
+                    root,
+                    Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Global(global) if objects.placed(global).is_some())
+                )
             }
             _ => false,
         },
@@ -127,21 +164,33 @@ fn dgroup(function: &Function, context: &Context, objects: &Objects, segment: Op
     }
 }
 
-fn before(function: &mut Function, at: InstId, opcode: Opcode, ty: llrm_mir::types::TypeId, operands: Vec<Operand>) -> Operand {
+fn before(
+    function: &mut Function,
+    at: InstId,
+    opcode: Opcode,
+    ty: llrm_mir::types::TypeId,
+    operands: Vec<Operand>,
+) -> Operand {
     let made = function.create_instruction(opcode, ty, operands, Flags::default(), None);
     function.insert(made, Position::Before(at)).expect("placed");
     Operand::Value(function.instruction(made).result.expect("a value"))
 }
 
 /// Erases what `root` leaves computing nothing anything reads.
-fn sweep(function: &mut Function, root: Operand) {
+fn sweep(
+    function: &mut Function,
+    root: Operand,
+) {
     let mut pending = vec![root];
     while let Some(Operand::Value(value)) = pending.pop() {
         let ValueDef::Instruction(inst) = function.value(value).def else { continue };
         if function.is_erased(inst) || !function.users(value).is_empty() {
             continue;
         }
-        let pure = matches!(function.instruction(inst).opcode, Opcode::Cast(_) | Opcode::GetElementPtr { .. } | Opcode::Binary(BinaryOp::Add | BinaryOp::Sub));
+        let pure = matches!(
+            function.instruction(inst).opcode,
+            Opcode::Cast(_) | Opcode::GetElementPtr { .. } | Opcode::Binary(BinaryOp::Add | BinaryOp::Sub)
+        );
         if !pure {
             continue;
         }
@@ -154,10 +203,30 @@ fn sweep(function: &mut Function, root: Operand) {
 
 /// Gives every near address in `function` formed from an object's
 /// address that object.
-pub fn attribute(function: &mut Function, context: &mut Context, objects: &Objects, spaces: &llrm_mir::spaces::Spaces) {
-    let (near, far, segment, word, byte) = (context.types.ptr(0), context.types.ptr(spaces.far), context.types.ptr(crate::segment(spaces)), context.types.int(16), context.types.int(8));
+pub fn attribute(
+    function: &mut Function,
+    context: &mut Context,
+    objects: &Objects,
+    spaces: &llrm_mir::spaces::Spaces,
+) {
+    let (near, far, segment, word, byte) = (
+        context.types.ptr(0),
+        context.types.ptr(spaces.far),
+        context.types.ptr(crate::segment(spaces)),
+        context.types.int(16),
+        context.types.int(8),
+    );
     // A far address through DGROUP's selector is a near one.
-    let fars: Vec<InstId> = function.walk().map(|(_, one)| one).filter(|&one| matches!(function.instruction(one).opcode, Opcode::GetElementPtr { source } if source == byte)).collect();
+    let fars: Vec<InstId> = function
+        .walk()
+        .map(|(_, one)| one)
+        .filter(|&one| {
+            matches!(
+                function.instruction(one).opcode,
+                Opcode::GetElementPtr { source } if source == byte
+            )
+        })
+        .collect();
     for inst in fars {
         let operands = function.instruction(inst).operands.clone();
         if operands.len() != 2 || function.instruction(inst).ty != far {
@@ -175,7 +244,13 @@ pub fn attribute(function: &mut Function, context: &mut Context, objects: &Objec
         function.erase(inst).expect("placed");
         sweep(function, operands[0]);
     }
-    let casts: Vec<InstId> = function.walk().map(|(_, one)| one).filter(|&one| function.instruction(one).opcode == Opcode::Cast(CastOp::IntToPtr) && function.instruction(one).ty == near).collect();
+    let casts: Vec<InstId> = function
+        .walk()
+        .map(|(_, one)| one)
+        .filter(|&one| {
+            function.instruction(one).opcode == Opcode::Cast(CastOp::IntToPtr) && function.instruction(one).ty == near
+        })
+        .collect();
     for inst in casts {
         let offset = function.instruction(inst).operands[0];
         let Some(parts) = offset_parts(function, context, offset, 0) else { continue };
@@ -189,7 +264,8 @@ pub fn attribute(function: &mut Function, context: &mut Context, objects: &Objec
             constant += object.start - target.start;
             root = Operand::Constant(target.reference);
         }
-        let mut index: Option<Operand> = (constant != 0).then(|| Operand::Constant(context.int(word, i128::from(constant))));
+        let mut index: Option<Operand> =
+            (constant != 0).then(|| Operand::Constant(context.int(word, i128::from(constant))));
         for &term in &parts.terms {
             index = Some(match index {
                 None => term,

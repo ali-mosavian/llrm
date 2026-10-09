@@ -7,10 +7,10 @@
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-/// Whether the compiler checks its own work between passes and phases (`LLRM_VERIFY`, any value but `0`): the module the frontend
-/// made is checked either way, as LLVM's release pipeline checks its input once; what each pass and each machine phase returned is
-/// checked when this is on. Tests, the gate, torture and the QCport run set it, so a phase that breaks an invariant is caught in
-/// every gate run and not in a user's compile.
+/// Whether the compiler checks its own work between passes and phases (`LLRM_VERIFY`, any value but `0`): the module
+/// the frontend made is checked either way, as LLVM's release pipeline checks its input once; what each pass and each
+/// machine phase returned is checked when this is on. Tests, the gate, torture and the QCport run set it, so a phase
+/// that breaks an invariant is caught in every gate run and not in a user's compile.
 pub fn verifying() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var("LLRM_VERIFY").is_ok_and(|value| value != "0"))
@@ -47,8 +47,8 @@ struct Stat {
     calls: usize,
     own: Duration,
     total: Duration,
-    /// The same in the thread's user-space instructions (or its CPU nanoseconds where the counter is absent): work done,
-    /// the same on a loaded host.
+    /// The same in the thread's user-space instructions (or its CPU nanoseconds where the counter is absent): work
+    /// done, the same on a loaded host.
     own_work: u64,
     total_work: u64,
 }
@@ -64,8 +64,8 @@ struct Open {
     children_work: u64,
 }
 
-/// The thread's user-space instruction counter, opened on first use: `perf_event_open`, this thread, kernel and hypervisor
-/// excluded. -1 where the host will not give one.
+/// The thread's user-space instruction counter, opened on first use: `perf_event_open`, this thread, kernel and
+/// hypervisor excluded. -1 where the host will not give one.
 fn work_fd() -> i32 {
     thread_local! {
         static FD: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
@@ -74,12 +74,14 @@ fn work_fd() -> i32 {
         if let Some(found) = fd.get() {
             return found;
         }
-        // perf_event_attr: type HARDWARE (0), size 128; config INSTRUCTIONS (1); exclude_kernel (bit 5), exclude_hv (bit 6).
+        // perf_event_attr: type HARDWARE (0), size 128; config INSTRUCTIONS (1); exclude_kernel (bit 5), exclude_hv
+        // (bit 6).
         let mut attr = [0u64; 16];
         attr[0] = 128 << 32;
         attr[1] = 1;
         attr[5] = (1 << 5) | (1 << 6);
-        // SAFETY: `attr` is a valid, zero-padded perf_event_attr of the size it states; the others are the syscall's own numbers.
+        // SAFETY: `attr` is a valid, zero-padded perf_event_attr of the size it states; the others are the syscall's
+        // own numbers.
         let opened = unsafe { libc::syscall(libc::SYS_perf_event_open, attr.as_ptr(), 0, -1, -1, 8u64) };
         let found = i32::try_from(opened).unwrap_or(-1);
         fd.set(Some(found));
@@ -101,7 +103,8 @@ fn work_now() -> u64 {
     u64::try_from(cpu_now().as_nanos()).unwrap_or(u64::MAX)
 }
 
-/// The thread's work so far (instructions, or CPU nanoseconds where there is no counter), for a caller that bills its own steps.
+/// The thread's work so far (instructions, or CPU nanoseconds where there is no counter), for a caller that bills its
+/// own steps.
 pub fn work() -> u64 {
     work_now()
 }
@@ -128,8 +131,8 @@ struct Clock {
     tree: Vec<(Vec<&'static str>, Stat)>,
     /// Time in spans with nothing open around them.
     top: Duration,
-    /// The same on the thread's CPU clock, which a loaded machine does not stretch: the thread's CPU time when the clock started,
-    /// and in the outermost steps.
+    /// The same on the thread's CPU clock, which a loaded machine does not stretch: the thread's CPU time when the
+    /// clock started, and in the outermost steps.
     cpu_start: Option<Duration>,
     cpu_top: Duration,
     /// The work counter when the clock started, and in the outermost steps.
@@ -142,7 +145,15 @@ struct Clock {
     functions: Vec<(String, Vec<(&'static str, Duration)>)>,
 }
 
-fn add<K: PartialEq>(rows: &mut Vec<(K, Stat)>, key: K, calls: usize, own: Duration, total: Duration, own_work: u64, total_work: u64) {
+fn add<K: PartialEq>(
+    rows: &mut Vec<(K, Stat)>,
+    key: K,
+    calls: usize,
+    own: Duration,
+    total: Duration,
+    own_work: u64,
+    total_work: u64,
+) {
     let stat = match rows.iter_mut().find(|(one, _)| *one == key) {
         Some((_, stat)) => stat,
         None => {
@@ -203,7 +214,15 @@ impl Drop for Span {
             // A name inside itself counts its outer span's time once.
             let nested = clock.open.iter().any(|one| one.name == name);
             let path: Vec<&'static str> = clock.open.iter().map(|one| one.name).chain([name]).collect();
-            add(&mut clock.flat, name, 1, own, if nested { Duration::ZERO } else { spent }, own_work, if nested { 0 } else { done });
+            add(
+                &mut clock.flat,
+                name,
+                1,
+                own,
+                if nested { Duration::ZERO } else { spent },
+                own_work,
+                if nested { 0 } else { done },
+            );
             add(&mut clock.tree, path, 1, own, spent, own_work, done);
             match clock.open.last_mut() {
                 Some(parent) => {
@@ -235,13 +254,19 @@ impl Drop for Span {
 
 /// LLVM's `-time-passes`: `run` timed under `name` while the `time` channel is on, nested
 /// in the span that is open. `name` is a literal, so a span on the hot path costs a check.
-pub fn timed<T>(name: &'static str, run: impl FnOnce() -> T) -> T {
+pub fn timed<T>(
+    name: &'static str,
+    run: impl FnOnce() -> T,
+) -> T {
     let _span = span(name);
     run()
 }
 
 /// `timed` for a name made at run time, formatted only when the channel is on.
-pub fn timed_by<T>(name: impl FnOnce() -> String, run: impl FnOnce() -> T) -> T {
+pub fn timed_by<T>(
+    name: impl FnOnce() -> String,
+    run: impl FnOnce() -> T,
+) -> T {
     if !enabled("time") {
         return run();
     }
@@ -264,7 +289,10 @@ pub fn timed_by<T>(name: impl FnOnce() -> String, run: impl FnOnce() -> T) -> T 
 }
 
 /// `run` with the steps inside it also charged to `function`, for the `timefunc` channel.
-pub fn in_function<T>(function: &str, run: impl FnOnce() -> T) -> T {
+pub fn in_function<T>(
+    function: &str,
+    run: impl FnOnce() -> T,
+) -> T {
     if !enabled("time") || !enabled("timefunc") {
         return run();
     }
@@ -275,7 +303,10 @@ pub fn in_function<T>(function: &str, run: impl FnOnce() -> T) -> T {
 }
 
 /// One lookup of a cached `what`: a hit when it was there, a miss when it was computed.
-pub fn counted(what: &'static str, hit: bool) {
+pub fn counted(
+    what: &'static str,
+    hit: bool,
+) {
     if !enabled("time") {
         return;
     }
@@ -317,19 +348,38 @@ pub fn report_times() {
         flat.sort_by(|one, other| other.1.own.cmp(&one.1.own));
         eprintln!("[time] by own time:");
         for (name, stat) in flat.iter().take(top) {
-            eprintln!("[time] {:>10.3} ms own {:>10.3} ms total {:>7}x {name}", ms(stat.own), ms(stat.total), stat.calls);
+            eprintln!(
+                "[time] {:>10.3} ms own {:>10.3} ms total {:>7}x {name}",
+                ms(stat.own),
+                ms(stat.total),
+                stat.calls
+            );
         }
-        // Work done, not time passed: the same on a loaded host, for a gate to read. The unit is the thread's user-space
-        // instructions, or its CPU nanoseconds where the host has no counter.
+        // Work done, not time passed: the same on a loaded host, for a gate to read. The unit is the thread's
+        // user-space instructions, or its CPU nanoseconds where the host has no counter.
         let unit = work_unit();
         let work = clock.work_start.map(|start| work_now().saturating_sub(start)).unwrap_or_default();
         let mut by_work: Vec<&(&'static str, Stat)> = flat.iter().collect();
         by_work.sort_by(|one, other| other.1.own_work.cmp(&one.1.own_work));
-        eprintln!("[instr] by own work, in M{} (the thread's user-space instructions; M{} where the host has no counter):", &unit[1..], "cpu-ns");
+        eprintln!(
+            "[instr] by own work, in M{} (the thread's user-space instructions; M{} where the host has no counter):",
+            &unit[1..],
+            "cpu-ns"
+        );
         for (name, stat) in by_work.iter().take(top) {
-            eprintln!("[instr] {:>12.3} {unit} own {:>12.3} {unit} total {:>7}x {name}", stat.own_work as f64 / 1e6, stat.total_work as f64 / 1e6, stat.calls);
+            eprintln!(
+                "[instr] {:>12.3} {unit} own {:>12.3} {unit} total {:>7}x {name}",
+                stat.own_work as f64 / 1e6,
+                stat.total_work as f64 / 1e6,
+                stat.calls
+            );
         }
-        eprintln!("[instr] total {:.3} {unit}, outermost steps {:.3} {unit}, outside every step {:.3} {unit}", work as f64 / 1e6, clock.work_top as f64 / 1e6, work.saturating_sub(clock.work_top) as f64 / 1e6);
+        eprintln!(
+            "[instr] total {:.3} {unit}, outermost steps {:.3} {unit}, outside every step {:.3} {unit}",
+            work as f64 / 1e6,
+            clock.work_top as f64 / 1e6,
+            work.saturating_sub(clock.work_top) as f64 / 1e6
+        );
         let floor = wall / 200;
         eprintln!("[time] nesting (own / total ms, steps under 0.5% left out):");
         let mut tree = clock.tree;
@@ -337,7 +387,13 @@ pub fn report_times() {
         for (path, stat) in &tree {
             if stat.total >= floor {
                 let indent = "  ".repeat(path.len() - 1);
-                eprintln!("[time] {:>10.3} {:>10.3} {:>7}x {indent}{}", ms(stat.own), ms(stat.total), stat.calls, path.last().expect("a name"));
+                eprintln!(
+                    "[time] {:>10.3} {:>10.3} {:>7}x {indent}{}",
+                    ms(stat.own),
+                    ms(stat.total),
+                    stat.calls,
+                    path.last().expect("a name")
+                );
             }
         }
         if !clock.counts.is_empty() {
@@ -352,12 +408,26 @@ pub fn report_times() {
         for (function, mut steps) in functions.into_iter().take(shown) {
             steps.sort_by_key(|(_, own)| std::cmp::Reverse(*own));
             let all: Duration = steps.iter().map(|(_, own)| *own).sum();
-            let worst: Vec<String> = steps.iter().take(4).map(|(name, own)| format!("{name} {:.1}", ms(*own))).collect();
+            let worst: Vec<String> =
+                steps.iter().take(4).map(|(name, own)| format!("{name} {:.1}", ms(*own))).collect();
             eprintln!("[time] fn {function}: {:.1} ms ({})", ms(all), worst.join(", "));
         }
-        eprintln!("[time] wall {:.3} ms, outermost steps {:.3} ms, untimed {:.3} ms ({:.1}%)", ms(wall), ms(clock.top), ms(wall.saturating_sub(clock.top)), 100.0 * wall.saturating_sub(clock.top).as_secs_f64() / wall.as_secs_f64().max(1e-9));
-        // The same by the thread's CPU time: a wait between two steps, a thread another process preempted, is not time in no step.
-        eprintln!("[time] cpu {:.3} ms, outermost steps cpu {:.3} ms, untimed cpu {:.3} ms ({:.1}%)", ms(cpu), ms(clock.cpu_top), ms(cpu.saturating_sub(clock.cpu_top)), 100.0 * cpu.saturating_sub(clock.cpu_top).as_secs_f64() / cpu.as_secs_f64().max(1e-9));
+        eprintln!(
+            "[time] wall {:.3} ms, outermost steps {:.3} ms, untimed {:.3} ms ({:.1}%)",
+            ms(wall),
+            ms(clock.top),
+            ms(wall.saturating_sub(clock.top)),
+            100.0 * wall.saturating_sub(clock.top).as_secs_f64() / wall.as_secs_f64().max(1e-9)
+        );
+        // The same by the thread's CPU time: a wait between two steps, a thread another process preempted, is not time
+        // in no step.
+        eprintln!(
+            "[time] cpu {:.3} ms, outermost steps cpu {:.3} ms, untimed cpu {:.3} ms ({:.1}%)",
+            ms(cpu),
+            ms(clock.cpu_top),
+            ms(cpu.saturating_sub(clock.cpu_top)),
+            100.0 * cpu.saturating_sub(clock.cpu_top).as_secs_f64() / cpu.as_secs_f64().max(1e-9)
+        );
     });
 }
 
@@ -382,8 +452,9 @@ mod tests {
         sum
     }
 
-    /// Wall time and thread CPU time both read a loaded host's weather (the same linear pass read 33 to 89 ms between runs): the
-    /// per-pass column a scaling gate reads is the thread's user-space instructions, which the same work repeats to a hair.
+    /// Wall time and thread CPU time both read a loaded host's weather (the same linear pass read 33 to 89 ms between
+    /// runs): the per-pass column a scaling gate reads is the thread's user-space instructions, which the same work
+    /// repeats to a hair.
     #[test]
     fn test_the_work_counter_counts_the_same_loop_the_same_and_at_least_its_instructions() {
         if work_fd() < 0 {

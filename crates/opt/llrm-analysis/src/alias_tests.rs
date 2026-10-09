@@ -7,8 +7,13 @@ use llrm_mir::module::{InstId, Module, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::hash::IndexMap;
 
-use super::{_direct_summary, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences, nonnull_by_definition, points_to, summaries};
-use crate::memory::{self, Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit, object_of};
+use super::{
+    _direct_summary, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences,
+    nonnull_by_definition, points_to, summaries,
+};
+use crate::memory::{
+    self, Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit, object_of,
+};
 use crate::regions::overlapping;
 use crate::testing::{DOS, function, layout, parsed, value};
 
@@ -24,7 +29,10 @@ impl Parsed {
         Self { module, layout }
     }
 
-    fn unit_of(&self, name: &str) -> Unit<'_> {
+    fn unit_of(
+        &self,
+        name: &str,
+    ) -> Unit<'_> {
         crate::testing::with_registers(Unit::of(&self.module, &self.layout, function(&self.module, name)))
     }
 
@@ -32,7 +40,10 @@ impl Parsed {
         self.unit_of("f")
     }
 
-    fn value(&self, name: &str) -> ValueId {
+    fn value(
+        &self,
+        name: &str,
+    ) -> ValueId {
         value(function(&self.module, "f"), name)
     }
 
@@ -41,27 +52,44 @@ impl Parsed {
     }
 
     /// The object `%name` allocates.
-    fn object(&self, name: &str) -> ObjectRef {
+    fn object(
+        &self,
+        name: &str,
+    ) -> ObjectRef {
         object_of(&self.unit(), Operand::Value(self.value(name))).expect("an object")
     }
 
     /// The instructions of `@f` whose opcode `is` picks.
-    fn all(&self, is: impl Fn(&Opcode) -> bool) -> Vec<InstId> {
+    fn all(
+        &self,
+        is: impl Fn(&Opcode) -> bool,
+    ) -> Vec<InstId> {
         let f = function(&self.module, "f");
         f.walk().map(|(_, inst)| inst).filter(|&inst| is(&f.instruction(inst).opcode)).collect()
     }
 
     /// What `@f`'s calls read and write, callees summarized by `known`.
-    fn effects(&self, known: &IndexMap<String, Summary>) -> Vec<Effect> {
+    fn effects(
+        &self,
+        known: &IndexMap<String, Summary>,
+    ) -> Vec<Effect> {
         calls_annotated(&Procedure::of(self.unit()), known).unwrap().into_values().collect()
     }
 }
 
-fn object(kind: MemoryKind, identity: Identity, extent: Option<i64>) -> MemoryObject {
+fn object(
+    kind: MemoryKind,
+    identity: Identity,
+    extent: Option<i64>,
+) -> MemoryObject {
     MemoryObject { identity: Some(identity), extent, ..MemoryObject::new(kind) }
 }
 
-fn one(object: &MemoryObject, low: i64, high: i64) -> Provenance {
+fn one(
+    object: &MemoryObject,
+    low: i64,
+    high: i64,
+) -> Provenance {
     Provenance::one_with_slice(object.clone(), low, high, 1, 1, BTreeSet::new()).unwrap()
 }
 
@@ -70,16 +98,29 @@ fn parameter(index: i64) -> MemoryObject {
 }
 
 /// An access to bytes `low..high` of `object`.
-fn bytes(object: &(impl Into<ObjectRef> + Clone), low: i64, high: i64) -> MemRef {
+fn bytes(
+    object: &(impl Into<ObjectRef> + Clone),
+    low: i64,
+    high: i64,
+) -> MemRef {
     let slice = Slice::new(object.clone(), low, low + 1, 1, high - low).unwrap();
-    MemRef::reach(u32::try_from(high - low).unwrap(), Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() })
+    MemRef::reach(
+        u32::try_from(high - low).unwrap(),
+        Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() },
+    )
 }
 
-fn overlaps(one: &MemRef, other: &MemRef) -> bool {
+fn overlaps(
+    one: &MemRef,
+    other: &MemRef,
+) -> bool {
     overlapping(one, other, None, None, None).unwrap()
 }
 
-fn writes(effect: &Effect, access: &MemRef) -> bool {
+fn writes(
+    effect: &Effect,
+    access: &MemRef,
+) -> bool {
     effect.stores.iter().any(|one| overlaps(access, one))
 }
 
@@ -180,7 +221,14 @@ b20:
 ",
         );
         let loaded = parsed.facts().values[&parsed.value("loaded")].clone();
-        sender.send(loaded.slices.iter().any(|one| ObjectInterner::of(&parsed.module.context).object(one.object) == parameter(0))).unwrap();
+        sender
+            .send(
+                loaded
+                    .slices
+                    .iter()
+                    .any(|one| ObjectInterner::of(&parsed.module.context).object(one.object) == parameter(0)),
+            )
+            .unwrap();
     });
     assert!(receiver.recv_timeout(std::time::Duration::from_secs(10)).expect("points_to terminates"));
 }
@@ -200,7 +248,10 @@ b0:
     );
     let load = parsed.all(|op| matches!(op, Opcode::Load { .. }))[0];
     let tagged = annotated(&parsed.unit()).unwrap()[&load].provenance.clone().expect("a derived provenance");
-    assert_eq!(tagged.slices.iter().map(|one| one.object).collect::<BTreeSet<_>>(), BTreeSet::from([parsed.object("a")]));
+    assert_eq!(
+        tagged.slices.iter().map(|one| one.object).collect::<BTreeSet<_>>(),
+        BTreeSet::from([parsed.object("a")])
+    );
 }
 
 #[test]
@@ -225,7 +276,14 @@ b0:
     let summary = _direct_summary(&parsed.unit()).unwrap();
     assert_eq!(facts.values[&parsed.value("second")], facts.values[&parsed.value("root")]);
     assert!(!summary.unknown_write);
-    assert_eq!(summary.writes.iter().map(|one| ObjectInterner::of(&parsed.module.context).object(one.object)).collect::<BTreeSet<_>>(), BTreeSet::from([parameter(0)]));
+    assert_eq!(
+        summary
+            .writes
+            .iter()
+            .map(|one| ObjectInterner::of(&parsed.module.context).object(one.object))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([parameter(0)])
+    );
 }
 
 #[test]
@@ -277,7 +335,10 @@ b30:
 ",
     );
     let facts = parsed.facts();
-    let expected = Provenance { slices: UNKNOWN.slices.union(&Provenance::one(parameter(0)).slices).cloned().collect(), restrict: BTreeSet::new() };
+    let expected = Provenance {
+        slices: UNKNOWN.slices.union(&Provenance::one(parameter(0)).slices).cloned().collect(),
+        restrict: BTreeSet::new(),
+    };
     assert_eq!(facts.values[&parsed.value("current")], expected);
     assert_eq!(facts.values[&parsed.value("advanced")], expected);
 }
@@ -285,7 +346,8 @@ b30:
 #[test]
 fn test_parameter_modref_is_instantiated_at_a_call_site() {
     // A callee writing parameter zero clobbers its actual object and no neighbour.
-    let summary = Summary { writes: BTreeSet::from([Slice::new(parameter(0), 2, 4, 1, 1).unwrap()]), ..Summary::default() };
+    let summary =
+        Summary { writes: BTreeSet::from([Slice::new(parameter(0), 2, 4, 1, 1).unwrap()]), ..Summary::default() };
     let actual = object(MemoryKind::Global, Identity::Global(7), Some(16));
     let effect = summary.instantiated(&[one(&actual, 4, 5)]).writes;
     assert_eq!(effect, BTreeSet::from([Slice::new(actual, 6, 8, 1, 1).unwrap()]));
@@ -311,10 +373,15 @@ b0:
 fn test_interprocedural_modref_reaches_the_call_operation() {
     // A known callee replaces the call's catch-all effect with its actual object.
     let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
-    let procedures = IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+    let procedures =
+        IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
     let known = summaries(&procedures, None).unwrap();
     let effect = &parsed.effects(&known)[0];
-    let Some(super::Actual::Provenance(passed)) = procedures["f"].arguments.values().next().map(|actual| actual[0].clone()) else { panic!("@g's slice") };
+    let Some(super::Actual::Provenance(passed)) =
+        procedures["f"].arguments.values().next().map(|actual| actual[0].clone())
+    else {
+        panic!("@g's slice")
+    };
     let g = passed.slices.first().unwrap().object;
     assert!(effect.loads.is_empty());
     assert!(writes(effect, &bytes(&g, 6, 8)));
@@ -360,7 +427,15 @@ b0:
     let (passed, private) = (parsed.object("passed"), parsed.object("private"));
     assert!(writes(effect, &bytes(&passed, 0, 4)) && writes(effect, &bytes(&passed, 3, 4)));
     assert!(!writes(effect, &bytes(&private, 0, 4)));
-    assert!(effect.stores.iter().any(|one| one.provenance.as_ref().unwrap().slices.iter().any(|one| one.object.kind == MemoryKind::Nonlocal)));
+    assert!(
+        effect.stores.iter().any(|one| one
+            .provenance
+            .as_ref()
+            .unwrap()
+            .slices
+            .iter()
+            .any(|one| one.object.kind == MemoryKind::Nonlocal))
+    );
 }
 
 const PUBLISHED: &str = "@g = global ptr null
@@ -389,7 +464,10 @@ fn test_unknown_call_reaches_a_frame_pointer_escaped_before_the_call() {
 
 #[test]
 fn a_pointer_published_after_a_call_is_not_reached_by_it() {
-    let text = PUBLISHED.replace("  store ptr %escaped, ptr @g\n  call void @external()\n", "  call void @external()\n  store ptr %escaped, ptr @g\n");
+    let text = PUBLISHED.replace(
+        "  store ptr %escaped, ptr @g\n  call void @external()\n",
+        "  call void @external()\n  store ptr %escaped, ptr @g\n",
+    );
     let parsed = Parsed::new(&text);
     let effect = &parsed.effects(&IndexMap::default())[0];
     assert!(!writes(effect, &bytes(&parsed.object("escaped"), 0, 4)));
@@ -433,8 +511,13 @@ fn test_offsets_in_different_objects_are_never_compared() {
 fn test_capture_decides_what_nonlocal_reaches() {
     // A call's NONLOCAL reach met every global, so no call left a private
     // static in a register.
-    let private = MemoryObject { captured: false, ..object(MemoryKind::Global, Identity::Str("counter".to_owned()), None) };
-    let unaddressed = MemoryObject { addressed: false, captured: false, ..object(MemoryKind::Global, Identity::Str("total".to_owned()), None) };
+    let private =
+        MemoryObject { captured: false, ..object(MemoryKind::Global, Identity::Str("counter".to_owned()), None) };
+    let unaddressed = MemoryObject {
+        addressed: false,
+        captured: false,
+        ..object(MemoryKind::Global, Identity::Str("total".to_owned()), None)
+    };
     let nonlocal = MemoryObject::new(MemoryKind::Nonlocal);
     let unknown = MemoryObject::new(MemoryKind::Unknown);
     assert!(!memory::objects_may_alias(&nonlocal, &private));
@@ -508,7 +591,9 @@ b0:
 ",
     );
     let (unit, facts) = (parsed.unit(), parsed.facts());
-    assert!(facts.nonnull(parsed.value("a")) && !facts.nonnull(parsed.value("p")) && !facts.nonnull(parsed.value("loaded")));
+    assert!(
+        facts.nonnull(parsed.value("a")) && !facts.nonnull(parsed.value("p")) && !facts.nonnull(parsed.value("loaded"))
+    );
     assert_eq!(nonnull_by_definition(&unit, parsed.value("a")), Some(true));
     assert_eq!(nonnull_by_definition(&unit, parsed.value("p")), Some(false));
     assert_eq!(nonnull_by_definition(&unit, parsed.value("loaded")), None);
@@ -532,7 +617,10 @@ b0:
 fn a_returned_or_integer_address_escapes_and_a_frame_spill_does_not() {
     assert_eq!(escaped("ret ptr %a").len(), 1);
     assert_eq!(escaped("%n = ptrtoint ptr %a to i16\n  %m = inttoptr i16 %n to ptr\n  ret ptr %m").len(), 1);
-    assert_eq!(escaped("%n = ptrtoint ptr %a to i16\n  %m = add i16 %n, 2\n  %k = inttoptr i16 %m to ptr\n  ret ptr %k").len(), 1);
+    assert_eq!(
+        escaped("%n = ptrtoint ptr %a to i16\n  %m = add i16 %n, 2\n  %k = inttoptr i16 %m to ptr\n  ret ptr %k").len(),
+        1
+    );
     assert!(escaped("store ptr %a, ptr %slot\n  ret ptr null").is_empty());
     assert_eq!(escaped("store ptr %a, ptr %slot\n  ret ptr %slot").len(), 2);
 }
@@ -543,7 +631,9 @@ fn a_returned_or_integer_address_escapes_and_a_frame_spill_does_not() {
 #[test]
 fn an_integer_address_nothing_reads_escapes_nothing() {
     assert!(escaped("%n = ptrtoint ptr %a to i16\n  ret ptr null").is_empty());
-    assert!(escaped("%n = ptrtoint ptr %a to i16\n  %m = add i16 %n, 2\n  %k = add i16 %m, 2\n  ret ptr null").is_empty());
+    assert!(
+        escaped("%n = ptrtoint ptr %a to i16\n  %m = add i16 %n, 2\n  %k = add i16 %m, 2\n  ret ptr null").is_empty()
+    );
 }
 
 #[test]
@@ -595,7 +685,10 @@ b50:
 
 /// A byte counter stepping by `step` for 200 trips, counting the trips
 /// where `%i urem modulus != residue`.
-fn wrapping(step: i64, check: Option<(i64, i64)>) -> String {
+fn wrapping(
+    step: i64,
+    check: Option<(i64, i64)>,
+) -> String {
     let (modulus, residue) = check.unwrap_or((1, 0));
     format!(
         "define i16 @f() {{
@@ -636,7 +729,11 @@ fn a_congruence_holds_across_the_counters_wrap() {
         let (modulus, residue) = (i64::try_from(modulus).unwrap(), i64::try_from(residue).unwrap());
         if modulus > 1 {
             let checked = parsed_module(&wrapping(step, Some((modulus, residue))));
-            assert_eq!(llrm_mir::interpret::run(&checked, "f", vec![], 100_000), Ok(llrm_mir::interpret::Val::Int { bits: 0, width: 16 }), "{step}");
+            assert_eq!(
+                llrm_mir::interpret::run(&checked, "f", vec![], 100_000),
+                Ok(llrm_mir::interpret::Val::Int { bits: 0, width: 16 }),
+                "{step}"
+            );
         }
     }
 }
@@ -814,7 +911,8 @@ fn a_tags_ancestors_are_the_same_with_and_without_the_type_tree() {
 #[test]
 fn a_direct_summary_is_made_once_per_body_however_many_rounds() {
     let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
-    let procedures = IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+    let procedures =
+        IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
     let before = super::direct_runs();
     summaries(&procedures, None).unwrap();
     assert_eq!(super::direct_runs() - before, 2);
@@ -826,45 +924,55 @@ fn a_direct_summary_is_made_once_per_body_however_many_rounds() {
 #[test]
 fn a_body_in_no_cycle_of_calls_is_visited_once() {
     let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
-    let procedures = IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+    let procedures =
+        IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
     let before = super::visits();
     summaries(&procedures, None).unwrap();
     assert_eq!(super::visits() - before, 2);
 
-    let recursive = Parsed::new("define void @f(ptr %p) {\nb0:\n  store i8 0, ptr %p\n  call void @f(ptr %p)\n  ret void\n}\n");
+    let recursive =
+        Parsed::new("define void @f(ptr %p) {\nb0:\n  store i8 0, ptr %p\n  call void @f(ptr %p)\n  ret void\n}\n");
     let procedures = IndexMap::from_iter([("f".to_owned(), Procedure::of(recursive.unit()))]);
     let before = super::visits();
     summaries(&procedures, None).unwrap();
     assert!(super::visits() - before >= 2, "a cycle is visited until nothing changes");
 }
 
-/// Every inline splice worked the summaries of the whole module out again (host.c: 72 runs, 20.8 s of 35.8 s). After one body is
-/// edited only it and what reads it are visited and made again, and the result is what a whole run makes.
+/// Every inline splice worked the summaries of the whole module out again (host.c: 72 runs, 20.8 s of 35.8 s). After
+/// one body is edited only it and what reads it are visited and made again, and the result is what a whole run makes.
 #[test]
 fn an_edit_visits_the_edited_body_and_its_callers_only() {
     let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
-    let procedures = IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+    let procedures =
+        IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
     let mut memo = super::SummaryMemo::default();
     let whole = super::summaries_updating(&procedures, None, &mut memo, None).unwrap();
     assert_eq!(whole, summaries(&procedures, None).unwrap());
     // `f` calls `callee`: editing `f` leaves `callee` as it was.
     let (visits, direct) = (super::visits(), super::direct_runs());
-    let again = super::summaries_updating(&procedures, None, &mut memo, Some(&BTreeSet::from(["f".to_owned()]))).unwrap();
+    let again =
+        super::summaries_updating(&procedures, None, &mut memo, Some(&BTreeSet::from(["f".to_owned()]))).unwrap();
     assert_eq!((super::visits() - visits, super::direct_runs() - direct), (1, 1), "only f is made again");
     assert_eq!(again, whole);
     // Editing `callee` is read by `f`.
     let (visits, direct) = (super::visits(), super::direct_runs());
-    let again = super::summaries_updating(&procedures, None, &mut memo, Some(&BTreeSet::from(["callee".to_owned()]))).unwrap();
+    let again =
+        super::summaries_updating(&procedures, None, &mut memo, Some(&BTreeSet::from(["callee".to_owned()]))).unwrap();
     assert_eq!((super::visits() - visits, super::direct_runs() - direct), (2, 1), "callee, and f which reads it");
     assert_eq!(again, whole);
 }
 
-/// The facts a visit found are of the body as it was: an edited body is visited from its own, and the summaries are what a whole run
-/// of the edited module makes (host.c: one function differed before).
+/// The facts a visit found are of the body as it was: an edited body is visited from its own, and the summaries are
+/// what a whole run of the edited module makes (host.c: one function differed before).
 #[test]
 fn an_edited_body_is_summarized_from_its_new_facts() {
     // The pointer passed is an instruction's, found by the body's points-to facts, not a constant.
-    let text = |at: u32| CALLEE_WRITES_ITS_PARAMETER.replace("  call void @callee(ptr getelementptr (i8, ptr @g, i16 4))", &format!("  %x = getelementptr i8, ptr @g, i16 {at}\n  call void @callee(ptr %x)"));
+    let text = |at: u32| {
+        CALLEE_WRITES_ITS_PARAMETER.replace(
+            "  call void @callee(ptr getelementptr (i8, ptr @g, i16 4))",
+            &format!("  %x = getelementptr i8, ptr @g, i16 {at}\n  call void @callee(ptr %x)"),
+        )
+    };
     let before = Parsed::new(&text(4));
     let after = Parsed::new(&text(8));
     fn made(parsed: &Parsed) -> IndexMap<String, Procedure<'_>> {
@@ -885,7 +993,8 @@ fn an_edited_body_is_summarized_from_its_new_facts() {
 #[test]
 fn test_calls_alike_to_something_unknown_are_worked_out_once() {
     let calls: String = (0..12).map(|_| "  call void @ext(ptr %p)\n".to_owned()).collect();
-    let parsed = Parsed::new(&format!("declare void @ext(ptr)\n\ndefine void @f(ptr %p) {{\nb0:\n{calls}  ret void\n}}\n"));
+    let parsed =
+        Parsed::new(&format!("declare void @ext(ptr)\n\ndefine void @f(ptr %p) {{\nb0:\n{calls}  ret void\n}}\n"));
     let procedures = IndexMap::from_iter([("f".to_owned(), Procedure::of(parsed.unit()))]);
     let before = super::other_runs();
     summaries(&procedures, None).unwrap();
@@ -905,14 +1014,26 @@ mod counted {
     pub struct Counting;
 
     unsafe impl GlobalAlloc for Counting {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        unsafe fn alloc(
+            &self,
+            layout: Layout,
+        ) -> *mut u8 {
             MADE.with(|made| made.set(made.get() + 1));
             unsafe { System.alloc(layout) }
         }
-        unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+        unsafe fn dealloc(
+            &self,
+            pointer: *mut u8,
+            layout: Layout,
+        ) {
             unsafe { System.dealloc(pointer, layout) }
         }
-        unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        unsafe fn realloc(
+            &self,
+            pointer: *mut u8,
+            layout: Layout,
+            size: usize,
+        ) -> *mut u8 {
             MADE.with(|made| made.set(made.get() + 1));
             unsafe { System.realloc(pointer, layout, size) }
         }
@@ -927,11 +1048,14 @@ mod counted {
 #[global_allocator]
 static COUNTING: counted::Counting = counted::Counting;
 
-/// A `MemRef` copied its type name and every ancestor's as strings, a vector, and a set: 5 allocations for a reference of a
-/// three-deep type, 8% of all the compile's allocations and ~3% of its instructions on QCport. The names are shared.
+/// A `MemRef` copied its type name and every ancestor's as strings, a vector, and a set: 5 allocations for a reference
+/// of a three-deep type, 8% of all the compile's allocations and ~3% of its instructions on QCport. The names are
+/// shared.
 #[test]
 fn a_typed_reference_is_copied_without_allocating() {
-    let parsed = Parsed::new(&format!("define void @f(ptr %p) {{\n  store i16 1, ptr %p, !tbaa !5\n  ret void\n}}\n{TYPE_TREE}"));
+    let parsed = Parsed::new(&format!(
+        "define void @f(ptr %p) {{\n  store i16 1, ptr %p, !tbaa !5\n  ret void\n}}\n{TYPE_TREE}"
+    ));
     let unit = parsed.unit();
     let store = parsed.all(|op| matches!(op, Opcode::Store { .. }))[0];
     let tree = llrm_mir::tbaa::Tbaa::of(&parsed.module.metadata);
@@ -945,11 +1069,12 @@ fn a_typed_reference_is_copied_without_allocating() {
     drop((copy, copies));
 }
 
-/// Picking the buckets a write reaches made a vector for the objects, one for the classes and one grown a few times for the
-/// answer: 7% of the compile's allocations (QCport). One vector, sized once, is the answer.
+/// Picking the buckets a write reaches made a vector for the objects, one for the classes and one grown a few times for
+/// the answer: 7% of the compile's allocations (QCport). One vector, sized once, is the answer.
 #[test]
 fn picking_the_buckets_of_a_write_allocates_once() {
-    let global = MemoryObject { identity: Some(Identity::Global(1)), extent: Some(16), ..MemoryObject::new(MemoryKind::Global) };
+    let global =
+        MemoryObject { identity: Some(Identity::Global(1)), extent: Some(16), ..MemoryObject::new(MemoryKind::Global) };
     let reference = MemRef { provenance: Some(one(&global, 0, 4)), ..MemRef::reach(4, one(&global, 0, 4)) };
     let parts = crate::regions::OverlapParts::default();
     let before = counted::made();
@@ -958,16 +1083,20 @@ fn picking_the_buckets_of_a_write_allocates_once() {
     drop(reached);
 }
 
-/// A callee was looked up among every global by name at every call of every visit (`_summary`: 12.7 G of host.c's 94 G instructions
-/// in `summaries visit`, a quarter of it that scan). The procedure knows once which of its callees another definition may replace.
+/// A callee was looked up among every global by name at every call of every visit (`_summary`: 12.7 G of host.c's 94 G
+/// instructions in `summaries visit`, a quarter of it that scan). The procedure knows once which of its callees another
+/// definition may replace.
 #[test]
 fn a_procedure_knows_which_callees_a_definition_elsewhere_may_replace() {
-    let text = |linkage: &str| CALLEE_WRITES_ITS_PARAMETER.replace("define void @callee", &format!("define {linkage}void @callee"));
+    let text = |linkage: &str| {
+        CALLEE_WRITES_ITS_PARAMETER.replace("define void @callee", &format!("define {linkage}void @callee"))
+    };
     for (linkage, replaceable) in [("", false), ("weak ", true), ("linkonce_odr ", true), ("internal ", false)] {
         let parsed = Parsed::new(&text(linkage));
         let procedure = Procedure::of(parsed.unit_of("f"));
         assert_eq!(procedure.replaceable.contains("callee"), replaceable, "linkage [{linkage}]");
-        let procedures = IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+        let procedures =
+            IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
         let found = summaries(&procedures, None).unwrap();
         // No summary describes a call that may be replaced: f then writes what an unknown callee may.
         assert_eq!(found["f"].writes.is_empty(), false, "f writes something, replaceable callee or not");

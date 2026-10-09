@@ -8,7 +8,6 @@
 //! control flow, trapping arithmetic, x87 work and relocations are deliberately
 //! outside it.
 
-use crate::support::hash::HashSet;
 use std::sync::Arc;
 
 use iced_x86::Register;
@@ -17,6 +16,7 @@ use crate::backend::liveness;
 use crate::backend::peephole::id;
 use crate::model::ir::{Loc, Operation, Space};
 use crate::model::lir::{self, Insn, LirBody};
+use crate::support::hash::HashSet;
 
 const _PURE: [Operation; 9] = [
     Operation::Move,
@@ -42,13 +42,18 @@ fn _relocated(where_: &Loc) -> bool {
 
 /// Architectural state whose writes are not ordinary dead values.
 fn _stateful_destination(where_: &Loc) -> bool {
-    matches!(where_, Loc::Reg(one)
-        if one.register.full_register32() == Register::ESP || _STATEFUL_REGISTERS.contains(&one.register))
+    matches!(
+        where_,
+        Loc::Reg(one) if one.register.full_register32() == Register::ESP || _STATEFUL_REGISTERS.contains(&one.register)
+    )
 }
 
 /// A frame slot read by name: no fault, nothing else stored through it.
 fn _slot(where_: &Loc) -> bool {
-    matches!(where_, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame) && cell.base.is_none() && cell.index.is_none() && cell.selector.is_none())
+    matches!(
+        where_,
+        Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame) && cell.base.is_none() && cell.index.is_none() && cell.selector.is_none()
+    )
 }
 
 /// Whether removing this occurrence can remove only registers and flags.
@@ -99,11 +104,15 @@ fn _once(body: &LirBody) -> Option<LirBody> {
         blocks.push(if redundant.is_empty() {
             block.clone()
         } else {
-            block.with_insns(block
+            block.with_insns(
+                block
                     .insns
                     .iter()
-                    .map(|one| if redundant.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) })
-                    .collect())
+                    .map(
+                        |one| if redundant.contains(&id(one)) { lir::anchor(Arc::clone(one)) } else { Arc::clone(one) },
+                    )
+                    .collect(),
+            )
         });
     }
     if changed { Some(body.with_blocks(blocks)) } else { None }
@@ -127,13 +136,18 @@ mod tests {
     use std::sync::Arc;
 
     use iced_x86::Register;
-    use crate::support::hash::IndexMap;
 
     use super::eliminated;
     use crate::model::ir::{Imm, Loc, Mem, Operation, Reg, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
 
-    fn what(op: Operation, name: &str, dests: Vec<Loc>, sources: Vec<Loc>) -> Option<Semantics> {
+    fn what(
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Option<Semantics> {
         Some(Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) })
     }
 
@@ -141,21 +155,30 @@ mod tests {
         Loc::Reg(Reg { register, width: 2 })
     }
 
-    fn _mov(at: i64, value: u32, register: Register) -> Arc<Insn> {
+    fn _mov(
+        at: i64,
+        value: u32,
+        register: Register,
+    ) -> Arc<Insn> {
         Arc::new(Insn::new(
             at,
             Some((at, at + 3)),
-            what(Operation::Move, "mov", vec![reg(register)], vec![Loc::Imm(Imm {
-                value: i64::from(value),
-                width: 2,
-                address: None,
-            })]),
+            what(
+                Operation::Move,
+                "mov",
+                vec![reg(register)],
+                vec![Loc::Imm(Imm { value: i64::from(value), width: 2, address: None })],
+            ),
             vec![value],
             vec![],
         ))
     }
 
-    fn block(at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>) -> LirBlock {
+    fn block(
+        at: i64,
+        insns: Vec<Arc<Insn>>,
+        succ: Vec<i64>,
+    ) -> LirBlock {
         LirBlock { succ, ..LirBlock::new(at, insns) }
     }
 
@@ -163,7 +186,11 @@ mod tests {
         LirBody::new("machine-dce", 0, blocks, IndexMap::default(), IndexMap::default())
     }
 
-    fn branch(at: i64, name: &str, uses: Vec<u32>) -> Arc<Insn> {
+    fn branch(
+        at: i64,
+        name: &str,
+        uses: Vec<u32>,
+    ) -> Arc<Insn> {
         Arc::new(Insn::new(
             at,
             Some((at, at + 2)),
@@ -178,7 +205,8 @@ mod tests {
         // An allocated result overwritten on every successor used to survive.
         let dead = _mov(0, 1, Register::AX);
         let overwrite = _mov(5, 2, Register::AX);
-        let result = eliminated(body(vec![block(0, vec![Arc::clone(&dead)], vec![5]), block(5, vec![overwrite], vec![])]));
+        let result =
+            eliminated(body(vec![block(0, vec![Arc::clone(&dead)], vec![5]), block(5, vec![overwrite], vec![])]));
         let first = result.blocks.iter().find(|block| block.at == 0).unwrap();
         assert_eq!(first.insns[0].what.as_ref().unwrap().op, Operation::Nothing);
         assert_eq!(first.insns[0].defines, dead.defines);
@@ -226,10 +254,12 @@ mod tests {
         let add = Arc::new(Insn::new(
             0,
             Some((0, 3)),
-            what(Operation::Binary, "add", vec![reg(Register::AX)], vec![
-                reg(Register::AX),
-                Loc::Imm(Imm { value: 1, width: 2, address: None }),
-            ]),
+            what(
+                Operation::Binary,
+                "add",
+                vec![reg(Register::AX)],
+                vec![reg(Register::AX), Loc::Imm(Imm { value: 1, width: 2, address: None })],
+            ),
             vec![1],
             vec![],
         ));
@@ -248,12 +278,19 @@ mod tests {
         let load = Arc::new(Insn::new(
             0,
             Some((0, 3)),
-            what(Operation::Move, "mov", vec![reg(Register::BX)], vec![Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 8)), 2))]),
+            what(
+                Operation::Move,
+                "mov",
+                vec![reg(Register::BX)],
+                vec![Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(crate::model::ir::Space::Frame, 8)), 2))],
+            ),
             vec![1],
             vec![],
         ));
-        let result =
-            eliminated(body(vec![block(0, vec![Arc::clone(&load)], vec![5]), block(5, vec![_mov(5, 2, Register::BX)], vec![])]));
+        let result = eliminated(body(vec![
+            block(0, vec![Arc::clone(&load)], vec![5]),
+            block(5, vec![_mov(5, 2, Register::BX)], vec![]),
+        ]));
         assert_eq!(result.blocks[0].insns[0].what.as_ref().unwrap().op, Operation::Nothing);
     }
 
@@ -262,15 +299,19 @@ mod tests {
         let load = Arc::new(Insn::new(
             0,
             Some((0, 3)),
-            what(Operation::Move, "mov", vec![reg(Register::AX)], vec![Loc::Mem(Mem {
-                through: Register::BX,
-                ..Mem::new(None, 2)
-            })]),
+            what(
+                Operation::Move,
+                "mov",
+                vec![reg(Register::AX)],
+                vec![Loc::Mem(Mem { through: Register::BX, ..Mem::new(None, 2) })],
+            ),
             vec![1],
             vec![],
         ));
-        let result =
-            eliminated(body(vec![block(0, vec![Arc::clone(&load)], vec![5]), block(5, vec![_mov(5, 2, Register::AX)], vec![])]));
+        let result = eliminated(body(vec![
+            block(0, vec![Arc::clone(&load)], vec![5]),
+            block(5, vec![_mov(5, 2, Register::AX)], vec![]),
+        ]));
         assert_eq!(result.blocks[0].insns[0].what, load.what);
     }
 
@@ -280,10 +321,12 @@ mod tests {
         let cleanup = Arc::new(Insn::new(
             0,
             Some((0, 3)),
-            what(Operation::Binary, "add", vec![reg(Register::SP)], vec![
-                reg(Register::SP),
-                Loc::Imm(Imm { value: 4, width: 2, address: None }),
-            ]),
+            what(
+                Operation::Binary,
+                "add",
+                vec![reg(Register::SP)],
+                vec![reg(Register::SP), Loc::Imm(Imm { value: 4, width: 2, address: None })],
+            ),
             vec![],
             vec![],
         ));

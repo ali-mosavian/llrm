@@ -4,21 +4,17 @@
 //! `_constant_operands`). What is known is consts' answer.
 //!
 //! What changed with the IR:
-//! - An operation whose answer was known became a move of that number, and
-//!   each reader's register operand became the number. Here every use of
-//!   the value is the constant, and Dead takes the definition. So a store's
-//!   value, a call's argument (`_constant_argument`), a fill's byte and count
-//!   (`_constant_fill`) and an address's index (`_constant_based`) need no
-//!   case of their own, and a load from a known cell is a value consts knows.
-//! - Operand order is no machine's: an ordered operand is replaced like any
-//!   other. A commutative operation still takes its constant on the right.
-//! - An edge fold put a copy of each number in its parent; a phi here takes
-//!   the constant, so the parent's terminator no longer matters.
-//! - consts reads the module's globals through the outer proxy, and what
-//!   each call writes from the manager's `Writes`.
-//! - The old Fold left floatfold out of a body with loops, whose x87
-//!   observation points belonged to floatloop; the rich MIR observes no FP
-//!   exception, so it folds every body.
+//! - An operation whose answer was known became a move of that number, and each reader's register operand became the
+//!   number. Here every use of the value is the constant, and Dead takes the definition. So a store's value, a call's
+//!   argument (`_constant_argument`), a fill's byte and count (`_constant_fill`) and an address's index
+//!   (`_constant_based`) need no case of their own, and a load from a known cell is a value consts knows.
+//! - Operand order is no machine's: an ordered operand is replaced like any other. A commutative operation still takes
+//!   its constant on the right.
+//! - An edge fold put a copy of each number in its parent; a phi here takes the constant, so the parent's terminator no
+//!   longer matters.
+//! - consts reads the module's globals through the outer proxy, and what each call writes from the manager's `Writes`.
+//! - The old Fold left floatfold out of a body with loops, whose x87 observation points belonged to floatloop; the rich
+//!   MIR observes no FP exception, so it folds every body.
 //!
 //! Dropped, no rich MIR analogue: `_constant_update` (a read-modify-write of
 //! a cell); `_symbol_copies` and the symbol half of `_literal_of` (a
@@ -40,9 +36,9 @@ use std::collections::BTreeSet;
 use llrm_analysis::cfg;
 use llrm_analysis::consts::{self, Calls, Known, masked};
 use llrm_analysis::floatfacts;
+use llrm_analysis::graph::loops;
 use llrm_analysis::manager;
 use llrm_analysis::memory::Unit;
-use llrm_analysis::graph::loops;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -65,11 +61,19 @@ impl FunctionPass for Fold {
         "fold"
     }
 
-    fn run(&mut self, unit: &mut passes::Unit, analyses: &mut Analyses) -> PreservedAnalyses {
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         let calls = manager::writes(unit.context, unit.layout, unit.function, analyses);
         let folded = _folded(unit.context, unit.layout, unit.function, analyses, &calls);
         let swapped = canonical::compares(unit.context, unit.function);
-        if folded | swapped | canonical::identities(unit.context, unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if folded | swapped | canonical::identities(unit.context, unit.function) {
+            PreservedAnalyses::none()
+        } else {
+            PreservedAnalyses::all()
+        }
     }
 }
 
@@ -83,12 +87,24 @@ struct _EdgeFold {
 /// Each known value of `function` replaced by its number, one join
 /// expression folded on its edges, then floatfold; `outer` is its module
 /// and target, `calls` what each call writes. Whether anything changed.
-pub fn folded(context: &mut Context, layout: &DataLayout, function: &mut Function, outer: &Outer, calls: &Calls) -> bool {
+pub fn folded(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    calls: &Calls,
+) -> bool {
     _folded(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), calls)
 }
 
 /// `folded`, `analyses` holding what is known of `function`.
-fn _folded(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, calls: &Calls) -> bool {
+fn _folded(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &mut Analyses,
+    calls: &Calls,
+) -> bool {
     let numbers = _numbers(context, layout, function, analyses, calls);
     if numbers {
         analyses.invalidate(&PreservedAnalyses::none());
@@ -98,18 +114,28 @@ fn _folded(context: &mut Context, layout: &DataLayout, function: &mut Function, 
 
 /// `folded`'s integers: consts' answers, a counted float loop's exit
 /// cells among them.
-fn _numbers(context: &mut Context, layout: &DataLayout, function: &mut Function, analyses: &mut Analyses, calls: &Calls) -> bool {
+fn _numbers(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &mut Analyses,
+    calls: &Calls,
+) -> bool {
     let (values, edge) = {
         let held = manager::Held::of(context, layout, function, analyses, true);
         let outer = std::rc::Rc::clone(analyses.outer());
         let unit = held.unit(context, layout, function, &outer);
         let edges = floatfacts::exit_cells(&unit, calls);
         // With no edges the answer is the manager's, where it was of these writes.
-        let shared = (edges.is_empty() && *calls == manager::writes(context, layout, function, analyses)).then(|| analyses.get::<manager::ThroughMemory>(context, layout, function));
+        let shared = (edges.is_empty() && *calls == manager::writes(context, layout, function, analyses))
+            .then(|| analyses.get::<manager::ThroughMemory>(context, layout, function));
         let facts = match shared.as_deref() {
             Some(Ok(through)) => {
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
-                    assert!(*through == consts::known(&unit, Some(calls), Some(&edges), None), "ThroughMemory's integers are not those fold derives for itself");
+                    assert!(
+                        *through == consts::known(&unit, Some(calls), Some(&edges), None),
+                        "ThroughMemory's integers are not those fold derives for itself"
+                    );
                 }
                 through.clone()
             }
@@ -125,7 +151,10 @@ fn _numbers(context: &mut Context, layout: &DataLayout, function: &mut Function,
     }
     for &inst in &rewritten {
         let operands = &function.instruction(inst).operands;
-        let commutes = matches!(function.instruction(inst).opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor));
+        let commutes = matches!(
+            function.instruction(inst).opcode,
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor)
+        );
         if commutes && matches!(operands[..], [Operand::Constant(_), Operand::Value(_)]) {
             let swapped = vec![operands[1], operands[0]];
             function.set_operands(inst, swapped);
@@ -137,7 +166,11 @@ fn _numbers(context: &mut Context, layout: &DataLayout, function: &mut Function,
     let instruction = function.instruction(edge.op);
     let (ty, result) = (instruction.ty, instruction.result.expect("an integer result"));
     let name = function.value(result).name.clone();
-    let incoming = edge.numbers.iter().map(|(parent, number)| (Operand::Constant(context.int(ty, _bits(number))), *parent)).collect::<Vec<_>>();
+    let incoming = edge
+        .numbers
+        .iter()
+        .map(|(parent, number)| (Operand::Constant(context.int(ty, _bits(number))), *parent))
+        .collect::<Vec<_>>();
     let phi = function.create_instruction(Opcode::Phi, ty, from_arms(&incoming), Flags::default(), name.as_deref());
     let first = operations(function, edge.block)[0];
     function.insert(phi, Position::Before(first)).expect("a placed block");
@@ -153,7 +186,10 @@ fn _bits(number: &BigInt) -> i128 {
 
 /// Every value something reads whose number consts knows at its full
 /// width, or that a division of two known numbers computes.
-fn _known_values(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Vec<(ValueId, BigInt)> {
+fn _known_values(
+    unit: &Unit,
+    facts: &IndexMap<ValueId, Known>,
+) -> Vec<(ValueId, BigInt)> {
     let function = unit.function;
     let mut out = Vec::new();
     for (_, inst) in function.walk() {
@@ -164,7 +200,10 @@ fn _known_values(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Vec<(ValueId,
         if let Some(fact) = facts.get(&result).filter(|fact| fact.width >= width) {
             out.push((result, masked(&fact.n, width)));
         } else if let Some((quotient, remainder)) = consts::division(unit, inst, facts) {
-            let divides = matches!(function.instruction(inst).opcode, Opcode::Binary(BinaryOp::SDiv | BinaryOp::UDiv));
+            let divides = matches!(
+                function.instruction(inst).opcode,
+                Opcode::Binary(BinaryOp::SDiv | BinaryOp::UDiv)
+            );
             out.push((result, if divides { quotient } else { remainder }));
         }
     }
@@ -173,7 +212,10 @@ fn _known_values(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Vec<(ValueId,
 
 /// The first pure operation a join's phis feed, in the join or the blocks
 /// only it leads to, whose answer is a number on every incoming edge.
-fn _folded_phi_edges(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Option<_EdgeFold> {
+fn _folded_phi_edges(
+    unit: &Unit,
+    facts: &IndexMap<ValueId, Known>,
+) -> Option<_EdgeFold> {
     let function = unit.function;
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
@@ -187,17 +229,22 @@ fn _folded_phi_edges(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Option<_E
         }
         let phis = edges::phis(function, block)
             .into_iter()
-            .filter(|&phi| arms(function, phi).iter().map(|&(_, from)| cfg::id(from)).collect::<BTreeSet<_>>() == *parents)
+            .filter(|&phi| {
+                arms(function, phi).iter().map(|&(_, from)| cfg::id(from)).collect::<BTreeSet<_>>() == *parents
+            })
             .collect::<Vec<_>>();
         let Some(&first) = phis.first() else {
             continue;
         };
         let order = arms(function, first).into_iter().map(|(_, from)| from).collect::<Vec<_>>();
-        let joined = phis.iter().map(|&phi| function.instruction(phi).result.expect("a phi's value")).collect::<BTreeSet<_>>();
+        let joined =
+            phis.iter().map(|&phi| function.instruction(phi).result.expect("a phi's value")).collect::<BTreeSet<_>>();
 
         let mut corridor = vec![at];
         while let [next] = successors[corridor.last().expect("nonempty")][..] {
-            if corridor.contains(&next) || predecessors.get(&next) != Some(&BTreeSet::from([*corridor.last().expect("nonempty")])) {
+            if corridor.contains(&next)
+                || predecessors.get(&next) != Some(&BTreeSet::from([*corridor.last().expect("nonempty")]))
+            {
                 break;
             }
             corridor.push(next);
@@ -221,13 +268,15 @@ fn _folded_phi_edges(unit: &Unit, facts: &IndexMap<ValueId, Known>) -> Option<_E
                 for &parent in &order {
                     for &phi in &phis {
                         let value = function.instruction(phi).result.expect("a phi's value");
-                        let (incoming, _) = arms(function, phi).into_iter().find(|&(_, from)| from == parent).expect("a complete phi");
+                        let (incoming, _) =
+                            arms(function, phi).into_iter().find(|&(_, from)| from == parent).expect("a complete phi");
                         match consts::_operand(unit, incoming, facts, None) {
                             Some(fact) => edge_facts.insert(value, fact),
                             None => edge_facts.shift_remove(&value),
                         };
                     }
-                    let Some(fact) = consts::_result(unit, inst, &edge_facts, None).filter(|fact| fact.width >= width) else {
+                    let Some(fact) = consts::_result(unit, inst, &edge_facts, None).filter(|fact| fact.width >= width)
+                    else {
                         break;
                     };
                     numbers.push((parent, masked(&fact.n, width)));

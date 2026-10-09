@@ -63,21 +63,30 @@ impl Lanes {
         Self(u128::from(mask))
     }
 
-    pub fn insert(&mut self, lane: Lane) -> bool {
+    pub fn insert(
+        &mut self,
+        lane: Lane,
+    ) -> bool {
         let mask = 1 << bit(&lane).unwrap_or_else(|| panic!("{lane:?} is no lane"));
         let fresh = self.0 & mask == 0;
         self.0 |= mask;
         fresh
     }
 
-    pub fn remove(&mut self, lane: &Lane) -> bool {
+    pub fn remove(
+        &mut self,
+        lane: &Lane,
+    ) -> bool {
         let Some(bit) = bit(lane) else { return false };
         let present = self.0 & (1 << bit) != 0;
         self.0 &= !(1 << bit);
         present
     }
 
-    pub fn contains(&self, lane: &Lane) -> bool {
+    pub fn contains(
+        &self,
+        lane: &Lane,
+    ) -> bool {
         bit(lane).is_some_and(|bit| self.0 & (1 << bit) != 0)
     }
 
@@ -89,11 +98,17 @@ impl Lanes {
         self.0 == 0
     }
 
-    pub fn is_subset(&self, other: &Self) -> bool {
+    pub fn is_subset(
+        &self,
+        other: &Self,
+    ) -> bool {
         self.0 & !other.0 == 0
     }
 
-    pub fn is_disjoint(&self, other: &Self) -> bool {
+    pub fn is_disjoint(
+        &self,
+        other: &Self,
+    ) -> bool {
         self.0 & other.0 == 0
     }
 
@@ -102,32 +117,53 @@ impl Lanes {
     }
 
     // The set operations as `BTreeSet` spells them, yielding lanes in order.
-    pub fn union(&self, other: &Self) -> Iter {
+    pub fn union(
+        &self,
+        other: &Self,
+    ) -> Iter {
         Iter(self.0 | other.0)
     }
 
-    pub fn difference(&self, other: &Self) -> Iter {
+    pub fn difference(
+        &self,
+        other: &Self,
+    ) -> Iter {
         Iter(self.0 & !other.0)
     }
 
-    pub fn intersection(&self, other: &Self) -> Iter {
+    pub fn intersection(
+        &self,
+        other: &Self,
+    ) -> Iter {
         Iter(self.0 & other.0)
     }
 
     // The same operations as sets, without an iterator between.
-    pub fn or(&self, other: &Self) -> Self {
+    pub fn or(
+        &self,
+        other: &Self,
+    ) -> Self {
         Self(self.0 | other.0)
     }
 
-    pub fn minus(&self, other: &Self) -> Self {
+    pub fn minus(
+        &self,
+        other: &Self,
+    ) -> Self {
         Self(self.0 & !other.0)
     }
 
-    pub fn and(&self, other: &Self) -> Self {
+    pub fn and(
+        &self,
+        other: &Self,
+    ) -> Self {
         Self(self.0 & other.0)
     }
 
-    pub fn retain(&mut self, mut keep: impl FnMut(&Lane) -> bool) {
+    pub fn retain(
+        &mut self,
+        mut keep: impl FnMut(&Lane) -> bool,
+    ) {
         for lane in self.iter() {
             if !keep(lane) {
                 self.remove(lane);
@@ -204,7 +240,10 @@ impl<'a> FromIterator<&'a Lane> for Lanes {
 }
 
 impl Extend<Lane> for Lanes {
-    fn extend<I: IntoIterator<Item = Lane>>(&mut self, lanes: I) {
+    fn extend<I: IntoIterator<Item = Lane>>(
+        &mut self,
+        lanes: I,
+    ) {
         for lane in lanes {
             self.insert(lane);
         }
@@ -212,7 +251,10 @@ impl Extend<Lane> for Lanes {
 }
 
 impl<'a> Extend<&'a Lane> for Lanes {
-    fn extend<I: IntoIterator<Item = &'a Lane>>(&mut self, lanes: I) {
+    fn extend<I: IntoIterator<Item = &'a Lane>>(
+        &mut self,
+        lanes: I,
+    ) {
         self.extend(lanes.into_iter().copied());
     }
 }
@@ -224,20 +266,29 @@ impl<const N: usize> From<[Lane; N]> for Lanes {
 }
 
 impl PartialOrd for Lanes {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 /// `BTreeSet`'s order: lexicographic over the sorted lanes.
 impl Ord for Lanes {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> std::cmp::Ordering {
         self.iter().cmp(other.iter())
     }
 }
 
 impl fmt::Debug for Lanes {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         f.debug_set().entries(self.iter()).finish()
     }
 }
@@ -265,7 +316,8 @@ mod tests {
             assert_eq!(set.iter().rev().copied().collect::<Vec<_>>(), tree.iter().rev().copied().collect::<Vec<_>>());
             assert_eq!(format!("{set:?}"), format!("{tree:?}"));
             for other in &picks {
-                let (theirs, their_tree): (Lanes, BTreeSet<Lane>) = (other.iter().collect(), other.iter().copied().collect());
+                let (theirs, their_tree): (Lanes, BTreeSet<Lane>) =
+                    (other.iter().collect(), other.iter().copied().collect());
                 assert_eq!(set.cmp(&theirs), tree.cmp(&their_tree));
                 assert_eq!(set.is_subset(&theirs), tree.is_subset(&their_tree));
                 assert_eq!(

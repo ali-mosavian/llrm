@@ -4,18 +4,18 @@
 //! and the tests made of nothing else; test_dos_bootstrap_enters_the_runtime_before_language_main
 //! (reads runtime sources, no compiler).
 
-use llrm_core::abi::nib as rt;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use llrm_core::abi::nib as rt;
+use llrm_core::backend::masm;
+use llrm_core::driver::Options;
+use llrm_core::hir::{self, model};
+use llrm_core::support::pyjson::{self, Json};
 use regex::Regex;
 
 use super::compile as nib_compile;
 use super::driver;
-use llrm_core::backend::masm;
-use llrm_core::hir::{self, model};
-use llrm_core::driver::Options;
-use llrm_core::support::pyjson::{self, Json};
 
 pub(crate) fn root() -> PathBuf {
     PathBuf::from(env!("LLRM_ROOT"))
@@ -43,12 +43,20 @@ fn refused(source: &Path) -> String {
 fn every_load_of_an_enums_tag_has_its_range_from_one_statement() {
     use llrm_core::hir::facts::Subject;
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "shape.nib", "enum Shape:\n    circle(radius: i16)\n    square(side: i16)\n    tri(base: i16, height: i16)\n\nfn area(shape: &Shape) -> i16:\n    match shape:\n        .circle(r):\n            return r * r * 3\n        .square(s):\n            return s * s\n        .tri(b, h):\n            return b * h // 2\n\nfn sides(shape: &Shape) -> i16:\n    match shape:\n        .circle(_):\n            return 0\n        .square(_):\n            return 4\n        .tri(_, _):\n            return 3\n\nfn main() -> i16:\n    let a = Shape.square(side=4)\n    return area(a) + sides(a)\n");
+    let source = written(
+        &directory,
+        "shape.nib",
+        "enum Shape:\n    circle(radius: i16)\n    square(side: i16)\n    tri(base: i16, height: i16)\n\nfn area(shape: &Shape) -> i16:\n    match shape:\n        .circle(r):\n            return r * r * 3\n        .square(s):\n            return s * s\n        .tri(b, h):\n            return b * h // 2\n\nfn sides(shape: &Shape) -> i16:\n    match shape:\n        .circle(_):\n            return 0\n        .square(_):\n            return 4\n        .tri(_, _):\n            return 3\n\nfn main() -> i16:\n    let a = Shape.square(side=4)\n    return area(a) + sides(a)\n",
+    );
     let program = parsed(&source);
     let module = &program.modules[0];
     let fields: Vec<_> = module.facts.iter().filter(|one| matches!(one.subject, Subject::Field { .. })).collect();
     assert_eq!(fields.len(), 1, "one statement for the one enum");
-    assert!(module.facts.iter().all(|one| !(matches!(one.subject, Subject::Instruction { .. }) && matches!(one.fact, llrm_mir::facts::Fact::Range(bounds) if bounds.hi == 2))), "no load is stated of its own");
+    assert!(
+        module.facts.iter().all(|one| !(matches!(one.subject, Subject::Instruction { .. })
+            && matches!(one.fact, llrm_mir::facts::Fact::Range(bounds) if bounds.hi == 2))),
+        "no load is stated of its own"
+    );
     let emitted = hir::mir::emit(&program, &llrm_x86_m16::layout());
     let text: String = emitted.iter().map(|one| llrm_mir::print::module(&one.module)).collect();
     let tag_loads: Vec<&str> = text.lines().filter(|one| one.contains("load i8")).collect();
@@ -58,13 +66,23 @@ fn every_load_of_an_enums_tag_has_its_range_from_one_statement() {
 
 /// A view lies within one segment, so a dimension of 2-byte elements is at most 32767: stated of its
 /// load, or `lo <u len` leaves a negative `lo` possible and no pass can hoist an index check out
-/// of a loop (quicksort's `sort` tested `j <u len` on every trip). A byte view says nothing: 65535 is its type's whole range.
+/// of a loop (quicksort's `sort` tested `j <u len` on every trip). A byte view says nothing: 65535 is its type's whole
+/// range.
 #[test]
 fn a_views_dimension_load_states_what_its_segment_holds() {
     let directory = tempfile::tempdir().expect("a directory");
     let program = |element: &str| {
-        let source = written(&directory, &format!("view_{element}.nib"), &format!("fn at(a: &[{element}], i: i16) -> {element}:\n    return a[i]\n\nfn main() -> i16:\n    let a: {element}[4] = [1] * 4\n    return i16(at(a, 2))\n"));
-        let text: String = hir::mir::emit(&parsed(&source), &llrm_x86_m16::layout()).iter().map(|one| llrm_mir::print::module(&one.module)).collect();
+        let source = written(
+            &directory,
+            &format!("view_{element}.nib"),
+            &format!(
+                "fn at(a: &[{element}], i: i16) -> {element}:\n    return a[i]\n\nfn main() -> i16:\n    let a: {element}[4] = [1] * 4\n    return i16(at(a, 2))\n"
+            ),
+        );
+        let text: String = hir::mir::emit(&parsed(&source), &llrm_x86_m16::layout())
+            .iter()
+            .map(|one| llrm_mir::print::module(&one.module))
+            .collect();
         text.lines().filter(|one| one.contains("load i16") && one.contains("!range")).count()
     };
     assert_eq!(program("i16"), 1, "the length of a view of i16 is stated at most 32767");
@@ -78,7 +96,11 @@ fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
     use llrm_core::hir::facts::Subject;
     use llrm_mir::facts::{Bounds, Fact};
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "pair.nib", "struct P:\n    mut a: i16\n    mut b: i16\n\nfn bump(p: &mut P) -> void:\n    p.b = p.b + 1\n\nfn main() -> i16:\n    let mut q = P(a=1, b=2)\n    q.b = q.b + 5\n    bump(q)\n    return q.b + q.a\n");
+    let source = written(
+        &directory,
+        "pair.nib",
+        "struct P:\n    mut a: i16\n    mut b: i16\n\nfn bump(p: &mut P) -> void:\n    p.b = p.b + 1\n\nfn main() -> i16:\n    let mut q = P(a=1, b=2)\n    q.b = q.b + 5\n    bump(q)\n    return q.b + q.a\n",
+    );
     let mut program = parsed(&source);
     let owner = program.modules[0].types.iter().find(|one| one.name == "P").expect("the struct P").id;
     // The accesses of member b, as the frontend wrote them: loads and stores, by reference and by place.
@@ -90,7 +112,11 @@ fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
     let (mut loads, mut stores, mut reference, mut local) = (0, 0, 0, 0);
     for function in &program.modules[0].functions {
         for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
-            let Some(member) = instruction.operands.first().and_then(member_of).filter(|one| one.owner == owner && one.offset == 2) else { continue };
+            let Some(member) =
+                instruction.operands.first().and_then(member_of).filter(|one| one.owner == owner && one.offset == 2)
+            else {
+                continue;
+            };
             let _ = member;
             match instruction.op {
                 model::Op::Store => stores += 1,
@@ -102,10 +128,34 @@ fn a_fact_of_a_member_reaches_every_load_and_store_of_it() {
             }
         }
     }
-    assert!(loads >= 3 && stores >= 2 && reference >= 2 && local >= 3, "loads {loads} stores {stores} reference {reference} local {local}");
-    program.modules[0].facts.push(llrm_core::hir::facts::Stated { subject: Subject::Field { owner, offset: 2 }, fact: Fact::Range(Bounds { lo: 0, hi: 100 }), source: None });
-    program.modules[0].facts.push(llrm_core::hir::facts::Stated { subject: Subject::Field { owner, offset: 2 }, fact: Fact::Align(2), source: None });
-    let text: String = hir::mir::emit(&program, &llrm_x86_m16::layout()).iter().map(|one| llrm_mir::print::module(&one.module)).collect();
+    assert!(
+        loads >= 3 && stores >= 2 && reference >= 2 && local >= 3,
+        "loads {loads} stores {stores} reference {reference} local {local}"
+    );
+    program
+        .modules[0]
+        .facts
+        .push(
+            llrm_core::hir::facts::Stated {
+                subject: Subject::Field { owner, offset: 2 },
+                fact: Fact::Range(Bounds { lo: 0, hi: 100 }),
+                source: None,
+            },
+        );
+    program
+        .modules[0]
+        .facts
+        .push(
+            llrm_core::hir::facts::Stated {
+                subject: Subject::Field { owner, offset: 2 },
+                fact: Fact::Align(2),
+                source: None,
+            },
+        );
+    let text: String = hir::mir::emit(&program, &llrm_x86_m16::layout())
+        .iter()
+        .map(|one| llrm_mir::print::module(&one.module))
+        .collect();
     let ranged = text.lines().filter(|one| one.contains("load i16") && one.contains("!range")).count();
     let aligned_loads = text.lines().filter(|one| one.contains("load i16") && one.contains("align 2")).count();
     let aligned_stores = text.lines().filter(|one| one.contains("store i16") && one.contains("align 2")).count();
@@ -129,7 +179,10 @@ fn the_mir_of_sum_three_lints_clean() {
 /// undefined bytes (#290); `lint::poison` finds a load that reads them.
 fn lint_of(name: &str) -> Vec<String> {
     let program = parsed(&PathBuf::from(env!("LLRM_ROOT")).join(name));
-    hir::mir::emit(&program, &llrm_x86_m16::layout()).iter().flat_map(|emitted| llrm_mir::lint::poison(&emitted.module)).collect()
+    hir::mir::emit(&program, &llrm_x86_m16::layout())
+        .iter()
+        .flat_map(|emitted| llrm_mir::lint::poison(&emitted.module))
+        .collect()
 }
 
 #[test]
@@ -138,26 +191,46 @@ fn the_enum_values_of_digits_write_all_their_bytes() {
 }
 
 /// `tmp_path / name` holding `text`.
-fn written(directory: &tempfile::TempDir, name: &str, text: &str) -> PathBuf {
+fn written(
+    directory: &tempfile::TempDir,
+    name: &str,
+    text: &str,
+) -> PathBuf {
     let path = directory.path().join(name);
     std::fs::write(&path, text).expect("writes the source");
     path
 }
 
 /// `masm.text(nib_compile.assembled(program, entry=entry, options=options))`.
-pub(crate) fn listing(program: &model::Program, entry: &str, options: &Options) -> String {
+pub(crate) fn listing(
+    program: &model::Program,
+    entry: &str,
+    options: &Options,
+) -> String {
     listing_on(program, entry, options, "386")
 }
 
 /// `listing` with `cpu=cpu`.
-fn listing_on(program: &model::Program, entry: &str, options: &Options, cpu: &'static str) -> String {
-    let options = Options { machine: llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..options.machine.clone() }, ..options.clone() };
+fn listing_on(
+    program: &model::Program,
+    entry: &str,
+    options: &Options,
+    cpu: &'static str,
+) -> String {
+    let options = Options {
+        machine: llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..options.machine.clone() },
+        ..options.clone()
+    };
     let module = nib_compile::assembled(program, entry, &options, &crate::real_mode().os).expect("assembles");
     masm::text(&module).expect("prints")
 }
 
 /// `text.split(start, 1)[1].split(end, 1)[0]`.
-fn between<'t>(text: &'t str, start: &str, end: &str) -> &'t str {
+fn between<'t>(
+    text: &'t str,
+    start: &str,
+    end: &str,
+) -> &'t str {
     let after = text.split_once(start).unwrap_or_else(|| panic!("{start:?} not in listing")).1;
     after.split_once(end).map_or(after, |(inside, _)| inside)
 }
@@ -166,7 +239,10 @@ fn between<'t>(text: &'t str, start: &str, end: &str) -> &'t str {
 pub(crate) fn level(name: &str) -> Options {
     let mut flags = llrm_core::driver::flags::Flags::default();
     flags.take(&[format!("-{name}")], &mut 0).expect("a level");
-    { let bound = llrm_driver::target(&flags, Some(&["x86-m16"])).unwrap(); bound.options(&flags, nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) }
+    {
+        let bound = llrm_driver::target(&flags, Some(&["x86-m16"])).unwrap();
+        bound.options(&flags, nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+    }
 }
 
 /// -Os with no inlining: the function under test stays a function, as it does where more than
@@ -186,7 +262,10 @@ fn unrolled_or_peeled_none() -> Options {
 }
 
 /// `program`'s module MIR after the pipeline, as text.
-fn optimized_mir(program: &model::Program, options: &Options) -> String {
+fn optimized_mir(
+    program: &model::Program,
+    options: &Options,
+) -> String {
     let (mut mir, _) = llrm_core::driver::emitted(program, options).expect("emits");
     llrm_core::driver::optimized(&mut mir, options).expect("optimizes");
     llrm_mir::print::module(&mir.modules[0])
@@ -213,15 +292,29 @@ pub(crate) fn O2_calls_kept() -> Options {
 }
 
 /// `program` compiled to an object.
-fn object_of(program: &model::Program, entry: &str, source: &Path, options: &Options, layout: llrm_core::backend::objbuild::CodeLayout) -> Result<Vec<u8>, String> {
-    nib_compile::object(&nib_compile::assembled(program, entry, options, &crate::real_mode().os)?, source, layout, llrm_target::object::Format::Omf)
+fn object_of(
+    program: &model::Program,
+    entry: &str,
+    source: &Path,
+    options: &Options,
+    layout: llrm_core::backend::objbuild::CodeLayout,
+) -> Result<Vec<u8>, String> {
+    nib_compile::object(
+        &nib_compile::assembled(program, entry, options, &crate::real_mode().os)?,
+        source,
+        layout,
+        llrm_target::object::Format::Omf,
+    )
 }
 
 fn types(program: &model::Program) -> std::collections::BTreeMap<&str, &model::Type> {
     program.modules[0].types.iter().map(|one| (one.name.as_str(), one)).collect()
 }
 
-fn function<'p>(program: &'p model::Program, name: &str) -> &'p model::Function {
+fn function<'p>(
+    program: &'p model::Program,
+    name: &str,
+) -> &'p model::Function {
     program.modules[0].functions.iter().find(|one| one.name == name).expect("the function exists")
 }
 
@@ -231,8 +324,14 @@ fn emitted_text(program: &model::Program) -> String {
 }
 
 /// `@name`'s definition in `text`.
-fn defined<'t>(text: &'t str, name: &str) -> &'t str {
-    let start = text.find(&format!("@{name}(")).and_then(|at| text[..at].rfind("define ")).unwrap_or_else(|| panic!("no @{name}\n{text}"));
+fn defined<'t>(
+    text: &'t str,
+    name: &str,
+) -> &'t str {
+    let start = text
+        .find(&format!("@{name}("))
+        .and_then(|at| text[..at].rfind("define "))
+        .unwrap_or_else(|| panic!("no @{name}\n{text}"));
     &text[start..start + text[start..].find("\n}\n").expect("its end")]
 }
 
@@ -298,13 +397,39 @@ fn test_all_primitive_types_cross_hir_with_their_exact_representation() {
     assert_eq!(
         names,
         // The runtime's routines take a `&string` as the far pointer to its descriptor.
-        BTreeSet::from(["void", "bool", "char", "i8", "u8", "i16", "u16", "i32", "u32", "f32", "f64", "string", "addr", "$slice[char]", "&$slice[char]"])
+        BTreeSet::from([
+            "void",
+            "bool",
+            "char",
+            "i8",
+            "u8",
+            "i16",
+            "u16",
+            "i32",
+            "u32",
+            "f32",
+            "f64",
+            "string",
+            "addr",
+            "$slice[char]",
+            "&$slice[char]"
+        ])
     );
-    let integral: Vec<(i64, Option<bool>)> =
-        ["char", "i8", "u8", "i16", "u16", "i32", "u32"].iter().map(|name| (types[name].width, types[name].signed)).collect();
+    let integral: Vec<(i64, Option<bool>)> = ["char", "i8", "u8", "i16", "u16", "i32", "u32"]
+        .iter()
+        .map(|name| (types[name].width, types[name].signed))
+        .collect();
     assert_eq!(
         integral,
-        [(1, Some(false)), (1, Some(true)), (1, Some(false)), (2, Some(true)), (2, Some(false)), (4, Some(true)), (4, Some(false))]
+        [
+            (1, Some(false)),
+            (1, Some(true)),
+            (1, Some(false)),
+            (2, Some(true)),
+            (2, Some(false)),
+            (4, Some(true)),
+            (4, Some(false))
+        ]
     );
     assert_eq!((types["bool"].width, types["void"].width), (1, 0));
     // The x87 evaluates in extended precision and rounds on store, as DOS C does.
@@ -380,7 +505,10 @@ fn test_fixed_i32_arithmetic_never_enters_generic_int64_legalization() {
     // nbody's Q23.9 inner loop expanded one division to 311 inline bytes.
     let assembly = listing(&parsed(&fixture("nbody.nib")), "main", &O2());
     let calls: BTreeSet<&str> = assembly.lines().filter_map(|line| line.trim().strip_prefix("call far ptr ")).collect();
-    assert!(calls.iter().any(|callee| callee.starts_with("N$")), "premise: nbody prints through the runtime\n{assembly}");
+    assert!(
+        calls.iter().any(|callee| callee.starts_with("N$")),
+        "premise: nbody prints through the runtime\n{assembly}"
+    );
     assert!(calls.iter().all(|callee| callee.starts_with("N$") || *callee == "_nbody"), "{calls:?}");
 }
 
@@ -418,10 +546,20 @@ fn test_nbody_arrays_strings_and_print_cross_hir_and_verify_in_mir() {
     assert!(!callables[rt::PRINT_NEWLINE].defined);
     assert!(module.functions[0].calls.iter().all(|call| call.distance == model::CallDistance::Far));
     let fixed_id = callables[rt::PRINT_Q4].id;
-    assert!(module.functions[0].calls.iter().filter(|call| call.callee == Some(fixed_id)).all(|call| call.order == [1, 0]));
+    assert!(
+        module.functions[0].calls.iter().filter(|call| call.callee == Some(fixed_id)).all(|call| call.order == [1, 0])
+    );
 
     let nbody = nbody_emitted();
-    for one in ["getelementptr", "br i1 ", "addrspace(1) void @N$", "@llvm.sdiv.fix.i32(", "@llvm.smul.fix.i32(", " = load ", "store "] {
+    for one in [
+        "getelementptr",
+        "br i1 ",
+        "addrspace(1) void @N$",
+        "@llvm.sdiv.fix.i32(",
+        "@llvm.smul.fix.i32(",
+        " = load ",
+        "store ",
+    ] {
         assert!(nbody.contains(one), "{one}\n{nbody}");
     }
 
@@ -537,7 +675,9 @@ fn test_counted_struct_loop_uses_its_record_width_as_the_byte_stride() {
     let update = between(&assembly, "_update proc near", "_update endp");
 
     // -5 * sizeof(sample), with sizeof(sample) == 10.
-    let offset = Regex::new(r"    mov ([sd]i), -50\n").unwrap().captures(update).unwrap_or_else(|| panic!("{update}"))[1].to_owned();
+    let offset = Regex::new(r"    mov ([sd]i), -50\n").unwrap().captures(update).unwrap_or_else(|| panic!("{update}"))
+        [1]
+    .to_owned();
     let body = closed_on_jne(update).unwrap_or_else(|| panic!("no loop closes on jne:\n{update}"));
     assert!(body.contains(&format!("add {offset}, 10\n")), "{body}");
     assert!(body.contains(&format!("dword ptr [bp+{offset}+2]")), "{body}");
@@ -583,10 +723,16 @@ fn main() -> i16:
 ",
     );
     let bytes = |options: &Options| -> usize {
-        object_of(&parsed(&source), "main", &source, options, llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").len()
+        object_of(&parsed(&source), "main", &source, options, llrm_core::backend::objbuild::CodeLayout::OneSegment)
+            .expect("writes")
+            .len()
     };
     let uncopied = unrolled_or_peeled_none();
-    assert_ne!(listing(&parsed(&source), "main", &level("O3")), listing(&parsed(&source), "main", &uncopied), "premise: -O3 copies the loop");
+    assert_ne!(
+        listing(&parsed(&source), "main", &level("O3")),
+        listing(&parsed(&source), "main", &uncopied),
+        "premise: -O3 copies the loop"
+    );
     assert!(bytes(&level("Os")) <= bytes(&uncopied));
 }
 
@@ -632,9 +778,8 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     let payload_address = addresses.iter().find(|one| one.operands == [model::Operand::place_ref(values.id)]).unwrap();
     let view = caller.places.iter().find(|place| place.name == "$slice_values").unwrap();
     let view_address = addresses.iter().find(|one| one.operands == [model::Operand::place_ref(view.id)]).unwrap();
-    let call = instructions(caller)
-        .find(|one| one.op == model::Op::Call && one.callee.as_deref() == Some("bump"))
-        .unwrap();
+    let call =
+        instructions(caller).find(|one| one.op == model::Op::Call && one.callee.as_deref() == Some("bump")).unwrap();
     assert_eq!(call.operands, [model::Operand::value_ref(view_address.results[0])]);
     let pointer = caller.values.iter().find(|value| value.id == payload_address.results[0]).unwrap();
     let pointer_type = program.modules[0].types.iter().find(|one| one.id == pointer.r#type).unwrap();
@@ -645,16 +790,22 @@ fn test_borrowed_array_call_builds_one_view_from_the_direct_payload() {
     let bump = between(&assembly, "_bump proc near", "_bump endp");
     let main = between(&assembly, "_main proc far", "_main endp");
     // The payload's address is the view's pointer, the view's address the argument.
-    let payload = Regex::new(r"    lea ([a-z]+), \[bp-\d+\]\n").unwrap().captures(main).unwrap_or_else(|| panic!("{main}"))[1].to_owned();
+    let payload =
+        Regex::new(r"    lea ([a-z]+), \[bp-\d+\]\n").unwrap().captures(main).unwrap_or_else(|| panic!("{main}"))[1]
+            .to_owned();
     assert!(Regex::new(&format!(r"    mov word ptr \[bp-\d+\], {payload}\n")).unwrap().is_match(main), "{main}");
     assert!(Regex::new(r"    mov [a-z]+, ss\n").unwrap().is_match(main));
     assert!(main.contains("call _bump"));
-    // `bump` is internal and called directly: the view, a stack pointer of one word, is its first argument, in AX, and nothing is
-    // pushed or popped.
+    // `bump` is internal and called directly: the view, a stack pointer of one word, is its first argument, in AX, and
+    // nothing is pushed or popped.
     assert!(!main.contains("add sp, 2") && !bump.contains("ret 2"), "{main}{bump}");
     assert!(Regex::new(r"    lea ax, \[bp-\d+\]\n    call _bump").unwrap().is_match(main), "{main}");
     assert!(bump.contains("es:["));
-    assert!(!object_of(&program, "main", &source, &O2_calls_kept(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(
+        !object_of(&program, "main", &source, &O2_calls_kept(), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+            .expect("writes")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -788,7 +939,11 @@ fn test_data_is_an_explicit_pointer_escape_hatch() {
     let types = types(&program);
     assert_eq!(types["addr"].kind, model::TypeKind::Pointer);
     assert_eq!((types["addr"].width, types["addr"].address), (4, model::AddressKind::Far));
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(
+        !object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+            .expect("writes")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -801,7 +956,12 @@ fn test_string_descriptor_methods_and_value_iteration_need_no_runtime() {
     );
 
     let program = parsed(&source);
-    assert!(program.modules[0].callables.iter().all(|one| !["len", "capacity", "iter", "next"].contains(&one.name.as_str())));
+    assert!(
+        program.modules[0]
+            .callables
+            .iter()
+            .all(|one| !["len", "capacity", "iter", "next"].contains(&one.name.as_str()))
+    );
 }
 
 #[test]
@@ -815,7 +975,11 @@ fn test_return_inside_sequence_iteration_reaches_object_generation() {
     );
 
     let program = parsed(&source);
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(
+        !object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+            .expect("writes")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -828,8 +992,17 @@ fn test_bounded_comprehension_materializes_and_generator_fuses() {
     );
 
     let program = parsed(&source);
-    assert!(program.modules[0].callables.iter().all(|one| !["iter", "next", "collect", "append"].contains(&one.name.as_str())));
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(
+        program.modules[0]
+            .callables
+            .iter()
+            .all(|one| !["iter", "next", "collect", "append"].contains(&one.name.as_str()))
+    );
+    assert!(
+        !object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+            .expect("writes")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -842,7 +1015,11 @@ fn test_dictionary_comprehension_deduplicates_and_has_explicit_lookup() {
     );
 
     let program = parsed(&source);
-    assert!(!object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes").is_empty());
+    assert!(
+        !object_of(&program, "main", &source, &O2(), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+            .expect("writes")
+            .is_empty()
+    );
 }
 
 #[test]
@@ -923,7 +1100,8 @@ fn test_unroll_is_priced_against_the_loop_as_optimized() {
     let body = &assembly[assembly.find("_value proc").unwrap()..assembly.find("_value endp").unwrap()];
 
     // Each fill is one string fill or one rolled store, never eight copies.
-    let fills = Regex::new(r"rep stos[bwd]\n").unwrap().find_iter(body).count() + Regex::new(r"mov dword ptr \[[^\]]*\], 0\n").unwrap().find_iter(body).count();
+    let fills = Regex::new(r"rep stos[bwd]\n").unwrap().find_iter(body).count()
+        + Regex::new(r"mov dword ptr \[[^\]]*\], 0\n").unwrap().find_iter(body).count();
     assert_eq!(fills, 2, "{body}");
 }
 
@@ -1057,7 +1235,9 @@ fn test_a_loop_past_max_completely_peel_times_stays_rolled() {
     let directory = tempfile::tempdir().expect("a directory");
     let rolled = |trips: i16| {
         // `total * 3 + i` has no closed form, so only peeling removes the loop.
-        let text = format!("@export(\"cdecl16\")\nfn value(k: i16) -> i16:\n    let mut total: i16 = k\n    for i in 0..{trips}:\n        total = total * 3 + i\n    return total\n");
+        let text = format!(
+            "@export(\"cdecl16\")\nfn value(k: i16) -> i16:\n    let mut total: i16 = k\n    for i in 0..{trips}:\n        total = total * 3 + i\n    return total\n"
+        );
         optimized_mir(&parsed(&written(&directory, "settled.nib", &text)), &O3()).contains(" = phi ")
     };
     assert!(!rolled(16), "within the cap the loop is copied out");
@@ -1077,9 +1257,10 @@ fn closed_on_jne(function: &str) -> Option<String> {
     for (at, line) in lines.iter().enumerate() {
         let Some(label) = line.strip_suffix(":\n").filter(|label| label.starts_with('L')) else { continue };
         let back = format!("jne {label}");
-        if let Some(end) = lines[at + 1..].iter().position(|one| {
-            one.ends_with('\n') && one.split_whitespace().collect::<Vec<_>>().join(" ") == back
-        }) {
+        if let Some(end) = lines[at + 1..]
+            .iter()
+            .position(|one| one.ends_with('\n') && one.split_whitespace().collect::<Vec<_>>().join(" ") == back)
+        {
             return Some(lines[at..=at + 1 + end].concat());
         }
     }
@@ -1166,7 +1347,8 @@ fn test_a_vec_view_names_dgroup_in_the_object() {
         "view.nib",
         "fn total(values: &[i16]) -> i16:\n    let mut sum = 0\n    for value in values:\n        sum += value\n    return sum\n\nfn main() -> i16:\n    let values = [x * x for x in [1, 2, 3]]\n    return total(values)\n",
     );
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+        .expect("writes an object");
 }
 
 /// `v[0].bump()` passed the element's near pointer where `&mut T` is far:
@@ -1205,16 +1387,10 @@ fn test_foreign_functions_link_by_their_c_symbols() {
         "interop.nib",
         "@extern(\"cdecl16\", name=\"_sum_all\")\nfn total(values: *far i16, count: u16) -> i32\n\n@export(\"cdecl16\")\nfn weight(value: i16) -> i16:\n    return value * 2\n\nfn main() -> i16:\n    let values: i16[2] = [1, 2]\n    unsafe:\n        return i16(total(&values, 2))\n",
     );
-    let module = nib_compile::assembled(&parsed(&source), "main", &level("O2"), &crate::real_mode().os)
-    .expect("assembles");
+    let module =
+        nib_compile::assembled(&parsed(&source), "main", &level("O2"), &crate::real_mode().os).expect("assembles");
     assert_eq!(module.publics, ["_weight", "_main"]);
-    assert!(
-        module
-            .externs
-            .contains(&("_sum_all".to_owned(), "far".to_owned())),
-        "{:?}",
-        module.externs
-    );
+    assert!(module.externs.contains(&("_sum_all".to_owned(), "far".to_owned())), "{:?}", module.externs);
 }
 
 #[test]
@@ -1228,7 +1404,8 @@ fn test_float_arguments_comparisons_and_truncation_reach_the_object() {
         "floats.nib",
         "fn unused(x: f32) -> i16:\n    return 1\n\nfn above(x: f32) -> i16:\n    if x > 1.0:\n        return i16(x)\n    return 0\n\nfn main() -> i16:\n    return above(2.5) + unused(1.5)\n",
     );
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+        .expect("writes an object");
 }
 
 #[test]
@@ -1306,14 +1483,22 @@ fn test_any_integer_operand_converts_to_a_float() {
         "@export(\"pascal16\")\nfn mixed(small: i8, byte: u8, word: u16, long: u32, high: i16) -> f64:\n    return f64(high) + f64(small) + f64(byte) + f64(word) + f64(long) + f64(high + 1) + f64(u16(7))\n",
     );
     let options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
-    let module = nib_compile::assembled(&parsed(&source), "main", &options, &crate::real_mode().os).unwrap_or_else(|error| panic!("{error}"));
+    let module = nib_compile::assembled(&parsed(&source), "main", &options, &crate::real_mode().os)
+        .unwrap_or_else(|error| panic!("{error}"));
     let text = masm::text(&module).expect("prints");
     let mixed = between(&text, "MIXED proc far", "MIXED endp");
     // Each unsigned is read signed at twice its width: u8 a word, u16 a
     // dword, u32 a qword whose high dword is zero.
     let widened = |pattern: &str| Regex::new(pattern).unwrap().is_match(mixed);
-    assert!(widened(r"movzx [a-d]x, (?:[a-d]l|byte ptr \[bp\+\d+\])") && widened(r"movzx e[a-d]x, (?:[a-d]x|word ptr \[bp\+\d+\])"), "{mixed}");
-    let qword = Regex::new(r"mov dword ptr \[bp-(\d+)\], e[a-d]x\n\s*mov dword ptr \[bp-(\d+)\], 0\n\s*fild qword ptr \[bp-(\d+)\]").unwrap();
+    assert!(
+        widened(r"movzx [a-d]x, (?:[a-d]l|byte ptr \[bp\+\d+\])")
+            && widened(r"movzx e[a-d]x, (?:[a-d]x|word ptr \[bp\+\d+\])"),
+        "{mixed}"
+    );
+    let qword = Regex::new(
+        r"mov dword ptr \[bp-(\d+)\], e[a-d]x\n\s*mov dword ptr \[bp-(\d+)\], 0\n\s*fild qword ptr \[bp-(\d+)\]",
+    )
+    .unwrap();
     let cells = qword.captures(mixed).unwrap_or_else(|| panic!("{mixed}"));
     let at = |group: usize| cells[group].parse::<i64>().unwrap();
     assert_eq!((at(1), at(2)), (at(3), at(3) - 4), "{mixed}");
@@ -1336,8 +1521,11 @@ fn test_an_unsigned_integer_converts_to_its_value() {
     let options = llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os));
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
-    for (name, width, bits, value) in [("byte", 8, 0xff, 255.0), ("word", 16, 0xffff, 65535.0), ("long", 32, 0xffff_ffff, 4294967295.0_f64)] {
-        let got = interpret::run(&mir.modules[0], &format!("_{name}"), vec![Val::Int { bits, width }], 1_000).unwrap_or_else(|trap| panic!("{name}: {trap:?}"));
+    for (name, width, bits, value) in
+        [("byte", 8, 0xff, 255.0), ("word", 16, 0xffff, 65535.0), ("long", 32, 0xffff_ffff, 4294967295.0_f64)]
+    {
+        let got = interpret::run(&mir.modules[0], &format!("_{name}"), vec![Val::Int { bits, width }], 1_000)
+            .unwrap_or_else(|trap| panic!("{name}: {trap:?}"));
         assert!(matches!(got, Val::Float(_, found) if found == f64::to_bits(value)), "{name}: {got:?}");
     }
 }
@@ -1360,10 +1548,14 @@ fn test_small_aggregates_return_in_registers() {
     let program = parsed(&source);
     let shape = |name: &str| {
         let function = function(&program, name);
-        (function.parameters.len(), types(&program).values().find(|one| one.id == function.result_type).expect("a type").width)
+        (
+            function.parameters.len(),
+            types(&program).values().find(|one| one.id == function.result_type).expect("a type").width,
+        )
     };
     assert_eq!([shape("point"), shape("cell"), shape("box")], [(2, 4), (1, 4), (2, 0)]);
-    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+        .expect("writes an object");
 }
 
 #[test]
@@ -1393,7 +1585,8 @@ fn test_a_panic_path_reaches_the_object() {
         "checked.nib",
         "fn at(values: &[i16], i: u16) -> i16:\n    return values[i]\n\nfn main() -> i16:\n    let v: i16[3] = [1, 2, 3]\n    return at(&v, 1)\n",
     );
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+        .expect("writes an object");
 }
 
 #[test]
@@ -1406,7 +1599,8 @@ fn a_float_converts_to_every_integer_width() {
         "convert.nib",
         "@export(\"pascal16\")\nfn convert(x: f64, y: f64) -> i16:\n    print(f\"{u8(x)} {i8(x - 300.0)} {u16(x * 200.0)} {u32(y)} {i32(x)}\")\n    return 0\n",
     );
-    let text = listing_on(&parsed(&source), "convert", &level("Os"), llrm_target::Target::default_cpu(&llrm_x86_m16::M16));
+    let text =
+        listing_on(&parsed(&source), "convert", &level("Os"), llrm_target::Target::default_cpu(&llrm_x86_m16::M16));
     assert!(text.contains("fistp qword"), "{text}");
 }
 
@@ -1482,8 +1676,19 @@ fn test_each_procedure_has_a_code_segment_the_linker_may_drop() {
     // One segment held every procedure, so a program linked all of the
     // runtime even when it called one routine.
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "two.nib", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
-    let object = object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::PerProcedure).expect("writes");
+    let source = written(
+        &directory,
+        "two.nib",
+        "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n",
+    );
+    let object = object_of(
+        &parsed(&source),
+        "main",
+        &source,
+        &level("O2"),
+        llrm_core::backend::objbuild::CodeLayout::PerProcedure,
+    )
+    .expect("writes");
     let records = llrm_core::objectfile::omf::parse(&object).expect("parses");
     let segments = records.iter().filter(|one| one.r#type & 0xFE == llrm_core::objectfile::omf::SEGDEF).count();
     // Two procedures, and _DATA.
@@ -1495,8 +1700,19 @@ fn test_an_object_defines_each_segment_once_unless_asked_for_one_per_procedure()
     // A segment per procedure, all of one name, was the default: Microsoft
     // LINK 3.69 read them as one and refused SORTLIB.OBJ with L1103.
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "two.nib", "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n");
-    let object = object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes");
+    let source = written(
+        &directory,
+        "two.nib",
+        "@export(\"cdecl16\")\nfn unused(x: i16) -> i16:\n    return x + 1\n\nfn main() -> i16:\n    print(3)\n    return 0\n",
+    );
+    let object = object_of(
+        &parsed(&source),
+        "main",
+        &source,
+        &level("O2"),
+        llrm_core::backend::objbuild::CodeLayout::OneSegment,
+    )
+    .expect("writes");
     let records = llrm_core::objectfile::omf::parse(&object).expect("parses");
     let segments = records.iter().filter(|one| one.r#type & 0xFE == llrm_core::objectfile::omf::SEGDEF).count();
     // The code, and _DATA.
@@ -1507,8 +1723,13 @@ fn test_an_object_defines_each_segment_once_unless_asked_for_one_per_procedure()
 fn test_a_computed_float_argument_is_passed_through_memory() {
     // x87 cannot push: "floating instruction has no allocation rule".
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "pushed.nib", "fn half(x: f64) -> f64:\n    return x / 2.0\n\n@export(\"cdecl16\")\nfn quarter(x: f32, y: f64) -> f64:\n    print(x * 2.0)\n    return half(y) / 2.0\n\nfn main() -> i16:\n    return 0\n");
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("writes an object");
+    let source = written(
+        &directory,
+        "pushed.nib",
+        "fn half(x: f64) -> f64:\n    return x / 2.0\n\n@export(\"cdecl16\")\nfn quarter(x: f32, y: f64) -> f64:\n    print(x * 2.0)\n    return half(y) / 2.0\n\nfn main() -> i16:\n    return 0\n",
+    );
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+        .expect("writes an object");
 }
 
 #[test]
@@ -1533,7 +1754,8 @@ fn test_a_far_pointer_result_travels_in_dx_ax() {
 /// near pointer, and removes them; it links without the Nib runtime.
 fn test_a_qb45_library_takes_basic_arguments_by_reference() {
     let source = root().join("examples/basic/sortlib.nib");
-    let module = nib_compile::assembled(&parsed(&source), "main", &level("O2"), &crate::real_mode().os).expect("assembles");
+    let module =
+        nib_compile::assembled(&parsed(&source), "main", &level("O2"), &crate::real_mode().os).expect("assembles");
     assert_eq!(module.publics, ["SORTSCORES", "UPPER", "AVERAGE", "ROWTOTAL", "INITIALS"]);
     let externs: Vec<&str> = module.externs.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(externs, ["B$SCPY", "MEAN"]);
@@ -1545,14 +1767,22 @@ fn test_a_qb45_library_takes_basic_arguments_by_reference() {
     assert!(upper.contains("retf 2"), "{upper}");
     // Mean# takes two locals by reference and the DOUBLE's pointer, and returns that pointer.
     let average = between(&text, "AVERAGE proc far", "AVERAGE endp");
-    assert!(average.matches("lea ").count() >= 3 && average.contains("call far ptr MEAN\n    mov bx, ax\n    fld qword ptr [bx]"), "{average}");
+    assert!(
+        average.matches("lea ").count() >= 3
+            && average.contains("call far ptr MEAN\n    mov bx, ax\n    fld qword ptr [bx]"),
+        "{average}"
+    );
     // A rank-2 view reads both dimensions' counts: the descriptor's words at 14 and 18.
     let rows = between(&text, "ROWTOTAL proc far", "ROWTOTAL endp");
     let field = |offset: i64| Regex::new(&format!(r"word ptr \[\w+\+{offset}\]")).unwrap().is_match(rows);
     assert!(field(14) && field(18), "{rows}");
     let initials = between(&text, "INITIALS proc far", "INITIALS endp");
     // The result is copied into BASIC's string by B$SCPY, inline or through `abi.qb45.string_result`.
-    assert!((initials.contains("call far ptr B$SCPY") || initials.contains("call far ptr _abi.qb45.string_result")) && initials.contains("retf 2"), "{initials}");
+    assert!(
+        (initials.contains("call far ptr B$SCPY") || initials.contains("call far ptr _abi.qb45.string_result"))
+            && initials.contains("retf 2"),
+        "{initials}"
+    );
 }
 
 #[test]
@@ -1560,7 +1790,8 @@ fn test_a_qb45_library_takes_basic_arguments_by_reference() {
 /// last, to store its result through, and reads the pointer back from ax.
 fn test_a_basic_float_result_goes_through_its_hidden_pointer() {
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "half.nib", "@export(\"qb45\")\nfn half(value: f64) -> f64:\n    return value / 2.0\n");
+    let source =
+        written(&directory, "half.nib", "@export(\"qb45\")\nfn half(value: f64) -> f64:\n    return value / 2.0\n");
     let text = listing_on(&parsed(&source), "main", &level("O2"), "486");
     let half = between(&text, "HALF proc far", "HALF endp");
     assert!(half.contains("mov bx, word ptr [bp+6]") && half.contains("fstp qword ptr [bx]"), "{half}");
@@ -1577,7 +1808,8 @@ fn test_a_far_basic_string_is_read_through_its_runtime() {
         "count.nib",
         "import abi.pds71 as pds\n\n@export(\"pds71\")\nfn Spaces(text: pds.StringRef) -> i16:\n    let mut count: i16 = 0\n    for letter in text:\n        if letter == ' ':\n            count += 1\n    return count\n",
     );
-    let module = nib_compile::assembled(&parsed(&source), "main", &level("O2"), &crate::real_mode().os).expect("assembles");
+    let module =
+        nib_compile::assembled(&parsed(&source), "main", &level("O2"), &crate::real_mode().os).expect("assembles");
     let externs: Vec<&str> = module.externs.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(externs, ["STRINGADDRESS", "STRINGLENGTH"]);
     let text = masm::text(&module).expect("prints");
@@ -1602,7 +1834,8 @@ fn test_an_interrupt_handler_saves_every_register_and_returns_with_iret() {
     );
     assert_eq!(lines[lines.len() - 6..], ["pop gs", "pop fs", "pop es", "pop ds", "popad", "iret"], "{text}");
     assert!(text.contains("dd _tick"), "{text}");
-    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment).expect("encodes");
+    object_of(&program, "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::OneSegment)
+        .expect("encodes");
 }
 
 #[test]
@@ -1617,16 +1850,30 @@ fn test_a_variable_a_handler_names_is_read_on_every_pass() {
     );
     let text = listing(&parsed(&source), "main", &O2());
     let main = between(&text, "_main proc", "_main endp");
-    assert!(Regex::new(r"(L\w+):\n    cmp word ptr \S+, 36\n    jb (L\w+)\n").unwrap().captures(main).is_some_and(|loop_| loop_[1] == loop_[2]), "{text}");
+    assert!(
+        Regex::new(r"(L\w+):\n    cmp word ptr \S+, 36\n    jb (L\w+)\n")
+            .unwrap()
+            .captures(main)
+            .is_some_and(|loop_| loop_[1] == loop_[2]),
+        "{text}"
+    );
 }
 
 #[test]
 /// Nothing calls a handler, and an interrupt passes it nothing.
 fn test_an_interrupt_handler_takes_nothing_and_is_not_called() {
     let directory = tempfile::tempdir().expect("a directory");
-    let taking = written(&directory, "taking.nib", "@export(\"interrupt16\")\nfn tick(n: i16) -> void:\n    return\n\nfn main() -> i16:\n    return 0\n");
+    let taking = written(
+        &directory,
+        "taking.nib",
+        "@export(\"interrupt16\")\nfn tick(n: i16) -> void:\n    return\n\nfn main() -> i16:\n    return 0\n",
+    );
     assert!(refused(&taking).contains("takes nothing and returns void"));
-    let called = written(&directory, "called.nib", "@export(\"interrupt16\")\nfn tick() -> void:\n    return\n\nfn main() -> i16:\n    tick()\n    return 0\n");
+    let called = written(
+        &directory,
+        "called.nib",
+        "@export(\"interrupt16\")\nfn tick() -> void:\n    return\n\nfn main() -> i16:\n    tick()\n    return 0\n",
+    );
     assert!(refused(&called).contains("only an interrupt enters it"));
 }
 
@@ -1732,15 +1979,26 @@ fn test_inline_assembly_outputs_survive_unrolling() {
          total += got\n        i += 1\n    return total\n\nfn main() -> i16:\n    return i16(spin(3))\n",
     );
     let assembly = listing(&parsed(&source), "main", &O2());
-    let after: Vec<&str> = assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
+    let after: Vec<&str> =
+        assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
     assert_eq!(after.len(), 3, "{assembly}");
     assert!(after.iter().all(|line| line.ends_with(", cx")), "{assembly}");
 }
 
 /// `source` through the rich MIR, as masm.
-fn rich(directory: &tempfile::TempDir, name: &str, source: &str) -> String {
+fn rich(
+    directory: &tempfile::TempDir,
+    name: &str,
+    source: &str,
+) -> String {
     let program = parsed(&written(directory, name, source));
-    let module = nib_compile::assembled(&program, "main", &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)), &crate::real_mode().os).unwrap_or_else(|error| panic!("{error}"));
+    let module = nib_compile::assembled(
+        &program,
+        "main",
+        &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
+        &crate::real_mode().os,
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     masm::text(&module).expect("prints")
 }
 
@@ -1775,7 +2033,9 @@ fn test_the_rich_mir_reads_memory_again_after_a_block_declaring_it() {
         let base: *near mut u8 = &mut bytes\n        asm(si=base, clobbers=[memory]):\n            \
         mov byte ptr [si+3], 7\n    return u16(bytes[3]) + before\n\n\
         fn main() -> i16:\n    return i16(poke())\n";
-    let reads = |text: &str| between(&rich(&directory, "poke.nib", text), "db 0c6h,044h,003h,007h", "retf").contains("byte ptr $var_bytes+3");
+    let reads = |text: &str| {
+        between(&rich(&directory, "poke.nib", text), "db 0c6h,044h,003h,007h", "retf").contains("byte ptr $var_bytes+3")
+    };
     assert!(reads(text));
     assert!(!reads(&text.replace("clobbers=[memory]", "clobbers=[]")));
 }
@@ -1784,7 +2044,11 @@ fn test_the_rich_mir_reads_memory_again_after_a_block_declaring_it() {
 #[test]
 fn test_the_rich_mir_loads_each_input_into_its_register() {
     let directory = tempfile::tempdir().expect("a directory");
-    let assembly = rich(&directory, "pair.nib", "fn main() -> i16:\n    unsafe:\n        asm(si=1, di=2, ax=3, clobbers=[]):\n            cli\n    return 0\n");
+    let assembly = rich(
+        &directory,
+        "pair.nib",
+        "fn main() -> i16:\n    unsafe:\n        asm(si=1, di=2, ax=3, clobbers=[]):\n            cli\n    return 0\n",
+    );
     let before = between(&assembly, "_main proc far", "db 0fah");
     for set in ["mov si, 1", "mov di, 2", "mov ax, 3"] {
         assert!(before.contains(set), "{set}: {before}");
@@ -1800,9 +2064,15 @@ fn test_the_rich_mir_reads_a_block_output_from_its_register_when_unrolled() {
          unsafe:\n            asm(bx=i, out=(cx=let got), clobbers=[]):\n                mov cx, bx\n            \
          total += got\n        i += 1\n    return total\n\nfn main() -> i16:\n    return i16(spin(3))\n";
     let assembly = rich(&directory, "spin.nib", source);
-    let after: Vec<&str> = assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
+    let after: Vec<&str> =
+        assembly.split("db 089h,0d9h\n").skip(1).map(|rest| rest.lines().next().unwrap_or("")).collect();
     assert_eq!(after.len(), 3, "{assembly}");
-    assert!(after.iter().all(|line| line.trim_start().starts_with("mov ax, cx") || line.trim_start().starts_with("add ax, cx")), "{assembly}");
+    assert!(
+        after
+            .iter()
+            .all(|line| line.trim_start().starts_with("mov ax, cx") || line.trim_start().starts_with("add ax, cx")),
+        "{assembly}"
+    );
 }
 
 /// A raw pointer walk (#105): `p != e` of far pointers was refused "a ptr
@@ -1827,7 +2097,11 @@ fn test_an_export_no_object_uses_is_dropped_with_what_only_it_calls() {
     // jwlink's `option eliminate` keeps a segment any other references, even
     // one it drops: every program carried the unused float printer, 2.8 KB.
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "lib.nib", "fn helper(x: u16) -> u16:\n    let mut total: u16 = 0\n    for i in 0..x:\n        total += i * x\n    return total\n\n@export(\"cdecl16\", name=\"N$ZA\")\nfn a(x: u16) -> u16:\n    return helper(x) + 1\n\n@export(\"cdecl16\", name=\"N$ZB\")\nfn b(x: u16) -> u16:\n    return x * 2\n");
+    let source = written(
+        &directory,
+        "lib.nib",
+        "fn helper(x: u16) -> u16:\n    let mut total: u16 = 0\n    for i in 0..x:\n        total += i * x\n    return total\n\n@export(\"cdecl16\", name=\"N$ZA\")\nfn a(x: u16) -> u16:\n    return helper(x) + 1\n\n@export(\"cdecl16\", name=\"N$ZB\")\nfn b(x: u16) -> u16:\n    return x * 2\n",
+    );
     let mut program = parsed(&source);
     nib_compile::keep_exports(&mut program, &["N$ZB".to_owned()].into_iter().collect());
     let module = nib_compile::assembled(&program, "main", &level("O2"), &crate::real_mode().os).expect("assembles");
@@ -1864,7 +2138,10 @@ fn test_a_borrowed_fixed_array_is_a_far_pointer_with_no_descriptor() {
 
     assert_eq!((pointer.kind, pointer.width), (model::TypeKind::Pointer, 4));
     assert_eq!((target.kind, target.rank, target.width), (model::TypeKind::Array, 1, 8));
-    assert!(!instructions(function).any(|one| one.operands.iter().any(|operand| matches!(operand, model::Operand::DescriptorPlace(_)))));
+    assert!(
+        !instructions(function)
+            .any(|one| one.operands.iter().any(|operand| matches!(operand, model::Operand::DescriptorPlace(_))))
+    );
 }
 
 /// An `@export` without an ABI is Nib's own convention, as the runtime's
@@ -1872,7 +2149,9 @@ fn test_a_borrowed_fixed_array_is_a_far_pointer_with_no_descriptor() {
 #[test]
 fn test_an_export_without_an_abi_takes_what_a_nib_function_takes() {
     let directory = tempfile::tempdir().expect("a directory");
-    let text = |decorator: &str| format!("{decorator}\nfn size(text: &string) -> u16:\n    return text.len\n\nfn main() -> i16:\n    return 0\n");
+    let text = |decorator: &str| {
+        format!("{decorator}\nfn size(text: &string) -> u16:\n    return text.len\n\nfn main() -> i16:\n    return 0\n")
+    };
     let foreign = written(&directory, "foreign.nib", &text("@export(\"cdecl16\")"));
     assert!(refused(&foreign).contains("cannot cross a foreign ABI"), "{}", refused(&foreign));
     let native = written(&directory, "native.nib", &text("@export(name=\"N$SIZE\")"));
@@ -1886,15 +2165,33 @@ fn test_an_export_without_an_abi_takes_what_a_nib_function_takes() {
 #[test]
 fn test_a_program_compiles_through_the_rich_mir() {
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "twice.nib", "fn twice(x: i16) -> i16:\n    return x + x\n\nfn main() -> i16:\n    return twice(21)\n");
-    let module = nib_compile::assembled(&parsed(&source), "main", &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)), &crate::real_mode().os).expect("assembles");
+    let source = written(
+        &directory,
+        "twice.nib",
+        "fn twice(x: i16) -> i16:\n    return x + x\n\nfn main() -> i16:\n    return twice(21)\n",
+    );
+    let module = nib_compile::assembled(
+        &parsed(&source),
+        "main",
+        &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
+        &crate::real_mode().os,
+    )
+    .expect("assembles");
     let text = masm::text(&module).expect("prints");
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
     assert_eq!(
         lines,
         [
-            ".model medium", ".386", "public _main", ".data", ".code TWICE_TEXT",
-            "_main proc far", "L0_0:", "mov ax, 42", "retf", "_main endp",
+            ".model medium",
+            ".386",
+            "public _main",
+            ".data",
+            ".code TWICE_TEXT",
+            "_main proc far",
+            "L0_0:",
+            "mov ax, 42",
+            "retf",
+            "_main endp",
             "end",
         ]
     );
@@ -1906,10 +2203,27 @@ fn test_a_program_compiles_through_the_rich_mir() {
 #[test]
 fn test_the_rich_route_prices_the_configured_cpu() {
     let directory = tempfile::tempdir().expect("a directory");
-    let source = written(&directory, "logic.nib", "fn logic(a: i16, b: i16) -> bool:\n    return (a < b && a * 3 + b == 0) || (b == 7 && a + b * 5 == 2)\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n");
+    let source = written(
+        &directory,
+        "logic.nib",
+        "fn logic(a: i16, b: i16) -> bool:\n    return (a < b && a * 3 + b == 0) || (b == 7 && a + b * 5 == 2)\n\nfn main() -> i16:\n    print(f\"{i16(logic(1, 2))} {i16(logic(0, 2))} {i16(logic(3, 7))} {i16(logic(3, 2))}\")\n    return 0\n",
+    );
     let calls = |cpu: &'static str| {
-        let module = nib_compile::assembled(&parsed(&source), "main", &llrm_driver::m16_options(llrm_core::abi::machine::Machine { cpu: cpu.to_owned(), ..nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os) }), &crate::real_mode().os).expect("assembles");
-        masm::text(&module).expect("prints").lines().filter(|line| line.contains("call") && line.contains("_logic")).count()
+        let module = nib_compile::assembled(
+            &parsed(&source),
+            "main",
+            &llrm_driver::m16_options(llrm_core::abi::machine::Machine {
+                cpu: cpu.to_owned(),
+                ..nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)
+            }),
+            &crate::real_mode().os,
+        )
+        .expect("assembles");
+        masm::text(&module)
+            .expect("prints")
+            .lines()
+            .filter(|line| line.contains("call") && line.contains("_logic"))
+            .count()
     };
     assert_eq!((calls("486"), calls("386")), (4, 0));
 }
@@ -1940,12 +2254,19 @@ fn test_a_borrowed_view_states_facts_of_its_descriptor() {
         program.modules[0]
             .facts
             .iter()
-            .filter(|one| matches!(one.subject, llrm_core::hir::facts::Subject::Param { function, index: at } if function == multiply.id && at == index as i64))
+            .filter(|one| matches!(
+                one.subject,
+                llrm_core::hir::facts::Subject::Param { function, index: at } if function == multiply.id && at == index as i64
+            ))
             .map(|one| one.fact)
             .collect()
     };
     for index in 0..multiply.parameters.len() {
-        assert_eq!(stated(index), vec![Fact::NoAlias, Fact::ReadOnly, Fact::Dereferenceable(10), Fact::NoCapture], "parameter {index}");
+        assert_eq!(
+            stated(index),
+            vec![Fact::NoAlias, Fact::ReadOnly, Fact::Dereferenceable(10), Fact::NoCapture],
+            "parameter {index}"
+        );
     }
 }
 
@@ -1959,16 +2280,23 @@ fn test_a_reference_states_what_the_language_guarantees_and_no_more() {
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "refs.nib", source));
     let bump = function(&program, "bump");
-    let stated = |index: i64| -> Vec<Fact> {
-        program.modules[0]
+    let stated =
+        |index: i64| -> Vec<Fact> {
+            program.modules[0]
             .facts
             .iter()
-            .filter(|one| matches!(one.subject, llrm_core::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index))
+            .filter(|one| matches!(
+                one.subject,
+                llrm_core::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index
+            ))
             .map(|one| one.fact)
             .collect()
-    };
+        };
     assert_eq!(stated(0), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::NoAlias, Fact::NoCapture]);
-    assert_eq!(stated(1), vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::ReadOnly, Fact::NoAlias, Fact::NoCapture]);
+    assert_eq!(
+        stated(1),
+        vec![Fact::NonNull, Fact::Dereferenceable(4), Fact::ReadOnly, Fact::NoAlias, Fact::NoCapture]
+    );
 }
 
 /// `for i in 0..n` adds one to a counter that is below `n`: it cannot wrap,
@@ -1979,13 +2307,20 @@ fn test_a_range_loops_counter_does_not_wrap() {
     use llrm_mir::facts::Fact;
     let directory = tempfile::tempdir().unwrap();
     let stated = |type_name: &str| -> Vec<Fact> {
-        let source = format!("fn total(n: {type_name}) -> {type_name}:\n    let mut s: {type_name} = 0\n    for i in 0..n:\n        s += i\n    return s\n\nfn main() -> i16:\n    return 0\n");
+        let source = format!(
+            "fn total(n: {type_name}) -> {type_name}:\n    let mut s: {type_name} = 0\n    for i in 0..n:\n        s += i\n    return s\n\nfn main() -> i16:\n    return 0\n"
+        );
         let program = parsed(&written(&directory, &format!("{type_name}.nib"), &source));
         let total = function(&program, "total");
         program.modules[0]
             .facts
             .iter()
-            .filter(|one| matches!(one.subject, llrm_core::hir::facts::Subject::Instruction { function, .. } if function == total.id))
+            .filter(|one| {
+                matches!(
+                    one.subject,
+                    llrm_core::hir::facts::Subject::Instruction { function, .. } if function == total.id
+                )
+            })
             .map(|one| one.fact)
             .collect()
     };
@@ -1995,12 +2330,21 @@ fn test_a_range_loops_counter_does_not_wrap() {
     let source = "fn total(n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += i\n    return s\n\nfn main() -> i16:\n    return 0\n";
     let program = parsed(&written(&directory, "which.nib", source));
     let total = function(&program, "total");
-    let ids: Vec<i64> = program.modules[0].facts.iter().filter_map(|one| match one.subject {
-        llrm_core::hir::facts::Subject::Instruction { function, id } if function == total.id => Some(id),
-        _ => None,
-    }).collect();
+    let ids: Vec<i64> = program.modules[0]
+        .facts
+        .iter()
+        .filter_map(|one| match one.subject {
+            llrm_core::hir::facts::Subject::Instruction { function, id } if function == total.id => Some(id),
+            _ => None,
+        })
+        .collect();
     assert_eq!(ids.len(), 1);
-    let stated = total.blocks.iter().flat_map(|block| &block.instructions).find(|one| one.id == ids[0]).expect("the instruction");
+    let stated = total
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find(|one| one.id == ids[0])
+        .expect("the instruction");
     assert_eq!(stated.op, llrm_core::hir::model::Op::Add);
     assert!(matches!(stated.operands[1], llrm_core::hir::model::Operand::Constant(_)), "{:?}", stated.operands);
 }
@@ -2013,10 +2357,22 @@ fn test_a_reference_lets_its_field_load_leave_the_loop() {
     let directory = tempfile::tempdir().unwrap();
     let source = "struct V:\n    mut a: i16\n    b: i16\n\nfn sum(v: &V, n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += v.b\n    return s\n\nfn main() -> i16:\n    return 0\n";
     let program = parsed(&written(&directory, "refsum.nib", source));
-    let module = nib_compile::assembled(&program, "sum", &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)), &crate::real_mode().os).expect("assembles");
+    let module = nib_compile::assembled(
+        &program,
+        "sum",
+        &llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)),
+        &crate::real_mode().os,
+    )
+    .expect("assembles");
     let asm = masm::text(&module).expect("prints");
     let from = asm.find("_sum proc").expect("the function");
-    let body: Vec<&str> = asm[from..].lines().skip(1).map(str::trim).take_while(|one| !one.ends_with("endp")).filter(|one| !one.ends_with(':')).collect();
+    let body: Vec<&str> = asm[from..]
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .take_while(|one| !one.ends_with("endp"))
+        .filter(|one| !one.ends_with(':'))
+        .collect();
     assert_eq!(body.len(), 15, "{body:?}");
     assert!(!body.contains(&"push si"), "{body:?}");
 }
@@ -2058,7 +2414,13 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "bump.nib", source));
     let bump = function(&program, "bump");
-    let unaliased = |index: i64| program.modules[0].facts.iter().any(|one| one.fact == Fact::NoAlias && matches!(one.subject, llrm_core::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index));
+    let unaliased =
+        |index: i64| {
+            program.modules[0].facts.iter().any(|one| one.fact == Fact::NoAlias && matches!(
+                one.subject,
+                llrm_core::hir::facts::Subject::Param { function, index: at } if function == bump.id && at == index
+            ))
+        };
     assert!(unaliased(0) && unaliased(1), "the premise: both are stated noalias");
     // The memory operands of `bump`'s loop: from the label its backward
     // jump names to that jump.
@@ -2073,8 +2435,16 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
         between(&body[..end], &format!("{head}:\n"), "\0").matches("ptr").count()
     };
     // Unrolled, the 4-trip loop is gone and there is nothing to count.
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), unroll: false, peel: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    let pipeline = llrm_transforms::pipeline::Options {
+        inline: llrm_transforms::inline::Threshold::none(),
+        unroll: false,
+        peel: false,
+        ..Default::default()
+    };
+    let options = llrm_core::driver::Options {
+        pipeline,
+        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+    };
     let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
     assert_eq!(looped(&masm::text(&module).expect("prints")), 1);
 }
@@ -2084,7 +2454,18 @@ fn test_a_noalias_parameter_keeps_its_loads_out_of_a_loop_that_stores_another() 
 #[test]
 fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
     let program = parsed(&fixture("league.nib"));
-    let result = nib_compile::assembled(&program, "main", &Options { machine: llrm_core::abi::machine::Machine { cpu: "386".to_owned(), ..nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os) }, ..level("O2") }, &crate::real_mode().os);
+    let result = nib_compile::assembled(
+        &program,
+        "main",
+        &Options {
+            machine: llrm_core::abi::machine::Machine {
+                cpu: "386".to_owned(),
+                ..nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)
+            },
+            ..level("O2")
+        },
+        &crate::real_mode().os,
+    );
     assert!(result.is_ok(), "{:?}", result.err());
 }
 
@@ -2096,7 +2477,7 @@ fn test_league_compiles_when_a_long_spiller_product_must_be_spilled() {
 /// touches none.
 #[test]
 fn test_mir_infers_what_a_nib_function_touches() {
-    use llrm_mir::{GlobalKind, Attribute};
+    use llrm_mir::{Attribute, GlobalKind};
     let source = "@extern(\"cdecl16\")\nfn keep(x: i16) -> i16\n\nvar g: i16 = 3\n\nfn scalars(a: i16, b: i16) -> i16:\n    return a * b\n\nfn reads(p: &i16) -> i16:\n    return p + g\n\nfn writes(p: &mut i16) -> void:\n    p = 1\n\nfn main() -> i16:\n    unsafe:\n        let mut x: i16 = keep(2)\n        writes(x)\n        print(scalars(keep(x), reads(x)))\n    return 0\n";
     let directory = tempfile::tempdir().unwrap();
     let mut program = parsed(&written(&directory, "effects.nib", source));
@@ -2107,31 +2488,57 @@ fn test_mir_infers_what_a_nib_function_touches() {
             function.linkage = llrm_core::hir::model::FunctionLinkage::External;
         }
     }
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    let pipeline =
+        llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
+    let options = llrm_core::driver::Options {
+        pipeline,
+        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+    };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let module = &mir.modules[0];
     let memory = |name: &str| -> Vec<(Option<String>, String)> {
-        let GlobalKind::Function(function) = &module.global(module.named(name).unwrap_or_else(|| panic!("{name} among {:?}", module.globals.iter().filter_map(|one| one.name.clone()).collect::<Vec<_>>()))).kind else { panic!("{name} is no function") };
-        function.attrs.iter().find_map(|one| if let Attribute::Memory(locations) = one { Some(locations.clone()) } else { None }).unwrap_or_default()
+        let GlobalKind::Function(function) = &module
+            .global(module.named(name).unwrap_or_else(|| {
+                panic!(
+                    "{name} among {:?}",
+                    module.globals.iter().filter_map(|one| one.name.clone()).collect::<Vec<_>>()
+                )
+            }))
+            .kind
+        else {
+            panic!("{name} is no function")
+        };
+        function
+            .attrs
+            .iter()
+            .find_map(|one| if let Attribute::Memory(locations) = one { Some(locations.clone()) } else { None })
+            .unwrap_or_default()
     };
     assert_eq!(memory("scalars"), [(None, "none".to_owned())]);
-    assert!(memory("reads").iter().all(|(_, access)| access != "write" && access != "readwrite"), "{:?}", memory("reads"));
+    assert!(
+        memory("reads").iter().all(|(_, access)| access != "write" && access != "readwrite"),
+        "{:?}",
+        memory("reads")
+    );
     assert_eq!(memory("writes"), [(Some("argmem".to_owned()), "write".to_owned())]);
 }
 
 /// A range loop's counter cannot wrap (`nsw`), so its trip count is `n` and
 /// the loop counts down to zero, testing the flags `dec` leaves: no `cmp`
-/// in the loop. Two callers pass different bounds: with one, the bound is a constant of the body, and the loop (which leaves by its
-/// bounds check as well) is copied out by it.
+/// in the loop. Two callers pass different bounds: with one, the bound is a constant of the body, and the loop (which
+/// leaves by its bounds check as well) is copied out by it.
 #[test]
 fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
     let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    print(total(a, 6))\n    return 0\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "trip.nib", source));
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    let pipeline =
+        llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
+    let options = llrm_core::driver::Options {
+        pipeline,
+        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+    };
     let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
     let body = between(&assembly, "_total proc near\n", "_total endp");
@@ -2146,20 +2553,26 @@ fn test_a_range_loop_with_a_variable_bound_counts_to_zero() {
     assert!(!looped.contains("cmp"), "{looped}");
 }
 
-/// One caller passes 5, so the body's bound is the constant 5: the loop, which also leaves by its bounds check, is copied out by that
-/// bound (gcc's `cunroll` by `loop_max_iterations`) and no backward jump is left. The test above needs two callers to keep the loop.
+/// One caller passes 5, so the body's bound is the constant 5: the loop, which also leaves by its bounds check, is
+/// copied out by that bound (gcc's `cunroll` by `loop_max_iterations`) and no backward jump is left. The test above
+/// needs two callers to keep the loop.
 #[test]
 fn test_a_range_loop_whose_bound_every_caller_passes_is_copied_out() {
     let source = "fn total(values: &[i16], n: i16) -> i16:\n    let mut s: i16 = 0\n    for i in 0..n:\n        s += values[0]\n    return s\n\nfn main() -> i16:\n    let a: i16[2] = [1, 2]\n    print(total(a, 5))\n    return 0\n";
     let directory = tempfile::tempdir().unwrap();
     let program = parsed(&written(&directory, "copied.nib", source));
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    let pipeline =
+        llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
+    let options = llrm_core::driver::Options {
+        pipeline,
+        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+    };
     let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
     let body = between(&assembly, "_total proc near\n", "_total endp");
     let jump = Regex::new(r"\n    j\w+ (L\d+_\d+)\n").unwrap();
-    let backward = jump.captures_iter(body).any(|one| body[..one.get(0).unwrap().start()].contains(&format!("{}:\n", &one[1])));
+    let backward =
+        jump.captures_iter(body).any(|one| body[..one.get(0).unwrap().start()].contains(&format!("{}:\n", &one[1])));
     assert!(!backward, "{body}");
 }
 
@@ -2174,7 +2587,10 @@ fn test_a_nib_program_does_not_claim_zeroed_frames() {
     let program = parsed(&written(&directory, "zeroed.nib", source));
     assert!(!program.zeroed_locals, "the premise: the program says its frames are not zeroed");
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    let options = llrm_core::driver::Options {
+        pipeline,
+        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+    };
     let module = nib_compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("assembles");
     let assembly = masm::text(&module).expect("prints");
     let body = between(&assembly, "_f proc near\n", "_f endp");
@@ -2227,13 +2643,18 @@ fn main() -> i16:
     let held = llrm_core::hir::execute::run(&program, "main", &[]).expect("runs").value;
     assert_eq!(held, Some(llrm_core::hir::model::Number::Int(127)), "the HIR executor");
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
-    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
+        llrm_core::hir::model::FunctionLinkage::External;
     for optimize in [false, true] {
         let pipeline = llrm_transforms::pipeline::Options { optimize, ..Default::default() };
-        let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+        let options = llrm_core::driver::Options {
+            pipeline,
+            ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        };
         let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
         llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
-        let score = interpret::run(&mir.modules[0], "main", vec![], 1_000_000).unwrap_or_else(|trap| panic!("{trap:?}"));
+        let score =
+            interpret::run(&mir.modules[0], "main", vec![], 1_000_000).unwrap_or_else(|trap| panic!("{trap:?}"));
         assert!(matches!(score, Val::Int { bits: 127, .. }), "optimize {optimize}: {score:?}");
     }
 }
@@ -2260,9 +2681,14 @@ fn main() -> i16:
     let directory = tempfile::tempdir().unwrap();
     let mut program = parsed(&written(&directory, "views.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
-    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
-    let pipeline = llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
+        llrm_core::hir::model::FunctionLinkage::External;
+    let pipeline =
+        llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
+    let options = llrm_core::driver::Options {
+        pipeline,
+        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+    };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2297,9 +2723,13 @@ fn main() -> i16:
     let directory = tempfile::tempdir().unwrap();
     let mut program = parsed(&written(&directory, "enum.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
-    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
+        llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    let options = llrm_core::driver::Options {
+        pipeline,
+        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+    };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2334,9 +2764,13 @@ fn main() -> i16:
     let directory = tempfile::tempdir().unwrap();
     let mut program = parsed(&written(&directory, "large.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
-    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
+        llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    let options = llrm_core::driver::Options {
+        pipeline,
+        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+    };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2371,9 +2805,13 @@ fn main() -> i16:
     let directory = tempfile::tempdir().unwrap();
     let mut program = parsed(&written(&directory, "small.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
-    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
+        llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    let options = llrm_core::driver::Options {
+        pipeline,
+        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+    };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2411,9 +2849,13 @@ fn main() -> i16:
     let directory = tempfile::tempdir().unwrap();
     let mut program = parsed(&written(&directory, "test_a_struct_holding_an_enum_copies_it_byte_for_byte.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
-    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
+        llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    let options = llrm_core::driver::Options {
+        pipeline,
+        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+    };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2445,11 +2887,16 @@ fn main() -> i16:
             return 2
 ";
     let directory = tempfile::tempdir().unwrap();
-    let mut program = parsed(&written(&directory, "test_an_enum_past_the_unrolled_copy_keeps_its_small_payload.nib", source));
+    let mut program =
+        parsed(&written(&directory, "test_an_enum_past_the_unrolled_copy_keeps_its_small_payload.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
-    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage = llrm_core::hir::model::FunctionLinkage::External;
+    program.modules[0].functions.iter_mut().find(|function| function.name == "main").unwrap().linkage =
+        llrm_core::hir::model::FunctionLinkage::External;
     let pipeline = llrm_transforms::pipeline::Options { optimize: false, ..Default::default() };
-    let options = llrm_core::driver::Options { pipeline, ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os)) };
+    let options = llrm_core::driver::Options {
+        pipeline,
+        ..llrm_driver::m16_options(nib_compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+    };
     let (mut mir, _) = llrm_core::driver::emitted(&program, &options).expect("emits");
     llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
     let result = interpret::run(&mir.modules[0], "main", vec![], 1_000_000);
@@ -2463,7 +2910,8 @@ fn main() -> i16:
 #[test]
 fn test_a_far_pointer_literal_stores_at_its_segment_and_offset() {
     use llrm_mir::interpret::{self, Trap};
-    let source = "fn poke() -> void:\n    unsafe:\n        let screen: *far mut u8 = 0xB8000000\n        screen[2] = 7\n";
+    let source =
+        "fn poke() -> void:\n    unsafe:\n        let screen: *far mut u8 = 0xB8000000\n        screen[2] = 7\n";
     let directory = tempfile::tempdir().unwrap();
     let mut program = parsed(&written(&directory, "poke.nib", source));
     program.modules[0].functions.iter_mut().for_each(|function| function.symbol = Some(function.name.clone()));
@@ -2513,7 +2961,9 @@ fn test_a_module_array_past_64k_needs_huge() {
 #[test]
 fn a_target_states_how_much_a_segment_holds() {
     let source = "var a: i16[20000] = [0] * 20000\n";
-    let compile = |frontend: &crate::Frontend| crate::compile_module(crate::parse(crate::lex(source).unwrap()).unwrap(), "m", frontend);
+    let compile = |frontend: &crate::Frontend| {
+        crate::compile_module(crate::parse(crate::lex(source).unwrap()).unwrap(), "m", frontend)
+    };
     let mut frontend = crate::real_mode();
     assert!(compile(&frontend).is_ok());
     frontend.layout.spaces.roles.segment_bytes = Some(32768);
@@ -2546,22 +2996,28 @@ fn test_an_internal_function_only_called_directly_is_entered_by_a_near_call() {
 
 #[test]
 fn test_a_near_call_reaches_a_procedure_in_another_code_segment_of_the_object() {
-    // With a segment per procedure, a near call between them was refused: "a near call to _down in another code segment".
+    // With a segment per procedure, a near call between them was refused: "a near call to _down in another code
+    // segment".
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "near.nib", RECURSIVE);
-    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::PerProcedure).expect("writes");
+    object_of(&parsed(&source), "main", &source, &level("O2"), llrm_core::backend::objbuild::CodeLayout::PerProcedure)
+        .expect("writes");
 }
 
-/// A library cut to what an object names (`--used-by`) is still a library when the cut leaves it no export: the runtime of a
-/// program that calls none of its routines. It was an error, "entry function 'main' does not exist", and tools/dosbatch could
-/// not link the program (#747).
+/// A library cut to what an object names (`--used-by`) is still a library when the cut leaves it no export: the runtime
+/// of a program that calls none of its routines. It was an error, "entry function 'main' does not exist", and
+/// tools/dosbatch could not link the program (#747).
 #[test]
 fn test_a_library_cut_to_nothing_assembles_without_an_entry() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(&directory, "lib.nib", "@export(\"cdecl16\")\nfn twice(x: i16) -> i16:\n    return x + x\n");
     let mut program = parsed(&source);
     nib_compile::keep_exports(&mut program, &std::collections::BTreeSet::new());
-    let module = nib_compile::assembled_library(&program, &level("O2"), &crate::real_mode().os).unwrap_or_else(|error| panic!("{error}"));
+    let module = nib_compile::assembled_library(&program, &level("O2"), &crate::real_mode().os)
+        .unwrap_or_else(|error| panic!("{error}"));
     assert!(module.publics.is_empty(), "{:?}", module.publics);
-    assert!(nib_compile::assembled(&program, "main", &level("O2"), &crate::real_mode().os).is_err(), "a program with no entry is still refused");
+    assert!(
+        nib_compile::assembled(&program, "main", &level("O2"), &crate::real_mode().os).is_err(),
+        "a program with no entry is still refused"
+    );
 }

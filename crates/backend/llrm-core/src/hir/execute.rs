@@ -11,11 +11,11 @@
 //! Python's `struct` raises; ZERO_EXTEND and SIGN_EXTEND reinterpret the
 //! source at its own width; addresses compare by identity, not content.
 
-use crate::abi::nib as rt;
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
+use crate::abi::nib as rt;
 use crate::hir::model::{self, Number, Op, Operand, Storage, TerminatorKind, TypeKind};
 use crate::hir::verify::{InvalidHIR, verify};
 use crate::support::hash::HashMap;
@@ -30,7 +30,10 @@ const DIVIDE_FAULT: &str = "division by zero or overflow";
 pub struct ExecutionError(pub String);
 
 impl fmt::Display for ExecutionError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut fmt::Formatter<'_>,
+    ) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
@@ -61,7 +64,11 @@ fn fail<T>(message: impl Into<String>) -> Outcome<T> {
 }
 
 /// Execute one function and return its captured output and result value.
-pub fn run(program: &model::Program, entry: &str, arguments: &[Number]) -> Outcome<Executed> {
+pub fn run(
+    program: &model::Program,
+    entry: &str,
+    arguments: &[Number],
+) -> Outcome<Executed> {
     run_limited(program, entry, arguments, STEP_LIMIT)
 }
 
@@ -95,12 +102,7 @@ pub fn run_with_input(
     let value = match machine.invoke(entry, arguments) {
         Err(_) if machine.ended => None,
         Err(_) if machine.panicked.is_some() => {
-            return Ok(Executed {
-                output: machine.output,
-                value: None,
-                leaked: 0,
-                panic: machine.panicked,
-            });
+            return Ok(Executed { output: machine.output, value: None, leaked: 0, panic: machine.panicked });
         }
         other => other?,
     };
@@ -114,12 +116,7 @@ pub fn run_with_input(
         Some(Scalar::Address(_)) => return fail(format!("{entry} returned an address")),
     };
     let leaked = machine.leaked();
-    Ok(Executed {
-        output: machine.output,
-        value,
-        leaked,
-        panic: None,
-    })
+    Ok(Executed { output: machine.output, value, leaked, panic: None })
 }
 
 type Memory = Rc<RefCell<Cells>>;
@@ -172,17 +169,10 @@ impl Scalar {
             Self::Int(value) => Ok(*value),
             Self::Float(value) => {
                 if !value.is_finite() {
-                    return fail(format!(
-                        "cannot convert {} to an integer",
-                        pyrepr::float(*value)
-                    ));
+                    return fail(format!("cannot convert {} to an integer", pyrepr::float(*value)));
                 }
                 // From 2**120 a double is a multiple of 2**68: zero at every width here.
-                Ok(if value.abs() >= 2f64.powi(120) {
-                    0
-                } else {
-                    value.trunc() as i128
-                })
+                Ok(if value.abs() >= 2f64.powi(120) { 0 } else { value.trunc() as i128 })
             }
             Self::Address(_) => fail("address used as a numeric value"),
         }
@@ -209,27 +199,36 @@ fn truth(value: bool) -> Scalar {
     Scalar::Int(-i128::from(value))
 }
 
-fn wrap(value: i128, bits: i64, signed: bool) -> i128 {
+fn wrap(
+    value: i128,
+    bits: i64,
+    signed: bool,
+) -> i128 {
     if bits >= 128 {
         return value;
     }
     let masked = value & ((1i128 << bits) - 1);
-    if signed && (masked >> (bits - 1)) & 1 != 0 {
-        masked - (1i128 << bits)
-    } else {
-        masked
-    }
+    if signed && (masked >> (bits - 1)) & 1 != 0 { masked - (1i128 << bits) } else { masked }
 }
 
-fn integer(value: i128, type_: &model::Type) -> i128 {
+fn integer(
+    value: i128,
+    type_: &model::Type,
+) -> i128 {
     wrap(value, type_.width * 8, type_.signed == Some(true))
 }
 
-fn unsigned(value: i128, type_: &model::Type) -> i128 {
+fn unsigned(
+    value: i128,
+    type_: &model::Type,
+) -> i128 {
     wrap(value, type_.width * 8, false)
 }
 
-fn normalized(value: Scalar, type_: &model::Type) -> Outcome<Scalar> {
+fn normalized(
+    value: Scalar,
+    type_: &model::Type,
+) -> Outcome<Scalar> {
     match type_.kind {
         TypeKind::Pointer => match value {
             // Null, as a moved-from string holds.
@@ -238,38 +237,37 @@ fn normalized(value: Scalar, type_: &model::Type) -> Outcome<Scalar> {
         },
         TypeKind::Float => {
             let number = value.float()?;
-            Ok(Scalar::Float(if type_.width == 4 {
-                f64::from(number as f32)
-            } else {
-                number
-            }))
+            Ok(Scalar::Float(if type_.width == 4 { f64::from(number as f32) } else { number }))
         }
         // A word copy of an aggregate carries its addresses.
         TypeKind::Integer if matches!(value, Scalar::Address(_)) => Ok(value),
         // An unsigned boolean's `true` is one, as C's; any other widens as
         // `movsx` widens it, the all-ones `true` being -1.
-        TypeKind::Boolean if type_.signed == Some(false) => Ok(Scalar::Int(i128::from(wrap(value.whole()?, type_.width * 8, false) != 0))),
+        TypeKind::Boolean if type_.signed == Some(false) => {
+            Ok(Scalar::Int(i128::from(wrap(value.whole()?, type_.width * 8, false) != 0)))
+        }
         TypeKind::Boolean => Ok(Scalar::Int(wrap(value.whole()?, type_.width * 8, true))),
         TypeKind::Integer => Ok(Scalar::Int(integer(value.whole()?, type_))),
-        _ => fail(format!(
-            "{}: aggregate values are not first-class",
-            type_.name
-        )),
+        _ => fail(format!("{}: aggregate values are not first-class", type_.name)),
     }
 }
 
 /// The truncated quotient, or `None` where the machine's divide faults:
 /// a zero divisor, or a quotient `type_` cannot hold.
-fn trunc_div(left: i128, right: i128, type_: &model::Type) -> Option<i128> {
+fn trunc_div(
+    left: i128,
+    right: i128,
+    type_: &model::Type,
+) -> Option<i128> {
     let quotient = left.checked_div(right)?;
     (integer(quotient, type_) == quotient).then_some(quotient)
 }
 
-fn fixed_text(raw: i128, fraction: i128) -> Outcome<String> {
-    let Some(power) = u32::try_from(fraction)
-        .ok()
-        .and_then(|one| 5u128.checked_pow(one))
-    else {
+fn fixed_text(
+    raw: i128,
+    fraction: i128,
+) -> Outcome<String> {
+    let Some(power) = u32::try_from(fraction).ok().and_then(|one| 5u128.checked_pow(one)) else {
         return fail(format!("fixed fraction {fraction} is out of range"));
     };
     let fraction = fraction as u32;
@@ -284,10 +282,7 @@ fn fixed_text(raw: i128, fraction: i128) -> Outcome<String> {
         let padded = format!("{scaled:0>width$}", width = fraction as usize);
         padded.trim_end_matches('0').to_owned()
     };
-    Ok(format!(
-        "{}{whole}.{digits}",
-        if raw < 0 { "-" } else { "" }
-    ))
+    Ok(format!("{}{whole}.{digits}", if raw < 0 { "-" } else { "" }))
 }
 
 /// `bytes` as the screen shows them.
@@ -353,7 +348,10 @@ struct Machine<'p> {
 }
 
 impl<'p> Machine<'p> {
-    fn new(program: &'p model::Program, limit: u64) -> Outcome<Self> {
+    fn new(
+        program: &'p model::Program,
+        limit: u64,
+    ) -> Outcome<Self> {
         verify(program)?;
         let [module] = program.modules.as_slice() else {
             return fail("the reference executor accepts one HIR module");
@@ -363,14 +361,7 @@ impl<'p> Machine<'p> {
             .iter()
             .map(|one| {
                 let bytes = one.bytes.iter().map(|byte| *byte as u8).collect();
-                (
-                    one.id,
-                    Rc::new(RefCell::new(Cells {
-                        bytes,
-                        pointers: HashMap::default(),
-                        dead: false,
-                    })),
-                )
+                (one.id, Rc::new(RefCell::new(Cells { bytes, pointers: HashMap::default(), dead: false })))
             })
             .collect::<HashMap<i64, Memory>>();
         // The word of a length and a capacity, as the program states it.
@@ -393,11 +384,7 @@ impl<'p> Machine<'p> {
         Ok(Self {
             program,
             types: module.types.iter().map(|one| (one.id, one)).collect(),
-            functions: module
-                .functions
-                .iter()
-                .map(|one| (one.name.as_str(), one))
-                .collect(),
+            functions: module.functions.iter().map(|one| (one.name.as_str(), one)).collect(),
             layouts: HashMap::default(),
             data,
             output: String::new(),
@@ -414,27 +401,19 @@ impl<'p> Machine<'p> {
         })
     }
 
-    fn layout(&mut self, function: &'p model::Function) -> Rc<Layout<'p>> {
+    fn layout(
+        &mut self,
+        function: &'p model::Function,
+    ) -> Rc<Layout<'p>> {
         if let Some(layout) = self.layouts.get(function.name.as_str()) {
             return layout.clone();
         }
-        let framed: Vec<&model::Place> = function
-            .places
-            .iter()
-            .filter(|one| matches!(one.storage, Storage::Local | Storage::Parameter))
-            .collect();
+        let framed: Vec<&model::Place> =
+            function.places.iter().filter(|one| matches!(one.storage, Storage::Local | Storage::Parameter)).collect();
         let base = framed.iter().map(|one| one.offset).min().unwrap_or(0);
-        let size = framed
-            .iter()
-            .map(|one| one.offset + one.extent.unwrap_or(0) - base)
-            .max()
-            .unwrap_or(0);
+        let size = framed.iter().map(|one| one.offset + one.extent.unwrap_or(0) - base).max().unwrap_or(0);
         let layout = Rc::new(Layout {
-            value_types: function
-                .values
-                .iter()
-                .map(|one| (one.id, self.types[&one.r#type]))
-                .collect(),
+            value_types: function.values.iter().map(|one| (one.id, self.types[&one.r#type])).collect(),
             places: function.places.iter().map(|one| (one.id, one)).collect(),
             blocks: function.blocks.iter().map(|one| (one.id, one)).collect(),
             base,
@@ -444,7 +423,11 @@ impl<'p> Machine<'p> {
         layout
     }
 
-    fn invoke(&mut self, name: &str, arguments: Vec<Scalar>) -> Outcome<Option<Scalar>> {
+    fn invoke(
+        &mut self,
+        name: &str,
+        arguments: Vec<Scalar>,
+    ) -> Outcome<Option<Scalar>> {
         let Some(&function) = self.functions.get(name) else {
             return fail(format!("unknown entry function {name:?}"));
         };
@@ -463,18 +446,11 @@ impl<'p> Machine<'p> {
         let locals = function
             .places
             .iter()
-            .filter(|one| {
-                !matches!(
-                    one.storage,
-                    Storage::Module | Storage::Local | Storage::Parameter
-                )
-            })
-            .map(|one| {
-                (
-                    one.id,
-                    memory(one.extent.unwrap_or(self.types[&one.r#type].width)),
-                )
-            })
+            .filter(|one| !matches!(
+                one.storage,
+                Storage::Module | Storage::Local | Storage::Parameter
+            ))
+            .map(|one| (one.id, memory(one.extent.unwrap_or(self.types[&one.r#type].width))))
             .collect();
         let frame = memory(layout.size);
         if self.program.frames == model::Frames::Own {
@@ -482,14 +458,9 @@ impl<'p> Machine<'p> {
             // stores: anything else a local holds is garbage.
             frame.borrow_mut().bytes.fill(0xCC);
         }
-        let mut activation = Activation {
-            name: &function.name,
-            frame,
-            layout,
-            values,
-            locals,
-        };
-        let _expires = Expiring(std::iter::once(&activation.frame).chain(activation.locals.values()).cloned().collect());
+        let mut activation = Activation { name: &function.name, frame, layout, values, locals };
+        let _expires =
+            Expiring(std::iter::once(&activation.frame).chain(activation.locals.values()).cloned().collect());
         let mut current = function.entry;
         loop {
             if self.remaining == 0 {
@@ -504,22 +475,11 @@ impl<'p> Machine<'p> {
             current = match terminator.kind {
                 TerminatorKind::Jump => terminator.targets[0],
                 TerminatorKind::Branch => {
-                    terminator.targets[if self
-                        .scalar(&activation, &terminator.operands[0])?
-                        .truthy()
-                    {
-                        0
-                    } else {
-                        1
-                    }]
+                    terminator.targets[if self.scalar(&activation, &terminator.operands[0])?.truthy() { 0 } else { 1 }]
                 }
                 TerminatorKind::Switch => {
                     let key = self.scalar(&activation, &terminator.operands[0])?.whole()?;
-                    let case = terminator
-                        .cases
-                        .iter()
-                        .rev()
-                        .find(|(value, _)| i128::from(*value) == key);
+                    let case = terminator.cases.iter().rev().find(|(value, _)| i128::from(*value) == key);
                     case.map_or(terminator.targets[0], |(_, target)| *target)
                 }
                 TerminatorKind::Return => {
@@ -548,17 +508,22 @@ impl<'p> Machine<'p> {
         }
     }
 
-    fn value(&self, activation: &Activation<'p>, value: i64) -> Outcome<Scalar> {
+    fn value(
+        &self,
+        activation: &Activation<'p>,
+        value: i64,
+    ) -> Outcome<Scalar> {
         match activation.values.get(&value) {
             Some(one) => Ok(one.clone()),
-            None => fail(format!(
-                "{}: value {value} used before definition",
-                activation.name
-            )),
+            None => fail(format!("{}: value {value} used before definition", activation.name)),
         }
     }
 
-    fn scalar(&self, activation: &Activation<'p>, operand: &Operand) -> Outcome<Scalar> {
+    fn scalar(
+        &self,
+        activation: &Activation<'p>,
+        operand: &Operand,
+    ) -> Outcome<Scalar> {
         match operand {
             Operand::Constant(constant) => {
                 let value = match constant.value {
@@ -584,7 +549,11 @@ impl<'p> Machine<'p> {
         }
     }
 
-    fn scoped_view(&self, activation: &Activation<'p>, descriptor: &model::DescriptorPlace) -> bool {
+    fn scoped_view(
+        &self,
+        activation: &Activation<'p>,
+        descriptor: &model::DescriptorPlace,
+    ) -> bool {
         activation.layout.value_types[&descriptor.base]
             .element
             .map(|one| self.types[&one])
@@ -593,16 +562,28 @@ impl<'p> Machine<'p> {
 
     /// The descriptor word `descriptor` names: a scoped view's own words, or
     /// the header before an owned buffer's data.
-    fn descriptor_location(&self, activation: &Activation<'p>, descriptor: &model::DescriptorPlace) -> Outcome<Location<'p>> {
+    fn descriptor_location(
+        &self,
+        activation: &Activation<'p>,
+        descriptor: &model::DescriptorPlace,
+    ) -> Outcome<Location<'p>> {
         let Some(Scalar::Address(address)) = activation.values.get(&descriptor.base) else {
             return fail("descriptor place has no address value");
         };
         let pointee = activation.layout.value_types[&descriptor.base].element.map(|one| self.types[&one]);
         let offset = descriptor.offset(pointee, self.program.descriptor_word);
-        Ok(Location { memory: address.memory.clone(), offset: address.offset + offset, type_: self.types[&descriptor.r#type] })
+        Ok(Location {
+            memory: address.memory.clone(),
+            offset: address.offset + offset,
+            type_: self.types[&descriptor.r#type],
+        })
     }
 
-    fn location(&self, activation: &Activation<'p>, operand: &Operand) -> Outcome<Location<'p>> {
+    fn location(
+        &self,
+        activation: &Activation<'p>,
+        operand: &Operand,
+    ) -> Outcome<Location<'p>> {
         let (place, indices, projection) = match operand {
             Operand::IndirectPlace(indirect) => {
                 let Some(Scalar::Address(address)) = activation.values.get(&indirect.base) else {
@@ -616,11 +597,9 @@ impl<'p> Machine<'p> {
             }
             Operand::PlaceRef(one) => (one.place, None, None),
             Operand::ArrayElement(one) => (one.place, Some(&one.indices), None),
-            Operand::ProjectedPlace(one) => (
-                one.place,
-                Some(&one.indices),
-                Some((one.offset, self.types[&one.r#type])),
-            ),
+            Operand::ProjectedPlace(one) => {
+                (one.place, Some(&one.indices), Some((one.offset, self.types[&one.r#type])))
+            }
             Operand::DescriptorPlace(descriptor) => {
                 return self.descriptor_location(activation, descriptor);
             }
@@ -631,16 +610,10 @@ impl<'p> Machine<'p> {
             Storage::Module => match self.data.get(&place.symbol) {
                 Some(memory) => (memory.clone(), place.offset),
                 None => {
-                    return fail(format!(
-                        "{}: unknown module object {}",
-                        place.name, place.symbol
-                    ));
+                    return fail(format!("{}: unknown module object {}", place.name, place.symbol));
                 }
             },
-            Storage::Local | Storage::Parameter => (
-                activation.frame.clone(),
-                place.offset - activation.layout.base,
-            ),
+            Storage::Local | Storage::Parameter => (activation.frame.clone(), place.offset - activation.layout.base),
             // A static backed by a data object, such as a float literal,
             // holds that object's bytes and keeps them across calls.
             Storage::Static if self.data.contains_key(&place.symbol) => {
@@ -650,11 +623,7 @@ impl<'p> Machine<'p> {
         };
         let array = self.types[&place.r#type];
         let Some(indices) = indices else {
-            return Ok(Location {
-                memory,
-                offset,
-                type_: array,
-            });
+            return Ok(Location { memory, offset, type_: array });
         };
         if let (Some((extra, type_)), false) = (projection, array.kind == TypeKind::Array) {
             if !indices.is_empty() {
@@ -663,11 +632,7 @@ impl<'p> Machine<'p> {
             if extra + type_.width > array.width {
                 return fail(format!("{}: projection exceeds its place", place.name));
             }
-            return Ok(Location {
-                memory,
-                offset: offset + extra,
-                type_,
-            });
+            return Ok(Location { memory, offset: offset + extra, type_ });
         }
         let (TypeKind::Array, Some(element)) = (array.kind, array.element) else {
             return fail(format!("{}: indexed place is not an array", place.name));
@@ -701,11 +666,7 @@ impl<'p> Machine<'p> {
         let element = self.types[&element];
         let (extra, type_) = projection.unwrap_or((0, element));
         let offset = i128::from(offset) + linear * i128::from(element.width) + i128::from(extra);
-        Ok(Location {
-            memory,
-            offset: offset as i64,
-            type_,
-        })
+        Ok(Location { memory, offset: offset as i64, type_ })
     }
 
     fn define(
@@ -756,8 +717,12 @@ impl<'p> Machine<'p> {
                 };
                 let mut cells = to.memory.borrow_mut();
                 cells.bytes[to_range].copy_from_slice(&data);
-                cells.pointers.retain(|(offset, width), _| !(to.offset < offset + width && *offset < to.offset + bytes));
-                cells.pointers.extend(held.into_iter().map(|((offset, width), address)| ((to.offset + offset, width), address)));
+                cells
+                    .pointers
+                    .retain(|(offset, width), _| !(to.offset < offset + width && *offset < to.offset + bytes));
+                cells
+                    .pointers
+                    .extend(held.into_iter().map(|((offset, width), address)| ((to.offset + offset, width), address)));
                 return Ok(());
             }
             Op::Store => {
@@ -769,30 +734,21 @@ impl<'p> Machine<'p> {
                 let mut extent = None;
                 if let Operand::PlaceRef(place) = &operands[0] {
                     let type_ = self.types[&activation.layout.places[&place.place].r#type];
-                    if let (TypeKind::Array, [(low, high)]) = (type_.kind, type_.bounds.as_slice())
-                    {
+                    if let (TypeKind::Array, [(low, high)]) = (type_.kind, type_.bounds.as_slice()) {
                         extent = Some(high - low + 1);
                     }
                 }
-                let address = Address {
-                    memory: where_.memory,
-                    offset: where_.offset,
-                    length: extent,
-                    capacity: extent,
-                };
+                let address =
+                    Address { memory: where_.memory, offset: where_.offset, length: extent, capacity: extent };
                 return self.define(activation, instruction, vec![Scalar::Address(address)]);
             }
             _ => {}
         }
-        let args = operands
-            .iter()
-            .map(|one| self.scalar(activation, one))
-            .collect::<Outcome<Vec<_>>>()?;
+        let args = operands.iter().map(|one| self.scalar(activation, one)).collect::<Outcome<Vec<_>>>()?;
         let operand_type = |index: usize| self.operand_type(activation, &operands[index]);
         let results = match op {
             Op::PtrOffset => {
-                let (Scalar::Address(address), Scalar::Int(displacement)) = (&args[0], &args[1])
-                else {
+                let (Scalar::Address(address), Scalar::Int(displacement)) = (&args[0], &args[1]) else {
                     return fail("pointer offset requires an address and an integer");
                 };
                 let mut address = address.clone();
@@ -813,10 +769,7 @@ impl<'p> Machine<'p> {
                     (_, true) => vec![],
                     (Some(value), false) => vec![value],
                     (None, false) => {
-                        return fail(format!(
-                            "{:?}: call did not return a value",
-                            instruction.callee
-                        ));
+                        return fail(format!("{:?}: call did not return a value", instruction.callee));
                     }
                 }
             }
@@ -827,22 +780,14 @@ impl<'p> Machine<'p> {
             }],
             Op::Copy => vec![args[0].clone()],
             Op::ZeroExtend => vec![Scalar::Int(unsigned(args[0].whole()?, operand_type(0)?))],
-            Op::SignExtend => vec![Scalar::Int(wrap(
-                args[0].whole()?,
-                operand_type(0)?.width * 8,
-                true,
-            ))],
+            Op::SignExtend => vec![Scalar::Int(wrap(args[0].whole()?, operand_type(0)?.width * 8, true))],
             Op::Truncate => {
                 let target = activation.layout.value_types[&instruction.results[0]];
                 let fits = match &args[0] {
                     Scalar::Float(value) => {
                         // Powers of two, so exact as doubles.
                         let half = 2f64.powi(target.width as i32 * 8 - 1);
-                        let (low, top) = if target.signed == Some(true) {
-                            (-half, half)
-                        } else {
-                            (0.0, 2.0 * half)
-                        };
+                        let (low, top) = if target.signed == Some(true) { (-half, half) } else { (0.0, 2.0 * half) };
                         value.is_finite() && (low..top).contains(&value.trunc())
                     }
                     other => {
@@ -864,8 +809,7 @@ impl<'p> Machine<'p> {
                 vec![if boolean { truth(!args[0].truthy()) } else { Scalar::Int(!args[0].whole()?) }]
             }
             Op::FixedMul | Op::FixedDiv => {
-                let (left, right, fraction) =
-                    (args[0].whole()?, args[1].whole()?, args[2].whole()?);
+                let (left, right, fraction) = (args[0].whole()?, args[1].whole()?, args[2].whole()?);
                 if !(0..64).contains(&fraction) {
                     return fail(format!("fixed fraction {fraction} is out of range"));
                 }
@@ -881,9 +825,14 @@ impl<'p> Machine<'p> {
             }
             // An array descriptor's adjusted offset is an address in the
             // model: adding a scaled subscript moves along its object.
-            Op::Add if matches!((&args[0], &args[1]), (Scalar::Address(_), Scalar::Int(_)) | (Scalar::Int(_), Scalar::Address(_))) => {
-                let ((Scalar::Address(address), Scalar::Int(displacement)) | (Scalar::Int(displacement), Scalar::Address(address))) =
-                    (&args[0], &args[1])
+            Op::Add
+                if matches!(
+                    (&args[0], &args[1]),
+                    (Scalar::Address(_), Scalar::Int(_)) | (Scalar::Int(_), Scalar::Address(_))
+                ) =>
+            {
+                let ((Scalar::Address(address), Scalar::Int(displacement))
+                | (Scalar::Int(displacement), Scalar::Address(address))) = (&args[0], &args[1])
                 else {
                     unreachable!("guard matched")
                 };
@@ -1002,24 +951,23 @@ impl<'p> Machine<'p> {
                     _ => value.exp2(),
                 };
                 // Python's math raises where IEEE would invent a NaN or overflow.
-                if (result.is_nan() && !value.is_nan())
-                    || (result.is_infinite() && value.is_finite())
-                {
+                if (result.is_nan() && !value.is_nan()) || (result.is_infinite() && value.is_finite()) {
                     return fail(format!("{op}: math domain error"));
                 }
                 vec![Scalar::Float(result)]
             }
             _ => {
-                return fail(format!(
-                    "{}: unsupported HIR operation {op}",
-                    activation.name
-                ));
+                return fail(format!("{}: unsupported HIR operation {op}", activation.name));
             }
         };
         self.define(activation, instruction, results)
     }
 
-    fn call(&mut self, name: Option<&str>, arguments: Vec<Scalar>) -> Outcome<Option<Scalar>> {
+    fn call(
+        &mut self,
+        name: Option<&str>,
+        arguments: Vec<Scalar>,
+    ) -> Outcome<Option<Scalar>> {
         let Some(name) = name else {
             return fail("call has no resolved callee");
         };
@@ -1033,8 +981,7 @@ impl<'p> Machine<'p> {
             return Ok(result);
         }
         if name == rt::PRINT_FIELD {
-            let [width, radix, fill, left] =
-                [0, 1, 2, 3].map(|index| arguments[index].whole().unwrap_or(0));
+            let [width, radix, fill, left] = [0, 1, 2, 3].map(|index| arguments[index].whole().unwrap_or(0));
             self.field = Some((width as usize, radix as u32, fill as u8, left != 0));
             return Ok(None);
         }
@@ -1044,12 +991,7 @@ impl<'p> Machine<'p> {
             rt::PRINT_STRING => cp437(&runtime::string_bytes(&arguments[0], self.word)?),
             rt::PRINT_VIEW => cp437(&runtime::descriptor_bytes(&arguments[0], self.word)?),
             rt::PRINT_Q2 | rt::PRINT_Q4 => fixed_text(arguments[0].whole()?, arguments[1].whole()?)?,
-            rt::PRINT_BOOL => if arguments[0].truthy() {
-                "true"
-            } else {
-                "false"
-            }
-            .to_owned(),
+            rt::PRINT_BOOL => if arguments[0].truthy() { "true" } else { "false" }.to_owned(),
             rt::PRINT_CHAR => match u8::try_from(arguments[0].whole()?) {
                 Ok(byte) => cp437(&[byte]),
                 Err(_) => return fail(format!("{} byte must be in range(0, 256)", rt::PRINT_CHAR)),
@@ -1067,13 +1009,14 @@ impl<'p> Machine<'p> {
 }
 
 /// `value` in base `radix`, lowercase, its sign in front.
-fn radix_text(value: i128, radix: u32) -> String {
+fn radix_text(
+    value: i128,
+    radix: u32,
+) -> String {
     let mut magnitude = value.unsigned_abs();
     let mut digits = Vec::new();
     loop {
-        digits.push(
-            std::char::from_digit((magnitude % u128::from(radix)) as u32, radix).expect("a digit"),
-        );
+        digits.push(std::char::from_digit((magnitude % u128::from(radix)) as u32, radix).expect("a digit"));
         magnitude /= u128::from(radix);
         if magnitude == 0 {
             break;
@@ -1084,7 +1027,12 @@ fn radix_text(value: i128, radix: u32) -> String {
 }
 
 /// `text` filled out to `width`; a zero fill goes after the sign.
-fn padded(text: String, width: usize, fill: u8, left: bool) -> String {
+fn padded(
+    text: String,
+    width: usize,
+    fill: u8,
+    left: bool,
+) -> String {
     let missing = width.saturating_sub(text.chars().count());
     let filler = (fill as char).to_string().repeat(missing);
     match (left, fill, text.strip_prefix('-')) {
@@ -1112,7 +1060,10 @@ fn compare(args: &[Scalar]) -> Outcome<Option<std::cmp::Ordering>> {
     }
 }
 
-fn ordered(op: Op, order: std::cmp::Ordering) -> bool {
+fn ordered(
+    op: Op,
+    order: std::cmp::Ordering,
+) -> bool {
     match op {
         Op::Lt => order.is_lt(),
         Op::Le => order.is_le(),
@@ -1121,7 +1072,10 @@ fn ordered(op: Op, order: std::cmp::Ordering) -> bool {
     }
 }
 
-fn span(where_: &Location<'_>, length: usize) -> Outcome<std::ops::Range<usize>> {
+fn span(
+    where_: &Location<'_>,
+    length: usize,
+) -> Outcome<std::ops::Range<usize>> {
     if where_.memory.borrow().dead {
         return fail("access through a pointer into a returned call's frame");
     }
@@ -1140,12 +1094,7 @@ fn load(where_: &Location<'_>) -> Outcome<Scalar> {
         return match cells.pointers.get(&(where_.offset, type_.width)) {
             Some(address) => Ok(Scalar::Address(address.clone())),
             // A null pointer, as a moved-from string holds.
-            None if cells.bytes[span(where_, type_.width as usize)?]
-                .iter()
-                .all(|one| *one == 0) =>
-            {
-                Ok(Scalar::Int(0))
-            }
+            None if cells.bytes[span(where_, type_.width as usize)?].iter().all(|one| *one == 0) => Ok(Scalar::Int(0)),
             None => fail("pointer load reads an uninitialized address cell"),
         };
     }
@@ -1157,30 +1106,33 @@ fn load(where_: &Location<'_>) -> Outcome<Scalar> {
     // object an offset joined to it addresses.
     if type_.width == 2 {
         if let Some(far) = cells.pointers.get(&(where_.offset - 2, 4)) {
-            return Ok(Scalar::Address(Address { memory: far.memory.clone(), offset: far.offset, length: None, capacity: None }));
+            return Ok(Scalar::Address(Address {
+                memory: far.memory.clone(),
+                offset: far.offset,
+                length: None,
+                capacity: None,
+            }));
         }
     }
     let data = &cells.bytes[span(where_, type_.width as usize)?];
     match type_.kind {
         TypeKind::Float => match data.len() {
-            4 => Ok(Scalar::Float(f64::from(f32::from_le_bytes(
-                data.try_into().unwrap(),
-            )))),
+            4 => Ok(Scalar::Float(f64::from(f32::from_le_bytes(data.try_into().unwrap())))),
             8 => Ok(Scalar::Float(f64::from_le_bytes(data.try_into().unwrap()))),
             _ => fail(format!("cannot load {}", type_.name)),
         },
         TypeKind::Integer | TypeKind::Boolean => {
-            let raw = data
-                .iter()
-                .rev()
-                .fold(0i128, |value, byte| value << 8 | i128::from(*byte));
+            let raw = data.iter().rev().fold(0i128, |value, byte| value << 8 | i128::from(*byte));
             Ok(Scalar::Int(integer(raw, type_)))
         }
         _ => fail(format!("cannot load first-class {}", type_.name)),
     }
 }
 
-fn store(where_: &Location<'_>, value: Scalar) -> Outcome<()> {
+fn store(
+    where_: &Location<'_>,
+    value: Scalar,
+) -> Outcome<()> {
     let type_ = where_.type_;
     let value = normalized(value, type_)?;
     let data = match (&value, type_.kind) {
@@ -1197,9 +1149,7 @@ fn store(where_: &Location<'_>, value: Scalar) -> Outcome<()> {
     if let Scalar::Address(address) = value {
         cells.pointers.insert((where_.offset, type_.width), address);
     } else {
-        cells
-            .pointers
-            .retain(|(offset, width), _| !(where_.offset < offset + width && *offset < after));
+        cells.pointers.retain(|(offset, width), _| !(where_.offset < offset + width && *offset < after));
     }
     Ok(())
 }
@@ -1209,4 +1159,3 @@ mod runtime;
 
 #[path = "execute_qb.rs"]
 mod qb;
-

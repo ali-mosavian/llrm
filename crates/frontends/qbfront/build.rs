@@ -4,9 +4,7 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use buildprs::buildprs_generator::{
-    generate_tables_from_grammar, parse_opcode_equates_from_peropcod,
-};
+use buildprs::buildprs_generator::{generate_tables_from_grammar, parse_opcode_equates_from_peropcod};
 use buildprs::buildprs_grammar::parse_grammar_file;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -90,8 +88,8 @@ fn main() -> io::Result<()> {
     println!("cargo:rerun-if-changed={}", action_schema.display());
     println!("cargo:rerun-if-changed={}", extension_schema.display());
 
-    let grammar_file = parse_grammar_file(&grammar)
-        .unwrap_or_else(|error| panic!("failed to parse {}: {error}", grammar.display()));
+    let grammar_file =
+        parse_grammar_file(&grammar).unwrap_or_else(|error| panic!("failed to parse {}: {error}", grammar.display()));
     let opcode_source = fs::read_to_string(&peropcod)?;
     let tables = generate_tables_from_grammar(&grammar_file, &opcode_source)
         .unwrap_or_else(|error| panic!("failed to generate QB parser tables: {error}"));
@@ -106,14 +104,7 @@ fn main() -> io::Result<()> {
     validate_dialect_extensions(&extensions, &tokens)
         .unwrap_or_else(|error| panic!("invalid {}: {error}", extension_schema.display()));
 
-    let output = render(
-        &grammar_file,
-        &tables,
-        &tokens,
-        &opcodes,
-        &mappings,
-        &extensions,
-    );
+    let output = render(&grammar_file, &tables, &tokens, &opcodes, &mappings, &extensions);
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     fs::write(out.join("qbasic_parser_tables.rs"), output)
 }
@@ -169,11 +160,8 @@ fn render(
     render_pairs(&mut out, "T_FUNC_DISPATCH", &function_dispatch);
 
     out.push_str("pub const TOKENS: &[(&str, &str, u16, u8)] = &[\n");
-    let by_name = grammar
-        .tokens
-        .iter()
-        .map(|token| (token.name.as_str(), token))
-        .collect::<std::collections::BTreeMap<_, _>>();
+    let by_name =
+        grammar.tokens.iter().map(|token| (token.name.as_str(), token)).collect::<std::collections::BTreeMap<_, _>>();
     let mut ordered = tokens
         .tk_to_irw
         .iter()
@@ -186,12 +174,7 @@ fn render(
         .collect::<Vec<_>>();
     ordered.sort_by_key(|&(id, _, _, _)| id);
     for (id, name, spelling, flags) in ordered {
-        writeln!(
-            out,
-            "    ({:?}, {:?}, {}, 0x{:02X}),",
-            name, spelling, id, flags
-        )
-        .unwrap();
+        writeln!(out, "    ({:?}, {:?}, {}, 0x{:02X}),", name, spelling, id, flags).unwrap();
     }
     out.push_str("];\n\n");
 
@@ -211,9 +194,7 @@ fn parse_dialect_extensions(source: &str) -> Result<Vec<DialectExtension>, Strin
             return Ok(());
         }
         let mut required = |name: &str| {
-            fields
-                .remove(name)
-                .ok_or_else(|| format!("extension ending at line {line_number} requires {name}"))
+            fields.remove(name).ok_or_else(|| format!("extension ending at line {line_number} requires {name}"))
         };
         let identity = required("identity")?;
         let action = required("action")?;
@@ -224,16 +205,11 @@ fn parse_dialect_extensions(source: &str) -> Result<Vec<DialectExtension>, Strin
                 item.strip_prefix("token:")
                     .map(|name| ExtensionPattern::GrammarToken(name.to_string()))
                     .or_else(|| {
-                        item.strip_prefix("keyword:")
-                            .map(|word| ExtensionPattern::Keyword(word.to_ascii_uppercase()))
+                        item.strip_prefix("keyword:").map(|word| ExtensionPattern::Keyword(word.to_ascii_uppercase()))
                     })
                     .or_else(|| (item == "capture:label").then_some(ExtensionPattern::Label))
-                    .or_else(|| {
-                        (item == "capture:identifier").then_some(ExtensionPattern::Identifier)
-                    })
-                    .or_else(|| {
-                        (item == "capture:string").then_some(ExtensionPattern::StringLiteral)
-                    })
+                    .or_else(|| (item == "capture:identifier").then_some(ExtensionPattern::Identifier))
+                    .or_else(|| (item == "capture:string").then_some(ExtensionPattern::StringLiteral))
                     .ok_or_else(|| format!("extension {identity} has invalid pattern item {item}"))
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -242,12 +218,7 @@ fn parse_dialect_extensions(source: &str) -> Result<Vec<DialectExtension>, Strin
             let unknown = fields.keys().next().expect("not empty");
             return Err(format!("extension {identity} has unknown field {unknown}"));
         }
-        extensions.push(DialectExtension {
-            identity,
-            action,
-            pattern,
-            tail,
-        });
+        extensions.push(DialectExtension { identity, action, pattern, tail });
         Ok(())
     };
 
@@ -272,10 +243,7 @@ fn parse_dialect_extensions(source: &str) -> Result<Vec<DialectExtension>, Strin
         if !matches!(key, "identity" | "action" | "pattern" | "tail") {
             return Err(format!("line {line_number}: unknown field {key}"));
         }
-        if fields
-            .insert(key.to_string(), value[1..value.len() - 1].to_string())
-            .is_some()
-        {
+        if fields.insert(key.to_string(), value[1..value.len() - 1].to_string()).is_some() {
             return Err(format!("line {line_number}: duplicate field {key}"));
         }
     }
@@ -291,55 +259,42 @@ fn validate_dialect_extensions(
     let mut actions = std::collections::BTreeSet::new();
     for extension in extensions {
         if !identities.insert(extension.identity.as_str()) {
-            return Err(format!(
-                "duplicate extension identity {}",
-                extension.identity
-            ));
+            return Err(format!("duplicate extension identity {}", extension.identity));
         }
         if !actions.insert(extension.action.as_str()) {
             return Err(format!("duplicate extension action {}", extension.action));
         }
         if extension.pattern.is_empty() {
-            return Err(format!(
-                "extension {} has an empty pattern",
-                extension.identity
-            ));
+            return Err(format!("extension {} has an empty pattern", extension.identity));
         }
-        if !extension.action.chars().enumerate().all(|(index, ch)| {
-            ch.is_ascii_alphanumeric() && (index != 0 || ch.is_ascii_uppercase())
-        }) {
-            return Err(format!(
-                "extension action {} is not a Rust enum variant",
-                extension.action
-            ));
+        if !extension
+            .action
+            .chars()
+            .enumerate()
+            .all(|(index, ch)| ch.is_ascii_alphanumeric() && (index != 0 || ch.is_ascii_uppercase()))
+        {
+            return Err(format!("extension action {} is not a Rust enum variant", extension.action));
         }
         for item in &extension.pattern {
             match item {
                 ExtensionPattern::GrammarToken(name) if !tokens.tk_to_irw.contains_key(name) => {
-                    return Err(format!(
-                        "extension {} names unknown grammar token {name}",
-                        extension.identity
-                    ));
+                    return Err(format!("extension {} names unknown grammar token {name}", extension.identity));
                 }
                 ExtensionPattern::Keyword(keyword)
-                    if keyword.is_empty()
-                        || !keyword.bytes().all(|byte| byte.is_ascii_uppercase()) =>
+                    if keyword.is_empty() || !keyword.bytes().all(|byte| byte.is_ascii_uppercase()) =>
                 {
-                    return Err(format!(
-                        "extension {} has invalid keyword {keyword}",
-                        extension.identity
-                    ));
+                    return Err(format!("extension {} has invalid keyword {keyword}", extension.identity));
                 }
                 ExtensionPattern::Label => {}
                 ExtensionPattern::Identifier | ExtensionPattern::StringLiteral => {}
                 _ => {}
             }
         }
-        if !matches!(extension.tail.as_str(), "none" | "function_signature" | "letter_ranges") {
-            return Err(format!(
-                "extension {} has unknown tail {}",
-                extension.identity, extension.tail
-            ));
+        if !matches!(
+            extension.tail.as_str(),
+            "none" | "function_signature" | "letter_ranges"
+        ) {
+            return Err(format!("extension {} has unknown tail {}", extension.identity, extension.tail));
         }
     }
     Ok(())
@@ -362,12 +317,7 @@ fn parse_action_schema(source: &str) -> Result<Vec<ActionMapping>, String> {
                 "emit" => MappingKind::Emit,
                 "external" => MappingKind::External,
                 "dispatch" => MappingKind::Dispatch,
-                _ => {
-                    return Err(format!(
-                        "line {}: unknown section {section}",
-                        line_number + 1
-                    ))
-                }
+                _ => return Err(format!("line {}: unknown section {section}", line_number + 1)),
             };
             current = Some(ActionMapping {
                 kind,
@@ -396,12 +346,8 @@ fn parse_action_schema(source: &str) -> Result<Vec<ActionMapping>, String> {
             "operand" => mapping.operand = Some(value.into()),
             "shape" => mapping.shape = Some(value.into()),
             "retains" => {
-                mapping.retains = value
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|fact| !fact.is_empty())
-                    .map(str::to_string)
-                    .collect();
+                mapping.retains =
+                    value.split(',').map(str::trim).filter(|fact| !fact.is_empty()).map(str::to_string).collect();
             }
             other => return Err(format!("line {}: unknown field {other}", line_number + 1)),
         }
@@ -418,9 +364,7 @@ fn finish_mapping(
     line_number: usize,
 ) -> Result<(), String> {
     if mapping.identity.is_empty() || mapping.action.is_empty() {
-        return Err(format!(
-            "mapping ending at line {line_number} requires identity and action"
-        ));
+        return Err(format!("mapping ending at line {line_number} requires identity and action"));
     }
     mappings.push(mapping);
     Ok(())
@@ -435,18 +379,15 @@ fn validate_action_schema(
     let mut seen = std::collections::BTreeSet::new();
     for mapping in mappings {
         if !seen.insert((mapping.kind as u8, mapping.identity.as_str())) {
-            return Err(format!(
-                "duplicate {:?} identity {}",
-                mapping.kind, mapping.identity
-            ));
+            return Err(format!("duplicate {:?} identity {}", mapping.kind, mapping.identity));
         }
-        if !mapping.action.chars().enumerate().all(|(index, ch)| {
-            ch.is_ascii_alphanumeric() && (index != 0 || ch.is_ascii_uppercase())
-        }) {
-            return Err(format!(
-                "action {} is not a Rust enum variant",
-                mapping.action
-            ));
+        if !mapping
+            .action
+            .chars()
+            .enumerate()
+            .all(|(index, ch)| ch.is_ascii_alphanumeric() && (index != 0 || ch.is_ascii_uppercase()))
+        {
+            return Err(format!("action {} is not a Rust enum variant", mapping.action));
         }
         match mapping.kind {
             MappingKind::Emit if !opcodes.contains_key(&mapping.identity) => {
@@ -461,10 +402,7 @@ fn validate_action_schema(
             _ => {}
         }
         if mapping.kind == MappingKind::External && mapping.retains.is_empty() {
-            return Err(format!(
-                "external action {} must declare retained source facts",
-                mapping.identity
-            ));
+            return Err(format!("external action {} must declare retained source facts", mapping.identity));
         }
         for fact in &mapping.retains {
             if !AST_SOURCE_FACTS.contains(&fact.as_str()) {
@@ -494,10 +432,8 @@ fn render_ast_actions(
         .filter(|mapping| mapping.kind == MappingKind::External)
         .map(|mapping| mapping.action.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    let shapes = mappings
-        .iter()
-        .filter_map(|mapping| mapping.shape.as_deref())
-        .collect::<std::collections::BTreeSet<_>>();
+    let shapes =
+        mappings.iter().filter_map(|mapping| mapping.shape.as_deref()).collect::<std::collections::BTreeSet<_>>();
     let operand_actions = mappings
         .iter()
         .filter(|mapping| mapping.operand.is_some())
@@ -527,7 +463,9 @@ fn render_ast_actions(
         }
     }
     out.push_str("}\n\n");
-    out.push_str("impl AstAction {\n    pub fn statement_shape(&self) -> Option<StatementShape> {\n        match self {\n");
+    out.push_str(
+        "impl AstAction {\n    pub fn statement_shape(&self) -> Option<StatementShape> {\n        match self {\n",
+    );
     let mut rendered_actions = std::collections::BTreeSet::new();
     for mapping in mappings.iter().filter(|mapping| mapping.shape.is_some()) {
         if !rendered_actions.insert(mapping.action.as_str()) {
@@ -540,10 +478,7 @@ fn render_ast_actions(
     out.push_str("            _ => None,\n        }\n    }\n}\n\n");
 
     out.push_str("fn one_emit_action(id: u16) -> AstAction {\n    match id {\n");
-    for mapping in mappings
-        .iter()
-        .filter(|mapping| mapping.kind == MappingKind::Emit)
-    {
+    for mapping in mappings.iter().filter(|mapping| mapping.kind == MappingKind::Emit) {
         let id = opcodes[&mapping.identity];
         let action = render_action_value(mapping);
         writeln!(out, "        {id} => {action},").unwrap();
@@ -561,10 +496,7 @@ fn render_ast_actions(
     out.push_str("pub fn emit_actions(word: u16) -> [Option<AstAction>; 2] {\n    if word == u16::MAX {\n        return [Some(AstAction::OperandPlaceholder), None];\n    }\n    let primary = one_emit_action(word & 0x03ff);\n    let secondary_id = word >> 10;\n    let secondary = (secondary_id != 0).then(|| one_emit_action(secondary_id));\n    [Some(primary), secondary]\n}\n\n");
 
     out.push_str("pub fn dispatch_action(token: u16) -> Option<AstAction> {\n    match token {\n");
-    for mapping in mappings
-        .iter()
-        .filter(|mapping| mapping.kind == MappingKind::Dispatch)
-    {
+    for mapping in mappings.iter().filter(|mapping| mapping.kind == MappingKind::Dispatch) {
         let irw = &tokens.tk_to_irw[&mapping.identity];
         let id = tokens.irw_ids[irw];
         let action = render_action_value(mapping);
@@ -576,26 +508,13 @@ fn render_ast_actions(
     for variant in external_variants {
         writeln!(out, "    {variant},").unwrap();
     }
-    out.push_str(
-        "}\n\npub fn external_action(name: &str) -> Option<ExternalAction> {\n    match name {\n",
-    );
-    for mapping in mappings
-        .iter()
-        .filter(|mapping| mapping.kind == MappingKind::External)
-    {
-        writeln!(
-            out,
-            "        {:?} => Some(ExternalAction::{}),",
-            mapping.identity, mapping.action
-        )
-        .unwrap();
+    out.push_str("}\n\npub fn external_action(name: &str) -> Option<ExternalAction> {\n    match name {\n");
+    for mapping in mappings.iter().filter(|mapping| mapping.kind == MappingKind::External) {
+        writeln!(out, "        {:?} => Some(ExternalAction::{}),", mapping.identity, mapping.action).unwrap();
     }
     out.push_str("        _ => None,\n    }\n}\n\n");
     out.push_str("pub const EXTERNAL_RETAINED_FACTS: &[(&str, &[&str])] = &[\n");
-    for mapping in mappings
-        .iter()
-        .filter(|mapping| mapping.kind == MappingKind::External)
-    {
+    for mapping in mappings.iter().filter(|mapping| mapping.kind == MappingKind::External) {
         write!(out, "    ({:?}, &[", mapping.identity).unwrap();
         for fact in &mapping.retains {
             write!(out, "{:?}, ", fact).unwrap();
@@ -614,9 +533,7 @@ fn render_dialect_extensions(
     extensions: &[DialectExtension],
     tokens: &buildprs::buildprs_tokens::TokenArtifacts,
 ) {
-    out.push_str(
-        "\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum GeneratedExtensionAction {\n",
-    );
+    out.push_str("\n#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum GeneratedExtensionAction {\n");
     for extension in extensions {
         writeln!(out, "    {},", extension.action).unwrap();
     }
@@ -627,11 +544,7 @@ fn render_dialect_extensions(
     out.push_str("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum ExtensionTail {\n    None,\n    FunctionSignature,\n    LetterRanges,\n}\n\n");
     out.push_str("#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub struct ExtensionSpec {\n    pub identity: &'static str,\n    pub action: GeneratedExtensionAction,\n    pub pattern: &'static [ExtensionPatternToken],\n    pub tail: ExtensionTail,\n}\n\n");
     for (index, extension) in extensions.iter().enumerate() {
-        writeln!(
-            out,
-            "const EXTENSION_PATTERN_{index}: &[ExtensionPatternToken] = &["
-        )
-        .unwrap();
+        writeln!(out, "const EXTENSION_PATTERN_{index}: &[ExtensionPatternToken] = &[").unwrap();
         for item in &extension.pattern {
             match item {
                 ExtensionPattern::GrammarToken(name) => {
@@ -712,7 +625,11 @@ fn render_shape(mapping: &ActionMapping) -> String {
     }
 }
 
-fn render_strings(out: &mut String, name: &str, values: &[String]) {
+fn render_strings(
+    out: &mut String,
+    name: &str,
+    values: &[String],
+) {
     writeln!(out, "pub const {name}: &[&str] = &[").unwrap();
     for value in values {
         writeln!(out, "    {:?},", value).unwrap();
@@ -720,7 +637,11 @@ fn render_strings(out: &mut String, name: &str, values: &[String]) {
     out.push_str("];\n\n");
 }
 
-fn render_pairs(out: &mut String, name: &str, values: &[(u16, u16)]) {
+fn render_pairs(
+    out: &mut String,
+    name: &str,
+    values: &[(u16, u16)],
+) {
     writeln!(out, "pub const {name}: &[(u16, u16)] = &[").unwrap();
     for (left, right) in values {
         writeln!(out, "    ({left}, {right}),").unwrap();

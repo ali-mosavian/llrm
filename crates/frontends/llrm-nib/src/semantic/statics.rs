@@ -30,7 +30,10 @@ pub(super) struct StaticLayout {
 /// only a function it calls names is not among them.
 pub(super) fn shared(module: &Module) -> BTreeSet<String> {
     let mut named = BTreeSet::new();
-    let handlers = module.functions.iter().filter(|one| module.exports.get(&one.name).is_some_and(|export| export.abi.is_some_and(Abi::interrupt)));
+    let handlers = module
+        .functions
+        .iter()
+        .filter(|one| module.exports.get(&one.name).is_some_and(|export| export.abi.is_some_and(Abi::interrupt)));
     for handler in handlers {
         for statement in &mut handler.body.clone() {
             let mut name_in = |expression: &mut Expr| {
@@ -43,7 +46,9 @@ pub(super) fn shared(module: &Module) -> BTreeSet<String> {
                 if let Statement::Assign { target, .. } = one {
                     let _ = match target {
                         AssignTarget::Name(name) => name_in(&mut Expr::Name(name.clone(), Span::new(0, 0, 0))),
-                        AssignTarget::Index { base, .. } | AssignTarget::Member { base, .. } | AssignTarget::Deref(base) => base.walk_mut(&mut name_in),
+                        AssignTarget::Index { base, .. }
+                        | AssignTarget::Member { base, .. }
+                        | AssignTarget::Deref(base) => base.walk_mut(&mut name_in),
                     };
                 }
             });
@@ -59,12 +64,17 @@ impl TypeRegistry {
     /// to a dword; a struct's, the widest field's up to its pack, which is
     /// two bytes unless `@repr` says less -- and a represented struct is
     /// laid out as its foreign ABI says, so no more is claimed of it.
-    fn alignment_of(&self, element: ElementType) -> u32 {
+    fn alignment_of(
+        &self,
+        element: ElementType,
+    ) -> u32 {
         match element {
             ElementType::Scalar(_) => self.width(element.id()).clamp(1, 4),
             ElementType::Struct(id) if self.represented.contains(&id) => 1,
             ElementType::Struct(id) => match self.structure(id) {
-                Some(layout) => layout.fields.values().map(|field| self.alignment_of(field.type_)).max().unwrap_or(1).min(2),
+                Some(layout) => {
+                    layout.fields.values().map(|field| self.alignment_of(field.type_)).max().unwrap_or(1).min(2)
+                }
                 None => 1,
             },
         }
@@ -72,11 +82,22 @@ impl TypeRegistry {
 
     /// Lays out each module variable as writable data, its value encoded;
     /// those in `shared` are volatile.
-    pub(super) fn register_statics(&mut self, statics: &[Static], shared: &BTreeSet<String>, module_name: &str, literals: &mut LiteralPool) -> Result<(), Diagnostic> {
+    pub(super) fn register_statics(
+        &mut self,
+        statics: &[Static],
+        shared: &BTreeSet<String>,
+        module_name: &str,
+        literals: &mut LiteralPool,
+    ) -> Result<(), Diagnostic> {
         for declared in statics {
             let (binding, type_id, element, dims) = match &declared.annotation {
                 TypeAnnotation::Value(spec) => match self.resolve_element(spec, declared.span)? {
-                    ElementType::Scalar(type_name) => (BindingType::Scalar(type_name), super::type_id(type_name), ElementType::Scalar(type_name), Vec::new()),
+                    ElementType::Scalar(type_name) => (
+                        BindingType::Scalar(type_name),
+                        super::type_id(type_name),
+                        ElementType::Scalar(type_name),
+                        Vec::new(),
+                    ),
                     ElementType::Struct(id) => (BindingType::Struct(id), id, ElementType::Struct(id), Vec::new()),
                 },
                 TypeAnnotation::Array { element, dims } => {
@@ -84,7 +105,9 @@ impl TypeRegistry {
                     let shape = Shape::new(dims);
                     (BindingType::Array { element, shape }, self.array(element, shape), element, dims.clone())
                 }
-                TypeAnnotation::Slice { .. } => return Err(Diagnostic::new(declared.span, "a module variable owns its storage: give it a length")),
+                TypeAnnotation::Slice { .. } => {
+                    return Err(Diagnostic::new(declared.span, "a module variable owns its storage: give it a length"));
+                }
             };
             let count: u32 = dims.iter().product();
             let mut bytes = vec![0; (count * self.width(element.id())) as usize];
@@ -94,7 +117,14 @@ impl TypeRegistry {
                 return Err(Diagnostic::new(declared.span, "only an array is 'huge var'"));
             }
             if !declared.huge && u64::from(extent) > self.sizes.max_object {
-                return Err(Diagnostic::new(declared.span, format!("{} takes {extent} bytes, past DGROUP's {} bytes: declare it 'huge var'", declared.name, self.sizes.max_object + 1)));
+                return Err(Diagnostic::new(
+                    declared.span,
+                    format!(
+                        "{} takes {extent} bytes, past DGROUP's {} bytes: declare it 'huge var'",
+                        declared.name,
+                        self.sizes.max_object + 1
+                    ),
+                ));
             }
             // Where far is near a huge object is in the one space: no segment of its own.
             let huge = declared.huge && self.sizes.segmented;
@@ -105,7 +135,10 @@ impl TypeRegistry {
             let symbol = literals.object(&format!("$var_{}", declared.name), bytes, false, segment);
             let volatile = shared.contains(&declared.name);
             let align = self.alignment_of(element);
-            self.statics.insert(declared.name.clone(), StaticLayout { symbol, binding, type_id, extent, volatile, align, huge });
+            self.statics.insert(
+                declared.name.clone(),
+                StaticLayout { symbol, binding, type_id, extent, volatile, align, huge },
+            );
         }
         Ok(())
     }
@@ -113,9 +146,14 @@ impl TypeRegistry {
 
 impl FunctionCompiler<'_> {
     /// Whether `operand` is a place in a huge module variable.
-    pub(super) fn in_huge(&self, operand: &hir::Operand) -> bool {
+    pub(super) fn in_huge(
+        &self,
+        operand: &hir::Operand,
+    ) -> bool {
         let place = match operand {
-            hir::Operand::Place(place) | hir::Operand::ArrayElement(place, _) | hir::Operand::ProjectedPlace { place, .. } => *place,
+            hir::Operand::Place(place)
+            | hir::Operand::ArrayElement(place, _)
+            | hir::Operand::ProjectedPlace { place, .. } => *place,
             _ => return false,
         };
         let symbol = self.places.iter().find(|one| one.id == place && one.storage == "module").map(|one| one.symbol);
@@ -124,7 +162,8 @@ impl FunctionCompiler<'_> {
 
     /// Each module variable, named in the outermost scope.
     pub(super) fn bind_statics(&mut self) {
-        let statics: Vec<(String, StaticLayout)> = self.types.statics.iter().map(|(name, one)| (name.clone(), *one)).collect();
+        let statics: Vec<(String, StaticLayout)> =
+            self.types.statics.iter().map(|(name, one)| (name.clone(), *one)).collect();
         for (name, layout) in statics {
             let id = self.next_place;
             self.next_place += 1;
@@ -147,7 +186,15 @@ impl FunctionCompiler<'_> {
 impl TypeRegistry {
     /// Writes `value` into `bytes` at `at`: `element`s filling `dims`,
     /// row-major, a struct's fields at their offsets.
-    fn encode(&self, bytes: &mut [u8], at: u32, value: &Expr, element: ElementType, dims: &[u32], span: Span) -> Result<(), Diagnostic> {
+    fn encode(
+        &self,
+        bytes: &mut [u8],
+        at: u32,
+        value: &Expr,
+        element: ElementType,
+        dims: &[u32],
+        span: Span,
+    ) -> Result<(), Diagnostic> {
         let width = self.width(element.id());
         if !dims.is_empty() {
             let count: u32 = dims.iter().product();
@@ -185,7 +232,8 @@ impl TypeRegistry {
         let number = match folded.as_ref() {
             Some(Expr::Boolean(value, _)) => i64::from(*value),
             Some(Expr::Character(value, _)) => i64::from(*value),
-            Some(one) => super::super::consts::integer(one).ok_or_else(|| Diagnostic::new(value.span(), "a module variable starts as an integer, char or bool"))?,
+            Some(one) => super::super::consts::integer(one)
+                .ok_or_else(|| Diagnostic::new(value.span(), "a module variable starts as an integer, char or bool"))?,
             None => return Err(Diagnostic::new(value.span(), "a module variable's value is a compile-time value")),
         };
         let start = at as usize;

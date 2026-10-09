@@ -8,8 +8,8 @@
 
 /// Location lists say where a value is over each range of the code.
 pub const LOCATION_RANGES: bool = true;
-/// A frame cell is placed from the canonical frame address, which call frame information gives at every address: `-g` keeps no
-/// frame register for it.
+/// A frame cell is placed from the canonical frame address, which call frame information gives at every address: `-g`
+/// keeps no frame register for it.
 pub const CFA_LOCATIONS: bool = true;
 
 mod buffer;
@@ -18,10 +18,9 @@ mod frame;
 mod line;
 mod types;
 
+pub use buffer::{sleb, uleb};
 use llrm_object::debug::{Format, Info};
 use llrm_object::{Definition, Object, Reloc, Role, Section, Target, Unsupported};
-
-pub use buffer::{sleb, uleb};
 
 /// The version DWARF is written in when the format does not say.
 pub const DEFAULT_VERSION: u16 = 5;
@@ -31,7 +30,10 @@ fn refused<T>(what: impl std::fmt::Display) -> Result<T, Unsupported> {
 }
 
 /// Where in `object` a section's address is: a symbol defined in it, and the symbol's offset.
-pub(crate) fn anchor(object: &Object, section: usize) -> Result<(usize, usize), Unsupported> {
+pub(crate) fn anchor(
+    object: &Object,
+    section: usize,
+) -> Result<(usize, usize), Unsupported> {
     object
         .symbols
         .iter()
@@ -40,11 +42,16 @@ pub(crate) fn anchor(object: &Object, section: usize) -> Result<(usize, usize), 
             Definition::Defined { section: at, offset } if at == section => Some((index, offset)),
             _ => None,
         })
-        .ok_or_else(|| Unsupported(format!("DWARF: section {} has no symbol to address it by", object.sections[section].name)))
+        .ok_or_else(|| {
+            Unsupported(format!("DWARF: section {} has no symbol to address it by", object.sections[section].name))
+        })
 }
 
 /// `object` with its debug information written as DWARF sections, and `debug` cleared.
-pub fn expanded(object: &Object, info: &Info) -> Result<Object, Unsupported> {
+pub fn expanded(
+    object: &Object,
+    info: &Info,
+) -> Result<Object, Unsupported> {
     let version = match info.format {
         Format::Default => DEFAULT_VERSION,
         Format::Dwarf { version } if matches!(version, 4 | 5) => version,
@@ -61,7 +68,16 @@ pub fn expanded(object: &Object, info: &Info) -> Result<Object, Unsupported> {
     }
     names.extend([".debug_line", ".debug_info", ".debug_aranges"]);
     // The section of location lists, where any variable has one.
-    let lists = info.globals.iter().chain(info.functions.iter().flat_map(|one| one.variables.iter().chain(one.blocks.iter().flat_map(blocks)))).any(|one| matches!(&one.location, llrm_object::debug::Location::List(entries) if !entries.is_empty()));
+    let lists = info
+        .globals
+        .iter()
+        .chain(info.functions.iter().flat_map(|one| one.variables.iter().chain(one.blocks.iter().flat_map(blocks))))
+        .any(|one| {
+            matches!(
+                &one.location,
+                llrm_object::debug::Location::List(entries) if !entries.is_empty()
+            )
+        });
     if lists {
         names.push(if version >= 5 { ".debug_loclists" } else { ".debug_loc" });
     }
@@ -70,7 +86,14 @@ pub fn expanded(object: &Object, info: &Info) -> Result<Object, Unsupported> {
         names.push(".debug_frame");
     }
     let at = |name: &str| base + names.iter().position(|one| *one == name).expect("a section of this version");
-    let places = die::Places { abbrev: at(".debug_abbrev"), strings: at(".debug_str"), line: at(".debug_line"), info: at(".debug_info"), line_strings: (version >= 5).then(|| at(".debug_line_str")), locations: lists.then(|| at(if version >= 5 { ".debug_loclists" } else { ".debug_loc" })) };
+    let places = die::Places {
+        abbrev: at(".debug_abbrev"),
+        strings: at(".debug_str"),
+        line: at(".debug_line"),
+        info: at(".debug_info"),
+        line_strings: (version >= 5).then(|| at(".debug_line_str")),
+        locations: lists.then(|| at(if version >= 5 { ".debug_loclists" } else { ".debug_loc" })),
+    };
     let mut out = die::Out::new(version, address as u8, places);
     let line = line::program(object, info, &mut out)?;
     let (info_part, abbrev, locations) = die::unit(object, info, &mut out)?;
@@ -99,16 +122,36 @@ fn blocks(block: &llrm_object::debug::Block) -> Box<dyn Iterator<Item = &llrm_ob
     Box::new(block.variables.iter().chain(block.blocks.iter().flat_map(blocks)))
 }
 
-fn section(name: &str, part: buffer::Done) -> Section {
+fn section(
+    name: &str,
+    part: buffer::Done,
+) -> Section {
     let spans = if part.bytes.is_empty() { Vec::new() } else { vec![[0, part.bytes.len()]] };
-    Section { name: name.to_owned(), role: Role::Debug, near: true, align: 1, image: part.bytes, spans, relocs: part.relocs }
+    Section {
+        name: name.to_owned(),
+        role: Role::Debug,
+        near: true,
+        align: 1,
+        image: part.bytes,
+        spans,
+        relocs: part.relocs,
+    }
 }
 
-pub(crate) fn symbol_reloc(at: usize, width: usize, symbol: usize, addend: i64) -> Reloc {
+pub(crate) fn symbol_reloc(
+    at: usize,
+    width: usize,
+    symbol: usize,
+    addend: i64,
+) -> Reloc {
     Reloc { at, kind: llrm_object::Kind::Abs { width }, target: Target::Symbol(symbol), addend }
 }
 
-pub(crate) fn section_reloc(at: usize, section: usize, addend: i64) -> Reloc {
+pub(crate) fn section_reloc(
+    at: usize,
+    section: usize,
+    addend: i64,
+) -> Reloc {
     Reloc { at, kind: llrm_object::Kind::Abs { width: 4 }, target: Target::Section(section), addend }
 }
 

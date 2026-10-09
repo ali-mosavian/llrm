@@ -14,15 +14,19 @@ pub mod branchprob;
 pub mod cellmap;
 pub mod cfg;
 pub mod constant_cycles;
-pub mod difference;
 pub mod consts;
+#[cfg(test)]
+mod corpus_tests;
+pub mod difference;
 pub mod effects;
 pub mod floatbounds;
 pub mod floatfacts;
 pub mod frameescape;
+#[cfg(any(test, feature = "testing"))]
+pub mod generated;
+pub mod globalsaa;
 pub mod graph;
 pub mod guards;
-pub mod globalsaa;
 pub mod induction;
 pub mod interprocedural;
 pub mod liveness;
@@ -30,17 +34,13 @@ pub mod manager;
 pub mod memory;
 pub mod memoryssa;
 pub mod noreturn;
-pub mod parameter_ranges;
 pub mod observers;
 pub mod occurrence;
+pub mod parameter_ranges;
 pub mod peelsize;
 pub mod pointerfacts;
 pub mod ranges;
 pub mod regions;
 pub mod ssa;
-#[cfg(test)]
-mod corpus_tests;
-#[cfg(any(test, feature = "testing"))]
-pub mod generated;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

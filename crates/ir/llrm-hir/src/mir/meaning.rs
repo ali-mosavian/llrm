@@ -3,17 +3,21 @@
 //! for the inliner to price against the call. A copy never reaches the
 //! object; a call it does not replace is the runtime's own.
 
+use llrm_mir::BinaryOp;
 use llrm_mir::build::Builder;
 use llrm_mir::facts::Fact;
 use llrm_mir::{CastOp, Flags, GlobalId, IntPredicate, Linkage, Module, Operand, Type, TypeId};
-use llrm_mir::BinaryOp;
 
-use super::{convention, mark_cold, RUNTIME};
+use super::{RUNTIME, convention, mark_cold};
 use crate::meaning::{Arithmetic, Descriptor, Expr, Meaning, Parameter, Returns};
 use crate::model;
 
 /// Each routine of `promises` that `module` declares, defined by its meaning.
-pub(super) fn defined(module: &mut Module, spaces: &llrm_target::layout::AddressSpaces, promises: &model::RuntimePromises) {
+pub(super) fn defined(
+    module: &mut Module,
+    spaces: &llrm_target::layout::AddressSpaces,
+    promises: &model::RuntimePromises,
+) {
     let Some(descriptor) = promises.descriptor else { return };
     for meaning in &promises.routines {
         let Some(global) = module.named(&format!("{RUNTIME}{}", meaning.routine)) else { continue };
@@ -26,7 +30,11 @@ pub(super) fn defined(module: &mut Module, spaces: &llrm_target::layout::Address
 }
 
 /// Whether `global` is a declaration of the type `meaning` gives.
-fn declares(module: &mut Module, global: GlobalId, meaning: &Meaning) -> bool {
+fn declares(
+    module: &mut Module,
+    global: GlobalId,
+    meaning: &Meaning,
+) -> bool {
     let Some(function) = module.global(global).function().filter(|one| one.is_declaration()) else { return false };
     let ty = function.ty;
     let (ptr, word) = (module.context.types.ptr(0), module.context.types.int(16));
@@ -34,12 +42,19 @@ fn declares(module: &mut Module, global: GlobalId, meaning: &Meaning) -> bool {
         Returns::Value(_) => word,
         Returns::View { .. } => ptr,
     };
-    let parameters: Vec<TypeId> = meaning.parameters.iter().map(|one| if *one == Parameter::String { ptr } else { word }).collect();
-    matches!(module.context.types.get(ty), Type::Function { returns: r, parameters: p, variadic: false } if *r == returns && *p == parameters)
+    let parameters: Vec<TypeId> =
+        meaning.parameters.iter().map(|one| if *one == Parameter::String { ptr } else { word }).collect();
+    matches!(
+        module.context.types.get(ty),
+        Type::Function { returns: r, parameters: p, variadic: false } if *r == returns && *p == parameters
+    )
 }
 
 /// The runtime's error routine, `B$SERR(number)`, as the module calls it, declared where it is not.
-fn raiser(module: &mut Module, spaces: &llrm_target::layout::AddressSpaces) -> Option<(GlobalId, TypeId, u32)> {
+fn raiser(
+    module: &mut Module,
+    spaces: &llrm_target::layout::AddressSpaces,
+) -> Option<(GlobalId, TypeId, u32)> {
     let (conv, space) = convention(spaces, model::StackCleanup::Callee, model::CallDistance::Far, None).ok()?;
     let name = format!("{RUNTIME}B$SERR");
     let global = match module.named(&name) {
@@ -56,7 +71,13 @@ fn raiser(module: &mut Module, spaces: &llrm_target::layout::AddressSpaces) -> O
     Some((global, module.global(global).function()?.ty, conv))
 }
 
-fn define(module: &mut Module, global: GlobalId, meaning: &Meaning, descriptor: Descriptor, raise: Option<(GlobalId, TypeId, u32)>) {
+fn define(
+    module: &mut Module,
+    global: GlobalId,
+    meaning: &Meaning,
+    descriptor: Descriptor,
+    raise: Option<(GlobalId, TypeId, u32)>,
+) {
     let raise = raise.map(|(routine, ty, conv)| (module.reference(routine), ty, conv));
     let mut builder = module.builder(global);
     let entry = builder.block("entry");
@@ -107,7 +128,10 @@ struct Body<'a, 'm> {
 
 impl Body<'_, '_> {
     /// `operand` as a word: a byte zero-extended.
-    fn word(&mut self, operand: Operand) -> Operand {
+    fn word(
+        &mut self,
+        operand: Operand,
+    ) -> Operand {
         let ty = self.b.type_of(operand);
         if self.b.context.types.int_bits(ty) == Some(8) {
             let word = self.b.context.types.int(16);
@@ -117,17 +141,27 @@ impl Body<'_, '_> {
     }
 
     /// The address `offset` bytes into `pointer`.
-    fn field(&mut self, pointer: Operand, offset: i64) -> Operand {
+    fn field(
+        &mut self,
+        pointer: Operand,
+        offset: i64,
+    ) -> Operand {
         let (byte, index) = (self.b.context.types.int(8), self.b.int(16, i128::from(offset)));
         self.b.gep(byte, pointer, &[index], Flags::default(), "")
     }
 
     /// `expr` as a condition.
-    fn condition(&mut self, expr: &Expr) -> Operand {
+    fn condition(
+        &mut self,
+        expr: &Expr,
+    ) -> Operand {
         self.expr(expr)
     }
 
-    fn expr(&mut self, expr: &Expr) -> Operand {
+    fn expr(
+        &mut self,
+        expr: &Expr,
+    ) -> Operand {
         let word = self.b.context.types.int(16);
         match expr {
             Expr::Int(value) => self.b.int(16, i128::from(*value)),
@@ -140,7 +174,8 @@ impl Body<'_, '_> {
                 self.b.load(word, address, false, "length")
             }
             Expr::Data(at) => {
-                let (pointer, address) = (self.b.context.types.ptr(0), self.field(self.b.parameter(*at), self.descriptor.data));
+                let (pointer, address) =
+                    (self.b.context.types.ptr(0), self.field(self.b.parameter(*at), self.descriptor.data));
                 self.b.load(pointer, address, false, "data")
             }
             Expr::Slot(value) => {
@@ -164,7 +199,11 @@ impl Body<'_, '_> {
                     let byte = self.b.context.types.int(8);
                     return self.b.gep(byte, left, &[right], Flags::default(), "");
                 }
-                let (left, right) = if self.b.context.types.int_bits(left_ty) == Some(1) { (left, right) } else { (self.word(left), self.word(right)) };
+                let (left, right) = if self.b.context.types.int_bits(left_ty) == Some(1) {
+                    (left, right)
+                } else {
+                    (self.word(left), self.word(right))
+                };
                 match op {
                     Arithmetic::Add => self.b.binary(BinaryOp::Add, left, right, Flags::default(), ""),
                     Arithmetic::Sub => self.b.binary(BinaryOp::Sub, left, right, Flags::default(), ""),
