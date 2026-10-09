@@ -37,6 +37,7 @@ Sources read:
 | `inline` / `inline-functions` | `-finline-small-functions`, `-finline-functions` | -O2 (627, 652) | every level above -O0 |
 | `forward`, `drop_loads` / `gcse` | `-fgcse` | -O2 (624) | every level above -O0 |
 | `sibcalls` / `optimize-sibling-calls` | `-foptimize-sibling-calls` | -O2 (636) | same |
+| (`jumpthread`) | `-fthread-jumps` | -O2 and up (`OPT_LEVELS_2_PLUS`) | every level above -O0, -O1 too: switched off at -O1 (as gcc has it) x_switch runs x1.87 the clocks, queens x1.10, geomean of the 66 +1.1% clocks, code -2.2% (2026-10-09) |
 | `fill` / `tree-loop-distribute-patterns` | `-ftree-loop-distribute-patterns` | -O2 (653) | same |
 | `unroll` / `unroll-loops` | complete unrolling (`cunroll`) is in the loop passes at every level with loop optimisation; it may *grow* the code only with `-O3`, `-funroll-loops` or `-fpeel-loops` (`opts.cc` 1311-1316, `flag_cunroll_grow_size`) | -O1 and up; may grow at -O3 | -O1 and up, may grow at -O3 (`limits.grows`) |
 | `peel` / `peel-loops` | `-fpeel-loops` | -O3 (679) | -O3 |
