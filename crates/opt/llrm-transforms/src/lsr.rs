@@ -1604,7 +1604,7 @@ fn _applied(unit: &mut Unit, plan: &Plan) -> Option<BlockId> {
     // it where it runs no trip, and the loop is entered at its body.
     let guard = counting::skip_guard(&mut Seeds { context: &mut *context, function: &mut *function, at: entering, width: proof.width() }, proof).expect("a pre-tested loop");
     let shape = rotate::_shape(function, &plan.loop_).expect("a rotatable loop");
-    rotate::_rotate(context, function, &shape, Some(Operand::Value(guard))).expect("a rotation");
+    rotate::_rotate(context, function, &shape, Some((Operand::Value(guard), true))).expect("a rotation");
     crate::cfg::merged(function);
     // The guard also reaches the exit: the loop leaves through its own block again.
     crate::loopsimplify::simplified(function);

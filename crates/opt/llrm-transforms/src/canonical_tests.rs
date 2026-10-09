@@ -233,7 +233,7 @@ b3:
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.verify_each = true;
     passes.add(super::Canonical);
-    passes.add(crate::rotate::Rotate);
+    passes.add(crate::rotate::Rotate { proven: true, copy: false });
     passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
     let shown = printed(&module);
     let entry = shown.split("b0:\n").nth(1).unwrap().lines().next().unwrap();

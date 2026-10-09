@@ -66,7 +66,7 @@ fn through(text: &str, pass: impl llrm_mir::passes::FunctionPass + 'static) -> (
 #[test]
 fn a_proven_loop_is_entered_at_its_body() {
     for (bound, entered) in [("4", true), ("1", true), ("0", false), ("%n", false)] {
-        let (changed, mut module) = through(&summing(bound), Rotate);
+        let (changed, mut module) = through(&summing(bound), Rotate { proven: true, copy: false });
         assert_eq!(changed, entered, "{bound}");
         let function = f(&mut module);
         let loop_ = only_loop(function);
@@ -105,7 +105,7 @@ b3:
   ret i16 %r
 }
 ";
-    assert!(through(text, Rotate).0);
+    assert!(through(text, Rotate { proven: true, copy: false }).0);
 }
 
 /// Header phis read in parallel: `a, b = b, a` rotates, each moved phi
@@ -134,7 +134,7 @@ b3:
 }
 ";
     for trips in ["1", "2", "5"] {
-        let (changed, mut module) = through(&text.replace("TRIPS", trips), Rotate);
+        let (changed, mut module) = through(&text.replace("TRIPS", trips), Rotate { proven: true, copy: false });
         assert!(changed, "{trips}");
         assert_eq!(only_loop(f(&mut module)).body.len(), 1, "{trips}");
     }
@@ -144,7 +144,7 @@ b3:
 #[test]
 fn a_header_that_stores_keeps_its_first_test() {
     let text = format!("@g = global i16 0\n\n{}", summing("4").replace("  %go = icmp", "  store i16 %i, ptr @g\n  %go = icmp"));
-    assert!(!through(&text, Rotate).0);
+    assert!(!through(&text, Rotate { proven: true, copy: false }).0);
 }
 
 /// A rotated loop is one block testing at its bottom, which unroll and
@@ -152,7 +152,7 @@ fn a_header_that_stores_keeps_its_first_test() {
 #[test]
 fn a_rotated_loop_is_not_unrolled_or_peeled() {
     let mut module = parsed(&summing("4"));
-    managed(&mut module, Rotate);
+    managed(&mut module, Rotate { proven: true, copy: false });
     let rotated = printed(&module);
     assert!(!through(&rotated, Unroll::default()).0);
     assert!(!through(&rotated, Peel::default()).0);
@@ -180,5 +180,5 @@ b3:
   ret i16 %i
 }
 ";
-    assert!(!through(text, Rotate).0);
+    assert!(!through(text, Rotate { proven: true, copy: false }).0);
 }
