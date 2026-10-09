@@ -96,7 +96,7 @@ impl Default for Options {
             fill: true,
             sibcalls: true,
             unswitch: false,
-            copy_headers: false,
+            copy_headers: true,
             for_size: false,
             search: true,
             exhaustive: false,

@@ -263,8 +263,11 @@ struct _Found {
     stored: Stored,
     /// Bytes each trip fills.
     bytes: BigInt,
-    /// Counters the exit reads from the header, with their steps.
-    left: Vec<(ValueId, BigInt)>,
+    /// What the exit reads of the counters, by the value it reads: the counter, its step, and the trips more than the loop's count
+    /// the value has taken (a tested-after loop's exit takes the counter of its last trip: one fewer, or its next value: none).
+    left: Vec<(ValueId, ValueId, BigInt, i64)>,
+    /// The loop is tested after its trips, entered behind a copy of its test (`-ftree-ch`).
+    posttested: bool,
     /// The memset's pointer space and length width.
     memset: (u32, u32),
 }
@@ -308,21 +311,37 @@ enum Byte {
 fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop, costs: &OperationCosts, size: bool) -> Option<_Found> {
     let function = unit.function;
     let header = cfg::block(loop_.header);
-    let successors = function.successors(header);
-    if loop_.latches.len() != 1 || successors.len() != 2 {
+    if loop_.latches.len() != 1 {
         return None;
     }
-    // The body is one straight line back to the header, in whatever order its blocks lie.
-    let chain = _chain(function, header, loop_)?;
-    let latch = *chain.last().expect("a chain has blocks");
-    let exit = *successors.iter().find(|to| !loop_.body.contains(&cfg::id(**to)))?;
+    // Tested before its trips: the header tests and the body is a straight line back to it, in whatever order its blocks lie. Tested after
+    // them: the body is a straight line from the header to the latch, which tests (a loop entered behind a copy of its test).
+    let successors = function.successors(header);
+    let posttested = loop_.body.len() == 1 || !successors.iter().any(|to| !loop_.body.contains(&cfg::id(*to)));
+    let (chain, latch, test) = if posttested {
+        let chain = _chain_after(function, header, loop_)?;
+        let latch = *chain.last().expect("a chain has blocks");
+        (chain, latch, latch)
+    } else {
+        let chain = _chain(function, header, loop_)?;
+        let latch = *chain.last().expect("a chain has blocks");
+        (chain, latch, header)
+    };
+    let exit = *function.successors(test).iter().find(|to| !loop_.body.contains(&cfg::id(**to)))?;
 
     // How many trips is `induction`'s to prove, whatever the counter's step or test.
-    let tested = operations(function, header);
+    let tested = operations(function, test);
     let plain = |inst: InstId| memory::speculatable(unit.context, callees, function, inst);
     let proof = induction::counted(unit, loop_, None, true).into_iter().find(|proof| {
-        !proof.posttested && tested.last() == Some(&proof.branch) && tested.contains(&proof.compare) && tested.iter().all(|&one| one == proof.branch || one == proof.compare || plain(one))
+        proof.posttested == posttested
+            && tested.last() == Some(&proof.branch)
+            && tested.contains(&proof.compare)
+            && (posttested || tested.iter().all(|&one| one == proof.branch || one == proof.compare || plain(one)))
     })?;
+    // Its trips, placed before the loop, are what the fill is counted by.
+    if posttested && induction::trips(&proof, &mut |_, args| args[0].clone()).is_none() {
+        return None;
+    }
     let counters = induction::basics(unit, loop_);
     let phis = edges::phis(function, header);
     if counters.len() != phis.len() {
@@ -378,7 +397,7 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop, costs: &OperationCosts, s
         Stored::Copy(copy) => Some((bytes.to_i64()?, copy.descending && copy.how == How::Overlapping)),
         Stored::Fill(_) => None,
     };
-    if (pattern || moved.is_some()) && !_pays(unit, callees, &chain, header, &proof, costs, size, moved) {
+    if (pattern || moved.is_some()) && !_pays(unit, callees, if posttested { &chain[1..] } else { &chain }, header, &proof, costs, size, moved) {
         return None;
     }
     // Trips of a byte never wrap the index; wider cells need a promise.
@@ -388,7 +407,7 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop, costs: &OperationCosts, s
         return None;
     }
 
-    // Nothing after the loop may read what it computed, but a counter the exit's phis take from the header.
+    // Nothing after the loop may read what it computed, but a counter the exit's phis take from the test's block.
     let mut left = Vec::new();
     for &at in &loop_.body {
         for &inst in function.block(cfg::block(at)).instructions() {
@@ -399,18 +418,23 @@ fn _fill(unit: &Unit, callees: &Callees, loop_: &Loop, costs: &OperationCosts, s
                     continue;
                 }
                 let from = user.operands.get(one.index as usize + 1);
-                let counter = counters.get(&result).filter(|counter| counter.start.width() == proof.width());
-                let AffineOperand::Const(step) = &counter?.step else { return None };
-                if user.opcode != Opcode::Phi || function.parent(one.user) != Some(exit) || from != Some(&Operand::Block(header)) {
+                if user.opcode != Opcode::Phi || function.parent(one.user) != Some(exit) || from != Some(&Operand::Block(test)) {
                     return None;
                 }
-                left.push((result, induction::_signed(&AffineOperand::Const(step.clone()), &facts, proof.width())?));
+                // The counter itself, or the value of it that a trip steps to.
+                let (base, taken) = match counters.get(&result).filter(|counter| counter.start.width() == proof.width()) {
+                    Some(_) => (result, -i64::from(posttested)),
+                    None if posttested => (_stepped(unit, &phis, latch, inst)?, 0),
+                    None => return None,
+                };
+                let AffineOperand::Const(step) = &counters.get(&base).filter(|counter| counter.start.width() == proof.width())?.step else { return None };
+                left.push((result, base, induction::_signed(&AffineOperand::Const(step.clone()), &facts, proof.width())?, taken));
             }
         }
     }
     left.dedup();
     let memset = (unit.space(pointer)?, width);
-    Some(_Found { proof, header, first: chain[0], latch, exit, effect, pointer, stored, bytes, left, memset })
+    Some(_Found { proof, header, first: chain[0], latch, exit, effect, pointer, stored, bytes, left, posttested, memset })
 }
 
 /// Whether the one fill is cheaper than the loop for its trips, the proven
@@ -500,9 +524,10 @@ fn _filled(context: &mut Context, declared: &mut Declared, function: &mut Functi
     let finals = found
         .left
         .iter()
-        .map(|(value, step)| {
-            let moved = if *step == BigInt::from(1) { counted.clone() } else { seeds.computed(BinaryOp::Mul, vec![counted.clone(), AffineOperand::constant(step.clone(), counter)]) };
-            (*value, seeds.computed(BinaryOp::Add, vec![AffineOperand::Value(*value, counter), moved]))
+        .map(|(value, base, step, taken)| {
+            let trips = if *taken == 0 { counted.clone() } else { seeds.computed(BinaryOp::Add, vec![counted.clone(), AffineOperand::constant(*taken, counter)]) };
+            let moved = if *step == BigInt::from(1) { trips } else { seeds.computed(BinaryOp::Mul, vec![trips, AffineOperand::constant(step.clone(), counter)]) };
+            (*value, seeds.computed(BinaryOp::Add, vec![AffineOperand::Value(*base, counter), moved]))
         })
         .collect::<IndexMap<_, _>>();
     seeds.width = width;
@@ -565,12 +590,19 @@ fn _filled(context: &mut Context, declared: &mut Declared, function: &mut Functi
     // The exit's phis take each counter's exit value from the one trip.
     for phi in edges::phis(function, found.exit) {
         let mut incoming = arms(function, phi);
-        let Some(&(value, _)) = incoming.iter().find(|(_, from)| *from == found.header) else { continue };
+        let test = if found.posttested { found.latch } else { found.header };
+        let Some(&(value, _)) = incoming.iter().find(|(_, from)| *from == test) else { continue };
         let value = match value {
             Operand::Value(one) => finals.get(&one).copied().unwrap_or(value),
             _ => value,
         };
-        incoming.push((value, found.latch));
+        if found.posttested {
+            for arm in incoming.iter_mut().filter(|(_, from)| *from == found.latch) {
+                arm.0 = value;
+            }
+        } else {
+            incoming.push((value, found.latch));
+        }
         function.set_operands(phi, from_arms(&incoming));
     }
     let back = function.terminator(found.latch).expect("a latch branch");
@@ -583,7 +615,7 @@ fn _filled(context: &mut Context, declared: &mut Declared, function: &mut Functi
         function.erase(phi).expect("its uses were replaced");
     }
     // A proven positive count means the header's test passes on entry: it guards nothing.
-    if found.proof.count.as_ref().is_some_and(|count| *count != BigInt::from(0)) {
+    if !found.posttested && found.proof.count.as_ref().is_some_and(|count| *count != BigInt::from(0)) {
         let test = function.terminator(found.header).expect("a header branch");
         function.set_operands(test, vec![Operand::Block(found.first)]);
         for phi in edges::phis(function, found.exit) {
@@ -606,6 +638,21 @@ fn _chain(function: &Function, header: BlockId, loop_: &Loop) -> Option<Vec<Bloc
         at = Some(successors[0]);
     }
     (!chain.is_empty() && chain.len() + 1 == loop_.body.len()).then_some(chain)
+}
+
+/// The blocks of a loop tested after its trips: the header, then each block with one way on, to the latch, which tests.
+fn _chain_after(function: &Function, header: BlockId, loop_: &Loop) -> Option<Vec<BlockId>> {
+    let mut chain = vec![header];
+    loop {
+        let here = *chain.last().expect("a chain has blocks");
+        let inside: Vec<BlockId> = function.successors(here).into_iter().filter(|to| loop_.body.contains(&cfg::id(*to))).collect();
+        match inside[..] {
+            [next] if next == header => break,
+            [next] if function.successors(here).len() == 1 && !chain.contains(&next) && edges::phis(function, next).is_empty() => chain.push(next),
+            _ => return None,
+        }
+    }
+    (chain.len() == loop_.body.len() && function.successors(*chain.last().expect("a chain has blocks")).len() == 2).then_some(chain)
 }
 
 /// A store's or a memset's pointer, the byte it fills with, and its bytes,

@@ -504,3 +504,46 @@ fn a_short_counter_scroll_down_is_one_memmove() {
     let after = managed_fill_on(FLAT, &scroll(false), SCROLL_INPUTS);
     assert!(after.contains("llvm.memmove") && after.contains("!llrm.backward"), "{after}");
 }
+
+/// `looped`, rotated by `-ftree-ch`: the test copied before the loop and kept at its latch, the loop entered through a block of its own.
+/// The exit takes the counter after its last step.
+fn guarded(cell: &str, bound: &str, body: &str) -> String {
+    let widened = if cell == "i16" { "or i16 %v, 0".to_owned() } else { format!("zext {cell} %v to i16") };
+    format!(
+        "@buf = global [64 x {cell}] zeroinitializer
+
+{MEMSET}define i16 @f(i16 %n, i16 %q) {{
+b0:
+  %go = icmp slt i16 0, {bound}
+  br i1 %go, label %pre, label %b3
+
+pre:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %pre ], [ %next, %b1 ]
+{body}  %next = add i16 %i, 1
+  %c = icmp slt i16 %next, {bound}
+  br i1 %c, label %b1, label %b3
+
+b3:
+  %e = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %r = getelementptr [64 x {cell}], ptr @buf, i16 0, i16 %q
+  %v = load {cell}, ptr %r
+  %w = {widened}
+  %x = add i16 %w, %e
+  ret i16 %x
+}}
+"
+    )
+}
+
+/// A loop tested after its trips and entered behind its own test is one memset too, as the loop the test was copied from was: the
+/// copied loop's fills were lost (bench/sieve, -ftree-ch: 12,106 → 16,411 instructions).
+#[test]
+fn a_guarded_byte_loop_is_one_memset() {
+    let body = "  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i\n  store i8 65, ptr %p\n";
+    let (text, changed) = fill(&guarded("i8", "%n", body), TRIPS);
+    assert!(changed, "{text}");
+    assert!(text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 65, i16 %"), "{text}");
+}

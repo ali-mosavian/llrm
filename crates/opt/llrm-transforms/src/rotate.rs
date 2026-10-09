@@ -274,6 +274,13 @@ pub fn copied(context: &mut Context, layout: &DataLayout, function: &mut Functio
         let Some(shape) = _shape(function, &loop_) else {
             continue;
         };
+        // A loop proven to run needs no guard: it is entered at its body once the loop passes are done (`rotated`, which unroll, peel and
+        // fill wait for), as gcc's value propagation leaves it after its copy.
+        let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&found);
+        let facts = fresh.get::<Registers>(context, layout, function);
+        if induction::trip_count(&unit, &loop_, &facts).is_some() {
+            continue;
+        }
         let insns = function.block(shape.header).instructions().iter().filter(|&&inst| function.instruction(inst).opcode != Opcode::Phi).count();
         if insns > MAX_HEADER_INSNS {
             continue;
