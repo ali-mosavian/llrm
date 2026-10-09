@@ -1,2 +1,4 @@
 # style: format the tree with tools/fmt.sh
 cf063d3a027ecc365f939a5df73171189924badd
+# style: wrap comments at column 80 with tools/fmt.sh
+49cb572c0f8f900f6d8dae56a67f12bcabc414ce
