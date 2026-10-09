@@ -3,28 +3,28 @@
 # first; the columns are described there.
 #
 # name   operation shape            widths    cost        fixed                  iced
-j{cc}    branch    -/-              -         jcc         -                      J{cc}_rel16
-jmp      jump      -/-              -         jmp_short   -                      Jmp_rel16
-call     call      -/-              -         call_far    -                      Call_rel16
-les      move      r,r/m            16        les         d1=es                  Les_r16_m1616
-lds      move      r,r/m            16        les         d1=ds                  Lds_r16_m1616
-lfs      move      r,r/m            16        les         d1=fs                  Lfs_r16_m1616
-lgs      move      r,r/m            16        les         d1=gs                  Lgs_r16_m1616
+j{cc}     branch     -/-                -          jcc          -                       -    -      J{cc}_rel16
+jmp       jump       -/-                -          jmp_short    -                       -    -      Jmp_rel16
+call      call       -/-                -          call_far     -                       -    -      Call_rel16
+les       move       r,r/m              16         les          d1=es                   -    -      Les_r16_m1616
+lds       move       r,r/m              16         les          d1=ds                   -    -      Lds_r16_m1616
+lfs       move       r,r/m              16         les          d1=fs                   -    -      Lfs_r16_m1616
+lgs       move       r,r/m              16         les          d1=gs                   -    -      Lgs_r16_m1616
 
 # The string operations as lowering writes them, with the selectors real mode
 # addresses through. Dests: a placeholder cell, the pointer or pointers after,
 # and with a count the emptied count. Sources: the value (stos) or the pointers
 # (movs), with a count first for the rep form, then the selectors: movs' source
 # override (fs) and es. A selector is pinned only while it is a held value.
-stosb    fill      m,r/r,r,r        8         rep_stos    s0=ax,s1=di,s2=es,d1=di Stosb_m8_AL
-stosw    fill      m,r/r,r,r        16        rep_stos    s0=ax,s1=di,s2=es,d1=di Stosw_m16_AX
-stosd    fill      m,r/r,r,r        32        rep_stos    s0=ax,s1=di,s2=es,d1=di Stosd_m32_EAX
-stosb    fill      m,r,r/r,r,r,r    8         rep_stos    s0=ax,s1=cx,s2=di,s3=es,d1=di,d2=cx Stosb_m8_AL
-stosw    fill      m,r,r/r,r,r,r    16        rep_stos    s0=ax,s1=cx,s2=di,s3=es,d1=di,d2=cx Stosw_m16_AX
-stosd    fill      m,r,r/r,r,r,r    32        rep_stos    s0=ax,s1=cx,s2=di,s3=es,d1=di,d2=cx Stosd_m32_EAX
-movsb    copy      m,r,r/r,r,r,r    8         rep_movs    s0=si,s1=di,s2=fs,s3=es,d1=si,d2=di Movsb_m8_m8
-movsw    copy      m,r,r/r,r,r,r    16        rep_movs    s0=si,s1=di,s2=fs,s3=es,d1=si,d2=di Movsw_m16_m16
-movsd    copy      m,r,r/r,r,r,r    32        rep_movs    s0=si,s1=di,s2=fs,s3=es,d1=si,d2=di Movsd_m32_m32
-movsb    copy      m,r,r,r/r,r,r,r,r 8        rep_movs    s0=cx,s1=si,s2=di,s3=fs,s4=es,d1=si,d2=di,d3=cx Movsb_m8_m8
-movsw    copy      m,r,r,r/r,r,r,r,r 16       rep_movs    s0=cx,s1=si,s2=di,s3=fs,s4=es,d1=si,d2=di,d3=cx Movsw_m16_m16
-movsd    copy      m,r,r,r/r,r,r,r,r 32       rep_movs    s0=cx,s1=si,s2=di,s3=fs,s4=es,d1=si,d2=di,d3=cx Movsd_m32_m32
+stosb     fill       m,r/r,r,r          8          rep_stos     s0=ax,s1=di,s2=es,d1=di  -    -      Stosb_m8_AL
+stosw     fill       m,r/r,r,r          16         rep_stos     s0=ax,s1=di,s2=es,d1=di  -    -      Stosw_m16_AX
+stosd     fill       m,r/r,r,r          32         rep_stos     s0=ax,s1=di,s2=es,d1=di  -    -      Stosd_m32_EAX
+stosb     fill       m,r,r/r,r,r,r      8          rep_stos     s0=ax,s1=cx,s2=di,s3=es,d1=di,d2=cx  -    -      Stosb_m8_AL
+stosw     fill       m,r,r/r,r,r,r      16         rep_stos     s0=ax,s1=cx,s2=di,s3=es,d1=di,d2=cx  -    -      Stosw_m16_AX
+stosd     fill       m,r,r/r,r,r,r      32         rep_stos     s0=ax,s1=cx,s2=di,s3=es,d1=di,d2=cx  -    -      Stosd_m32_EAX
+movsb     copy       m,r,r/r,r,r,r      8          rep_movs     s0=si,s1=di,s2=fs,s3=es,d1=si,d2=di  -    -      Movsb_m8_m8
+movsw     copy       m,r,r/r,r,r,r      16         rep_movs     s0=si,s1=di,s2=fs,s3=es,d1=si,d2=di  -    -      Movsw_m16_m16
+movsd     copy       m,r,r/r,r,r,r      32         rep_movs     s0=si,s1=di,s2=fs,s3=es,d1=si,d2=di  -    -      Movsd_m32_m32
+movsb     copy       m,r,r,r/r,r,r,r,r  8          rep_movs     s0=cx,s1=si,s2=di,s3=fs,s4=es,d1=si,d2=di,d3=cx  -    -      Movsb_m8_m8
+movsw     copy       m,r,r,r/r,r,r,r,r  16         rep_movs     s0=cx,s1=si,s2=di,s3=fs,s4=es,d1=si,d2=di,d3=cx  -    -      Movsw_m16_m16
+movsd     copy       m,r,r,r/r,r,r,r,r  32         rep_movs     s0=cx,s1=si,s2=di,s3=fs,s4=es,d1=si,d2=di,d3=cx  -    -      Movsd_m32_m32
