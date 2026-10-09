@@ -1,6 +1,12 @@
 # Instruction identity that survives insertion
 
-Status: design, no code. Owner: tiers. Review before the first PR.
+Status: **not pursued.** After #990/#997 the spill path is about 7% of QCport (`tools/pass-profile.py`, 2026-10-09: facts intervals 1.5,
+spill colour slots 1.4, split placed + carving 2.6, siblings and cleanup the rest), and 30% of `d_faces`, not 42%. PR 0 of this
+design (blocks share their instruction lists, copy-on-write) was built and measured: -0.7% of `d_faces` against -4% estimated, and it
+moved cost between steps (the old body clones had warmed every instruction's cache line; the next O(body) scan paid the misses), which
+the `measure` step flagged (`live Os regalloc spill` +7%). The mass is in MIR analyses and passes: `mir gvn` 12% of QCport, the module
+analyses ~25%. Kept as the record of what was designed, reviewed (Opus review: rework, folded in below) and why it stopped.
+Owner: tiers.
 
 ## Why
 
