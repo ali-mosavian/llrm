@@ -58,7 +58,7 @@ pub struct Gvn {
 
 impl Default for Gvn {
     fn default() -> Self {
-        Self { dataflow: true }
+        Self { dataflow: false }
     }
 }
 
