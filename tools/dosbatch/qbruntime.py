@@ -142,6 +142,12 @@ def draws_screen(name: str) -> bool:
     return name.startswith("screen_") or name.upper() in ("NIBBLES", "GORILLA")
 
 
+def typed_input(name: str) -> bytes | None:
+    """The keys a program is given: its probe's tests/qbrt/<name>.in, if it has one."""
+    path = dosbatch.ROOT / "tests" / "qbrt" / f"{name}.in"
+    return path.read_bytes() if path.is_file() else None
+
+
 def differential_batch(
     objects: dict[str, tuple[Path, ...]], archive: Path, work: Path
 ) -> dict[str, Differential]:
@@ -162,13 +168,13 @@ def differential_batch(
             for at, (name, job) in enumerate(pairs)
         }
 
-    reference = session([(n, dosbatch.Job(names[n], "obj", pair[0], objects=pair[2:], screen=draws_screen(n))) for n, pair in objects.items()])
+    reference = session([(n, dosbatch.Job(names[n], "obj", pair[0], objects=pair[2:], screen=draws_screen(n), stdin=typed_input(n))) for n, pair in objects.items()])
     candidate = session(
         [
             (
                 n,
                 dosbatch.Job(
-                    names[n], "obj", pair[1], runtime="llrmqb", runtime_file=archive, objects=pair[2:], screen=draws_screen(n)
+                    names[n], "obj", pair[1], runtime="llrmqb", runtime_file=archive, objects=pair[2:], screen=draws_screen(n), stdin=typed_input(n)
                 ),
             )
             for n, pair in objects.items()

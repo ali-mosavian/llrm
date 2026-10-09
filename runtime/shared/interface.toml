@@ -82,7 +82,7 @@ returns = "heap"
 [[op]]
 group = "console"
 name = "console_read_key"
-doc = "The next byte of standard input, not echoed, waiting for one; an extended key is 0 and then its scan code."
+doc = "The next byte of standard input, not echoed, waiting for one; an extended key is 0 and then its scan code. At the end of redirected input it is 26 (Ctrl-Z), again and again."
 args = []
 returns = "u8"
 
@@ -92,6 +92,14 @@ name = "console_key_ready"
 doc = "Whether `console_read_key` would not wait. What it says at the end of redirected input is the operating system's: DOSBox says ready."
 args = []
 returns = "bool"
+
+# The time of day.
+[[op]]
+group = "clock"
+name = "clock_hundredths"
+doc = "The time of day in hundredths of a second since midnight."
+args = []
+returns = "i32"
 
 # A text screen of character cells, rows and columns counted from 0, each cell a character and an
 # attribute (its colours). A target has it where the program may write the screen itself.

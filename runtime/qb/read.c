@@ -4,6 +4,7 @@
    of its items and a NUL, and after the last a key of 0xFFFF and the byte 1.
    The module's data area keeps where the next item is. */
 #include "fin.h"
+#include "input.h"
 #include "module.h"
 #include "nhstutil.h"
 
@@ -47,11 +48,16 @@ void B_RSTB(unsigned line)
 }
 
 /* One item: the text it starts at (Out of DATA at the end of the list), and the
-   data area to leave after it. */
+   data area to leave after it.  While an INPUT line is waiting the items are
+   its, and there is no data area. */
 static const char *item_start(ModuleData **data)
 {
     const char *text;
 
+    if (input_active()) {
+        *data = NULL;
+        return input_cursor();
+    }
     *data = reading();
     text = md_cursor(*data);
     while (*text == ' ' || *text == '\t')
@@ -65,6 +71,10 @@ static const char *item_start(ModuleData **data)
    the end of its line; the end of a line also skips the next line's key. */
 static void item_end(ModuleData *data, const char *cursor, char delimiter)
 {
+    if (!data) {
+        input_set_cursor(cursor);
+        return;
+    }
     if (delimiter != ',' && delimiter != 0)
         qb_error(BE_SYNTAX);
     if (delimiter == 0)

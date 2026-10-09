@@ -3,6 +3,26 @@
 #include "fin.h"
 #include "bigint.h"
 
+unsigned fin_error;
+static int trapping;
+
+void fin_trap(int on)
+{
+    trapping = on;
+    if (on)
+        fin_error = 0;
+}
+
+/* An error in the number: raised, or while INPUT is checking a line kept for it
+   to report, the parse going on with what it has. */
+static void fin_fail(unsigned code)
+{
+    if (!trapping)
+        qb_error(code);
+    if (!fin_error)
+        fin_error = code;
+}
+
 /* The most a 64-bit mantissa takes another digit at. */
 #define MANTISSA_LIMIT 1844674407370955160ULL
 
@@ -65,12 +85,12 @@ static char radix_number(
 
     while (digit_value(*p) < radix) {
         if (total > 0xFFFFFFFFUL / radix)
-            qb_error(BE_OVERFLOW);
+            fin_fail(BE_OVERFLOW);
         total = total * radix + digit_value(*p++);
     }
     if (type == VT_I2) {
         if (total > 0xFFFF)
-            qb_error(BE_OVERFLOW);
+            fin_fail(BE_OVERFLOW);
         value->integer = (int)total;
     } else if (type == VT_I4) {
         value->long_integer = (long)total;
@@ -218,7 +238,7 @@ static double nearest_double(unsigned long long mantissa, int exponent)
     bits = kept;
     if (kept >> HIDDEN) {
         if (lowest + BIAS >= 2047)
-            qb_error(BE_OVERFLOW);
+            fin_fail(BE_OVERFLOW);
         bits = (unsigned long long)(lowest + BIAS) << HIDDEN;
         bits |= kept & ((1ULL << HIDDEN) - 1);
     }
@@ -277,13 +297,13 @@ char fin_number(const char **cursor, byte type, FinValue *value)
             : round_to_long(real);
         if (type == VT_I2) {
             if (whole < -32768L || whole > 32767L)
-                qb_error(BE_OVERFLOW);
+                fin_fail(BE_OVERFLOW);
             value->integer = (int)whole;
         } else {
             value->long_integer = whole;
         }
         if (suffix == '%' && (whole < -32768L || whole > 32767L))
-            qb_error(BE_TYPE);
+            fin_fail(BE_TYPE);
     }
     return next_char(cursor);
 }

@@ -3,6 +3,7 @@
    type is I2, I4 or SD. */
 #include "console.h"
 #include "fout.h"
+#include "input.h"
 #include "nhstutil.h"
 
 enum Terminator { COMMA, SEMI, EOL };
@@ -65,10 +66,11 @@ static void string(SD *sd, enum Terminator end)
     terminate(end);
 }
 
-/* B$PEOS: the end of a PRINT that ended with a separator.  The console is
-   written as each item is, so there is nothing to flush. */
+/* B$PEOS: the end of a PRINT that ended with a separator, and of an INPUT.  The
+   console is written as each item is, so there is nothing to flush. */
 void B_PEOS(void)
 {
+    input_end();
 }
 
 void B_PCI2(int v) { number(v, COMMA); }

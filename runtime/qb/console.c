@@ -192,6 +192,20 @@ void cn_crlf(void)
     }
 }
 
+void cn_erase(void)
+{
+    if (!started)
+        start();
+    if (on_screen) {
+        if (column)
+            column--;
+        llrm_os_screen_put(row, column, ' ', attribute);
+        finish();
+    } else {
+        cn_write("\b \b", 3);
+    }
+}
+
 void cn_color(int foreground, int background)
 {
     if (!started)

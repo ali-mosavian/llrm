@@ -13,11 +13,17 @@ static void finish(void)
     llrm_os_exit(0);
 }
 
-/* B$CEND: SYSTEM and END. */
-void B_CEND(void)
+/* Ends the program as END does, for the console's Ctrl-Z. */
+void qb_end(void)
 {
     b_errnum = 0;
     finish();
+}
+
+/* B$CEND: SYSTEM and END. */
+void B_CEND(void)
+{
+    qb_end();
 }
 
 /* B$CENP: the end of the module; an ON ERROR handler still running is a No

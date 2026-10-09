@@ -24,4 +24,9 @@ char fin_number(const char **cursor, byte type, FinValue *value);
    the blanks before it dropped.  *start and *length are the string. */
 char fin_string(const char **cursor, const char **start, unsigned *length);
 
+/* While trapping, an error in a number is left in fin_error (0 for none) and
+   the call returns, so INPUT can tell the typist; otherwise it is raised. */
+extern unsigned fin_error;
+void fin_trap(int on);
+
 #endif

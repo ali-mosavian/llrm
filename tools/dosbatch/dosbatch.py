@@ -293,6 +293,7 @@ class Job:
     map: bool = False  # LINK /MAP: NAME.MAP lists the public symbols too
     runner: str = ""  # a program that runs this one (it must be among `files`), e.g. a timer
     screen: bool = False  # standard output stays the screen, so the program draws it and no NAME.TXT is written
+    stdin: bytes | None = None  # what the program reads as its standard input, from NAME.IN
 
 
 def runtime_library(job: Job, tools: Toolchain, work: Path) -> str:
@@ -411,6 +412,8 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
         link = f"{tools.link} /NOE{' /MAP' if job.map else ''} {u}.OBJ{more},{u}.EXE,,{libraries}; > {u}.LNK"
         for data in job.files:
             place(data, work / data.name.upper())
+        if job.stdin is not None:
+            (work / f"{u}.IN").write_bytes(job.stdin)
         if job.kind == "exe":
             shutil.copy(job.path, work / f"{u}.EXE")
         elif job.kind == "obj":
@@ -425,7 +428,7 @@ def run(jobs: list[Job], work: Path, timeout: int = 1800, budget_ms: int = 120_0
     script = [f":ms {build_ms}", *head, *building, "."]
     for job in jobs:
         u = job.stem.upper()
-        script += [f":ms {job.budget_ms or budget_ms}", *head, f"if exist {u}.EXE {job.runner} {u}.EXE {job.args}{'' if job.screen else f' > {u}.TXT'}", "."]
+        script += [f":ms {job.budget_ms or budget_ms}", *head, f"if exist {u}.EXE {job.runner} {u}.EXE {job.args}{'' if job.stdin is None else f' < {u}.IN'}{'' if job.screen else f' > {u}.TXT'}", "."]
     (work / "job.conf").write_text(conf)
     (work / "jobs.txt").write_text("\n".join(script) + "\n")
     events = work / "events.txt"

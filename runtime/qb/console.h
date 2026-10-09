@@ -18,6 +18,8 @@ byte cn_width(void);
 void cn_write(const char *s, unsigned n);
 void cn_putc(char c);
 void cn_crlf(void);
+/* Erases the character before the cursor, which is on the same line. */
+void cn_erase(void);
 
 /* COLOR: a foreground 0-31 (16 and up blink) and a background 0-7, either -1
    to leave it. */

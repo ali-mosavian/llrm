@@ -11,6 +11,12 @@ typedef struct ModuleData ModuleData;
 /* The module's data area. */
 ModuleData *module_data(void);
 
+/* The module's name, blank padded to this many characters. */
+enum { MODULE_NAME_LENGTH = 8 };
+void module_name(char *name);
+/* Where the module's code is: the segment a far address is shown with. */
+unsigned module_code_segment(void);
+
 /* The first DATA line (MODULE_CODE.OF_DS). */
 const char *module_first_data(void);
 

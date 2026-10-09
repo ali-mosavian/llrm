@@ -11,6 +11,7 @@ public _llrm_os_close
 public _llrm_os_exit
 public _llrm_os_console_read_key
 public _llrm_os_console_key_ready
+public _llrm_os_clock_hundredths
 public _llrm_os_screen_is_console
 public _llrm_os_screen_size
 public _llrm_os_screen_cursor
@@ -28,6 +29,10 @@ public _llrm_os_stack_low
 public _llrm_os_psp
 public BSS_LAST
 public FBSS_LAST
+
+; What DOS's device information (IOCTL 44h) says of a handle: bit 7 is a character device.
+DEVICE_BIT equ 80h
+CTRL_Z equ 1Ah
 
 ; Where the uninitialised data ends, near and far, which start.asm zeroes: this object is linked last.
 _BSS segment word public 'BSS'
@@ -217,11 +222,42 @@ _llrm_os_close endp
 
 ; The console's keyboard: standard input, so what DOS redirects it follows.
 
-; _llrm_os_console_read_key() -> u8: DOS's character input without echo (08h).
+; _llrm_os_console_read_key() -> u8: the keyboard's character, no echo (08h). From redirected
+; input it is the next byte read from the handle, or Ctrl-Z once there are none.
 _llrm_os_console_read_key proc far
+    push bx
+    push cx
+    push dx
+    mov ax, DOS_IOCTL * 256
+    mov bx, DOS_STDIN
+    int DOS_INT
+    jc short from_handle
+    test dl, DEVICE_BIT
+    jnz short from_device
+from_handle:
+    push ax                        ; the byte lands here
+    mov ah, DOS_READ
+    mov bx, DOS_STDIN
+    mov cx, 1
+    mov dx, sp
+    int DOS_INT
+    pop dx
+    jc short end_of_input
+    cmp ax, 1
+    jne short end_of_input
+    mov al, dl
+    jmp short key_done
+end_of_input:
+    mov al, CTRL_Z
+    jmp short key_done
+from_device:
     mov ah, DOS_READ_KEY
     int DOS_INT
+key_done:
     xor ah, ah
+    pop dx
+    pop cx
+    pop bx
     retf
 _llrm_os_console_read_key endp
 
@@ -232,6 +268,33 @@ _llrm_os_console_key_ready proc far
     and ax, 1
     retf
 _llrm_os_console_key_ready endp
+
+; The time of day.
+
+SECONDS_PER_MINUTE equ 60
+MINUTES_PER_HOUR equ 60
+HUNDREDTHS equ 100
+
+; _llrm_os_clock_hundredths() -> i32: DOS's clock (2Ch) as hundredths of a second since midnight.
+_llrm_os_clock_hundredths proc far
+    push cx
+    mov ah, DOS_GET_TIME
+    int DOS_INT
+    movzx eax, ch
+    imul eax, eax, MINUTES_PER_HOUR
+    movzx ecx, cl
+    add eax, ecx
+    imul eax, eax, SECONDS_PER_MINUTE
+    movzx ecx, dh
+    add eax, ecx
+    imul eax, eax, HUNDREDTHS
+    movzx ecx, dl
+    add eax, ecx
+    mov edx, eax
+    shr edx, 16
+    pop cx
+    retf
+_llrm_os_clock_hundredths endp
 
 ; The screen: the BIOS's text mode. A cell is read and written in video memory, which is how the
 ; cursor stays where it is; the BIOS data area (0040h) says the mode, columns and rows.
@@ -244,7 +307,6 @@ MONO_MODE equ 7
 MONO_SEGMENT equ 0B000h
 COLOR_SEGMENT equ 0B800h
 DEFAULT_ROWS equ 25
-DEVICE_BIT equ 80h
 CONSOLE_OUT_BIT equ 02h
 
 ; _llrm_os_screen_is_console() -> bool: whether DOS says standard output is the console device.
