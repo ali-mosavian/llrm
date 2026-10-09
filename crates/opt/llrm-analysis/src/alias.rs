@@ -1804,12 +1804,30 @@ fn joined(op: &llrm_mir::module::Instruction) -> Option<Vec<Operand>> {
     }
 }
 
-/// Flow pointer objects through values, exact spill slots and CFG joins.
-pub fn points_to(
-    unit: &Unit,
-    arguments: Option<&IndexMap<InstId, Vec<Actual>>>,
-    captures: Option<&IndexMap<InstId, Option<BTreeSet<Option<Identity>>>>>,
-) -> Result<PointsTo, String> {
+/// What the pointer solve finds of a body before it asks what escapes: each
+/// pointer value's provenance and the pointer cells held on entry to each
+/// block. The call arguments and captures never enter it, so one holds for
+/// every configuration of `points_to` over the same body, declarations and
+/// context.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PointValues {
+    pub values: IndexMap<ValueId, Provenance>,
+    incoming: IndexMap<i64, IndexMap<CellKey, Provenance>>,
+}
+
+thread_local! {
+    static VALUE_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many value solves this thread has made, for a test that two analyses of
+/// one body ask one.
+pub fn value_solves() -> usize {
+    VALUE_SOLVES.with(std::cell::Cell::get)
+}
+
+/// The value solve of `points_to`.
+pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
+    VALUE_SOLVES.with(|solves| solves.set(solves.get() + 1));
     let function = unit.function;
     let seeds = seeds(unit);
     let mut values = seeds.clone();
@@ -2012,6 +2030,40 @@ pub fn points_to(
         }
     }
 
+    Ok(PointValues { values, incoming })
+}
+
+/// Flow pointer objects through values, exact spill slots and CFG joins.
+pub fn points_to(
+    unit: &Unit,
+    arguments: Option<&IndexMap<InstId, Vec<Actual>>>,
+    captures: Option<&IndexMap<InstId, Option<BTreeSet<Option<Identity>>>>>,
+) -> Result<PointsTo, String> {
+    let solved = match unit.point_values {
+        Some(held) => {
+            if llrm_support::env_set("LLRM_CHECK_POINTVALUES") {
+                assert!(*held == point_values(unit)?, "the held point values are not what solving again gives");
+            }
+            std::borrow::Cow::Borrowed(held)
+        }
+        None => std::borrow::Cow::Owned(point_values(unit)?),
+    };
+    escapes(unit, &solved, arguments, captures)
+}
+
+/// What `points_to` adds to the value solve: what escapes, and when.
+fn escapes(
+    unit: &Unit,
+    solved: &PointValues,
+    arguments: Option<&IndexMap<InstId, Vec<Actual>>>,
+    captures: Option<&IndexMap<InstId, Option<BTreeSet<Option<Identity>>>>>,
+) -> Result<PointsTo, String> {
+    let function = unit.function;
+    let graph = cfg::graph(function);
+    let predecessors = loops::predecessors(&graph);
+    let none = BTreeSet::new();
+    let (values, incoming) = (&solved.values, &solved.incoming);
+    let instructions = |at: i64| function.block(cfg::block(at)).instructions();
     // Escape is flow-sensitive separately from pointer contents. A pointer
     // published after a call must not make the earlier call reach its frame.
     let mut pointer_fields: IndexMap<ObjectRef, BTreeSet<ObjectRef>> = IndexMap::default();
@@ -2250,7 +2302,7 @@ pub fn points_to(
     out.values().for_each(|one| every.union_with(one));
     let escaped = named(&every);
     let escaped_before = EscapedBefore { objects: Rc::new(objects), at: before };
-    Ok(PointsTo { values, escaped, escaped_before })
+    Ok(PointsTo { values: values.clone(), escaped, escaped_before })
 }
 
 /// Whether anything that stays reads `value`: a use that is no pure operation,
