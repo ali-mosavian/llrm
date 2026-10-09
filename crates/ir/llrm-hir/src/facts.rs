@@ -191,7 +191,7 @@ pub struct Builder {
     frontend: String,
     stated: Vec<Stated>,
     /// What `stated` holds, to say a fact once without reading all of them.
-    held: std::collections::HashSet<(Subject, Fact)>,
+    held: llrm_support::hash::HashSet<(Subject, Fact)>,
 }
 
 impl Builder {
