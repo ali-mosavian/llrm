@@ -764,12 +764,23 @@ fn memory_providers(
 
     let mut groups: Vec<(&MemRef, Vec<usize>)> = Vec::new();
     let mut group_of: HashMap<&MemRef, usize> = HashMap::default();
+    // The groups by what a group naming the same bytes shares, so a load
+    // compares itself with those and not with all.
+    let mut by_frame: HashMap<(crate::regions::Frame, i128, i128), Vec<usize>> = HashMap::default();
+    let mut by_pointer: HashMap<(Operand, i64, u64), Vec<usize>> = HashMap::default();
     for (at, (_, (loaded, _))) in loads.iter().enumerate() {
         let group = *group_of
             .entry(loaded)
             .or_insert_with(
                 || {
                     groups.push((loaded, Vec::new()));
+                    let keys = memoryssa::byte_keys(unit, loaded);
+                    if let Some(key) = keys.frame {
+                        by_frame.entry(key).or_default().push(groups.len() - 1);
+                    }
+                    if let Some(key) = keys.pointer {
+                        by_pointer.entry(key).or_default().push(groups.len() - 1);
+                    }
                     groups.len() - 1
                 },
             );
@@ -795,14 +806,40 @@ fn memory_providers(
         // Loads of one address are one group, whose bytes are compared with
         // `cell` once; the candidates are then taken in load order, as
         // when each was compared.
-        let mut candidates: Vec<usize> = groups
+        let keys = memoryssa::byte_keys(unit, &cell);
+        let mut near: Vec<usize> = keys
+            .frame
+            .and_then(|key| by_frame.get(&key))
+            .into_iter()
+            .chain(keys.pointer.and_then(|key| by_pointer.get(&key)))
+            .flatten()
+            .copied()
+            .collect();
+        near.sort_unstable();
+        near.dedup();
+        let mut candidates: Vec<usize> = near
             .iter()
+            .map(|&group| &groups[group])
             .filter(|(loaded, _)| {
                 SAMES.with(|runs| runs.set(runs.get() + 1));
                 same_bytes(unit, loaded, &cell)
             })
             .flat_map(|(_, members)| members.iter().copied())
             .collect();
+        if llrm_support::env_set("LLRM_CHECK_GROUPS") {
+            let mut every: Vec<usize> = groups
+                .iter()
+                .filter(|(loaded, _)| same_bytes(unit, loaded, &cell))
+                .flat_map(|(_, members)| members.iter().copied())
+                .collect();
+            every.sort_unstable();
+            let mut keyed = candidates.clone();
+            keyed.sort_unstable();
+            assert!(
+                keyed == every,
+                "LLRM_CHECK_GROUPS: loads naming the same bytes, found through their keys, are not those a scan of every group finds"
+            );
+        }
         candidates.sort_unstable();
         for at in candidates {
             let (source, (loaded, value)) = &loads[at];

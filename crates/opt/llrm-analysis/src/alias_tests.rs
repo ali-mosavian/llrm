@@ -1166,7 +1166,7 @@ fn initialized_asks_the_interner_per_parameter_not_per_read_and_parameter() {
     // M instructions per QCport file.
     let loads: String = (0..24).map(|i| format!("  %l{i} = load i16, ptr %p{}\n", i % 6)).collect();
     let text = format!(
-        "define i16 @f(ptr %p0, ptr %p1, ptr %p2, ptr %p3, ptr %p4, ptr %p5) {{\nb0:\n{loads}  ret i16 %l0\n}}\n"
+        "define i16 @f(ptr %p0, ptr %p1, ptr %p2, ptr %p3, ptr %p4, ptr %p5) {{\nb0:\n{loads}  store i16 0, ptr %p0\n  ret i16 %l0\n}}\n"
     );
     let parsed = Parsed::new(&text);
     let unit = parsed.unit();
@@ -1175,4 +1175,31 @@ fn initialized_asks_the_interner_per_parameter_not_per_read_and_parameter() {
     let asked = ObjectInterner::of(&parsed.module.context).lookups() - before;
     assert_eq!(found.len(), 6);
     assert!(asked < 24 * 6 / 2, "{asked} interner lookups for 24 reads and 6 parameters");
+}
+
+/// `initialized` made two points-to solves and the effects of every call for
+/// each body of the module, 45% of `mir interprocedural` over QCport at -O1.
+/// What it states is bytes a body writes into a pointer parameter before
+/// reading them: a body with no pointer parameter, or with no store or call,
+/// states none, and is not solved.
+#[test]
+fn initialized_does_not_solve_a_body_that_writes_no_pointer_parameter() {
+    let run = |text: &str| {
+        let parsed = Parsed::new(text);
+        let unit = parsed.unit();
+        let before = ObjectInterner::of(&parsed.module.context).lookups();
+        let found = initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
+        (found, ObjectInterner::of(&parsed.module.context).lookups() - before)
+    };
+    for (text, what) in [
+        ("define i16 @f(i16 %a) {\nb0:\n  %x = add i16 %a, 1\n  ret i16 %x\n}\n", "integer parameters"),
+        ("define i16 @f(ptr %p) {\nb0:\n  %x = load i16, ptr %p\n  ret i16 %x\n}\n", "a pointer parameter only read"),
+    ] {
+        let (found, asked) = run(text);
+        assert!(found.iter().all(Vec::is_empty), "{what}: {found:?}");
+        assert_eq!(asked, 0, "{what}: the body was solved");
+    }
+    let (found, asked) = run("define i16 @f(ptr %p) {\nb0:\n  store i16 0, ptr %p\n  ret i16 0\n}\n");
+    assert_eq!(found, vec![vec![(0, 2)]], "premise: a store through a pointer parameter initializes it");
+    assert!(asked > 0);
 }

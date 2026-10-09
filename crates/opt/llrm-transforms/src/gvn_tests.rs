@@ -856,3 +856,73 @@ b0:
         .unwrap();
     assert_eq!(super::numberings() - before, 1);
 }
+
+/// The three kinds of load the availability dataflow forwards and the MemorySSA
+/// walk alone does not (gvn forwards loads by the walk once the dataflow goes):
+/// each is pinned here so the loss is seen, not measured later.
+///
+/// (a) A join whose arms store the same operand, the load below the join.
+#[test]
+fn a_load_below_a_join_whose_arms_stored_the_same_value_takes_it() {
+    let text = "@g = global i16 0
+
+define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 %x, ptr @g
+  br label %b3
+
+b2:
+  store i16 %x, ptr @g
+  br label %b3
+
+b3:
+  br label %b4
+
+b4:
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+";
+    let after = managed(text);
+    assert!(!after.contains("load i16"), "the load survives: {after}");
+}
+
+/// (b) A store through an index a register fact places away from the cell.
+#[test]
+fn a_load_is_served_across_a_store_whose_index_a_constant_places_away() {
+    let text = "@g = global [8 x i16] zeroinitializer
+
+define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  store i16 %x, ptr @g
+  %k = and i16 12, 6
+  %q = getelementptr i16, ptr @g, i16 %k
+  store i16 %y, ptr %q
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+";
+    let after = managed(text);
+    assert!(!after.contains("load i16"), "the load survives: {after}");
+}
+
+/// (c) A load marked invariant, after the store that initialises what it reads.
+#[test]
+fn an_invariant_load_takes_the_value_stored_before_it() {
+    let text = "@g = global i16 0
+
+define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  store i16 %x, ptr @g
+  %r = load i16, ptr @g, !invariant.load !0
+  ret i16 %r
+}
+
+!0 = !{}
+";
+    let after = managed(text);
+    assert!(!after.contains("load i16"), "the load survives: {after}");
+}
