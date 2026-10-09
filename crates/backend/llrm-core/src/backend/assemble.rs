@@ -908,7 +908,7 @@ fn phased_to(
             in_ssa = false;
         }
         let kept = (!body.notes.is_empty()).then(|| body.clone());
-        body = flow::checked(body, phase.as_mut(), in_ssa, classes).map_err(|error| match error {
+        body = flow::checked(body, phase.as_mut(), in_ssa, classes, target.segments).map_err(|error| match error {
             flow::Checked::Refused(raised) => format!("@{name}: {}", raised.message),
             flow::Checked::Malformed(malformed) => format!("@{name}: {}", malformed.0),
         })?;
