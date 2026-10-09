@@ -100,3 +100,14 @@ def test_the_nest_axis_is_a_loop_nest_as_deep_as_it_says_and_the_gate_sizes_it()
     depths = [len(line) - len(line.lstrip()) for line in text.splitlines() if line.lstrip().startswith("for (")]
     assert depths == sorted(depths) and len(set(depths)) == 5, depths
     assert gate.SIZES["nest"] == 16
+
+
+def test_the_cells_axis_reads_n_distinct_cells_after_the_stores_to_every_cell_before_and_the_gate_sizes_it():
+    """The 66 programs and the other axes carry little memory a pass can scan per load: `straight` has none. Memory forwarding's walks
+    and per-cell scans are quadratic in the cells a function touches, which no axis measured (2N/N of 224 cells is 3.8 at -O2)."""
+    text = scaling.AXES["cells"](10)
+    assert "static unsigned cell[10];" in text
+    assert text.count("cell[") == 10 * 3 + 1
+    stored = {line.split("]")[0].split("[")[1] for line in text.splitlines() if line.strip().startswith("cell[") and "=" in line}
+    assert stored == {str(k) for k in range(10)}, stored
+    assert gate.SIZES["cells"] == 112
