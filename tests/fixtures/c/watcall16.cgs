@@ -4,7 +4,7 @@ SEG 2 attr=0x1c name="CONST" align=2
 SEG 3 attr=0xc name="CONST2" align=2
 SEG 4 attr=0x6 name="_DATA" align=2
 START
-f1 DBSrcFile "/home/alim/scratch/abi32/tests/fixtures/c/watcall16.c" main=1
+f1 DBSrcFile "tests/fixtures/c/watcall16.c" main=1
 - DBSrcCue f1 2 1
 SYM y1 name="six" base="six" pattern="*_" attr=0x7 seg=1
 CALLCONV y1 class=0x0 target=0x4 parms=[ff:0] ret=0:0

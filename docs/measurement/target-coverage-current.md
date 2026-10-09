@@ -50,9 +50,6 @@ does not change this selection's final output. JUMPS's range-proven dispatch
 change is shown in [switches.md](../semantics/switches.md); FPDEEP's new denominator is
 an executed JWasm reference, not an optimizer speedup.
 
-Previous artifacts: `/tmp/qbopt-native-targets.Xr96r6`.
-Current objects, measurement script and all 29 rows:
-`/tmp/qbopt-target-refresh.jC2U3t`.
 The older figures below retain their original compiler/configuration scope.
 
 ## Latest focused check

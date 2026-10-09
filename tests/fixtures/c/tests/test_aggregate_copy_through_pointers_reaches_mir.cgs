@@ -5,7 +5,7 @@ SEG 3 attr=0xc name="CONST2" align=2
 SEG 4 attr=0x6 name="_DATA" align=2
 START
 TYPE T25 size=12 align=1
-f1 DBSrcFile "/private/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/tmp86lzmnsl/unit.c"
+f1 DBSrcFile "unit.c"
 - DBSrcCue f1 2 1
 SYM y1 name="copy" base="copy" pattern="_*" attr=0x7 seg=1
 CALLCONV y1 class=0x80 target=0x716 parms=[] ret=0:0

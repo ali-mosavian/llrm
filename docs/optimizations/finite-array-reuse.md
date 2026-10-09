@@ -52,8 +52,6 @@ test now suppresses both constant and interval proofs, retaining its original
 assertion. Only FPDEEP changed in a before/after ordinary PDS emission scan.
 All 33 output cases pass across PDS, QB and VBDOS with LIR emission required.
 
-Stages and runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-array-reuse-final-75n2fcfg`.
 The adjacent `s18-mir-r02-hoist.txt` / `s19-mir-r02-forward.txt` diff shows
 the memory operands replaced by held values; subsequent CSE removes the
 repeated loads.
@@ -85,5 +83,3 @@ These remain ranking scores, not runtime measurements.
 The allocation regression failed first; 109 focused allocation/selection/
 floating-bound tests pass. FPDEEP alone changed in the ordinary PDS scan;
 all 33 runtime output cases pass across the three compiler variants.
-Artifacts and full stage dumps:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-float-destination-2byduooy`.

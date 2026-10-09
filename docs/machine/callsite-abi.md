@@ -45,7 +45,7 @@ Lowered bodies now require their instruction sequence to survive emission.
 The emitted-byte regression fails with the old rule restored; 19 focused
 checks pass. In the isolated corrected h_frame run, `pt_build_mean` recovered
 from zero to 13.18 ms, the image remained byte-identical to baseline, and FPS
-was 13.67. Evidence: `/tmp/qbopt-qrender-order.rIh47r/`.
+was 13.67.
 
 The separate d_surf trial reduced object size from 25,053 to 21,373 bytes and
 rendered identical pixels at 13.62 FPS, but used the broken h_frame build.
@@ -54,7 +54,7 @@ a speedup.
 
 ### Integrated rebuild with corrected order
 
-`/tmp/qbopt-qrender-current.btIQeb/` contains the fresh 16/17-module rebuild,
+`qrender-current/` contains the fresh 16/17-module rebuild,
 its per-module outcomes, LINK map and benchmark evidence. Only snd is refused
 (`B$FEVS` input contract unknown); its original object is retained explicitly.
 
@@ -87,8 +87,8 @@ change is +1.67%, not a demonstrated speedup: this is one pair and timer
 calibration varies between launches. Six interleaved pairs remain necessary
 for a performance claim. No source or pass changed during these runs.
 
-Evidence: `/tmp/qbopt-long-baseline.Hm6ZTS/` and
-`/tmp/qbopt-long-opt.bcKVnQ/`, each containing the exact config, executable,
+Evidence: `long-baseline/` and
+`long-opt/`, each containing the exact config, executable,
 `BENCH.TXT`, `BENCH.BMP` and `benchmark.png`.
 
 ### Remaining runtime interface
@@ -114,8 +114,6 @@ push ax
 call far B$SASS
 ```
 
-Stage dumps: `/tmp/qbopt-snd-stages/`. Audit disassembly:
-`/tmp/qbopt-fevs-contract.json` and `/tmp/qbopt-refstring-contract.json`.
 
 One h_frame floating update, before (emulated x87 shown as its equivalent):
 
@@ -136,6 +134,4 @@ fadd dword [bp+1Ch]
 fstp dword [si]
 ```
 
-All h_frame stages: `/tmp/qbopt-qrender-frame-abi.1TS8gz/frame-stages/`.
 Run evidence: `BENCH.TXT`, `BENCH.BMP` and `live.png` in the same parent folder.
-Before h_frame: `/tmp/qbopt-qrender-main-abi.zhAJZK/`.

@@ -54,8 +54,5 @@ input was initialized, producing HARR answers 18183 (QB/PDS) and 12327
 An emitted-code regression fails with the bad placement restored. The
 counter-elimination fixture regressions also fail with the pass disabled.
 
-Before dumps: `/tmp/qbopt-harr-current/s81-asm-emitted.txt` and corresponding
-MIR files. After dumps and passing HARR runs:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-indvars-fixed-no1fz7b5`.
-Passing MATRIX/NESTED runs:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-indvars-affected-ikexjl97`.
+Before dumps: `harr-current/s81-asm-emitted.txt` and corresponding
+MIR files.

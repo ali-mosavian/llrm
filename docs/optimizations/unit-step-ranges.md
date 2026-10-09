@@ -34,5 +34,3 @@ comparison across the ordinary PDS fixtures found no changed objects.
 The proven extent is a prerequisite for finite array-value analysis, not
 proof that the values are finite or permission to remove floating effects.
 
-Initial stage dumps for this investigation:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fpdeep-array-y4td5z34`.

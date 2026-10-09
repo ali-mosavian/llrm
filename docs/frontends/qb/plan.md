@@ -7,7 +7,7 @@ not the first test of procedure entry, stack layout, strings, or arrays.
 This plan is ordered around executable vertical slices. Each phase must leave
 the existing OMF frontend, MIR optimizer, and backend unchanged in behavior.
 
-The real-program target is `~/work/personal/qb-qrender`: all 17 production
+The real-program target is [qb-qrender](https://github.com/ali-mosavian/qb-quake): all 17 production
 BASIC modules through this frontend, its five C modules through the WCC
 frontend (then the common HIR once proven), and its two assembly modules kept
 as assembly. The existing uGL, U3D, and VBDOS libraries/runtime remain link
@@ -164,7 +164,7 @@ remain to connect.
 ## Phase 2: extract the QBasic parser in tree
 
 - Import the minimal Rust lexer/parser/table generator from
-  `~/work/personal/qbasic-port` into `crates/frontends/qbfront/`, preserving provenance
+  `qbasic-port` into `crates/frontends/qbfront/`, preserving provenance
   and license notices.
 - Replace p-code `EMIT` actions with named semantic actions and rollback-safe
   builder checkpoints.
