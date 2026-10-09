@@ -10,7 +10,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::model::lir::LirBlock;
-use crate::support::bits::Bits;
 use crate::support::hash::IndexMap;
 
 /// All these walks read of a block: where it is and where it goes.

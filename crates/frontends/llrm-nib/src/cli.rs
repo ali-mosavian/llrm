@@ -149,12 +149,6 @@ pub fn frontend_with_mode(arguments: &mut Vec<String>) -> Result<super::Frontend
     })
 }
 
-/// What the target's OS layer says of Nib's runtime; a target without one is
-/// refused.
-fn nib_os(target: &dyn llrm_target::Target) -> Result<super::Os, String> {
-    super::Os::for_target(target)
-}
-
 /// The symbols `objects` import.
 fn used(objects: &[PathBuf]) -> Result<std::collections::BTreeSet<String>, String> {
     let mut names = std::collections::BTreeSet::new();
@@ -358,8 +352,8 @@ mod tests {
     /// runtime is refused by saying so, whatever else it is.
     #[test]
     fn a_target_without_a_nib_runtime_is_refused_by_that_message() {
-        let error = super::nib_os(&Bare(llrm_x86_m16::M16)).expect_err("refused");
+        let error = super::super::Os::for_target(&Bare(llrm_x86_m16::M16)).expect_err("refused");
         assert_eq!(error, "target x86-m16 has no Nib runtime");
-        assert!(super::nib_os(&llrm_x86_m16::M16).is_ok());
+        assert!(super::super::Os::for_target(&llrm_x86_m16::M16).is_ok());
     }
 }

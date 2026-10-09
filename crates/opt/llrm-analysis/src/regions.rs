@@ -47,8 +47,7 @@ use num_traits::ToPrimitive;
 
 use crate::cellmap::Bucket;
 use crate::memory::{
-    AliasClass, Identity, MemRef, MemoryKind, MemoryObject, ObjectRef, Provenance, Slice, SliceError, alias_class,
-    classes_may_alias,
+    AliasClass, MemRef, MemoryKind, ObjectRef, Provenance, Slice, SliceError, alias_class, classes_may_alias,
 };
 use crate::ranges::{Interval, covering};
 

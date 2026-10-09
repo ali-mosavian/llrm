@@ -20,7 +20,6 @@ use crate::backend::postings::{self, At, Postings};
 use crate::backend::target;
 use crate::model::ir::{self, Addr, Address, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBlock, LirBody};
-use crate::model::passes::LIRTransform;
 use crate::support::hash::{IndexMap, IndexSet};
 use crate::support::pyset::PySet;
 
@@ -1209,9 +1208,9 @@ fn _same_colors(
         })
 }
 
-/// `_existing_colors`, with the intervals of the homes' pseudo-values found
-/// among themselves and the body's own remembered, or, `whole`, as the body
-/// with the homes in it is worked out at once.
+// `_existing_colors`, with the intervals of the homes' pseudo-values found
+// among themselves and the body's own remembered, or, `whole`, as the body
+// with the homes in it is worked out at once.
 thread_local! {
     static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -1248,15 +1247,14 @@ impl Lives {
 
 /// The intervals of the homes' pseudo-values (`first..`) walked in a body of
 /// the instructions that name them alone (whole parallel copies, which share a
-/// point), at the slots they have in the body: what `homes_by_occurrences` is
-/// held to under `LLRM_CHECK_OCCURRENCES`.
+/// point), at the slots they have in the body.
 fn homes_by_sparse_body(
     body: &LirBody,
     index: &ranges::Indexes,
     changed: &[(usize, usize, Arc<Insn>)],
     first: u32,
 ) -> IndexMap<u32, Interval> {
-    let mut sparse_blocks: Vec<LirBlock> = body
+    let sparse_blocks: Vec<LirBlock> = body
         .blocks
         .iter()
         .map(|block| LirBlock {
@@ -1526,17 +1524,6 @@ fn homes_kept(
             },
         );
     result
-}
-
-fn homes_by_occurrences(
-    body: &LirBody,
-    index: &ranges::Indexes,
-    named: &[(usize, usize, BTreeSet<u32>, BTreeSet<u32>)],
-    first: u32,
-    count: usize,
-) -> IndexMap<u32, Interval> {
-    let values: Vec<u32> = (first..first + count as u32).collect();
-    crate::analysis::occurrences::Occurrences::planned(named).ranges(body, index, &values)
 }
 
 fn _existing_colors_by(

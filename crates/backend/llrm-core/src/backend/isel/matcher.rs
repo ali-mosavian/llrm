@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
-use llrm_mir::{CastOp, ConstantKind, Opcode, Type, TypeId};
+use llrm_mir::{CastOp, ConstantKind, Opcode, TypeId};
 
 use super::{
     Convention, FLOAT, Pointer, Selector, Test, TypeClass, Unselected, float_conditions, insn, insn_of, refuse,

@@ -776,7 +776,6 @@ pub fn promoted(
         if one.body.iter().any(|at| taken.contains(at)) {
             continue;
         }
-        let insns = || one.body.iter().flat_map(|at| body.blocks[index[at]].insns.iter());
         // How each instruction of the loop reaches the frame, worked out once:
         // each slot asks of the instructions that reach it, not of all
         // of them (a loop of d nested levels asked d slots of d levels'

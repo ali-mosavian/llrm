@@ -132,7 +132,7 @@ def test_a_base_is_built_the_way_the_gate_builds(tmp_path, monkeypatch):
     monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
     monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
     assert measure.built("0" * 40) == tmp_path / "target" / "release"
-    assert ran == [["bash", "-c", measure.gate.BUILD]]
+    assert ran == [["bash", "-c", measure.gate.MEASURE_BUILD]]
 
 
 def test_two_sessions_missing_the_same_base_build_it_once(tmp_path, monkeypatch):

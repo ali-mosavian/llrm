@@ -158,7 +158,7 @@ def built(sha: str) -> Path:
     tree = checked_out(sha, BUILD / "tree")
     env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
     env.pop("LLRM_BIN", None)
-    done = subprocess.run(["bash", "-c", DIST_BUILD if PROFILE == "dist" else gate.BUILD], cwd=tree, env=env, capture_output=True, text=True)
+    done = subprocess.run(["bash", "-c", DIST_BUILD if PROFILE == "dist" else gate.MEASURE_BUILD], cwd=tree, env=env, capture_output=True, text=True)
     if done.returncode:
         raise SystemExit(f"measure: the base {sha[:9]} does not build:\n{done.stderr[-2000:]}")
     return BUILD / "target" / PROFILE

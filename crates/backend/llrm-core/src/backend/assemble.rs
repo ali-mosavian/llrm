@@ -390,7 +390,7 @@ fn machined_once(
     first_stage: Staged,
 ) -> Result<Machined, String> {
     MACHINED.with(|count| count.set(count.get() + 1));
-    let (first, frame) = timed("candidate first frame", || cheaper(&first_stage, module, name, pool, target))?;
+    let (first, frame) = timed("candidate first frame", || cheaper(&first_stage, name, pool, target))?;
     let spilled = frame.floor + first.reserve;
     let far = far_frame(&first.body);
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
@@ -402,7 +402,7 @@ fn machined_once(
     // layout.
     let laid = timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled));
     if llrm_support::env_set("LLRM_CHECK_FRAME") {
-        let (again, _) = cheaper(&staged(module, name, abi, pool, target, spilled)?, module, name, pool, target)?;
+        let (again, _) = cheaper(&staged(module, name, abi, pool, target, spilled)?, name, pool, target)?;
         match &laid {
             Some((laid, _)) => {
                 if let Some(difference) = crate::backend::relayout::difference(laid, &again) {
@@ -427,7 +427,6 @@ fn machined_once(
 /// the allocator does anyway.
 fn cheaper(
     staged: &Staged,
-    module: &Module,
     name: &str,
     pool: &Rc<RefCell<Pool>>,
     target: &Target<'_>,
@@ -442,18 +441,17 @@ fn cheaper(
     // Without the routes the allocator is run once, as gcc's IRA is at -O0
     // (`fast_allocation`, no conflicts built): one route.
     if candidates == Candidates::AllocatorOnly || !target.cpu.routes {
-        return timed("candidate allocator alone", || phased(staged, module, name, pool, target, false, true))
+        return timed("candidate allocator alone", || phased(staged, name, pool, target, false, true))
             .map(|(made, _)| made);
     }
     if !target.cpu.exhaustive && candidates == Candidates::Both {
-        return directed(staged, module, name, pool, target);
+        return directed(staged, name, pool, target);
     }
-    let (spilled, ran) = timed("candidate spiller", || phased(staged, module, name, pool, target, true, true))?;
+    let (spilled, ran) = timed("candidate spiller", || phased(staged, name, pool, target, true, true))?;
     if !ran.changed() || candidates == Candidates::SpillerOnly {
         return Ok(spilled);
     }
-    let (allocator_alone, _) =
-        timed("candidate allocator alone", || phased(staged, module, name, pool, target, false, true))?;
+    let (allocator_alone, _) = timed("candidate allocator alone", || phased(staged, name, pool, target, false, true))?;
     llrm_support::debug!(
         "candidates",
         "{name}: spiller {:?}, allocator alone {:?}",
@@ -466,7 +464,7 @@ fn cheaper(
         (spilled, true)
     };
     if from_spiller && ran.ties() {
-        return admitted_or_plain(staged, module, name, pool, target, kept);
+        return admitted_or_plain(staged, name, pool, target, kept);
     }
     Ok(kept)
 }
@@ -484,12 +482,11 @@ const SPILLER_TRAFFIC: f64 = 0.005;
 /// frame worth removing.
 fn directed(
     staged: &Staged,
-    module: &Module,
     name: &str,
     pool: &Rc<RefCell<Pool>>,
     target: &Target<'_>,
 ) -> Result<(Machined, frame::Frame), String> {
-    let (alone, _) = timed("candidate allocator alone", || phased(staged, module, name, pool, target, false, true))?;
+    let (alone, _) = timed("candidate allocator alone", || phased(staged, name, pool, target, false, true))?;
     let busy = crate::analysis::frequency::Frequency::of(&alone.0.body);
     let (mut traffic, mut all) = (0.0, 0.0);
     for block in &alone.0.body.blocks {
@@ -517,8 +514,7 @@ fn directed(
     if traffic < SPILLER_TRAFFIC * all {
         return Ok(alone);
     }
-    let Some((spilled, ran)) =
-        timed("candidate spiller", || phased_to(staged, module, name, pool, target, true, true, true))?
+    let Some((spilled, ran)) = timed("candidate spiller", || phased_to(staged, name, pool, target, true, true, true))?
     else {
         return Ok(alone);
     };
@@ -535,7 +531,7 @@ fn directed(
     }
     let kept = spilled;
     if ran.ties() {
-        return admitted_or_plain(staged, module, name, pool, target, kept);
+        return admitted_or_plain(staged, name, pool, target, kept);
     }
     Ok(kept)
 }
@@ -545,13 +541,12 @@ fn directed(
 /// encoded code: the loads it moved to the entry are not all it changed.
 fn admitted_or_plain(
     staged: &Staged,
-    module: &Module,
     name: &str,
     pool: &Rc<RefCell<Pool>>,
     target: &Target<'_>,
     admitted: (Machined, frame::Frame),
 ) -> Result<(Machined, frame::Frame), String> {
-    let (plain, _) = timed("candidate plain", || phased(staged, module, name, pool, target, true, false))?;
+    let (plain, _) = timed("candidate plain", || phased(staged, name, pool, target, true, false))?;
     if timed("candidate cost", || route_cost(&plain.0, target).zip(route_cost(&admitted.0, target)))
         .is_some_and(|(plain, admitted)| plain < admitted)
     {
@@ -753,15 +748,13 @@ fn far_frame(body: &LirBody) -> usize {
 #[allow(clippy::too_many_arguments)]
 fn phased(
     staged: &Staged,
-    module: &Module,
     name: &str,
     pool: &Rc<RefCell<Pool>>,
     target: &Target<'_>,
     spilling: bool,
     admission: bool,
 ) -> Result<((Machined, frame::Frame), Rc<ssaspill::Run>), String> {
-    Ok(phased_to(staged, module, name, pool, target, spilling, admission, false)?
-        .expect("a route that runs to its end"))
+    Ok(phased_to(staged, name, pool, target, spilling, admission, false)?.expect("a route that runs to its end"))
 }
 
 /// A function selected and its frame made: what every route through the machine
@@ -871,7 +864,6 @@ fn staged(
 #[allow(clippy::too_many_arguments)]
 fn phased_to(
     staged: &Staged,
-    module: &Module,
     name: &str,
     pool: &Rc<RefCell<Pool>>,
     target: &Target<'_>,

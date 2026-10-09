@@ -1511,31 +1511,6 @@ fn test_a_guarded_do_while_behind_a_forwarding_latch_keeps_one_counter() {
     assert_eq!(counters(&printed), 1, "{printed}");
 }
 
-/// A far pointer walked a word a trip beside a counter that only tests
-/// the exit: the counter is the pointer's distance.
-const FAR_SUM: &str = "define i16 @f(ptr addrspace(1) %q, i16 %n) {
-entry:
-  br label %l1
-
-l1:
-  %i = phi i16 [ 0, %entry ], [ %i.next, %l2 ]
-  %p = phi ptr addrspace(1) [ %q, %entry ], [ %p.next, %l2 ]
-  %s = phi i16 [ 0, %entry ], [ %t, %l2 ]
-  %more = icmp slt i16 %i, %n
-  br i1 %more, label %l2, label %l3
-
-l2:
-  %v = load i16, ptr addrspace(1) %p
-  %t = add i16 %s, %v
-  %p.next = getelementptr i8, ptr addrspace(1) %p, i16 2
-  %i.next = add nsw i16 %i, 1
-  br label %l1
-
-l3:
-  ret i16 %s
-}
-";
-
 /// Basic's five far arrays read at `lo + 8 + i`, as the descriptors give
 /// them: three word arrays and two dword, summed to a symbolic bound.
 const FAR_ARRAYS: &str = "define i32 @f(ptr dereferenceable(18) nocapture readonly %0, ptr dereferenceable(18) nocapture readonly %1, ptr dereferenceable(18) nocapture readonly %2, ptr dereferenceable(18) nocapture readonly %3, ptr dereferenceable(18) nocapture readonly %4, ptr dereferenceable(2) nocapture readonly %5, ptr dereferenceable(2) nocapture readonly %6, ptr dereferenceable(2) nocapture readonly %7) addrspace(1) memory(read, inaccessiblemem: none) {

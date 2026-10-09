@@ -38,13 +38,12 @@ use llrm_analysis::cfg;
 use llrm_analysis::consts;
 use llrm_analysis::memory::Unit;
 use llrm_mir::callgraph::CallGraph;
-use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
+use llrm_mir::context::{ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::{Facts, Inlining};
 use llrm_mir::memory::{Callees, Effects, callee};
-use llrm_mir::module::MetadataId;
-use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
+use llrm_mir::module::{Function, InstId, Linkage, Module, Operand, ValueDef};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::splice::{carries, splice};
@@ -491,8 +490,8 @@ pub fn candidates(
     reach: i64,
     threshold: Threshold,
 ) -> IndexMap<GlobalId, Candidate> {
-    let call_cost = costs.call;
     let budget = threshold.budget(reach);
+    let call_cost = costs.call;
     let (recursive, addressed) = (recursive(module), llrm_mir::callgraph::addressed(module));
     let mut out = IndexMap::default();
     let mut lasts = IndexMap::default();
@@ -588,7 +587,6 @@ pub fn constant_sites(
     reach: i64,
     threshold: Threshold,
 ) -> IndexMap<InstId, Candidate> {
-    let call_cost = costs.call;
     let Some(budget) = threshold.budget(reach) else { return IndexMap::default() };
     let frequency =
         profit::_frequencies(&module.context, &module.metadata, &module.globals, caller, None).unwrap_or_default();
