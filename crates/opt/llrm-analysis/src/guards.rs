@@ -82,7 +82,102 @@ pub fn holds(unit: &Unit, at: i64, predicate: IntPredicate, left: &Scev, right: 
     if let (Some(one), Some(other)) = (left.known(), right.known()) {
         return evaluated(predicate, &one, &other, left.width);
     }
-    guards(unit, at).iter().any(|guard| implies(guard, predicate, left, right))
+    let facts = guards(unit, at);
+    if facts.iter().any(|guard| implies(guard, predicate, left, right)) {
+        return true;
+    }
+    // An unsigned compare of zero extensions is the compare of what they extend: the guard may be in the narrow type.
+    if let Some((left, right)) = narrowed(unit, predicate, left, right)
+        && (facts.iter().any(|guard| implies(guard, predicate, &left, &right)) || holds(unit, at, predicate, &left, &right))
+    {
+        return true;
+    }
+    through_phi(unit, at, predicate, left, right)
+}
+
+/// `phi predicate right` below the phi's block where each edge into the block proves it of the value it brings: no branch dominates the
+/// block then, as in a loop entered from a guard and from its own latch test (LLVM's `isImpliedCondition` over a header phi's incoming values).
+fn through_phi(unit: &Unit, at: i64, predicate: IntPredicate, left: &Scev, right: &Scev) -> bool {
+    let function = unit.function;
+    let shape = unit.shape();
+    let phi_of = |one: &Scev| -> Option<llrm_mir::module::InstId> {
+        let [(product, factor)] = one.terms.iter().collect::<Vec<_>>()[..] else { return None };
+        if one.constant != BigInt::from(0) || *factor != BigInt::from(1) {
+            return None;
+        }
+        let ValueDef::Instruction(inst) = function.value(product.single()?).def else { return None };
+        (function.instruction(inst).opcode == Opcode::Phi).then_some(inst)
+    };
+    let (phi, from_left) = match (phi_of(left), phi_of(right)) {
+        (Some(phi), None) => (phi, true),
+        (None, Some(phi)) => (phi, false),
+        _ => return false,
+    };
+    let Some(block) = function.parent(phi) else { return false };
+    let other = if from_left { right } else { left };
+    // The other side stays what it is on every trip: a constant, or a value defined above the phi's block.
+    let fixed = other.known().is_some()
+        || other.unknowns().all(|value| match function.value(value).def {
+            ValueDef::Instruction(inst) => function.parent(inst).is_some_and(|home| home != block && shape.dominance.dominates(cfg::id(home), cfg::id(block))),
+            _ => true,
+        });
+    if !fixed || !shape.dominance.dominates(cfg::id(block), at) {
+        return false;
+    }
+    let operands = function.instruction(phi).operands.clone();
+    if operands.len() < 2 {
+        return false;
+    }
+    let width = left.width;
+    operands.chunks(2).all(|arm| {
+        let Operand::Block(from) = &arm[1] else { return false };
+        let Some(brought) = term(unit, arm[0]) else { return false };
+        let brought = Scev::of(&brought, width);
+        let (l, r) = if from_left { (&brought, right) } else { (left, &brought) };
+        if let (Some(one), Some(two)) = (l.known(), r.known()) {
+            return evaluated(predicate, &one, &two, width);
+        }
+        // What holds at the end of the incoming block, and what its branch says of the edge into this one.
+        let mut proven = guards(unit, cfg::id(*from));
+        if let Some(branch) = function.terminator(*from)
+            && let [Operand::Value(condition), Operand::Block(yes), Operand::Block(no)] = function.instruction(branch).operands[..]
+            && yes != no
+            && (yes == block || no == block)
+        {
+            _proven(unit, condition, yes == block, &mut proven);
+        }
+        proven.iter().any(|guard| implies(guard, predicate, l, r))
+    })
+}
+
+/// The two sides read before the zero extension that made one of them, where each is that or a constant it holds: `zext a` against `64`
+/// is `a` against `64` one width down. Unsigned and equality compares only, which a zero extension keeps.
+fn narrowed(unit: &Unit, predicate: IntPredicate, left: &Scev, right: &Scev) -> Option<(Scev, Scev)> {
+    use IntPredicate::*;
+    if !matches!(predicate, Ult | Ule | Ugt | Uge | Eq | Ne) {
+        return None;
+    }
+    let source = |one: &Scev| -> Option<(ValueId, u32)> {
+        let [(product, factor)] = one.terms.iter().collect::<Vec<_>>()[..] else { return None };
+        if one.constant != BigInt::from(0) || *factor != BigInt::from(1) {
+            return None;
+        }
+        let value = product.single()?;
+        let ValueDef::Instruction(inst) = unit.function.value(value).def else { return None };
+        let op = unit.function.instruction(inst);
+        let (Opcode::Cast(llrm_mir::opcode::CastOp::ZExt), [Operand::Value(from)]) = (&op.opcode, &op.operands[..]) else { return None };
+        Some((*from, unit.int_bits(Operand::Value(*from))?))
+    };
+    let narrow = |one: &Scev, bits: u32| -> Option<Scev> {
+        if let Some((from, width)) = source(one) {
+            return (width == bits).then(|| Scev::of(&crate::induction::AffineOperand::Value(from, width), width));
+        }
+        let value = one.known().filter(|_| one.terms.is_empty())?;
+        let unsigned = if value < BigInt::from(0) { value + (BigInt::from(1) << one.width) } else { value };
+        (unsigned < (BigInt::from(1) << bits)).then(|| Scev::constant(unsigned, bits))
+    };
+    let bits = source(left).or_else(|| source(right))?.1;
+    Some((narrow(left, bits)?, narrow(right, bits)?))
 }
 
 /// `holds`, given also `assumed` and what the program states of the
@@ -118,6 +213,17 @@ pub fn holds_given(unit: &Unit, at: i64, assumed: &[Guard], predicate: IntPredic
 
 /// Whether `guard` proves `left predicate right`.
 pub fn implies(guard: &Guard, predicate: IntPredicate, left: &Scev, right: &Scev) -> bool {
+    // `a != 0` proves `0 <u a`: the guard of a loop that counts up from zero to `a`, as LLVM's isLoopEntryGuardedByCond finds it.
+    if guard.predicate == IntPredicate::Ne {
+        let zero = |one: &Scev| one.known().is_some_and(|value| value == BigInt::from(0));
+        let nonzero = if zero(&guard.right) { Some(&guard.left) } else if zero(&guard.left) { Some(&guard.right) } else { None };
+        if let Some(value) = nonzero {
+            let below = (predicate == IntPredicate::Ult && zero(left) && right == value) || (predicate == IntPredicate::Ugt && zero(right) && left == value);
+            if below {
+                return true;
+            }
+        }
+    }
     if guard.left == *left && guard.right == *right {
         return _stronger(guard.predicate, predicate);
     }
