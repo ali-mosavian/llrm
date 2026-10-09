@@ -130,3 +130,18 @@ def test_a_rewrite_counts_what_the_instructions_it_changed_say_of_the_register_c
         source.write_text(scaling.AXES["cells"](224))
         run = steps(compiler, source, "-O2")
     assert run["classes scan"] < 60, f"cells N=224 -O2: classes scan cost {run['classes scan']} Minstr (60 allowed; 371 before): {run}"
+
+
+def test_a_rewrite_prices_the_siblings_of_the_values_it_changed_only():
+    """`facts sibling prices` walked every instruction for plain moves and impure values, and tested every move's intervals for
+    overlap, after each spill: 263 Minstr on `cells` at N=224. The values the changed instructions name, and the other sides of
+    their copies, are priced again; the rest stand."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](224))
+        run = steps(compiler, source, "-O2")
+    assert run["facts sibling prices"] < 70, f"cells N=224 -O2: facts sibling prices cost {run['facts sibling prices']} Minstr (70 allowed; 263 before): {run}"
