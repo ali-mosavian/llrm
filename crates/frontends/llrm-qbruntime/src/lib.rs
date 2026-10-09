@@ -1601,7 +1601,6 @@ pub fn per_call(
     family: &str,
     defined: &BTreeSet<String>,
 ) -> IndexMap<i64, Contract> {
-    let variants: &IndexMap<(&str, &str), Contract> = &VARIANTS;
     calls
         .iter()
         .map(|(&at, name)| {
@@ -1610,9 +1609,9 @@ pub fn per_call(
                 if defined.contains(name) {
                     own(name)
                 } else {
-                    variants
-                        .get(&(name.as_str(), family))
-                        .cloned()
+                    in_table(name)
+                        .then(|| VARIANTS.get(&(name.as_str(), family)).cloned())
+                        .flatten()
                         .unwrap_or_else(|| contract(Some(name)))
                 },
             )
@@ -1879,7 +1878,16 @@ pub fn contract(name: Option<&str>) -> Contract {
     let Some(name) = name else {
         return worst("");
     };
+    if !in_table(name) {
+        return worst(name);
+    }
     CONTRACTS.get(name).cloned().unwrap_or_else(|| worst(name))
+}
+
+/// Whether `name` can be a row of the tables: every row is a `B$` entry, so any other name (every C function) is worst case
+/// without parsing the 64 KB table, which was 3% of a compile of a typical C program.
+fn in_table(name: &str) -> bool {
+    name.starts_with("B$")
 }
 
 #[cfg(test)]
@@ -2445,6 +2453,7 @@ mod tests {
             CONTRACTS.keys().collect::<BTreeSet<_>>(),
             "the table and what loaded disagree"
         );
+        assert!(CONTRACTS.keys().all(|name| in_table(name)) && VARIANTS.keys().all(|(name, _)| in_table(name)), "a row outside B$ is skipped");
         for name in ["B$HARY", "B$LINA"] {
             for family in ["qb45", "pds71", "vbdos"] {
                 assert_eq!(VARIANTS[&(name, family)], CONTRACTS[name]);
