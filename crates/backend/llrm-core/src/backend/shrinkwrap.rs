@@ -1,5 +1,6 @@
-//! LLVM's ShrinkWrap for the registers a procedure keeps for its caller (SI and DI): saved where they
-//! are first needed instead of at every entry, and restored only on the returns that path reaches.
+//! LLVM's ShrinkWrap: the registers a procedure keeps for its caller (SI and DI), and its frame (the
+//! stack reserve and the frame register), set up where they are first needed instead of at every entry,
+//! and taken back only on the returns that path reaches.
 //!
 //! A procedure that leaves early (`if row == 7 { return 1 }`) before any of its loop touches SI paid a
 //! push and a pop for it on every call. The save goes to the block that dominates every use, and the
@@ -19,6 +20,9 @@ use crate::model::lir::{Insn, LirBody};
 pub struct Wrap {
     pub at: i64,
     pub restored: BTreeSet<i64>,
+    /// The frame's setup is at `at` too, and the returns outside `restored` take none back: nothing
+    /// outside the blocks `at` dominates touches the frame or the stack.
+    pub frame: bool,
 }
 
 /// The registers `one` names, and those the call it is disturbs by its convention.
@@ -39,11 +43,34 @@ pub fn named(one: &Insn) -> BTreeSet<Register> {
     found
 }
 
-/// The wrap of `body` for the registers `kept`, where one is worth having.
-pub fn wrapped(body: &LirBody, kept: &BTreeSet<Register>) -> Option<Wrap> {
-    if body.noreturn || kept.is_empty() {
+/// Whether `one` reads or writes the frame or the stack pointer: a frame cell or argument, a push or pop,
+/// or an instruction the printer cannot read.
+fn touches_frame(one: &Insn) -> bool {
+    let Some(what) = &one.what else { return false };
+    if matches!(what.op, ir::Operation::Push | ir::Operation::Pop | ir::Operation::Leave | ir::Operation::Escape)
+        || (what.op == ir::Operation::Nothing && what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")))
+    {
+        return true;
+    }
+    what.dests.iter().chain(&what.sources).any(|place| match place {
+        Loc::Mem(cell) => cell.in_frame(),
+        Loc::Address(cell) => cell.in_frame(),
+        _ => false,
+    })
+}
+
+/// The wrap of `body` for the registers `kept`, and for the frame where `frame` names the frame register and the stack
+/// pointer, if one is worth having. A frame that cannot be wrapped leaves the registers to be.
+pub fn wrapped(body: &LirBody, kept: &BTreeSet<Register>, frame: Option<(Register, Register)>) -> Option<Wrap> {
+    frame.and_then(|registers| placed(body, kept, Some(registers))).or_else(|| placed(body, kept, None))
+}
+
+fn placed(body: &LirBody, kept: &BTreeSet<Register>, frame: Option<(Register, Register)>) -> Option<Wrap> {
+    if body.noreturn || (kept.is_empty() && frame.is_none()) {
         return None;
     }
+    let mut kept = kept.clone();
+    kept.extend(frame.iter().flat_map(|(pointer, stack)| [ir::root(*pointer), ir::root(*stack)]));
     let entry = Some(body.entry);
     let from_entry = dominance(&body.blocks, entry);
     // Every block must be reached from the entry: a block only the runtime enters has no dominator.
@@ -51,7 +78,7 @@ pub fn wrapped(body: &LirBody, kept: &BTreeSet<Register>) -> Option<Wrap> {
         return None;
     }
     let idom = immediate_dominators(&body.blocks, entry);
-    let uses: Vec<i64> = body.blocks.iter().filter(|block| block.insns.iter().any(|one| named(one).iter().any(|register| kept.contains(register)))).map(|block| block.at).collect();
+    let uses: Vec<i64> = body.blocks.iter().filter(|block| block.insns.iter().any(|one| (frame.is_some() && touches_frame(one)) || named(one).iter().any(|register| kept.contains(register)))).map(|block| block.at).collect();
     let first = *uses.first()?;
     let above = |block: i64| {
         let mut chain = vec![block];
@@ -75,6 +102,10 @@ pub fn wrapped(body: &LirBody, kept: &BTreeSet<Register>) -> Option<Wrap> {
     }
     let from_home = dominance(&body.blocks, Some(home));
     let mut restored = BTreeSet::new();
+    // The frame is set up at `home`, so a block it reaches that something else also reaches would be entered at two depths.
+    if frame.is_some() && body.blocks.iter().any(|block| from_home.reachable(block.at) && !from_entry.dominates(home, block.at)) {
+        return None;
+    }
     for block in &body.blocks {
         let returns = block.insns.iter().any(|one| one.what.as_ref().is_some_and(|what| what.op == ir::Operation::Return));
         if !returns || !from_home.reachable(block.at) {
@@ -86,5 +117,5 @@ pub fn wrapped(body: &LirBody, kept: &BTreeSet<Register>) -> Option<Wrap> {
         }
         restored.insert(block.at);
     }
-    Some(Wrap { at: home, restored })
+    Some(Wrap { at: home, restored, frame: frame.is_some() })
 }
