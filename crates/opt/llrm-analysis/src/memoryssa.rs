@@ -16,7 +16,7 @@ use std::rc::Rc;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::stated;
-use llrm_mir::module::{Function, GlobalValue, InstId, ValueId};
+use llrm_mir::module::{Change, Function, GlobalValue, InstId, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis};
 use llrm_support::hash::IndexMap;
@@ -84,6 +84,9 @@ pub struct Accesses {
     touched: IndexMap<InstId, Footprint>,
     /// Of each call, the bytes it writes before reading any.
     fills: IndexMap<InstId, Vec<MemRef>>,
+    /// What the manager's accesses were made from: the references annotated
+    /// and the calls' effects.
+    source: Option<(Rc<<Annotated as Analysis>::Result>, Rc<<CallEffects as Analysis>::Result>)>,
 }
 
 /// The objects an instruction's writes can reach, for ruling a cell out before
@@ -133,6 +136,7 @@ impl Reach {
 impl Analysis for Accesses {
     type Result = Result<Rc<Accesses>, String>;
     const NAME: &'static str = "accesses";
+    const INCREMENTAL: bool = true;
 
     fn run(
         context: &Context,
@@ -140,17 +144,52 @@ impl Analysis for Accesses {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        let references = analyses.get::<Annotated>(context, layout, function);
-        let effects = analyses.get::<CallEffects>(context, layout, function);
-        let references = Result::as_ref(&*references).map_err(String::clone)?;
-        let effects = Result::as_ref(&*effects).map_err(String::clone)?;
+        let annotated = analyses.get::<Annotated>(context, layout, function);
+        let calls = analyses.get::<CallEffects>(context, layout, function);
+        let references = Result::as_ref(&*annotated).map_err(String::clone)?;
+        let effects = Result::as_ref(&*calls).map_err(String::clone)?;
         let shape = analyses.get::<crate::cfg::Shape>(context, layout, function);
         let exposed = analyses.get::<crate::manager::ExposedFrames>(context, layout, function);
-        Ok(Rc::new(Self::of(
+        let made = Self::of(
             &Unit::within(context, layout, function, analyses.outer()).with_shape(&shape).with_exposed(&exposed),
             references.clone(),
             effects,
-        )))
+        );
+        Ok(Rc::new(Self { source: Some((annotated, calls)), ..made }))
+    }
+
+    /// What an instruction touches is its own: a store or call moved to
+    /// another place touches what it did, so these are the ones they were made
+    /// from, as long as the references annotated and the calls' effects are
+    /// (the same results, or equal ones). Any change that is not a move or a
+    /// store given another value derives them afresh.
+    fn update(
+        previous: &Self::Result,
+        changes: &[Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        let held = previous.as_ref().ok()?;
+        let (was_annotated, was_calls) = held.source.as_ref()?;
+        let only_moves = changes
+            .iter()
+            .all(
+                |change| match *change {
+                    Change::Moved { .. } => true,
+                    Change::Rewritten(inst) => matches!(function.instruction(inst).opcode, Opcode::Store { .. }),
+                    _ => false,
+                },
+            );
+        if !only_moves {
+            return None;
+        }
+        let annotated = analyses.get::<Annotated>(context, layout, function);
+        let calls = analyses.get::<CallEffects>(context, layout, function);
+        let unchanged = (Rc::ptr_eq(&annotated, was_annotated) || *annotated == **was_annotated)
+            && (Rc::ptr_eq(&calls, was_calls) || *calls == **was_calls);
+        unchanged.then(|| previous.clone())
     }
 }
 
@@ -239,7 +278,7 @@ impl Accesses {
             };
             touched.insert(inst, found);
         }
-        Self { references, touched, fills: IndexMap::default() }
+        Self { references, touched, fills: IndexMap::default(), source: None }
     }
 
     /// What `inst` writes; `None` where it may write anything.

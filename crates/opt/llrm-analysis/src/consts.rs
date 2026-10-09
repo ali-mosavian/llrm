@@ -594,11 +594,92 @@ fn _killed(
 }
 
 /// What `cells_solved` found, and what each block ends with, which a later
-/// solve of the same body with some blocks changed starts from.
-#[derive(Debug, Default, PartialEq)]
+/// solve of the same body with some blocks changed starts from. A restart's is
+/// of the blocks it worked alone, for `restarted` to put in their place.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SolvedCells {
-    pub held: HeldCells,
+    /// Each block's instructions' cells, a block's together: a restart replaces
+    /// those of the blocks it works and shares the rest.
+    pub blocks: IndexMap<i64, Rc<HeldCells>>,
     pub outof: IndexMap<i64, Option<Rc<Cells>>>,
+    /// The body's blocks and edges, as solved: a restart is of the same ones.
+    frame: Rc<Frame>,
+}
+
+/// What the solve reads of a body's shape, found once for its blocks and edges.
+#[derive(Debug, Default)]
+struct Frame {
+    graph: Vec<cfg::Block>,
+    preds: IndexMap<i64, Vec<i64>>,
+    successors: HashMap<i64, Vec<i64>>,
+    /// Reverse postorder from the entry, and each block's place in it.
+    order: Vec<i64>,
+    rank: HashMap<i64, usize>,
+    /// Each block of a cycle with the blocks of its cycle, when asked.
+    cycles: std::cell::OnceCell<HashMap<i64, Vec<i64>>>,
+}
+
+impl PartialEq for Frame {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.graph == other.graph
+    }
+}
+
+impl Frame {
+    fn of(
+        function: &llrm_mir::module::Function,
+        entry: i64,
+    ) -> Self {
+        let graph = cfg::graph(function);
+        let mut preds = graph.iter().map(|block| (block.at, Vec::new())).collect::<IndexMap<i64, Vec<i64>>>();
+        for one in &graph {
+            for to in &one.succ {
+                if let Some(from) = preds.get_mut(to).filter(|from| from.last() != Some(&one.at)) {
+                    from.push(one.at);
+                }
+            }
+        }
+        let order = loops_order(&graph, entry);
+        let rank = order.iter().enumerate().map(|(rank, at)| (*at, rank)).collect();
+        let successors = graph.iter().map(|block| (block.at, block.succ.clone())).collect();
+        Self { graph, preds, successors, order, rank, cycles: std::cell::OnceCell::new() }
+    }
+
+    fn cycles(&self) -> &HashMap<i64, Vec<i64>> {
+        self.cycles.get_or_init(|| cycles(&self.graph))
+    }
+}
+
+impl SolvedCells {
+    /// What is held before `inst`.
+    pub fn at(
+        &self,
+        function: &llrm_mir::module::Function,
+        inst: InstId,
+    ) -> Option<&Rc<Cells>> {
+        self.blocks.get(&cfg::id(function.parent(inst)?))?.get(&inst)
+    }
+
+    /// This, with the blocks `touched` had instructions moved in or out brought
+    /// up to date (`cells_restarted`), in place; whether that could be done.
+    pub fn restarted(
+        &mut self,
+        unit: &Unit,
+        touched: &BTreeSet<i64>,
+    ) -> bool {
+        let Some(worked) = cells_restarted(unit, self, touched) else { return false };
+        self.blocks.extend(worked.blocks);
+        self.outof.extend(worked.outof);
+        true
+    }
+
+    /// Every instruction's cells in one map.
+    pub fn held(&self) -> HeldCells {
+        self.blocks.values().flat_map(|block| block.iter().map(|(inst, cells)| (*inst, Rc::clone(cells)))).collect()
+    }
 }
 
 /// What each memory cell holds before each instruction, where it is a
@@ -637,16 +718,15 @@ pub fn cells_solved(
     let mut queries = memory_queries(*unit, known);
     let initial = initial.cloned().unwrap_or_default();
     // Kept indexed: an edge from a lone predecessor hands its map on as it is.
-    let graph = cfg::graph(function);
-    let mut outof = graph.iter().map(|block| (block.at, None)).collect::<IndexMap<i64, Option<IndexedCells>>>();
-    let mut preds = graph.iter().map(|block| (block.at, Vec::new())).collect::<IndexMap<i64, Vec<i64>>>();
-    for one in &graph {
-        for to in &one.succ {
-            if let Some(from) = preds.get_mut(to).filter(|from| from.last() != Some(&one.at)) {
-                from.push(one.at);
-            }
-        }
-    }
+    let frame = restart.map_or_else(|| Rc::new(Frame::of(function, entry)), |(previous, _)| Rc::clone(&previous.frame));
+    let Frame { graph, preds, order, rank, successors, .. } = &*frame;
+    // The blocks to work: a restart's, or every one. A block not here has no
+    // end yet.
+    let work = restart.map_or_else(
+        || graph.iter().map(|block| block.at).collect(),
+        |(_, reset)| reset.iter().copied().collect::<Vec<_>>(),
+    );
+    let mut outof = IndexMap::<i64, Option<IndexedCells>>::default();
     let no_edges = IndexMap::default();
     let edge_map = edges.unwrap_or(&no_edges);
     let edge_facts = edges.is_some_and(|edges| !edges.is_empty());
@@ -658,7 +738,7 @@ pub fn cells_solved(
         let mut seen: Vec<std::borrow::Cow<Cells>> = Vec::new();
         let mut sole = None;
         for one in &preds[&at] {
-            let Some(here) = &outof[one] else {
+            let Some(Some(here)) = outof.get(one) else {
                 continue;
             };
             let none = Cells::default();
@@ -700,21 +780,18 @@ pub fn cells_solved(
 
     // A worklist in reverse postorder, as LLVM's dataflow solvers drain theirs:
     // a block runs again only when what enters it changed, not every round.
-    let order = loops_order(&graph, entry);
-    let rank = order.iter().enumerate().map(|(rank, at)| (*at, rank)).collect::<HashMap<_, _>>();
-    let successors = graph.iter().map(|block| (block.at, block.succ.clone())).collect::<HashMap<_, _>>();
     // A restart works the blocks it names and holds, as they were, what
     // enters them from the others.
     let active = |at: &i64| restart.is_none_or(|(_, reset)| reset.contains(at));
     if let Some((previous, _)) = restart {
-        for block in graph.iter().filter(|block| active(&block.at)) {
-            for pred in preds[&block.at].iter().filter(|pred| !active(pred)) {
+        for at in &work {
+            for pred in preds[at].iter().filter(|pred| !active(pred)) {
                 let held = previous.outof.get(pred).cloned().flatten();
-                outof[pred] = held.map(|cells| queries.owned(Here::Plain((*cells).clone())));
+                outof.insert(*pred, held.map(|cells| queries.owned(Here::Plain((*cells).clone()))));
             }
         }
     }
-    let mut waiting = (0..order.len()).filter(|&next| active(&order[next])).collect::<BTreeSet<_>>();
+    let mut waiting = work.iter().filter_map(|at| rank.get(at).copied()).collect::<BTreeSet<_>>();
     while let Some(next) = waiting.pop_first() {
         let at = order[next];
         let Some(mut here) = entering(&outof, at) else {
@@ -723,20 +800,21 @@ pub fn cells_solved(
         for &inst in function.block(cfg::block(at)).instructions() {
             here = _killed(here, inst, known, calls, assume.as_deref_mut(), allowed, edge_facts, &mut queries);
         }
-        if outof[&at].as_deref() != Some(here.cells()) {
+        if outof.get(&at).and_then(|held| held.as_deref()) != Some(here.cells()) {
             outof.insert(at, Some(queries.owned(here)));
             waiting.extend(successors[&at].iter().filter(|at| active(at)).filter_map(|at| rank.get(at).copied()));
         }
     }
 
-    let mut found = restart.map_or_else(IndexMap::default, |(previous, _)| previous.held.clone());
-    for block in graph.iter().filter(|block| active(&block.at)) {
-        let mut here = entering(&outof, block.at).unwrap_or(Here::Plain(Cells::default()));
+    let mut found = IndexMap::default();
+    for &at in &work {
+        let mut here = entering(&outof, at).unwrap_or(Here::Plain(Cells::default()));
         // Instructions between two writes see one map, shared rather than
         // copied per instruction.
         let mut shared: Option<Rc<Cells>> = None;
-        for &inst in function.block(cfg::block(block.at)).instructions() {
-            found.insert(inst, Rc::clone(shared.get_or_insert_with(|| Rc::new(here.cells().clone()))));
+        let mut within = HeldCells::default();
+        for &inst in function.block(cfg::block(at)).instructions() {
+            within.insert(inst, Rc::clone(shared.get_or_insert_with(|| Rc::new(here.cells().clone()))));
             let writes = is_call(unit, inst)
                 || unmodeled_write(unit, inst)
                 || matches!(function.instruction(inst).opcode, Opcode::Store { .. });
@@ -745,18 +823,13 @@ pub fn cells_solved(
             }
             here = _killed(here, inst, known, calls, assume.as_deref_mut(), allowed, edge_facts, &mut queries);
         }
+        found.insert(at, Rc::new(within));
     }
-    let ends = graph
+    let ends = work
         .iter()
-        .map(|block| {
-            let held = match restart {
-                Some((previous, _)) if !active(&block.at) => previous.outof.get(&block.at).cloned().flatten(),
-                _ => outof[&block.at].as_ref().map(|cells| Rc::new((**cells).clone())),
-            };
-            (block.at, held)
-        })
+        .map(|at| (*at, outof.get(at).and_then(|held| held.as_ref()).map(|cells| Rc::new((**cells).clone()))))
         .collect();
-    SolvedCells { held: found, outof: ends }
+    SolvedCells { blocks: found, outof: ends, frame: Rc::clone(&frame) }
 }
 
 /// `previous`, what `cells` gave the body of the default question (no callee's
@@ -773,13 +846,9 @@ pub fn cells_restarted(
     previous: &SolvedCells,
     touched: &BTreeSet<i64>,
 ) -> Option<SolvedCells> {
-    let function = unit.function;
-    let graph = cfg::graph(function);
-    if previous.outof.len() != graph.len() || graph.iter().any(|block| !previous.outof.contains_key(&block.at)) {
-        return None;
-    }
-    let successors = graph.iter().map(|block| (block.at, block.succ.clone())).collect::<HashMap<_, _>>();
-    let cycles = cycles(&graph);
+    let frame = &previous.frame;
+    let successors = &frame.successors;
+    let cycles = frame.cycles();
     let whole = |blocks: &BTreeSet<i64>| {
         let mut all = blocks.clone();
         for at in blocks {
@@ -1265,7 +1334,7 @@ fn _solved(
         // feed each other and run to one fixed point together.
         if let Some(calls) = calls {
             if rounds > 1 && (learned || !remembered) {
-                held = cells_solved(unit, calls, Some(&facts), initial, edges, assume.as_mut(), allowed, None).held;
+                held = cells_solved(unit, calls, Some(&facts), initial, edges, assume.as_mut(), allowed, None).held();
                 remembered = true;
             }
             learned = false;
