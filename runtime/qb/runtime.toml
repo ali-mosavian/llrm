@@ -1,7 +1,7 @@
 [portable]
 sources = ["runtime.c"]
 
-exports = ["B$CEND", "B$CENP", "B$DDIM", "B$ENRA", "B$ERAS", "B$EXSA", "B$LTRM", "B$PESD", "B$SASS", "B$SPAC", "B$STDL", "B$STI4"]
+exports = ["B$CEND", "B$CENP", "B$CLOS", "B$DDIM", "B$ENRA", "B$ERAS", "B$EXSA", "B$FLOF", "B$GET3", "B$LTRM", "B$OPEN", "B$PESD", "B$SASS", "B$SPAC", "B$STDL", "B$STI4"]
 
 [platform]
 sources = [
@@ -10,6 +10,7 @@ sources = [
   "platform/qb/dos/m16/string_abi.asm",
   "platform/qb/dos/m16/text.asm",
   "platform/qb/dos/m16/array_abi.asm",
+  "platform/qb/dos/m16/file_abi.asm",
 ]
 
 [shared]

@@ -103,7 +103,9 @@ def test_runtime_program_matches_bcom45_byte_for_byte(name: str):
 
 
 @pytest.mark.skipif(not qbruntime.dosbatch.QB45.is_dir(), reason="QB45_DIR is unavailable")
-def test_grep_links_space_before_its_file_entries_exist():
-    """Grep left SPAC unresolved before SPACE$ returned a temporary descriptor."""
+def test_grep_matches_bcom45_byte_for_byte():
+    """Grep left its binary file path unresolved before the portable file state existed."""
     result = differential_case("grep")
-    assert "B$SPAC" not in qbruntime.undefined_symbols(result.candidate.detail)
+    assert result.reference.status == "ok"
+    assert result.candidate.status == "ok"
+    assert result.difference == ""

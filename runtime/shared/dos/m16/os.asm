@@ -4,6 +4,7 @@
 public _llrm_os_open
 public _llrm_os_create
 public _llrm_os_read
+public _llrm_os_seek
 public _llrm_os_write_file
 public _llrm_os_close
 public _llrm_os_exit
@@ -112,6 +113,28 @@ _llrm_os_read proc far
     mov ah, DOS_READ
     jmp short transfer
 _llrm_os_read endp
+
+; _llrm_os_seek(handle: i16, position: i32, origin: u8) -> i32: the absolute position, or the error code negated.
+_llrm_os_seek proc far
+    push bp
+    mov bp, sp
+    push bx
+    mov bx, [bp+6]
+    mov dx, [bp+8]
+    mov cx, [bp+10]
+    mov al, [bp+12]
+    mov ah, DOS_SEEK
+    int DOS_INT
+    pop bx
+    jc short seek_failed
+    pop bp
+    retf
+seek_failed:
+    neg ax
+    cwd
+    pop bp
+    retf
+_llrm_os_seek endp
 
 ; _llrm_os_write_file(handle: i16, data: *far u8, count: u16) -> i32: bytes written, as _llrm_os_read.
 _llrm_os_write_file proc far
