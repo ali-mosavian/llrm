@@ -525,16 +525,16 @@ fn estimated_sites<E: From<String>>(
     recursive: &BTreeSet<GlobalId>,
     bases: &llrm_support::hash::IndexMap<GlobalId, i64>,
     caller: GlobalId,
-    sites: &llrm_support::hash::IndexMap<llrm_mir::module::InstId, inline::Candidate>,
+    sites: &llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, inline::Candidate>,
     counts: &inline::Counter,
     costs: &OperationCosts,
     credit: (&OperationCosts, i64),
     memo: &mut Specialisations,
     specialised: Specialiser<E>,
     reoptimised: &mut dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str) -> Result<(), E>,
-) -> Result<(bool, llrm_support::hash::IndexMap<llrm_mir::module::InstId, inline::Candidate>), E> {
-    let mut chosen: llrm_support::hash::IndexMap<llrm_mir::module::InstId, inline::Candidate> = Default::default();
-    let mut left: llrm_support::hash::IndexMap<llrm_mir::module::InstId, inline::Candidate> = Default::default();
+) -> Result<(bool, llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, inline::Candidate>), E> {
+    let mut chosen: llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, inline::Candidate> = Default::default();
+    let mut left: llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, inline::Candidate> = Default::default();
     let constants = {
         let body = module.global(caller).function().expect("a procedure");
         llrm_analysis::interprocedural::current_call_constants(&module.context, body)
@@ -607,7 +607,7 @@ fn together_trial<E: From<String>>(
     recursive: &BTreeSet<GlobalId>,
     bases: &llrm_support::hash::IndexMap<GlobalId, i64>,
     caller: GlobalId,
-    sites: &llrm_support::hash::IndexMap<llrm_mir::module::InstId, inline::Candidate>,
+    sites: &llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, inline::Candidate>,
     counts: &inline::Counter,
     costs: &OperationCosts,
     credit: (&OperationCosts, i64),
