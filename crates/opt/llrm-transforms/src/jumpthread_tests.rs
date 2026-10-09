@@ -357,3 +357,47 @@ done:
     // The entry still reaches the loop through its header.
     assert!(printed.contains("head:"), "{printed}");
 }
+
+/// A loop whose test is branched on twice: at its top, and again in the join the two ways of the first reach, where the way in settles it
+/// (the rotated nest of hanoi). Each way is threaded to its arm; the loop computes what it did.
+const CORRELATED: &str = "define i16 @f(i16 %n, i16 %k) {
+b0:
+  %go = icmp ne i16 %n, 0
+  br i1 %go, label %pre, label %out
+
+pre:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %pre ], [ %i1, %join ]
+  %acc = phi i16 [ 0, %pre ], [ %acc1, %join ]
+  %i1 = add i16 %i, 1
+  %last = icmp eq i16 %i1, %n
+  br i1 %last, label %join, label %work
+
+work:
+  %w = mul i16 %i, %k
+  br label %join
+
+join:
+  %x = phi i16 [ 0, %head ], [ %w, %work ]
+  %acc1 = add i16 %acc, %x
+  br i1 %last, label %done, label %head
+
+done:
+  ret i16 %acc1
+
+out:
+  ret i16 -1
+}
+";
+
+#[test]
+fn test_a_branch_the_way_in_settles_is_threaded_on_each_way() {
+    let inputs: &[&[i128]] = &[&[0, 3], &[1, 3], &[2, 5], &[7, 2], &[9, 1]];
+    let before = parsed(&format!("{DOS}{CORRELATED}"));
+    let mut after = before.clone();
+    let printed = managed(&mut after, JumpThread { size: false });
+    assert_eq!(results(&after, inputs), results(&before, inputs), "{printed}");
+    assert!(printed.matches("br i1 %last").count() < 2, "the second branch on %last is decided on each way: {printed}");
+}

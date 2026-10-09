@@ -69,6 +69,34 @@ pub fn guards(unit: &Unit, at: i64) -> Vec<Guard> {
     found
 }
 
+/// What holds at the end of `from` going on to `to`: the compares proven on entry to `from`, and the one its own branch says of the edge.
+pub fn on_edge(unit: &Unit, from: llrm_mir::module::BlockId, to: llrm_mir::module::BlockId) -> Vec<Guard> {
+    let function = unit.function;
+    let mut facts = guards(unit, cfg::id(from));
+    if let Some(branch) = function.terminator(from)
+        && let [Operand::Value(condition), Operand::Block(yes), Operand::Block(no)] = function.instruction(branch).operands[..]
+        && yes != no
+        && (yes == to || no == to)
+    {
+        _proven(unit, condition, yes == to, &mut facts);
+    }
+    facts
+}
+
+/// Whether `facts` decide the compare `condition`: its answer, if they imply it or its opposite.
+pub fn decides(unit: &Unit, facts: &[Guard], condition: ValueId) -> Option<bool> {
+    let function = unit.function;
+    let ValueDef::Instruction(inst) = function.value(condition).def else { return None };
+    let op = function.instruction(inst);
+    let (Opcode::ICmp(predicate), [left, right]) = (&op.opcode, &op.operands[..]) else { return None };
+    let (Some(left_term), Some(right_term), Some(width)) = (term(unit, *left), term(unit, *right), unit.int_bits(*left)) else { return None };
+    let (left, right) = (Scev::of(&left_term, width), Scev::of(&right_term, width));
+    if facts.iter().any(|guard| implies(guard, *predicate, &left, &right)) {
+        return Some(true);
+    }
+    facts.iter().any(|guard| implies(guard, predicate.inverse(), &left, &right)).then_some(false)
+}
+
 /// The compares `condition` being `holds` proves: its own, or those of
 /// the `and` it is true of, or the `or` it is false of.
 fn _proven(unit: &Unit, condition: ValueId, holds: bool, found: &mut Vec<Guard>) {

@@ -79,7 +79,13 @@ pub fn threaded(context: &mut Context, layout: &DataLayout, function: &mut Funct
         function.instruction(inst).opcode.is_terminator()
             && decided(function, &unit, inst).is_some_and(|(state, _)| matches!(function.value(state).def, ValueDef::Instruction(phi) if function.instruction(phi).opcode == Opcode::Phi))
     });
-    if !any {
+    // Or a branch on a compare, at a join of ways that may each settle it.
+    let joined = !size
+        && function.walk().any(|(block, inst)| {
+            let op = function.instruction(inst);
+            op.opcode == Opcode::Br && op.operands.len() == 3 && function.predecessors(block).len() > 1 && matches!(op.operands[0], Operand::Value(c) if matches!(function.value(c).def, ValueDef::Instruction(made) if matches!(function.instruction(made).opcode, Opcode::ICmp(_))))
+        });
+    if !any && !joined {
         return false;
     }
     let mut copied = 0;
@@ -109,6 +115,29 @@ fn found(context: &mut Context, layout: &DataLayout, function: &Function, outer:
         let Some(last) = function.terminator(block) else { continue };
         // The innermost loop holding the block, the one a chain of blocks to the state's phi stays within.
         let loop_ = shape.loops.iter().filter(|one| one.body.contains(&cfg::id(block))).min_by_key(|one| one.body.len());
+        // A branch on a compare that the way into the block settles, from the branches above that way: threaded to its arm there.
+        if branches && size == false && function.instruction(last).opcode == Opcode::Br {
+            let ways = correlated(function, &unit, block, last);
+            let mut paths = Vec::new();
+            let mut spent = copied;
+            for (source, target) in ways {
+                if source == block || !copyable(function, block) || shape.loops.iter().any(|l| l.header == cfg::id(block) && !l.body.contains(&cfg::id(source))) {
+                    continue;
+                }
+                let killed_here = matches!(function.instruction(last).operands.first(), Some(&Operand::Value(c)) if matches!(function.value(c).def, ValueDef::Instruction(made) if function.parent(made) == Some(block) && matches!(function.instruction(made).opcode, Opcode::ICmp(_))));
+                let copies = function.block(block).instructions().iter().filter(|&&inst| function.instruction(inst).opcode != Opcode::Phi && !function.instruction(inst).opcode.is_terminator()).count().saturating_sub(usize::from(killed_here));
+                let phis = if function.predecessors(block).len() > 1 && function.successors(block).len() > 1 { function.block(block).instructions().iter().filter(|&&inst| function.instruction(inst).opcode == Opcode::Phi).count() } else { 0 };
+                let copies = copies + phis;
+                if copies > (BRANCH_PATH - 1) / PATH_SCALE || spent + copies > MAX_COPIED {
+                    continue;
+                }
+                spent += copies.max(1);
+                paths.push(Path { from: source, blocks: vec![block], target });
+            }
+            if !paths.is_empty() {
+                return Some(paths);
+            }
+        }
         // A switch is the state machine of a loop; a branch on a constant a path decides is threaded wherever it is.
         let Some((state, decide)) = decided(function, &unit, last) else { continue };
         let is_switch = function.instruction(last).opcode == Opcode::Switch;
@@ -185,6 +214,35 @@ fn found(context: &mut Context, layout: &DataLayout, function: &Function, outer:
         }
     }
     None
+}
+
+/// The predecessors of `block` from which the branch `last` goes one way for certain, each with its arm: where the compare it branches
+/// on is settled by what is known of the way in (`guards::on_edge`). A predecessor reaching it by two edges is not one way.
+fn correlated(function: &Function, unit: &memory::Unit, block: BlockId, last: InstId) -> Vec<(BlockId, BlockId)> {
+    let operands = &function.instruction(last).operands;
+    let [Operand::Value(condition), Operand::Block(yes), Operand::Block(no)] = operands[..] else { return Vec::new() };
+    if yes == no || function.predecessors(block).len() < 2 {
+        return Vec::new();
+    }
+    // The compare it branches on was made above the way in, not by the block itself: a compare the block makes is made again on each
+    // trip, and what the way in knows of it is what the last trip's made.
+    let ValueDef::Instruction(made) = function.value(condition).def else { return Vec::new() };
+    let Some(home) = function.parent(made) else { return Vec::new() };
+    if home == block {
+        return Vec::new();
+    }
+    let shape = unit.shape();
+    let mut ways = Vec::new();
+    for source in function.predecessors(block) {
+        if function.terminator(source).is_some_and(|end| function.instruction(end).operands.iter().filter(|one| **one == Operand::Block(block)).count() != 1) || !shape.dominance.dominates(cfg::id(home), cfg::id(source)) {
+            continue;
+        }
+        let facts = llrm_analysis::guards::on_edge(unit, source, block);
+        if let Some(answer) = llrm_analysis::guards::decides(unit, &facts, condition) {
+            ways.push((source, if answer { yes } else { no }));
+        }
+    }
+    ways
 }
 
 /// What the terminator `last` decides from a phi: the phi's value, and where control goes for a constant of it. A switch on the
