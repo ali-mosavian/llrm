@@ -53,6 +53,7 @@ use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{avail, cfg, regions, ssa};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
@@ -441,7 +442,7 @@ impl Forwarding {
         &self,
         unit: &memory::Unit,
         accesses: &Accesses,
-        want: &BTreeSet<InstId>,
+        want: &IdSet<InstId>,
     ) -> Vec<avail::Forward> {
         let map =
             || avail::forwardable_by(unit, accesses, want, self.held.get_or_init(|| avail::holders(unit, accesses)));
@@ -477,7 +478,7 @@ pub fn forwarded(
         .walk()
         .map(|(_, inst)| inst)
         .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Load { .. }))
-        .collect::<BTreeSet<_>>();
+        .collect::<IdSet<_>>();
     if want.is_empty() {
         return Ok(false);
     }

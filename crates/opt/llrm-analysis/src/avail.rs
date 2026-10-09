@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Deref;
 use std::rc::Rc;
 
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::bits::Bits;
@@ -266,7 +267,7 @@ thread_local! {
 pub fn forwardable_walk(
     unit: &Unit,
     accesses: &Accesses,
-    want: &BTreeSet<InstId>,
+    want: &IdSet<InstId>,
 ) -> Vec<Forward> {
     WALKED.with(|walked| walked.set(walked.get() + 1));
     let missing: Vec<InstId> = unit
@@ -312,8 +313,8 @@ pub fn compared(
         }
         value
     };
-    let by_walk: HashMap<InstId, Operand> = walk.iter().map(|one| (one.at, root(walk, one.value))).collect();
-    let by_map: HashMap<InstId, Operand> = map.iter().map(|one| (one.at, root(map, one.value))).collect();
+    let by_walk: IdMap<InstId, Operand> = walk.iter().map(|one| (one.at, root(walk, one.value))).collect();
+    let by_map: IdMap<InstId, Operand> = map.iter().map(|one| (one.at, root(map, one.value))).collect();
     let mut out = Comparison::default();
     for one in map {
         match by_walk.get(&one.at) {
@@ -758,7 +759,7 @@ fn aborts(
 pub fn forwardable(
     unit: &Unit,
     accesses: &Accesses,
-    want: &BTreeSet<InstId>,
+    want: &IdSet<InstId>,
 ) -> Vec<Forward> {
     forwardable_by(unit, accesses, want, &holders(unit, accesses))
 }
@@ -769,7 +770,7 @@ pub fn forwardable(
 pub fn forwardable_by(
     unit: &Unit,
     accesses: &Accesses,
-    want: &BTreeSet<InstId>,
+    want: &IdSet<InstId>,
     held: &Held,
 ) -> Vec<Forward> {
     let mut found = Vec::new();
