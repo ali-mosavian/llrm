@@ -79,10 +79,9 @@ unchanged and these are not elapsed-time measurements.
 74 focused tests pass. The 96-primary-object differential changes FPCSE,
 FPDEEP, ROTATE and SPLIT on all three compilers, with no emission-status
 changes; all changed programs passed their focused runtime checks. FPCSEX
-and FPEMU also passed. Final FPCSE stage dumps and runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-observation-guard-a9mtvkyx`.
+and FPEMU also passed.
 The earlier before listing is under
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-exact-loop-42yop23c/after`.
+`exact-loop/after`.
 
 Bounded unrolling is now a transaction at its original post-placement pass
 boundary. The raw expansion is sent through the ordinary scalar fixed point,
@@ -272,9 +271,7 @@ the old provisional target is not validated by these improvements.
 All six FPCSE/FPCSEX output checks pass on the three compilers, along with
 28 focused tests. A differential comparison of 96 primary objects changes
 only the three FPCSE objects, with no emission-status changes. The new
-FPCSE regression failed before the expansion change. Dumps of every stage,
-before/after assembly and runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-exact-loop-42yop23c`.
+FPCSE regression failed before the expansion change.
 
 The normal pipeline passes all 33 FPDEEP output checks across PDS, QB and
 VBDOS, with no experimental wrapper. The 26 focused unrolling and exact-store
@@ -289,10 +286,7 @@ runtime executions.
 PDS FPDEEP's object changes from 1497 to 1925 bytes. This trades code size
 for removal of repeated arithmetic, not a claim of smaller code. The first
 square changes from `fld; fmul; fstp` to `mov dword [scratch],43100000h`
-(144), preserving floating exception checkpoints. Runtime output artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-default-unroll-8vopmthi`.
-Every pass and emitted assembly, before and after:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-pipeline-unroll-stages-jhhx_l1m`.
+(144), preserving floating exception checkpoints.
 These checks do not provide elapsed-time measurements.
 
 The post-allocation constant peephole now retains register knowledge across
@@ -302,8 +296,6 @@ emits one move, reducing the PDS object from 1925 to 1922 bytes. Markers with
 definitions or clobbers, unknown instructions and calls remain boundaries.
 This changes no MIR semantics and adds no LIR optimization tier. The focused
 regression failed first; 81 peephole tests and 33 FPDEEP output checks pass.
-New stage dumps and runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-marker-constant-4ljmnufn`.
 
 Subsequent exact-store folding reduces expanded FPDEEP to roughly 2.0x
 target (PDS 2166, QB 2201, VBDOS 2162). The earlier comparison below records
@@ -321,7 +313,6 @@ bodies are refused until per-body ordering is supported.
 With only the experimental MIR transform selected, **no checker or writer
 monkeypatch**, FPDEEP passes all 33 output checks across PDS, QB and VBDOS.
 58 focused expansion, emission and floating-allocation tests pass.
-Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-clone-integrated-warr3ky_`.
 
 The former generic cost model's ten-trip assumption exaggerated this improvement:
 FPDEEP actually runs three iterations. The transactional selector now keys the
@@ -401,7 +392,7 @@ With an experimental, process-local allowance for exact repeated floating
 sequences and ordered emission, FPDEEP passes all 33 output checks across PDS,
 QB and VBDOS. The default pipeline and floating refusal guard remain unchanged.
 Artifacts: `qbopt-clone-labels-k8wgg42a` and `qbopt-clone-compilers-a_p3y6ax`
-under `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T`.
+under the system temporary directory.
 
 Unrolling alone does not yet establish the expected numeric facts: PDS has
 zero exact floating facts before and after another optimization round.
@@ -426,5 +417,3 @@ the loop disappears, effect identities repeat in their original order three
 times, definitions are unique, and applying it again changes nothing.
 This is structural coverage, not a proof of full unrolling correctness.
 
-Failed-run artifacts and full stage dumps:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-unroll-_nme4yh1`.

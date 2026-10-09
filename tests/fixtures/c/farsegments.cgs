@@ -26,7 +26,7 @@ SYM y2 name="odd" base="odd" pattern="_*" attr=0x6 seg=13
 b2 BENewBack y2
 - DGLabel b2
 - DGIBytes 3 0
-f3 DBSrcFile "/home/alim/scratch/ctime-probe/hg/b.c" main=1
+f3 DBSrcFile "b.c" main=1
 - DBSrcCue f3 3 1
 SYM y3 name="get" base="get" pattern="_*" attr=0x7 seg=1
 CALLCONV y3 class=0x80 target=0x716 parms=[] ret=0:0

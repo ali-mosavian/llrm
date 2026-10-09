@@ -22,7 +22,6 @@ tests fail before the change; 32 distinct lowering/induction checks pass,
 including read-result, exit-visible and partial-write safeguards. IVWORD
 still prints `34 0 11 37` plus DONE on all three linked compiler builds.
 
-Before/after stages: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-test-lowering-stages-tbnbvm8x`.
 Runtime artifacts under the same temporary parent:
 `qbopt-test-lowering-p-g2-kp6j8dtk`, `qbopt-test-lowering-q-O-sj5o8r7e`,
 `qbopt-test-lowering-v-g3-ikyw3m5n`.
@@ -53,7 +52,6 @@ reported result. The 56 focused induction/loop-motion checks pass, and all
 three linked baseline/optimized IVWORD runs retain `34 0 11 37` plus DONE.
 Both improved compiler cases fail their regression against the old pass.
 
-Stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-licm-condition-stages-xy1bi73n`.
 Runtime artifacts under the same temporary parent:
 `qbopt-licm-condition-p-g2-c0bahk04`, `qbopt-licm-condition-q-O-b5huwj6x`,
 `qbopt-licm-condition-v-g3-ou7pdnl8`.
@@ -88,8 +86,6 @@ all three linked baseline/optimized runs. HARR, PRESSX and LNGMIX also pass
 on all three compilers. The two newly improved compiler cases and direct
 normalization test fail with normalization disabled; 35 focused tests pass.
 
-Before/after stage dumps:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-ivword-stages-g200nme1`.
 Runtime artifacts under the same temporary parent: `qbopt-ivword-p-g2-sqn4jp6q`,
 `qbopt-ivword-q-O-p5a2tbgx`, `qbopt-ivword-v-g3-g7l19eju`, and
 `qbopt-words-gate-p-g2-jdjpzu56`, `qbopt-words-gate-q-O-4fx45at8`,
@@ -123,7 +119,7 @@ pass; all 18 induction-simplification tests pass, including observed-counter,
 zero-trip, wrapping-exit and short-period safeguards.
 
 The first stage difference is `s28-mir-r02-strength.txt`; full before/after
-dumps are in `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-ivarm-stages-xl1hmqai`.
+dumps are in `ivarm-stages`.
 Runtime artifacts have the same temporary parent and names
 `qbopt-ivarm-runtime-p-g2-1u4y1yd3`, `qbopt-ivarm-runtime-q-O-bk07y47p`,
 and `qbopt-ivarm-runtime-v-g3-l4oiu248`.
@@ -149,7 +145,6 @@ Four regressions failed against the original analysis. Fourteen focused CFG
 checks and 59 LCSSA/loop-motion/GVN consumer checks pass. All stage files for
 PDS RNGARM compare identically before/after, including the 1060-byte emitted
 object listing: this fixes analysis correctness, not a claimed speedup.
-Stage evidence: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-dominance-stages-vzhl0hoj`.
 
 ## 2026-09-10: register CMPORD's complete reference
 
@@ -172,7 +167,7 @@ preceding complete snapshot, coverage is **301 comparable/passing, 105
 provisional, 81 without targets**. FPCSEX and FPDEEP remain provisional;
 their exception/observability obligations were not relaxed.
 
-Runtime artifacts under `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T`:
+Runtime artifacts under the system temporary directory:
 `qbopt-cmpord-reference-p-g2-jp_tsoey`,
 `qbopt-cmpord-reference-q-O-vw_9s607`,
 `qbopt-cmpord-reference-v-g3-wvwjjj81`.
@@ -243,7 +238,7 @@ stale allocations and implicit width extension. Emitted-body checks require
 descriptor loads to be absent from the loop.
 
 Stages:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-hugerg-stages-zht1_3om`
+`hugerg-stages`
 (`before/s43-asm-emitted.txt`, `after/s75-asm-emitted.txt`). Runtime folders
 under the same parent: `qbopt-hugerg-p-g2-bna872no`,
 `qbopt-hugerg-q-O-2ffa9y41`, `qbopt-hugerg-v-g3-8dla5_j2`.
@@ -287,7 +282,7 @@ failures: unrolling removes the indexed accesses those tests expect.
 All three also fail with edge refinement disabled; they were not weakened.
 
 Stage dumps:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-rngarm-stages-d9pn5yw6`
+`rngarm-stages`
 (`before/s59-asm-emitted.txt`, `after/s75-asm-emitted.txt`). Runtime folders
 under the same parent: `qbopt-rngarm-p-g2-4_495kzy`,
 `qbopt-rngarm-q-O-vn84g4c9`, `qbopt-rngarm-v-g3-kgao5ak6`.
@@ -329,7 +324,7 @@ zero element loads. Those three tests fail with phi translation disabled.
 
 All three baseline/optimized executions print **10; 9; DONE**; **67 focused
 tests pass**. Stage dumps are in
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-arrphi-value-stages-4r8gb9cu`
+`arrphi-value-stages`
 (`before/s59-asm-emitted.txt`, `after/s75-asm-emitted.txt`). Runtime artifacts
 under the same temporary parent: `qbopt-arrphi-value-p-g2-y5s_7ao0`,
 `qbopt-arrphi-value-q-O-agcmui5w`, `qbopt-arrphi-value-v-g3-ifdtxepb`.
@@ -386,7 +381,7 @@ print **10; 9; DONE**. The fixtures were compiled with the usual configuration
 switches plus `/AH`. Final output bytes match the runtime-verified artifacts.
 
 The scoped array/bounds/memory-join checks pass **47 tests**. Stage dumps:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-arrphi-stages-khvix8rz`
+`arrphi-stages`
 (`before/s43-asm-emitted.txt`, `after/s59-asm-emitted.txt`). Runtime artifacts:
 `qbopt-arrphi-p-g2-n7u06p3o`, `qbopt-arrphi-q-O-final-js725ryt`, and
 `qbopt-arrphi-v-g3-ixz5z4ef` under the same temporary parent.
@@ -441,7 +436,6 @@ the result for the following numeric PRINT instead of carrying it across
 the preceding call. All three PRESSX executions pass, and its verified model
 cost remains within target: **627 / 508 = 1.23x**.
 
-Stages: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-memphi-fixed-p-g2-h5p97qgu`.
 Remaining array blocker: `raising_array_bounds.proven` currently requires one
 allocation and known branch outcomes. Unknown branches lose allocation
 disjointness, so dynamic-array descriptor/address reloads still prevent this
@@ -492,7 +486,6 @@ showed correct MIR/LIR block membership but the wrong emitted jump target.
 The occurrence now belongs to the predecessor; real-object regressions
 check that the jump skips the edge computation on all three compilers.
 Twenty-one BOOLS/FLAGS/NOTS/ARITH/NEGNOT/PRESSX/FPCSEX outputs are unchanged.
-Stages: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-gvnpre-fixed-stages-51lp3hmh`.
 
 This is scalar PRE on dedicated edges, not completion of GVN-PRE or the goal.
 Memory expressions, critical edges and target profitability remain.
@@ -518,8 +511,7 @@ mov [square],eax
 Static multiplies **3 -> 2**, executed multiplies **2 -> 1 per iteration**;
 PDS object **1200 -> 1195 bytes**. Both paths print **48,49; 37,36; DONE**
 under QB, PDS and VBDOS. MIR and all three emitted-code regressions failed
-without phi translation. Stage dumps:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-gvnphi-stages-vj75d8jt`.
+without phi translation.
 Dedicated-edge insertion was added in the follow-up above; memory PRE and
 profitability remain open.
 
@@ -553,7 +545,6 @@ The MIR and three emitted-code regressions failed first; 39 focused CSE/GVN
 checks pass. All three compilers build/link successfully and print
 **35,36; 37,36; DONE**. Twenty-one existing BOOLS, FLAGS, NOTS, ARITH, NEGNOT,
 PRESSX and FPCSEX objects emit byte-identical output with the new step.
-Stages: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-gvnjn-stages-dhpr1e8y`.
 
 This is full redundancy elimination at joins, not complete PRE: missing-edge
 insertion, memory expressions and profitability remain. Phi translation was
@@ -596,7 +587,6 @@ PDS optimized object size: **1244 -> 1233 bytes**. The constant, nonconstant
 and three real-object regressions failed first. Pointer/MemorySSA focused
 tests pass 43 cases. All three `/AH` DOS builds print **11, 22, DONE**; final
 objects are byte-identical to those runtime-validated outputs.
-Stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-pointer-constant-stages-kmw2de4b`.
 This extends the shared alias/MemorySSA foundation; it is not full GVN-PRE
 or a verified target-ratio result.
 
@@ -634,7 +624,6 @@ call B$PEI2
 The second store uses native huge-pointer offset arithmetic (+6 bytes).
 The remaining load should eventually forward the first store's constant;
 that is a separate memory-optimization opportunity, not a completed result.
-All-stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-checked-fixedpoint-stages-rx3gy39p`.
 
 ## 2026-09-10: eliminate proven checked dynamic-array accesses
 
@@ -676,7 +665,7 @@ without it BC itself rejects the expression. The golden includes BASIC's
 leading sign space; existing run artifacts were rejudged, not rerun.
 
 All-stage before/after dumps:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-checked-ndmax-stages-agg67_cw`
+`checked-ndmax-stages`
 (`before` and `fixed`). Runtime artifacts are under
 `qbopt-checked-native-{p-g2-i9f9e89y,q-O-ihs67yxo,v-g3-kivd3c6x}` in the same
 temporary root. No hardware timing or target-ratio improvement is claimed.
@@ -727,8 +716,7 @@ FPDEEP PDS/QB/VBDOS **1803/1604/1803 -> 1797/1598/1797**.
 All six runtime outputs match originals. FPCSE's real-object no-JMP
 regression failed first. Layout/emission tests: 4400 passed, 18 failures
 also reproduced with unmodified HEAD's layout; five extra placement guards
-pass. No test was weakened. Dumps and DOS evidence:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-linear-layout-0p5kai7p`.
+pass. No test was weakened.
 The remaining floating-point gaps are not closed by this placement change.
 
 ## 2026-09-10: propagate pointer displacement constants and remove zero steps
@@ -749,8 +737,7 @@ All nine optimized runtime outputs match their originals. The three real
 zero-displacement regressions failed first. Focused algebraic/constants/
 pointer tests: 1156 passed; four failures (three ADDRM shape counts and one
 NBODY negation count) also reproduce with the unmodified baseline functions.
-No assertions were weakened. Stage and DOS artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-pointer-constants-uok9o47h`.
+No assertions were weakened.
 
 Do not infer a zero base offset from a small allocation: Microsoft's
 `runtime/rt/dynamic.asm` initializes FHD_oData to sizeof(AHD), while huge
@@ -777,8 +764,6 @@ The nine-operation regression failed before the change. Focused pointer,
 huge-array and induction tests: 111 passed. An additional independent
 selector/offset oracle covers all 16 supported shifts, wrap and borrow
 boundaries; the final pointer module passes 40 tests.
-All stage dumps and runtime evidence:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-pointer-correction-7qw_x23l`.
 Remaining: avoid normalization only when allocation/range facts prove no
 boundary crossing, and reduce segment materialization around accesses.
 
@@ -808,8 +793,7 @@ address recomputation but repeated normalization remains a backend gap.
 Focused induction/range run: 104 passed; three FPDEEP range tests also fail
 on unmodified HEAD because their expected indexed loads have already gone.
 Those tests were not weakened. Five logical-bound acceptance/rejection
-cases pass separately. Stage and DOS evidence:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-ndarr-induction-vljjjibp`.
+cases pass separately.
 
 ## 2026-09-10: prove multidimensional loops with logical zero tests
 
@@ -828,8 +812,6 @@ runtime output on all three compilers: NDARR 1,12,2 and NDMAX 11,22, then DONE.
 The three extent regressions failed before the fix. The two focused array
 modules passed 54 tests; the added unknown-logical-condition rejection and
 three positive cases then passed together (4 tests).
-Stage dumps and runtime evidence:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-ndarr-extent-xezymida`.
 This bounded concrete proof is not general symbolic range analysis; that
 remains necessary for variable-trip loops and broader induction optimization.
 
@@ -858,8 +840,7 @@ hardware timings or target ratios.
 All three real-object fact regressions failed before the fix. The focused
 array, constant-call and constant-cell modules pass **62 tests**. NDARR and
 NDMAX match original DOS output on all three compilers (1,12,2 and 11,22),
-with successful links. Dumps and runtime output:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-ndarrays-facts-1hb839sh`.
+with successful links.
 
 ## 2026-09-10: remove the invented eight-dimension array limit
 
@@ -893,7 +874,7 @@ This is a support/correctness milestone, not good final code quality:
 NDARR objects grow from roughly 1.4 KB to 3.3 KB; NDMAX from 1.4–1.9 KB
 to roughly 9.7 KB. Known singleton dimensions should simplify far more.
 Stage dumps and successful linked runs are under
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-ndarrays-native-tcshx93d`.
+`ndarrays-native`.
 
 ## 2026-09-10: select immediate arguments without temporary registers
 
@@ -930,8 +911,6 @@ run passed 123 tests; the final explicit opaque-use guard also passed
 on all three compilers, with successful links. Final outputs were compared
 byte-for-byte to these runtime-validated artifacts after adding the
 conservative opaque-instruction guard, avoiding unchanged DOS reruns.
-Stage dumps and runtime output:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-direct-args-final-mr0mwvmt`.
 
 ## 2026-09-10: combine adjacent constant argument pushes
 
@@ -960,8 +939,6 @@ The emitted-code regression failed before fusion. All 102 peephole tests
 pass, including byte-order, signed constants, four-byte stack adjustment
 and boundary guards. FPCSE and all eleven FPDEEP answers match original
 DOS executions on each of the three compilers; links succeeded.
-All stage dumps and runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-push-pairs-tr0joga6`.
 
 ## 2026-09-10: release empty allocator frame reservations
 
@@ -977,8 +954,6 @@ cost **159 -> 157**, object **822 -> 819 bytes**. PDS and VBDOS FPCSE
 remain byte-identical. The emitted regression failed first on `sub sp,2`.
 The focused peephole/prologue checks pass; original and optimized QB DOS
 outputs both remain `S= 487.5` and `DONE`, with successful links.
-Stage dumps and runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-empty-frame-28n57_c5`.
 FPCSE is still **1.60x**, not within the target; removing unread program
 stores needs a real visibility/lifetime proof, not a noreturn assumption.
 
@@ -1008,7 +983,7 @@ The emitted-code regression failed before the fix. All 93 peephole tests
 pass, including ownership and live-read guards. QB original and optimized
 DOS runs both print `S= 487.5` and `DONE`; linking succeeds. All pass dumps
 and runtime artifacts are under
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-dead-reload-i79b8ssf`.
+`dead-reload`.
 Adjacent prologue/peephole dumps show exactly the one reload removed.
 
 ## 2026-09-10: fix noreturn being mistaken for restricted memory access
@@ -1052,8 +1027,6 @@ unreachable transform restored and threading disabled (42 passes, two xfails
 in the baseline transform-only run). They were not weakened or reclassified.
 FPCSE and BOOLS match original DOS output on all three primary compilers:
 487.5 and T=2, respectively, then DONE; all runs finished normally.
-Stage and runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-threaded-final-8d_44awd`.
 
 ## 2026-09-10: carry completed FP checks across integer-only edges
 
@@ -1077,8 +1050,7 @@ to the previous implementation.
 21 focused tests pass, including fail-first agreeing-edge coverage and
 negative call/FP-path and first-loop-iteration guards. QB original/optimized
 DOS output matches `S= 487.5` and DONE; the run finished normally and both
-links were clean. Full stage and runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fp-check-edges-kqwojnk2`.
+links were clean.
 
 ## 2026-09-10: full ranking refresh and exact FPCSE reference
 
@@ -1099,8 +1071,7 @@ The stronger denominator exposes primary PDS/QB/VBDOS ratios of
 173/98=1.77x, 190/98=1.94x, 167/98=1.70x. Nothing got slower. Ten focused
 target checks pass; the new reference test failed against the old value.
 QB's emitted dump already passes 487.5 as immediate words but retains
-initializer stores, collapsed-loop control and stack work. Full stages:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fpcse-reference-rtam_arc`.
+initializer stores, collapsed-loop control and stack work.
 Next substantive work: eliminate that residual work with proper memory and
 exception-observation proofs, without weakening the target or FP semantics.
 
@@ -1143,8 +1114,6 @@ new peephole disabled (six shuffles instead of one); byte-read and partial-write
 guards pass. Original/optimized FPDEEP output matches and reaches DONE on
 PDS and VBDOS after the final change, with clean linker output. QB output
 also matched in the preliminary run; its final ranking is unchanged.
-Stage dumps and final runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-overwritten-final-26xdf2u0`.
 
 ## 2026-09-10: repair the sliced floating-copy regression
 
@@ -1183,7 +1152,6 @@ QuickBASIC raw loop-proof assertion was excluded from this focused run.
 FPDEEP output objects remain byte-identical on PDS, QB and VBDOS: this fixes
 the CFG limitation but does not yet establish the runtime-entry DF/DS facts
 needed by that program. No speedup claimed and no unchanged DOS run repeated.
-Full stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-copy-edges-2i3_2qg1`.
 Next: establish narrowly scoped runtime environment facts for the actual
 FPDEEP call path, then scalarize its DOUBLE initializer and measure again.
 
@@ -1315,9 +1283,7 @@ reference; the complete target derivation remains provisional.
 
 154-object comparison changes exactly these nine objects with no new refusals.
 54 focused host checks and all nine affected runtime cases pass. The three
-real HOTLPX LEA regressions failed before implementation. All-stage dumps:
-`/tmp/qbopt-lea-before` and `/tmp/qbopt-lea-after`. Runtime evidence:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-lea-gt8xh49d`.
+real HOTLPX LEA regressions failed before implementation.
 
 ## Lower two-bit constant products to shifts and an addition
 
@@ -1341,9 +1307,6 @@ extra bytes. These are model rankings, not measured hardware speedups.
 Twelve focused checks pass (three real fail-first HOTLPX cases, six wrapping
 checks, two flag-preservation checks and the existing multiply selection
 check). All 69 runtime cases for affected programs pass across three compilers.
-All-stage dumps: `/tmp/qbopt-scaled-before` and `/tmp/qbopt-scaled-after`.
-Runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-scaled-8tkh95ni`.
 The complete runtime-input target derivations remain unfinished/provisional.
 
 ## Combine constant offsets in MIR
@@ -1364,10 +1327,8 @@ HOTLPX's target remains provisional, not certified by this improvement.
 96 focused algebraic checks pass, including live-flag, shared-result, width,
 merge, memory and wrapping cases; the three real SPILL regressions failed
 before implementation. Nine strict-LIR runtime cases pass across three
-compilers. All-stage dumps: `/tmp/qbopt-offsets-before` and
-`/tmp/qbopt-offsets-after`; the MIR already contains the combined constant
-before lowering. Runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-offsets-o2hoo5km`.
+compilers. The MIR already contains the combined constant
+before lowering.
 
 ## Remove jumps to the next emitted instruction
 
@@ -1389,9 +1350,6 @@ checks pass, including a real PRESSX symptom that failed before the fix.
 Three existing targeted relocation/coverage checks pass. One additional old
 BOOLS fold-test fails because it finds no qualifying fold; verified unchanged
 with the previous assembler, and not weakened or included in the pass count.
-Before/after all-stage dumps: `/tmp/qbopt-fallthrough-before` and
-`/tmp/qbopt-fallthrough-after`. Runtime evidence:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fallthrough-j_82rc5r`.
 
 ## Short zeroing when arithmetic flags are dead
 
@@ -1409,10 +1367,7 @@ improvement, not a loop-speed gain or closure of the larger target gaps.
 154-object comparison changes only those three HARR objects with no new
 refusals. 42 focused host checks and three strict-LIR HARR runtime comparisons
 pass. Disabling the change makes the real emitted-code regression fail.
-All-stage dumps: `/tmp/qbopt-zeroing-before`, `/tmp/qbopt-zeroing-after`;
-the adjacent prologue/peephole diff shows only the CX zeroing replacement.
-Runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-zeroing-uwzzcdfn`.
+The adjacent prologue/peephole diff shows only the CX zeroing replacement.
 
 ## Assembly dumps expose relocation targets
 
@@ -1446,8 +1401,6 @@ PDS costs: **HARR 5062 -> 4462 (2.43x)**;
 equality, including HARR's surviving element load; 20 focused checks and six
 strict-LIR runtime comparisons pass across p-g2/q-O/v-g3. Segment setup remains
 in the loop and remains the next placement opportunity.
-Dumps: `/tmp/qbopt-allocation-equality`; runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-allocation-equality-hkp11p3v`.
 
 ## Induct the complete offset pointer, including invariant descriptor data
 
@@ -1463,8 +1416,6 @@ PDS modeled cost: **HARR 7130 -> 5062, 3.89x -> 2.76x**;
 pass; the real HARR preheader-read regression fails with old analysis, and a
 descriptor-write variant keeps the read inside. Nine strict-LIR runtime
 comparisons pass (HARR/SEGLD/NESTED across p-g2/q-O/v-g3).
-Dumps: `/tmp/qbopt-invariant-pointer`; runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-invariant-pointer-p8ksw05l`.
 
 ## Reuse unchanged memory-dependent computations
 
@@ -1479,8 +1430,6 @@ complete-pointer induction, not merely duplicate-expression removal.
 Three fixture regressions fail against old CSE; corresponding unknown-write
 cases retain both computations. Fourteen focused checks and nine strict-LIR
 runtime comparisons pass (HARR/SEGLD/LNGMIX across p-g2/q-O/v-g3).
-Dumps: `/tmp/qbopt-memory-cse`; runtime evidence:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-memory-cse-hslacsvl`.
 
 ## Bounded array paths unlock existing optimization
 
@@ -1503,9 +1452,7 @@ work remain. No array-specific optimization pass was introduced.
 Three real HARR dimension-fact regressions fail with the proof disabled; 35
 focused checks pass, including rejected out-of-bounds/unknown-condition/changed-
 descriptor/wrong-segment/exhausted proofs. Six strict-LIR runtime comparisons
-pass for HARR/SEGLD across p-g2/q-O/v-g3. Stage dumps display allocation proofs:
-`/tmp/qbopt-array-bounds-final`. Runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-array-bounds-k2_79k98`.
+pass for HARR/SEGLD across p-g2/q-O/v-g3.
 
 ## Memory identity requires the segment, not just the offset
 
@@ -1521,8 +1468,6 @@ Three failing-before cases cover unknown segment, changed segment and different
 relocated objects; a positive case preserves coverage for known same pointers.
 3417 availability checks pass in 15 seconds; nine strict-LIR runtime comparisons
 pass (HARR/SEGLD/NESTED across p-g2/q-O/v-g3). HARR's emitted stage is unchanged.
-Dumps: `/tmp/qbopt-far-identity`; runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-far-identity-7nomd5wb`.
 
 Next array proof must include segment provenance as well as offset bounds;
 neither an unchanged offset nor a DIM request alone proves address identity.
@@ -1547,7 +1492,7 @@ All three real HARR postcondition regressions fail with the old constant walk;
 33 focused checks pass. Six HARR/SEGLD emission comparisons across the compiler
 families are byte-identical with/without postconditions, so no new runtime loop
 was needed. No speedup yet: loop element stores still conservatively invalidate
-the facts. Dumps: `/tmp/qbopt-dim-postconditions-visible`.
+the facts.
 
 ## Constant memory facts retain pointer identity
 
@@ -1561,8 +1506,6 @@ descriptor-address metadata usable by constant propagation.
 Three new cases fail before the fix; 1030 focused constant/array checks pass.
 Nine strict-LIR runtime comparisons pass (HARR/SEGLD/LNGMIX across p-g2/q-O/v-g3).
 HARR's final MIR is identical to the previous stage dump; no speedup claimed.
-Dumps: `/tmp/qbopt-constant-pointer-identity`; runtime evidence:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-constant-pointer-68wnorjb`.
 
 Runtime source inspection also confirms that dynamic allocation can be near:
 QB45 `dynamic.asm` uses the near allocator and DGROUP when FADF_FAR/HUGE are
@@ -1587,7 +1530,7 @@ in-bounds reasoning remain the next required part of the work.
 
 ## HARR: the next major gap is array provenance, not another arithmetic pass
 
-Current stage evidence (`/tmp/qbopt-harr-current`, especially s43-mir-widen):
+Current stage evidence (`harr-current`, especially s43-mir-widen):
 the raise recognizes DDIM's `(0..20, 0..20)` bounds and element width 2,
 but that request is not connected to later element references. Those remain
 `[es:bx]` with no allocation identity. Descriptor accesses likewise remain
@@ -1624,8 +1567,7 @@ ADDRM cost **1794 -> 1320 (2.38x -> 1.75x)**, improving on the earlier 1492
 baseline as well. The new dead-flags test fails before the change, and the
 live-flags cross-block case retains CWD. Nine focused lowering checks and
 nine strict-LIR runtime comparisons pass (ADDRM/LNGMIX/NEGNOT across the three
-compiler configurations). Dumps: `/tmp/qbopt-sign-shift`; runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-sign-lower-2h24eknr`.
+compiler configurations).
 
 ## Preserve independent promotion when an update cannot be split
 
@@ -1639,8 +1581,6 @@ comparisons pass (SEGLD/NESTED/HARR across p-g2/q-O/v-g3). The older
 promotion-store test now isolates store motion, whose separate tests verify
 the store's new exit placement rather than its original instruction address.
 
-Dumps: `/tmp/qbopt-segld-promotion-fixed`. Runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-promote-independent-7qcme0hf`.
 
 Current PDS measurements also show ARRIDX 0.89x, PRESS 0.82x, SPILL 1.37x,
 SPLIT 1.30x; MATRIX 1.62x, ROTATE 1.54x and IVCHAN 1.51x remain above goal.
@@ -1658,9 +1598,7 @@ names enter the analysis or transform.
 
 NESTED cost **1962 -> 1900, 2.55x -> 2.47x**. The real-fixture regression
 fails with the old implementation; nine runtime comparisons pass across
-NESTED/MATRIX/ADDRM on p-g2/q-O/v-g3. Stage dumps:
-`/tmp/qbopt-affine-offset`. Runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-affine-offset-hx0x5oew`.
+NESTED/MATRIX/ADDRM on p-g2/q-O/v-g3.
 
 ## Store motion through a nested loop body
 
@@ -1673,9 +1611,7 @@ Cost **1990 -> 1962, 2.59x -> 2.55x**. It still misses the overall goal.
 
 The real-fixture regression failed before this change. All 13 store-motion
 checks pass, as do nine strict-LIR runtime comparisons of NESTED, MATRIX,
-HOTLOP across p-g2/q-O/v-g3. Dumps: `/tmp/qbopt-outer-store-sink`.
-Runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-outer-sink-o3uxyvdc`.
+HOTLOP across p-g2/q-O/v-g3.
 
 ## Sink the nested accumulator's inner-loop store
 
@@ -1692,8 +1628,6 @@ outer-loop exit store and remaining allocation costs are still opportunities.
 The new real-fixture regression fails before the change; removing its seed
 keeps the store in the loop. All 12 store-motion checks and nine strict-LIR
 runtime comparisons pass (NESTED/HOTLOP/LNGMIX, p-g2/q-O/v-g3).
-Dumps: `/tmp/qbopt-nested-store-sink`. Runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-nested-sink-9g9z4h2i`.
 
 ## Promote read-modify-write accumulators
 
@@ -1712,8 +1646,6 @@ owns the original bytes; the inserted store owns the relocated operand.
 Both the promotion and backend ownership regressions failed with their old
 implementations. Fourteen focused checks pass; NESTED/HOTLOP/FLAGS pass on
 p-g2, q-O and v-g3 (nine runtime comparisons).
-Dumps: `/tmp/qbopt-rmw-promote-verified`. Runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-rmw-final-rto51u8w`.
 
 ## One reload per spilled operand
 
@@ -1722,13 +1654,12 @@ outer-loop multiply. The LIR instruction names the same value twice; the
 spiller made two fresh reloads, overwrote the first rename, and used only the
 second. Reusing the first rename removes the unused reload without changing
 operand multiplicity or any MIR pass. NESTED cost falls 2228 -> 2156,
-**2.90x -> 2.81x**. Adjacent backend dumps show exactly two removed loads:
-`/tmp/qbopt-single-spill-reload`.
+**2.90x -> 2.81x**.
 
 The repeated-operand regression failed before the change; all 15 spill tests
 pass. NESTED and SPILL pass strict-LIR runtime checks on p-g2, q-O and v-g3
 (six comparisons), artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-single-reload-k5nmekdv`.
+`single-reload`.
 
 ## Frame-to-frame phi copies
 
@@ -1739,12 +1670,11 @@ PUSH/POP pair, preserving flags without another scratch register. Selection
 now supports 16/32-bit memory POP. Cyclic copies remain explicitly refused.
 
 NESTED now emits LIR at 2228/768 = **2.90x**, not yet the 1.5x goal.
-Stage dumps: `/tmp/qbopt-memory-parcopy-final`. Seven focused checks pass;
+Seven focused checks pass;
 the spill regression failed against the old spiller, and both encoded-width
 checks failed against the old selector. Nine saved runtime results pass:
 NESTED, PRESSX, SPILL across p-g2/q-O/v-g3, checked against golden output and
-DONE markers, not merely matching two empty files. Artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-mem-parcopy-c2493ga4`.
+DONE markers, not merely matching two empty files.
 The earlier wider focused run had two unrelated MIR-versus-REFUSED expectation
 failures; this is not a claim that the full test suite is green.
 
@@ -1762,7 +1692,7 @@ folds that *incorrect input* to `0 + 14290`. Fix hoist's handling of existing
 cross-variable phis before reintroducing the divmod fold; do not blame the
 constant evaluator for the phi already lost in the previous stage.
 
-Evidence: `/tmp/qbopt-lngmix-divfold-20260909`, especially
+Evidence: `lngmix-divfold`, especially
 `s29-mir-r03-fold.txt` versus `s32-mir-r03-hoist.txt`, then
 `s42-mir-r03-place.txt` versus `s43-mir-r04-fold.txt`.
 The prototype copied both semantic results, retained original byte ownership on
@@ -1781,7 +1711,7 @@ contract analysis is evidence for unresolved dependencies, not an automatic ABI.
 
 The emission regression failed first; five focused checks pass. Strict-LIR
 runtime checks pass PROCS on PDS `/G2`, QB `/O`, and VBDOS `/G3` (three cases
-each). Stages: `/tmp/qbopt-procs-exit-20260909`. This removes a coverage blocker,
+each). This removes a coverage blocker,
 not a claim of target completion or a full integration gate.
 
 Goal: correct modern-compiler-quality output, machine-independent MIR, every documented target within 1.5x. **Not complete.** Branch `restore-through-lir`; checkpoint `dda3d46` and backend increment `abf9ab5` are committed. Stashes are untouched.
@@ -1790,11 +1720,11 @@ Goal: correct modern-compiler-quality output, machine-independent MIR, every doc
 
 Constant reads now mask and narrow a fact to the semantic operand's width. Previously a word read of 0x12350000 shifted right once folded to 0x8000 instead of 0. Three byte/word cases failed first, passed after the fix, failed with the mutation restored, then passed again. The constant suite had 985 passes and one existing comparison-materialization failure, reproduced with old read semantics. Ruff passes for both changed files. Sampled hotlop, lngmix and harr costs are unchanged; this is correctness progress, not a measured optimization gain.
 
-The next increment teaches constant propagation MIR's existing step semantics, restoring increment/decrement folding without machine names. Six width/wrap cases and the existing cmpord regression fail when this change is removed; the complete constant-propagation file now passes 992 tests (15.75 seconds). PDS bools improves from 176 to 174 (1.38x); hotlop/lngmix are unchanged. Production stage files: `/tmp/qbopt-constant-steps-20260909`. No all-target or runtime-completion claim.
+The next increment teaches constant propagation MIR's existing step semantics, restoring increment/decrement folding without machine names. Six width/wrap cases and the existing cmpord regression fail when this change is removed; the complete constant-propagation file now passes 992 tests (15.75 seconds). PDS bools improves from 176 to 174 (1.38x); hotlop/lngmix are unchanged. No all-target or runtime-completion claim.
 
 Committed as `c72f918`. The following alias increment requires equal segment origins as well as equal offset values before using displacement arithmetic. Distinct or unknown far segments can overlap despite disjoint offsets (1000:0020 equals 1001:0010). Three new checks fail first and under mutation; the alias/loop-motion checks pass 12 tests. Sampled harr, matrix and segld costs remain unchanged. This repairs a soundness prerequisite, not the remaining array-extent proof.
 
-Alias fix committed as `ffb0269`. A strength-reduction experiment appeared to improve harr from 6.27x to 4.47x and passed harr's output check on all three compiler families. **Do not accept that as valid optimization evidence**: the dumps show the shifted full address being mistaken for both loop counters because their old variable numbers match. harr writes and immediately rereads an address, so its sum does not independently validate that address. Artifacts: `/tmp/qbopt-strength-harr.zYw8Ia`. Strength remains disabled. The next analysis fix keys recurrences and backedges by exact SSA identity; two focused checks fail first and under mutation, then pass. Fresh variable collisions in strength.py and proper SSA construction remain to fix before enabling it.
+Alias fix committed as `ffb0269`. A strength-reduction experiment appeared to improve harr from 6.27x to 4.47x and passed harr's output check on all three compiler families. **Do not accept that as valid optimization evidence**: the dumps show the shifted full address being mistaken for both loop counters because their old variable numbers match. harr writes and immediately rereads an address, so its sum does not independently validate that address. Strength remains disabled. The next analysis fix keys recurrences and backedges by exact SSA identity; two focused checks fail first and under mutation, then pass. Fresh variable collisions in strength.py and proper SSA construction remain to fix before enabling it.
 
 Exact identity committed as `01ebaaa`. The old raw-MIR matrix coverage assertion now fails (zero recognized counters); it relied on equality not proven by its input. The next increment follows only width-preserving value copies, finding three exact counters/two derived candidates in promoted matrix and one/one in segld. Raw-memory equivalence still requires promotion, not variable-name matching. Generic isolated SSA construction is extracted from promotion into `ssa.py` and used by strength reduction. New counters now use fresh variable IDs from the complete graph and carry an explicit loop phi; removing either fix fails the regression. An unavailable stride is refused, and duplicate transformations are skipped. Strength remains disabled: no verified performance gain from the repaired implementation yet, and multiple-entry/backedge recurrence validation and profitable selection remain outstanding.
 
@@ -1832,10 +1762,9 @@ The last full emission scan was 410 LIR / 77 MIR fallback before fixing seven ju
 - Those failures exposed a second emitter hiding injected backend diagnostics. Updated tests require refusal, byte-identical input, and the original reason; three failed before removing fallback. All five selected refusal checks now pass.
 - Final focused check: 43 passed in 1.09 seconds. Rechecked hotlop 1.45x, press 1.06x and matrix 1.94x after fallback removal; matrix still fails the target. Ruff passed for the new loop-motion/coalescer work and edited whole-segment emitter; this is not a whole-project lint claim.
 - Focused runtime programs passed on PDS, QuickBASIC and VBDOS: hotlop, hotlpx, press, pressx, matrix, harr, lngmix, flags. After address-class changes: jumps, arridx, arrprm, fpdeep, procs, harr, hotlop and pressx passed all three. VBDOS procs used unchanged input, not LIR success.
-- Latest runtime artifacts: `/tmp/qbopt-coalesced-addresses-runtime-20260909`. Stage evidence: `/tmp/qbopt-lngmix-next-20260909`, `/tmp/qbopt-harr-next-20260909`, `/tmp/qbopt-jumps-coalesce-20260909`.
 - Full commit gates have not passed. The checkpoint had lint failures and 787 type diagnostics; pytest was interrupted once its gate was already blocked. User authorized that unsigned checkpoint with hooks bypassed, not future commits.
 - Subsequent authorization: use focused checks for progress commits and reserve the full gate for milestones. Current full type check reports 802 diagnostics; the milestone gate remains outstanding. Progress commits may bypass hooks under this explicit authorization, without claiming full validation.
-- Required independent review was unavailable (expired Claude OAuth; Fable unavailable); user authorized proceeding. No Claude Desktop session was resumed.
+- Required independent review was unavailable; user authorized proceeding.
 
 ## Next implementation priorities
 
@@ -1858,9 +1787,7 @@ original instruction nodes, discarding that transferred ownership. Pair and
 chain endpoints now honor current `covers`, with original node spans only as
 fallback. The real-object emission regression failed before the fix and now
 requires strict LIR output. ADDRM, ARITH and NEGNOT pass runtime checks on
-PDS/G2, QB/O and VBDOS/G3 (nine program/configuration runs). Before/after
-stage dumps: `/tmp/qbopt-addrm-ownership-20260909` and
-`/tmp/qbopt-addrm-ownership-fixed-20260909`. The known PROCS/TWICE runtime
+PDS/G2, QB/O and VBDOS/G3 (nine program/configuration runs). The known PROCS/TWICE runtime
 contract refusal remains, and broader full-goal validation is outstanding.
 Five existing widening ownership/restore checks also pass (75.93 seconds;
 these five checks internally traverse the fixture corpus, so they were run
@@ -1884,7 +1811,7 @@ The three-family emission check is 94/96 LIR: all 32 PDS/G2 and 32 QB/O;
 focused runtime program/configuration runs pass; VBDOS ADDRM explicitly
 reports REWRITEFAIL, not PASS. Seventy-four focused host checks pass.
 Removing either the cheap-work filter or the condition guard fails its
-regressions. Production stages: `/tmp/qbopt-strength-production-arridx-20260909`.
+regressions.
 Full milestone validation remains incomplete; the overall goal is not met.
 
 Condition-selection checkpoint: lowering now schedules a pure, single-use
@@ -1897,8 +1824,7 @@ results and multiple consumers are not moved. Those general cases still need
 condition materialization or flag-aware scheduling before unrestricted use.
 The new ordering regression fails with scheduling removed; 40 focused checks
 and 12 strict LIR program/configuration runs pass (matrix, segld, bools and
-flags across three compiler families). Dumps:
-`/tmp/qbopt-conditions-matrix-20260909`. Strength remains disabled and full
+flags across three compiler families). Strength remains disabled and full
 milestone validation is outstanding.
 
 Innermost selection checkpoint: reducing matrix's outer row counter created
@@ -1907,8 +1833,7 @@ Restricting strength reduction to innermost natural loops avoids that loss:
 experimental matrix cost is now 11,418 versus production 11,916; segld is
 24,642 versus 25,802; HARR is unchanged at 11,094. The new real-output cost
 regression fails at 12,974 when the restriction is removed. Thirty-six focused
-checks and six strict LIR runtime cases pass. Full dumps and final assembly:
-`/tmp/qbopt-inner-strength-matrix-20260909`. Strength is still disabled pending
+checks and six strict LIR runtime cases pass. Strength is still disabled pending
 backend condition/flag safety and a broader milestone validation. This is a
 temporary selection policy, not a substitute for target-aware pressure costing.
 
@@ -1919,7 +1844,7 @@ chooses terminal candidates rather than introducing counters for every term.
 Thirty-five focused checks pass; disabling composition makes the two new
 coefficient/wrap regressions fail. Six strict LIR runtime cases pass for
 matrix/segld across PDS /G2, QB /O and VBDOS /G3. Stage-by-stage evidence is
-in `/tmp/qbopt-affine-matrix-20260909`.
+in `affine-matrix`.
 Strength remains disabled: experimentally enabling it costs matrix 12,974
 versus production 11,916, though segld improves 25,802 -> 24,642. This is
 analysis infrastructure, not a production performance gain. Profitable
@@ -1935,8 +1860,7 @@ projection, and its final assembly contains immediate `imul` forms. PDS modeled
 cost falls 12,334 -> 11,916 (1.92x); pressx falls 820 -> 782. HARR remains
 11,094. Seventy-two focused checks and 15 strict LIR runtime cases pass
 (matrix/pressx/HARR/nots/lngmix across PDS /G2, QB /O, VBDOS /G3). Disabling
-phi pruning fails the real-matrix regression. Dumps and emitted assembly:
-`/tmp/qbopt-matrix-dead-phis`. Full validation remains outstanding.
+phi pruning fails the real-matrix regression. Full validation remains outstanding.
 
 Algebraic checkpoint: a machine-independent pass now simplifies integer
 identities and projects a two-result word multiply to its low result when
@@ -1949,7 +1873,7 @@ still far above 1.5x). pressx changes 824 -> 820; the sampled matrix, SEGLD,
 lngmix and arridx costs remain unchanged. Forty-six focused/algebraic-boundary
 checks pass; disabling projection fails the real-HARR regression. Strict LIR
 HARR/matrix/nots/SEGLD/lngmix runtime passes across PDS /G2, QB /O and
-VBDOS /G3 (15 cases). `/tmp/qbopt-low-product-harr-20260909` contains every
+VBDOS /G3 (15 cases). `low-product-harr` contains every
 stage and the emitted assembly. Full validation remains outstanding.
 
 Copy-propagation checkpoint: CSE now substitutes full-width copy values into
@@ -1962,7 +1886,7 @@ for HARR, SEGLD, pressx, lngmix and matrix. This improves the MIR boundary,
 not the target scoreboard yet. Thirty-five focused checks pass; restoring the
 old copy-retention code fails the regression. Strict LIR runtime passes those
 five programs on PDS /G2, QB /O and VBDOS /G3 (15 cases). Stage evidence is in
-`/tmp/qbopt-copy-values-harr-20260909`.
+`copy-values-harr`.
 Rejected experiment: simply allowing CSE to share partial-write copies lowered
 HARR 11,494 -> 11,296 but worsened SEGLD 25,802 -> 26,604. That relaxation is
 not enabled; direct source-value propagation avoids the measured regression.
@@ -1975,7 +1899,7 @@ and whether it replaces an existing allocation. Recognition stays in
 PDS /G2, QB /O and VBDOS /G3, including QB's register-fed pushes. ADIM is not
 classified as allocation. Thirteen focused checks pass; annotation preserves
 strict LIR emission byte-for-byte for HARR on those three configurations.
-`/tmp/qbopt-array-request-q-20260909` shows the request at raise and after opt.
+`array-request-q` shows the request at raise and after opt.
 These are requested shapes, NOT proof of successful allocation, physical
 disjointness, lifetime, or in-bounds access. Next use requires those proofs;
 do not feed requests directly to no-alias. No target reduction claimed here.
@@ -1987,7 +1911,7 @@ The originless and symbolic cases fail under the old computation key; 33
 focused checks pass, including distinct-address negatives. Strict LIR
 HARR/matrix/chain/segld runtime passes on PDS /G2, QB /O and VBDOS /G3
 (12 program/configuration cases). HARR stage dumps are in
-`/tmp/qbopt-cse-symbolic-harr-20260909`. No new target reduction is claimed:
+`cse-symbolic-harr`. No new target reduction is claimed:
 partial-write preservation and the far-store/descriptor alias barrier remain.
 
 CSE value-identity checkpoint: removed the obsolete same-variable restriction
@@ -1999,7 +1923,6 @@ pass, and strict LIR chain/matrix/lngmix/pressx runtime passes on PDS /G2,
 QB /O and VBDOS /G3 (12 program/configuration cases). PDS chain shrinks three
 object bytes and modeled cost changes 1,632 -> 1,630. This is a removed
 architectural restriction, not a claim of closing the remaining target gaps.
-Stage evidence: `/tmp/qbopt-cse-chain-20260909`.
 
 Symbolic-address checkpoint: HARR's descriptor move at 0x6f was raised as
 literal zero although its immediate has a relocation to segment 5 + 6.
@@ -2009,13 +1932,13 @@ from literal rematerialization. This corrects an unsound constant fact; no
 runtime miscompile from that fact is claimed. Both regressions catch in-memory
 restorations of the bugs; 1,015 consts/spiller checks and two focused LIR checks
 pass. Strict LIR HARR/segld/matrix runtime passes across PDS /G2, QB /O and
-VBDOS /G3 (nine cases). Stage dumps are in `/tmp/qbopt-symbol-harr-20260909`.
+VBDOS /G3 (nine cases). Stage dumps are in `symbol-harr`.
 Full validation remains outstanding; touched files retain baseline lint errors.
 This establishes symbolic descriptor identity, not allocation extents or no-alias.
 
 Reassessment after immediate multiply: the whole-fixture target scan still shows
 large array gaps; ordinary bools/subexp configurations meet 1.5x. HARR's actual
-final MIR (`/tmp/qbopt-harr-reassess-20260909/s24-mir-r02-place.txt`) stores through
+final MIR stores through
 F[v3_7] at 0x78, then reloads descriptor offset D[v4_5] at 0x7d to form v3_9 and
 reads F[v3_9] at 0x83. They are not yet proven equal: the far store may alias the
 descriptor in today's memory model. Removing the reload without proving distinct
@@ -2028,8 +1951,7 @@ Immediate-multiply checkpoint: single-result MIR products now propagate known
 factors; lowering selects the existing three-source immediate representation,
 avoiding a destination tie. Widening/multi-result products are unchanged. Three
 regressions fail with the old propagation/lowering; six focused checks pass.
-Strict LIR matrix/lngmix runtime passes on PDS /G2 with experimental reduction
-(`/tmp/qbopt-immediate-multiply.jthvzG/p-g2`). No measured kernel gain yet:
+Strict LIR matrix/lngmix runtime passes on PDS /G2 with experimental reduction. No measured kernel gain yet:
 experimental matrix stays 13,138 (2.12x); production stays 12,334 (1.99x).
 Do not enable strength on these figures.
 
@@ -2039,14 +1961,14 @@ copies and redefined values are excluded; rematerialization precedes in-place
 updates of other spilled values. Thirteen spiller checks pass; the old spiller
 fails the no-slot regression. Strict LIR-only runtime passes matrix, hotlop,
 pressx and lngmix across PDS /G2, QB /O and VBDOS /G3 (12 cases), artifacts
-`/tmp/qbopt-remat.YNcAMl`. Matrix modeled cost falls 12,500 -> 12,334 (1.99x).
+`remat`. Matrix modeled cost falls 12,500 -> 12,334 (1.99x).
 The target remains 6,210; this is progress, not completion or a full gate.
 
 Zero-fact checkpoint: identical, same-width Held operands of integer XOR/SUB
 now establish zero without requiring an input fact. Six fail-first/mutation
 regressions and all 998 constant checks pass. Strict LIR-only runtime transforms
 (refusal raises instead of falling back) pass matrix, hotlop and pressx on PDS
-/G2, QB /O and VBDOS /G3: `/tmp/qbopt-zero-verified.PNnu34`.
+/G2, QB /O and VBDOS /G3: `zero-verified`.
 This is analysis capability, not a speedup claim: matrix production cost is
 12,500 / 6,210 = 2.01x; strength-enabled is 13,224 = 2.13x. Harr stays 6.27x;
 segld is 3.85x production / 3.91x with strength. Keep strength disabled. Constant
@@ -2058,13 +1980,13 @@ not the operation's old address. The former check made a survivor span bytes
 still owned by a jump after transformations separated address and ownership.
 The focused regression fails with the old function; 46 checks pass. With the
 zero-fact and strength experiments enabled in memory, matrix now reports LIR
-`rebuilt` and passes PDS /G2 (`/tmp/qbopt-zero-fold.ckjHrW/ownership-p-g2`).
+`rebuilt` and passes PDS /G2.
 Neither experimental production switch changed in this checkpoint.
 
 CSE phi checkpoint: CSE now replaces phi inputs as well as operation uses when
 deleting a repeated computation. A focused regression fails with the old pass;
 45 related checks pass. The zero-fact experiment exposed this dangling definition
-at matrix 0x79; artifacts: `/tmp/qbopt-zero-fold.ckjHrW`.
+at matrix 0x79;
 Zero folding is withdrawn, not enabled: after fixing the phi, matrix refuses LIR
 emission with `0x0044: 9 bytes are claimed by more than one op`. Subsequent runtime
 PASS results were fallback, not successful recompilation. Without the experiment,
@@ -2075,7 +1997,7 @@ Two-address multiply checkpoint: the pass skipped all MULTIPLY operations even
 though the single-result, two-source form reads its destination. It now inserts
 the required first-factor copy, leaving widening/fixed forms alone. The old pass
 fails the regression; 48 focused checks pass. Experimental reduction passes
-matrix on PDS /G2 (`/tmp/qbopt-matrix-tied.CtbS1u/p-g2`) but still costs 13,144
+matrix on PDS /G2 but still costs 13,144
 against production 12,076 and target 6,210. Reduction remains disabled pending
 profitability and broader correctness evidence; this is not a full-gate result.
 
@@ -2083,7 +2005,7 @@ Insertion-location checkpoint: setup/update operations now use their insertion
 sites instead of the old product address. Tail updates retain the predecessor's
 last operation address with zero-width ownership at its end, so a branch to the
 next block skips the update. Stage evidence is in
-`/tmp/qbopt-matrix-reducer.IRijKE/{baseline,reduced,anchored-tail}`.
+`matrix-reducer/{baseline,reduced,anchored-tail}`.
 Original experimental emission put setup inside loops; corrected entry jumps
 now skip latch updates (0x4d -> 0x7d and 0x8f -> 0xa3).
 44 focused checks pass; the old reducer fails the insertion-location regression.
@@ -2140,7 +2062,7 @@ correctness work, not a new speedup or a full-gate result.
 
 Generic copy propagation plus trimming merge dependencies was tried and **reverted**: pressx printed 0 instead of 7500 on all three compilers, and some QuickBASIC runs failed to complete. Do not resurrect that shortcut. A suspected moved-store relocation defect was disproved by the emitted-object check; removing its unnecessary symbol override did not fix a runtime bug.
 
-Runtime scope explicitly excludes /V, /W event trapping and /X resumable errors; do not spend the next round inventing event interfaces. VBDOS B$ENRA remains unestablished. LLVM LICM dedicated-exit/store-dominance rules informed store sinking; LLVM/GCC references are under /Users/alim/work/other.
+Runtime scope explicitly excludes /V, /W event trapping and /X resumable errors; do not spend the next round inventing event interfaces. VBDOS B$ENRA remains unestablished. LLVM LICM dedicated-exit/store-dominance rules informed store sinking; LLVM and GCC are the references.
 # Hoisting preserves existing SSA edges
 
 Hoisting no longer reconstructs the entire body from variable numbers after
@@ -2152,8 +2074,7 @@ hoist. It failed before the fix and passes after it.
 
 Validation: nine focused hoist/fixed-point checks pass. Strict-LIR LNGMIX,
 HOTLPX and PRESSX run correctly on PDS `/G2`, QB `/O` and VBDOS `/G3` (nine
-runtime passes). Stage files: `/tmp/qbopt-hoist-ssa-20260909`. Runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-hoist-ssa-6h90ojay`.
+runtime passes).
 Constant DIVMOD folding remains withdrawn; its byte-ownership issue is still
 open. No performance improvement is claimed for this correctness repair.
 # Constant division now reaches the executable
@@ -2174,8 +2095,6 @@ Validation: 24 focused checks pass, one existing xfail. The emitted-code
 regression fails when constant folding is disabled and separately when CSE's
 extra-range transfer is disabled (the original 12-byte refusal). LNGMIX and
 HOTLPX pass strict LIR execution on all three compiler families (six runs).
-Artifacts: `/tmp/qbopt-constant-division-final` and
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-divfold-verified-8f_6zsli`.
 Remaining LNGMIX work includes redundant high-half reconstruction and memory
 traffic in its accumulator; inspect these stage dumps before changing them.
 # High-part extraction experiment — next boundary to repair
@@ -2187,7 +2106,7 @@ operation made both facts provable, but is not retained:
 
 - Folding extraction to a COPY left it inside the loop (LICM excludes an
   independent copy), pulling its dependent ADD/ADC chain back in as well.
-  Cost rose from 566 to 616. `/tmp/qbopt-extract-trial` has every stage;
+  Cost rose from 566 to 616. `extract-trial` has every stage;
   `s58-lir-lowered.txt` shows the zero move and ADD/ADC in the loop.
 - Leaving EXTRACT unfurled instead refused at `0x004b: restore is not one
   select.py can emit`. The legacy restore adapter cannot lower an operation
@@ -2211,8 +2130,6 @@ these carry generated semantics and own no original bytes.
 Validation: the lowering regression failed before expansion was implemented;
 13 focused extraction/division/condition tests pass. LNGMIX and HOTLPX pass
 strict LIR execution on PDS `/G2`, QB `/O`, and VBDOS `/G3` (six runs).
-Artifacts: `/tmp/qbopt-extract-lowered` and
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-extract-lower-2duh528o`.
 
 This is a boundary migration, not a speedup: LNGMIX currently costs 594 versus
 566 before it. Next fold explicit extraction plus known carry-dependent
@@ -2230,9 +2147,9 @@ LNGMIX's constant ADD/ADC becomes constants; propagation into the remaining ADC
 reduces cost from 594 to 580 (still 2.76x target). Fifteen focused checks pass;
 carry tests failed before implementation and the width guard test fails when
 the guard is removed. LNGMIX/HOTLPX pass on PDS, QB and VBDOS through strict LIR.
-Artifacts: `/tmp/qbopt-carry-final`,
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-carry-tmu2qjhw` (PDS/QB),
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-carry-v-ak5up4y6` (VBDOS).
+Artifacts: `carry-final`,
+`carry` (PDS/QB),
+`carry-v` (VBDOS).
 
 Next blocker: dead-code deletion groups operations by original address. A live
 operation therefore keeps dead sibling copies. A trial deleting by object
@@ -2251,7 +2168,7 @@ pass after it. Production LNGMIX still emits at cost 580.
 
 Deleting dead siblings by object identity now emits, but costs 598 and still
 retains dead copies whose bytes have no adjacent taker. That deletion change
-was not retained. `/tmp/qbopt-dce-identity` records its stages. The next change
+was not retained. `dce-identity` records its stages. The next change
 should unify ownership of removed operations instead of relying on an adjacent
 instruction's single span, allowing true deletion rather than leftover moves.
 # Dead computations emit no bytes
@@ -2266,9 +2183,7 @@ coverage check rather than bypassing it.
 LNGMIX drops from 580 to 552 (2.63x target). MATRIX measures 11376/6210
 (1.83x). The regression fails against the old DCE implementation; seventeen
 focused tests and nine strict-LIR runtime runs pass: LNGMIX, HOTLPX, MATRIX
-on PDS `/G2`, QB `/O`, VBDOS `/G3`. Artifacts:
-`/tmp/qbopt-dead-marker-final` and
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-dead-marker-qhdaewbz`.
+on PDS `/G2`, QB `/O`, VBDOS `/G3`.
 The target is still unmet; accumulator memory traffic remains in LNGMIX.
 # Promote carry-arithmetic memory reads
 
@@ -2279,9 +2194,7 @@ the loop emits `adc di,0` rather than reading its high word from memory.
 Cost drops 552 to 540 (2.57x target).
 
 The real-fixture regression failed first. Ten promotion checks and nine strict
-LIR runtime runs pass (LNGMIX, HOTLPX, MATRIX on PDS, QB, VBDOS). Artifacts:
-`/tmp/qbopt-promote-carry-final` and
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-promote-carry-m80cp_0f`.
+LIR runtime runs pass (LNGMIX, HOTLPX, MATRIX on PDS, QB, VBDOS).
 
 Both accumulator stores remain in the latch. Store sinking currently considers
 only stores in the block that has the exit edge, which is the test/header in
@@ -2302,8 +2215,6 @@ the loop. The two temporary stack stores and counter-copy traffic remain.
 The positive real-fixture test failed before implementation; missing-zero-trip
 initialization remains a negative case. Eleven focused checks pass. Nine
 strict-LIR runtime runs pass (LNGMIX, HOTLOP, MATRIX on PDS, QB, VBDOS).
-Artifacts: `/tmp/qbopt-rotated-store-final` and
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-rotated-store-36lii9ld`.
 # Phi widths enable counter-copy propagation
 
 The CSE/copy-propagation width map previously described only operation results,
@@ -2316,8 +2227,6 @@ in one register through increment and comparison; its two per-iteration copies
 are gone. The positive width test failed first, the conflicting-width negative
 passes, and fifteen focused checks plus nine strict-LIR runtime runs pass
 (LNGMIX, HOTLOP, MATRIX across PDS, QB, VBDOS).
-Artifacts: `/tmp/qbopt-phi-width-final` and
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-phi-width-99x3f49l`.
 Two temporary stack stores and the split-word accumulator arithmetic remain.
 
 # Nbody: correctness baseline and the next optimization boundary
@@ -2328,7 +2237,7 @@ address-keyed dead-store deletion, duplicate widening, and undeclared restore
 clobbers. NEGNOT and LNGMIX also pass on all three. This is a correctness
 baseline, not evidence that the modern-backend performance goal is met.
 
-The PDS stage dump at `/tmp/qbopt-nbody-pds-baseline` shows five runtime calls
+The PDS stage dump at `nbody-pds-baseline` shows five runtime calls
 in the interaction loop that `calls.sites()` recognizes with `consume`
 arguments but an empty `pushed` classification. `mir._sites()` skips them:
 
@@ -2368,8 +2277,7 @@ minimum signed value preserve truncation toward zero.
 PDS nbody's divisions at 0x1a0 and 0x1d4 become these sequences. With only
 this transformation disabled, the weighted cost is 1,094,861; enabled it is
 1,012,861 (7.5% lower). This is the opportunity model, not measured hardware
-cycles or a ratio against a hand-derived target. Stage dumps:
-`/tmp/qbopt-nbody-powdiv`. Strict LIR runtime checks pass nbody (24 outputs),
+cycles or a ratio against a hand-derived target. Strict LIR runtime checks pass nbody (24 outputs),
 chain (7), and divmod (20), each on p-g2, q-O and v-g3. Focused regressions
 were observed failing with the transformation disabled.
 
@@ -2415,7 +2323,7 @@ Algebraic simplification instead combines same-width left shifts whose final
 flags are unused and whose summed count is below the value width. PDS's
 0x119 shift disappears and 0x11b shifts by two. Cost becomes 880,313, with
 nbody and HARR passing strict LIR on all three compilers. Stage dumps are in
-`/tmp/qbopt-nbody-shift-combine`. Invariant position reads remain folded into
+`nbody-shift-combine`. Invariant position reads remain folded into
 their subtracts and are the next larger opportunity.
 
 ## Invariant reads need an index-range proof first
@@ -2464,7 +2372,7 @@ conservative. LICM supplies block-scoped read-side facts to these queries.
 The real nbody POSX/DELTAX regression fails when the projection is disabled;
 all twelve focused interval tests pass with it enabled. Saved runtime outputs
 for nbody and HARR match BC on PDS, QB and VBDOS in
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-range-alias-2382vm4p`.
+`range-alias`.
 
 This establishes an alias proof, not an nbody speedup. A separate experiment
 extracting position reads from word arithmetic did hoist them, but increased
@@ -2486,9 +2394,9 @@ qualify; the rule has no machine dependencies.
 Nbody's product at 0x1cd now feeds the signed /512 reduction at 0x1d4 directly.
 The real-fixture assertion fails with this rule disabled. PDS modeled cost
 falls from 880,313 to 820,313 (6.8%); this is not hardware timing or a target
-ratio. Dumps: `/tmp/qbopt-recombined`. Nbody (24 cases), CHAIN (7) and HARR
+ratio. Nbody (24 cases), CHAIN (7) and HARR
 (1) pass strict LIR on each of PDS, QB and VBDOS; runtime artifacts are in
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-recombined-we7utdqf`.
+`recombined`.
 Position arithmetic is still word-paired before late widening; early whole
 values and invariant-load motion remain the larger unfinished step.
 
@@ -2504,11 +2412,10 @@ idioms; this is not a claim that the migration is finished.
 
 Nbody now enters optimization with whole position loads and subtracts at
 0x11d/0x12d and 0x13c/0x144, and a whole DELTAX store at 0x135. PDS modeled
-cost falls from 820,313 to 792,437. Dumps: `/tmp/qbopt-early-longs`.
+cost falls from 820,313 to 792,437.
 The real-fixture regression fails with recognition disabled; 67 focused tests
 pass. Nbody, CHAIN, HARR, negnot and arridx pass strict LIR on all three
-compilers across two bounded runs. Latest artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-long-guards-ypyxvyud`.
+compilers across two bounded runs.
 Invariant position memory operands are still inside the scalar subtracts;
 exposing those as whole loads is the next step toward LICM.
 
@@ -2525,8 +2432,8 @@ The integration regression fails with load separation disabled. The range
 test now follows source identities rather than requiring optimized operations
 to retain their original addresses; its interval and alias assertions remain.
 PDS nbody modeled cost is 788,837, down from 792,437. Dumps are in
-`/tmp/qbopt-scalar-licm`; nbody, HARR and CHAIN pass strict LIR for PDS, QB and
-VBDOS in `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-scalar-licm-z36i1_nd`.
+`scalar-licm`; nbody, HARR and CHAIN pass strict LIR for PDS, QB and
+VBDOS in `scalar-licm`.
 This closes the specific invariant-position-load opportunity, not the overall
 nbody target. Register pressure, accumulator halves and remaining arithmetic
 round trips still limit the emitted loop.
@@ -2539,7 +2446,7 @@ pairs. The extraction proof is shared with algebraic recombination. Nbody's
 post-division +1 and accumulator additions now remain 32-bit operations;
 promotion can keep the whole accumulators across loop edges. PDS modeled cost
 falls from 788,837 to 607,037 (23.0%). This remains a model, not hardware timing
-or proof of the missing nbody target. Dumps: `/tmp/qbopt-scalar-immediates`.
+or proof of the missing nbody target.
 
 VBDOS exposed three defects, each with a fail-first regression:
 
@@ -2553,8 +2460,7 @@ VBDOS exposed three defects, each with a fail-first regression:
 
 The raised-only VBDOS program passed before the phi fix, isolating the defect
 downstream of recognition. After the fix, nbody (24 cases), HARR (1), CHAIN
-(7), and negnot (4) pass strict LIR on PDS, QB and VBDOS. Runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-scalar-phi-final-6yt_a4th`.
+(7), and negnot (4) pass strict LIR on PDS, QB and VBDOS.
 All 75 focused tests pass. The overall target and full architecture migration
 remain unfinished; this result specifically restores whole-value continuity.
 
@@ -2566,10 +2472,8 @@ new extraction definitions and uses the shared proof for stores as well as
 arithmetic. DELTAY and FALLOFF are stored whole instead of split solely for
 the stores. The real-fixture assertion failed before the change.
 
-PDS nbody modeled cost falls from 607,037 to 517,793 (14.7%). Stage dumps:
-`/tmp/qbopt-whole-stores`. Nbody, HARR, CHAIN and negnot pass strict LIR on all
-three compilers; artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-stores-8ej78xls`.
+PDS nbody modeled cost falls from 607,037 to 517,793 (14.7%). Nbody, HARR, CHAIN and negnot pass strict LIR on all
+three compilers;
 79 focused tests pass. Memory forwarding and the remaining legacy multiply
 sites still limit value continuity; a hand-derived nbody target remains due.
 
@@ -2587,10 +2491,8 @@ Separated pushes keep independent snapshots. DELTAX's full subtraction result
 now feeds its later multiply directly; the older regression checks this full
 dependency rather than insisting that a removed high-half concatenation exist.
 
-PDS nbody modeled cost falls from 517,793 to 402,593 (22.2%). Dumps:
-`/tmp/qbopt-whole-multiply`. Nbody, HARR, CHAIN and negnot pass strict LIR on
-PDS, QB and VBDOS; artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-multiply-z2y54a7y`.
+PDS nbody modeled cost falls from 517,793 to 402,593 (22.2%). Nbody, HARR, CHAIN and negnot pass strict LIR on
+PDS, QB and VBDOS;
 This removes the remaining frozen multiply sites in nbody, not every legacy
 runtime idiom in the project. Target derivation and broader migration remain.
 
@@ -2610,8 +2512,7 @@ is **not an accepted milestone**: DIVMOD refuses an inserted multiply crossing
 a live condition (PDS 0x20a). Retaining the multiply's own flag definition did
 not resolve it, indicating another live condition, and that attempted change
 was removed. Inspect the flag SSA/exceptional edges before committing this
-broader migration. Dumps: `/tmp/qbopt-forward-divmod`; runtime evidence:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-forward-fixes-i44yb65c`.
+broader migration.
 
 ## Call flag inputs follow established contracts
 
@@ -2625,8 +2526,8 @@ the PRINT symptom and both explicit and unknown flag-input boundaries.
 
 With the pending forwarding/divide experiment present, DIVMOD (20 cases),
 nbody (24), CHAIN (7), and HARR (1) pass strict LIR on all three compilers:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-contract-flags-pziqn7pl`.
-Stage dumps: `/tmp/qbopt-contract-flags`. Focused runtime/raising checks pass
+`contract-flags`.
+Focused runtime/raising checks pass
 259 tests, with one old divide-relocation regression still tied to the legacy
 representation. This commit isolates the contract fix; the broader migration
 and that regression's replacement remain pending.
@@ -2659,10 +2560,9 @@ promotion and loop phis. The initializer regression failed before the change;
 Not accepted yet: nbody's modeled cost rises from 388,342 to 418,616. The
 allocation diff shows both accumulator phis spilled, with additional edge
 copies rather than register-resident accumulators. Compare
-`/tmp/qbopt-accumulator-current` and `/tmp/qbopt-accumulator-whole`.
+`accumulator-current` and `accumulator-whole`.
 Nbody and HARR pass all three compilers, but CHAIN and DIVMOD refuse immediate
 stores on PDS/QB (CHAIN 0x48; DIVMOD 0x9a/0x9c). VBDOS passes all four.
-Runtime artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-initializers-x6ij0ddp`.
 Next: inspect the immediate-store encoding refusal, then eliminate the
 promoted-phi spill/edge-copy overhead. The source experiment is uncommitted.
 
@@ -2676,7 +2576,7 @@ the fix; both immediate load/store tests pass afterwards.
 
 With whole initializers still experimental, CHAIN (7 cases) and DIVMOD (20)
 pass strict LIR on PDS, QB and VBDOS:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-store-immediates-eqtnx5t9`.
+`store-immediates`.
 The promotion cost regression remains: global accumulator stores survive
 alongside private spill-slot loads/stores and phi edge transfers. This encoder
 fix is committed independently; initializer recognition remains uncommitted.
@@ -2693,9 +2593,9 @@ executes. The real Nbody sinking regression failed before this change.
 
 Both accumulator writes now move to exit 0x227. Modeled cost improves from
 418,616 to 409,016, still worse than committed 388,342 because private phi-spill
-traffic remains. Dumps: `/tmp/qbopt-conditional-sink`. Nbody, HARR, LNGMXX and
+traffic remains. Nbody, HARR, LNGMXX and
 NESTED pass strict LIR on all three compilers in
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-conditional-sink-y6v0bvte`.
+`conditional-sink`.
 26 focused tests pass, but LNGMXX's nonempty invariant-temporary sinking check
 still fails: its remaining whole temporary's provider is not classified
 invariant. Do not weaken that check. Source changes remain uncommitted pending
@@ -2712,9 +2612,9 @@ as an abstract temporary before the divide, leaving allocation to place it.
 Three fail-first checks cover 7, zero, and -1, including insufficient-width
 facts; the latter two divisors remain unsafe to speculate. All 16 loop-motion
 checks pass, including the previously failing invariant-store check. The
-dump in `/tmp/qbopt-divisor-constants` places the divide at preheader 0x4c.
+dump in `divisor-constants` places the divide at preheader 0x4c.
 LNGMXX, DIVMOD, and nbody pass strict LIR on all three compilers in
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-divisor-constants-dbsfgqw2`.
+`divisor-constants`.
 This fix is separate from the uncommitted initializer/conditional-sinking
 experiment, whose nbody cost remains 409,016 pending allocator work.
 
@@ -2747,7 +2647,7 @@ old copy behavior was restored.
 
 Together with whole constant-store recognition and conditional store sinking,
 PDS nbody models 379,016, below the committed 388,342 baseline and the
-409,016 intermediate. Dumps in `/tmp/qbopt-fixed-remat` show immediate 512
+409,016 intermediate. Dumps in `fixed-remat` show immediate 512
 loads directly into EAX rather than preserving a separate constant in EDI.
 Redundant preparations remain visible and are a later cleanup opportunity,
 not hidden in the result. This is modeled cost, not hardware timing.
@@ -2756,7 +2656,7 @@ All 38 focused constraint, loop-motion, and whole-recognition checks pass.
 Conditional sinking is refused without the matching initialization or without
 either available alias proof. Nbody (24), HARR (1), CHAIN (7), DIVMOD (20),
 LNGMXX (1), and NESTED (1) pass strict LIR on all three compilers:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fixed-remat-nkr3jy7h`.
+`fixed-remat`.
 The initializer/sinking experiment is now accepted with this allocation fix.
 Nbody still needs its hand-derived target; the project-wide goal is not met.
 
@@ -2775,15 +2675,13 @@ accepts literal displacements through those abstract bases. The read becomes
 `add di,[bx+0Ah]`, preserving the descriptor pointer instead of reading DS:0.
 The three emitted-code regressions failed before the fix. All 47 focused
 induction tests pass; HARR and NESTED pass runtime on all three compilers.
-Stage dumps: `/tmp/qbopt-harr-es` and `/tmp/qbopt-harr-address-fixed`.
-Runtime artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-harr-address-y0z6zjgj`.
 HARR costs remain 2920/2936/3132 for PDS/QB/VBDOS. The opaque ES load still
 needs a machine-independent address representation; this fix does not hoist it.
 
 The same focused runtime run found MATRIX prints T=190 instead of T=380 on
 all three compilers. Replacing the changed functions in memory with HEAD's
 pre-fix definitions reproduces the PDS failure independently, in
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-matrix-baseline-xgc4dvts`.
+`matrix-baseline`.
 Its earlier 1.31x score is therefore not evidence of goal completion. Fix
 this existing correctness failure before further optimization.
 
@@ -2806,9 +2704,7 @@ before inserting any load.
 
 All three new emitted-address regressions failed before the fix; all 50
 focused induction tests pass afterwards. MATRIX prints 380 on PDS, QB and
-VBDOS; HARR and NESTED also pass on all three. Runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-matrix-stride-adva5wll`.
-Pass dumps: `/tmp/qbopt-matrix-failure` and `/tmp/qbopt-matrix-stride-fixed`.
+VBDOS; HARR and NESTED also pass on all three.
 MATRIX now models 8056/8060/8066 against 6210, about 1.30x on all three.
 This restores this benchmark's correctness evidence, not project completion.
 
@@ -2824,7 +2720,7 @@ word LOAD and an opaque resource installation. CSE and LICM did hoist the
 ordinary load out of both HARR loops, as intended. The emitted result also
 kept the selector in AX for the entire nest, spilled the row counter and
 descriptor pointer, and installed ES twice in the inner loop. Modeled PDS
-cost rose from 2920 to 3072. Dumps remain in `/tmp/qbopt-harr-selector`.
+cost rose from 2920 to 3072. Dumps remain in `harr-selector`.
 The experiment was removed; no runtime correctness claim is made for it.
 
 This is evidence against treating selector extraction alone as the completed
@@ -2856,8 +2752,8 @@ failed with three before the phase was connected. PDS cost drops from
 379016 to 377016. All 10 focused peephole/prologue checks pass, including
 partial writes, call/unknown barriers, clobbers, relocation and block edges.
 Nbody's 24 cases, MATRIX and HARR pass strict LIR runtime on all three
-compilers in `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-peephole-gc_sg3g2`.
-Dumps: `/tmp/qbopt-nbody-peephole`, including the new final machine phase.
+compilers in `peephole`.
+Dumps: `nbody-peephole`, including the new final machine phase.
 
 ## Fixed-resource allocation and coalescing
 
@@ -2877,7 +2773,7 @@ pins and reject keeping an ES value live through an ES clobber.
 
 All 20 coalescer/peephole checks pass. Nbody (24 cases), MATRIX and HARR pass
 strict LIR runtime on all three compilers in
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-resource-coalesce-jwvqpoim`.
+`resource-coalesce-jwvqpoim`.
 This establishes a backend prerequisite, not HARR's far-address migration:
 MIR still needs to express the address-space value and each access's
 dependency on it, with resource constraints supplied only by lowering.
@@ -2891,7 +2787,7 @@ Numerous event-enabled PDS/VBDOS fixtures remain unmeasured because LIR
 emission refuses them; direct checks of hotlop-p-evt and harr-p-evt report
 an unestablished call interface, not an optimization success.
 
-FPCSEX dumps in `/tmp/qbopt-fpcsex-current` show the repeated loads and
+FPCSEX dumps in `fpcsex-current` show the repeated loads and
 arithmetic still naming st0 rather than floating SSA identities. Its target
 listing also reassociates the accumulator and bypasses SINGLE rounding.
 An exact integer simulation of a 64-bit significand gives different results
@@ -2920,8 +2816,7 @@ Only current definitions now contribute selector pins.
 HARR's primary PDS/QB/VBDOS modeled costs are **2326/2342/2538**, down from
 2920/2936/3132: **1.27x/1.28x/1.38x** against the unchanged 1834 target.
 The raw emitted loop contains a far store, accumulator add, and striding
-induction variables, with no selector reload or array read. Stage dumps:
-`/tmp/qbopt-harr-selector-live-pins`. These are modeled costs, not timings.
+induction variables, with no selector reload or array read. These are modeled costs, not timings.
 
 The regression verifies that the selector load lies outside every backward
 branch interval and that the far read is eliminated on all three compilers;
@@ -2947,8 +2842,8 @@ six followed by a shift; the previous spill slot disappears as well.
 
 Primary modeled costs are **1202/1206/1212** (PDS/QB/VBDOS), against 768:
 **1.57x/1.57x/1.58x**, still above goal. PDS was 1292 before this change.
-Before/after stage directories are `/tmp/qbopt-nested-next` and
-`/tmp/qbopt-nested-scales`. All three real-object regression cases failed
+Before/after stage directories are `nested-next` and
+`nested-scales`. All three real-object regression cases failed
 before the rewrite and passed after it. Algebraic and address-space tests:
 67 passed, including modular overflow and refusal boundaries. Strict LIR
 runtime runs of NESTED, MATRIX, HARR and all 24 NBODY cases passed on each
@@ -2977,15 +2872,13 @@ Primary modeled costs (PDS/QB/VBDOS):
 The preceding scale-chain change also improved MATRIX and VBDOS HARR;
 the before column above is freshly measured, not copied from older rows.
 The 63 available primary target fixtures show no other modeled change and
-no new unmeasured result (`/tmp/qbopt-outer-target-audit.txt`). This is not a
+no new unmeasured result. This is not a
 correctness claim over those 63 fixtures. Strict LIR runtime validation is
 NESTED, MATRIX, HARR and all 24 NBODY cases on each compiler, all passing;
 artifacts: `qbopt-outer-recurrences-sh7l7689` under system temporary storage.
 Induction, algebraic and address-space tests: 120 passed. The new emitted
 NESTED regression failed on all three compilers with the guard present.
 
-Dumps: `/tmp/qbopt-nested-outer-probe`,
-`/tmp/qbopt-matrix-outer-recurrences`, `/tmp/qbopt-harr-outer-recurrences`.
 The descriptor-hoist regression now requires its read to dominate the inner
 preheader, allowing it to move farther out without weakening its memory
 dependency checks. Product-width testing disables strength reduction to
@@ -3030,9 +2923,7 @@ fixtures. Constant propagation tests passed (1036 cases before operand
 integration); the focused integration selection passed 91 cases. Six
 runtime programs (SPILL's two checks, NESTED, MATRIX, HARR, NBODY's 24
 checks, LNGMIX) passed through strict LIR on all three compilers. Artifacts:
-`qbopt-memory-constants-o7e3tm7t` in system temporary storage. Stage dumps:
-`/tmp/qbopt-spill-next`, `/tmp/qbopt-spill-byte-facts`,
-`/tmp/qbopt-spill-constant-operands`.
+`qbopt-memory-constants-o7e3tm7t` in system temporary storage.
 
 ### SPILL: promote fields initialized by a packed store
 
@@ -3054,8 +2945,8 @@ remain before output calls.
 SPILL's PDS/QB/VBDOS modeled costs fall from 2806/2812/2816 to
 **1410/1416/1420**, or **1.26x/1.26x/1.27x** against 1122. All three primary
 variants now meet the target. Stage directories:
-`/tmp/qbopt-spill-promoted` (before the store-sinking proof) and
-`/tmp/qbopt-spill-promoted-sunk` (after it).
+`spill-promoted` (before the store-sinking proof) and
+`spill-promoted-sunk` (after it).
 
 The three real-fixture loop-memory regressions failed before the change.
 Promotion, constant-cell and induction tests: 83 passed, including a shared
@@ -3079,7 +2970,6 @@ Calls and barriers conservatively invalidate these initializer facts.
 ADDRM modeled costs: PDS 1578 -> 1460, QB 1584 -> 1466, VBDOS unchanged
 at 1346. The accumulator reload is gone, but its loop write-back and the
 long array store/reload remain opportunities; the 754 target is not met.
-Stage evidence: `/tmp/qbopt-addrm-next` and `/tmp/qbopt-addrm-captured`.
 
 The real PDS/QB regressions and complete split-initializer case failed with
 the previous implementation. All 20 promotion tests pass, including missing
@@ -3100,7 +2990,6 @@ ADDRM PDS/QB costs fall again, 1460/1466 -> **1346/1352**; VBDOS remains
 1346. The accumulator write-back is now after the loop. The target remains
 754, so roughly 1.79x is still unfinished. The remaining long-array reload
 is visible directly in the emitted loop, after its two word stores.
-Before/after MIR dumps: `/tmp/qbopt-addrm-captured` and `/tmp/qbopt-addrm-sunk`.
 
 47 promotion/store-motion tests pass. The new PDS/QB complete-initialization
 cases fail before this change; missing and clobbered initializers retain
@@ -3122,13 +3011,13 @@ require AX/DX: applying that old blanket EXTEND constraint to MOVSX added two
 unnecessary moves, so the target constraint now distinguishes those forms.
 The resulting PDS/QB/VBDOS ADDRM costs are **1206/1212/1206**, down from
 1346/1352/1346, still about 1.60x against 754. Address scales remain inside
-the loop. Stage diff: `/tmp/qbopt-addrm-sunk` -> `/tmp/qbopt-addrm-whole-store`.
+the loop.
 
 All three real-fixture whole-store regressions fail before the change;
 the MOVSX encoding regression also fails before selection support. The
 combined focused run reports 1118 passes and 12 existing selection failures;
 all 12 also fail with the previous raising/lowering/selection/target code
-loaded in isolation (`/tmp/qbopt-signed-stores-select-baseline.txt`). This is
+loaded in isolation. This is
 not a claim of a green selection suite. Strict LIR runtime checks passed
 99 cases across ADDRM, SPILL, NESTED, MATRIX, HARR, HOTLOP, LNGMIX and NBODY
 on all three compilers. Artifacts: `qbopt-signed-stores-g026xtr_`.
@@ -3150,8 +3039,7 @@ ship a fixture-specific exception. Preserve the induction/range/alias
 relationships before enabling these cheaper recurrences.
 
 All experimental source/test changes were removed. The authoritative ADDRM
-cost remains 1206/1212/1206, not the attractive probe number. Probe dumps:
-`/tmp/qbopt-addrm-strides`, `/tmp/qbopt-nbody-shift-probe`; runtime artifacts
+cost remains 1206/1212/1206, not the attractive probe number. Runtime artifacts
 `qbopt-address-recurrences-adusqjrb` (96 passing cases across three compilers).
 
 ### Share the exit counter's proven iteration count
@@ -3170,7 +3058,6 @@ the probe cost from 410356 to 401956. That is still worse than 377016,
 so recurrence generation remains unchanged. The remaining probe regression
 needs allocation/profitability analysis, not more alias speculation.
 Production NBODY remains 377016 and ADDRM 1206 on PDS.
-Stage diff: `/tmp/qbopt-nbody-shift-probe` -> `/tmp/qbopt-nbody-shared-ranges`.
 
 73 focused range/induction tests pass. The injected-recurrence real-program
 range regression fails with the previous analysis. Wraparound, final-latch
@@ -3215,8 +3102,6 @@ QB LNGMIX cost falls **10592 -> 306**, within 1.5x of its 210 target.
 QB LNGMXX falls **10634 -> 373**, still above target. PDS/VBDOS are unchanged:
 LNGMIX 302, LNGMXX 371. LNGMIX folds both arithmetic operations; LNGMXX
 retains one shared DIVMOD. These are model costs, not hardware speedups.
-Raw/stage evidence: `/tmp/qbopt-lngmix-q-gap`, `/tmp/qbopt-lngmix-q-pushes`,
-`/tmp/qbopt-lngmix-q-constants`.
 
 18 focused raising tests pass. Both new QB real-fixture regressions fail
 with the previous raiser; PDS/VBDOS cases already passed. Strict LIR runtime
@@ -3238,13 +3123,12 @@ PDS/QB/VBDOS LNGMXX costs fall 371/373/371 -> **331/333/331**. HOTLPX falls
 (1.45x/1.46x/1.48x). The 63-target-fixture audit has only these six changes,
 all improvements. NBODY PDS improves slightly, 377016 -> 376416, but the
 shift-recurrence probe still regresses (401156), so its policy stays disabled.
-LNGMXX remains above target. Stage evidence: `/tmp/qbopt-lngmxx-next` and
-`/tmp/qbopt-lngmxx-commuted`.
+LNGMXX remains above target.
 
 12 focused legalization tests pass, including three real emitted-loop tests
 that fail with the previous legalization. The wider LIR tests have 37 existing
 failures, reproduced with the previous two-address code in
-`/tmp/qbopt-twoaddr-lir-baseline.txt`; they are not presented as green.
+`twoaddr-lir-baseline.txt`; they are not presented as green.
 Strict LIR runtime checks pass for LNGMIX, LNGMXX, DIVMOD, ADDRM, NBODY,
 HOTLOP, SPILL, MATRIX, NESTED and HARR (162 cases), plus HOTLPX separately.
 Artifacts: `qbopt-commuted-operands-hozw1s5m`, `qbopt-commuted-hotlpx-32srgv2g`.
@@ -3292,8 +3176,8 @@ recurrence descriptions, and unproved termination prevent deletion.
 Zero-trip loops are currently left to other simplification, not guessed.
 
 The real emitted-backedge assertions failed first on all three LNGMXX
-fixtures. Adjacent MIR dumps at `/tmp/qbopt-lngmxx-exit-before` and
-`/tmp/qbopt-lngmxx-exit-fixed` show the recurrence becoming a multiply and
+fixtures. Adjacent MIR dumps at `lngmxx-exit-before` and
+`lngmxx-exit-fixed` show the recurrence becoming a multiply and
 the loop disappearing. An intermediate dump caught retained original bytes
 on removed operations; cleared operations now explicitly own no computation,
 and the rewritten jump retains the provenance needed to lower its new target.
@@ -3330,7 +3214,7 @@ HOTLPX becomes `20*(n*k)+210`, and constant HOTLOP folds to its answer.
 Six real emitted-loop regressions failed first (both programs, all three
 compilers). Additional cases cover descending counters, an overflowing
 triangular sum, and refusal of a doubled accumulator. Stage dumps are in
-`/tmp/qbopt-hotlpx-sum-before` and `/tmp/qbopt-hotlpx-sum-after`.
+`hotlpx-sum-before` and `hotlpx-sum-after`.
 
 | Program | Before (PDS/QB/VBDOS) | After |
 | --- | --- | --- |
@@ -3368,7 +3252,7 @@ are byte-identical to the previous implementation (97-object comparison).
 
 Three emitted-copy regressions failed before the change and pass afterwards;
 all 16 focused coalescing tests pass. Stage dumps are at
-`/tmp/qbopt-matrix-next` and `/tmp/qbopt-matrix-palette-after`. The broader
+`matrix-next` and `matrix-palette-after`. The broader
 intermediate candidate passed 111 runtime cases; the final pinned-guard
 version is separately checked on the six changed MATRIX/ARRIDX variants.
 
@@ -3406,8 +3290,8 @@ reading EAX.
 
 The emitted constant-count assertion was tightened from two copies to one
 and failed first, alongside the non-clobbering-extension case. All 11 focused
-peephole checks pass. Dumps at `/tmp/qbopt-nbody-next` and
-`/tmp/qbopt-nbody-constant-after` show the one deleted hot-loop materialization.
+peephole checks pass. Dumps at `nbody-next` and
+`nbody-constant-after` show the one deleted hot-loop materialization.
 NBODY's modeled cost falls 376416 -> 374416. CHAIN also loses one materialization
 per object: 921/933/881 -> 919/931/879. Those three CHAIN variants are the only
 changed primary objects among 96. NBODY passes all 72 runtime cases across the
@@ -3429,7 +3313,7 @@ loads are not treated as reusable register copies.
 LNGMXX's `mov eax,ecx; cdq; mov eax,ecx` now has one copy. Its three emitted
 regressions and the basic snapshot-reuse case failed first. All 18 focused
 peephole checks pass, including partial source/destination clobbers and
-snapshot lifetime. `/tmp/qbopt-lngmxx-copy-after` records the final stages.
+snapshot lifetime. `lngmxx-copy-after` records the final stages.
 Strict runtime checks pass 156 cases across three compilers for LNGMXX,
 CHAIN, DIVMOD, FPDEEP, FPEMU and MATRIX (`qbopt-copy-values-k3tpmxd3` under
 the system temporary directory).
@@ -3472,8 +3356,7 @@ removed those regressions. Final modeled costs (PDS/QB/VBDOS):
 | STRIDE | 569 / 573 / 579 | 527 / 531 / 537 |
 
 These 15 objects are the only changes among 96 primary fixtures plus NBODY;
-all remain LIR-emitted. Final dumps are in `/tmp/qbopt-addrm-exit-final`
-(before: `/tmp/qbopt-addrm-next`). Strict runtime verification passes 18 cases
+all remain LIR-emitted. Final dumps are in `addrm-exit-final`. Strict runtime verification passes 18 cases
 on the five changed programs across all three compilers, with artifacts at
 `qbopt-partial-loop-exits-muo7dksz` under the system temporary directory.
 
@@ -3496,8 +3379,7 @@ above 1.5 times the historical 754 target; this is not project completion.
 All three emitted-code regressions failed before the change. Availability,
 unused intermediates, width, flag, and modular-value checks bring the focused
 algebraic file to 71 passing tests. All six strict ADDRM runtime cases pass.
-Stage dumps: `/tmp/qbopt-addrm-shared-before` and
-`/tmp/qbopt-addrm-shared-final`. Runtime artifacts:
+Runtime artifacts:
 `qbopt-shared-scales-_lw1cq5h` under the system temporary directory.
 
 ### Raise split long negations before optimization
@@ -3520,8 +3402,8 @@ The emitted NBODY regression fails on the preceding implementation (four
 word negations instead of two long negations). Carry provenance, addend,
 width, mismatched halves, and modular edge values are covered; 94 focused
 tests pass. Strict runtime checks pass all 90 cases across NBODY and JUMPS
-on three compilers. Before/after dumps are `/tmp/qbopt-nbody-current` and
-`/tmp/qbopt-nbody-neg-whole`; runtime artifacts are
+on three compilers. Before/after dumps are `nbody-current` and
+`nbody-neg-whole`; runtime artifacts are
 `qbopt-whole-negation-wh1x42lt` under the system temporary directory.
 
 ### Reverse negated differences in MIR
@@ -3537,8 +3419,7 @@ NBODY's modeled cost falls from **364016 to 363616**. It is the only changed
 object in the 97-object audit. The new emitted regression failed before the
 change; the preceding whole-negation test now also checks the raised MIR
 contains both whole negations, rather than requiring them to survive opt.
-All 79 algebraic tests and 72 strict NBODY runtime cases pass. Dumps:
-`/tmp/qbopt-nbody-neg-whole` and `/tmp/qbopt-nbody-reverse-sub`. Runtime
+All 79 algebraic tests and 72 strict NBODY runtime cases pass. Runtime
 artifacts: `qbopt-reverse-difference-1c20xxm3` under the system temporary directory.
 
 ### NBODY's remaining temporary store: missing object identity
@@ -3595,7 +3476,7 @@ making the incorrect chain visible without reading backward from assembly.
 All seven new regression cases fail with the preceding tracker, including
 FPCSE on three compilers, arithmetic-pop/unary flow, calls, stack capacity,
 and the actual stage output. Together with stage tests, 11 tests pass.
-New dumps are `/tmp/qbopt-fpcse-values` (before: `/tmp/qbopt-fpcse-current`).
+New dumps are `fpcse-values`.
 This changes analysis and diagnostics, not generated code or measured cost.
 The block-local tracker is not yet typed MIR SSA: the next step must carry
 storage conversions, arithmetic precision, rounding mode, and FP effects
@@ -3626,8 +3507,7 @@ integration steps, not claims established by this metadata change.
 The three real FPCSE rounding-boundary tests failed before implementation.
 Conversion-format, unary, and dump checks bring the focused set to 33 passing
 tests. All 97 audited objects remain byte-identical and LIR-emitted, so no
-unchanged runtime suite was repeated. Pass dumps now expose the contracts
-alongside value identities: `/tmp/qbopt-fpcse-semantics`.
+unchanged runtime suite was repeated.
 
 ### Floating operands become MIR value edges
 
@@ -3659,9 +3539,8 @@ cover changed dataflow, operation ordering, rounding, integer/float variable
 separation, raw forwarding, and direct lowering. All 41 focused tests pass.
 The complete preceding implementation comparison and final SSA toggle audit
 both leave all 97 primary/regression objects byte-identical; there is no
-performance claim and no unchanged runtime suite was repeated. Final dumps:
-`/tmp/qbopt-fpcse-ssa-final`; the unsafe initial pass behavior is recorded in
-`/tmp/qbopt-fpcse-ssa-probe`. Next work must replace the identity baseline
+performance claim and no unchanged runtime suite was repeated. The unsafe initial pass behavior is recorded in
+`fpcse-ssa-probe`. Next work must replace the identity baseline
 with floating scheduling/allocation and model environment effects before
 changing strict evaluation order or sharing arithmetic.
 
@@ -3677,7 +3556,7 @@ Three fail-first regressions demonstrate that a missing push, premature pop,
 or incorrect input slot used to pass the identity check. All 44 focused tests
 pass. All 97 audited objects retain identical outcomes and bytes, so no
 unchanged runtime suite was repeated. Stage dumps are in
-`/tmp/qbopt-fpcse-stack-validation`. Actual floating value reuse and stack
+`fpcse-stack-validation`. Actual floating value reuse and stack
 scheduling, with rounding and environment effects preserved, remain next.
 
 ### Floating register forms are selectable
@@ -3729,7 +3608,7 @@ floating values and leaves floating allocation with stack operands. The
 renaming and refusal tests now exercise this production pipeline. All 90
 focused tests pass. The 97-object comparison with the previous lowering and
 machine pipeline is byte-identical. Adjacent dumps in
-`/tmp/qbopt-fpcse-lir-floatalloc` show the value-to-slot transition at
+`fpcse-lir-floatalloc` show the value-to-slot transition at
 `s30-lir-lowered.txt` / `s31-lir-floatalloc.txt`, with no change to MIR.
 Inserted stack moves, spills, cross-block allocation and profitable reuse
 remain unfinished; this change removes the premature-placement architecture
@@ -3805,7 +3684,7 @@ writing immediate bits; production optimization does not assume those bytes.
 All three fixture tests fail with the analysis disabled. The focused set
 passes 121 tests, and all 97 emitted-object hashes/outcomes remain unchanged.
 Stage dumps expose exact numeric values (without assuming pool contents) in
-`/tmp/qbopt-fpcse-exact-facts`. These are numeric proofs, not permission to
+`fpcse-exact-facts`. These are numeric proofs, not permission to
 discard pending exceptions, synchronization, or floating-environment effects.
 Connecting them to a sound reusable-operation proof is still required.
 
@@ -3846,8 +3725,8 @@ additions rather than four. Rejection tests cover unknown effects, barriers,
 aliasing writes and differing rounding semantics. 103 focused tests plus three
 CSE tests pass. Of 97 audited outputs only the two FPCSE variants change;
 both changed variants pass actual runtime checks (one case each). Stage dumps
-are in `/tmp/qbopt-fpcse-cse`; runtime artifacts are in
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fpcse-cse-runtime-6cjfzzr5`.
+are in `fpcse-cse`; runtime artifacts are in
+`fpcse-cse-runtime`.
 
 Two legacy consumers also needed their boundaries corrected: MIR instruction
 classification no longer lowers floating values to ask whether they are an
@@ -3894,8 +3773,8 @@ sibling value. The 33 focused tests pass. Among 97 emitted outputs, only
 NBODY's object changes; its 24 PDS runtime cases pass. Its measured cost stays
 363616: the final LIR diff removes seven empty markers, not seven executed
 instructions, so this is not reported as a benchmark speedup. Dumps are in
-`/tmp/qbopt-nbody-cse-dominance` and runtime artifacts in
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-nbody-cse-dominance-qrk0imxa`.
+`nbody-cse-dominance` and runtime artifacts in
+`nbody-cse-dominance`.
 
 ### CSE numbers commutative integer expressions independently of operand order
 
@@ -3962,7 +3841,7 @@ This is a consumer of the proof, not loop deletion. All 60 floating fixture
 objects are byte-identical before/after enabling it. In literal FPCSE,
 `B$PSSD` precedes the output value reads and its current contract permits
 caller-memory writes, so the proof cannot cross that call. No speedup is
-claimed. Stage dumps: `/tmp/qbopt-fpcse-exit-propagation`.
+claimed.
 
 ### Floating loop exits use proved control flow
 
@@ -3978,7 +3857,7 @@ After: FPCSE's MIR proves ten iterations and SINGLE 487.5; changing its bound
 to three proves SINGLE 146.25. Unknown bounds, unknown header aliases and calls
 refuse. The 71 focused tests pass. Each MIR stage can display the proof, e.g.
 `exact loop exit 0xa9 after 10 iterations: ... D:4=0x43f3c000` in
-`/tmp/qbopt-fpcse-proved-exit`. ASM and the 3956 PDS cost are unchanged: the
+`fpcse-proved-exit`. ASM and the 3956 PDS cost are unchanged: the
 remaining step is consuming this proof while preserving observable effects.
 
 ### Execute one checked final floating iteration
@@ -4035,7 +3914,7 @@ failed before retaining exception-visible initial state.
 The 97-primary-object before/after audit changes only FPCSE/FPCSEX across the
 three compilers, with no new emission refusals. All six affected runtime cases
 pass. Runtime artifacts: `qbopt-fpcse-final-relocated-226hmxj3` in the system
-temporary directory. Complete stage dumps: `/tmp/qbopt-fpcse-single-checked`.
+temporary directory.
 
 ### QuickBASIC literal initialization reaches the same FP optimization
 
@@ -4075,8 +3954,7 @@ The focused checks include missing bytes, relocation-bearing records,
 procedure entry, alias invalidation, SSA rebuilding and emitted seed/final
 store relocation on all three compilers.
 
-Stage dumps: `/tmp/qbopt-fpcse-q-pool-before` and
-`/tmp/qbopt-fpcse-q-pool-after`. Runtime artifacts:
+Runtime artifacts:
 `qbopt-q-literal-pool-i9b_skt4` under the system temporary directory.
 
 ## Adjacent floating-point waits (2026-09-09)
@@ -4115,8 +3993,7 @@ the floating reference target is still provisional.
 The 145-object audit changes 30 floating variants, all through LIR, with no
 new refusals. Focused peephole tests: 27 pass. DOS validation: FPCSE and
 FPCSEX on all three primary compilers, plus changed QB FPDEEP (11 cases)
-and FPEMU (12 cases), all pass (29 cases total). Stage files, including
-the exact prologue-to-peephole diff: `/tmp/qbopt-waits-final`.
+and FPEMU (12 cases), all pass (29 cases total).
 Runtime artifacts: `qbopt-waits-runtime-u8nzjbmj` in the system temporary
 directory. The major remaining FP opportunity is general value reuse across
 statements, not further WAIT cleanup.
@@ -4144,7 +4021,6 @@ Separate checks reject bypassed, pinned and multiply-defined inputs.
 The focused floating/allocation-order tests pass 60/60. Existing FPCSE,
 FPDEEP and FPCSEX objects are byte-identical across all three compilers;
 no runtime rerun or performance improvement is claimed for those objects.
-Stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-float-regions-3hto6b7l`.
 
 This is a spill-based allocation baseline, not optimal cross-edge register
 placement. Floating phis remain refused: they need parallel edge transfers,
@@ -4182,7 +4058,6 @@ fallback-expectation failures, reproduced on the preceding commit without
 changing those tests. Nine FPCSE/FPDEEP/FPCSEX objects remain byte-identical
 across QB, PDS and VBDOS. No benchmark speedup is claimed for this allocator
 capability: MIR still needs to expose more cross-statement/loop reuse.
-Stage dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-floating-phis-4795iz9n`.
 ## 2026-09-10: distinguish exact numeric FP targets from verified full programs
 
 A scan of primary PDS fixtures found no cross-block floating CSE candidate
@@ -4234,7 +4109,7 @@ The real PDS/VBDOS regression failed first. Width and address-use guards
 are tested independently. 113 constant-store/peephole tests pass; original
 and optimized FPCSE, FPDEEP and ARRIDX outputs match on QB, PDS and VBDOS.
 Every stage is dumped under
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-constant-stores-slm_wbdf`.
+`constant-stores`.
 
 Verified ranking changes, not hardware timings:
 
@@ -4288,8 +4163,6 @@ store-motion tests pass. Original and optimized HARR/LNGMXX outputs match
 on QB, PDS and VBDOS. HARR's rankings fall 2048→1994 on PDS/VBDOS and
 2084→2030 on QB, exactly nine fewer six-unit stores with the instrument's
 ten-iteration weight. Object sizes are unchanged. LNGMXX is unchanged.
-Artifacts and all stage dumps:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-constant-loop-stores-fvks_2bi`.
 
 The NBODY assembly inspected this round still contains unabsorbed arithmetic
 helpers in initialization and velocity damping, plus allocator spill traffic.
@@ -4320,7 +4193,7 @@ stopped on two failures reproduced with HEAD's original functions:
 event `test_resolving_a_body_that_has_not_moved_changes_nothing` case.
 
 Before/after pass dumps and runtime output are under
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-site-contracts-wzq4x7x1`.
+`site-contracts`.
 No modeled NBODY speedup is claimed: opportunity.counted returned 6386 for
 both objects because re-raising either optimized object returns only the
 PITSNAP body, silently dropping main. The next measurement fix must cost
@@ -4392,8 +4265,6 @@ PDS NBODY **2912 -> 2906 bytes**, modeled **363522 -> 361322**.
 Two copies disappear in each object. Both original/optimized NBODY outputs
 match, excluding only the benchmark's TICKS line. QB LNGMXX stays byte-
 and cost-identical (838 bytes, 246 units), with matching runtime output.
-All-stage before/after dumps and runtime files:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-commuted-accumulator-7gjcwoyy`.
 
 ## Raise captured long comparisons as ordinary MIR
 
@@ -4417,8 +4288,6 @@ Both runtime outputs match the originals (excluding only TICKS). CMPORD
 matches original output and retains identical emitted bytes on QB, PDS,
 and VBDOS. All 26 arithmetic-raising checks pass; the real NBODY regression
 failed first and three flag-safety cases retain the helper.
-Before/after stage dumps and runtime artifacts:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-captured-comparison-4t2vcg63`.
 
 ## Next whole-value boundary: loop phis and sign-fill recognition
 
@@ -4450,7 +4319,6 @@ A fresh linked-executable experiment replaced the working seed sequence
 `mov ax,1; mov bx,ax; sar bx,15` with
 `mov ax,1; mov bx,0; nop; nop`, preserving its length. Both executables
 finished with identical 24 values and DONE (excluding TICKS).
-Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-seed-equal-length-smywdk_l`.
 This rules out the zero seed alone as sufficient to explain the failure;
 it does not yet establish a relocation defect.
 
@@ -4460,7 +4328,7 @@ All 164 fixups retain their targets with the expected offset adjustments;
 the code-header self-reference also moves by two. LINK maps place RTCODE
 at the same 0x590 in both executables. A fresh run of the failing linked
 executable independently timed out after 15 seconds with empty output:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-seed-linked-recheck-w2r1_veh`.
+`seed-linked-recheck`.
 Next diagnosis must inspect the linked execution/remaining layout-dependent
 state, not repeat the constant-folding argument or enable this normalization.
 
@@ -4487,8 +4355,6 @@ This is a whole-value prerequisite, not yet a size win: full normalization
 changes VBDOS NBODY 4211 -> 4223 bytes and PDS NBODY 2896 -> 2900 bytes;
 QB CMPORD remains 3873. Fresh emitted NBODY on VBDOS and PDS and CMPORD on QB
 match original outputs under the normal core, excluding only NBODY TICKS.
-Every-pass dumps and linked results:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-sign-fill-verified-m2uzbzwp`.
 The remaining optimization is still combining the paired loop phis into one
 whole value; normalizing the seed alone does not accomplish it.
 
@@ -4508,13 +4374,12 @@ After: `wholePhi = phi(entry: 1, backedge: nextWhole)`, consumed directly.
 The old word phis remain for their independent stores. This is not yet an
 overall code-size win: VBDOS NBODY 4223 -> 4225 bytes, PDS 2900 -> 2913.
 Both match all original results under the normal core; QB CMPORD remains
-3873 bytes and matches. Dumps and output:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-phi-checkpoint-qpize_ny`.
+3873 bytes and matches.
 
 An extension replacing those old word phis with local EXTRACTs of the whole
 phi was withdrawn: VBDOS emitted 4219 bytes but printed an unprintable runtime
 error at 0825:0377 under the normal core. Its every-pass dumps and executable
-are in `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-phi-single-egodhrtz`.
+are in `whole-phi-single-egodhrtz`.
 That failure is not the earlier dynamic-core timeout. Locate its first wrong
 stage before removing the remaining word consumers; do not claim the loop
 now carries only one value or that the induction optimization is complete.
@@ -4536,7 +4401,6 @@ copying. Coverage still accounts for deleted/replaced bytes, independently.
 The real NBODY emitted-instruction regression fails before the fix and passes
 after it. NBODY now matches on **both normal and dynamic cores**, at 4219
 bytes versus 4225 before this fix, with the timing calls intact.
-Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-opaque-span-kmtbcugt`.
 
 This supersedes the earlier suggestion of an emulator defect: core-dependent
 behavior was an observation, not a diagnosis. Unintended memory writes can
@@ -4558,7 +4422,6 @@ Fresh default-core runs match all NBODY values on VBDOS and PDS, with timing
 calls enabled. QB CMPORD also matches. Against the prior whole-phi checkpoint,
 NBODY is 4225 -> 4213 bytes on VBDOS and 2913 -> 2896 on PDS; CMPORD stays
 3873. The VBDOS total includes six bytes removed by correcting raw emission.
-Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-single-phi-fixed-9p427sjp`.
 
 Before MIR: two word phis plus a separately reconstructed whole comparison.
 After MIR: one whole phi; word stores extract from it; comparison uses it
@@ -4581,8 +4444,7 @@ existing promotion and store elimination remove stepNo memory traffic from
 the whole outer loop and retain one exit store. Fourteen focused checks pass,
 including mismatched addresses, unrelated halves and non-store rejection.
 Fresh NBODY runtime outputs match on VBDOS/PDS; QB CMPORD is unchanged and
-matches. Every-pass dumps and linked output:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-whole-stores-3c2fucaq`.
+matches.
 
 VBDOS NBODY: 4213 -> 4209 bytes, modeled cost 364154 -> 363812.
 PDS NBODY: 2896 -> 2892 bytes, modeled cost 360989 -> 360647.
@@ -4612,8 +4474,7 @@ through those loops.
 The real emitted-LIR regression failed first. All 127 peephole checks pass.
 VBDOS NBODY is 4209 -> 4205 bytes, modeled cost 363812 -> 363752; PDS is
 2892 -> 2888, cost 360647 -> 360587. Both runtime outputs match. QB LNGMXX
-matches at unchanged 838 bytes / 246 modeled cost. Dumps and output:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-edge-reload-c2reus8k`.
+matches at unchanged 838 bytes / 246 modeled cost.
 
 ### Reuse signed whole values instead of extracting and rebuilding them
 
@@ -4631,7 +4492,6 @@ and 11 focused recombination checks pass. Fresh VBDOS/PDS NBODY and QB ADDRM
 outputs match originals. NBODY changes 4205 -> 4165 bytes on VBDOS and
 2888 -> 2872 on PDS; modeled costs change 363752 -> 361952 and
 360587 -> 359867 respectively. These are estimates, not hardware timings.
-Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-signed-recombine-dbv_q48f`.
 
 ### Target-coverage checkpoint: FLAGS
 
@@ -4664,7 +4524,6 @@ The real NBODY regression failed first. The 136 focused peephole checks
 passed, followed by ten checks including the additional frame-base guard.
 VBDOS NBODY is 4165 -> 4162 object bytes; PDS is 2872 -> 2869. Both outputs
 match BC with timing calls intact. QB ADDRM matches at unchanged 857 bytes.
-Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-reload-reuse-q57jswm5`.
 
 ### Fold untied spill sources while allocating
 
@@ -4693,8 +4552,6 @@ PDS NBODY: 2869 -> 2863 bytes; modeled cost 359267 -> 355267.
 Both runtime outputs match BC, including all simulation coordinates and DONE;
 timer readings are excluded from output equality. QB LNGMXX remains correct
 at 838 bytes / 246 modeled units. These are estimates, not hardware timings.
-Complete dumps, objects and runtime outputs:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fold-spill-m06buebr`.
 
 ### Fold comparison spill sources and compose with accumulator spills
 
@@ -4720,7 +4577,6 @@ shape assertion is replaced by execution of the emitted spill operations,
 checking accumulator value and unchanged source across five operations.
 Forty spiller checks passed, followed by eleven focused checks including
 word/dword comparisons with one or both operands spilled.
-Artifacts: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-compare-spill-vx0gut06`.
 
 ### Rematerialize constants inside parallel copies
 
@@ -4740,8 +4596,6 @@ real-fixture regression failed first; 57 focused spiller/parallel-copy checks
 pass. VBDOS NBODY is 4151 -> 4143 bytes and modeled cost 355332 -> 354726;
 PDS is 2858 -> 2850 and 353247 -> 352641. Both runtime outputs match BC.
 QB PRESSX remains correct at 1031 bytes / 627 modeled units.
-Full before/after stage dumps and runtime output:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-group-remat-x_52mdd7`.
 
 ### Reject blindly strength-reducing NBODY's index shifts
 
@@ -4763,8 +4617,6 @@ Forcing only initialization's shift at 0x7e yields 4150 bytes / 354718 units:
 seven extra bytes for eight modeled units. Neither experiment is adopted.
 Future work here must account for the original counter's non-address uses,
 not simply enable every shift candidate or put machine-cost rules into MIR.
-Before/forced objects and every stage:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-shift-induction-96_jonay`.
 
 ### Numeric arithmetic arguments are not escaping addresses
 
@@ -4791,8 +4643,7 @@ The three real-fixture regressions failed first. All 32 focused escape and
 constant-call-memory checks pass. Runtime outputs match BC on all compilers:
 PDS 1356 -> 1274 object bytes and modeled cost 869 -> 682; QB 1336 -> 1254
 and 869 -> 682; VBDOS 1687 -> 1613 and 819 -> 642. These are ranking costs,
-not hardware timings. Full before/after stage dumps and runtime output:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-numeric-escape-fz312fjx`.
+not hardware timings.
 
 ### Close supported loop exits in SSA without machine overhead
 
@@ -4813,8 +4664,7 @@ Before and after HARR VBDOS `/G3` assembly are identical: 40 instructions and
 0060h; mov word ptr ds:[0],0Bh`, rather than the rejected intermediate
 `jle 0060h; jmp trampoline; ...; trampoline: jmp exit`. Four LCSSA tests and
 46 focused architecture, phi, induction and stage-dump checks pass. HARR and matrix on PDS, QB
-and VBDOS, plus VBDOS NBODY, are byte-identical with LCSSA on and off. Stage
-evidence: `/tmp/qbopt-lcssa-canonical.zC31cP`.
+and VBDOS, plus VBDOS NBODY, are byte-identical with LCSSA on and off.
 
 ### MemorySSA foundation
 
@@ -4859,8 +4709,8 @@ cover successful replacement, aliasing backedges, calls and a bypass entry;
 41 memory, forwarding and boundary checks pass. HARR VBDOS assembly is
 identical with the consumer disabled/enabled (1038 object bytes); there is
 no measured HARR speedup from this increment. All stages and both assembly
-listings are in `/tmp/qbopt-memoryssa-harr-before` and
-`/tmp/qbopt-memoryssa-harr`. For example, both retain:
+listings are in `memoryssa-harr-before` and
+`memoryssa-harr`. For example, both retain:
 
 ```asm
 mov es,[bx+2]
@@ -4881,7 +4731,7 @@ assertion, not phi preservation. It now uses HARR's descriptor work, which
 actually moves, while retaining the cross-variable phi and movement assertions.
 Injecting the original defect (reconstructing SSA after hoisting) fails with
 `hoisting discarded the existing accumulator phi`; production code passes.
-LNGMIX stage evidence: `/tmp/qbopt-lngmix-hoist`. This changes a test fixture
+This changes a test fixture
 only; production assembly before/after is unchanged.
 
 ### Preserve raised call effects in MemorySSA
@@ -4897,9 +4747,7 @@ for a two-byte read still prevents forwarding. All 42 focused MemorySSA and
 boundary checks and 32 existing call-memory/escape checks pass.
 
 CHAIN PDS before/after assembly is identical at 1274 object bytes: existing
-passes already cover its cases, so no CHAIN speedup is claimed. Full stages
-and assembly: `/tmp/qbopt-memoryssa-call-before` and
-`/tmp/qbopt-memoryssa-call-after`. Both retain the initializer
+passes already cover its cases, so no CHAIN speedup is claimed. Both retain the initializer
 `mov dword [0],40000007h` and the same four remaining frame divisions.
 
 ### Escaped pointer origins are not object extents
@@ -4915,8 +4763,8 @@ private workaround. Empty per-segment escape sets retain their precision.
 
 42 focused alias, call-memory, numeric-escape and forwarding tests pass.
 CHAIN PDS before/after assembly remains identical at 1274 object bytes;
-stages are in `/tmp/qbopt-escape-extents-after`, compared with
-`/tmp/qbopt-memoryssa-call-after`. Its four remaining frame divisions need
+stages are in `escape-extents-after`, compared with
+`memoryssa-call-after`. Its four remaining frame divisions need
 a separate frame-object escape proof; no frame preservation was assumed.
 
 ### Reuse dominating loads through MemorySSA
@@ -4933,8 +4781,7 @@ operand; aliasing writes, bypass entries and intervening loop stores retain
 it. The focused gate passed 46 checks, followed by 13 graph checks including
 the additional intervening-store case. HARR VBDOS assembly is identical with
 this consumer disabled/enabled (1038 object bytes), so no HARR speedup is
-claimed. Stage and assembly files: `/tmp/qbopt-load-reuse-before` and
-`/tmp/qbopt-load-reuse-after`.
+claimed.
 
 ### Target-directed checkpoint after MemorySSA integration
 
@@ -4954,7 +4801,7 @@ configurations. They do not establish completion of the full matrix or
 roadmap. FPCSEX costs 4452; its 1340 reference remains provisional because
 it reassociates the sum and omits SINGLE conversions.
 
-The current FPCSEX assembly (`/tmp/qbopt-fpcsex-current/s43-asm-emitted.txt`)
+The current FPCSEX assembly
 still loads a, computes a+b, multiplies by c and stores p; then reloads a,
 recomputes a+b, divides by c and stores q. It retains all three SINGLE
 stores and the final WAIT. No floating transformation was made at this
@@ -4976,7 +4823,7 @@ floating reassociation or speculative motion.
 The new diamond regression fails with the former block-local restriction
 and passes with the path proof. All 29 focused CSE and architecture checks
 pass. FPDEEP VBDOS before/after assembly is identical at 1924 object bytes;
-stage evidence is in `/tmp/qbopt-fp-path-before` and `/tmp/qbopt-fp-path-after`.
+stage evidence is in `fp-path-before` and `fp-path-after`.
 Runtime integer-derived floating bounds are still propagated only within a
 block, which limits the new path to computations with available exact facts.
 Extending that analysis over SSA is the next dependency for broader reuse.
@@ -4993,8 +4840,7 @@ This enables exact cross-block CSE for runtime INTEGER-derived arithmetic.
 The runtime-input and reversed-block-order tests failed before implementation.
 All 32 focused SSA-path and architecture checks pass, including unknown phi
 inputs and a growing cyclic recurrence. FPI2CS PDS assembly is identical with
-the previous/current bounds analysis (1418 object bytes, three FILDs); dumps:
-`/tmp/qbopt-fp-ssa-bounds-before` and `/tmp/qbopt-fp-ssa-bounds-after`.
+the previous/current bounds analysis (1418 object bytes, three FILDs);
 
 The broader floatbounds file reports ten count-assertion failures. Two
 representatives were reproduced with the previous bounds analysis: FPCALC PDS
@@ -5022,7 +4868,7 @@ the absence of loads alone is not proof of correct numerical output.
 The QB FPDEEP baseline and optimized executables produce byte-identical
 output, matching all eleven numeric golden results. The one-program `q-O`
 end-to-end run passed; BC reported zero severe errors. Artifacts are in
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-fpdeep-output-8d_nepjg`.
+`fpdeep-output`.
 
 The regression now checks all eleven constant numeric print arguments for
 QB, requires LIR emission, and verifies that indexed floating loads are gone.
@@ -5046,8 +4892,7 @@ to `fld tword [owned]; fst dword [out]; fstp dword [out]`. Both rounded stores
 remain; the retained stack value is extended precision, not the rounded output.
 
 FPCSEX PDS before/after assembly is identical. This closes an allocation gap
-for shared values but does not yet improve that target. Complete stage dumps:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-float-reload-mpt9c8qd`.
+for shared values but does not yet improve that target.
 
 ### Unroll through LCSSA exit phis
 
@@ -5089,7 +4934,7 @@ PDS and VBDOS end-to-end FPDEEP each pass all eleven numeric golden cases.
 Before stages: `qbopt-fpdeep-unroll-9m59iys4`; after stages:
 `qbopt-fpdeep-lcssa-after-cpfq2fn9`; execution artifacts:
 `qbopt-fpdeep-p-g2-_s_c0hhf` and `qbopt-fpdeep-v-g3-dis9k6o7`, all beneath
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T`.
+the system temporary directory.
 
 ### Complete FPCSE's observable reference
 
@@ -5127,7 +4972,7 @@ also fails with this pass disabled and was not weakened.
 
 NBODY VBDOS before/after assembly is identical; no target improvement claimed.
 Dumps are in
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-global-copies-sri89wqu`.
+`global-copies`.
 General operand substitution remains unfinished, so the roadmap item stays open.
 
 ### Native C reconstruction and selector rematerialization
@@ -5174,7 +5019,7 @@ original 34 bytes plus exactly four spill bytes, and its final instruction count
 is 541 versus 542 in the older artifact.  The whole object is 1,985 bytes.  The
 remaining 16-byte object-size difference is outside spill expansion and follows
 earlier semantic reconstruction changes; no equivalence claim is made from size
-alone.  Stage evidence is in `/tmp/qbopt-pltrace-remat`.
+alone.  Stage evidence is in `pltrace-remat`.
 
 Per the user's explicit instruction for this checkpoint, no tests were written
 or run.  Only syntax compilation, selected-file diff checks, stage dumps, object
@@ -5241,7 +5086,7 @@ slots such as `[bp-22h]`, immediately reloaded into the same physical register,
 then stored into existing program locals; those spill homes have later reads,
 so deleting the first round trip alone would be wrong.  Reusing the already
 written stable local as a spill/rematerialization home is the next general
-backend question.  Complete dumps are in `/tmp/qbopt-rwalk-current`.
+backend question.  Complete dumps are in `rwalk-current`.
 
 That backend question is now answered conservatively in LIR.  A spilled value
 may use a source-program frame local as its home only when one original
@@ -5261,7 +5106,7 @@ included `mov [bp-22h],bx; mov bx,[bp-22h]; mov [bp-6],bx`; after, it is directl
 value reached through a separate copy is not admitted: it has no pre-existing
 frame home, and the coalescer deliberately keeps its short load range separate
 because merging it fails the colorability guard.  Post-change dumps are in
-`/tmp/qbopt-rwalk-framehomes2`.  `pl_trace.obj` remains a 1,985-byte LIR rebuild,
+`rwalk-framehomes2`.  `pl_trace.obj` remains a 1,985-byte LIR rebuild,
 so selector rematerialization is unchanged by this rule.
 
 This checkpoint again contains no authored or executed tests at the user's

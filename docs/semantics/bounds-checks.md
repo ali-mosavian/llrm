@@ -34,8 +34,6 @@ after:  offset = ((column - load(lowerColumn)) * load(rowCount)
 ```
 
 Its `/D` builds print the same answer before/after on all three compilers.
-Artifacts and complete PDS stage dumps:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-harr-native-jbt83893`.
 `tests/inputs/omf/regressions/harr-bounds-{p-g2,q-o,v-g3}.obj` are unchanged compiler
 output from `tests/run/qb/harr.bas` with the named configuration plus `/D`.
 An additional focused expression check uses unequal dimensions and negative
@@ -51,8 +49,6 @@ uses negative/nonzero lower bounds. Its three `dynsz-*.obj` files are real
 compiler output with the named primary flags plus `/D`. All three original
 and optimized executables print `123 456` and `DONE`; the emitted objects
 contain no HARY calls. Before this change they refused unchecked lowering.
-Compiler/linker logs and every stage are under:
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-dynamic-shape-o_7c7vz5`.
 
 For a zero-based INTEGER array the address computation changes from:
 
@@ -74,8 +70,6 @@ disabled (six runs). This also exposed an independent INTO normal-path SSA bug:
 invented register results made ARRIDX print 630/0. INTO now observes flags
 without redefining registers; its exceptional memory/control barrier remains.
 
-Runtime evidence: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-array-into-fixed-0o53uveo`.
-Per-pass dumps: `/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-array-native-stages-l5_dgmvk`.
 
 ## Actual compiler output
 
@@ -83,7 +77,7 @@ Compiled the existing ARRIDX and HARR sources with each primary configuration
 plus `/D`, on QB 4.5, PDS 7.1 and VBDOS. All six compilations report zero
 severe errors. Objects and complete PDS ARRIDX stage dumps are at:
 
-`/var/folders/zp/jrq41dpn4kjcmx0g8lpzx4880000gn/T/qbopt-bounds-codegen-kkj8rbla`
+`bounds-codegen`
 
 All three compilers emit three `B$HARY` calls for ARRIDX's three accesses
 and two for HARR's two accesses. These calls compute addresses as well as

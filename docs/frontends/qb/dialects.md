@@ -57,8 +57,7 @@ out of MIR optimization and machine lowering.
 
 ## Evidence hierarchy
 
-The QBasic grammar at
-`~/work/ms/msdos_60/45/qb5/ir/qbasbnf.prs` is the parser baseline, not proof
+The QBasic grammar (`qb5/ir/qbasbnf.prs` in the QuickBASIC 4.5 source tree) is the parser baseline, not proof
 of the later dialects. Additions are established using, in order:
 
 1. a minimal source probe compiled by each relevant original compiler;

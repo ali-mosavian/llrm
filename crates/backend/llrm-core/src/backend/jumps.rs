@@ -90,6 +90,7 @@ pub fn optimized(
 ) -> Result<LirBody, masm::Unprintable> {
     let mut candidate = _placed(&_hoisted(body), size)?;
     let baseline = threaded(&candidate);
+    let settled = candidate.clone();
     // Merging one physical tail may make the condition selecting between its
     // former copies dead; deleting that compare can in turn make predecessor
     // tails identical.  Settle those two machine facts before final threading
@@ -103,8 +104,14 @@ pub fn optimized(
             break;
         }
     }
-    let placed = preferred(&baseline, &threaded(&candidate)).clone();
-    Ok(inverted(&if size { placed } else { duplicated(&duplicated_tails(&placed), true) }))
+    // Merging nothing leaves the candidate the baseline was threaded from.
+    let again = if candidate == settled { baseline.clone() } else { threaded(&candidate) };
+    let placed = preferred(&baseline, &again).clone();
+    Ok(inverted(&if size {
+        placed
+    } else {
+        rotated(&duplicated(&duplicated_tails(&placed), true), &Frequency::of(&placed))?
+    }))
 }
 
 /// A conditional branch taken to the block laid out next, followed by a jump:
@@ -378,6 +385,203 @@ fn _unowned(
     Arc::new(made)
 }
 
+/// `body`'s blocks with every fall-through written as a jump, which makes any
+/// order correct.
+fn _explicit(body: &LirBody) -> Result<Vec<LirBlock>, masm::Unprintable> {
+    let mut explicit = Vec::new();
+    for block in &body.blocks {
+        let mut block = block.clone();
+        let fall = masm::_falls_to(&block, &body.name)?;
+        if let Some(fall) = fall {
+            let at = block.insns.last().map_or(block.at, |last| last.at);
+            let jump = Insn::new(
+                at,
+                Some((at, at)),
+                Some(Semantics { name: Some("jmp".to_owned()), target: Some(fall), ..Semantics::new(Operation::Jump) }),
+                Vec::new(),
+                Vec::new(),
+            );
+            block.insns = block.insns.iter().cloned().chain([Arc::new(jump)]).collect();
+        }
+        explicit.push(block);
+    }
+    Ok(explicit)
+}
+
+/// What a rotated loop's jumps must come to, of the loop's own: the estimates
+/// do not conserve flow, and two layouts that take the same jumps differ by a
+/// few percent (a loop without a diamond in it: sieve's marking loop took one
+/// more instruction a pass).
+const ROTATION_GAIN: f64 = 0.7;
+
+/// How many times a loop goes round per entry for a turn to pay: the jump into
+/// it is one more instruction a time.
+const ROTATION_TRIPS: f64 = 8.0;
+
+/// The longest run of blocks tried at each turn.
+const ROTATION_BLOCKS: usize = 24;
+
+/// A loop laid out as one run of blocks, started at another of its blocks when
+/// that takes fewer jumps, as gcc's bb-reorder `rotate_loop`: the latch then
+/// falls into the header and the loop is entered by a jump to it. A pass round
+/// a loop whose body is a diamond took two jumps, one into an arm or over it
+/// and one back to the header; it takes one. Counted by the edges that are not
+/// to the next block, each as often as the estimate runs it.
+fn rotated(
+    body: &LirBody,
+    frequency: &Frequency,
+) -> Result<LirBody, masm::Unprintable> {
+    if body.source_order {
+        return Ok(body.clone());
+    }
+    let mut order = body.blocks.clone();
+    let mut position: IndexMap<i64, usize> = order.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
+    // The runs a branch goes back over: from its target to the farthest block
+    // that goes back to it.
+    let mut latest: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+    for (index, block) in order.iter().enumerate() {
+        for to in &block.succ {
+            if let Some(&header) =
+                position.get(to).filter(|&&header| header <= index && index - header < ROTATION_BLOCKS)
+            {
+                let last = latest.entry(header).or_insert(index);
+                *last = (*last).max(index);
+            }
+        }
+    }
+    if latest.is_empty() {
+        return Ok(body.clone());
+    }
+    let mut entered: Option<IndexMap<i64, Vec<usize>>> = None;
+    let mut changed = false;
+    let runs: Vec<(usize, usize)> = latest.iter().map(|(&header, &last)| (header, last + 1)).collect();
+    for &(start, end) in &runs {
+        // A run round another is left as the inner one places it: rotating one
+        // round another only moves its test. Nor one entered anywhere
+        // but at its first block.
+        // A run without a diamond in it has nothing to gain.
+        if latest.range(start + 1..end).next().is_some()
+            || order[start..end].iter().filter(|block| block.succ.len() > 1).count() < 2
+            || order[start..end].iter().any(|block| block.at == body.entry)
+        {
+            continue;
+        }
+        let from = entered.get_or_insert_with(|| {
+            let mut from: IndexMap<i64, Vec<usize>> = IndexMap::default();
+            for (index, block) in order.iter().enumerate() {
+                for to in &block.succ {
+                    from.entry(*to).or_default().push(index);
+                }
+            }
+            from
+        });
+        if order[start..end].iter().skip(1).any(|block| {
+            from.get(&block.at).is_some_and(|from| from.iter().any(|&index| index < start || index >= end))
+        }) {
+            continue;
+        }
+        // The jumps a run of blocks takes, `after` being what follows it and
+        // `before` what leads into it.
+        let jumps = |run: &[LirBlock], before: Option<&LirBlock>, after: Option<i64>| -> f64 {
+            let sequence: Vec<&LirBlock> = before.into_iter().chain(run.iter()).collect();
+            let mut total = 0.0;
+            for (index, block) in sequence.iter().enumerate() {
+                let next = sequence.get(index + 1).map(|one| one.at).or(after);
+                let away: Vec<f64> = block
+                    .succ
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .filter(|to| Some(*to) != next)
+                    .map(|to| frequency.edge(block.at, to))
+                    .collect();
+                total += away.iter().sum::<f64>();
+                // Both ways of a branch lead elsewhere: one is a `jcc`, the
+                // other a `jmp` of its own, the colder.
+                if let [one, other] = away[..] {
+                    total += one.min(other);
+                }
+            }
+            total
+        };
+        let before = start.checked_sub(1).map(|index| &order[index]);
+        let after = order.get(end).map(|block| block.at);
+        let run = &order[start..end];
+        // Entering costs a jump the loop must pay back: it goes round at least
+        // `ROTATION_TRIPS` times a time.
+        let header = run[0].at;
+        let back: f64 = run.iter().map(|block| frequency.edge(block.at, header)).sum();
+        let entries: f64 = order
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index < start || *index >= end)
+            .map(|(_, block)| frequency.edge(block.at, header))
+            .sum();
+        if back < entries * ROTATION_TRIPS {
+            continue;
+        }
+        let current = jumps(run, before, after);
+        let best = (1..run.len())
+            .map(|at| {
+                let turned: Vec<LirBlock> = run[at..].iter().chain(&run[..at]).cloned().collect();
+                (jumps(&turned, before, after), at)
+            })
+            .min_by(|one, other| one.0.total_cmp(&other.0));
+        if let Some((_, at)) = best.filter(|(cost, _)| *cost < current * ROTATION_GAIN) {
+            let turned: Vec<LirBlock> = run[at..].iter().chain(&run[..at]).cloned().collect();
+            order.splice(start..end, turned);
+            for (index, block) in order.iter().enumerate().take(end).skip(start) {
+                position.insert(block.at, index);
+            }
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok(body.clone());
+    }
+    // A block that leaves for several with no instruction choosing (a switch
+    // table) is the placer's to refuse; here it is left.
+    let Ok(explicit) = _explicit(body) else { return Ok(body.clone()) };
+    let by_at: IndexMap<i64, LirBlock> = explicit.into_iter().map(|block| (block.at, block)).collect();
+    let turned = order.iter().map(|block| by_at[&block.at].clone()).collect();
+    Ok(body.with_blocks(_without_jumps_to_next(turned)))
+}
+
+/// `order` less each direct `jmp` to the block laid out next. `threaded` does
+/// this too, but reads a block with a second branch in it (a copied tail's) as
+/// leaving for three: such a block keeps its jump.
+fn _without_jumps_to_next(order: Vec<LirBlock>) -> Vec<LirBlock> {
+    let next: Vec<Option<i64>> = order.iter().skip(1).map(|block| Some(block.at)).chain([None]).collect();
+    order
+        .into_iter()
+        .zip(next)
+        .map(|(block, next)| {
+            let real = _real(&block);
+            let branches =
+                real.iter().filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Branch)).count();
+            let jump = real
+                .last()
+                .filter(
+                    |one| one.what.as_ref().is_some_and(|what| {
+                        what.op == Operation::Jump && !what.indirect && next.is_some() && what.target == next
+                    }),
+                );
+            match jump {
+                Some(jump) if branches <= 1 => {
+                    let insns = block
+                        .insns
+                        .iter()
+                        .map(|one| if Arc::ptr_eq(one, jump) { lir::bytes_only(one) } else { Arc::clone(one) })
+                        .collect();
+                    block.with_insns(insns)
+                }
+                _ => block,
+            }
+        })
+        .collect()
+}
+
 /// Each block placed after the jump that reaches it, where no block is already.
 ///
 /// The raise lays a C loop out as it reads, test first, so even entered at
@@ -397,23 +601,7 @@ fn _placed(
     body: &LirBody,
     size: bool,
 ) -> Result<LirBody, masm::Unprintable> {
-    let mut explicit = Vec::new();
-    for block in &body.blocks {
-        let mut block = block.clone();
-        let fall = masm::_falls_to(&block, &body.name)?;
-        if let Some(fall) = fall {
-            let at = block.insns.last().map_or(block.at, |last| last.at);
-            let jump = Insn::new(
-                at,
-                Some((at, at)),
-                Some(Semantics { name: Some("jmp".to_owned()), target: Some(fall), ..Semantics::new(Operation::Jump) }),
-                Vec::new(),
-                Vec::new(),
-            );
-            block.insns = block.insns.iter().cloned().chain([Arc::new(jump)]).collect();
-        }
-        explicit.push(block);
-    }
+    let explicit = _explicit(body)?;
     if body.source_order {
         return Ok(body.with_blocks(explicit));
     }
@@ -660,7 +848,18 @@ pub fn threaded(body: &LirBody) -> LirBody {
     let mut body = _reachable(&body, body.blocks.clone());
     let protected: BTreeSet<i64> = body.loop_trip_counts.iter().map(|(header, _count)| *header).collect();
     let mut at: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
-    while _step(&mut body, &mut at, &protected) {}
+    // One pass applies every change it meets, going on from the changed block
+    // (LLVM's BranchFolding, gcc's `cleanup_cfg`); a change can open one in a
+    // block before it, so passes repeat from the top until one finds none.
+    let (mut from, mut visits) = (0, 0);
+    loop {
+        match _step(&mut body, &mut at, &protected, from, &mut visits) {
+            Some(next) => from = next,
+            None if from == 0 => break,
+            None => from = 0,
+        }
+    }
+    body.facts.0.bump_by("jump-visits", visits);
     body
 }
 
@@ -1178,9 +1377,12 @@ pub fn _step(
     body: &mut LirBody,
     at: &mut IndexMap<i64, usize>,
     protected: &BTreeSet<i64>,
-) -> bool {
+    from: usize,
+    visits: &mut usize,
+) -> Option<usize> {
     let mut blocks = std::mem::take(&mut body.blocks);
-    for index in 0..blocks.len() {
+    for index in from..blocks.len() {
+        *visits += 1;
         // The block's last two real instructions, which is all the rules read
         // of the rest: nothing is copied for a block no rule applies
         // to.
@@ -1193,6 +1395,7 @@ pub fn _step(
             continue;
         }
         let block = blocks[index].clone();
+        let here = block.at;
         let last = &last;
         // Control falls through blocks of only meta instructions, as layout
         // places them.
@@ -1209,7 +1412,7 @@ pub fn _step(
             blocks[index] = _retargeted(&block, last, onward);
             body.blocks = blocks;
             _stranded(body, at);
-            return true;
+            return Some(at.get(&here).copied().unwrap_or(0));
         }
         if last_what.op == Operation::Jump && target == after {
             // A fall-through needs no machine jump.  A decoded jump may still
@@ -1230,7 +1433,7 @@ pub fn _step(
                 .collect();
             blocks[index] = LirBlock { insns: kept, ..block };
             body.blocks = blocks;
-            return true;
+            return Some(at.get(&here).copied().unwrap_or(0));
         }
         if last_what.op == Operation::Jump
             && before.as_ref().is_some_and(|one| one.what.as_ref().expect(NO_OP).op == Operation::Branch)
@@ -1255,7 +1458,7 @@ pub fn _step(
                     .collect();
                 blocks[index] = LirBlock { insns, ..block };
                 body.blocks = blocks;
-                return true;
+                return Some(at.get(&here).copied().unwrap_or(0));
             }
         }
         let opposite = last_what.name.as_deref().and_then(|name| _OPPOSITE.get(name));
@@ -1289,12 +1492,12 @@ pub fn _step(
                 blocks[index + 1] = LirBlock { succ: Vec::new(), ..over };
                 body.blocks = blocks;
                 _stranded(body, at);
-                return true;
+                return Some(at.get(&here).copied().unwrap_or(0));
             }
         }
     }
     body.blocks = blocks;
-    false
+    None
 }
 
 /// The last two of `_real(block)`, the last first, without making the rest.

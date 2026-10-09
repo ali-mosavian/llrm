@@ -115,6 +115,32 @@ pub fn work() -> u64 {
     work_now()
 }
 
+thread_local! {
+    /// The work spent in analyses, outermost first (one inside another is
+    /// counted once), and how deep in them the thread is.
+    static ANALYSED: std::cell::Cell<(u64, u32)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// `run`, an analysis, its work added to `analysed_work`. A pass that asks for
+/// one bills its first computation in `work()`; this is what lets a step tell
+/// its own work from the analyses it happened to compute first (which the next
+/// pass to ask would otherwise have paid).
+pub fn analysed<T>(run: impl FnOnce() -> T) -> T {
+    let start = work_now();
+    ANALYSED.with(|one| one.set((one.get().0, one.get().1 + 1)));
+    let out = run();
+    ANALYSED.with(|one| {
+        let (spent, depth) = one.get();
+        one.set((if depth == 1 { spent + (work_now() - start) } else { spent }, depth - 1));
+    });
+    out
+}
+
+/// The work spent in `analysed` so far on this thread.
+pub fn analysed_work() -> u64 {
+    ANALYSED.with(|one| one.get().0)
+}
+
 fn work_unit() -> &'static str {
     if work_fd() >= 0 { "Minstr" } else { "Mcpu-ns" }
 }

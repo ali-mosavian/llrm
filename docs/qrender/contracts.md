@@ -5,9 +5,9 @@ objects and libraries, then propagates contracts from callees to callers.
 Supply additional libraries with repeated `--lib` arguments:
 
 ```sh
-uv run python tools/contracts.py 'B$FreeHandleBlock' --lib /path/to/VBDCL10E.LIB --dump /tmp/contracts.json
+uv run python tools/contracts.py 'B$FreeHandleBlock' --lib /path/to/VBDCL10E.LIB --dump contracts.json
 uv run python tools/contracts.py 'MYPROC' --lib /path/to/module.obj --lib /path/to/runtime.lib --json
-uv run python tools/contracts.py --all --lib /path/to/VBDCL10E.LIB --dump /tmp/library-contracts.json
+uv run python tools/contracts.py --all --lib /path/to/VBDCL10E.LIB --dump library-contracts.json
 ```
 
 The JSON contains each function's reachable disassembly, dependency edges,

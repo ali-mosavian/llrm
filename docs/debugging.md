@@ -105,17 +105,17 @@ an offset into the public before it. `_snd_mix_sum+0x23D` below is the static
 ## 3. Which module: swap llrm objects into the BCC build
 
 Start from the program built entirely with BCC, and replace one module at a
-time with llrm's. `~/scratch/qcmix.sh MOD...` links BCC's objects with MOD's
+time with llrm's. The private script `qcmix.sh MOD...` links BCC's objects with MOD's
 llrm objects, runs 300 ticks and prints polys per frame. The oracle is the
 frame: BENCH.BMP byte-identical to BCC's, compared against a private copy of
 the reference, since shared runs overwrite theirs. With sound on,
-`~/scratch/qcrom.sh MOD...` runs 60 s and prints DOSBox's `write ... to rom`
+`qcrom.sh MOD...` runs 60 s and prints DOSBox's `write ... to rom`
 count; 0 is correct.
 
 Run all modules at once, each in its own directory, then bisect the ones that
 fail:
 
-    ~/scratch/qcrom.sh snd_mix        # llrm's snd_mix alone in the BCC build
+    qcrom.sh snd_mix        # llrm's snd_mix alone in the BCC build
     112320                            # ROM writes; BCC's own build writes 0
 
 ## 4. Where it goes wrong: the break
