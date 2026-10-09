@@ -265,7 +265,7 @@ struct Problem<'a> {
     /// The spill traffic of what `fixed` keeps.
     traffic: BTreeMap<ValueId, Traffic>,
     /// `total` of each set asked: the search asks the same set again from the other start and from each step's neighbours.
-    totals: std::cell::RefCell<std::collections::HashMap<BTreeSet<usize>, Option<i64>>>,
+    totals: std::cell::RefCell<llrm_support::hash::HashMap<BTreeSet<usize>, Option<i64>>>,
     /// Where each site's value is live, at the points of `fixed`.
     alive: Vec<BTreeMap<i64, Vec<bool>>>,
     latch: i64,
