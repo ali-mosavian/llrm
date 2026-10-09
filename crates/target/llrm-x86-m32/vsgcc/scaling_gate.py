@@ -36,6 +36,20 @@ LEVELS = ("O1", "O2", "Os")
 # axis as far up as it allows. A step whose ratio is a small-N artifact (branches' recolor reads 2.75 at 32->64, 1.9-2.2 at 64->256:
 # the pairwise scan fills up to its 48-holder limit) is recorded as it reads; its budget says so, not that it is superlinear.
 SIZES = {"functions": 64, "straight": 512, "branches": 32, "live": 64, "callers": 32, "chain": 32, "mulconst": 512}
+# The axes that cross calls, again at -m16: another register file and calling convention, where a hang once hid (chain at N=7 never
+# finished) while every -m32 axis passed.
+SIZES |= {"chain-m16": 32, "callers-m16": 32}
+
+
+def generated(axis: str, n: int) -> str:
+    return scaling.AXES[axis.removesuffix("-m16")](n)
+
+
+def commanded(axis: str, command):
+    """`command`, for `axis`: -m16's axes compile with -m16."""
+    if axis.endswith("-m16") and command is levels_time.command:
+        return lambda compiler, level, source: levels_time.command(compiler, level, source, 16)
+    return command
 
 
 class NoCounter(Exception):
@@ -57,10 +71,10 @@ def costs(axis: str, level: str, work: Path, command=levels_time.command, compil
     """(cost at N, cost at 2N), each less the empty file's, for one axis and level."""
     n = SIZES[axis]
     cost = {}
-    for label, text in (("empty", ""), (n, scaling.AXES[axis](n)), (2 * n, scaling.AXES[axis](2 * n))):
+    for label, text in (("empty", ""), (n, generated(axis, n)), (2 * n, generated(axis, 2 * n))):
         source = work / f"{axis}_{level}_{label}.c"
         source.write_text(text)
-        cost[label] = count(command(compiler, level, source))
+        cost[label] = count(commanded(axis, command)(compiler, level, source))
     return cost[n] - cost["empty"], cost[2 * n] - cost["empty"]
 
 
@@ -93,10 +107,10 @@ def pass_costs(axis: str, level: str, work: Path, command=levels_time.command, c
     """Per step with LOW or more of the work: (own Minstr at N, at 2N, and all steps' at 2N), each less the empty file's."""
     n = SIZES[axis]
     own = {}
-    for label, text in (("empty", ""), (n, scaling.AXES[axis](n)), (2 * n, scaling.AXES[axis](2 * n))):
+    for label, text in (("empty", ""), (n, generated(axis, n)), (2 * n, generated(axis, 2 * n))):
         source = work / f"{axis}_{level}_{label}_p.c"
         source.write_text(text)
-        own[label] = own_work(command(compiler, level, source))
+        own[label] = own_work(commanded(axis, command)(compiler, level, source))
     net = {name: big - own["empty"].get(name, 0.0) for name, big in own[2 * n].items()}
     whole = sum(v for v in net.values() if v > 0)
     out = {}
