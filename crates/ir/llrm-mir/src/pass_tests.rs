@@ -640,3 +640,36 @@ fn a_late_pass_that_adds_what_it_said_it_would_not_fails_the_stale_check() {
     let message = *caught.expect_err("the pass added an instruction").downcast::<String>().expect("a message");
     assert!(message.contains("lies added a memory operation"), "{message}");
 }
+
+/// A module pass that changes the module.
+struct Edits;
+
+impl ModulePass for Edits {
+    fn name(&self) -> &'static str {
+        "edits"
+    }
+
+    fn run(
+        &mut self,
+        module: &mut Module,
+        _: &mut ModuleAnalyses,
+    ) -> Vec<GlobalId> {
+        vec![module.named("f").unwrap()]
+    }
+}
+
+/// The required module analyses were made before every pass: before a module
+/// pass that changed the module and dropped them, for the next to drop them
+/// again (2% of the -O1 compile of QCport). A function pass reads them through
+/// `Outer`; they are made before it.
+#[test]
+fn the_required_module_analyses_are_made_before_a_function_pass_not_before_a_module_pass() {
+    SUMMED.set(0);
+    let mut passes = PassManager::default();
+    passes.require::<Bodies>();
+    passes.add_module(Edits);
+    passes.add_module(Edits);
+    passes.add(Counts(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(SUMMED.get(), 1, "made before a module pass");
+}
