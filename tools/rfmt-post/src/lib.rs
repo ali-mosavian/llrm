@@ -1,8 +1,14 @@
-//! Post-rustfmt pass: split overflowing method chains outside-in, and long `matches!` one argument per line.
+//! Post-rustfmt pass: split overflowing method chains outside-in, long
+//! `matches!` one argument per line, and comments rustfmt leaves past column 80
+//! (see `comments`).
 //!
-//! rustfmt keeps `recv.a(..).b(` on one line and overflows the last call's arguments onto later lines. Here such a
-//! chain is broken first, one link per line as rustfmt breaks chains, and then the last call's arguments go one per
-//! line. Only whitespace changes, plus trailing commas and the braces around a closure body that is one expression.
+//! rustfmt keeps `recv.a(..).b(` on one line and overflows the last call's
+//! arguments onto later lines. Here such a chain is broken first, one link per
+//! line as rustfmt breaks chains, and then the last call's arguments go one per
+//! line. Only whitespace changes, plus trailing commas, the braces around a
+//! closure body that is one expression, and where a comment's lines break.
+
+pub mod comments;
 
 use std::collections::HashMap;
 
@@ -10,45 +16,70 @@ use ra_ap_syntax::ast::{self, AstNode, HasArgList};
 use ra_ap_syntax::{Edition, SourceFile, SyntaxKind, SyntaxNode, SyntaxToken, T};
 
 const WIDTH: usize = 120;
-const MATCHES_WIDTH: usize = 72; // rustfmt's fn_call_width at max_width 120 (60%)
+// rustfmt's fn_call_width at max_width 120 (60%)
+const MATCHES_WIDTH: usize = 72;
 const INDENT: usize = 4;
 
 #[derive(Default)]
 pub struct Stats {
     pub chains: usize,
-    pub too_wide: usize, // chains left as rustfmt wrote them: split, a line would pass WIDTH
+    // chains left as rustfmt wrote them: split, a line would pass WIDTH
+    pub too_wide: usize,
     pub matches: usize,
+    pub hoisted: usize, // trailing comments moved above their lines
+    pub wrapped: usize, // own-line comments broken
 }
 
 /// Long `matches!` broken, then chains split, in one file of rustfmt output.
 ///
-/// rustfmt keeps a `matches!` it cannot parse as written, and lays out what is around it by its width. So the
-/// pipeline breaks them, runs rustfmt again, and only then splits chains; otherwise the next run's rustfmt would see
+/// rustfmt keeps a `matches!` it cannot parse as written, and lays out what is
+/// around it by its width. So the pipeline breaks them, runs rustfmt again, and
+/// only then splits chains; otherwise the next run's rustfmt would see
 /// them broken where this one saw them whole, and lay out differently.
 pub fn format(text: &str) -> Result<(String, Stats), String> {
     let mut doc = Doc::parse(text)?;
     let matches = break_matches(&mut doc);
     let mut broken = Doc::parse(&doc.render())?;
     let chains = split_chains(&mut broken);
-    checked(&doc, broken.render()).map(|out| (out, Stats { chains: chains.0, too_wide: chains.1, matches }))
+    let (out, wrapped) = comments::fix(&broken.render(), comments::Step::Wrap)?;
+    let stats = Stats { chains: chains.0, too_wide: chains.1, matches, wrapped, ..Default::default() };
+    checked(&doc, out).map(|out| (out, stats))
 }
 
-/// Long `matches!` broken, the first step of the pipeline.
-pub fn matches_only(text: &str) -> Result<(String, usize), String> {
+/// Every comment line past the width, with why.
+pub fn scan(text: &str) -> Result<Vec<comments::Long>, String> {
+    Ok(comments::scan(&Doc::parse(text)?, text))
+}
+
+/// Long `matches!` broken and trailing comments past the width moved above
+/// their lines: the steps before rustfmt's second run, which lays out around
+/// both.
+pub fn pre(text: &str) -> Result<(String, Stats), String> {
     let mut doc = Doc::parse(text)?;
-    let count = break_matches(&mut doc);
-    checked(&doc, doc.render()).map(|out| (out, count))
+    let matches = break_matches(&mut doc);
+    let (out, hoisted) = comments::fix(&doc.render(), comments::Step::Hoist)?;
+    checked(&doc, out).map(|out| (out, Stats { matches, hoisted, ..Default::default() }))
 }
 
-/// `out` if its tokens are those of `doc`, up to trailing commas and closure braces.
+/// `out` if its tokens are those of `doc`, up to trailing commas and closure
+/// braces, and its comments' words.
 fn checked(
     doc: &Doc,
     out: String,
 ) -> Result<String, String> {
-    if normalized(doc) != normalized(&Doc::parse(&out)?) {
+    let after = Doc::parse(&out)?;
+    if normalized(doc) != normalized(&after) || comments::words(doc) != comments::words(&after) {
         return Err("tokens changed".into());
     }
     Ok(out)
+}
+
+/// A doc comment is a token kind of its own, apart from the other comments.
+fn is_comment(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::COMMENT | SyntaxKind::OUTER_DOC_COMMENT | SyntaxKind::INNER_DOC_COMMENT
+    )
 }
 
 struct Tok {
@@ -58,7 +89,8 @@ struct Tok {
     line: usize,
 }
 
-/// Non-whitespace tokens (comments included), the whitespace before each, and pending edits to both.
+/// Non-whitespace tokens (comments included), the whitespace before each, and
+/// pending edits to both.
 struct Doc {
     root: SyntaxNode,
     toks: Vec<Tok>,
@@ -72,7 +104,8 @@ struct Doc {
 #[derive(Clone)]
 struct Edits {
     gap: Vec<Option<String>>,
-    shift: Vec<isize>, // added to the indent of a gap that ends a line, unless `gap` replaces it
+    // added to the indent of a gap that ends a line, unless `gap` replaces it
+    shift: Vec<isize>,
     drop: Vec<bool>,
 }
 
@@ -149,7 +182,7 @@ impl Doc {
         from: usize,
         to: usize,
     ) -> bool {
-        (from..=to).any(|i| self.toks[i].kind == SyntaxKind::COMMENT)
+        (from..=to).any(|i| is_comment(self.toks[i].kind))
     }
 
     fn gap(
@@ -188,7 +221,8 @@ impl Doc {
         self.render_range(0, self.gaps.len())
     }
 
-    /// Rendered lines from the one holding toks[from] to the one holding toks[to], and how many are too wide.
+    /// Rendered lines from the one holding toks[from] to the one holding
+    /// toks[to], and how many are too wide.
     fn too_wide(
         &self,
         mut from: usize,
@@ -226,7 +260,8 @@ fn newline(indent: usize) -> String {
     format!("\n{}", " ".repeat(indent))
 }
 
-/// A chain whose last call's arguments overflow onto later lines, in rustfmt's layout.
+/// A chain whose last call's arguments overflow onto later lines, in rustfmt's
+/// layout.
 struct Site {
     first: usize,       // the line's first token
     breaks: Vec<usize>, // the `.` of each link that goes on its own line
@@ -236,7 +271,8 @@ struct Site {
     last_arg: usize, // its first token
     vertical: bool,
     joinable: bool,
-    braces: Option<(usize, usize)>, // around a closure body that is one expression
+    // around a closure body that is one expression
+    braces: Option<(usize, usize)>,
 }
 
 impl Site {
@@ -272,17 +308,18 @@ impl Site {
         };
         dots.reverse();
 
-        // rustfmt keeps an expression with a comment between its operands as written, so its layout after a rerun
-        // cannot be predicted.
+        // rustfmt keeps an expression with a comment between its operands as
+        // written, so its layout after a rerun cannot be predicted.
         let verbatim = top
             .descendants_with_tokens()
             .filter_map(|e| e.into_token())
-            .any(|t| t.kind() == COMMENT && t.parent().is_some_and(|p| ast::Expr::can_cast(p.kind())));
+            .any(|t| is_comment(t.kind()) && t.parent().is_some_and(|p| ast::Expr::can_cast(p.kind())));
         if verbatim {
             return None;
         }
 
-        // Where the chain may stand; the statement holding it must start the chain's line.
+        // Where the chain may stand; the statement holding it must start the
+        // chain's line.
         let mut context = top.clone();
         while let Some(parent) = context.parent().filter(|p| matches!(p.kind(), REF_EXPR | PREFIX_EXPR)) {
             context = parent;
@@ -321,8 +358,9 @@ impl Site {
             return None;
         }
 
-        // rustfmt keeps the first links on the root's line while the root is no wider than an indent; a chain is
-        // two links or more left after that (`self.items.retain(..)` is one).
+        // rustfmt keeps the first links on the root's line while the root is no
+        // wider than an indent; a chain is two links or more left after
+        // that (`self.items.retain(..)` is one).
         let budget = INDENT as isize - (doc.col(start) - indent) as isize;
         let mut kept = 0;
         while kept < dots.len() && (doc.col(dots[kept]) - doc.col(start)) as isize <= budget {
@@ -422,7 +460,8 @@ impl Site {
     }
 }
 
-/// The braces of a closure whose block body holds one expression and nothing else.
+/// The braces of a closure whose block body holds one expression and nothing
+/// else.
 fn bare_body(
     doc: &Doc,
     arg: &ast::Expr,
@@ -438,11 +477,13 @@ fn bare_body(
     (plain && single && !attributed && !doc.has_comment(open, close)).then_some((open, close))
 }
 
-/// How many chains were split, and how many were left because a line would pass WIDTH.
+/// How many chains were split, and how many were left because a line would pass
+/// WIDTH.
 fn split_chains(doc: &mut Doc) -> (usize, usize) {
     let calls: Vec<ast::MethodCallExpr> = doc.root.descendants().filter_map(ast::MethodCallExpr::cast).collect();
     let mut sites: Vec<Site> = calls.iter().filter_map(|call| Site::find(doc, call)).collect();
-    sites.sort_by_key(|site| site.first); // outer sites first: an inner one indents from where the outer put it
+    // outer sites first: an inner one indents from where the outer put it
+    sites.sort_by_key(|site| site.first);
     let (mut count, mut wide_left) = (0, 0);
     for site in sites {
         let saved = doc.edit.clone();
@@ -458,7 +499,8 @@ fn split_chains(doc: &mut Doc) -> (usize, usize) {
     (count, wide_left)
 }
 
-/// Each argument of a `matches!` longer than MATCHES_WIDTH on its own line; rustfmt keeps macro contents.
+/// Each argument of a `matches!` longer than MATCHES_WIDTH on its own line;
+/// rustfmt keeps macro contents.
 fn break_matches(doc: &mut Doc) -> usize {
     let (mut done_to, mut count) = (0, 0);
     let calls: Vec<ast::MacroCall> = doc.root.descendants().filter_map(ast::MacroCall::cast).collect();
@@ -481,7 +523,8 @@ fn break_matches(doc: &mut Doc) -> usize {
         let item = newline(indent + INDENT);
         let at = doc.gaps[open + 1].rfind('\n');
         if let Some(at) = at {
-            // Already one argument per line, by rustfmt or an earlier run: only indented under this line.
+            // Already one argument per line, by rustfmt or an earlier run: only
+            // indented under this line.
             let by = (indent + INDENT) as isize - (doc.gaps[open + 1].len() - at - 1) as isize;
             doc.shift(open + 1, close, by);
             doc.set_gap(close, newline(indent));
@@ -490,7 +533,8 @@ fn break_matches(doc: &mut Doc) -> usize {
         }
         let trailing = commas.last() == Some(&(close - 1));
         let args = commas.len() + 1 - trailing as usize;
-        // Its width with each argument on one line: one space wherever the source has whitespace.
+        // Its width with each argument on one line: one space wherever the
+        // source has whitespace.
         let flat: usize = (open + 1..close)
             .map(|i| doc.toks[i].text.chars().count() + (i > open + 1 && !doc.gaps[i].is_empty()) as usize)
             .sum();
@@ -516,9 +560,10 @@ fn break_matches(doc: &mut Doc) -> usize {
     count
 }
 
-/// Token texts, ignoring trailing commas and the braces of a closure body.
+/// Token texts, ignoring comments, trailing commas and the braces of a closure
+/// body.
 fn normalized(doc: &Doc) -> Vec<&str> {
-    let toks = &doc.toks;
+    let toks: Vec<&Tok> = doc.toks.iter().filter(|t| !is_comment(t.kind)).collect();
     let mut drop = vec![false; toks.len()];
     let mut open = vec![];
     for (i, tok) in toks.iter().enumerate() {
@@ -536,5 +581,5 @@ fn normalized(doc: &Doc) -> Vec<&str> {
             _ => {}
         }
     }
-    toks.iter().zip(drop).filter(|(_, d)| !d).map(|(t, _)| t.text.as_str()).collect()
+    toks.into_iter().zip(drop).filter(|(_, d)| !d).map(|(t, _)| t.text.as_str()).collect()
 }
