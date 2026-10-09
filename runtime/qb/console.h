@@ -4,7 +4,8 @@
 
 #include "qb.h"
 
-/* The cursor's 0-based column and the line width of the device PRINT writes to. */
+/* The cursor's 0-based column and the line width of the device PRINT writes to.
+   */
 byte cn_pos(void);
 byte cn_width(void);
 /* Writes `n` bytes of `s`, a character at a time as B$OUTCNT does. */

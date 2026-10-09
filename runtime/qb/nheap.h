@@ -1,9 +1,11 @@
-/* The dynamic region of DGROUP (QB rt/nhinit.asm, nhlhcore.asm, nhstutil.asm): from the end of the stack
-   to the top of the group.  String space is at the bottom and the local heap at the top, and the boundary
-   between them (`heap_low`) moves as either needs room.
+/* The dynamic region of DGROUP (QB rt/nhinit.asm, nhlhcore.asm, nhstutil.asm):
+   from the end of the stack to the top of the group.  String space is at the
+   bottom and the local heap at the top, and the boundary between them
+   (`heap_low`) moves as either needs room.
 
-   Local heap entries tile the heap from `heap_low` up to `heap_top`.  Each is a header, the data, and a
-   copy of its size at its end, so the heap can be walked either way. */
+   Local heap entries tile the heap from `heap_low` up to `heap_top`.  Each is a
+   header, the data, and a copy of its size at its end, so the heap can be
+   walked either way. */
 #ifndef QB_NHEAP_H
 #define QB_NHEAP_H
 
@@ -21,7 +23,8 @@ typedef struct LhEntry {
 extern char *heap_low;
 extern char *heap_top;
 
-/* A type's hook, called when compaction moves an entry's data `delta` bytes up. */
+/* A type's hook, called when compaction moves an entry's data `delta` bytes up.
+   */
 typedef void (*LhMoved)(void *data, int delta);
 void lh_on_move(enum LhType type, LhMoved moved);
 
@@ -32,8 +35,9 @@ void lh_compact(void);
 LhEntry *lh_entry(void *data);
 void *lh_data(LhEntry *entry);
 
-/* The two heaps trade room (nhstutil.c is the other side): the free tail of string space becomes free
-   heap, and free heap at the boundary becomes string space.  False when there is none to take. */
+/* The two heaps trade room (nhstutil.c is the other side): the free tail of
+   string space becomes free heap, and free heap at the boundary becomes string
+   space.  False when there is none to take. */
 int lh_take_from_strings(void);
 void lh_give_free_to_strings(void);
 

@@ -1110,3 +1110,9 @@ evidence = "rt/stcore.asm B$FCHR: OR AH,AH / JNZ ERRFC raises error 5 where the 
 parameters = ["int"]
 view = { length = "1", data = "slot($0)" }
 check = { when = "$0 < 0 or 255 < $0", raise = 5 }
+
+# llrm's runtime takes its calls as the target's own convention states them, except these routines, whose
+# stack block is the call site's own length (the bounds of every dimension, the channels closed): a register
+# convention cannot name that, so they keep BASIC's pushes and are popped by the callee.
+[llrm]
+stack_abi = ["B$ADIM", "B$CLOS", "B$DDIM", "B$RDIM"]

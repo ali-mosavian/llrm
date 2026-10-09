@@ -1,5 +1,6 @@
-/* The error model (QB rt/erproc.asm, erhandlr.asm, inc/messages.inc): one number per error, a
-   dispatch to the components that must reset, then the ON ERROR handler or the fatal message. */
+/* The error model (QB rt/erproc.asm, erhandlr.asm, inc/messages.inc): one
+   number per error, a dispatch to the components that must reset, then the ON
+   ERROR handler or the fatal message. */
 #include "rtinit.h"
 #include "error.h"
 #include "llrm_os.h"

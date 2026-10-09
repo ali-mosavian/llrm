@@ -1,5 +1,6 @@
-/* PRINT of one value (QB rt/prnval.asm B$P<terminator><type>).  The terminator is C for a comma, S for a
-   semicolon and E for the end of the statement; the type is I2, I4 or SD. */
+/* PRINT of one value (QB rt/prnval.asm B$P<terminator><type>).  The terminator
+   is C for a comma, S for a semicolon and E for the end of the statement; the
+   type is I2, I4 or SD. */
 #include "console.h"
 #include "fout.h"
 #include "nhstutil.h"
@@ -7,8 +8,8 @@
 enum Terminator { COMMA, SEMI, EOL };
 enum { ZONE = 14 };
 
-/* B$PRTCHK: make room for `len` more characters on the line, ending it first when they do not fit.
-   False when it did. */
+/* B$PRTCHK: make room for `len` more characters on the line, ending it first
+   when they do not fit. False when it did. */
 static int room(word len)
 {
     byte pos = cn_pos(), width = cn_width();
@@ -33,9 +34,7 @@ static void terminate(enum Terminator end)
     }
 }
 
-static void number(
-    long v,
-    enum Terminator end)
+static void number(long v, enum Terminator end)
 {
     char text[FOUT_MAX];
     word length = fout_i4(v, text);
@@ -46,9 +45,7 @@ static void number(
     terminate(end);
 }
 
-static void string(
-    SD *sd,
-    enum Terminator end)
+static void string(SD *sd, enum Terminator end)
 {
     room(sd->len);
     cn_write(sd->ptr, sd->len);

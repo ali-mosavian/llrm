@@ -1,12 +1,12 @@
-/* String functions (QB rt/strfcn.asm).  Every result is a temporary: an argument is never changed. */
+/* String functions (QB rt/strfcn.asm).  Every result is a temporary: an
+   argument is never changed. */
 #include "nhstutil.h"
 
 enum { TRIM_LEFT = 1, TRIM_RIGHT = 2 };
 
-/* TRIM: the argument itself when it is empty, else a temporary holding what the blanks leave. */
-static SD *trim(
-    SD *sd,
-    byte sides)
+/* TRIM: the argument itself when it is empty, else a temporary holding what the
+   blanks leave. */
+static SD *trim(SD *sd, byte sides)
 {
     word first = 0, last = sd->len;
 

@@ -44,6 +44,13 @@ returns = "i32"
 
 [[op]]
 group = "core"
+name = "seek"
+doc = "Seeks relative to origin 0, 1, or 2 and returns the absolute position."
+args = [["handle", "handle"], ["position", "i32"], ["origin", "u8"]]
+returns = "i32"
+
+[[op]]
+group = "core"
 name = "write_file"
 doc = "Bytes written, as read."
 args = [["handle", "handle"], ["data", "bytes"], ["count", "usize"]]
@@ -107,3 +114,11 @@ name = "chain"
 doc = "Enters `handler` as its interrupt would, and comes back."
 args = [["handler", "handler"]]
 returns = "void"
+
+# The program's own memory block, where a target has one to give back and take from (real-mode DOS).
+[[op]]
+group = "memory"
+name = "block_resize"
+doc = "Resizes the memory block that starts at paragraph `segment` to `paragraphs`, or to the most there is, and returns the paragraphs it now has."
+args = [["segment", "usize"], ["paragraphs", "usize"]]
+returns = "usize"

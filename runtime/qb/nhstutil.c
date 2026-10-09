@@ -1,4 +1,5 @@
-/* String space and string temporaries (QB rt/nhstutil.asm).  See nhstutil.h for the layout. */
+/* String space and string temporaries (QB rt/nhstutil.asm).  See nhstutil.h for
+   the layout. */
 #include "nhstutil.h"
 
 enum { NUMTEMPS = 20, WORD = 2 };
@@ -7,8 +8,8 @@ typedef struct StrEntry {
     word header;
 } StrEntry;
 
-/* A string temporary (inc/string.inc LenTemp = 6): a descriptor, and the program level that made it or
-   -1 while it is free. */
+/* A string temporary (inc/string.inc LenTemp = 6): a descriptor, and the
+   program level that made it or -1 while it is free. */
 typedef struct Tmp {
     SD sd;
     int level;
@@ -62,7 +63,9 @@ static StrEntry *entry_of(const char *data)
 
 static word entry_bytes(const StrEntry *entry)
 {
-    return WORD + (is_free(entry) ? free_data(entry) : even(owner_of(entry)->len));
+    word data = is_free(entry) ? free_data(entry) : even(owner_of(entry)->len);
+
+    return WORD + data;
 }
 
 static StrEntry *following(const StrEntry *entry)
@@ -75,28 +78,26 @@ static int at_end(const StrEntry *entry)
     return (char *)entry >= str_end;
 }
 
-static void make_free(
-    StrEntry *entry,
-    word bytes)
+static void make_free(StrEntry *entry, word bytes)
 {
     entry->header = bytes - WORD + 1;
 }
 
-/* A string of `len` bytes is in string space when its data is between the constants and the boundary. */
+/* A string of `len` bytes is in string space when its data is between the
+   constants and the boundary. */
 static int in_space(const SD *sd)
 {
     return sd->len && sd->ptr >= (char *)str_first && sd->ptr < str_end;
 }
 
-static void check_owner(
-    const StrEntry *entry,
-    const SD *owner)
+static void check_owner(const StrEntry *entry, const SD *owner)
 {
     if (owner_of(entry) != owner || owner->ptr != (char *)(entry + 1))
         corrupt();
 }
 
-/* B$STSetFree: the hint is kept only if it names the free entry that ends string space. */
+/* B$STSetFree: the hint is kept only if it names the free entry that ends
+   string space. */
 static void set_hint(void)
 {
     if (at_end(str_free) || !is_free(str_free) || !at_end(following(str_free)))
@@ -104,10 +105,7 @@ static void set_hint(void)
 }
 
 /* Takes `bytes` for `owner` from free `entry`, leaving the rest free. */
-static char *take(
-    StrEntry *entry,
-    word bytes,
-    SD *owner)
+static char *take(StrEntry *entry, word bytes, SD *owner)
 {
     word have = entry_bytes(entry);
 
@@ -121,18 +119,19 @@ static char *take(
     return data_of(entry);
 }
 
-/* First fit from `from` up to `limit`, joining free neighbours as it goes (SS_SCAN). */
-static StrEntry *scan(
-    StrEntry *from,
-    StrEntry *limit,
-    word bytes)
+/* First fit from `from` up to `limit`, joining free neighbours as it goes
+   (SS_SCAN). */
+static StrEntry *scan(StrEntry *from, StrEntry *limit, word bytes)
 {
     StrEntry *entry = from, *after;
 
     while (entry <= limit && !at_end(entry)) {
         if (is_free(entry)) {
-            for (after = following(entry); !at_end(after) && is_free(after); after = following(entry))
+            after = following(entry);
+            while (!at_end(after) && is_free(after)) {
                 make_free(entry, entry_bytes(entry) + entry_bytes(after));
+                after = following(entry);
+            }
             if (entry_bytes(entry) >= bytes)
                 return entry;
         }
@@ -150,7 +149,8 @@ static StrEntry *fit(word bytes)
     return found;
 }
 
-/* B$STCPCT: slide every string down over the free entries, so the free room is one entry at the end. */
+/* B$STCPCT: slide every string down over the free entries, so the free room is
+   one entry at the end. */
 void str_compact(void)
 {
     StrEntry *to = str_first, *entry = str_first;
@@ -176,8 +176,8 @@ void str_compact(void)
     str_free = to;
 }
 
-/* The free entry that ends string space, which the heap may take: its size, and the boundary moves up
-   by as much as is given. */
+/* The free entry that ends string space, which the heap may take: its size, and
+   the boundary moves up by as much as is given. */
 word str_give_tail(void)
 {
     word room;
@@ -206,11 +206,10 @@ void str_take(word bytes)
     str_end += bytes;
 }
 
-/* B$STALC: room for `owner`'s string.  Out of room, it tries a scan, the heap's free room, then
-   compaction (nhstutil.asm:161-215), and raises Out of string space if there is still none. */
-char *str_alloc(
-    SD *owner,
-    word len)
+/* B$STALC: room for `owner`'s string.  Out of room, it tries a scan, the heap's
+   free room, then compaction (nhstutil.asm:161-215), and raises Out of string
+   space if there is still none. */
+char *str_alloc(SD *owner, word len)
 {
     word bytes = WORD + even(len);
     StrEntry *entry;
@@ -218,7 +217,7 @@ char *str_alloc(
     if (len == 0xFFFF)
         qb_error(BE_STRINGSP);
     owner->len = len;
-    entry = !at_end(str_free) && is_free(str_free) && entry_bytes(str_free) >= bytes ? str_free : fit(bytes);
+    entry = fit(bytes);
     if (!entry) {
         lh_give_free_to_strings();
         entry = fit(bytes);
@@ -244,9 +243,7 @@ void str_release(SD *owner)
     make_free(entry, entry_bytes(entry));
 }
 
-void str_owner_moved(
-    SD *owner,
-    int delta)
+void str_owner_moved(SD *owner, int delta)
 {
     if (in_space(owner))
         entry_of(owner->ptr)->header += delta;
@@ -279,9 +276,7 @@ static void tmp_release(Tmp *tmp)
     tmp->level = -1;
 }
 
-void str_adopt(
-    SD *to,
-    SD *from)
+void str_adopt(SD *to, SD *from)
 {
     str_release(to);
     *to = *from;
@@ -291,7 +286,8 @@ void str_adopt(
         tmp_release(as_tmp(from));
 }
 
-/* B$STDALCTMP: a temporary's string and descriptor, freed; anything else is left. */
+/* B$STDALCTMP: a temporary's string and descriptor, freed; anything else is
+   left. */
 void str_tmp_free(SD *sd)
 {
     if (str_is_tmp(sd)) {
@@ -300,10 +296,9 @@ void str_tmp_free(SD *sd)
     }
 }
 
-/* B$STALCTMP: a temporary of `len` bytes, its data in *data.  Zero bytes is the shared empty string. */
-SD *str_tmp(
-    word len,
-    char **data)
+/* B$STALCTMP: a temporary of `len` bytes, its data in *data.  Zero bytes is the
+   shared empty string. */
+SD *str_tmp(word len, char **data)
 {
     Tmp *tmp;
 
@@ -317,11 +312,9 @@ SD *str_tmp(
     return &tmp->sd;
 }
 
-/* B$STALCTMPSUB: a temporary copy of `len` bytes of source from `from`; a temporary source is freed. */
-SD *str_tmp_copy(
-    SD *source,
-    word from,
-    word len)
+/* B$STALCTMPSUB: a temporary copy of `len` bytes of source from `from`; a
+   temporary source is freed. */
+SD *str_tmp_copy(SD *source, word from, word len)
 {
     char *data;
     SD *tmp = str_tmp(len, &data);
@@ -331,7 +324,8 @@ SD *str_tmp_copy(
     return tmp;
 }
 
-/* B$STDALCALLTMP: the temporaries made at program level `level` or deeper are freed. */
+/* B$STDALCALLTMP: the temporaries made at program level `level` or deeper are
+   freed. */
 void str_all_tmp_free(int level)
 {
     Tmp *tmp;
@@ -341,10 +335,9 @@ void str_all_tmp_free(int level)
             str_tmp_free(&tmp->sd);
 }
 
-/* B$STINIT: all of string space is one free entry, and every temporary is free. */
-void str_init(
-    char *first,
-    char *end)
+/* B$STINIT: all of string space is one free entry, and every temporary is free.
+   */
+void str_init(char *first, char *end)
 {
     Tmp *tmp;
 

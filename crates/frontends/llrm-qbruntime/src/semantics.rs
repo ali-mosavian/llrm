@@ -42,6 +42,15 @@ pub fn descriptor(family: &str) -> Option<Descriptor> {
     Some(Descriptor { length: at("length"), data: at("data"), size: at("size") })
 }
 
+/// Whether llrm's runtime keeps BASIC's stack block for `name`, which no register convention can state.
+pub fn keeps_stack_abi(name: &str) -> bool {
+    TABLE
+        .get("llrm")
+        .and_then(|row| row.get("stack_abi"))
+        .and_then(toml::Value::as_array)
+        .is_some_and(|names| names.iter().any(|one| one.as_str() == Some(name)))
+}
+
 /// What `family`'s runtime says of its stack, where it checks one.
 pub fn stack(family: &str) -> Option<StackCheck> {
     let row = row("stack", family)?;

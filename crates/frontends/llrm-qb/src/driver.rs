@@ -232,7 +232,20 @@ pub fn natively_called(
 ) {
     let named = native_cc.filter(|cc| *cc != "cdecl").map(str::to_owned);
     for function in program.modules.iter_mut().flat_map(|module| &mut module.functions) {
-        for call in function.calls.iter_mut().filter(|call| call.callee.is_none()) {
+        let called: std::collections::HashMap<i64, String> = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter_map(|one| Some((one.id, one.callee.clone()?)))
+            .collect();
+        let native = |call: &model::CallAbi| {
+            call.callee.is_none()
+                && !called
+                    .get(&call.instruction)
+                    .is_some_and(|name| llrm_core::abi::runtime::semantics::keeps_stack_abi(name))
+        };
+        let natives: Vec<bool> = function.calls.iter().map(native).collect();
+        for call in function.calls.iter_mut().zip(natives).filter_map(|(call, native)| native.then_some(call)) {
             call.cleanup = model::StackCleanup::Caller;
             call.order.reverse();
             call.convention = named.clone();

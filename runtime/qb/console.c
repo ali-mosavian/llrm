@@ -1,5 +1,6 @@
-/* The console driver for PRINT (QB rt/iotty.asm B$TTY_SOUT, rt/out.asm B$OUTCNT).  Output goes to
-   DOS's standard output, which is the screen or a redirect alike; the cursor column is kept here. */
+/* The console driver for PRINT (QB rt/iotty.asm B$TTY_SOUT, rt/out.asm
+   B$OUTCNT).  Output goes to DOS's standard output, which is the screen or a
+   redirect alike; the cursor column is kept here. */
 #include "console.h"
 #include "llrm_os.h"
 
@@ -11,8 +12,10 @@ static word used;
 
 static void flush(void)
 {
+    const unsigned char __far *text = (const unsigned char __far *)pending;
+
     if (used) {
-        llrm_os_write_file(LLRM_OS_STDOUT, (const unsigned char __far *)pending, used);
+        llrm_os_write_file(LLRM_OS_STDOUT, text, used);
         used = 0;
     }
 }
@@ -42,9 +45,7 @@ void cn_putc(char c)
     flush();
 }
 
-void cn_write(
-    const char *s,
-    word n)
+void cn_write(const char *s, word n)
 {
     while (n--)
         put(*s++);

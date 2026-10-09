@@ -1,5 +1,6 @@
-/* QB's component dispatch (rtinit.asm b$ini_disp and its siblings, inc/compvect.inc).  A module
-   registers one Comp from its initializer; the runtime runs the slots it set. */
+/* QB's component dispatch (rtinit.asm b$ini_disp and its siblings,
+   inc/compvect.inc).  A module registers one Comp from its initializer; the
+   runtime runs the slots it set. */
 #ifndef QB_RTINIT_H
 #define QB_RTINIT_H
 
@@ -7,7 +8,8 @@
 
 typedef void (__far *Vec)(void);
 
-/* The slots of compvect.inc: ini, run, clrt and err run in id order; end and term in reverse. */
+/* The slots of compvect.inc: ini, run, clrt and err run in id order; end and
+   term in reverse. */
 enum { V_INI, V_RUN, V_CLRT, V_ERR, V_END, V_TERM, V_COUNT };
 
 /* Component ids, in QB's initialization order. */

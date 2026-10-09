@@ -1,4 +1,5 @@
-/* The local heap (QB rt/nhlhcore.asm, nhlhutil.asm) and the dynamic region's setup (nhinit.asm). */
+/* The local heap (QB rt/nhlhcore.asm, nhlhutil.asm) and the dynamic region's
+   setup (nhinit.asm). */
 #include "nheap.h"
 #include "nhstutil.h"
 #include "rtinit.h"
@@ -10,9 +11,7 @@ static LhMoved moved[LH_FILE + 1];
 
 enum { HEADER = sizeof(LhEntry), FOOTER = sizeof(word) };
 
-void lh_on_move(
-    enum LhType type,
-    LhMoved hook)
+void lh_on_move(enum LhType type, LhMoved hook)
 {
     moved[type] = hook;
 }
@@ -38,10 +37,7 @@ static int at_top(const LhEntry *entry)
 }
 
 /* An entry of `size` bytes at `at`, with its footer. */
-static LhEntry *make(
-    void *at,
-    word size,
-    enum LhType type)
+static LhEntry *make(void *at, word size, enum LhType type)
 {
     LhEntry *entry = at;
 
@@ -77,11 +73,9 @@ static void zero(LhEntry *entry)
         *at++ = 0;
 }
 
-/* Take `size` bytes from the top of free `entry`, as the heap allocates downwards; the rest stays free. */
-static void *carve(
-    LhEntry *entry,
-    word size,
-    enum LhType type)
+/* Take `size` bytes from the top of free `entry`, as the heap allocates
+   downwards; the rest stays free. */
+static void *carve(LhEntry *entry, word size, enum LhType type)
 {
     word rest = entry->size - size;
     LhEntry *taken;
@@ -99,17 +93,18 @@ static void *carve(
 }
 
 /* First fit over the heap, joining free neighbours as it goes. */
-static void *first_fit(
-    word size,
-    enum LhType type)
+static void *first_fit(word size, enum LhType type)
 {
     LhEntry *entry, *after;
 
     for (entry = lowest(); !at_top(entry); entry = next(entry)) {
         if (entry->type != LH_FREE)
             continue;
-        for (after = next(entry); !at_top(after) && after->type == LH_FREE; after = next(entry))
+        after = next(entry);
+        while (!at_top(after) && after->type == LH_FREE) {
             make(entry, entry->size + after->size, LH_FREE);
+            after = next(entry);
+        }
         if (entry->size >= size)
             return carve(entry, size, type);
     }
@@ -142,12 +137,15 @@ void lh_give_free_to_strings(void)
     }
 }
 
-/* Slide every entry up against the top, so the free room is one entry at the bottom (B$LH_CPCT). */
+/* Slide every entry up against the top, so the free room is one entry at the
+   bottom (B$LH_CPCT). */
 void lh_compact(void)
 {
     char *top = heap_top;
-    LhEntry *entry = heap_low == heap_top ? NULL : previous((LhEntry *)heap_top);
+    LhEntry *entry = NULL;
 
+    if (heap_low != heap_top)
+        entry = previous((LhEntry *)heap_top);
     while (entry) {
         LhEntry *before = (char *)entry == heap_low ? NULL : previous(entry);
 
@@ -159,7 +157,8 @@ void lh_compact(void)
             if (top != (char *)entry) {
                 if (moved[entry->type])
                     moved[entry->type](lh_data(entry), top - (char *)entry);
-                /* from the end down, so a move over itself reads each word before it writes it */
+                /* from the end down, so a move over itself reads each word
+                   before it writes it */
                 while (from > (word *)entry)
                     *--to = *--from;
             }
@@ -170,13 +169,10 @@ void lh_compact(void)
         make(heap_low, top - heap_low, LH_FREE);
 }
 
-/* An entry of `bytes` of data, for `owner`: the free room, then a scan, then room from string space,
-   with string space compacted first when that is not enough (LH_ALC_GROW). */
-void *lh_alloc(
-    word bytes,
-    enum LhType type,
-    void *owner,
-    byte file)
+/* An entry of `bytes` of data, for `owner`: the free room, then a scan, then
+   room from string space, with string space compacted first when that is not
+   enough (LH_ALC_GROW). */
+void *lh_alloc(word bytes, enum LhType type, void *owner, byte file)
 {
     word size = entry_size(bytes);
     void *data = first_fit(size, type);
@@ -201,15 +197,14 @@ void lh_free(void *data)
 }
 
 /* B$NHINIT: all of the region is string space until the heap asks for some. */
-void nh_init(
-    char *first,
-    char *top)
+void nh_init(char *first, char *top)
 {
     heap_low = heap_top = top;
     str_init(first, top);
 }
 
-/* B$xNHINI and B$NHINI: the heaps claim everything from the stack's end to the top of DGROUP. */
+/* B$xNHINI and B$NHINI: the heaps claim everything from the stack's end to the
+   top of DGROUP. */
 extern char qb_atopsp;
 extern word qb_asizds;
 

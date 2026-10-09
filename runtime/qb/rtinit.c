@@ -1,5 +1,6 @@
-/* Startup (QB rt/rtinit.asm B$Init, B$COMP_DISP): run the XI initializers, which register their
-   components, then the ini slots.  The segment bounds are start.asm's. */
+/* Startup (QB rt/rtinit.asm B$Init, B$COMP_DISP): run the XI initializers,
+   which register their components, then the ini slots.  The segment bounds are
+   start.asm's. */
 #include "rtinit.h"
 
 extern word qb_xi_begin, qb_xi_end;
@@ -26,8 +27,8 @@ static void run_down(Comp *c, byte slot)
     }
 }
 
-/* B$COMP_DISP: the slot of every component, in order for the starting ones and backwards for
-   the ending ones. */
+/* B$COMP_DISP: the slot of every component, in order for the starting ones and
+   backwards for the ending ones. */
 void qb_dispatch(byte slot)
 {
     Comp *c;
@@ -40,7 +41,8 @@ void qb_dispatch(byte slot)
                 c->v[slot]();
 }
 
-/* True once startup has finished: termination before it must not run the end slots. */
+/* True once startup has finished: termination before it must not run the end
+   slots. */
 byte qb_rt_inited(void)
 {
     return rt_inited;

@@ -1,5 +1,5 @@
-/* Termination (QB rt/rtterm.asm): END and the end of the module run the end slots, which close
-   files, then the term slots, then leave for DOS. */
+/* Termination (QB rt/rtterm.asm): END and the end of the module run the end
+   slots, which close files, then the term slots, then leave for DOS. */
 #include "rtinit.h"
 #include "error.h"
 #include "llrm_os.h"
@@ -20,7 +20,8 @@ void B_CEND(void)
     finish();
 }
 
-/* B$CENP: the end of the module; an ON ERROR handler still running is a No RESUME error. */
+/* B$CENP: the end of the module; an ON ERROR handler still running is a No
+   RESUME error. */
 void B_CENP(void)
 {
     if (b_inonerr)
