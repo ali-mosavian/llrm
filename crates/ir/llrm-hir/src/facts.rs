@@ -64,7 +64,7 @@ impl<'m> Index<'m> {
 
 /// What a fact is stated of, by HIR ids. A routine is one subject, whether
 /// the module defines it or only calls it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Subject {
     Callable(i64),
     Param {
@@ -190,11 +190,13 @@ pub struct Stated {
 pub struct Builder {
     frontend: String,
     stated: Vec<Stated>,
+    /// What `stated` holds, to say a fact once without reading all of them.
+    held: llrm_support::hash::HashSet<(Subject, Fact)>,
 }
 
 impl Builder {
     pub fn new(frontend: &str) -> Self {
-        Self { frontend: frontend.to_owned(), stated: Vec::new() }
+        Self { frontend: frontend.to_owned(), stated: Vec::new(), held: Default::default() }
     }
 
     /// The language promises `fact` of `subject`.
@@ -222,7 +224,7 @@ impl Builder {
         fact: Fact,
         source: String,
     ) -> &mut Self {
-        if !self.stated.iter().any(|one| one.subject == subject && one.fact == fact) {
+        if self.held.insert((subject, fact)) {
             self.stated.push(Stated { subject, fact, source: Some(source) });
         }
         self
@@ -234,7 +236,7 @@ impl Builder {
         stated: impl IntoIterator<Item = Stated>,
     ) {
         for one in stated {
-            if !self.stated.iter().any(|have| have.subject == one.subject && have.fact == one.fact) {
+            if self.held.insert((one.subject, one.fact)) {
                 self.stated.push(one);
             }
         }
@@ -247,6 +249,7 @@ impl Builder {
         keep: impl Fn(&Stated) -> bool,
     ) {
         self.stated.retain(keep);
+        self.held = self.stated.iter().map(|one| (one.subject, one.fact)).collect();
     }
 
     pub fn finish(self) -> Vec<Stated> {
@@ -268,6 +271,18 @@ mod tests {
         let stated = builder.finish();
         assert_eq!(stated.len(), 1);
         assert_eq!(stated[0].source.as_deref(), Some("c:7"));
+    }
+
+    /// What `retain` dropped can be stated again: the record of what is held
+    /// follows the facts.
+    #[test]
+    fn a_fact_dropped_by_retain_can_be_stated_again() {
+        let mut builder = Builder::new("c");
+        let subject = Subject::Param { function: 1, index: 0 };
+        builder.state(subject, Fact::NoAlias);
+        builder.retain(|_| false);
+        builder.state(subject, Fact::NoAlias);
+        assert_eq!(builder.finish().len(), 1);
     }
 
     /// A subject's wire fields name it back.

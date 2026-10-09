@@ -103,7 +103,8 @@ pub fn program(
         })
         .map(|proc| proc.symbol)
         .collect();
-    let module = Shared { calling, unit, data: &data, keys: &keys, valueless: &valueless };
+    let param_facts = crate::ow_facts::param_facts(unit);
+    let module = Shared { calling, unit, data: &data, keys: &keys, valueless: &valueless, param_facts: &param_facts };
     let mut described = crate::debug::Described::of(unit);
     let mut functions = Vec::new();
     for (at, proc) in unit.procs.iter().enumerate() {
@@ -592,6 +593,8 @@ struct Shared<'a> {
     /// Each defined procedure no return gives a value: a void function,
     /// which the stream types as an int.
     valueless: &'a HashSet<i64>,
+    /// The facts the language states of each parameter, by symbol.
+    param_facts: &'a HashMap<i64, Vec<Fact>>,
 }
 
 /// What a tree node evaluates to.
@@ -1459,7 +1462,7 @@ impl<'a, 't> Body<'a, 't> {
                     // What the language states of a parameter: C99 6.7.3.1 for
                     // restrict.
                     stated.extend(
-                        crate::ow_facts::of_param(self.unit, *symbol).into_iter().map(|fact| (parameter, fact)),
+                        self.shared.param_facts.get(symbol).into_iter().flatten().map(|fact| (parameter, *fact)),
                     );
                 }
             }
