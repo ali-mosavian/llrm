@@ -5,9 +5,16 @@
 #   tools/fmt.sh --check        change nothing; list the files that would change; exit 1 if any
 #   tools/fmt.sh --stdin FILE   FILE's text on stdin, formatted on stdout (editors); a failure writes nothing
 #
+# Exit status: 0 clean, 1 --check found files to format, 2 or more anything else (a missing toolchain, a failed build, a
+# crash). A gate that tolerates 1 must not tolerate the rest.
+#
 # Per file: rustfmt, break long matches!, rustfmt again (it lays out around them), split chains. Running it twice
 # changes nothing.
 set -euo pipefail
+
+verdict=
+trap 'rc=$?; [ "$rc" = 1 ] && [ "$verdict" != changed ] && exit 2' EXIT
+fail() { echo "fmt: $1" >&2; exit 2; }
 
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(dirname "$here")
@@ -62,16 +69,25 @@ one() {
 build_tool() {
     local dir
     dir=$(python3 "$here/llrmbin.py" target)/rfmt-post
-    cargo build --release -q --manifest-path "$here/rfmt-post/Cargo.toml" --target-dir "$dir" >&2
+    cargo build --release -q --manifest-path "$here/rfmt-post/Cargo.toml" --target-dir "$dir" >&2 || return 2
     echo "$dir/release/rfmt-post"
+}
+
+# The files cargo fmt formats, one `cargo fmt` with the given arguments. --check exits 1 on a difference, so only 2 or more is a
+# failure there; an empty list is one too (cargo +nightly not found, a crash before the first file).
+listed() {
+    local out rc=0
+    out=$(cd "$root" && cargo +nightly fmt "$@" -- --check -v) || rc=$?
+    [ "$rc" -le 1 ] || fail "cargo fmt $* failed ($rc)"
+    printf '%s\n' "$out" | LC_ALL=C sed -n 's/^Formatting //p'
 }
 
 # The files `cargo fmt --all` formats, and the tool's own sources (outside the workspace); each once.
 files() {
-    {
-        (cd "$root" && cargo +nightly fmt --all -- --check -v || true)
-        (cd "$root" && cargo +nightly fmt --manifest-path tools/rfmt-post/Cargo.toml -- --check -v || true)
-    } | LC_ALL=C sed -n 's/^Formatting //p' | sort -u
+    local all tool
+    all=$(listed --all) && tool=$(listed --manifest-path tools/rfmt-post/Cargo.toml) || exit 2
+    [ -n "$all" ] || fail "cargo fmt listed no files"
+    printf '%s\n%s\n' "$all" "$tool" | sort -u
 }
 
 mode=${1:-rewrite}
@@ -82,15 +98,17 @@ case $mode in
     ;;
 --stdin)
     [ $# = 2 ] || { echo "usage: tools/fmt.sh --stdin FILE" >&2; exit 2; }
-    RFMT_POST=$(build_tool)
+    RFMT_POST=$(build_tool) || fail "building tools/rfmt-post failed"
     if ignored "$2"; then cat; else pipeline "$2"; fi
     ;;
 rewrite | --check)
     [ $# -le 1 ] || { echo "usage: tools/fmt.sh [--check | --stdin FILE]" >&2; exit 2; }
     export RFMT_POST RFMT_WRITE=$([ "$mode" = rewrite ] && echo 1 || echo 0)
-    RFMT_POST=$(build_tool)
+    cargo +nightly fmt --version > /dev/null 2>&1 || fail "no nightly rustfmt (rustup toolchain install nightly -c rustfmt)"
+    RFMT_POST=$(build_tool) || fail "building tools/rfmt-post failed"
     jobs=${FMT_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu)}
-    changed=$(files | xargs -P "$jobs" -n 1 "$0" --one | sort)
+    list=$(files) || exit 2
+    changed=$(printf '%s\n' "$list" | xargs -P "$jobs" -n 1 "$0" --one | sort)
     [ -z "$changed" ] && exit 0
     count=$(echo "$changed" | wc -l | tr -d ' ')
     if [ "$mode" = rewrite ]; then
@@ -98,6 +116,7 @@ rewrite | --check)
     else
         echo "${changed//"$root"\//}"
         echo "fmt: $count files would change; run tools/fmt.sh" >&2
+        verdict=changed
         exit 1
     fi
     ;;

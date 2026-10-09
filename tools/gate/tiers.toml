@@ -1,7 +1,8 @@
 # The gate's tiers and the path map. `gate.py plan` shows what a diff selects; `gate.py run` runs it.
 #
 #   fast  every cheap step, plus each heavy step whose owner paths the diff touches.
-#         Purpose: the confidence most PRs need. Budget: 5 minutes on the loaded host.
+#         Purpose: the confidence most PRs need. Budget: 5 minutes on the loaded host (a cold build of the formatter, ~40 s,
+#         can be inside it once `fmt` is enforced; the host keeps the build between runs).
 #   full  every step. Chosen when the diff touches [shared] or a path no rule knows. Budget: 10 minutes.
 #         Also run over main after every 5 merges and nightly (`gate.py run --tier full`); red -> `gate.py bisect`.
 #
@@ -10,7 +11,7 @@
 # A diff of only [inert] paths runs nothing. Changed paths in no table below are unknown: full.
 
 [inert]
-paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**"]
+paths = ["docs/**", "**/*.md", "editors/**", ".gitignore", ".github/**", ".zed/**"]
 
 # Shared code every area runs through: the IR, the support library, target descriptions, the workspace. A change here
 # takes the full tier. The backend (isel, regalloc, conventions, driver) and transforms are not listed: they take the

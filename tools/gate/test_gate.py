@@ -268,5 +268,22 @@ def test_the_fmt_step_fails_only_once_enforced_and_the_switch_is_one_line_of_tie
     p = gate.plan(["tools/fmt.sh"])
     on = gate.commands(p, {**cfg, "fmt": {**cfg["fmt"], "enforced": True}}, pkgs)["fmt"]
     off = gate.commands(p, {**cfg, "fmt": {**cfg["fmt"], "enforced": False}}, pkgs)["fmt"]
-    assert on == "tools/fmt.sh --check" and off.startswith(on) and "||" in off
+    assert on == "tools/fmt.sh --check" and off.startswith(on) and off != on
     assert isinstance(cfg["fmt"]["enforced"], bool)
+
+
+def test_the_unenforced_fmt_step_passes_on_clean_and_on_files_to_format_and_fails_on_anything_else(tmp_path):
+    """`tools/fmt.sh --check || echo ...` passed a missing toolchain, a failed build and a rustfmt crash alike."""
+    (tmp_path / "tools").mkdir()
+    stub = tmp_path / "tools" / "fmt.sh"
+    command = gate.commands(gate.plan(["tools/fmt.sh"]), {**gate.load(), "fmt": {**gate.load()["fmt"], "enforced": False}}, gate.packages())["fmt"]
+    for status, want in ((0, 0), (1, 0), (2, 2), (101, 101)):
+        stub.write_text(f"#!/bin/sh\nexit {status}\n")
+        stub.chmod(0o755)
+        got = subprocess.run(["bash", "-c", command], cwd=tmp_path, capture_output=True).returncode
+        assert got == want, (status, got)
+
+
+def test_edits_under_zed_plan_nothing():
+    """.zed/settings.json was an unknown path: the full tier for an editor setting."""
+    assert gate.plan([".zed/settings.json"]).tier == "none"

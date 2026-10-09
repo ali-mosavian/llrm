@@ -206,8 +206,11 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict]) -> dict[str, str]:
         + "; exit $rc",
         "bench": bench,
         "torture": "timeout 600 uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work",
-        # Enforced or not (tiers.toml [fmt]), the check runs and lists the files; only an enforced one fails the step.
-        "fmt": "tools/fmt.sh --check" if cfg["fmt"]["enforced"] else "tools/fmt.sh --check || echo 'fmt: not enforced yet (tiers.toml [fmt])'",
+        # Enforced or not (tiers.toml [fmt]), the check runs and lists the files. Unenforced, "files would change" (exit 1) passes
+        # and anything else (2 or more: no toolchain, a failed build, a crash) still fails the step.
+        "fmt": "tools/fmt.sh --check"
+        if cfg["fmt"]["enforced"]
+        else "tools/fmt.sh --check; rc=$?; [ $rc -le 1 ] || exit $rc; [ $rc = 0 ] || echo 'fmt: not enforced yet (tiers.toml [fmt])'",
         "rfmt-post": 'cargo test --release -q --manifest-path tools/rfmt-post/Cargo.toml --target-dir "${CARGO_TARGET_DIR:-target}/rfmt-post"',
         "pytest": "uv run -q --project tools python -m pytest tools crates tests/*.py -q -p no:cacheprovider --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py",
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
