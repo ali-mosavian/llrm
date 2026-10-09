@@ -2124,19 +2124,6 @@ fn test_a_loop_of_more_groups_than_the_bound_is_left_as_it_is() {
     assert_eq!(bounded(&text, super::Bounds { groups: 1, ..super::Bounds::NONE }), printed(&parsed(&format!("{DOS}{text}"))));
 }
 
-/// Past `iv-consider-all-candidates-bound` a use is priced from the important candidates and its own, not from every candidate.
-#[test]
-fn test_past_the_candidate_bound_a_use_is_priced_from_its_own_candidates_only() {
-    let text = dot();
-    super::PRICED.with(|priced| priced.set(0));
-    bounded(&text, super::Bounds::NONE);
-    let all = super::PRICED.with(std::cell::Cell::get);
-    super::PRICED.with(|priced| priced.set(0));
-    bounded(&text, super::Bounds { all_candidates: 1, ..super::Bounds::NONE });
-    let related = super::PRICED.with(std::cell::Cell::get);
-    assert!(related < all, "{related} pairs priced of {all}");
-}
-
 /// Past the candidate bound the search replaces a candidate once, only where no one added or removed lowers the cost, and
 /// never one serving more uses than `iv-always-prune-cand-set-bound`: it priced every swap of every step before.
 #[test]

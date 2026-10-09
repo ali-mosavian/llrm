@@ -66,8 +66,7 @@ impl FunctionPass for Lsr {
 thread_local! {
     /// `total` asked and `total_of` worked out, for the test that a set is priced once.
     pub static TOTALS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
-    /// (site, candidate) pairs priced, for the test that a bound leaves the unrelated unpriced.
-    pub static PRICED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+
 }
 
 /// What the target says a loop's choice may cost.
@@ -84,7 +83,8 @@ struct Target<'a> {
 pub struct Bounds {
     /// `iv-max-considered-uses`: a loop of more groups of uses than this is left as it is.
     pub groups: usize,
-    /// `iv-consider-all-candidates-bound`: past this many candidates a use is priced only from the important ones and its own.
+    /// `iv-consider-all-candidates-bound`: below this many candidates the search is whole. gcc prices a use from the important
+    /// candidates and its own only past it; here that left the cheapest shared counter out and cost more (QCport weapons.c).
     pub all_candidates: usize,
     /// `iv-always-prune-cand-set-bound`: a candidate serving more uses than this is not replaced, and replacing is tried only
     /// where no one candidate added or removed lowers the cost, once (`iv_ca_replace`).
@@ -178,10 +178,6 @@ struct Candidate {
     /// A pointer's type; an integer is its width's.
     pointer: Option<TypeId>,
     existing: Option<ValueId>,
-    /// The loop's own counters, the standard ones and each step counted to zero: related to every use (gcc's `important`).
-    important: bool,
-    /// The sites it was derived from; it is related to those.
-    sites: BTreeSet<usize>,
 }
 
 /// An invariant a realization keeps in a register: a pointer plus a sum.
@@ -409,9 +405,7 @@ fn _plan(view: &memory::Unit, outer: &Outer, loop_: &Loop, target: &Target, pres
     let latch_block = cfg::block(latch);
     // The most backedges: the counted exit's, or what an in-bounds access allows.
     let most = exit.as_ref().map(|exit| exit.most.clone()).or_else(|| induction::inbounds_backedges(view, loop_));
-    // Past `iv-consider-all-candidates-bound` a use is priced from the important candidates and its own only.
-    let related = |at: usize, one: &Candidate| candidates.len() <= target.bounds.all_candidates || one.important || one.sites.contains(&at);
-    let fits = sites.iter().enumerate().map(|(at, site)| candidates.iter().enumerate().map(|(index, one)| if related(at, one) { _priced(view, target, site, index, one, latch_block, most.as_ref(), &mut keys) } else { None }).collect()).collect();
+    let fits = sites.iter().map(|site| candidates.iter().enumerate().map(|(index, one)| _priced(view, target, site, index, one, latch_block, most.as_ref(), &mut keys)).collect()).collect();
     let exits = candidates
         .iter()
         .map(|one| exit.as_ref().filter(|exit| _steps_before_test(function, &exit.proof, one) && _comparable(view, one)).and_then(|exit| _exit_price(target, exit, one, &mut keys)))
@@ -660,24 +654,20 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
         matches!(view.context.types.get(ty), Type::Pointer(_)).then_some(ty)
     };
     let mut found = Vec::<Candidate>::new();
-    let add = |found: &mut Vec<Candidate>, of: Recurrence, pointer: Option<TypeId>, existing: Option<ValueId>, home: Option<usize>| {
+    let add = |found: &mut Vec<Candidate>, of: Recurrence, pointer: Option<TypeId>, existing: Option<ValueId>| {
         if of.step.is_zero() {
             return;
         }
         match found.iter_mut().find(|one| one.of == of) {
-            Some(one) => {
-                one.existing = one.existing.or(existing);
-                one.important |= home.is_none();
-                one.sites.extend(home);
-            }
-            None => found.push(Candidate { of, pointer, existing, important: home.is_none(), sites: home.into_iter().collect() }),
+            Some(one) => one.existing = one.existing.or(existing),
+            None => found.push(Candidate { of, pointer, existing }),
         }
     };
     for &counter in &users.counters {
-        add(&mut found, users.values[&counter].clone(), pointer_type(counter), Some(counter), None);
+        add(&mut found, users.values[&counter].clone(), pointer_type(counter), Some(counter));
     }
     let mut steps = BTreeSet::<Scev>::new();
-    for (at, site) in sites.iter().enumerate() {
+    for site in sites {
         let of = _normal(view, &site.one);
         steps.insert(of.step.clone());
         let bare = Recurrence { pointer: None, start: of.start.clone(), step: of.step.clone() };
@@ -688,22 +678,22 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
             for mask in 0..1_usize << terms.len() {
                 let part = terms.iter().enumerate().filter(|(bit, _)| mask >> bit & 1 == 1).map(|(_, (value, factor))| ((*value).clone(), (*factor).clone())).collect();
                 let symbolic = Scev { constant: BigInt::from(0), terms: part, width: of.width() };
-                add(&mut found, Recurrence { start: symbolic.clone(), ..bare.clone() }, None, None, Some(at));
-                add(&mut found, Recurrence { start: symbolic.plus(&Scev::constant(of.start.constant.clone(), of.width())), ..bare.clone() }, None, None, Some(at));
+                add(&mut found, Recurrence { start: symbolic.clone(), ..bare.clone() }, None, None);
+                add(&mut found, Recurrence { start: symbolic.plus(&Scev::constant(of.start.constant.clone(), of.width())), ..bare.clone() }, None, None);
             }
         } else {
-            add(&mut found, Recurrence { start: Scev::constant(0, of.width()), ..bare.clone() }, None, None, Some(at));
-            add(&mut found, Recurrence { start: Scev::constant(of.start.constant.clone(), of.width()), ..bare.clone() }, None, None, Some(at));
+            add(&mut found, Recurrence { start: Scev::constant(0, of.width()), ..bare.clone() }, None, None);
+            add(&mut found, Recurrence { start: Scev::constant(of.start.constant.clone(), of.width()), ..bare.clone() }, None, None);
         }
         match of.pointer {
             Some(_) => {
                 let pointer = pointer_type(site.one.value);
                 if pointer.is_some() {
-                    add(&mut found, of.clone(), pointer, None, Some(at));
-                    add(&mut found, Recurrence { start: of.start.symbolic(), ..of.clone() }, pointer, None, Some(at));
+                    add(&mut found, of.clone(), pointer, None);
+                    add(&mut found, Recurrence { start: of.start.symbolic(), ..of.clone() }, pointer, None);
                 }
             }
-            None => add(&mut found, bare, None, None, Some(at)),
+            None => add(&mut found, bare, None, None),
         }
     }
     // An address form whose index is wider takes a counter of its width,
@@ -719,7 +709,7 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
                 }
                 let step = Scev::constant(&bytes / scale, width);
                 steps.insert(step.clone());
-                add(&mut found, Recurrence { pointer: None, start: Scev::constant(0, width), step }, None, None, None);
+                add(&mut found, Recurrence { pointer: None, start: Scev::constant(0, width), step }, None, None);
             }
         }
     }
@@ -732,7 +722,7 @@ fn _candidates(view: &memory::Unit, target: &Target, users: &Users, sites: &[Sit
             }
             let trips = exit.trips.truncated(step.width).times(&BigInt::from(-1));
             let Some(start) = trips.product(step) else { continue };
-            add(&mut found, Recurrence { pointer: None, start, step: step.clone() }, None, None, None);
+            add(&mut found, Recurrence { pointer: None, start, step: step.clone() }, None, None);
         }
     }
     found
@@ -921,8 +911,6 @@ fn _interned(keys: &mut Vec<Key>, key: Key) -> usize {
 
 #[allow(clippy::too_many_arguments)]
 fn _priced(view: &memory::Unit, target: &Target, site: &Site, index: usize, candidate: &Candidate, latch: BlockId, most: Option<&BigInt>, keys: &mut Vec<Key>) -> Option<(Fit, Price)> {
-    #[cfg(test)]
-    PRICED.with(|priced| priced.set(priced.get() + 1));
     let mut fit = _fit(view, site, candidate, most)?;
     // The candidate plus its step, in the latch, is the step itself: a new
     // one is placed before its first reader, a counter's must be what is read.
