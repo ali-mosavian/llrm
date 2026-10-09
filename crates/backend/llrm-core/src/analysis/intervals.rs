@@ -70,9 +70,9 @@ impl Interval {
     }
 }
 
-/// Python `id(insn)`: the instruction's identity in the body that holds it.
+/// Python `id(insn)`: the instruction's identity, in every body that holds it (`Insn::id`).
 pub fn key(one: &Arc<Insn>) -> usize {
-    Arc::as_ptr(one) as usize
+    one.id() as usize
 }
 
 /// Every instruction's slot number, and every block's span.
