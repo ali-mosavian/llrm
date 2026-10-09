@@ -987,6 +987,10 @@ impl Pressure {
             cells: cells(function),
             counted: (0..function.value_count() as u32)
                 .map(ValueId)
+                .filter(|&value| match function.value(value).def {
+                    ValueDef::Instruction(inst) => !function.is_erased(inst),
+                    ValueDef::Argument(_) => true,
+                })
                 .filter(|&value| integer_in(context, function, value, scales))
                 .collect(),
             addressed: addressed.into_iter().collect(),
