@@ -700,7 +700,7 @@ impl<'a> Unit<'a> {
     pub fn registers(&self) -> Cow<'a, IndexMap<ValueId, Known>> {
         match self.registers {
             Some(registers) => {
-                if std::env::var_os("LLRM_CHECK_FACTS").is_some() {
+                if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     let fresh = crate::consts::known(&Unit { registers: None, ..*self }, None, None, None);
                     assert!(*registers == fresh, "the registers a unit carries are not those of the body it stands over: stale");
                 }
@@ -731,7 +731,7 @@ impl<'a> Unit<'a> {
     pub fn shape(&self) -> Cow<'a, Shape> {
         match self.shape {
             Some(shape) => {
-                if std::env::var_os("LLRM_CHECK_SHAPE").is_some() {
+                if llrm_support::env_set("LLRM_CHECK_SHAPE") {
                     assert!(*shape == Shape::of(self.function), "the shape a unit carries is not that of the body it stands over: stale");
                 }
                 Cow::Borrowed(shape)

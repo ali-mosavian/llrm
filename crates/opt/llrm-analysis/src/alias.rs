@@ -1962,7 +1962,7 @@ impl Bounded<'_> {
 pub fn annotated_with(unit: &Unit, facts: &PointsTo, known: &IndexMap<ValueId, Known>) -> Result<IndexMap<InstId, MemRef>, String> {
     let bounded = match (unit.bounds, unit.registers) {
         (Some(held), Some(registers)) if std::ptr::eq(known, registers) => {
-            if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
                 assert!(held.facts() == ranges::bounded_with(unit, known)?, "the bounds a unit carries are not those of the body it stands over: stale");
             }
             Bounded::Held(held)

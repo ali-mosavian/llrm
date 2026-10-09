@@ -267,7 +267,7 @@ pub fn intervals_shared_over(body: &LirBody, index: Option<&Indexes>, busy: &Fre
         recent.0.insert(0, held);
         Some(answer)
     }) {
-        if std::env::var_os("LLRM_CHECK_INTERVALS").is_some() {
+        if llrm_support::env_set("LLRM_CHECK_INTERVALS") {
             assert!(*found == worked_out(body, index, busy), "{}: a remembered answer differs from working it out", body.name);
         }
         llrm_support::debug::counted("intervals remembered", true);
@@ -291,7 +291,7 @@ pub fn intervals_shared_over(body: &LirBody, index: Option<&Indexes>, busy: &Fre
         Some(found) => {
             llrm_support::debug::counted("intervals edited", true);
             body.facts.0.bump("intervals-edited");
-            if std::env::var_os("LLRM_CHECK_INTERVALS").is_some() {
+            if llrm_support::env_set("LLRM_CHECK_INTERVALS") {
                 let whole = worked_out(body, Some(index), busy);
                 if found.0 != whole {
                     let mut shown = 0;
@@ -433,7 +433,7 @@ fn updated(held: &Remembered, body: &LirBody, index: &Indexes, busy: &Frequency)
 /// occurrences and weights, and the intervals are found from those (`intervals_by_occurrences`) where the walk would take the body's
 /// liveness whole and walk every block. For a body with phis, whose arguments are read in other blocks, the walk.
 fn worked_among(body: &LirBody, index: &Indexes, busy: &Frequency, only: &crate::support::hash::HashSet<u32>) -> (IndexMap<u32, Interval>, IndexMap<u32, f64>) {
-    if body.blocks.iter().any(|block| !block.phis.is_empty()) || std::env::var_os("LLRM_WALK_ALL").is_some() {
+    if body.blocks.iter().any(|block| !block.phis.is_empty()) || llrm_support::env_set("LLRM_WALK_ALL") {
         return worked_out_with_totals(body, index, busy, &|value| only.contains(&value));
     }
     body.facts.0.bump("intervals-by-occurrences");
@@ -539,7 +539,7 @@ fn _group_start(block: &LirBlock, position: usize) -> usize {
 /// and nothing reads it in order. (The order is kept as it was all the same.)
 fn _ranges(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
     let found = _walked(body, index, keep);
-    if std::env::var_os("LLRM_CHECK_RANGES").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_RANGES") {
         let reference = _ranges_reference(body, index, keep);
         assert!(found.iter().eq(reference.iter()), "{}: the walk differs from the reference", body.name);
     }

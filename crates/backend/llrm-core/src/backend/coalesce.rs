@@ -94,7 +94,7 @@ pub fn joined(body: &LirBody, pinned: Option<&IndexMap<u32, Register>>, segments
     // The web a root's values are kept as: the larger of the two joined, so a join costs the smaller's neighbours.
     let mut node_of: IndexMap<u32, u32> = IndexMap::default();
     webs.begin(_interference(body), &held);
-    let checking = std::env::var_os("LLRM_CHECK_COALESCE").is_some();
+    let checking = llrm_support::env_set("LLRM_CHECK_COALESCE");
 
     for block in &body.blocks {
         for one in &block.insns {

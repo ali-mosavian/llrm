@@ -921,7 +921,7 @@ impl Facts {
         let confined = llrm_support::debug::timed("facts classes", || {
             let given = crate::backend::regclass::Found { live: &live, masks: &masks };
             let found = crate::backend::regclass::classes_given(body, protected, segments, registers, &given);
-            if std::env::var_os("LLRM_CHECK_CLASSES").is_some() {
+            if llrm_support::env_set("LLRM_CHECK_CLASSES") {
                 assert!(found.iter().eq(classes(body, protected, segments, registers).iter()), "{}: classes from the given intervals differ from working them out", body.name);
             }
             found
@@ -935,7 +935,7 @@ impl Facts {
 /// to a point that destroys it, or leave their class: the later of each pair.
 fn _overlapping(union: &LiveUnion, r#where: &IndexMap<u32, Register>, facts: &Facts) -> BTreeSet<u32> {
     let found = _overlapping_by_start(union, r#where, facts);
-    if std::env::var_os("LLRM_CHECK_OVERLAPPING").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_OVERLAPPING") {
         assert!(found == _overlapping_reference(union, r#where, facts), "values sharing a register found by start differ from the pairwise look");
     }
     found
@@ -1622,7 +1622,7 @@ pub fn _clobbered(one: &Interval, register: Register, masks: &Masks, width: u32)
 
 fn check_clobbered() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CLOBBERED").is_some())
+    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CLOBBERED"))
 }
 
 /// `_clobbered`, from where each register is destroyed: a segment meets a point where the point is after its
@@ -2434,7 +2434,7 @@ pub(crate) fn _fold_discount(one: &Insn, profile: &Profile) -> f64 {
 /// Discount reads by the target-specific saving from folding them.
 pub(crate) fn _fold_priced(body: &LirBody, live: IndexMap<u32, Interval>, profile: &Profile, busy: &Frequency) -> IndexMap<u32, Interval> {
     let discounts = FoldDiscounts::of(profile);
-    let check = std::env::var_os("LLRM_CHECK_FOLDS").is_some();
+    let check = llrm_support::env_set("LLRM_CHECK_FOLDS");
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = busy.block(block.at);

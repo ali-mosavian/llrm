@@ -523,7 +523,7 @@ enum Pointer {
 /// `LLRM_CHECK_CALLEES=1`: the callees' effects selection was given are what a scan of the module gives.
 fn checking_callees() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CALLEES").is_some())
+    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CALLEES"))
 }
 
 /// `hole` bytes below BP are left free, above the allocas, for spill slots.

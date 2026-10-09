@@ -739,7 +739,7 @@ fn siblings_over(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame, fixe
 
     // Only pairs among the values of those webs are asked of.
     let near = llrm_support::debug::timed("siblings interference", || coalesce::_interference_among(body, Some(&wanted)));
-    if std::env::var_os("LLRM_CHECK_SIBLINGS").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
         let whole = coalesce::_interference(body);
         for value in &wanted {
             let among = |graph: &coalesce::Graph| graph.get(value).map(|near| near.intersection(&wanted).copied().collect::<BTreeSet<u32>>()).unwrap_or_default();
@@ -772,7 +772,7 @@ fn siblings_over(body: &LirBody, values: &BTreeSet<u32>, frame: &mut Frame, fixe
         let each = |block: u32| ranges::level(deep.get(&body.blocks[block as usize].at).copied().unwrap_or(0));
         occurs.insert(value, at.iter().map(|one| (each(one.0), Arc::clone(_at(body, *one)))).collect());
     }
-    if std::env::var_os("LLRM_CHECK_SIBLINGS").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
         let mut everywhere: IndexMap<u32, Vec<(f64, Arc<Insn>)>> = IndexMap::default();
         for block in &body.blocks {
             let each = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
@@ -961,7 +961,7 @@ fn _copied_with(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Vec<Res
 /// at the top of the range instead. Nothing compares them with a real value.
 fn _existing_colors(body: &LirBody, frame: &mut Frame) -> (Vec<(i64, u32, Vec<Interval>)>, Lives) {
     let found = _existing_colors_by(body, frame, false);
-    if std::env::var_os("LLRM_CHECK_COLORS").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_COLORS") {
         let whole = _existing_colors_by(body, frame, true);
         assert!(_same_colors(&found.0, &whole.0), "{}: the slot colors differ from working them out whole", body.name);
         // What is asked of a value is where it is live (`slots::fits` overlaps segments). Its weight is not read, and
@@ -1151,7 +1151,7 @@ fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(
     let owned;
     let index: &ranges::Indexes;
     let live;
-    if whole || flipped || std::env::var_os("LLRM_CHECK_RANGES").is_some() {
+    if whole || flipped || llrm_support::env_set("LLRM_CHECK_RANGES") {
         let mut tracked = body.clone();
         for (block_index, at, made) in changed_insns() {
             let mut insns = tracked.blocks[block_index].insns.to_vec();
@@ -1178,7 +1178,7 @@ fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(
         shared = ranges::indexed_shared(body);
         index = &*shared;
         let homes_found = llrm_support::debug::timed("intervals by occurrences", || homes_by_occurrences(body, index, &named, first, homes.len()));
-        if std::env::var_os("LLRM_CHECK_OCCURRENCES").is_some() {
+        if llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
             let walked = homes_by_sparse_body(body, index, &changed_insns(), first);
             assert!(homes_found == walked, "{}: the homes' intervals by occurrences differ from the walk of the body of their instructions", body.name);
         }
@@ -1409,7 +1409,7 @@ pub fn _stable_loads_through(body: &LirBody, values: &BTreeSet<u32>, copies: &In
         } else {
             _unchanged(body, flow, define, cell, &uses[value])
         };
-        if std::env::var_os("LLRM_CHECK_UNCHANGED").is_some() {
+        if llrm_support::env_set("LLRM_CHECK_UNCHANGED") {
             assert!(held == _unchanged_reference(body, define, cell, &uses[value]), "{}: whether the cell holds differs from working it out as before", body.name);
         }
         if held {
@@ -2398,7 +2398,7 @@ pub fn _constants(body: &LirBody, values: &BTreeSet<u32>) -> IndexMap<u32, Imm> 
 
 fn check_postings() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_POSTINGS").is_some())
+    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_POSTINGS"))
 }
 
 fn _at<'b>(body: &'b LirBody, at: At) -> &'b Arc<Insn> {
