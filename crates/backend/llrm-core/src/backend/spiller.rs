@@ -143,20 +143,44 @@ pub fn spilled_from(
         }
     };
     let plan = planned(body, values, frame)?;
-    materialized(body, &plan, frame, floor, classes)
+    let (body, made, merged) = materialized(body, &plan, frame, floor, classes, &BTreeSet::new())?;
+    Ok((body, made.union(&merged).copied().collect()))
+}
+
+/// `spilled_from`, with `plain` kept out of the merging of updates into one register value, and what that merging made told apart
+/// from the rest: (the body, the values made to live for one use, the values made to live across several).
+///
+/// A merged value that is spilled in its turn is merged again, as long as it is not told to be plain: a spill that makes what it
+/// spills, without end (`chain` at N=7 with -m16 never finished). The caller names each merged value plain once it is spilled.
+pub fn spilled_apart(
+    body: &LirBody,
+    values: &BTreeSet<u32>,
+    frame: &mut Frame,
+    floor: u32,
+    classes: &RegisterClasses,
+    plain: &BTreeSet<u32>,
+) -> Result<(LirBody, BTreeSet<u32>, BTreeSet<u32>), Error> {
+    if values.is_empty() {
+        return Ok((body.clone(), BTreeSet::new(), BTreeSet::new()));
+    }
+    let plan = planned(body, values, frame)?;
+    materialized(body, &plan, frame, floor, classes, plain)
 }
 
 /// `body` with `plan` written: a reload before each read of a stored value, a
 /// store after each write, and every other value made again where it is read.
 /// The values made are returned; each lives for one use.
-pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, classes: &RegisterClasses) -> Result<(LirBody, BTreeSet<u32>), Error> {
+pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, classes: &RegisterClasses, plain: &BTreeSet<u32>) -> Result<(LirBody, BTreeSet<u32>, BTreeSet<u32>), Error> {
     let mut fresh = _next_value(body).max(floor);
     let mut made: BTreeSet<u32> = BTreeSet::new();
     let Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow } = plan;
-    let (body, next) = llrm_support::debug::timed("spill short updates", || _short_update_runs(body, &stored, frame, fresh))?;
+    let merging: BTreeSet<u32> = stored.difference(plain).copied().collect();
+    let first = fresh;
+    let (body, next) = llrm_support::debug::timed("spill short updates", || _short_update_runs(body, &merging, frame, fresh))?;
     fresh = next;
-    let (body, next) = llrm_support::debug::timed("spill local updates", || _local_updates(&body, &stored, frame, fresh))?;
+    let (body, next) = llrm_support::debug::timed("spill local updates", || _local_updates(&body, &merging, frame, fresh))?;
     fresh = next;
+    let merged: BTreeSet<u32> = (first..fresh).collect();
     let mut abandoned: BTreeSet<usize> = BTreeSet::new();
     let mut rematerialized_definitions: BTreeSet<usize> = BTreeSet::new();
     let mut identities: BTreeSet<usize> = BTreeSet::new();
@@ -372,7 +396,7 @@ pub fn materialized(body: &LirBody, plan: &Plan, frame: &mut Frame, floor: u32, 
     let result = _remove_abandoned_in(result, &abandoned, &marked);
     // The values made that something still defines.
     let made = postings::following(&result, |postings| made.iter().copied().filter(|value| !postings.defs(*value).is_empty()).collect::<BTreeSet<u32>>());
-    Ok((result, made))
+    Ok((result, made, merged))
 }
 
 /// The reloads of the spilled values `one` reads, and the value each is read as.
