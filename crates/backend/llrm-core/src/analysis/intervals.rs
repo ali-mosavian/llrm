@@ -723,7 +723,7 @@ pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32],
 }
 
 /// The position of the last instruction of the parallel-copy run `position` is in.
-fn _group_end(block: &LirBlock, position: usize) -> usize {
+pub(crate) fn _group_end(block: &LirBlock, position: usize) -> usize {
     let Some(group) = block.insns[position].group else { return position };
     let mut end = position;
     while end + 1 < block.insns.len() && block.insns[end + 1].group == Some(group) {
