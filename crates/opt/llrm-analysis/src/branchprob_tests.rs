@@ -700,35 +700,3 @@ fn test_a_counted_loop_is_run_once_for_all_the_branches_in_it() {
     // `3 <= i` holds on 2 of the 4 trips.
     assert!(close(odds.probability(at("g3"), at("e3")), 0.5), "{:?}", odds.taken);
 }
-
-/// gcc's `PRED_LOOP_GUARD` (predict.def:176, 73): the test that decides whether an inner loop is entered at all, in an outer loop that does
-/// not always enter it, is guessed to skip it. The branch to the inner loop's preheader is taken 27 times in 100.
-#[test]
-fn test_the_guard_of_a_loop_inside_a_loop_is_guessed_to_skip_it() {
-    let (odds, at) = estimate(
-        "define i16 @f(i16 %n, i16 %m) {
-entry:
-  br label %outer
-outer:
-  %i = phi i16 [ 0, %entry ], [ %i1, %latch ]
-  %enter = icmp slt i16 %i, %m
-  br i1 %enter, label %pre, label %latch
-pre:
-  br label %inner
-inner:
-  %j = phi i16 [ 0, %pre ], [ %j1, %inner ]
-  %j1 = add i16 %j, 1
-  %more = icmp slt i16 %j1, %n
-  br i1 %more, label %inner, label %latch
-latch:
-  %i1 = add i16 %i, 1
-  %again = icmp slt i16 %i1, 100
-  br i1 %again, label %outer, label %done
-done:
-  ret i16 %i1
-}
-",
-    );
-    assert_eq!(odds.by.get(&at("outer")), Some(&Heuristic::LoopGuard));
-    assert!(close(odds.probability(at("outer"), at("pre")), 0.27), "{:?}", odds.probability(at("outer"), at("pre")));
-}

@@ -49,8 +49,6 @@ pub enum Heuristic {
     Loop,
     /// A compare of an enclosing counted loop's counters: the share of its trips it holds on.
     Counted,
-    /// The test before a loop inside a loop that does not always run it: guessed to skip it.
-    LoopGuard,
     Pointer,
     Zero,
     Float,
@@ -80,8 +78,6 @@ const UNREACHABLE: (f64, f64) = (1.0, ((1 << 20) - 1) as f64);
 const LOOP: (f64, f64) = (124.0, 4.0);
 const OPCODE: (f64, f64) = (20.0, 12.0);
 const ORDERED: (f64, f64) = ((1024 * 1024 - 1) as f64, 1.0);
-// GCC's `PRED_LOOP_GUARD` (predict.def:176, HITRATE 73): the branch toward an inner loop is not taken.
-const GUARD: (f64, f64) = (27.0, 73.0);
 const CALL: (f64, f64) = (67.0, 33.0);
 const RETURN: (f64, f64) = (66.0, 34.0);
 // GCC's predict.def: a path that returns a constant, rather than computing a result, is the exception.
@@ -190,11 +186,6 @@ fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarat
         return (Heuristic::Counted, weights);
     }
     if successors.len() == 2 {
-        if let Some(weights) = guard(function, shape, successors) {
-            return (Heuristic::LoopGuard, weights);
-        }
-    }
-    if successors.len() == 2 {
         if let Some((heuristic, likely, nan)) = compared(context, declarations, function, block) {
             let weights = if nan { ORDERED } else { OPCODE };
             let (when_true, when_false) = if likely { weights } else { weights.swap() };
@@ -219,29 +210,6 @@ fn weighed(context: &Context, metadata: &[MetadataNode], declarations: &Declarat
         return (Heuristic::Return, weights);
     }
     (Heuristic::Even, vec![1.0; successors.len()])
-}
-
-/// gcc's loop guard (`predict_loops`, predict.cc:2229): of two successors, one the preheader or header of a loop inside another loop whose
-/// latch that loop's header does not dominate (the outer loop may skip the inner), the weights that guess the branch skips it.
-fn guard(function: &Function, shape: &Shape, successors: &[i64]) -> Option<Vec<f64>> {
-    let _ = function;
-    for inner in &shape.loops {
-        let Some(outer) = shape.loops.iter().filter(|one| one.header != inner.header && one.body.is_superset(&inner.body)).min_by_key(|one| one.body.len()) else { continue };
-        if outer.latches.iter().any(|latch| shape.dominance.dominates(inner.header, *latch)) {
-            continue;
-        }
-        // A successor that leads straight to the inner header: the header itself, or a block of one successor that is.
-        let enters = |at: i64| {
-            at == inner.header
-                || (!inner.body.contains(&at) && function.successors(cfg::block(at)).len() == 1 && function.successors(cfg::block(at)).into_iter().map(id).next() == Some(inner.header))
-        };
-        let favoured = |at: i64| !enters(at);
-        let count = successors.iter().filter(|&&at| favoured(at)).count();
-        if count == 1 {
-            return Some(successors.iter().map(|&at| if enters(at) { GUARD.0 } else { GUARD.1 }).collect());
-        }
-    }
-    None
 }
 
 /// The weights of `block`'s two successors where an enclosing loop with
