@@ -10,9 +10,8 @@
 //! - an instruction was inserted, moved or rewritten that the analysis does not
 //!   model, and neither does any instruction its value reaches.
 
-use std::collections::BTreeSet;
-
 use crate::context::Context;
+use crate::dense::IdSet;
 use crate::module::{Change, Function, InstId};
 use crate::opcode::Opcode;
 
@@ -67,7 +66,10 @@ impl Depends {
                 | Change::Cloned { to: inst, .. } => work.push(inst),
             }
         }
-        let mut seen: BTreeSet<InstId> = work.iter().copied().collect();
+        let mut seen: IdSet<InstId> = IdSet::new();
+        for &inst in &work {
+            seen.insert(inst);
+        }
         while let Some(inst) = work.pop() {
             if (self.models)(context, function, inst) {
                 return false;
