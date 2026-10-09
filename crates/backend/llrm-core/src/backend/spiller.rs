@@ -982,6 +982,76 @@ fn _same_colors(one: &[(i64, u32, Vec<Interval>)], other: &[(i64, u32, Vec<Inter
 
 /// `_existing_colors`, with the intervals of the homes' pseudo-values found among themselves and the body's
 /// own remembered, or, `whole`, as the body with the homes in it is worked out at once.
+/// The intervals of the homes' pseudo-values (`first..`) walked in a body of the instructions that name them alone (whole parallel
+/// copies, which share a point), at the slots they have in the body: what `homes_by_occurrences` is held to under
+/// `LLRM_CHECK_OCCURRENCES`.
+fn homes_by_sparse_body(body: &LirBody, index: &ranges::Indexes, changed: &[(usize, usize, Arc<Insn>)], first: u32) -> IndexMap<u32, Interval> {
+    let mut sparse_blocks: Vec<LirBlock> = body.blocks.iter().map(|block| LirBlock { at: block.at, insns: Vec::new(), succ: block.succ.clone(), phis: block.phis.clone(), cold: block.cold }).collect();
+    let mut starts: Vec<Vec<i64>> = vec![Vec::new(); body.blocks.len()];
+    let mut by_block: IndexMap<usize, Vec<(usize, Arc<Insn>)>> = IndexMap::default();
+    for (block_index, at, made) in changed.iter().cloned() {
+        by_block.entry(block_index).or_default().push((at, made));
+    }
+    for (block_index, mut named) in by_block {
+        let original = &body.blocks[block_index].insns;
+        // The runs of a parallel copy a named instruction is in, as the walk takes them together.
+        let mut wanted: std::collections::BTreeMap<usize, Arc<Insn>> = std::collections::BTreeMap::new();
+        for (at, made) in named.drain(..) {
+            if let Some(group) = original[at].group {
+                let (mut low, mut high) = (at, at);
+                while low > 0 && original[low - 1].group == Some(group) {
+                    low -= 1;
+                }
+                while high + 1 < original.len() && original[high + 1].group == Some(group) {
+                    high += 1;
+                }
+                for position in low..=high {
+                    wanted.entry(position).or_insert_with(|| Arc::clone(&original[position]));
+                }
+            }
+            wanted.insert(at, made);
+        }
+        // An instruction's slot, which the body's numbering gives its original; `made` stands where that stood.
+        let block = &body.blocks[block_index];
+        let mut counted = 0;
+        let mut before: Option<usize> = None;
+        for (position, one) in wanted {
+            // Two instructions of one parallel copy with others between them are not one run here either.
+            if let (Some(earlier), Some(group)) = (before, one.group) {
+                if position > earlier + 1 && sparse_blocks[block_index].insns.last().is_some_and(|last| last.group == Some(group)) {
+                    starts[block_index].push(index.slot(block, counted));
+                    sparse_blocks[block_index].insns.push(Arc::new(Insn::new(0, None, None, Vec::new(), Vec::new())));
+                }
+            }
+            before = Some(position);
+            counted = position;
+            starts[block_index].push(index.slot(block, position));
+            sparse_blocks[block_index].insns.push(one);
+        }
+    }
+    let sparse = body.with_blocks(sparse_blocks);
+    ranges::intervals_sparse(&sparse, index, &starts, &|value| value >= first)
+}
+
+/// The same from where the homes occur: the instructions `changed` name them, so the walk need not look at the others.
+fn homes_by_occurrences(body: &LirBody, index: &ranges::Indexes, changed: &[(usize, usize, Arc<Insn>)], first: u32, count: usize) -> IndexMap<u32, Interval> {
+    let mut places: IndexMap<u32, Vec<ranges::Place>> = IndexMap::default();
+    let mut made: crate::support::hash::HashMap<ranges::Place, Arc<Insn>> = Default::default();
+    for (block_index, at, one) in changed {
+        made.insert((*block_index, *at), Arc::clone(one));
+        let mut named: Vec<u32> = one.defines.iter().chain(&one.uses).copied().filter(|value| *value >= first).collect();
+        named.sort_unstable();
+        named.dedup();
+        for value in named {
+            places.entry(value).or_default().push((*block_index, *at));
+        }
+    }
+    let values: Vec<u32> = (first..first + count as u32).collect();
+    ranges::intervals_by_occurrences(body, index, &values, &|value| places.get(&value).cloned().unwrap_or_default(), &|block, position| {
+        made.get(&(block, position)).cloned().unwrap_or_else(|| Arc::clone(&body.blocks[block].insns[position]))
+    })
+}
+
 fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(i64, u32, Vec<Interval>)>, IndexMap<u32, Interval>) {
     let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
     homes.sort_unstable();
@@ -1068,52 +1138,13 @@ fn _existing_colors_by(body: &LirBody, frame: &mut Frame, whole: bool) -> (Vec<(
         // that name them alone (whole parallel copies, which share a point), at the slots they have in the body.
         shared = ranges::indexed_shared(body);
         index = &*shared;
-        let mut sparse_blocks: Vec<LirBlock> = body.blocks.iter().map(|block| LirBlock { at: block.at, insns: Vec::new(), succ: block.succ.clone(), phis: block.phis.clone(), cold: block.cold }).collect();
-        let mut starts: Vec<Vec<i64>> = vec![Vec::new(); body.blocks.len()];
-        let mut by_block: IndexMap<usize, Vec<(usize, Arc<Insn>)>> = IndexMap::default();
-        for (block_index, at, made) in changed {
-            by_block.entry(block_index).or_default().push((at, made));
-        }
-        for (block_index, mut named) in by_block {
-            let original = &body.blocks[block_index].insns;
-            // The runs of a parallel copy a named instruction is in, as the walk takes them together.
-            let mut wanted: std::collections::BTreeMap<usize, Arc<Insn>> = std::collections::BTreeMap::new();
-            for (at, made) in named.drain(..) {
-                if let Some(group) = original[at].group {
-                    let (mut low, mut high) = (at, at);
-                    while low > 0 && original[low - 1].group == Some(group) {
-                        low -= 1;
-                    }
-                    while high + 1 < original.len() && original[high + 1].group == Some(group) {
-                        high += 1;
-                    }
-                    for position in low..=high {
-                        wanted.entry(position).or_insert_with(|| Arc::clone(&original[position]));
-                    }
-                }
-                wanted.insert(at, made);
-            }
-            // An instruction's slot, which the body's numbering gives its original; `made` stands where that stood.
-            let block = &body.blocks[block_index];
-            let mut counted = 0;
-            let mut before: Option<usize> = None;
-            for (position, one) in wanted {
-                // Two instructions of one parallel copy with others between them are not one run here either.
-                if let (Some(earlier), Some(group)) = (before, one.group) {
-                    if position > earlier + 1 && sparse_blocks[block_index].insns.last().is_some_and(|last| last.group == Some(group)) {
-                        starts[block_index].push(index.slot(block, counted));
-                        sparse_blocks[block_index].insns.push(Arc::new(Insn::new(0, None, None, Vec::new(), Vec::new())));
-                    }
-                }
-                before = Some(position);
-                counted = position;
-                starts[block_index].push(index.slot(block, position));
-                sparse_blocks[block_index].insns.push(one);
-            }
-        }
-        let sparse = body.with_blocks(sparse_blocks);
         let mut all = ranges::intervals(body, None);
-        all.extend(ranges::intervals_sparse(&sparse, index, &starts, &|value| value >= first));
+        let homes_found = homes_by_occurrences(body, index, &changed, first, homes.len());
+        if std::env::var_os("LLRM_CHECK_OCCURRENCES").is_some() {
+            let walked = homes_by_sparse_body(body, index, &changed, first);
+            assert!(homes_found == walked, "{}: the homes' intervals by occurrences differ from the walk of the body of their instructions", body.name);
+        }
+        all.extend(homes_found);
         live = all;
     }
     let end = index.span.values().map(|(_first, last)| *last).max().unwrap_or(1);

@@ -522,6 +522,131 @@ pub(crate) fn _walked(body: &LirBody, index: &Indexes, keep: &impl Fn(u32) -> bo
 
 /// The values `keep` says of a body of which only the instructions that name them are given, each block's
 /// with the slot each has in the whole body: the body's numbering, blocks and all else are `index`'s.
+/// Where an instruction is in a body: its block's number and its own in the block.
+pub type Place = (usize, usize);
+
+/// The intervals of `values` (ascending), worked out from where they occur rather than by walking the body: what the walk
+/// finds of a value is decided in the blocks it occurs in and those it is live through, and the rest of the body adds
+/// nothing. `places(value)` are the instructions that name it, by block then position, once each; `named(block, position)`
+/// is the instruction there as it names the values (not the body's own, where a caller adds values to it). The answer holds
+/// what `intervals_sparse` does, in another order of values; it costs the occurrences and the blocks the values are live
+/// in, where the walk costs every value live in every block, hashed.
+pub fn intervals_by_occurrences(body: &LirBody, index: &Indexes, values: &[u32], places: &dyn Fn(u32) -> Vec<Place>, named: &dyn Fn(usize, usize) -> Arc<Insn>) -> IndexMap<u32, Interval> {
+    if values.is_empty() {
+        return IndexMap::default();
+    }
+    let position: crate::support::hash::HashMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); body.blocks.len()];
+    for (at, block) in body.blocks.iter().enumerate() {
+        for to in &block.succ {
+            if let Some(&to) = position.get(to) {
+                predecessors[to].push(at);
+            }
+        }
+    }
+    let mut out: IndexMap<u32, Interval> = IndexMap::default();
+    for &value in values {
+        let found = places(value);
+        if found.is_empty() {
+            continue;
+        }
+        // By block: the parallel-copy runs it occurs in, as (last position of the run, defined there, read there), ascending.
+        let mut by_block: Vec<(usize, Vec<(usize, bool, bool)>)> = Vec::new();
+        for (block_index, at) in found {
+            let block = &body.blocks[block_index];
+            let end = _group_end(block, at);
+            let start = _group_start(block, end);
+            let (mut defined, mut used) = (false, false);
+            for position in start..=end {
+                let one = named(block_index, position);
+                defined |= one.defines.contains(&value);
+                used |= one.uses.contains(&value);
+            }
+            match by_block.last_mut() {
+                Some((last, runs)) if *last == block_index => match runs.last_mut() {
+                    Some((run, was_defined, was_used)) if *run == end => {
+                        *was_defined |= defined;
+                        *was_used |= used;
+                    }
+                    _ => runs.push((end, defined, used)),
+                },
+                _ => by_block.push((block_index, vec![(end, defined, used)])),
+            }
+        }
+        // Live in a block, and out of it, by the occurrences: read before it is written there, and so up its predecessors until
+        // a block writes it.
+        let mut live_in: crate::support::hash::HashSet<usize> = Default::default();
+        let mut live_out: crate::support::hash::HashSet<usize> = Default::default();
+        let mut written: crate::support::hash::HashSet<usize> = Default::default();
+        let mut work: Vec<usize> = Vec::new();
+        for (block_index, runs) in &by_block {
+            if runs.iter().any(|(_, defined, _)| *defined) {
+                written.insert(*block_index);
+            }
+            // The first run that names it decides: a read, even with a write beside it (the walk takes the group's writes first).
+            if runs.first().is_some_and(|(_, _, used)| *used) {
+                live_in.insert(*block_index);
+                work.push(*block_index);
+            }
+        }
+        while let Some(block_index) = work.pop() {
+            for &before in &predecessors[block_index] {
+                if live_out.insert(before) && !written.contains(&before) && live_in.insert(before) {
+                    work.push(before);
+                }
+            }
+        }
+        let mut blocks: Vec<usize> = by_block.iter().map(|(block_index, _)| *block_index).chain(live_in.iter().copied()).chain(live_out.iter().copied()).collect();
+        blocks.sort_unstable();
+        blocks.dedup();
+        let mut occurring = by_block.iter().peekable();
+        let mut segments: Vec<Segment> = Vec::new();
+        for block_index in blocks {
+            let block = &body.blocks[block_index];
+            let (first, last) = index.span[&block.at];
+            let runs: &[(usize, bool, bool)] = match occurring.peek() {
+                Some((at, runs)) if *at == block_index => {
+                    let runs = runs.as_slice();
+                    occurring.next();
+                    runs
+                }
+                _ => &[],
+            };
+            let mut alive: Option<i64> = live_out.contains(&block_index).then_some(last);
+            let mut wrote = false;
+            for &(end, defined, used) in runs.iter().rev() {
+                let boundary = index.slot(block, end) + DEF;
+                if defined {
+                    wrote = true;
+                    segments.push(Segment { start: boundary, end: alive.take().unwrap_or(boundary + 1) });
+                }
+                if used && alive.is_none() {
+                    alive = Some(boundary);
+                }
+            }
+            if let Some(end) = alive {
+                if end > first {
+                    segments.push(Segment { start: first, end });
+                }
+            } else if live_in.contains(&block_index) && !wrote {
+                segments.push(Segment { start: first, end: last });
+            }
+        }
+        out.insert(value, Interval::new(value, _merged(segments)));
+    }
+    out
+}
+
+/// The position of the last instruction of the parallel-copy run `position` is in.
+fn _group_end(block: &LirBlock, position: usize) -> usize {
+    let Some(group) = block.insns[position].group else { return position };
+    let mut end = position;
+    while end + 1 < block.insns.len() && block.insns[end + 1].group == Some(group) {
+        end += 1;
+    }
+    end
+}
+
 pub fn intervals_sparse(sparse: &LirBody, index: &Indexes, starts: &[Vec<i64>], keep: &impl Fn(u32) -> bool) -> IndexMap<u32, Interval> {
     _walked_at(sparse, index, keep, Some(starts))
 }
