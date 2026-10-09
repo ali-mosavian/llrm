@@ -7,6 +7,7 @@ extrn _llrm_os_exit:far
 extrn _llrm_os_psp:word
 extrn _llrm_os_top:word
 extrn BSS_LAST:byte
+extrn qb_module_segment:word
 
 public _main
 public B$CEND
@@ -42,6 +43,7 @@ _main proc far
     mov ax, offset DGROUP:BSS_LAST
     mov _llrm_os_top, ax
     mov ax, word ptr qb_bc_sa+2
+    mov qb_module_segment, ax
     mov es, ax
     ; The module's code segment is the first BC_SA far address.  Its header
     ; starts at offset zero and user code at the measured fixed offset 30h.

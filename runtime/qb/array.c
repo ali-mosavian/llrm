@@ -147,3 +147,8 @@ void __near qb_array_erase(word array_address) {
     free_blocks = qb_array_address_of(record);
     qb_array_clear(value);
 }
+
+word __near qb_array_redim(word array_address, word type_and_dimensions, word element_bytes) {
+    qb_array_erase(array_address);
+    return qb_array_dim(array_address, type_and_dimensions, element_bytes);
+}

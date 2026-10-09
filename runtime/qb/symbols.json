@@ -12,7 +12,7 @@
   {"name": "B$LTRM", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/text.asm"},
   {"name": "B$OPEN", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/file_abi.asm"},
   {"name": "B$PESD", "milestone": "m1", "status": "implemented", "module": "platform/qb/dos/m16/text.asm"},
-  {"name": "B$RDIM", "milestone": "m1", "status": "planned"},
+  {"name": "B$RDIM", "milestone": "m1", "status": "implemented", "module": "runtime/qb/array.c"},
   {"name": "B$SASS", "milestone": "m1", "status": "implemented", "module": "runtime/qb/string.c"},
   {"name": "B$SPAC", "milestone": "m1", "status": "implemented", "module": "runtime/qb/string.c"},
   {"name": "B$STDL", "milestone": "m1", "status": "implemented", "module": "runtime/qb/string.c"},
