@@ -130,7 +130,7 @@ pub fn threaded(
             let op = function.instruction(inst);
             op.opcode == Opcode::Br && op.operands.len() == 3 && function.predecessors(block).len() > 1 && matches!(
                 op.operands[0],
-                Operand::Value(c) if matches!(function.value(c).def, ValueDef::Instruction(made) if matches!(function.instruction(made).opcode, Opcode::ICmp(_)) && compared_again(function, c))
+                Operand::Value(c) if matches!(function.value(c).def, ValueDef::Instruction(made) if matches!(function.instruction(made).opcode, Opcode::ICmp(_)) && compared_again(function, block, c))
             )
         });
     if !any && !joined {
@@ -185,7 +185,7 @@ fn found(
         // branches above that way: threaded to its arm there.
         if branches && correlate && size == false && function.instruction(last).opcode == Opcode::Br {
             let ways = match function.instruction(last).operands.first() {
-                Some(&Operand::Value(condition)) if compared_again(function, condition) => {
+                Some(&Operand::Value(condition)) if compared_again(function, block, condition) => {
                     correlated(function, &unit, block, last)
                 }
                 _ => Vec::new(),
@@ -340,24 +340,50 @@ fn found(
     None
 }
 
-/// Whether the compare `condition` shares an operand with another compare of
-/// the function: a branch the way in settles is one whose operands some branch
-/// above compared too.
+/// Whether the branch `at` on the compare `condition` has a branch above it, on
+/// a compare of one of its operands: a branch the way in settles is one that
+/// some branch on the way compared too. The compares of the operand are the
+/// only ones asked, and each of their blocks must reach `at`.
 fn compared_again(
     function: &Function,
+    at: BlockId,
     condition: llrm_mir::module::ValueId,
 ) -> bool {
     let ValueDef::Instruction(made) = function.value(condition).def else { return false };
-    function
-        .instruction(made)
-        .operands
-        .iter()
-        .any(
-            |operand| matches!(
-                operand,
-                Operand::Value(value) if function.users(*value).iter().any(|one| { one.user != made && matches!(function.instruction(one.user).opcode, Opcode::ICmp(_)) })
-            ),
-        )
+    let mut above = Vec::new();
+    for operand in &function.instruction(made).operands {
+        let Operand::Value(value) = operand else { continue };
+        for one in function.users(*value) {
+            if one.user == made || !matches!(function.instruction(one.user).opcode, Opcode::ICmp(_)) {
+                continue;
+            }
+            let Some(result) = function.instruction(one.user).result else { continue };
+            for branch in function.users(result) {
+                if function.instruction(branch.user).opcode == Opcode::Br
+                    && let Some(there) = function.parent(branch.user)
+                    && there != at
+                {
+                    above.push(there);
+                }
+            }
+        }
+    }
+    if above.is_empty() {
+        return false;
+    }
+    // Reached from one of them by going back from `at`.
+    let mut seen = std::collections::BTreeSet::new();
+    let mut stack = function.predecessors(at);
+    while let Some(block) = stack.pop() {
+        if !seen.insert(block) {
+            continue;
+        }
+        if above.contains(&block) {
+            return true;
+        }
+        stack.extend(function.predecessors(block));
+    }
+    false
 }
 
 /// The predecessors of `block` from which the branch `last` goes one way for
