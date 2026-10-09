@@ -569,29 +569,67 @@ _llrm_os_screen_get proc far
     retf
 _llrm_os_screen_get endp
 
-; _llrm_os_screen_scroll(top: u8, bottom: u8, lines: u8, attribute: u8)
+; _llrm_os_screen_scroll(top: u8, bottom: u8, lines: u8, attribute: u8): in video memory. The rows
+; `top` to `bottom` move up `lines`, and the rows freed are blanks of `attribute`; no lines, or
+; at least as many as the rows, clears them.
 _llrm_os_screen_scroll proc far
     push bp
     mov bp, sp
-    push bx
     push si
     push di
     push ds
+    push es
+    mov dh, [bp+6]                 ; the first row, column 0
+    xor dl, dl
+    call cell_address              ; es:di -> its first cell
+    push ds
     mov ax, BIOS_DATA
     mov ds, ax
-    mov dl, ds:[BIOS_COLUMNS]
+    movzx bx, byte ptr ds:[BIOS_COLUMNS]
     pop ds
-    dec dl
-    mov ch, [bp+6]
-    mov dh, [bp+8]
-    mov al, [bp+10]
-    mov bh, [bp+12]
-    xor cl, cl
-    mov ah, DOS_VIDEO_SCROLL_UP
-    int DOS_VIDEO_INT
+    movzx dx, byte ptr [bp+8]
+    movzx ax, byte ptr [bp+6]
+    sub dx, ax
+    inc dx                         ; rows in the window
+    movzx ax, byte ptr [bp+10]     ; rows to scroll
+    test ax, ax
+    jz short whole
+    cmp ax, dx
+    jb short part
+whole:
+    mov ax, dx                     ; all of them: nothing is moved
+part:
+    mov cx, dx
+    sub cx, ax
+    imul cx, bx                    ; cells that move up
+    mov dx, ax
+    imul dx, bx                    ; cells blanked, and the distance moved
+    mov si, dx
+    add si, si
+    add si, di                     ; the row `lines` below
+    push es
+    pop ds
+    cld
+    shr cx, 1
+    rep movsd
+    jnc short moved
+    movsw
+moved:
+    mov cx, dx
+    mov al, ' '
+    mov ah, [bp+12]
+    mov bx, ax
+    shl eax, 16
+    mov ax, bx
+    shr cx, 1
+    rep stosd
+    jnc short blanked
+    stosw
+blanked:
+    pop es
+    pop ds
     pop di
     pop si
-    pop bx
     pop bp
     retf
 _llrm_os_screen_scroll endp
