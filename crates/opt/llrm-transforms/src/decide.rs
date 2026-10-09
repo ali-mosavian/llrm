@@ -95,7 +95,9 @@ fn _decided(
         analyses.invalidate(&PreservedAnalyses::none());
     }
     let held = Held::of(context, layout, function, analyses, true).with_bounded(context, layout, function, analyses);
-    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()))?;
+    let through = analyses.get::<llrm_analysis::manager::ThroughMemory>(context, layout, function);
+    let decisions =
+        _decisions(&held.unit(context, layout, function, analyses.outer()), Result::as_ref(&*through).ok())?;
     if decisions.is_empty() {
         return Ok(threaded);
     }
@@ -109,9 +111,19 @@ fn _decided(
 }
 
 /// Each block whose terminator's way is known, with that way.
-fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
+fn _decisions(
+    unit: &Unit,
+    through: Option<&IndexMap<ValueId, Known>>,
+) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
-    let facts = consts::known(unit, Some(&Calls::default()), None, None);
+    let own;
+    let facts = match through {
+        Some(found) => found,
+        None => {
+            own = consts::known(unit, Some(&Calls::default()), None, None);
+            &own
+        }
+    };
     // Points-to only for a pointer compared with null, as LLVM asks
     // isKnownNonZero of one value rather than solving every pointer.
     let pointers = std::cell::OnceCell::new();
@@ -125,7 +137,7 @@ fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
     let successors = |at: i64, values: &IndexMap<ValueId, Known>, states: &IndexMap<ValueId, State>| {
         _executable_successors(unit, at, values, states, Some(&nonnull))
     };
-    let facts = constant_cycles::propagated(unit, &facts, Some(&successors));
+    let facts = constant_cycles::propagated(unit, facts, Some(&successors));
     let scoped = ranges::bounds(unit)?;
     let mut out = Vec::new();
     for &block in function.layout() {

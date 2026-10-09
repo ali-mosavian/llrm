@@ -642,3 +642,30 @@ b:
     decided(context, &layout, function, &outer).expect("decides");
     assert_eq!(llrm_analysis::ranges::loops_solved() - before, 1, "the loop's bounds were worked out more than once");
 }
+
+/// `decide` solved the body through memory a second time (calls assumed to
+/// write what the target says), beside the manager's `ThroughMemory` that other
+/// passes read: 1.3% of the -O1 compile of QCport, for facts the manager had.
+/// It asks the manager's.
+#[test]
+fn test_decide_reads_what_is_known_through_memory_from_the_manager() {
+    use llrm_analysis::manager::ThroughMemory;
+    use llrm_mir::passes::Analyses;
+    let mut module = parsed(&format!(
+        "{DOS}@g = global i16 0\n\ndefine i16 @f(i16 %a) {{\nb0:\n  store i16 3, ptr @g\n  %v = load i16, ptr @g\n  %c = icmp eq i16 %v, 3\n  br i1 %c, label %t, label %e\n\nt:\n  ret i16 %a\n\ne:\n  ret i16 0\n}}\n"
+    ));
+    let (layout, outer) = (layout(&module), std::rc::Rc::new(Outer::of(&module, None)));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    analyses.get::<ThroughMemory>(context, &layout, function);
+    let before = llrm_analysis::consts::memory_derivations();
+    assert!(
+        super::_decided(context, &layout, function, &mut analyses).expect("decides"),
+        "premise: the branch is decided"
+    );
+    assert_eq!(
+        llrm_analysis::consts::memory_derivations() - before,
+        0,
+        "decide derived what is known through memory again"
+    );
+}
