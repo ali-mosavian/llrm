@@ -10,8 +10,7 @@
 // A counter that starts where the outer loop left it is one the width of its index.
 // CHECK-LABEL: from_ proc
 // CHECK: fsub
-// CHECK-NEXT: fld
-// CHECK-NEXT: fmulp
+// CHECK-NEXT: fmul
 // CHECK-NEXT: faddp
 // CHECK-NEXT: add
 // CHECK-NEXT: jne

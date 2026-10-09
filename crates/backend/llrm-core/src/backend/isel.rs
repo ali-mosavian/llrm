@@ -3577,6 +3577,17 @@ impl Selector<'_, '_, '_> {
                     continue;
                 }
                 let held = self.float(argument, at, out)?;
+                // A float or double goes to the stack where the target addresses it (`[esp]`; 16-bit addressing has no stack pointer base):
+                // the space made, then the value stored into it, as gcc does, and not stored to a cell and pushed from it.
+                if matches!(size, 4 | 8) && self.arch.object().bitness == 32 {
+                    let sp = Loc::Reg(Reg { register: Register::SP, width: 2 });
+                    let count = Loc::Imm(Imm { value: i64::from(size), width: 2, address: None });
+                    out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp, count])));
+                    let top = Mem { through: Register::SP, disp_width: 0, ..Mem::new(None, size) };
+                    out.push(insn(at, semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(top)], vec![Loc::Held(held)])));
+                    pushed += i64::from(size);
+                    continue;
+                }
                 let cell = self.float_stored(held, "fstp", size, at, out);
                 // Its highest bytes pushed first: dwords, and an extended float's last word.
                 let dwords = (0..i64::from(size) / 4).map(|dword| (dword * 4, 4));
