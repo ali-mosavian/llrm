@@ -5,6 +5,19 @@ pub mod effects;
 /// `x86.instr`'s reader. Dependency-free but `llrm-lir`, so a build script can
 /// include it with `#[path]`.
 pub mod parse;
+/// How the family spells the halves of a wide operation.
+pub mod wide {
+    /// The form of a half that takes the carry (borrow) of the half below it,
+    /// for `name`'s: `add` then `adc`, `sub` then `sbb`; the bitwise
+    /// operations' halves do not chain.
+    pub fn carried(name: &'static str) -> &'static str {
+        match name {
+            "add" => "adc",
+            "sub" => "sbb",
+            other => other,
+        }
+    }
+}
 pub mod select;
 
 /// A calling convention's registers as the x86 family names them: the
