@@ -878,6 +878,26 @@ pub fn _moved_lanes(bits: u32, one: &Insn) -> Option<(Vec<(Lane, Lane)>, Lanes)>
     Some((moved, _lanes(destination).or(&source.map(_lanes).unwrap_or_default())))
 }
 
+/// `_register_effects` of an instruction that says only what it does: no required or delivered register, no clobber and no
+/// symbol. Asked of a proposed rewrite of one, which needs no instruction made of it to ask (copy propagation made and dropped
+/// two per register it tried to forward).
+pub fn _register_effects_of_what(bits: u32, what: &Semantics, may_write: bool, flags: bool) -> Option<(Lanes, Lanes)> {
+    if what.op == Operation::Nothing && what.name.as_deref().is_none_or(str::is_empty) {
+        return Some((Lanes::new(), Lanes::new()));
+    }
+    if what.op == Operation::Barrier {
+        return None;
+    }
+    let key = EffectKey { bits, may_write, flags, what, requires: &[], delivers: &[] };
+    if let Some(found) = EFFECTS.with(|held| held.borrow().find(&key)) {
+        return found;
+    }
+    EFFECTS_COMPUTED.with(|count| count.set(count.get() + 1));
+    let answer = _register_effects_of(bits, &Insn::new(0, None, None, vec![], vec![]), what, may_write, flags);
+    EFFECTS.with(|held| held.borrow_mut().remember(&key, answer.clone()));
+    answer
+}
+
 pub fn _register_effects(bits: u32, one: &Insn, may_write: bool, flags: bool) -> Option<(Lanes, Lanes)> {
     // A symbol/source anchor is a placement fact, not an unknown machine
     // instruction.  Complete unrolling can leave many of these between a
