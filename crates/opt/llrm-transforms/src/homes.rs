@@ -1,11 +1,13 @@
-//! A phi whose value is a cell's: what the optimizer proved of a loop-carried value that the program also stores,
-//! kept for selection as `!llrm.home` on the phi, naming one store of the cell. Where such a value is spilled the
-//! backend reads the cell: no store of its own, and a restore that is the load promotion removed. GCC's
-//! `REG_EQUIV` by store, which LLVM has no counterpart of. Last, as `spares`, so the ids it names are the ones
-//! selection sees.
+//! A phi whose value is a cell's: what the optimizer proved of a loop-carried
+//! value that the program also stores, kept for selection as `!llrm.home` on
+//! the phi, naming one store of the cell. Where such a value is spilled the
+//! backend reads the cell: no store of its own, and a restore that is the load
+//! promotion removed. GCC's `REG_EQUIV` by store, which LLVM has no counterpart
+//! of. Last, as `spares`, so the ids it names are the ones selection sees.
 //!
-//! A phi `p` is in cell `c` where each of its inputs `v` was stored to `c` and nothing has written `c` since, at
-//! the end of the block `v` comes from, and nothing writes `c` while `p` is live: `p` is then what `c` holds at
+//! A phi `p` is in cell `c` where each of its inputs `v` was stored to `c` and
+//! nothing has written `c` since, at the end of the block `v` comes from, and
+//! nothing writes `c` while `p` is live: `p` is then what `c` holds at
 //! every point it is read. A store of `p` itself writes what is there.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -62,7 +64,8 @@ impl ModulePass for Homes {
     }
 }
 
-/// An object's own bytes at a constant offset: the cell as one reference, whatever pointer named it.
+/// An object's own bytes at a constant offset: the cell as one reference,
+/// whatever pointer named it.
 fn exact(reference: &MemRef) -> bool {
     reference.object && reference.base.is_none() && reference.root.is_some() && !reference.volatile
 }
@@ -124,8 +127,9 @@ pub fn homed(
                 .chunks(2)
                 .filter_map(|pair| if let Operand::Block(from) = pair[1] { Some((pair[0], from)) } else { None })
                 .collect();
-            // The cells every input is stored to: the stores of an input that is a value, not a constant, name the
-            // candidates, as a constant's may be built from narrower stores.
+            // The cells every input is stored to: the stores of an input that
+            // is a value, not a constant, name the candidates, as a
+            // constant's may be built from narrower stores.
             let named_by = inputs
                 .iter()
                 .find(|(value, _)| matches!(value, Operand::Value(one) if *one != result))
@@ -138,7 +142,8 @@ pub fn homed(
                         continue;
                     }
                     let each = stores(value);
-                    // A store of this cell, whose value no write has changed by the end of `from`.
+                    // A store of this cell, whose value no write has changed by
+                    // the end of `from`.
                     let held = each
                         .iter()
                         .filter(|(_, other)| same(cell, other))
@@ -151,7 +156,8 @@ pub fn homed(
                 if place.is_none() {
                     continue;
                 }
-                // Nothing writes the cell while the phi is live, but a store of the phi's own value.
+                // Nothing writes the cell while the phi is live, but a store of
+                // the phi's own value.
                 let disturbed = function
                     .layout()
                     .iter()
@@ -174,7 +180,8 @@ pub fn homed(
     homes
 }
 
-/// Whether `inst` is a store of `value`: it leaves in the cell what the cell holds.
+/// Whether `inst` is a store of `value`: it leaves in the cell what the cell
+/// holds.
 fn writes_only(
     function: &Function,
     inst: InstId,
@@ -184,7 +191,8 @@ fn writes_only(
     matches!(instruction.opcode, Opcode::Store { .. }) && instruction.operands.first() == Some(&value)
 }
 
-/// Whether no instruction that may write `cell` runs between `store` and the end of `at`, on any path.
+/// Whether no instruction that may write `cell` runs between `store` and the
+/// end of `at`, on any path.
 fn survives(
     function: &Function,
     graph: &[cfg::Block],
@@ -203,7 +211,8 @@ fn survives(
         let start = from.and_then(|one| insts.iter().position(|&other| other == one)).map_or(0, |index| index + 1);
         insts[start..].iter().all(|&one| !overlaps(cell, one))
     };
-    // What follows the store in its block, then every block on a path from it to `at` that does not return to it.
+    // What follows the store in its block, then every block on a path from it
+    // to `at` that does not return to it.
     if !after(home, Some(store)) && home != at {
         return false;
     }
@@ -220,7 +229,8 @@ fn survives(
         }
         work.extend(by_block[&next].succ.iter().copied());
     }
-    // Of those, the ones `at` can be reached from, again without the store's block.
+    // Of those, the ones `at` can be reached from, again without the store's
+    // block.
     let mut reaches: BTreeSet<i64> = BTreeSet::from([cfg::id(at)]);
     loop {
         let joining: Vec<i64> = graph

@@ -359,7 +359,8 @@ mod tests {
 
     #[test]
     fn test_explicit_end_needs_no_spill_frame_return() {
-        // EVTRAP main refused four spill bytes after its END edge was corrected.
+        // EVTRAP main refused four spill bytes after its END edge was
+        // corrected.
         let mut body = procedure();
         body.blocks[0].insns.edit(|insns| insns.truncate(3));
         let mut slots = Frame::new(-16);

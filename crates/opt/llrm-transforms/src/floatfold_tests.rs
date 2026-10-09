@@ -281,12 +281,13 @@ fn through_the_pipeline(body: &str) -> String {
     printed(&module)
 }
 
-/// What the language lets a floating operation lose, each rule only under its flag, in
-/// the pipeline the compilers run: a division by a constant a multiply by its reciprocal
-/// (`arcp`), two constants of a chain one (`reassoc`), a zero's sign unobserved (`nsz`),
-/// no NaN or infinity (`nnan`, `ninf`). Without the flag the instruction stays:
-/// `x / 3.0` differs from `x * (1/3.0)` in its last bit, `x * 0.0` is NaN for a NaN,
-/// `x + 0.0` is +0.0 for -0.0. The rules were in `instcombine`, which no compiler runs.
+/// What the language lets a floating operation lose, each rule only under its
+/// flag, in the pipeline the compilers run: a division by a constant a multiply
+/// by its reciprocal (`arcp`), two constants of a chain one (`reassoc`), a
+/// zero's sign unobserved (`nsz`), no NaN or infinity (`nnan`, `ninf`). Without
+/// the flag the instruction stays: `x / 3.0` differs from `x * (1/3.0)` in its
+/// last bit, `x * 0.0` is NaN for a NaN, `x + 0.0` is +0.0 for -0.0. The rules
+/// were in `instcombine`, which no compiler runs.
 #[test]
 fn test_floating_flags_license_the_folds_and_their_absence_keeps_the_operation() {
     let said = |body: &str| through_the_pipeline(body);

@@ -171,7 +171,8 @@ impl Scalar {
                 if !value.is_finite() {
                     return fail(format!("cannot convert {} to an integer", pyrepr::float(*value)));
                 }
-                // From 2**120 a double is a multiple of 2**68: zero at every width here.
+                // From 2**120 a double is a multiple of 2**68: zero at every
+                // width here.
                 Ok(if value.abs() >= 2f64.powi(120) { 0 } else { value.trunc() as i128 })
             }
             Self::Address(_) => fail("address used as a numeric value"),
@@ -333,7 +334,8 @@ struct Machine<'p> {
     heap: Vec<Memory>,
     /// The string an f-string is building, which formatters write into.
     sink: Option<Address>,
-    /// The field the next formatted value fills: width, radix, fill, left-aligned.
+    /// The field the next formatted value fills: width, radix, fill,
+    /// left-aligned.
     field: Option<(usize, u32, u8, bool)>,
     /// Set by a runtime panic routine, which ends the program.
     panicked: Option<String>,
@@ -343,7 +345,8 @@ struct Machine<'p> {
     column: usize,
     /// A QB END stopped the program.
     ended: bool,
-    /// The bytes of a length, a capacity or a near address: the program's `descriptor_word`.
+    /// The bytes of a length, a capacity or a near address: the program's
+    /// `descriptor_word`.
     word: usize,
 }
 
@@ -773,7 +776,8 @@ impl<'p> Machine<'p> {
                     }
                 }
             }
-            // CONVERT rounds as the x87 does by default: to nearest, ties to even.
+            // CONVERT rounds as the x87 does by default: to nearest, ties to
+            // even.
             Op::Convert => vec![match (&args[0], activation.layout.value_types[&instruction.results[0]].kind) {
                 (Scalar::Float(value), TypeKind::Integer | TypeKind::Boolean) => Scalar::Float(value.round_ties_even()),
                 (other, _) => other.clone(),
@@ -839,8 +843,8 @@ impl<'p> Machine<'p> {
                 vec![Scalar::Address(Address { offset: address.offset + *displacement as i64, ..address.clone() })]
             }
             // A selector joined to an offset: an offset that carries its object
-            // already addresses it; a plain one counts from where the selector's
-            // object starts.
+            // already addresses it; a plain one counts from where the
+            // selector's object starts.
             Op::Concat => match (&args[0], &args[1]) {
                 (_, Scalar::Address(address)) => vec![Scalar::Address(address.clone())],
                 (Scalar::Address(segment), Scalar::Int(offset)) => {
@@ -852,7 +856,8 @@ impl<'p> Machine<'p> {
             Op::Sub | Op::Fsub => vec![arithmetic(&args, i128::wrapping_sub, |a, b| a - b)?],
             Op::Mul | Op::Fmul => vec![arithmetic(&args, i128::wrapping_mul, |a, b| a * b)?],
             Op::Fdiv => {
-                // As the x87 with its exceptions masked: inf or nan, never a fault.
+                // As the x87 with its exceptions masked: inf or nan, never a
+                // fault.
                 vec![Scalar::Float(args[0].float()? / args[1].float()?)]
             }
             Op::And => vec![Scalar::Int(args[0].whole()? & args[1].whole()?)],
@@ -950,7 +955,8 @@ impl<'p> Machine<'p> {
                     Op::Flog2 => value.log2(),
                     _ => value.exp2(),
                 };
-                // Python's math raises where IEEE would invent a NaN or overflow.
+                // Python's math raises where IEEE would invent a NaN or
+                // overflow.
                 if (result.is_nan() && !value.is_nan()) || (result.is_infinite() && value.is_finite()) {
                     return fail(format!("{op}: math domain error"));
                 }

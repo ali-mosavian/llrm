@@ -470,9 +470,10 @@ fn every_corpus_loop_ends_with_one_latch_at_a_fixed_point() {
     }
 }
 
-/// Every loop was tried on a copy of the whole function and its graph rebuilt, though it needed nothing:
-/// 39% of compiling 100 sequential loops, and the cost of `mir lsr` grew with the square of them (#556). A
-/// loop already in the form makes no copy.
+/// Every loop was tried on a copy of the whole function and its graph rebuilt,
+/// though it needed nothing: 39% of compiling 100 sequential loops, and the
+/// cost of `mir lsr` grew with the square of them (#556). A loop already in the
+/// form makes no copy.
 #[test]
 fn loops_already_in_simplified_form_make_no_copy_of_the_function() {
     let loops = 30;

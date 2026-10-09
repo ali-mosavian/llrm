@@ -1,6 +1,8 @@
-//! `.debug_frame`: one CIE (the rule at every function's entry) and an FDE for each function whose code could
-//! be followed, its rows as `DW_CFA_*` instructions: a debugger finds the caller's frame from them where
-//! prologue analysis has nothing to go on (a frameless function, registers saved where first needed).
+//! `.debug_frame`: one CIE (the rule at every function's entry) and an FDE for
+//! each function whose code could be followed, its rows as `DW_CFA_*`
+//! instructions: a debugger finds the caller's frame from them where
+//! prologue analysis has nothing to go on (a frameless function, registers
+//! saved where first needed).
 
 use llrm_object::debug::{FrameRow, Info};
 use llrm_object::{Object, Unsupported};
@@ -17,11 +19,13 @@ const DW_CFA_ADVANCE_LOC4: u8 = 0x04;
 const DW_CFA_DEF_CFA: u8 = 0x0C;
 const DW_CFA_DEF_CFA_REGISTER: u8 = 0x0D;
 const DW_CFA_DEF_CFA_OFFSET: u8 = 0x0E;
-/// The version of a CIE in DWARF 4 and 5: it names the address size and the segment selector size.
+/// The version of a CIE in DWARF 4 and 5: it names the address size and the
+/// segment selector size.
 const CIE_VERSION: u8 = 4;
 /// What a CIE's id field holds in `.debug_frame`.
 const CIE_ID: u32 = 0xFFFF_FFFF;
-/// Every offset a register is saved at is a multiple of this, below the frame address.
+/// Every offset a register is saved at is a multiple of this, below the frame
+/// address.
 const DATA_ALIGNMENT: i64 = -4;
 
 fn number(
@@ -34,7 +38,8 @@ fn number(
     }
 }
 
-/// The instructions that take the state `from` to `to`: its frame address, then each register's rule.
+/// The instructions that take the state `from` to `to`: its frame address, then
+/// each register's rule.
 fn changes(
     info: &Info,
     buf: &mut Buf,
@@ -98,7 +103,8 @@ fn advance(
     }
 }
 
-/// The section, None where no function has rows or the target numbers no return address.
+/// The section, None where no function has rows or the target numbers no return
+/// address.
 pub fn section(
     object: &Object,
     info: &Info,
@@ -110,7 +116,8 @@ pub fn section(
     }
     let return_column = number(info, &info.return_register)?;
     let mut buf = Buf::default();
-    // The CIE: the frame address at entry, and the return address in its slot just below it.
+    // The CIE: the frame address at entry, and the return address in its slot
+    // just below it.
     buf.u32(0);
     buf.u32(CIE_ID);
     buf.u8(CIE_VERSION);

@@ -12,13 +12,15 @@
 //! frame.
 //!
 //! What changed with the IR:
-//! - A global is never private. The old main body owned a program variable no other code named; a global here is
-//!   reached by the module's other functions and, but for `internal` linkage, by other modules.
-//! - Every access goes through a pointer. The old rule that an access through a pointer publishes what it reaches holds
-//!   of one that does not name its bytes (`MemRef::named`); the raw frame offsets and the direct frame address operands
-//!   are gone.
-//! - Dropped: `Exposure` and the BC descriptors, data segment and error and event handlers. A handler here is an
-//!   `invoke`'s unwind edge.
+//! - A global is never private. The old main body owned a program variable no
+//!   other code named; a global here is reached by the module's other functions
+//!   and, but for `internal` linkage, by other modules.
+//! - Every access goes through a pointer. The old rule that an access through a
+//!   pointer publishes what it reaches holds of one that does not name its
+//!   bytes (`MemRef::named`); the raw frame offsets and the direct frame
+//!   address operands are gone.
+//! - Dropped: `Exposure` and the BC descriptors, data segment and error and
+//!   event handlers. A handler here is an `invoke`'s unwind edge.
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;

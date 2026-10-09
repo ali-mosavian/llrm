@@ -177,8 +177,9 @@ impl FunctionCompiler<'_> {
                 continue;
             };
             let item = match end {
-                // A range's variable is the common type of its bounds, as the loop makes it: a
-                // literal start takes the end's (`0..xs.len` is a usize, not an i16).
+                // A range's variable is the common type of its bounds, as the
+                // loop makes it: a literal start takes the end's (`0..xs.len`
+                // is a usize, not an i16).
                 Some(end) => {
                     let (start, stop) = (self.expression_type_hint(iterable), self.expression_type_hint(end));
                     let one = match (start, stop) {
@@ -547,7 +548,8 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    /// `v.push(x)`, `v.pop()`, and `v.copy()`; `None` when `receiver` is not a vec.
+    /// `v.push(x)`, `v.pop()`, and `v.copy()`; `None` when `receiver` is not a
+    /// vec.
     pub(super) fn vector_method(
         &mut self,
         receiver: &Expr,

@@ -56,9 +56,7 @@ fn dropped(
         Some(&observers::private_of(memory, pointers, published)),
         Some(&pointers.escaped_before),
     );
-    for &store in &dead {
-        unit.function.erase(store)?;
-    }
+    unit.function.erase_all(&dead)?;
     Ok(!dead.is_empty())
 }
 

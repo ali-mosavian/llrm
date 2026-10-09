@@ -37,8 +37,9 @@ pub fn verify(
     out
 }
 
-/// Once instruction selection has tagged them, every frame cell names the slot it lies in: a phase that makes a cell
-/// from a displacement alone leaves the frame layout unable to move it.
+/// Once instruction selection has tagged them, every frame cell names the slot
+/// it lies in: a phase that makes a cell from a displacement alone leaves the
+/// frame layout unable to move it.
 fn _slots(body: &LirBody) -> Vec<String> {
     if !body.slotted {
         return Vec::new();
@@ -277,7 +278,8 @@ mod tests {
         LirBody::new(name, 1, blocks, IndexMap::default(), IndexMap::default())
     }
 
-    /// C crc32 returned -1141145971 after an eliminated phi lost its definition.
+    /// C crc32 returned -1141145971 after an eliminated phi lost its
+    /// definition.
     #[test]
     fn test_a_read_value_must_be_defined_or_an_explicit_body_input() {
         let stale = Insn::new(
@@ -325,8 +327,10 @@ mod tests {
         assert!(verify(&body, false).iter().any(|complaint| complaint.contains("block 0x0002 is not reachable")));
     }
 
-    /// A phase that made a frame cell from a displacement alone left the frame layout unable to move it: a `slotted`
-    /// body is refused one, and a cell of another space (a global whose `index` is a symbol's) is not a frame cell.
+    /// A phase that made a frame cell from a displacement alone left the frame
+    /// layout unable to move it: a `slotted` body is refused one, and a
+    /// cell of another space (a global whose `index` is a symbol's) is not a
+    /// frame cell.
     #[test]
     fn test_a_slotted_body_refuses_a_frame_cell_that_names_no_slot() {
         let cell =

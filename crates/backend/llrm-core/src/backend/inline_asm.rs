@@ -1,5 +1,6 @@
-//! Inline assembly: the x86 assembler is `llrm_x86::asm`; what is here is the QB runtime's naming of registers
-//! around it (`Reg`, the registers a runtime routine's contract names).
+//! Inline assembly: the x86 assembler is `llrm_x86::asm`; what is here is the
+//! QB runtime's naming of registers around it (`Reg`, the registers a runtime
+//! routine's contract names).
 
 use iced_x86::Register;
 use llrm_x86::asm::REGISTERS;
@@ -15,7 +16,8 @@ pub enum Part {
     High,
 }
 
-/// Registers an input or output may name: the ones a call's argument can be pinned to.
+/// Registers an input or output may name: the ones a call's argument can be
+/// pinned to.
 const OPERANDS: &[(&str, Reg, Part)] = &[
     ("ax", Reg::Ax, Part::Word),
     ("al", Reg::Ax, Part::Low),
@@ -53,8 +55,9 @@ pub fn named(name: &str) -> Option<Reg> {
     Reg::ALL.into_iter().find(|reg| reg.name().eq_ignore_ascii_case(name))
 }
 
-/// A general register by the name the HIR spells it with: its root `Reg` (the 16-bit register whose
-/// 32-bit view a flat target has) and the bits of the view named (`ax` is (Ax, 16), `eax` (Ax, 32), `al` (Ax, 8)).
+/// A general register by the name the HIR spells it with: its root `Reg` (the
+/// 16-bit register whose 32-bit view a flat target has) and the bits of the
+/// view named (`ax` is (Ax, 16), `eax` (Ax, 32), `al` (Ax, 8)).
 pub fn view(name: &str) -> Option<(Reg, u32)> {
     // A register the runtime names whole: ax..di, es, flags.
     if let Some(reg) = named(name) {
@@ -64,8 +67,8 @@ pub fn view(name: &str) -> Option<(Reg, u32)> {
     if !(register.is_gpr8() || register.is_gpr16() || register.is_gpr32()) {
         return None;
     }
-    // iced numbers every view of a general register as the register itself: the root is the 16-bit register of that
-    // number.
+    // iced numbers every view of a general register as the register itself: the
+    // root is the 16-bit register of that number.
     let sixteen = [
         Register::AX,
         Register::CX,
@@ -86,7 +89,8 @@ pub fn view(name: &str) -> Option<(Reg, u32)> {
     named(&format!("{sixteen:?}")).map(|reg| (reg, bits))
 }
 
-/// The machine register for the view of `bits` of the root `reg`: `Ax` of 32 bits is EAX.
+/// The machine register for the view of `bits` of the root `reg`: `Ax` of 32
+/// bits is EAX.
 pub fn machine(
     reg: Reg,
     bits: u32,

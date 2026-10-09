@@ -474,7 +474,8 @@ fn without_volatile(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<(usize, usize)>
         {
             continue;
         }
-        // `AS VOLATILE` and then a type; `AS VOLATILE` alone is a type of that name.
+        // `AS VOLATILE` and then a type; `AS VOLATILE` alone is a type of that
+        // name.
         let types = |next: Option<&Token>| {
             next.is_some_and(|next| matches!(next.kind, TokenKind::Identifier(_)) || matches!(
                 next.kind,
@@ -482,7 +483,8 @@ fn without_volatile(tokens: Vec<Token>) -> (Vec<Token>, BTreeSet<(usize, usize)>
             ))
         };
         if word("VOLATILE") && is(kept.last(), "tkAS") && types(tokens.get(index + 1)) {
-            // The identifier this declares: before the dimensions, if it has them.
+            // The identifier this declares: before the dimensions, if it has
+            // them.
             let mut at = kept.len() - 1;
             if is(at.checked_sub(1).and_then(|one| kept.get(one)), "tkRParen") {
                 let mut depth = 0;
@@ -3076,8 +3078,8 @@ mod tests {
     }
 
     /// ON n GOTO|GOSUB parsed to no statement ("invalid generated-grammar
-    /// statement"): the grammar emitted no opcode for it. tests/run/qb/jumps.bas
-    /// did not compile.
+    /// statement"): the grammar emitted no opcode for it.
+    /// tests/run/qb/jumps.bas did not compile.
     #[test]
     fn on_goto_and_on_gosub_select_the_nth_label() {
         for (source, gosub) in [("on k goto one, two, three\r\n", false), ("on k gosub one, two, three\r\n", true)] {

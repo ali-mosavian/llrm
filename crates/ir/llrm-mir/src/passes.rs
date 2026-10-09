@@ -21,12 +21,14 @@ use crate::module::{Change, Function, GlobalKind, GlobalValue, MetadataNode, Mod
 use crate::program::{Program, ProgramAnalyses, ProgramPass, ProgramProxy, interface};
 use crate::target::{Machine, Neutral};
 
-/// Where a timer is plugged in: MIR depends on nothing, so whoever times the pipeline
-/// (`llrm-transforms`, when `LLRM_DEBUG=time` is on) installs these once.
+/// Where a timer is plugged in: MIR depends on nothing, so whoever times the
+/// pipeline (`llrm-transforms`, when `LLRM_DEBUG=time` is on) installs these
+/// once.
 pub struct Observer {
     /// Runs the closure as a step of kind `.0` (`mir`, `analysis`) named `.1`.
     pub span: fn(&'static str, &'static str, &mut dyn FnMut()),
-    /// Runs the closure with the steps in it charged to the function named `.0`.
+    /// Runs the closure with the steps in it charged to the function named
+    /// `.0`.
     pub function: fn(&str, &mut dyn FnMut()),
     /// A cached analysis `.0` looked up: found when `.1`, else computed.
     pub count: fn(&'static str, bool),
@@ -58,7 +60,8 @@ fn spanned_as<T>(
     out.expect("the observer ran the step")
 }
 
-/// `run` with the steps in it charged to `function`, if an observer is installed.
+/// `run` with the steps in it charged to `function`, if an observer is
+/// installed.
 pub fn in_function<T>(
     function: &str,
     run: impl FnOnce() -> T,
@@ -84,8 +87,8 @@ pub struct Unit<'a> {
     pub context: &'a mut Context,
     pub layout: &'a DataLayout,
     pub function: &'a mut Function,
-    /// The function's own id in its module, where it is one the module names: a pass that must
-    /// tell a call to itself asks for it.
+    /// The function's own id in its module, where it is one the module names: a
+    /// pass that must tell a call to itself asks for it.
     pub id: Option<GlobalId>,
     /// The module's metadata nodes.
     pub metadata: &'a [crate::module::MetadataNode],
@@ -98,9 +101,11 @@ pub struct Unit<'a> {
 /// declaration once the pass has run over the function.
 #[derive(Clone, Debug, Default)]
 pub struct Declared {
-    /// The module's names, worked out when a pass first declares one: most runs declare nothing.
+    /// The module's names, worked out when a pass first declares one: most runs
+    /// declare nothing.
     ids: Option<HashMap<String, GlobalId>>,
-    /// Where the names come from while `ids` is not made: the module's `Declarations`.
+    /// Where the names come from while `ids` is not made: the module's
+    /// `Declarations`.
     held: Option<Rc<Vec<GlobalValue>>>,
     next: u32,
     pending: Vec<(String, crate::types::TypeId)>,
@@ -128,8 +133,10 @@ impl Declared {
         }
     }
 
-    /// As `of`, over the module's `Declarations` (`held`, its `metadata` node count): nothing is scanned or copied
-    /// unless a pass declares a function. LLVM's `getOrInsertFunction` is a symbol-table lookup, not a scan.
+    /// As `of`, over the module's `Declarations` (`held`, its `metadata` node
+    /// count): nothing is scanned or copied unless a pass declares a
+    /// function. LLVM's `getOrInsertFunction` is a symbol-table lookup, not a
+    /// scan.
     pub fn over(
         held: Rc<Vec<GlobalValue>>,
         metadata: usize,
@@ -215,17 +222,20 @@ pub trait Analysis: 'static {
     /// it builds on. One that does not outlives a change to the module.
     const READS_OUTER: bool = true;
 
-    /// Whether `update` can bring a result the function has since changed up to date: such a result is kept past an
-    /// invalidation, with the point in the function's history it was true at.
+    /// Whether `update` can bring a result the function has since changed up to
+    /// date: such a result is kept past an invalidation, with the point in
+    /// the function's history it was true at.
     const INCREMENTAL: bool = false;
 
-    /// Whether `unaffected` can tell a result still true after `changes`: such a result is kept past an invalidation,
-    /// and stands again when `changes` leave it as it was (and, if it reads the outer facts, those are the ones it
-    /// read).
+    /// Whether `unaffected` can tell a result still true after `changes`: such
+    /// a result is kept past an invalidation, and stands again when
+    /// `changes` leave it as it was (and, if it reads the outer facts, those
+    /// are the ones it read).
     const SKIPS: bool = false;
 
-    /// Whether `changes` leave `previous`, true of the function before them, true of it now. Must never say so wrongly,
-    /// as `LLRM_CHECK_REPLAY` asserts; saying no derives the result afresh.
+    /// Whether `changes` leave `previous`, true of the function before them,
+    /// true of it now. Must never say so wrongly, as `LLRM_CHECK_REPLAY`
+    /// asserts; saying no derives the result afresh.
     #[allow(unused_variables)]
     fn unaffected(
         changes: &[crate::module::Change],
@@ -235,8 +245,9 @@ pub trait Analysis: 'static {
         false
     }
 
-    /// `previous`, which was true of the function before `changes`, made true of it now; none where it would be
-    /// derived afresh. Must give what `run` gives, as `LLRM_CHECK_REPLAY` asserts.
+    /// `previous`, which was true of the function before `changes`, made true
+    /// of it now; none where it would be derived afresh. Must give what
+    /// `run` gives, as `LLRM_CHECK_REPLAY` asserts.
     #[allow(unused_variables)]
     fn update(
         previous: &Self::Result,
@@ -274,9 +285,10 @@ pub trait ModuleAnalysis: 'static {
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result;
 
-    /// Whether `previous`, a result dropped by a pass, is what `run` would give now, found without working it out: the
-    /// result then stands as the same one, so what holds it (an outer proxy) is the same too. Saying no, the default,
-    /// runs.
+    /// Whether `previous`, a result dropped by a pass, is what `run` would give
+    /// now, found without working it out: the result then stands as the
+    /// same one, so what holds it (an outer proxy) is the same too. Saying no,
+    /// the default, runs.
     #[allow(unused_variables)]
     fn unchanged(
         module: &Module,
@@ -287,7 +299,8 @@ pub trait ModuleAnalysis: 'static {
     }
 }
 
-/// The declarations an analysis last worked from: its result stands while `Declarations` is the same result.
+/// The declarations an analysis last worked from: its result stands while
+/// `Declarations` is the same result.
 struct Seen<A>(Option<Rc<Vec<GlobalValue>>>, std::marker::PhantomData<A>);
 
 impl<A> Default for Seen<A> {
@@ -296,7 +309,8 @@ impl<A> Default for Seen<A> {
     }
 }
 
-/// Whether the declarations are those `A` last worked from, and recording them as the ones it works from now.
+/// Whether the declarations are those `A` last worked from, and recording them
+/// as the ones it works from now.
 fn declared_as_before<A: 'static>(
     module: &Module,
     analyses: &mut ModuleAnalyses,
@@ -311,8 +325,8 @@ fn declared_as_before<A: 'static>(
     same
 }
 
-/// What each function does to memory, as its attributes state it: of its declaration alone, so it stands while the
-/// declarations do.
+/// What each function does to memory, as its attributes state it: of its
+/// declaration alone, so it stands while the declarations do.
 pub struct CalleeEffects;
 
 impl ModuleAnalysis for CalleeEffects {
@@ -525,8 +539,9 @@ impl PreservedAnalyses {
         self
     }
 
-    /// `self`, or everything where `function` logged no change since `before`: a pass that edited nothing left every
-    /// analysis true, whatever it says.
+    /// `self`, or everything where `function` logged no change since `before`:
+    /// a pass that edited nothing left every analysis true, whatever it
+    /// says.
     #[must_use]
     pub fn unless_unchanged(
         self,
@@ -751,7 +766,8 @@ impl Analyses {
         let updated = self.kept.remove(&key).and_then(|old| {
             let old = old.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
             let changes = function.changes_since(old.mark)?;
-            // Asking of a long log again and again is more than the run it saves.
+            // Asking of a long log again and again is more than the run it
+            // saves.
             if A::SKIPS
                 && changes.len() <= 256
                 && (!A::READS_OUTER || Rc::ptr_eq(&old.outer, &self.outer))
@@ -803,7 +819,8 @@ impl Analyses {
         result
     }
 
-    /// `LLRM_CHECK_PRESERVED`: every analysis still held after `pass` is what a fresh run gives.
+    /// `LLRM_CHECK_PRESERVED`: every analysis still held after `pass` is what a
+    /// fresh run gives.
     pub fn check_kept(
         &self,
         pass: &str,
@@ -880,8 +897,8 @@ thread_local! {
     static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many module analyses this thread has run (not counting those kept as they were), for a test that an unchanged
-/// one is not.
+/// How many module analyses this thread has run (not counting those kept as
+/// they were), for a test that an unchanged one is not.
 pub fn module_runs() -> usize {
     RUNS.with(std::cell::Cell::get)
 }
@@ -916,10 +933,11 @@ pub struct ModuleAnalyses {
     dropped: HashMap<TypeId, Rc<dyn Any>>,
     outer: Option<Rc<Outer>>,
     functions: HashMap<GlobalId, Analyses>,
-    /// What an analysis keeps for its next run, by its type: the working of an update that reuses the last.
+    /// What an analysis keeps for its next run, by its type: the working of an
+    /// update that reuses the last.
     memos: HashMap<TypeId, Box<dyn Any>>,
-    /// `LLRM_CHECK_MODULES`: an analysis being run again to check what it brought up to date works everything out
-    /// afresh.
+    /// `LLRM_CHECK_MODULES`: an analysis being run again to check what it
+    /// brought up to date works everything out afresh.
     scratch: bool,
 }
 
@@ -937,10 +955,12 @@ impl ModuleAnalyses {
         }
     }
 
-    /// The `T` an analysis left for its next run, made empty the first time: what survives `invalidate`, for an
-    /// analysis that brings its last result up to date instead of working it out again.
-    /// Whether an analysis is to work everything out afresh and keep nothing of its last run (`LLRM_CHECK_MODULES` runs
-    /// it so, to check what it brought up to date).
+    /// The `T` an analysis left for its next run, made empty the first time:
+    /// what survives `invalidate`, for an analysis that brings its last
+    /// result up to date instead of working it out again. Whether an
+    /// analysis is to work everything out afresh and keep nothing of its last
+    /// run (`LLRM_CHECK_MODULES` runs it so, to check what it brought up to
+    /// date).
     pub fn from_scratch(&self) -> bool {
         self.scratch
     }

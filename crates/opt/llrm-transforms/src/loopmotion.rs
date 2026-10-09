@@ -8,12 +8,14 @@
 //! that changed: a moved store's narrowing was its old block's.
 //!
 //! What changed with the IR:
-//! - A store is moved, not copied; one that goes with another value has it as its operand. An address is an operand
-//!   too, and must reach the exit.
-//! - What refuses a loop is what `llrm_mir::memory` says is more than a value, a store aside: a volatile access (the
-//!   old barrier), a call that may touch memory, an `invoke` (a raise a handler here observes). The old refused every
-//!   call; one with no effect that returns is a value.
-//! - A stored cell is in an object (`MemRef::object`), as the old `Segment` and `Frame` spaces were, with no selector.
+//! - A store is moved, not copied; one that goes with another value has it as
+//!   its operand. An address is an operand too, and must reach the exit.
+//! - What refuses a loop is what `llrm_mir::memory` says is more than a value,
+//!   a store aside: a volatile access (the old barrier), a call that may touch
+//!   memory, an `invoke` (a raise a handler here observes). The old refused
+//!   every call; one with no effect that returns is a value.
+//! - A stored cell is in an object (`MemRef::object`), as the old `Segment` and
+//!   `Frame` spaces were, with no selector.
 //! - `root` followed copies, which have no instruction.
 //!
 //! Dropped, no rich MIR analogue: the `excludes` an indexed store had to
@@ -66,7 +68,8 @@ impl FunctionPass for LoopMotion {
     }
 }
 
-/// What a store moved from a loop to its exit leaves: the blocks, the values and the facts about them, not the memory.
+/// What a store moved from a loop to its exit leaves: the blocks, the values
+/// and the facts about them, not the memory.
 fn kept_when_stores_move() -> PreservedAnalyses {
     PreservedAnalyses::none()
         .preserve::<Dominators>()
@@ -146,8 +149,8 @@ pub fn sunk_stores(
             function.set_operand(store, 0, value);
             function.move_to(store, Position::Before(anchor))?;
         }
-        // What alias said of the old placement no longer holds; no value, block or edge changed, so what is said of
-        // them does.
+        // What alias said of the old placement no longer holds; no value, block
+        // or edge changed, so what is said of them does.
         analyses.invalidate(&kept_when_stores_move());
         changed = true;
     }
@@ -184,7 +187,8 @@ fn _moved(
     let address_values = |value: ValueId| {
         defined_in(value).is_none_or(|at| !loop_.body.contains(&at) && header_dominators.contains(&at))
     };
-    // What a moved store reads must reach the exit, whose one way in is `source`.
+    // What a moved store reads must reach the exit, whose one way in is
+    // `source`.
     let reaches = |operand: Operand| match operand {
         Operand::Value(value) => defined_in(value)
             .is_none_or(|at| dominators.get(&source).is_some_and(|dominating| dominating.contains(&at))),
@@ -323,7 +327,8 @@ impl _Exit<'_> {
     ) -> (bool, usize) {
         let key = (at, expected);
         if let Some(depth) = active.iter().position(|one| *one == key) {
-            return (true, depth); // inductive backedge; every entry path still needs a matching store
+            // inductive backedge; every entry path still needs a matching store
+            return (true, depth);
         }
         if let Some(&answer) = known.get(&key) {
             return (answer, usize::MAX);

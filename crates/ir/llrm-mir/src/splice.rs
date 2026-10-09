@@ -1,6 +1,6 @@
-//! The copy an inlining makes: a call replaced by the body it calls, its returns
-//! branching to what followed. Where to inline is `llrm_transforms::inline`'s
-//! policy; this is only how.
+//! The copy an inlining makes: a call replaced by the body it calls, its
+//! returns branching to what followed. Where to inline is
+//! `llrm_transforms::inline`'s policy; this is only how.
 
 use crate::context::Context;
 use crate::edit::Position;

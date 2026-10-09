@@ -40,12 +40,14 @@ pub struct Options {
     pub selection: &'static crate::backend::isel::Compiled,
     /// The target `selection` is for.
     pub arch: std::rc::Rc<dyn llrm_target::Target>,
-    /// The object format the symbols are spelled for: `omf`, `elf` or `macho`, which the target's conventions
-    /// decorate.
+    /// The object format the symbols are spelled for: `omf`, `elf` or `macho`,
+    /// which the target's conventions decorate.
     pub object_format: &'static str,
-    /// `-mabi=`: the ABI family an unmarked function has (calling.toml's `[abi.*]`), the target's default without.
+    /// `-mabi=`: the ABI family an unmarked function has (calling.toml's
+    /// `[abi.*]`), the target's default without.
     pub abi: Option<String>,
-    /// `-gcodeview`, `-gdwarf`...: the debug format asked for, where `-g` writes any.
+    /// `-gcodeview`, `-gdwarf`...: the debug format asked for, where `-g`
+    /// writes any.
     pub debug_format: llrm_object::debug::Format,
 }
 
@@ -77,7 +79,8 @@ impl Options {
         Self::new(machine, std::rc::Rc::new(llrm_x86_m16::M16), crate::backend::isel::m16())
     }
 
-    /// Whether the debug writer this object format and `-g` flavor pick says where a value is over a range of code.
+    /// Whether the debug writer this object format and `-g` flavor pick says
+    /// where a value is over a range of code.
     pub fn location_ranges(&self) -> bool {
         use llrm_object::debug::Format;
         match (self.object_format, self.debug_format) {
@@ -89,8 +92,8 @@ impl Options {
         }
     }
 
-    /// Whether that writer places a frame cell from the canonical frame address, so `-g` need not keep a frame
-    /// register.
+    /// Whether that writer places a frame cell from the canonical frame
+    /// address, so `-g` need not keep a frame register.
     pub fn cfa_locations(&self) -> bool {
         use llrm_object::debug::Format;
         match (self.object_format, self.debug_format) {
@@ -185,9 +188,9 @@ pub fn compiled(
     Ok(out)
 }
 
-/// What the spill model (`llrm_transforms::spill`) forecasts for each function the pipeline
-/// hands to instruction selection: the `spillmodel` channel, to set beside the spills the
-/// allocator makes (`cost` channel, `executed`).
+/// What the spill model (`llrm_transforms::spill`) forecasts for each function
+/// the pipeline hands to instruction selection: the `spillmodel` channel, to
+/// set beside the spills the allocator makes (`cost` channel, `executed`).
 fn spill_model(program: &Program) {
     use llrm_transforms::{profit, spill};
     for module in &program.modules {
@@ -300,7 +303,8 @@ pub fn optimized(
         dump: options.dump.clone(),
         ..Default::default()
     };
-    // No format needs a variable's stores kept for a debugger: `-g` changes no code.
+    // No format needs a variable's stores kept for a debugger: `-g` changes no
+    // code.
     program.modules.iter_mut().for_each(lifted);
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
     timed("mir assumptions", || program.modules.iter_mut().for_each(llrm_transforms::dead::assumptions_dropped));
@@ -320,8 +324,8 @@ pub fn optimized(
     timed("mir verify pipeline", || verified(program, "the pipeline"))
 }
 
-/// `module` without the volatile that `-g` put on accesses to its variables (`llrm_mir::debuginfo::OBSERVED`), so `-g`
-/// changes no code.
+/// `module` without the volatile that `-g` put on accesses to its variables
+/// (`llrm_mir::debuginfo::OBSERVED`), so `-g` changes no code.
 fn lifted(module: &mut Module) {
     let one = module.context.types.int(1);
     let no = module.context.int(one, 0);
@@ -341,7 +345,8 @@ fn lifted(module: &mut Module) {
                 llrm_mir::Opcode::Call(_) => function.set_operand(inst, 3, llrm_mir::Operand::Constant(no)),
                 _ => {}
             }
-            // The mark has done its work; metadata on an instruction is something a pass tells it from another by.
+            // The mark has done its work; metadata on an instruction is
+            // something a pass tells it from another by.
             function.unannotate(inst, llrm_mir::debuginfo::OBSERVED);
         }
     }
@@ -464,9 +469,11 @@ mod location_ranges_tests {
 
     use super::Options;
 
-    /// Whether a debug format says where a value is over a range of code is the writer's fact: location lists in DWARF
-    /// and C13's ranges do; CodeView 4, its BASIC-era dialect and Turbo Debugger's records name one place for a
-    /// scope. OMF is the last, ELF and Mach-O the first, whatever `-g` flavor is asked where one can be written.
+    /// Whether a debug format says where a value is over a range of code is the
+    /// writer's fact: location lists in DWARF and C13's ranges do; CodeView
+    /// 4, its BASIC-era dialect and Turbo Debugger's records name one place for
+    /// a scope. OMF is the last, ELF and Mach-O the first, whatever `-g`
+    /// flavor is asked where one can be written.
     #[test]
     fn a_debug_format_says_ranges_as_its_writer_does() {
         let of = |object_format, debug_format| {

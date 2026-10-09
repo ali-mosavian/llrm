@@ -6,11 +6,14 @@
 //! loop's effects.
 //!
 //! What changed with the IR:
-//! - The seeds go first in the latch, where the old ones followed its first float load, the x87 checkpoint.
-//! - The counter's value after the loop is its final number, placed by `SsaUpdater` for every use outside the loop, a
-//!   phi's included.
-//! - Header phis lose the latch's arm and, left with one, are that value. What the loop no longer reads is Dead's.
-//! - A seed's pointer must be there before the latch: a constant or a value from outside it.
+//! - The seeds go first in the latch, where the old ones followed its first
+//!   float load, the x87 checkpoint.
+//! - The counter's value after the loop is its final number, placed by
+//!   `SsaUpdater` for every use outside the loop, a phi's included.
+//! - Header phis lose the latch's arm and, left with one, are that value. What
+//!   the loop no longer reads is Dead's.
+//! - A seed's pointer must be there before the latch: a constant or a value
+//!   from outside it.
 //!
 //! Dropped, no rich MIR analogue: the checkpoint and `floatfacts::checkpoint`
 //! (the rich MIR observes no FP exception), `strength::_made` (the final
@@ -20,12 +23,14 @@
 //!
 //! floatbounds has no consumer here, nor elsewhere on the rich MIR.
 //!
-//! Tests, in `floatloop_tests.rs`: `test_exact_loop_retains_checkpoint_and_final_iteration`,
+//! Tests, in `floatloop_tests.rs`:
+//! `test_exact_loop_retains_checkpoint_and_final_iteration`,
 //! `test_emitted_final_answer_has_the_correct_symbol` and
 //! `test_unproved_or_observable_iterations_remain`, as MIR. Skipped:
 //! `test_checkpoint_with_additional_effects_is_not_ignored` (`Fcheck`),
 //! `test_floatloop_can_be_disabled_for_stage_bisection` (the pipeline's
-//! options) and `test_checkpoint_keeps_initial_memory_and_counter_stores_for_an_error_handler`
+//! options) and
+//! `test_checkpoint_keeps_initial_memory_and_counter_stores_for_an_error_handler`
 //! (loopmotion's ON ERROR stores).
 
 use std::collections::BTreeSet;
@@ -61,7 +66,8 @@ impl FunctionPass for FloatLoop {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        // With no float in the body no loop is a float loop. LLRM_CHECK_FLOATSKIP runs the pass anyway and says if it
+        // With no float in the body no loop is a float loop.
+        // LLRM_CHECK_FLOATSKIP runs the pass anyway and says if it
         // changed anything.
         let none = !floatfacts::touches(unit.context, unit.function);
         if none && !llrm_support::env_set("LLRM_CHECK_FLOATSKIP") {
@@ -220,7 +226,8 @@ fn _planned(
     let start = induction::_signed(&affine.start, &solved.integers, width)?;
     let step = induction::_signed(&affine.step, &solved.integers, width)?;
     let (update, _) = arms(function, phi).into_iter().find(|&(_, from)| from == latch)?;
-    // The latch: float work that never reads the counter, the update, and its branch.
+    // The latch: float work that never reads the counter, the update, and its
+    // branch.
     for &inst in latch_insts {
         let op = function.instruction(inst);
         let reads_counter = op.operands.contains(&Operand::Value(counter));

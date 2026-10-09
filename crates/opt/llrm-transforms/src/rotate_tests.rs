@@ -165,8 +165,9 @@ fn a_rotated_loop_is_not_unrolled_or_peeled() {
     assert!(through(&summing("4"), Unroll::default()).0);
 }
 
-/// A step made in the header that a header phi takes round the back edge is not skipped on entry: rotation read it as
-/// test-only and the counter's next value was its own (`sub %x, 1` of itself, #811).
+/// A step made in the header that a header phi takes round the back edge is not
+/// skipped on entry: rotation read it as test-only and the counter's next value
+/// was its own (`sub %x, 1` of itself, #811).
 #[test]
 fn a_step_in_the_header_that_a_phi_reads_keeps_the_header() {
     let text = "define i16 @f(i16 %x) {

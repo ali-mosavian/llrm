@@ -9,7 +9,8 @@ use crate::facts::Fact;
 enum Shown {
     /// Tests by name, each a `fn` somewhere in the workspace.
     By(&'static [&'static str]),
-    /// Stated and carried, no pass reads it yet: whose reader, and why it waits.
+    /// Stated and carried, no pass reads it yet: whose reader, and why it
+    /// waits.
     Unread(&'static str),
 }
 
@@ -159,7 +160,8 @@ fn declared() -> Vec<&'static str> {
     Fact::examples().into_iter().map(Fact::key).collect()
 }
 
-/// The files under the workspace that define `fn name`, as paths from `crates/`.
+/// The files under the workspace that define `fn name`, as paths from
+/// `crates/`.
 fn defined(
     name: &str,
     files: &[(String, String)],
@@ -216,7 +218,8 @@ fn every_fact_is_shown_end_to_end_or_says_whose_reader_waits() {
                         .filter(|test| defined(test, &files).is_empty())
                         .map(|test| format!("{key}: no `fn {test}`")),
                 );
-                // A reader that only an IR crate's tests exercise has shown nothing about the compile.
+                // A reader that only an IR crate's tests exercise has shown
+                // nothing about the compile.
                 if !tests.iter().any(|test| defined(test, &files).iter().any(|path| on_the_compile_route(path))) {
                     wrong.push(format!(
                         "{key}: no test on the compile route (opt/, backend/, frontends/); name one or say `Unread`"

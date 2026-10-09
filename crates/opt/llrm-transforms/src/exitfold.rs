@@ -2,9 +2,10 @@
 //! `optimizeLoopExits`. Of a loop's exits the latch follows, each counted
 //! (`induction::exits`), in dominance order:
 //!
-//! - one whose count an earlier exit shares never leaves: the earlier one leaves on that trip first;
-//! - one whose count is above the loop's most, the least of the others', as the constants or the guards on entry prove,
-//!   never leaves;
+//! - one whose count an earlier exit shares never leaves: the earlier one
+//!   leaves on that trip first;
+//! - one whose count is above the loop's most, the least of the others', as the
+//!   constants or the guards on entry prove, never leaves;
 //! - one whose count is zero leaves on the first trip.
 //!
 //! Its branch is given the condition that decides it; `decide` makes it a
@@ -65,7 +66,8 @@ struct Hoisted {
     right: Operand,
     before: InstId,
     preheader: BlockId,
-    /// The branch can be taken in the preheader: the first trip reaches it and nothing seen runs on the way.
+    /// The branch can be taken in the preheader: the first trip reaches it and
+    /// nothing seen runs on the way.
     early: bool,
 }
 
@@ -102,7 +104,8 @@ pub fn folded_with(
             let exits = induction::exits(&unit, loop_, Some(facts), false);
             let folding = _decided(&unit, loop_, &exits);
             let lifting = _hoisted(&unit, outer, loop_, &exits, &folding);
-            // One rewrite of a loop's exits a round: each reads them as they were.
+            // One rewrite of a loop's exits a round: each reads them as they
+            // were.
             if folding.is_empty() && lifting.is_empty() {
                 match _merged(&unit, outer, loop_, &exits) {
                     Some(merge) => merged.push(merge),
@@ -150,7 +153,8 @@ pub fn folded_with(
     }
     for one in &predicated {
         // Each exit leaves where its count is the loop's, tested once, in the
-        // preheader, in the order the loop tests them; the loop never leaves by them.
+        // preheader, in the order the loop tests them; the loop never leaves by
+        // them.
         let loop_count = Expander::new(function.terminator(one.preheader).expect("a preheader's branch")).least(
             context,
             function,
@@ -224,7 +228,8 @@ pub fn folded_with(
             _replaced(function, one.branch, condition);
             continue;
         }
-        // Tested once, in the preheader: the way out, or on to the loop, which then never leaves here.
+        // Tested once, in the preheader: the way out, or on to the loop, which
+        // then never leaves here.
         let preheader = one.preheader;
         let header = match function.instruction(one.before).operands[..] {
             [Operand::Block(header)] => header,
@@ -307,7 +312,8 @@ fn _merged(
     };
     let (first_at, first) = exits.iter().enumerate().find(|(_, one)| single(one).is_some())?;
     let proof = single(first)?;
-    // The counter tested as the trip begins, stepping without wrapping up to its count.
+    // The counter tested as the trip begins, stepping without wrapping up to
+    // its count.
     if proof.stepped || proof.posttested || proof.test == IntPredicate::Ne {
         return None;
     }
@@ -405,7 +411,8 @@ fn _leaving(
     }
 }
 
-/// Whether block `to` is reached from `from` inside the loop short of its header.
+/// Whether block `to` is reached from `from` inside the loop short of its
+/// header.
 fn _reaches(
     function: &Function,
     loop_: &Loop,
@@ -566,8 +573,9 @@ fn _predicated(
     (!chosen.is_empty()).then_some(Predicated { preheader, header, loop_count, exits: chosen })
 }
 
-/// Whether something outside `loop_` reads a value made inside it, where the loop's values stand: an exit tested before
-/// the loop is reached without them (the program need not keep to LCSSA, whose phis would say so).
+/// Whether something outside `loop_` reads a value made inside it, where the
+/// loop's values stand: an exit tested before the loop is reached without them
+/// (the program need not keep to LCSSA, whose phis would say so).
 fn _values_out(
     function: &Function,
     loop_: &Loop,
@@ -584,7 +592,8 @@ fn _values_out(
                 .any(
                     |one| {
                         let user = function.instruction(one.user);
-                        // A phi reads it where the edge comes from: from the loop, the loop's value is there.
+                        // A phi reads it where the edge comes from: from the
+                        // loop, the loop's value is there.
                         let at = match (user.opcode == Opcode::Phi).then(|| user.operands[one.index as usize + 1]) {
                             Some(Operand::Block(from)) => Some(from),
                             _ => function.parent(one.user),
@@ -621,7 +630,8 @@ fn _crashes(
         )
 }
 
-/// The compare `exit`'s branch tests, as `counter predicate invariant` where the loop stays.
+/// The compare `exit`'s branch tests, as `counter predicate invariant` where
+/// the loop stays.
 fn _tested(
     unit: &memory::Unit,
     exit: &ExitCount,
@@ -771,15 +781,16 @@ fn _hoisted(
                 (false, true) => IntPredicate::Ule,
                 (false, false) => IntPredicate::Uge,
             };
-            // Taken only where the start passes its test, as it does on the first trip, so the test is a fact in the
-            // proof.
+            // Taken only where the start passes its test, as it does on the
+            // first trip, so the test is a fact in the proof.
             let first = [guards::Guard { predicate, left: start.clone(), right: bound.clone() }];
             let holds_up_to = |trips: &Scev| {
                 let last = start.plus(&trips.times(&by));
                 guards::holds_given(unit, latch, &first, predicate, &last, &bound)
                     && guards::holds_given(unit, exit.block, &first, no_wrap, &start, &last)
             };
-            // An earlier exit leaving on the loop's last trip spares the later ones it.
+            // An earlier exit leaving on the loop's last trip spares the later
+            // ones it.
             let invariant = most.iter().filter(|one| one.width == width).any(|trips| {
                 holds_up_to(trips) || (earlier.contains(trips) && holds_up_to(&trips.minus(&Scev::constant(1, width))))
             });
@@ -847,7 +858,8 @@ fn _decided(
     decided
 }
 
-/// Whether `most` is below `count` as unsigned numbers on entry to `header`'s loop.
+/// Whether `most` is below `count` as unsigned numbers on entry to `header`'s
+/// loop.
 fn _below(
     unit: &memory::Unit,
     header: i64,

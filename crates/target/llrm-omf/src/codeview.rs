@@ -1,6 +1,6 @@
-//! [`llrm_object::debug::Info`] as CodeView 4: the $$SYMBOLS and $$TYPES segments, and the line
-//! numbers each section's LINNUM records carry. A fact CodeView 4 as `cvwrite` writes it cannot
-//! say is refused with what it was.
+//! [`llrm_object::debug::Info`] as CodeView 4: the $$SYMBOLS and $$TYPES
+//! segments, and the line numbers each section's LINNUM records carry. A fact
+//! CodeView 4 as `cvwrite` writes it cannot say is refused with what it was.
 
 use llrm_object::debug::{self as model, Info, Location};
 use llrm_object::{Definition, Kind as Fixup, Object, Reloc, Role, Section, Target};
@@ -22,7 +22,8 @@ fn narrow<T: TryFrom<i64>>(
     T::try_from(value).or_else(|_| refused(format!("{what} {value} does not fit its field")))
 }
 
-/// The scalar CodeView 4 as measured has a code for, None where it has none (a 64-bit integer, a bool).
+/// The scalar CodeView 4 as measured has a code for, None where it has none (a
+/// 64-bit integer, a bool).
 fn scalar(one: model::Scalar) -> Option<Scalar> {
     use model::Scalar as M;
     Some(match one {
@@ -43,8 +44,8 @@ fn scalar(one: model::Scalar) -> Option<Scalar> {
     })
 }
 
-/// `one` as a CodeView type; None where the format as measured has no record for it, and then none for what
-/// names it either (see `usable`).
+/// `one` as a CodeView type; None where the format as measured has no record
+/// for it, and then none for what names it either (see `usable`).
 fn typed(one: &model::Type) -> Result<Option<Type>, Error> {
     use model::Type as M;
     Ok(Some(match one {
@@ -55,7 +56,8 @@ fn typed(one: &model::Type) -> Result<Option<Type>, Error> {
         M::FixedString(length) => Type::FixedString(narrow(i64::from(*length), "a STRING's length")?),
         M::Array { element, bytes: None } => Type::Array(*element),
         M::Array { element, bytes: Some(bytes) } => Type::Sized { element: *element, bytes: *bytes },
-        // CodeView 4's record is the same for a union: its fields all start at 0.
+        // CodeView 4's record is the same for a union: its fields all start
+        // at 0.
         M::Struct { name, bytes, fields, .. } => {
             let fields = fields
                 .iter()
@@ -86,9 +88,11 @@ fn typed(one: &model::Type) -> Result<Option<Type>, Error> {
     }))
 }
 
-/// Which types CodeView can write: those it has a record for, and those that name only such. A variable of
-/// another is left out, and a procedure naming one is written as `void ()`: what the C frontend did for every
-/// format before a 64-bit integer was a type of the model, now said once where the format's limit is.
+/// Which types CodeView can write: those it has a record for, and those that
+/// name only such. A variable of another is left out, and a procedure naming
+/// one is written as `void ()`: what the C frontend did for every format before
+/// a 64-bit integer was a type of the model, now said once where the format's
+/// limit is.
 fn usable(
     info: &Info,
     written: &[Option<Type>],
@@ -134,7 +138,8 @@ fn module(
         .zip(&usable)
         .map(|(one, &usable)| one.filter(|_| usable).unwrap_or(Type::Scalar(Scalar::Void)))
         .collect();
-    // A procedure CodeView cannot write is `void ()`, a type of its own at the end of the table.
+    // A procedure CodeView cannot write is `void ()`, a type of its own at the
+    // end of the table.
     let empty = types.len();
     types.push(Type::Procedure { result: None, parameters: Vec::new() });
     let mut written = cvwrite::Module { name, types, ..cvwrite::Module::default() };
@@ -164,15 +169,17 @@ fn module(
                 Location::Register(register) => {
                     return refused(format!("{} is in register {register}, which is not written yet", variable.name));
                 }
-                // A parameter that arrives in a register and is there until the body starts, or one the optimiser
-                // removed: CodeView 4 as written has no register symbol (S_REGISTER) and no "optimized out", so it is
-                // left out, as it was before the model said it.
+                // A parameter that arrives in a register and is there until the
+                // body starts, or one the optimiser removed: CodeView 4 as
+                // written has no register symbol (S_REGISTER) and no "optimized
+                // out", so it is left out, as it was before the model said it.
                 Location::List(entries)
                     if entries.iter().all(|(_, location)| matches!(location, Location::Register(_))) => {}
                 Location::List(_) => {
                     return refused(format!("{} has a location list, which is not written yet", variable.name));
                 }
-                // A value in no place, or in pieces: nothing in CodeView 4's records says it, so it is left out.
+                // A value in no place, or in pieces: nothing in CodeView 4's
+                // records says it, so it is left out.
                 Location::Constant(_) | Location::Pieces(_) | Location::Relative { .. } => {}
             }
         }
@@ -216,7 +223,8 @@ pub fn sections(
         }
         model::Format::TurboDebugger => return refused("this writer does not write Turbo Debugger's information yet"),
     }
-    // What the frontend says: CodeView 4 as C7 writes it, or the dialect BASIC's compilers write (`cvwrite`).
+    // What the frontend says: CodeView 4 as C7 writes it, or the dialect
+    // BASIC's compilers write (`cvwrite`).
     if info.dialect == model::Dialect::Cv4 {
         return crate::cv4::sections(object, info);
     }
@@ -230,7 +238,8 @@ pub fn sections(
             .iter()
             .position(|symbol| symbol.name == one.symbol)
             .ok_or_else(|| Error::Unencodable(format!("CodeView: {} is no symbol of the object", one.symbol)))?;
-        // The image holds zeros where LINK fills in, the displacement is the addend.
+        // The image holds zeros where LINK fills in, the displacement is the
+        // addend.
         image[one.at..one.at + 2].fill(0);
         relocs.push(Reloc {
             at: one.at,
@@ -273,7 +282,8 @@ mod tests {
         T::Scalar(S::Int { bytes: 2, signed: true })
     }
 
-    /// `_f(x) { y }` in eight bytes of code, `x` and `y` in the frame, on lines 3 and 4.
+    /// `_f(x) { y }` in eight bytes of code, `x` and `y` in the frame, on lines
+    /// 3 and 4.
     fn object(
         variables: Vec<Variable>,
         types: Vec<T>,
@@ -337,8 +347,9 @@ mod tests {
         T::Procedure { result: Some(0), parameters: vec![0], convention: None }
     }
 
-    /// The model's parameter, local, return type and lines reach CodeView as the records a debugger
-    /// reads; before the model, only the backend's own structures could write them.
+    /// The model's parameter, local, return type and lines reach CodeView as
+    /// the records a debugger reads; before the model, only the backend's
+    /// own structures could write them.
     #[test]
     fn a_function_of_the_model_is_a_procedure_with_its_frame_variables_and_lines() {
         let made = object(
@@ -357,8 +368,9 @@ mod tests {
         assert_eq!(lines, [(3, 0), (4, 4)]);
     }
 
-    /// A register location is the allocator's answer CodeView 4 can name (S_REGISTER) but this
-    /// writer does not yet: it is refused by name, never written as a frame cell.
+    /// A register location is the allocator's answer CodeView 4 can name
+    /// (S_REGISTER) but this writer does not yet: it is refused by name,
+    /// never written as a frame cell.
     #[test]
     fn a_register_location_is_refused_not_written_as_a_frame_cell() {
         let in_register = Variable {
@@ -371,8 +383,9 @@ mod tests {
         assert!(why.contains("x is in register ax"), "{why}");
     }
 
-    /// A 64-bit integer has no record in CodeView 4 as measured: a variable of one is left out, a procedure that
-    /// names one is `void ()`, and what is beside them is written. Neither is a long, which was a wrong value.
+    /// A 64-bit integer has no record in CodeView 4 as measured: a variable of
+    /// one is left out, a procedure that names one is `void ()`, and what
+    /// is beside them is written. Neither is a long, which was a wrong value.
     #[test]
     fn a_64_bit_integer_is_left_out_with_what_names_it_not_narrowed_and_not_refused() {
         let wide = T::Scalar(S::Int { bytes: 8, signed: true });
@@ -385,12 +398,14 @@ mod tests {
         made.debug.as_mut().unwrap().functions[0].variables[1].r#type = 1;
         made.debug.as_mut().unwrap().functions[0].r#type = 2;
         let shape = cvinfo::parse(&omf::parse(&write::write(&made).unwrap()).unwrap()).shape();
-        // `void` reads as STRING in CodeView's raw return code, as it does for any void function.
+        // `void` reads as STRING in CodeView's raw return code, as it does for
+        // any void function.
         assert_eq!(shape, ["PARAM f.x: INTEGER", "PROC f flags 0 () -> STRING"], "{shape:#?}");
     }
 
-    /// A parameter that arrives in a register (there until the body starts) and one the optimiser removed have
-    /// no frame cell CodeView 4 could name: they are left out, and the frame variables beside them are not.
+    /// A parameter that arrives in a register (there until the body starts) and
+    /// one the optimiser removed have no frame cell CodeView 4 could name:
+    /// they are left out, and the frame variables beside them are not.
     #[test]
     fn a_register_parameter_and_a_removed_one_are_left_out_of_codeview_not_refused() {
         let entry = Range { section: 0, offset: 0, length: 5 };

@@ -223,7 +223,8 @@ fn _found(
     if walks.is_empty() {
         return None;
     }
-    // The proof's test leaves: the header's before each trip, or the latch's after.
+    // The proof's test leaves: the header's before each trip, or the latch's
+    // after.
     let proofs = induction::counted(view, loop_, Some(&view.registers()), false);
     let tested = |one: &CountedLoop, block: BlockId| function.terminator(block) == Some(one.branch);
     let proof = proofs
@@ -311,7 +312,8 @@ fn _expected(found: &Found) -> i64 {
     })
 }
 
-/// `branch` taken to its first target `staying` times for each time to its second.
+/// `branch` taken to its first target `staying` times for each time to its
+/// second.
 fn _weighed(
     context: &mut Context,
     declared: &mut Declared,
@@ -544,7 +546,8 @@ fn _split(
         }
     }
     // The exit is left from the outer latch, with what the header held then;
-    // a walk's huge pointer, past its last window. A skipped loop leaves with the starts.
+    // a walk's huge pointer, past its last window. A skipped loop leaves with
+    // the starts.
     let test = if found.proof.posttested { found.latch } else { found.header };
     let exit_phis: Vec<InstId> = function
         .block(found.exit)
@@ -562,7 +565,8 @@ fn _split(
             }
             skipped = Some(_entry_value(function, pair[0], &carried, found.preheader));
             pair[1] = Operand::Block(next_window);
-            // Tested before each trip, the header held the next trip's values: the latch's.
+            // Tested before each trip, the header held the next trip's values:
+            // the latch's.
             if let Some(&(_, ending)) =
                 endings.iter().find(|(value, _)| *value == pair[0]).filter(|_| !found.proof.posttested)
             {
@@ -645,8 +649,9 @@ fn _windowed(
     let byte = context.types.int(8);
     let gep = Opcode::GetElementPtr { source: byte };
     let step = walk.step();
-    // The lowest byte reached, from `start`: `low`, and for a backward walk its trips less one on.
-    // Walking down, the far recurrence passes below the last trip's bytes: one step more.
+    // The lowest byte reached, from `start`: `low`, and for a backward walk its
+    // trips less one on. Walking down, the far recurrence passes below the
+    // last trip's bytes: one step more.
     let lowest = if step < 0 {
         let dword = context.types.int(huge_index);
         let by = counting::constant(context, &BigInt::from(step), huge_index);
@@ -747,7 +752,8 @@ fn _erased(
     }
 }
 
-/// `Intrinsic::Window` from `huge` pointers to `far` ones, declared where the module has none.
+/// `Intrinsic::Window` from `huge` pointers to `far` ones, declared where the
+/// module has none.
 fn _declared(
     context: &mut Context,
     declared: &mut Declared,

@@ -32,7 +32,8 @@ pub enum Role {
     Text,
     ROData,
     Data,
-    /// Uninitialised: its image is zeros, and a format with a section for it stores none.
+    /// Uninitialised: its image is zeros, and a format with a section for it
+    /// stores none.
     Bss,
     /// The linker's stack: concatenated with the other objects' stacks.
     Stack,
@@ -46,16 +47,19 @@ pub enum Role {
 pub enum Kind {
     /// The target's address, `width` bytes.
     Abs { width: usize },
-    /// The target's address minus the place `from` bytes past the field's start: an x86 call's
-    /// is `width`, the field's end.
+    /// The target's address minus the place `from` bytes past the field's
+    /// start: an x86 call's is `width`, the field's end.
     PcRel { width: usize, from: usize },
-    /// A call or jump's target, `width` bytes relative to the field's end: what `PcRel { width,
-    /// from: width }` says, for the formats that tell a branch from a data reference (Mach-O's
-    /// `BRANCH`, which a linker may send through a stub).
+    /// A call or jump's target, `width` bytes relative to the field's end: what
+    /// `PcRel { width, from: width }` says, for the formats that tell a
+    /// branch from a data reference (Mach-O's `BRANCH`, which a linker may
+    /// send through a stub).
     Branch { width: usize },
-    /// COFF: the 1-based index of the target's section, 2 bytes (`IMAGE_REL_*_SECTION`).
+    /// COFF: the 1-based index of the target's section, 2 bytes
+    /// (`IMAGE_REL_*_SECTION`).
     SectionIndex,
-    /// COFF: the target's offset within its section, `width` bytes (`IMAGE_REL_*_SECREL`).
+    /// COFF: the target's offset within its section, `width` bytes
+    /// (`IMAGE_REL_*_SECREL`).
     SectionOffset { width: usize },
     /// OMF: the selector of the target's segment.
     SegmentBase,
@@ -85,18 +89,20 @@ pub enum Target {
     Symbol(usize),
     /// An index into `Object::omf_groups`.
     OmfGroup(usize),
-    /// The start of a section, by its index in `Object::sections`: what a debug section refers to
-    /// another one by.
+    /// The start of a section, by its index in `Object::sections`: what a debug
+    /// section refers to another one by.
     Section(usize),
 }
 
-/// One field of a section's image, filled when the object is linked. The image holds zeros there.
+/// One field of a section's image, filled when the object is linked. The image
+/// holds zeros there.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Reloc {
     pub at: usize,
     pub kind: Kind,
     pub target: Target,
-    /// What is added to the target's address; sign-extended from the field's width.
+    /// What is added to the target's address; sign-extended from the field's
+    /// width.
     pub addend: i64,
 }
 
@@ -104,13 +110,14 @@ pub struct Reloc {
 pub struct Section {
     pub name: String,
     pub role: Role,
-    /// Addressed within the program's one data group or flat space. A section reached by its own
-    /// selector alone, paragraph aligned, is not.
+    /// Addressed within the program's one data group or flat space. A section
+    /// reached by its own selector alone, paragraph aligned, is not.
     pub near: bool,
     /// The widest alignment an item in it asks for, in bytes.
     pub align: usize,
     pub image: Vec<u8>,
-    /// `[start, end)` of the image that holds data; the rest is zeros that need not be stored.
+    /// `[start, end)` of the image that holds data; the rest is zeros that need
+    /// not be stored.
     pub spans: Vec<[usize; 2]>,
     pub relocs: Vec<Reloc>,
 }
@@ -150,14 +157,15 @@ pub struct Object {
     pub name: String,
     pub arch: Arch,
     pub sections: Vec<Section>,
-    /// Defined symbols in the order they were defined, then the undefined ones in the order they
-    /// are declared.
+    /// Defined symbols in the order they were defined, then the undefined ones
+    /// in the order they are declared.
     pub symbols: Vec<Symbol>,
     pub omf_groups: Vec<OmfGroup>,
     pub debug: Option<debug::Info>,
 }
 
-/// What a writer cannot say. A writer returns it; it never writes something near.
+/// What a writer cannot say. A writer returns it; it never writes something
+/// near.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Unsupported(pub String);
 

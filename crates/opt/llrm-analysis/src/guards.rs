@@ -30,8 +30,8 @@ thread_local! {
     static FOUND: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has found the guards of a block, for a test that a block asked of again is not found
-/// again.
+/// How many times this thread has found the guards of a block, for a test that
+/// a block asked of again is not found again.
 #[cfg(test)]
 pub(crate) fn found() -> usize {
     FOUND.with(std::cell::Cell::get)
@@ -56,7 +56,8 @@ pub fn guards(
                 _proven(unit, condition, true, &mut found);
             }
         }
-        // The edge from `above` toward `at` that alone enters the block it leads to.
+        // The edge from `above` toward `at` that alone enters the block it
+        // leads to.
         if let Some(branch) = function.terminator(cfg::block(above))
             && let [Operand::Value(condition), Operand::Block(yes), Operand::Block(no)] =
                 function.instruction(branch).operands[..]
@@ -125,8 +126,9 @@ pub fn holds(
     holds_in(unit, at, &guards(unit, at), predicate, left, right)
 }
 
-/// `holds`, given the guards on entry to `at` (`guards`), which a caller asking of one block again and again finds
-/// once: they were found four times for each branch `decide` asked of (half of its time on QCport's sc).
+/// `holds`, given the guards on entry to `at` (`guards`), which a caller asking
+/// of one block again and again finds once: they were found four times for each
+/// branch `decide` asked of (half of its time on QCport's sc).
 fn holds_in(
     unit: &Unit,
     at: i64,
@@ -141,7 +143,8 @@ fn holds_in(
     if facts.iter().any(|guard| implies(guard, predicate, left, right)) {
         return true;
     }
-    // An unsigned compare of zero extensions is the compare of what they extend: the guard may be in the narrow type.
+    // An unsigned compare of zero extensions is the compare of what they
+    // extend: the guard may be in the narrow type.
     if let Some((left, right)) = narrowed(unit, predicate, left, right)
         && (facts.iter().any(|guard| implies(guard, predicate, &left, &right))
             || holds_in(unit, at, facts, predicate, &left, &right))
@@ -151,8 +154,9 @@ fn holds_in(
     through_phi(unit, at, predicate, left, right)
 }
 
-/// `phi predicate right` below the phi's block where each edge into the block proves it of the value it brings: no
-/// branch dominates the block then, as in a loop entered from a guard and from its own latch test (LLVM's
+/// `phi predicate right` below the phi's block where each edge into the block
+/// proves it of the value it brings: no branch dominates the block then, as in
+/// a loop entered from a guard and from its own latch test (LLVM's
 /// `isImpliedCondition` over a header phi's incoming values).
 fn through_phi(
     unit: &Unit,
@@ -178,7 +182,8 @@ fn through_phi(
     };
     let Some(block) = function.parent(phi) else { return false };
     let other = if from_left { right } else { left };
-    // The other side stays what it is on every trip: a constant, or a value defined above the phi's block.
+    // The other side stays what it is on every trip: a constant, or a value
+    // defined above the phi's block.
     let fixed = other.known().is_some()
         || other.unknowns().all(|value| match function.value(value).def {
             ValueDef::Instruction(inst) => function
@@ -205,7 +210,8 @@ fn through_phi(
                 if let (Some(one), Some(two)) = (l.known(), r.known()) {
                     return evaluated(predicate, &one, &two, width);
                 }
-                // What holds at the end of the incoming block, and what its branch says of the edge into this one.
+                // What holds at the end of the incoming block, and what its
+                // branch says of the edge into this one.
                 let mut proven = guards(unit, cfg::id(*from));
                 if let Some(branch) = function.terminator(*from)
                     && let [Operand::Value(condition), Operand::Block(yes), Operand::Block(no)] =
@@ -220,9 +226,10 @@ fn through_phi(
         )
 }
 
-/// The two sides read before the zero extension that made one of them, where each is that or a constant it holds: `zext
-/// a` against `64` is `a` against `64` one width down. Unsigned and equality compares only, which a zero extension
-/// keeps.
+/// The two sides read before the zero extension that made one of them, where
+/// each is that or a constant it holds: `zext a` against `64` is `a` against
+/// `64` one width down. Unsigned and equality compares only, which a zero
+/// extension keeps.
 fn narrowed(
     unit: &Unit,
     predicate: IntPredicate,
@@ -272,8 +279,9 @@ pub fn holds_given(
     Given::at(unit, at, assumed).holds(unit, predicate, left, right)
 }
 
-/// What is given on entry to a block: the guards there, and with the `assumed` ones and the loops' proofs of their
-/// counters' followers the facts a range proof reads. Found once, for as many questions of the block as are asked.
+/// What is given on entry to a block: the guards there, and with the `assumed`
+/// ones and the loops' proofs of their counters' followers the facts a range
+/// proof reads. Found once, for as many questions of the block as are asked.
 pub struct Given<'a> {
     at: i64,
     guards: Vec<Guard>,
@@ -307,7 +315,8 @@ impl<'a> Given<'a> {
                 || {
                     let mut facts = self.guards.clone();
                     facts.extend(self.assumed.iter().cloned());
-                    // What the loops holding the block prove of the phis that follow their counters.
+                    // What the loops holding the block prove of the phis that
+                    // follow their counters.
                     let shape = unit.shape();
                     for loop_ in shape.loops.iter().filter(|one| one.body.contains(&self.at)) {
                         for (follower, counter, start) in crate::induction::followers(unit, loop_) {
@@ -345,8 +354,8 @@ pub fn implies(
     left: &Scev,
     right: &Scev,
 ) -> bool {
-    // `a != 0` proves `0 <u a`: the guard of a loop that counts up from zero to `a`, as LLVM's isLoopEntryGuardedByCond
-    // finds it.
+    // `a != 0` proves `0 <u a`: the guard of a loop that counts up from zero to
+    // `a`, as LLVM's isLoopEntryGuardedByCond finds it.
     if guard.predicate == IntPredicate::Ne {
         let zero = |one: &Scev| one.known().is_some_and(|value| value == BigInt::from(0));
         let nonzero = if zero(&guard.right) {

@@ -1,5 +1,6 @@
-//! A build product that is committed by accident (a stray `x.obj` from a compile run in the repository root reached
-//! main once) fails the gate here; the objects the tests read as input live under the fixture directories.
+//! A build product that is committed by accident (a stray `x.obj` from a
+//! compile run in the repository root reached main once) fails the gate here;
+//! the objects the tests read as input live under the fixture directories.
 
 use std::process::Command;
 

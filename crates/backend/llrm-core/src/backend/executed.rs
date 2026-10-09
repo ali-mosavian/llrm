@@ -43,21 +43,24 @@ impl Executed {
     }
 }
 
-/// What the MIR spill model forecast for a function (`driver::spill_model`), per entry, priced by the
-/// target's opcosts: the other side of the `pressure` channel's comparison with `executed`.
+/// What the MIR spill model forecast for a function (`driver::spill_model`),
+/// per entry, priced by the target's opcosts: the other side of the `pressure`
+/// channel's comparison with `executed`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Predicted {
     pub peak: i64,
     pub spilled: usize,
     pub price: f64,
-    /// What the target charges a reload and a spill store, the units of `price`.
+    /// What the target charges a reload and a spill store, the units of
+    /// `price`.
     pub load: i64,
     pub store: i64,
 }
 
 static PREDICTED: std::sync::Mutex<Vec<(String, Predicted)>> = std::sync::Mutex::new(Vec::new());
 
-/// Remember `forecast` for the function `name`; the model runs before selection.
+/// Remember `forecast` for the function `name`; the model runs before
+/// selection.
 pub fn predict(
     name: &str,
     forecast: Predicted,
@@ -65,7 +68,8 @@ pub fn predict(
     PREDICTED.lock().expect("the forecasts").push((name.to_owned(), forecast));
 }
 
-/// The `pressure` channel's row: the forecast for `body` beside the spill code the allocator left in it.
+/// The `pressure` channel's row: the forecast for `body` beside the spill code
+/// the allocator left in it.
 pub fn pressure(body: &LirBody) -> Option<String> {
     let forecast = PREDICTED
         .lock()
@@ -82,7 +86,8 @@ pub fn pressure(body: &LirBody) -> Option<String> {
     ))
 }
 
-/// `executed` as one line, for the `cost` channel and dump, its jumps priced on `cpu`.
+/// `executed` as one line, for the `cost` channel and dump, its jumps priced on
+/// `cpu`.
 pub fn summary(
     body: &LirBody,
     cpu: &Profile,
@@ -105,8 +110,9 @@ pub fn summary(
     }
 }
 
-/// What a body costs to run, one unit for an instruction and one for a memory operand: what `executed` counts, as the
-/// number the allocator and the route choice compare alternatives by. `None` where there is no finite estimate.
+/// What a body costs to run, one unit for an instruction and one for a memory
+/// operand: what `executed` counts, as the number the allocator and the route
+/// choice compare alternatives by. `None` where there is no finite estimate.
 pub fn work(body: &LirBody) -> Option<f64> {
     executed(body).map(|done| done.instructions + done.memory)
 }
@@ -144,8 +150,8 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
                     ),
             )
     };
-    // An argument's incoming home is above the frame: read where it runs more often than the function does,
-    // it is a register's one load made again.
+    // An argument's incoming home is above the frame: read where it runs more
+    // often than the function does, it is a register's one load made again.
     let incoming = |one: &Insn| {
         one.what
             .as_ref()
@@ -278,9 +284,11 @@ mod tests {
         assert_eq!((done.stores, done.reloads), (1.0, 1.0));
     }
 
-    /// An argument passed on the stack is read from its incoming home, a memory operand in the loop that
-    /// reads it (`sub esi,[esp+32]`): the work a register holds once, per trip. It carried no spill flag and
-    /// showed 0 reloads beside a forecast that put the value in a register (queens `safe`).
+    /// An argument passed on the stack is read from its incoming home, a memory
+    /// operand in the loop that reads it (`sub esi,[esp+32]`): the work a
+    /// register holds once, per trip. It carried no spill flag and showed 0
+    /// reloads beside a forecast that put the value in a register (queens
+    /// `safe`).
     #[test]
     fn test_a_loop_reading_an_incoming_argument_home_reloads_it_each_trip() {
         let ax = Loc::Reg(Reg { register: Register::AX, width: 2 });
@@ -307,7 +315,8 @@ mod tests {
         ];
         let mut body = LirBody::new("args", 1, blocks, IndexMap::default(), IndexMap::default());
         body.loop_trip_counts = vec![(2, 5)];
-        // The entry's own read is the load every path makes; the loop's five trips are the reloads.
+        // The entry's own read is the load every path makes; the loop's five
+        // trips are the reloads.
         assert_eq!(executed(&body).expect("a counted loop").reloads.round(), 5.0);
     }
 
@@ -335,7 +344,8 @@ mod tests {
         ];
         let mut body = LirBody::new("counted", 1, blocks, IndexMap::default(), IndexMap::default());
         body.loop_trip_counts = vec![(2, 5)];
-        // The entry's jump, the header's six tests, five trips of two, the return.
+        // The entry's jump, the header's six tests, five trips of two, the
+        // return.
         assert_eq!(executed(&body).expect("a counted loop").instructions.round(), 1.0 + 6.0 + 10.0 + 1.0);
     }
 
@@ -393,7 +403,8 @@ mod tests {
                 .expect("a loop")
                 .instructions
         };
-        // The preheader's jump, taken as often as the guard takes it (half, with no odds), is all that differs.
+        // The preheader's jump, taken as often as the guard takes it (half,
+        // with no odds), is all that differs.
         assert!((looped(true) - 0.5 - looped(false)).abs() < 1e-9, "{} {}", looped(true), looped(false));
     }
 
@@ -524,7 +535,8 @@ mod tests {
         body.odds.taken.insert((1, 3), (0.75 * BlockOdds::CERTAIN) as u32);
         body.odds.taken.insert((1, 4), (0.25 * BlockOdds::CERTAIN) as u32);
         let done = executed(&body).expect("straight branches");
-        // cmp and jne every time, mov and jmp a quarter, block 3's mov three quarters, ret.
+        // cmp and jne every time, mov and jmp a quarter, block 3's mov three
+        // quarters, ret.
         assert!((done.instructions - 4.25).abs() < 1e-3, "{}", done.instructions);
     }
 }

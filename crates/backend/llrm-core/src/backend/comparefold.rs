@@ -8,7 +8,8 @@ use crate::model::ir::{self, Held, Loc, Operation};
 use crate::model::lir::{self, Insn};
 use crate::support::hash::{IndexMap, IndexSet};
 
-/// Fold a private load followed by its sole comparison into a memory comparison.
+/// Fold a private load followed by its sole comparison into a memory
+/// comparison.
 ///
 /// A widening load may fold only for an equality test against zero:
 /// narrowing that comparison preserves ZF, while a signed condition could
@@ -158,7 +159,8 @@ pub fn selected(
     out
 }
 
-/// A load a compare may take as its memory operand: plain, or one made again where it is read (a stable cell).
+/// A load a compare may take as its memory operand: plain, or one made again
+/// where it is read (a stable cell).
 fn _plain_load(one: &Insn) -> bool {
     _plain(&Insn { rematerialized: false, ..one.clone() })
 }
@@ -199,7 +201,8 @@ mod tests {
 
     #[test]
     fn test_one_use_memory_comparison_is_selected_before_allocation() {
-        // Retaining lru_use's test temporary made its surviving far pointer spill.
+        // Retaining lru_use's test temporary made its surviving far pointer
+        // spill.
         let (base, selector, loaded, other) = (1, 2, 3, 4);
         let cell = Mem {
             through: Register::None,
@@ -293,8 +296,9 @@ mod tests {
         [Arc::new(load), Arc::new(compare)]
     }
 
-    /// queens c's `_place`: both arguments made again as loads, the second of them just before `cmp bx, ax`.
-    /// The compare did not take it as its operand because the load was made again where it is read.
+    /// queens c's `_place`: both arguments made again as loads, the second of
+    /// them just before `cmp bx, ax`. The compare did not take it as its
+    /// operand because the load was made again where it is read.
     #[test]
     fn test_a_load_made_again_is_the_compares_memory_operand() {
         let cell = Mem::new(Some(Addr::new(Space::Frame, 8)), 2);
@@ -356,7 +360,8 @@ mod tests {
 
     #[test]
     fn test_zero_extended_byte_test_keeps_the_load_when_sign_is_observed() {
-        // A narrow memory compare exposes bit 7 as SF; a zero-extended word test does not.
+        // A narrow memory compare exposes bit 7 as SF; a zero-extended word
+        // test does not.
         let loaded = 1;
         let cell =
             Mem { through: Register::BP, offset: -4, disp_width: 1, ..Mem::new(Some(Addr::new(Space::Frame, -4)), 1) };

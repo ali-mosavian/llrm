@@ -1,9 +1,11 @@
-//! Generate and validate `buildprs` token-layer artifacts from grammar `TOKENS:`.
+//! Generate and validate `buildprs` token-layer artifacts from grammar
+//! `TOKENS:`.
 //!
 //! Covers `IRW_*` ids, `RWF_*` flag constants, `mpIRWtoChar`, `mpIRWtoIOP`,
-//! per-letter `tRw` bucket bytes, and `ORW_*` numeric offsets. Statement/function
-//! parse offsets and `<Cg...>` hints come from lowering when available; parity
-//! scaffold tests can inject them from captured `prsrwt.asm` / `prsorw.inc`.
+//! per-letter `tRw` bucket bytes, and `ORW_*` numeric offsets.
+//! Statement/function parse offsets and `<Cg...>` hints come from lowering when
+//! available; parity scaffold tests can inject them from captured `prsrwt.asm`
+//! / `prsorw.inc`.
 
 use std::collections::BTreeMap;
 
@@ -44,7 +46,8 @@ pub struct TokenArtifacts {
     pub token_count: usize,
     pub irw_alpha_first: u16,
     pub rwf: RwfConstants,
-    /// `IRW_*` symbol → dense id (0..token_count-1) in grammar declaration order.
+    /// `IRW_*` symbol → dense id (0..token_count-1) in grammar declaration
+    /// order.
     pub irw_ids: BTreeMap<String, u16>,
     /// `IRW_*` symbols in declaration order.
     pub irw_order: Vec<String>,
@@ -52,7 +55,8 @@ pub struct TokenArtifacts {
     pub tk_to_irw: BTreeMap<String, String>,
     /// First [`IRW_ALPHA_FIRST`] spellings as bytes for `mpIRWtoChar`.
     pub mp_irw_to_char: Vec<u8>,
-    /// First [`IRW_ALPHA_FIRST`] operator indices for `mpIRWtoIOP` (`0xFF` = none).
+    /// First [`IRW_ALPHA_FIRST`] operator indices for `mpIRWtoIOP` (`0xFF` =
+    /// none).
     pub mp_irw_to_iop: Vec<u8>,
     /// Per-token `RWF_*` bits inferable from `TOKENS:` attributes only.
     pub token_rwf_flags: BTreeMap<String, u8>,
@@ -303,7 +307,8 @@ pub fn compare_irw_equates(
     Ok(())
 }
 
-/// Compare `RWF_*` constants and `NTOKENS` / `IRW_ALPHA_FIRST` against `prstab.inc`.
+/// Compare `RWF_*` constants and `NTOKENS` / `IRW_ALPHA_FIRST` against
+/// `prstab.inc`.
 pub fn compare_prstab_constants(
     artifacts: &TokenArtifacts,
     prstab_text: &str,
@@ -418,7 +423,8 @@ pub fn validate_against_golden(
     Ok(())
 }
 
-/// Build per-letter `tRw` buckets and `ORW_*` offsets from token artifacts and lowering hints.
+/// Build per-letter `tRw` buckets and `ORW_*` offsets from token artifacts and
+/// lowering hints.
 pub fn generate_reserved_word_tables(
     artifacts: &TokenArtifacts,
     lowering: &RwLoweringInput,
@@ -629,7 +635,8 @@ pub fn compare_rw_bucket_bytes(
     Ok(())
 }
 
-/// Validate generated reserved-word tables against captured `prsorw.inc` / `prsrwt.asm`.
+/// Validate generated reserved-word tables against captured `prsorw.inc` /
+/// `prsrwt.asm`.
 pub fn validate_rw_tables_against_golden(
     tables: &ReservedWordTableArtifacts,
     prsorw_text: &str,

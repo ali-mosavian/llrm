@@ -58,8 +58,8 @@ pub fn corpus() -> Vec<(String, Module)> {
     corpus_files().into_iter().map(|(name, path)| (name.clone(), parse_corpus_entry(&name, &path))).collect()
 }
 
-/// The corpus entries' names and files, in order, unparsed: a test that spreads the entries over threads parses each on
-/// its own.
+/// The corpus entries' names and files, in order, unparsed: a test that spreads
+/// the entries over threads parses each on its own.
 pub fn corpus_files() -> Vec<(String, std::path::PathBuf)> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
     let mut paths: Vec<_> = ["emitted", "optimized"]
@@ -85,8 +85,9 @@ pub fn parse_corpus_entry(
     llrm_mir::parse::module(&text).unwrap_or_else(|error| panic!("{name}: {error}"))
 }
 
-/// `unit` carrying what is known of its body without memory and its shape, derived once for the body a test built,
-/// which no manager has seen. (Kept for the life of the test run.)
+/// `unit` carrying what is known of its body without memory and its shape,
+/// derived once for the body a test built, which no manager has seen. (Kept for
+/// the life of the test run.)
 pub fn with_registers(unit: crate::memory::Unit<'_>) -> crate::memory::Unit<'_> {
     let known =
         Box::leak(Box::new(crate::consts::known(&crate::memory::Unit { registers: None, ..unit }, None, None, None)));

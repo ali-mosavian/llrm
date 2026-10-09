@@ -86,10 +86,10 @@ impl CallGraph {
 }
 
 impl CallGraph {
-    /// Whether `id` can never be entered again while it runs: it is in no cycle of
-    /// calls, and neither it nor what it reaches calls an unbounded pointer or a
-    /// declaration that may call back (not `nocallback`, not an intrinsic): LLVM's
-    /// `addNoRecurseAttrs`.
+    /// Whether `id` can never be entered again while it runs: it is in no cycle
+    /// of calls, and neither it nor what it reaches calls an unbounded
+    /// pointer or a declaration that may call back (not `nocallback`, not
+    /// an intrinsic): LLVM's `addNoRecurseAttrs`.
     pub fn cannot_reenter(
         &self,
         module: &Module,
@@ -266,8 +266,9 @@ impl<N: Copy + Ord> CallGraph<N> {
         })
     }
 
-    /// The strongly connected components, callees before their callers, each with whether it is
-    /// a cycle: what a bottom-up solver visits, iterating only within a cycle.
+    /// The strongly connected components, callees before their callers, each
+    /// with whether it is a cycle: what a bottom-up solver visits,
+    /// iterating only within a cycle.
     pub fn bottom_up_components(&self) -> Vec<(Vec<N>, bool)> {
         let mut out: BTreeMap<usize, (Vec<N>, bool)> = BTreeMap::new();
         for (&node, &(component, cyclic)) in self.components() {
@@ -351,8 +352,9 @@ impl ProgramAnalysis for ProgramCallGraph {
 #[path = "callgraph_tests.rs"]
 mod tests;
 
-/// Functions whose address is taken: named anywhere but as a callee, in a global's initializer,
-/// a personality, or a metadata list (a call's `callees`, which an indirect call may reach).
+/// Functions whose address is taken: named anywhere but as a callee, in a
+/// global's initializer, a personality, or a metadata list (a call's `callees`,
+/// which an indirect call may reach).
 pub fn addressed(module: &Module) -> BTreeSet<GlobalId> {
     let context = &module.context;
     let mut out = BTreeSet::new();
@@ -394,13 +396,15 @@ pub fn addressed(module: &Module) -> BTreeSet<GlobalId> {
     out
 }
 
-/// A function attribute a frontend states: nothing outside the module's code enters this
-/// function by a far call, so where every call of it is direct, it may be entered near.
+/// A function attribute a frontend states: nothing outside the module's code
+/// enters this function by a far call, so where every call of it is direct, it
+/// may be entered near.
 pub const NEAR_CODE: &str = "nearcode";
 
-/// Defined functions only their own module's calls reach: internal or private, not interrupt
-/// handlers, and never named but as a callee. What a call to one may assume of its callers
-/// (where they are, what they pass) holds for every call there is.
+/// Defined functions only their own module's calls reach: internal or private,
+/// not interrupt handlers, and never named but as a callee. What a call to one
+/// may assume of its callers (where they are, what they pass) holds for every
+/// call there is.
 pub fn direct_only(module: &Module) -> BTreeSet<GlobalId> {
     let named = addressed(module);
     module
@@ -415,8 +419,9 @@ pub fn direct_only(module: &Module) -> BTreeSet<GlobalId> {
         .collect()
 }
 
-/// Every plain direct call of each function, and the functions some call of which is not one: an
-/// `invoke`, or a call with more or fewer arguments than parameters.
+/// Every plain direct call of each function, and the functions some call of
+/// which is not one: an `invoke`, or a call with more or fewer arguments than
+/// parameters.
 pub struct DirectCalls {
     pub sites: BTreeMap<GlobalId, Vec<(GlobalId, InstId)>>,
     pub refused: BTreeSet<GlobalId>,

@@ -148,7 +148,8 @@ pub fn before(
     &line(text, number)[..column - 1]
 }
 
-/// Line `number` as a declaration's signature, without the `:` opening its body.
+/// Line `number` as a declaration's signature, without the `:` opening its
+/// body.
 pub fn signature(
     text: &str,
     number: usize,

@@ -1,4 +1,5 @@
-//! A far pointer cast from DGROUP's near one is read as the near one; each case's text is the pass's input.
+//! A far pointer cast from DGROUP's near one is read as the near one; each
+//! case's text is the pass's input.
 
 use crate::inferspace::InferAddressSpaces;
 use crate::testing::{Tuned, managed, managed_on, parsed};
@@ -10,8 +11,8 @@ fn run(text: &str) -> String {
     managed(&mut module, InferAddressSpaces)
 }
 
-/// Nib's `total(table, i)` read `a[i]` through `les bx, [bp+4]; es:[bx+si]`, a segment loaded and
-/// held for a pointer the caller made from a global.
+/// Nib's `total(table, i)` read `a[i]` through `les bx, [bp+4]; es:[bx+si]`, a
+/// segment loaded and held for a pointer the caller made from a global.
 #[test]
 fn a_load_through_a_step_of_a_cast_global_is_a_near_load() {
     let after = run("define i16 @f(i16 %i) {
@@ -25,8 +26,8 @@ b0:
     assert!(after.contains("load i16, ptr %") && !after.contains("load i16, ptr addrspace(1)"), "{after}");
 }
 
-/// A cast of a stack object makes SS:offset: its near pointer is the stack segment's, which a DGROUP
-/// pointer, read through DS, is not unless SS is DS.
+/// A cast of a stack object makes SS:offset: its near pointer is the stack
+/// segment's, which a DGROUP pointer, read through DS, is not unless SS is DS.
 #[test]
 fn a_cast_stack_object_is_read_as_a_stack_pointer() {
     let after = run("define i16 @f(i16 %i) {
@@ -46,8 +47,8 @@ b0:
     );
 }
 
-/// The stack's space was 5 in the pass: a target that numbers it 6 got its stack object's near
-/// pointer back as the data space's, read through DS.
+/// The stack's space was 5 in the pass: a target that numbers it 6 got its
+/// stack object's near pointer back as the data space's, read through DS.
 #[test]
 fn a_target_names_the_space_of_its_stack() {
     let text = "define i16 @f(i16 %i) {
@@ -81,7 +82,8 @@ b0:
     assert!(after.contains("load i16, ptr addrspace(1) %w"), "{after}");
 }
 
-/// A pointer a call reads needs its selector: it stays far, and the load beside it reads the near one.
+/// A pointer a call reads needs its selector: it stays far, and the load beside
+/// it reads the near one.
 #[test]
 fn a_step_a_call_reads_keeps_its_selector() {
     let after = run("define i16 @f(i16 %i) {
@@ -99,7 +101,8 @@ b0:
     );
 }
 
-/// A walking pointer: its phi and its step are near where nothing reads them whole but a load.
+/// A walking pointer: its phi and its step are near where nothing reads them
+/// whole but a load.
 #[test]
 fn a_pointer_that_walks_a_cast_global_walks_near() {
     let after = run("define i16 @f(i16 %n) {
@@ -121,7 +124,8 @@ out:
     assert!(after.contains("phi ptr [") && after.contains("load i16, ptr %"), "{after}");
 }
 
-/// Comparing two far pointers wants both selectors: a compare is no read through memory, the phi stays far.
+/// Comparing two far pointers wants both selectors: a compare is no read
+/// through memory, the phi stays far.
 #[test]
 fn a_phi_a_compare_reads_stays_far() {
     let after = run("define i16 @f(i16 %n) {

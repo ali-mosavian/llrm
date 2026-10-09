@@ -108,7 +108,8 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    /// Returns the aggregate `$result` holds: in registers, or already in the slot.
+    /// Returns the aggregate `$result` holds: in registers, or already in the
+    /// slot.
     pub(super) fn return_aggregate(
         &mut self,
         span: Span,

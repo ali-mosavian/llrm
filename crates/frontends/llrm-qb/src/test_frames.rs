@@ -39,8 +39,8 @@ fn runtime_framed(listing: &str) -> bool {
 }
 
 #[test]
-/// QB 4.5, PDS 7.1 and VBDOS called B$ENRA in every procedure by default: fib took
-/// 14.9 ms against 5.0 and each call 95 instructions more.
+/// QB 4.5, PDS 7.1 and VBDOS called B$ENRA in every procedure by default: fib
+/// took 14.9 ms against 5.0 and each call 95 instructions more.
 fn own_frames_are_the_default_in_every_dialect() {
     let source = "SUB s (x AS INTEGER)\nDIM a AS LONG, b AS DOUBLE\na = x\nb = a\nx = b\nEND SUB\n";
     for (dialect, runtime) in DIALECTS {
@@ -147,10 +147,11 @@ fn the_frame_switches_parse() {
     assert!(parse("--runtime-frames"));
 }
 
-/// Under own frames, a procedure that keeps B$ENRA (here a local STRING) had its
-/// frame emitted as holding garbage, so a local read before it was written was no
-/// longer zero to the optimizer: deedlines' INITCROSFADEPICS went from 263 071
-/// to 4.5 million estimated instructions. Its frame is zeroed; a self-framed one is not.
+/// Under own frames, a procedure that keeps B$ENRA (here a local STRING) had
+/// its frame emitted as holding garbage, so a local read before it was written
+/// was no longer zero to the optimizer: deedlines' INITCROSFADEPICS went from
+/// 263 071 to 4.5 million estimated instructions. Its frame is zeroed; a
+/// self-framed one is not.
 #[test]
 fn a_runtime_framed_procedure_still_zeroes_its_frame_in_mir() {
     let source = "SUB kept (n AS INTEGER)\nDIM k AS INTEGER, t AS STRING\nt = \"x\"\nPRINT k + n; t\nEND SUB\n\
@@ -168,7 +169,8 @@ fn a_runtime_framed_procedure_still_zeroes_its_frame_in_mir() {
                 .unwrap_or_else(|| panic!("{name} in {text}"))
                 .to_owned()
         };
-        // The emitter's own zeroing carries no metadata; the frontend's stores do.
+        // The emitter's own zeroing carries no metadata; the frontend's stores
+        // do.
         let zeroes = |name: &str| {
             entry(name).lines().any(|line| line.trim().starts_with("store i16 0, ptr %") && !line.contains('!'))
         };

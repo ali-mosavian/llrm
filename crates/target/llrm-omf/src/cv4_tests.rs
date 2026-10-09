@@ -19,7 +19,8 @@ fn variable(
     Variable { name: name.into(), r#type, kind, location }
 }
 
-/// `f` in 0x16 bytes of code with `types` and `variables`, its type the last of `types`.
+/// `f` in 0x16 bytes of code with `types` and `variables`, its type the last of
+/// `types`.
 fn object(
     arch: Arch,
     types: Vec<T>,
@@ -95,10 +96,12 @@ fn procedure() -> T {
     T::Procedure { result: None, parameters: vec![0, 0], convention: None }
 }
 
-/// ML 6.11's /Zi object for `f proc near c, a:word, b:word; local x:word` has these records for the procedure:
-/// LF_ARGLIST `02 00 21 00 21 00 f2 f1`, LF_PROCEDURE `03 00 00 00 02 00 <arglist>`, S_GPROC16 with zeros
-/// for the scope links and `S_BPREL16` of 4, 6 and -2. llrm's records are byte for byte those, ML having
-/// put the procedure type before its argument list where llrm puts it after (a reader takes either).
+/// ML 6.11's /Zi object for `f proc near c, a:word, b:word; local x:word` has
+/// these records for the procedure: LF_ARGLIST `02 00 21 00 21 00 f2 f1`,
+/// LF_PROCEDURE `03 00 00 00 02 00 <arglist>`, S_GPROC16 with zeros
+/// for the scope links and `S_BPREL16` of 4, 6 and -2. llrm's records are byte
+/// for byte those, ML having put the procedure type before its argument list
+/// where llrm puts it after (a reader takes either).
 #[test]
 fn a_16_bit_procedure_is_the_records_ml_writes() {
     let made = object(
@@ -130,9 +133,11 @@ fn a_16_bit_procedure_is_the_records_ml_writes() {
             (0x0006, vec![]),
         ]
     );
-    // The procedure's offset and segment are one far pointer, which LINK fills in.
+    // The procedure's offset and segment are one far pointer, which LINK fills
+    // in.
     assert_eq!(symbols.relocs.len(), 1);
-    // After the signature, the object name and compile records, the procedure's header, links and three lengths.
+    // After the signature, the object name and compile records, the procedure's
+    // header, links and three lengths.
     assert_eq!(symbols.relocs[0].at, 4 + (all[0].1.len() + 4) + (all[1].1.len() + 4) + 4 + 12 + 6);
 }
 
@@ -148,9 +153,10 @@ fn written(made: &Object) -> (Vec<(u16, Vec<u8>)>, Vec<(u16, Vec<u8>)>, Vec<llrm
     (records(&symbols.image, false), records(&types.image, true), symbols.relocs)
 }
 
-/// A struct that holds a pointer to itself: the struct's index is taken before its members are, so the
-/// pointer names it (0x1000) and the field list that follows has the member `next`, the struct record
-/// then has the field list's index. Made after its members, the pointer had nothing to name.
+/// A struct that holds a pointer to itself: the struct's index is taken before
+/// its members are, so the pointer names it (0x1000) and the field list that
+/// follows has the member `next`, the struct record then has the field list's
+/// index. Made after its members, the pointer had nothing to name.
 #[test]
 fn a_struct_that_points_to_itself_is_named_before_its_members_and_has_a_udt() {
     let node = T::Struct {
@@ -200,9 +206,11 @@ fn a_struct_that_points_to_itself_is_named_before_its_members_and_has_a_udt() {
     );
 }
 
-/// ML's `.386 flat` /Zi object: S_GPROC32 is the three links, three four-byte lengths, a four-byte offset and a
-/// two-byte segment, the type, the flags and the name; its locals are `S_BPREL32` with a four-byte offset. The
-/// offset and the segment are two fixups here (an offset32 and a base), ML's one 16:32 pointer's two halves.
+/// ML's `.386 flat` /Zi object: S_GPROC32 is the three links, three four-byte
+/// lengths, a four-byte offset and a two-byte segment, the type, the flags and
+/// the name; its locals are `S_BPREL32` with a four-byte offset. The offset and
+/// the segment are two fixups here (an offset32 and a base), ML's one 16:32
+/// pointer's two halves.
 #[test]
 fn a_32_bit_procedure_has_four_byte_fields_and_two_fixups() {
     let mut made = object(
@@ -227,9 +235,10 @@ fn a_32_bit_procedure_has_four_byte_fields_and_two_fixups() {
     );
 }
 
-/// Far is the function's, not the type's: the same procedure type called far is a second record whose call
-/// byte is 1, and the symbol's flag bit 2 says it returns far. Written as near, a debugger stepping out of
-/// a far function popped the wrong return address.
+/// Far is the function's, not the type's: the same procedure type called far is
+/// a second record whose call byte is 1, and the symbol's flag bit 2 says it
+/// returns far. Written as near, a debugger stepping out of a far function
+/// popped the wrong return address.
 #[test]
 fn a_far_function_has_a_far_procedure_type_and_the_far_flag() {
     let mut made = object(Arch::I8086, vec![int(), procedure()], Vec::new());
@@ -240,8 +249,9 @@ fn a_far_function_has_a_far_procedure_type_and_the_far_flag() {
     assert_eq!(symbols[2].1[symbols[2].1.len() - 3], 0x04, "flags: far return");
 }
 
-/// `local`'s records and the type index its `S_BPREL16` names, for a function of no parameters: the function's own
-/// two records (an empty argument list at 0x1000 and the procedure at 0x1001) come first.
+/// `local`'s records and the type index its `S_BPREL16` names, for a function
+/// of no parameters: the function's own two records (an empty argument list at
+/// 0x1000 and the procedure at 0x1001) come first.
 fn local_of(
     types: Vec<T>,
     local: usize,
@@ -254,10 +264,12 @@ fn local_of(
     (types[2..].to_vec(), u16::from_le_bytes([bprel.1[2], bprel.1[3]]))
 }
 
-/// Every type a C program has, by the layout cv4f.h gives: an array with its byte size and index type, an
-/// enum with its field list of enumerators (a negative one tagged), a bit field as its own record that the
-/// member names, a union (LF_UNION, with no derived list or vshape), and `const`. Each record ends where the
-/// next starts on four bytes, with the filler `LF_PAD` counts down.
+/// Every type a C program has, by the layout cv4f.h gives: an array with its
+/// byte size and index type, an enum with its field list of enumerators (a
+/// negative one tagged), a bit field as its own record that the member names, a
+/// union (LF_UNION, with no derived list or vshape), and `const`. Each record
+/// ends where the next starts on four bytes, with the filler `LF_PAD` counts
+/// down.
 #[test]
 fn a_c_programs_types_are_the_records_cv4f_h_describes() {
     let short = || T::Scalar(S::Int { bytes: 2, signed: true });
@@ -310,8 +322,8 @@ fn a_c_programs_types_are_the_records_cv4f_h_describes() {
     assert_eq!((records, at), (vec![(0x0001, vec![1, 0, 0x11, 0])], 0x1002), "const");
 }
 
-/// A pointer to a primitive is a primitive pointer (the mode in the high byte), which needs no record; one to
-/// anything else is LF_POINTER.
+/// A pointer to a primitive is a primitive pointer (the mode in the high byte),
+/// which needs no record; one to anything else is LF_POINTER.
 #[test]
 fn a_pointer_to_a_primitive_is_a_primitive_pointer_and_to_a_record_is_a_record() {
     let short = || T::Scalar(S::Int { bytes: 2, signed: true });
@@ -325,13 +337,16 @@ fn a_pointer_to_a_primitive_is_a_primitive_pointer_and_to_a_record_is_a_record()
         vec![short(), T::Array { element: 0, bytes: Some(2) }, T::Pointer { target: 1, bytes: 2, reach: Near }],
         2,
     );
-    // The array is first, the pointer second; near is kind 0, and ML writes four zero bytes after the type.
+    // The array is first, the pointer second; near is kind 0, and ML writes
+    // four zero bytes after the type.
     assert_eq!((records[1].clone(), at), ((0x0002, vec![0, 0, 0x02, 0x10, 0, 0, 0, 0]), 0x1003));
 }
 
-/// What CodeView 4 has no record for is left out and the rest is written: a record names one place for a whole
-/// scope, so a value that is in a register for only part of it (a register parameter, until the body starts)
-/// and one the optimiser removed have none; one that is in a register throughout is S_REGISTER.
+/// What CodeView 4 has no record for is left out and the rest is written: a
+/// record names one place for a whole scope, so a value that is in a register
+/// for only part of it (a register parameter, until the body starts)
+/// and one the optimiser removed have none; one that is in a register
+/// throughout is S_REGISTER.
 #[test]
 fn a_value_in_a_register_throughout_is_s_register_and_one_part_of_the_time_is_left_out() {
     let whole = Range { section: 0, offset: 0, length: 0x16 };
@@ -369,8 +384,9 @@ fn a_value_in_a_register_throughout_is_s_register_and_one_part_of_the_time_is_le
     );
 }
 
-/// A lexical block is S_BLOCK16 (the two links, a length, an offset and a segment, an empty name) with its own
-/// variables and S_END, its offset a fixup against the section it is in.
+/// A lexical block is S_BLOCK16 (the two links, a length, an offset and a
+/// segment, an empty name) with its own variables and S_END, its offset a fixup
+/// against the section it is in.
 #[test]
 fn a_block_is_a_scope_with_its_variables_and_an_end() {
     let mut made = object(
@@ -399,9 +415,11 @@ fn a_block_is_a_scope_with_its_variables_and_an_end() {
     assert_eq!(relocs[1].addend, 8);
 }
 
-/// The program of tests/inputs/cv4/p1.asm as the model says it, written, reads as what ML's own object of it
-/// reads as (`cv4info`, the same reader): the procedure and its arguments, the parameters and locals with a struct's
-/// members, and the struct's name. The two writers agree on what the program is, not on the order of records.
+/// The program of tests/inputs/cv4/p1.asm as the model says it, written, reads
+/// as what ML's own object of it reads as (`cv4info`, the same reader): the
+/// procedure and its arguments, the parameters and locals with a struct's
+/// members, and the struct's name. The two writers agree on what the program
+/// is, not on the order of records.
 #[test]
 fn the_writers_object_reads_as_mls_for_the_same_program() {
     use crate::{cv4info, omf, write};
@@ -433,10 +451,12 @@ fn the_writers_object_reads_as_mls_for_the_same_program() {
     assert_eq!(ours, ml);
 }
 
-/// The 32-bit records have no Microsoft reader here (llvm-readobj reads C13, not CodeView 4 in OMF), so the check
-/// is ML's own flat object of tests/inputs/cv4/p2.asm: a struct of two dwords, a procedure of two dword
-/// parameters, a dword and a struct local. Written by llrm, it reads as ML's does through the one reader.
-/// ML's `dword` is T_ULONG and C's `unsigned int` is T_UINT4, the one name that is mapped.
+/// The 32-bit records have no Microsoft reader here (llvm-readobj reads C13,
+/// not CodeView 4 in OMF), so the check is ML's own flat object of
+/// tests/inputs/cv4/p2.asm: a struct of two dwords, a procedure of two dword
+/// parameters, a dword and a struct local. Written by llrm, it reads as ML's
+/// does through the one reader. ML's `dword` is T_ULONG and C's `unsigned int`
+/// is T_UINT4, the one name that is mapped.
 #[test]
 fn the_32_bit_writers_object_reads_as_mls_flat_object_does() {
     use crate::{cv4info, omf, write};
@@ -472,9 +492,11 @@ fn the_32_bit_writers_object_reads_as_mls_flat_object_does() {
     assert_eq!(ours, ml);
 }
 
-/// A pointer to a function reaches it far or near, and the procedure it points to is called as that reach says: a far
-/// pointer's is a far call (LF_PROCEDURE call kind 1), a near one's a near call. The procedure type was one record
-/// called near, whatever pointed to it, so a debugger took a call through `int (far *fp)(int)` for a near one.
+/// A pointer to a function reaches it far or near, and the procedure it points
+/// to is called as that reach says: a far pointer's is a far call (LF_PROCEDURE
+/// call kind 1), a near one's a near call. The procedure type was one record
+/// called near, whatever pointed to it, so a debugger took a call through `int
+/// (far *fp)(int)` for a near one.
 #[test]
 fn a_pointer_to_a_function_points_to_a_procedure_called_as_far_as_the_pointer_reaches() {
     use llrm_object::debug::Reach::{Far, Near};
@@ -502,7 +524,8 @@ fn a_pointer_to_a_function_points_to_a_procedure_called_as_far_as_the_pointer_re
         .filter(|(_, (leaf, data))| *leaf == 0x0008 && data[4] == 1)
         .map(|(at, (_, data))| (index(at), data[2]))
         .collect();
-    // Two procedures of one parameter: the far one (call 1) and the near one (call 0).
+    // Two procedures of one parameter: the far one (call 1) and the near one
+    // (call 0).
     let call = |wanted: u8| one_parameter.iter().find(|(_, kind)| *kind == wanted).map(|(at, _)| *at);
     let (far, near) = (call(1).expect("a far procedure"), call(0).expect("a near procedure"));
     let target = |reach: u16| {
@@ -518,8 +541,9 @@ fn a_pointer_to_a_function_points_to_a_procedure_called_as_far_as_the_pointer_re
     );
 }
 
-/// Two types of the model that read alike, an array of `int` and one of `long` (the source spells each, so they are
-/// two), are one record: a second only grew the table, and every later index with it.
+/// Two types of the model that read alike, an array of `int` and one of `long`
+/// (the source spells each, so they are two), are one record: a second only
+/// grew the table, and every later index with it.
 #[test]
 fn arrays_of_scalars_of_two_spellings_are_one_record() {
     let spelled = |name: &str| T::Basic { name: name.into(), scalar: S::Int { bytes: 2, signed: true } };
@@ -544,9 +568,10 @@ fn arrays_of_scalars_of_two_spellings_are_one_record() {
     assert_eq!(bprels[0], bprels[1], "both locals name it");
 }
 
-/// A parameter in its register until the function stores it and in its frame cell for the rest has one place for the
-/// scope as CodeView 4 names it, the cell: written as a frame variable. Left out, as any list was, a debugger lost
-/// every parameter of a C function.
+/// A parameter in its register until the function stores it and in its frame
+/// cell for the rest has one place for the scope as CodeView 4 names it, the
+/// cell: written as a frame variable. Left out, as any list was, a debugger
+/// lost every parameter of a C function.
 #[test]
 fn a_parameter_in_a_register_and_then_its_cell_is_written_as_the_cell() {
     let list = Location::List(vec![

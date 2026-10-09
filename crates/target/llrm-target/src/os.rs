@@ -1,7 +1,9 @@
-//! The OS layer: one interface (`runtime/shared/interface.toml`) every target implements for every language's
-//! runtime. A target ships a `Layer` -- its `os.toml`, the assembly that implements the
-//! interface, and the facts of its operating system -- and the languages' bindings are rendered
-//! from the interface and the target's pointer kind, so no binding is written by hand.
+//! The OS layer: one interface (`runtime/shared/interface.toml`) every target
+//! implements for every language's runtime. A target ships a `Layer` -- its
+//! `os.toml`, the assembly that implements the interface, and the facts of its
+//! operating system -- and the languages' bindings are rendered
+//! from the interface and the target's pointer kind, so no binding is written
+//! by hand.
 
 use std::collections::BTreeMap;
 
@@ -24,7 +26,8 @@ pub struct Interface {
     pub prefix: String,
     /// The neutral error conditions and their codes.
     pub errors: BTreeMap<String, i64>,
-    /// The handles a program starts with; the operating system's facts number them.
+    /// The handles a program starts with; the operating system's facts number
+    /// them.
     pub handles: Vec<String>,
     pub ops: Vec<Op>,
 }
@@ -114,8 +117,8 @@ pub struct Layer {
     pub directory: &'static str,
     /// The target's `os.toml`.
     pub text: &'static str,
-    /// The operating system's facts (DOS's function numbers): one file, shared by the targets of
-    /// that operating system.
+    /// The operating system's facts (DOS's function numbers): one file, shared
+    /// by the targets of that operating system.
     pub facts: &'static str,
 }
 
@@ -146,7 +149,8 @@ impl Layer {
             .ok_or_else(|| format!("os.toml has no string {key}"))
     }
 
-    /// The integer type a `handle` is on this target: as wide as the operating system's facts say.
+    /// The integer type a `handle` is on this target: as wide as the operating
+    /// system's facts say.
     pub fn handle_type(&self) -> Result<&'static str, String> {
         let facts: toml::Table =
             self.facts.parse().map_err(|error: toml::de::Error| format!("the OS facts: {error}"))?;
@@ -157,7 +161,8 @@ impl Layer {
         }
     }
 
-    /// The standard handles and their numbers: the interface's names, the operating system's facts.
+    /// The standard handles and their numbers: the interface's names, the
+    /// operating system's facts.
     pub fn handles(&self) -> Result<Vec<(String, i64)>, String> {
         let facts: toml::Table =
             self.facts.parse().map_err(|error: toml::de::Error| format!("the OS facts: {error}"))?;
@@ -186,8 +191,9 @@ impl Layer {
             .collect()
     }
 
-    /// What the assembler is told: each integer of the operating system's facts as `<OS>_<KEY>`
-    /// and each integer of `os.toml` as `<KEY>`, so the assembly names no constant of its own.
+    /// What the assembler is told: each integer of the operating system's facts
+    /// as `<OS>_<KEY>` and each integer of `os.toml` as `<KEY>`, so the
+    /// assembly names no constant of its own.
     pub fn defines(&self) -> Result<Vec<(String, String)>, String> {
         let os = self.string("os")?.to_uppercase();
         let facts: toml::Table =
@@ -205,9 +211,11 @@ impl Layer {
         Ok(defines)
     }
 
-    /// What a language is told of the layer, one line a field for a build step: its directory, the
-    /// start-up and implementation files, the assembler's `SYMBOL=value` definitions (the layer's,
-    /// then the language description's), and the binding rendered for `language`.
+    /// What a language is told of the layer, one line a field for a build step:
+    /// its directory, the start-up and implementation files, the
+    /// assembler's `SYMBOL=value` definitions (the layer's,
+    /// then the language description's), and the binding rendered for
+    /// `language`.
     pub fn report(
         &self,
         language: &crate::runtime::Description,
@@ -237,8 +245,9 @@ impl Layer {
         }
     }
 
-    /// The C header of the interface: each operation declared `__cdecl` as `llrm_os_<name>` (C's underscore
-    /// makes the symbol), the data pointers far where the target has far data. The layer's routines are
+    /// The C header of the interface: each operation declared `__cdecl` as
+    /// `llrm_os_<name>` (C's underscore makes the symbol), the data
+    /// pointers far where the target has far data. The layer's routines are
     /// written in the target's C convention whatever its default is.
     pub fn c_header(&self) -> Result<String, String> {
         let interface = Interface::shipped();
@@ -303,8 +312,8 @@ impl Layer {
         Ok(text)
     }
 
-    /// Nib's `os` module: the interface's operations bound to this target's pointers and
-    /// convention, then what a program writes through them.
+    /// Nib's `os` module: the interface's operations bound to this target's
+    /// pointers and convention, then what a program writes through them.
     pub fn nib_module(&self) -> Result<String, String> {
         let interface = Interface::shipped();
         let convention = self.string("convention")?;
@@ -444,8 +453,9 @@ mod tests {
         );
     }
 
-    /// A handle was spelled `i16` in the interface, a target's width in a shared file: it takes the
-    /// width the operating system's facts give, and the standard handles their numbers.
+    /// A handle was spelled `i16` in the interface, a target's width in a
+    /// shared file: it takes the width the operating system's facts give,
+    /// and the standard handles their numbers.
     #[test]
     fn a_handle_is_as_wide_as_the_facts_say_and_the_standard_handles_are_theirs() {
         let wide = Layer { facts: "handle_bits = 32\nstdin = 0\nstdout = 1\nstderr = 2\n", ..LAYER };

@@ -85,7 +85,8 @@ pub fn prepared(module: &mut Module) -> Result<(), String> {
             ));
         }
         // Where trapping may be on, every call that may raise is an invoke to
-        // the pad: the runtime would land a call's error there with no site stored.
+        // the pad: the runtime would land a call's error there with no site
+        // stored.
         let on = trapping(&module.context, function, &registrations);
         for &block in function.layout() {
             let mut trapped = on[&block];
@@ -368,7 +369,8 @@ fn registered(
             _ => return Err("an ON ERROR whose handler is not constant".to_owned()),
         };
         let target = if Some(registration) == routines.onlocal.map(|(one, _, _)| one) {
-            // The runtime keeps a procedure's handler as an offset in its code segment.
+            // The runtime keeps a procedure's handler as an offset in its code
+            // segment.
             let i16 = context.types.int(16);
             if on {
                 let offset = function.create_instruction(

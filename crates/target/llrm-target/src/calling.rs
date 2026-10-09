@@ -1,6 +1,7 @@
-//! A target's calling conventions, from its `calling.toml`: one table a convention, in the order
-//! the file gives them, the first being the one a language's own functions use. Registers are
-//! named as the target's `registers.regs` names them; the schema takes no key it does not read.
+//! A target's calling conventions, from its `calling.toml`: one table a
+//! convention, in the order the file gives them, the first being the one a
+//! language's own functions use. Registers are named as the target's
+//! `registers.regs` names them; the schema takes no key it does not read.
 
 use std::collections::BTreeMap;
 
@@ -18,7 +19,8 @@ pub enum Cleanup {
     Callee,
 }
 
-/// A register kept for the caller: its full register, and the one a prologue pushes.
+/// A register kept for the caller: its full register, and the one a prologue
+/// pushes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Kept {
     pub full: String,
@@ -32,10 +34,12 @@ pub struct Aggregate {
     pub style: String,
     /// The sizes, in bytes, of a struct returned in a register.
     pub in_register_bytes: Vec<i64>,
-    /// `after-arguments`: pushed past the last argument; `register`: held in `pointer_register`.
+    /// `after-arguments`: pushed past the last argument; `register`: held in
+    /// `pointer_register`.
     pub pointer: String,
     pub pointer_register: Option<String>,
-    /// The address is a far pointer where the target has far data (Borland's); else a near one.
+    /// The address is a far pointer where the target has far data (Borland's);
+    /// else a near one.
     pub pointer_far: bool,
     pub pointer_returned: String,
     pub pointer_popped_by: String,
@@ -45,8 +49,8 @@ pub struct Aggregate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Convention {
     pub name: String,
-    /// The calling convention MIR names this one by (`cdecl`, `watcall`); the file's first answers
-    /// MIR's `ccc` as well.
+    /// The calling convention MIR names this one by (`cdecl`, `watcall`); the
+    /// file's first answers MIR's `ccc` as well.
     pub cc: Option<String>,
     /// What a byte argument takes on the stack, and the least a cell holds.
     pub slot_bytes: i64,
@@ -57,44 +61,53 @@ pub struct Convention {
     pub wide_pairs: Vec<[String; 2]>,
     /// Whether a register an argument skipped is free for a later one.
     pub backfill: bool,
-    /// The most bytes of an integer one argument register holds, where that is more than a stack slot (a long in a
-    /// 32-bit register on a 16-bit target); a slot's worth where the file gives none.
+    /// The most bytes of an integer one argument register holds, where that is
+    /// more than a stack slot (a long in a 32-bit register on a 16-bit
+    /// target); a slot's worth where the file gives none.
     pub register_bytes: Option<i64>,
-    /// A register takes the width of the value it holds (AL, AX or EAX for 1, 2 or 4 bytes) rather than its own: the
-    /// argument registers are named by their widest part.
+    /// A register takes the width of the value it holds (AL, AX or EAX for 1, 2
+    /// or 4 bytes) rather than its own: the argument registers are named by
+    /// their widest part.
     pub sized_arguments: bool,
-    /// An argument that travels in memory (a float, an i64, a struct) leaves the registers free for the arguments
-    /// after it.
+    /// An argument that travels in memory (a float, an i64, a struct) leaves
+    /// the registers free for the arguments after it.
     pub skip_memory: bool,
-    /// A struct passed by value travels in memory whatever its size; else a struct of a size that returns in a
-    /// register is passed as that integer.
+    /// A struct passed by value travels in memory whatever its size; else a
+    /// struct of a size that returns in a register is passed as that
+    /// integer.
     pub aggregate_arguments_in_memory: bool,
-    /// What a call's arguments in registers are the callee's to change; everything else it keeps.
+    /// What a call's arguments in registers are the callee's to change;
+    /// everything else it keeps.
     pub arguments_clobbered: bool,
     /// The same for the registers a result leaves in.
     pub results_clobbered: bool,
-    /// The convention a variadic call uses in place of this one: it moves the arguments, not the symbol.
+    /// The convention a variadic call uses in place of this one: it moves the
+    /// arguments, not the symbol.
     pub variadic: Option<String>,
-    /// The convention a function of this one's takes when the callee, not the caller, removes its stack arguments
-    /// (`calleepop`), where that is no convention MIR already names (`fastcc` is C's).
+    /// The convention a function of this one's takes when the callee, not the
+    /// caller, removes its stack arguments (`calleepop`), where that is no
+    /// convention MIR already names (`fastcc` is C's).
     pub pops_as: Option<String>,
-    /// How a symbol is written in each object format, `*` standing for its name and `^*` for its name in capitals
-    /// (`spell`).
+    /// How a symbol is written in each object format, `*` standing for its name
+    /// and `^*` for its name in capitals (`spell`).
     pub symbol: BTreeMap<String, String>,
     pub return_address_bytes: i64,
-    /// Where the first argument lies from the frame register, past the saved frame register and
-    /// the return address.
+    /// Where the first argument lies from the frame register, past the saved
+    /// frame register and the return address.
     pub first_argument_offset: i64,
     /// The same when the call is far, where the convention has far calls.
     pub first_argument_offset_far: Option<i64>,
-    /// The register a frame's cells are addressed through, and the stack pointer.
+    /// The register a frame's cells are addressed through, and the stack
+    /// pointer.
     pub frame: String,
-    /// A function that needs no frame register may leave it out: its cells are addressed through the
-    /// stack pointer, and the frame register is not set. gcc's `-fomit-frame-pointer`.
+    /// A function that needs no frame register may leave it out: its cells are
+    /// addressed through the stack pointer, and the frame register is not
+    /// set. gcc's `-fomit-frame-pointer`.
     pub frame_optional: bool,
-    /// A frame tuned for size is opened with `enter N,0` (4 bytes against 6). Left false where the target prices it
-    /// above `push bp; mov bp,sp; sub sp,N`: the 486 takes 14 clocks against 3 (Intel 240440-002), and neither GCC nor
-    /// LLVM emits it.
+    /// A frame tuned for size is opened with `enter N,0` (4 bytes against 6).
+    /// Left false where the target prices it above `push bp; mov bp,sp; sub
+    /// sp,N`: the 486 takes 14 clocks against 3 (Intel 240440-002), and neither
+    /// GCC nor LLVM emits it.
     pub frame_enter: bool,
     pub stack: String,
     /// The registers a callee keeps, the frame register among them.
@@ -102,20 +115,21 @@ pub struct Convention {
     pub clobbered: Vec<String>,
     /// What holds on entry and on return: `df_clear`, `x87_empty`.
     pub entry_state: Vec<String>,
-    /// The registers a result leaves in, by its width in bytes, or by a class (`pointer`, `float`).
+    /// The registers a result leaves in, by its width in bytes, or by a class
+    /// (`pointer`, `float`).
     pub results: BTreeMap<String, Vec<String>>,
     pub aggregate: Option<Aggregate>,
     pub promotion: String,
     /// How many slots an i64 or a double takes.
     pub wide_slots: i64,
     pub variadic_float: String,
-    /// For an interrupt handler: what its frame pointer addresses, lowest address first, each slot's register and
-    /// bytes. Empty for the rest.
+    /// For an interrupt handler: what its frame pointer addresses, lowest
+    /// address first, each slot's register and bytes. Empty for the rest.
     pub interrupt_frame: Vec<(String, i64)>,
 }
 
-/// A target's description of its conventions, by its address: one per target, so what a profile that holds it is keyed
-/// by.
+/// A target's description of its conventions, by its address: one per target,
+/// so what a profile that holds it is keyed by.
 #[derive(Clone, Copy, Debug)]
 pub struct Stated(pub &'static Calling);
 
@@ -143,13 +157,14 @@ impl std::hash::Hash for Stated {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Calling {
     pub conventions: Vec<Convention>,
-    /// The ABI families a program may ask for with `-mabi=`: each names the convention an unmarked function has under
-    /// it.
+    /// The ABI families a program may ask for with `-mabi=`: each names the
+    /// convention an unmarked function has under it.
     pub abis: BTreeMap<String, String>,
     /// The family a program gets without the switch.
     pub default: String,
-    /// The convention a function nothing outside the program reaches takes, whatever ABI the program has: no one else
-    /// sees it, so the target's best serves. None where its default is that.
+    /// The convention a function nothing outside the program reaches takes,
+    /// whatever ABI the program has: no one else sees it, so the target's
+    /// best serves. None where its default is that.
     pub private: Option<String>,
 }
 
@@ -263,9 +278,10 @@ impl Calling {
         self.private.as_deref().and_then(|name| self.named(name))
     }
 
-    /// Whether a function with `convention` may take the private one instead: the ABIs' own conventions are the ones a
-    /// program's functions have unless marked, and a marked one (Pascal's, an interrupt's) is a protocol its marker
-    /// names.
+    /// Whether a function with `convention` may take the private one instead:
+    /// the ABIs' own conventions are the ones a program's functions have
+    /// unless marked, and a marked one (Pascal's, an interrupt's) is a protocol
+    /// its marker names.
     pub fn replaceable(
         &self,
         convention: &Convention,
@@ -278,8 +294,9 @@ impl Calling {
         self.chosen(None).expect("parse checked the default")
     }
 
-    /// The convention an unmarked function has under `-mabi=family`, or the default's without one; a family this target
-    /// has not is refused, saying which it has.
+    /// The convention an unmarked function has under `-mabi=family`, or the
+    /// default's without one; a family this target has not is refused,
+    /// saying which it has.
     pub fn chosen(
         &self,
         family: Option<&str>,
@@ -299,7 +316,8 @@ impl Calling {
         self.conventions.iter().map(|one| one.name.as_str()).collect()
     }
 
-    /// The convention an interrupt handler is entered under: the one whose frame the file lays out.
+    /// The convention an interrupt handler is entered under: the one whose
+    /// frame the file lays out.
     pub fn interrupt(&self) -> Option<&Convention> {
         self.conventions.iter().find(|one| !one.interrupt_frame.is_empty())
     }
@@ -311,8 +329,10 @@ impl Calling {
         self.conventions.iter().find(|one| one.name == name)
     }
 
-    /// `pattern`, a symbol's OMF decoration (`*_`) as the front end records it, in `format`: the one the convention
-    /// whose OMF decoration it is gives. None where no convention states `format`, or none has that pattern.
+    /// `pattern`, a symbol's OMF decoration (`*_`) as the front end records it,
+    /// in `format`: the one the convention whose OMF decoration it is
+    /// gives. None where no convention states `format`, or none has that
+    /// pattern.
     pub fn redecorated(
         &self,
         pattern: &str,
@@ -325,7 +345,8 @@ impl Calling {
             .cloned()
     }
 
-    /// The convention MIR's `cc` names: the file's first answers `ccc`, whose `cc` is 0.
+    /// The convention MIR's `cc` names: the file's first answers `ccc`, whose
+    /// `cc` is 0.
     pub fn by_cc(
         &self,
         cc: &str,
@@ -333,8 +354,9 @@ impl Calling {
         self.conventions.iter().find(|one| one.cc.as_deref() == Some(cc))
     }
 
-    /// The convention a MIR calling-convention number names: `ccc` and `fastcc` the one stating `cc = "cdecl"`, any
-    /// other the one whose `cc` is the number's name without its `cc`.
+    /// The convention a MIR calling-convention number names: `ccc` and `fastcc`
+    /// the one stating `cc = "cdecl"`, any other the one whose `cc` is the
+    /// number's name without its `cc`.
     pub fn by_number(
         &self,
         number: u32,
@@ -346,7 +368,8 @@ impl Calling {
         }
     }
 
-    /// MIR's number for the convention a description's `cc` names: C's is `ccc`, the others `<cc>cc`.
+    /// MIR's number for the convention a description's `cc` names: C's is
+    /// `ccc`, the others `<cc>cc`.
     pub fn number_of(cc: Option<&str>) -> Option<u32> {
         match cc? {
             "cdecl" => Some(0),
@@ -357,14 +380,16 @@ impl Calling {
         }
     }
 
-    /// The convention a function in MIR convention `number` takes when its callee removes the stack arguments: the one
-    /// it names (`pops_as`), else MIR's `fastcc` for C's own.
+    /// The convention a function in MIR convention `number` takes when its
+    /// callee removes the stack arguments: the one it names (`pops_as`),
+    /// else MIR's `fastcc` for C's own.
     pub fn callee_pop(
         &self,
         number: u32,
     ) -> Option<u32> {
         let from = self.by_number(number)?;
-        // The convention that removes them itself has none to take: `like` carried `pops_as` to it.
+        // The convention that removes them itself has none to take: `like`
+        // carried `pops_as` to it.
         match &from.pops_as {
             Some(name) => Self::number_of(self.named(name)?.cc.as_deref()).filter(|twin| *twin != number),
             None => (number == 0).then_some(llrm_mir::opcode::FAST),
@@ -373,10 +398,11 @@ impl Calling {
 }
 
 impl Convention {
-    /// What `argument` is to this convention's registers, with `slot` bytes in a stack slot: a word that fits a slot,
-    /// an integer that fits a register wider than a slot (a long in a 32-bit register on a 16-bit target), a pair
-    /// for an integer or a pointer of two slots (an i64 in 32 bits, a long or a far pointer in 16), and memory for
-    /// the rest.
+    /// What `argument` is to this convention's registers, with `slot` bytes in
+    /// a stack slot: a word that fits a slot, an integer that fits a
+    /// register wider than a slot (a long in a 32-bit register on a 16-bit
+    /// target), a pair for an integer or a pointer of two slots (an i64 in
+    /// 32 bits, a long or a far pointer in 16), and memory for the rest.
     pub fn kind(
         &self,
         argument: llrm_mir::target::Argument,
@@ -393,13 +419,14 @@ impl Convention {
     }
 }
 
-/// What an argument is to a convention's registers: a word of at most a slot, an i64, or what
-/// travels in memory whatever it is (a float, a struct by value).
+/// What an argument is to a convention's registers: a word of at most a slot,
+/// an i64, or what travels in memory whatever it is (a float, a struct by
+/// value).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
     Word,
-    /// An integer of this many bytes, more than a slot, that one register holds: a long in a 32-bit register on a
-    /// 16-bit target.
+    /// An integer of this many bytes, more than a slot, that one register
+    /// holds: a long in a 32-bit register on a 16-bit target.
     Sized(i64),
     Wide,
     Memory(i64),
@@ -586,8 +613,8 @@ impl Convention {
         })
     }
 
-    /// The registers a result `width` bytes wide leaves in, low part first; the widest entry that
-    /// holds it where none is that width.
+    /// The registers a result `width` bytes wide leaves in, low part first; the
+    /// widest entry that holds it where none is that width.
     pub fn result_registers(
         &self,
         width: i64,
@@ -600,10 +627,12 @@ impl Convention {
             .map(|(_, registers)| registers.as_slice())
     }
 
-    /// Where `arguments` go: each takes the first register free, an i64 the first pair with both
-    /// free; the first that fits no register, and all after it, go on the stack, each at least a
-    /// slot. Without `backfill`, a register passed over is not free for a later argument. With `skip_memory`, only
-    /// the ones that fit none go on the stack: a later argument still takes a free register.
+    /// Where `arguments` go: each takes the first register free, an i64 the
+    /// first pair with both free; the first that fits no register, and all
+    /// after it, go on the stack, each at least a slot. Without `backfill`,
+    /// a register passed over is not free for a later argument. With
+    /// `skip_memory`, only the ones that fit none go on the stack: a later
+    /// argument still takes a free register.
     pub fn place(
         &self,
         arguments: &[Kind],
@@ -656,9 +685,10 @@ impl Convention {
         Placement { places, used, stack_bytes: stack }
     }
 
-    /// The registers a call changes that the callee does not keep: what the convention clobbers,
-    /// the registers it passed arguments in where those are the callee's, and those it returned a
-    /// result of `width` bytes in where those are.
+    /// The registers a call changes that the callee does not keep: what the
+    /// convention clobbers, the registers it passed arguments in where
+    /// those are the callee's, and those it returned a result of `width`
+    /// bytes in where those are.
     pub fn clobbers(
         &self,
         used: &[String],
@@ -676,8 +706,8 @@ impl Convention {
         out
     }
 
-    /// `name` as an object in `format` (`omf`, `elf`, `macho`) spells it under this convention, where the description
-    /// gives it.
+    /// `name` as an object in `format` (`omf`, `elf`, `macho`) spells it under
+    /// this convention, where the description gives it.
     pub fn decorated(
         &self,
         format: &str,
@@ -686,7 +716,8 @@ impl Convention {
         self.symbol.get(format).map(|pattern| spell(pattern, name))
     }
 
-    /// The registers kept for the caller that a value may be held in: all but the frame register.
+    /// The registers kept for the caller that a value may be held in: all but
+    /// the frame register.
     pub fn callee_saved(&self) -> Vec<&Kept> {
         self.preserved.iter().filter(|one| one.full != self.frame && one.pushed != self.frame).collect()
     }
@@ -737,7 +768,8 @@ mod tests {
         assert_eq!(one.result_registers(1).unwrap(), ["eax".to_owned()]);
     }
 
-    /// A key the schema does not read is a typo or a fact nobody reads: refused.
+    /// A key the schema does not read is a typo or a fact nobody reads:
+    /// refused.
     #[test]
     fn a_convention_is_like_an_earlier_one_but_for_what_it_states() {
         let text = format!("{ONE}[d]\nlike = \"c\"\ncleanup = \"caller\"\n[d.result]\n1 = [\"ax\"]\n");
@@ -761,15 +793,17 @@ mod tests {
         );
     }
 
-    /// Open Watcom's flat register convention, as `wcc386 -3r` emits it (read from its disassembly).
+    /// Open Watcom's flat register convention, as `wcc386 -3r` emits it (read
+    /// from its disassembly).
     const WATCALL: &str = "default = \"w\"\n[abi.w]\nconvention = \"w\"\n[w]\nslot_bytes = 4\norder = \"right-to-left\"\ncleanup = \"callee\"\nargument_registers = [\"eax\", \"edx\", \"ebx\", \"ecx\"]\nwide_pairs = [[\"eax\", \"edx\"], [\"ebx\", \"ecx\"]]\nbackfill = true\narguments_clobbered = true\nresults_clobbered = true\nreturn_address_bytes = 4\nfirst_argument_offset = 8\nframe = \"ebp\"\nstack = \"esp\"\npreserved = [\"ebx\", \"ecx\", \"edx\", \"esi\", \"edi\", \"ebp\"]\nclobbered = [\"eax\", \"flags\"]\nentry_state = []\npromotion = \"slot\"\nwide_slots = 2\nvariadic_float = \"double\"\n[w.result]\n4 = [\"eax\"]\n8 = [\"eax\", \"edx\"]\n";
 
     fn registers(names: &[&str]) -> Place {
         Place::Registers(names.iter().map(|one| (*one).to_owned()).collect())
     }
 
-    /// `wcc386` put `(int a, i64 b, int c)` in EAX, EBX:ECX and EDX: the pair EDX:EBX does not exist,
-    /// and EDX stayed free for `c`. A rule that took the next two registers in a row gave b EDX:EBX.
+    /// `wcc386` put `(int a, i64 b, int c)` in EAX, EBX:ECX and EDX: the pair
+    /// EDX:EBX does not exist, and EDX stayed free for `c`. A rule that
+    /// took the next two registers in a row gave b EDX:EBX.
     #[test]
     fn an_i64_takes_a_fixed_pair_and_a_register_passed_over_stays_free() {
         let calling = Calling::parse(WATCALL).unwrap();
@@ -781,9 +815,10 @@ mod tests {
         assert_eq!(w.place(&[Kind::Wide, Kind::Wide]).places, [registers(&["eax", "edx"]), registers(&["ebx", "ecx"])]);
     }
 
-    /// `wcc386` sent `(int, double, int)` to EAX and two stack cells: the first argument that fits no
-    /// register sends every later one to the stack, though EDX was free. Also `(int, int, int, i64)`:
-    /// only ECX was left, so the i64 went to the stack.
+    /// `wcc386` sent `(int, double, int)` to EAX and two stack cells: the first
+    /// argument that fits no register sends every later one to the stack,
+    /// though EDX was free. Also `(int, int, int, i64)`: only ECX was left,
+    /// so the i64 went to the stack.
     #[test]
     fn the_first_argument_that_fits_no_register_sends_the_rest_to_the_stack() {
         let calling = Calling::parse(WATCALL).unwrap();
@@ -801,9 +836,10 @@ mod tests {
         );
     }
 
-    /// gcc's regparm(3) puts `(float, int b, double, int d, int e)` in EAX, EDX, ECX (b, d, e) and the float and the
-    /// double on the stack: it counts integers only. With `skip_memory` off the float stopped the rest, as Open
-    /// Watcom's does (b, d, e to the stack).
+    /// gcc's regparm(3) puts `(float, int b, double, int d, int e)` in EAX,
+    /// EDX, ECX (b, d, e) and the float and the double on the stack: it
+    /// counts integers only. With `skip_memory` off the float stopped the rest,
+    /// as Open Watcom's does (b, d, e to the stack).
     #[test]
     fn an_argument_in_memory_leaves_the_registers_to_the_later_ones_where_the_convention_says_so() {
         let regparm = WATCALL
@@ -829,9 +865,10 @@ mod tests {
         assert_eq!(placed.places, [Place::Stack(0), Place::Stack(4)]);
     }
 
-    /// A long that reaches the stack takes its own two words: `(int, int, int, long)` has the long at the stack's start
-    /// and `(long, long, long, long, long)` the fifth four bytes past the fourth. A word's worth put the next one
-    /// in its middle.
+    /// A long that reaches the stack takes its own two words: `(int, int, int,
+    /// long)` has the long at the stack's start and `(long, long, long,
+    /// long, long)` the fifth four bytes past the fourth. A word's worth put
+    /// the next one in its middle.
     #[test]
     fn a_sized_argument_takes_its_bytes_on_the_stack() {
         let regparm = WATCALL
@@ -844,8 +881,9 @@ mod tests {
         assert_eq!(placed.stack_bytes, 12);
     }
 
-    /// A function whose callers remove its stack arguments takes, when the callee is to, the convention its description
-    /// names (`pops_as`), or MIR's `fastcc` where it is C's own and names none.
+    /// A function whose callers remove its stack arguments takes, when the
+    /// callee is to, the convention its description names (`pops_as`), or
+    /// MIR's `fastcc` where it is C's own and names none.
     #[test]
     fn a_convention_names_the_one_it_takes_when_its_callee_pops() {
         let text = format!(
@@ -858,8 +896,9 @@ mod tests {
         assert_eq!(calling.callee_pop(llrm_mir::opcode::WATCALL), None);
     }
 
-    /// A call changes EAX, the registers its arguments went in and EDX for an i64 result, and keeps
-    /// the rest: `wcc386` held a value in ECX across `h2(i64, int)` and one in EDX across `h1(int)`.
+    /// A call changes EAX, the registers its arguments went in and EDX for an
+    /// i64 result, and keeps the rest: `wcc386` held a value in ECX across
+    /// `h2(i64, int)` and one in EDX across `h1(int)`.
     #[test]
     fn a_call_changes_the_registers_of_its_arguments_and_results_only() {
         let calling = Calling::parse(WATCALL).unwrap();
@@ -870,8 +909,9 @@ mod tests {
         assert_eq!(w.clobbers(&used, Some(8)), ["eax", "ebx", "edx", "flags"]);
     }
 
-    /// An ELF object has no leading underscore and an OMF one a trailing one: the description says so for each
-    /// convention, and a pattern the front end recorded (OMF's) is turned into the format's.
+    /// An ELF object has no leading underscore and an OMF one a trailing one:
+    /// the description says so for each convention, and a pattern the front
+    /// end recorded (OMF's) is turned into the format's.
     #[test]
     fn a_symbol_is_decorated_as_its_object_format_spells_it() {
         let text = format!(
@@ -891,8 +931,9 @@ mod tests {
         assert_eq!((calling.redecorated("^", "elf"), calling.redecorated("*_", "coff")), (None, None));
     }
 
-    /// The default ABI is the file's `default`, not its first entry: a second family is chosen by name, and one the
-    /// target has not is refused with the ones it has.
+    /// The default ABI is the file's `default`, not its first entry: a second
+    /// family is chosen by name, and one the target has not is refused with
+    /// the ones it has.
     #[test]
     fn an_abi_family_names_the_convention_an_unmarked_function_has() {
         let text = format!("{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\n").replace(
@@ -909,8 +950,9 @@ mod tests {
         );
     }
 
-    /// A private function takes the convention `private` names under any ABI; only the ABIs' own conventions may be
-    /// replaced, and a name the file does not give is refused.
+    /// A private function takes the convention `private` names under any ABI;
+    /// only the ABIs' own conventions may be replaced, and a name the file
+    /// does not give is refused.
     #[test]
     fn a_private_function_has_the_convention_the_description_names() {
         let stack = format!("{WATCALL}[c]\nlike = \"w\"\ncc = \"cdecl\"\n[p]\nlike = \"c\"\ncc = \"pascal\"\n").replace("default = \"w\"\n[abi.w]\nconvention = \"w\"\n", "default = \"stack\"\nprivate = \"w\"\n[abi.reg]\nconvention = \"w\"\n[abi.stack]\nconvention = \"c\"\n");
@@ -938,8 +980,9 @@ mod tests {
 mod interrupt_frame_tests {
     use super::*;
 
-    /// The interrupt frame was a constant in llrm-mir beside the description; a convention states it now. A slot that
-    /// is not `[register, bytes]` was nobody's error before and is refused.
+    /// The interrupt frame was a constant in llrm-mir beside the description; a
+    /// convention states it now. A slot that is not `[register, bytes]` was
+    /// nobody's error before and is refused.
     #[test]
     fn test_an_interrupt_frame_is_read_from_the_description() {
         let text =

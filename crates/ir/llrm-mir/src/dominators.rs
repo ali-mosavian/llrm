@@ -7,16 +7,18 @@ use crate::module::{BlockId, Function, InstId};
 /// Absent from a table indexed by block: an unreachable block.
 const NONE: u32 = u32::MAX;
 
-/// Tables by block id, which are dense, so a query is an index and no hash: `dominates` is asked
-/// for every pair a pass compares, and walking up the tree made it as deep as the loops nest.
+/// Tables by block id, which are dense, so a query is an index and no hash:
+/// `dominates` is asked for every pair a pass compares, and walking up the tree
+/// made it as deep as the loops nest.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DominatorTree {
     /// Each reachable block's immediate dominator; the entry's is itself.
     idom: Vec<u32>,
     /// Reverse postorder position of each reachable block.
     order: Vec<u32>,
-    /// A preorder number of the dominator tree, and the last one in each block's subtree: `a`
-    /// dominates `b` where `b`'s lies between `a`'s two.
+    /// A preorder number of the dominator tree, and the last one in each
+    /// block's subtree: `a` dominates `b` where `b`'s lies between `a`'s
+    /// two.
     enter: Vec<u32>,
     last: Vec<u32>,
 }
@@ -57,8 +59,9 @@ impl DominatorTree {
                 }
             }
         }
-        // A block follows its dominator in reverse postorder, so numbering in that order gives each
-        // subtree a contiguous run: sizes bottom up, then each block's number from its parent's.
+        // A block follows its dominator in reverse postorder, so numbering in
+        // that order gives each subtree a contiguous run: sizes bottom
+        // up, then each block's number from its parent's.
         let mut subtree = vec![1_u32; size];
         for block in rpo.iter().skip(1).rev() {
             subtree[idom[block.0 as usize] as usize] += subtree[block.0 as usize];
@@ -128,8 +131,9 @@ impl DominatorTree {
         list.iter().position(|one| *one == def) < list.iter().position(|one| *one == user)
     }
 
-    /// `instruction_dominates`, where `position` is each instruction's index in its block
-    /// (`Function::positions`): no scan of the block for two in the same one.
+    /// `instruction_dominates`, where `position` is each instruction's index in
+    /// its block (`Function::positions`): no scan of the block for two in
+    /// the same one.
     pub fn instruction_dominates_at(
         &self,
         function: &Function,
@@ -149,8 +153,8 @@ thread_local! {
     static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has scanned a block's instructions to order two of them, for a test that the
-/// verifier does not.
+/// How many times this thread has scanned a block's instructions to order two
+/// of them, for a test that the verifier does not.
 pub fn scans() -> usize {
     SCANS.with(std::cell::Cell::get)
 }
@@ -210,7 +214,8 @@ mod tests {
             .expect("a body")
     }
 
-    /// `a` dominates `b` where `b` cannot be reached from the entry once `a` is gone.
+    /// `a` dominates `b` where `b` cannot be reached from the entry once `a` is
+    /// gone.
     fn by_definition(
         function: &Function,
         a: BlockId,
@@ -245,8 +250,9 @@ mod tests {
         }
     }
 
-    /// Asking was a walk up the tree through a hash map, as deep as the loops nest: 45% of a compile of
-    /// 60 sequential loops, and 301 s of one of 200 (#394). It is a comparison of two numbers.
+    /// Asking was a walk up the tree through a hash map, as deep as the loops
+    /// nest: 45% of a compile of 60 sequential loops, and 301 s of one of
+    /// 200 (#394). It is a comparison of two numbers.
     #[test]
     fn asking_whether_a_block_dominates_does_not_walk_the_tree() {
         let depth = 20_000;

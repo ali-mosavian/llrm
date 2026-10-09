@@ -110,14 +110,15 @@ static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|
         // rt/prnval.asm, FAR, no arguments.
         ("B$LPRT", 0),
         ("B$WRIT", 0),
-        // Path descriptor, channel, record length -1 and mode; BCOM45 dkopen.asm
-        // B$OPEN at 0224 returns with RETF 8 at 0252.
+        // Path descriptor, channel, record length -1 and mode; BCOM45
+        // dkopen.asm B$OPEN at 0224 returns with RETF 8 at 0252.
         ("B$OPEN", 8),
         ("B$SLEP", 4),
     ])
 });
 
-/// An inline block as a call: its declared registers are all it reads and changes.
+/// An inline block as a call: its declared registers are all it reads and
+/// changes.
 fn _inline_contract(
     asm: &model::Asm
 ) -> Result<(Contract, Vec<(runtime::Reg, u32)>, Vec<(runtime::Reg, u32)>), AbiError> {
@@ -131,7 +132,8 @@ fn _inline_contract(
             .collect::<Result<Vec<_>, _>>()
     };
     let (inputs, outputs, clobbers) = (registers(&asm.inputs)?, registers(&asm.outputs)?, registers(&asm.clobbers)?);
-    // A register is its root whatever the view: a 32-bit one clobbers the whole.
+    // A register is its root whatever the view: a 32-bit one clobbers the
+    // whole.
     let roots = |named: &[(runtime::Reg, u32)]| named.iter().map(|one| one.0).collect::<Vec<_>>();
     let (input_roots, output_roots, clobber_roots) = (roots(&inputs), roots(&outputs), roots(&clobbers));
     let memory = if asm.memory { runtime::Memory::Any } else { runtime::Memory::None };
@@ -363,8 +365,9 @@ fn _contract_keeping(
     if family == model::RuntimeProfile::Vbdos && (name == "B$STR4" || name == "B$STR8") {
         // The shared object raiser kept these conservative because it does not
         // model the mathpack's transitive stack paths. At a typed source site,
-        // however, the wrapper's own RETF 4/8 and exact argument width establish
-        // normal cleanup without making any stronger effect claim.
+        // however, the wrapper's own RETF 4/8 and exact argument width
+        // establish normal cleanup without making any stronger effect
+        // claim.
         return Ok(returns(
             pushed,
             format!(
@@ -761,7 +764,8 @@ pub struct HirAbi {
     pub objects: std::collections::BTreeMap<String, String>,
     /// The registers a call no runtime contract describes keeps.
     pub preserved: BTreeSet<runtime::Reg>,
-    /// The runtime's stack limit and overflow handler, where the program checks its stack.
+    /// The runtime's stack limit and overflow handler, where the program checks
+    /// its stack.
     pub stack_check: Option<model::StackCheck>,
 }
 

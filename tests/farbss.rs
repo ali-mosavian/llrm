@@ -1,8 +1,10 @@
-//! Zero data is uninitialised data, near and far alike: the image stores none of it, and the
-//! program's start-up zeroes it, because DOS does not clear memory past the image.
+//! Zero data is uninitialised data, near and far alike: the image stores none
+//! of it, and the program's start-up zeroes it, because DOS does not clear
+//! memory past the image.
 //!
-//! DOSBox starts with zeroed RAM, so a plain run proves nothing: every program here runs under
-//! `tools/dosbatch/dirty.asm`, which fills free memory with 0A5h first.
+//! DOSBox starts with zeroed RAM, so a plain run proves nothing: every program
+//! here runs under `tools/dosbatch/dirty.asm`, which fills free memory with
+//! 0A5h first.
 
 mod common;
 
@@ -78,8 +80,8 @@ impl Lab {
         self.run("jwasm", &args);
     }
 
-    /// What the assembler is told of the OS layer and C's runtime description; `nozero` adds NOZERO, a start-up
-    /// that does not zero.
+    /// What the assembler is told of the OS layer and C's runtime description;
+    /// `nozero` adds NOZERO, a start-up that does not zero.
     fn defines(nozero: bool) -> Vec<String> {
         let target = llrm_x86_m16::M16;
         let (layer, c) = (target.os_layer().unwrap(), target.runtime("c").unwrap());
@@ -94,7 +96,8 @@ impl Lab {
         defines
     }
 
-    /// `PROGRAM` at the flag, linked with the OS layer's start-up (`nozero`: one that does not zero).
+    /// `PROGRAM` at the flag, linked with the OS layer's start-up (`nozero`:
+    /// one that does not zero).
     fn exe(
         &self,
         name: &str,
@@ -178,9 +181,10 @@ impl Lab {
     }
 }
 
-/// QCport stored 27,264 bytes of zeros in far data, and Nib's huge.nib 84,000. Where the start-up
-/// zeroes the far uninitialised data they are not stored; the zeros are there all the same, near and
-/// far, on memory DOS left dirty. The same program on a start-up that does not zero reads the dirt,
+/// QCport stored 27,264 bytes of zeros in far data, and Nib's huge.nib 84,000.
+/// Where the start-up zeroes the far uninitialised data they are not stored;
+/// the zeros are there all the same, near and far, on memory DOS left dirty.
+/// The same program on a start-up that does not zero reads the dirt,
 /// which shows the run can see it.
 #[test]
 fn test_zero_far_data_is_not_stored_and_is_zero_on_dirty_memory() {
@@ -198,8 +202,8 @@ fn test_zero_far_data_is_not_stored_and_is_zero_on_dirty_memory() {
     assert!(size(&bss) + 39_000 < size(&stored), "{} against {}", size(&bss), size(&stored));
 }
 
-/// Where the program's start-up does not zero (Borland's, Open Watcom's), far zero data stays stored:
-/// the listing says so, and only `-mfar-bss` moves it.
+/// Where the program's start-up does not zero (Borland's, Open Watcom's), far
+/// zero data stays stored: the listing says so, and only `-mfar-bss` moves it.
 #[test]
 fn test_far_zero_data_moves_only_where_the_startup_zeroes_it() {
     let lab = Lab::new();
@@ -217,8 +221,9 @@ fn test_far_zero_data_moves_only_where_the_startup_zeroes_it() {
     assert!(!plain.contains("FAR_BSS") && plain.contains("000h,000h,000h,000h"));
 }
 
-/// Nib's start-up zeroes the far uninitialised data too: a huge array of zeros is not stored (84 KB
-/// of the EXE of bench/huge) and reads as zeros on dirty memory.
+/// Nib's start-up zeroes the far uninitialised data too: a huge array of zeros
+/// is not stored (84 KB of the EXE of bench/huge) and reads as zeros on dirty
+/// memory.
 #[test]
 fn test_a_nib_huge_array_of_zeros_is_not_stored_and_reads_zero_on_dirty_memory() {
     let lab = Lab::new();

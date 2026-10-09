@@ -129,8 +129,9 @@ pub static PER_CONVENTION: LazyLock<BTreeSet<Reg>> =
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Memory {
     None = 0,
-    Arguments = 1, // only the values pushed for this call, popped before it returns
-    Strings = 2,   // + any string descriptor or string data, anywhere
+    // only the values pushed for this call, popped before it returns
+    Arguments = 1,
+    Strings = 2, // + any string descriptor or string data, anywhere
     // Its own data, and anything the caller handed it a pointer to. GCC's
     // ipa-modref splits a callee's effects the same way: writes at a fixed
     // address, and writes through parameter N. `ANY` says only "writes
@@ -268,7 +269,8 @@ pub struct Contract {
     // handler summarization stops at the transfer and consumes these instead.
     pub direct_writes: Option<Memory>,
     pub direct_reads: Option<Memory>,
-    // Its result is the flags, as `cmp result, 0` would leave them: no register holds it.
+    // Its result is the flags, as `cmp result, 0` would leave them: no register
+    // holds it.
     pub flags_result: bool,
 }
 
@@ -1083,9 +1085,10 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
 
     // Emission-facing interfaces for QB45 routines newly reached by the demo
     // corpus. These deliberately do not turn into complete contracts: each call
-    // keeps worst-case memory, clobber, control and error effects. The sole claim
-    // needed here is that allocation may reproduce BC's incoming GP state; stack
-    // cleanup is recorded where the runtime's own epilogue makes it fixed.
+    // keeps worst-case memory, clobber, control and error effects. The sole
+    // claim needed here is that allocation may reproduce BC's incoming GP
+    // state; stack cleanup is recorded where the runtime's own epilogue
+    // makes it fixed.
     for (_name, _cleanup, _evidence) in [
         (
             "B$TIMR",
@@ -1222,8 +1225,9 @@ pub static VARIANTS: LazyLock<IndexMap<(&'static str, &'static str), Contract>> 
     }
 
     // Read in their source above, and none reaches the program's code: B$SCLS's
-    // one indirect call is the runtime's own viewport vector, B$INKY's other exit
-    // is B$END, and B$POW4's is B$RUNERR, which `raises_error` already says.
+    // one indirect call is the runtime's own viewport vector, B$INKY's other
+    // exit is B$END, and B$POW4's is B$RUNERR, which `raises_error` already
+    // says.
     for _name in ["B$SCLS", "B$INKY", "B$SCMP", "B$BSAV", "B$POW4"] {
         let one = variants[&(_name, "qb45")].clone();
         variants.insert((_name, "qb45"), Contract { enters_user_code: false, ..one });
@@ -1567,12 +1571,14 @@ pub fn barrier(routine: &Contract) -> bool {
     routine.enters_user_code || routine.error_handling || !routine.established
 }
 
-/// Whether the module has an ON ERROR handler, so a raised error can reach user code.
+/// Whether the module has an ON ERROR handler, so a raised error can reach user
+/// code.
 pub fn handles_errors<'a>(routines: impl IntoIterator<Item = &'a Contract>) -> bool {
     routines.into_iter().any(|routine| routine.error_handling)
 }
 
-/// Bytes consumed by value by prnval.asm's PRINTX path, not a descriptor pointer.
+/// Bytes consumed by value by prnval.asm's PRINTX path, not a descriptor
+/// pointer.
 pub fn numeric_print_argument(name: &str) -> Option<i64> {
     if !["B$PEI2", "B$PSI2", "B$PEI4", "B$PSI4", "B$PER4"].contains(&name) {
         return None;
@@ -1581,7 +1587,8 @@ pub fn numeric_print_argument(name: &str) -> Option<i64> {
     if routine.established { routine.cleanup } else { None }
 }
 
-/// Known scalar stack arguments, whose bits are values rather than caller pointers.
+/// Known scalar stack arguments, whose bits are values rather than caller
+/// pointers.
 pub fn numeric_stack_arguments(name: &str) -> Option<i64> {
     if ["B$MUI4", "B$DVI4", "B$RMI4", "B$CPI4"].contains(&name) {
         let routine = contract(Some(name));
@@ -1621,7 +1628,8 @@ pub struct Row {
 
 include!(concat!(env!("OUT_DIR"), "/rows.rs"));
 
-/// The row for `name`, if the table has one: a binary search, nothing parsed or built.
+/// The row for `name`, if the table has one: a binary search, nothing parsed or
+/// built.
 pub fn row(name: &str) -> Option<&'static Row> {
     row_at(name).map(|at| &ROWS[at])
 }
@@ -2243,8 +2251,8 @@ mod tests {
         }
     }
 
-    /// `build.rs` writes the rows the table's text parses to: one parse at run time, which the build replaced, equals
-    /// them all.
+    /// `build.rs` writes the rows the table's text parses to: one parse at run
+    /// time, which the build replaced, equals them all.
     #[test]
     fn the_rows_built_in_are_the_tables_text_parsed() {
         let parsed =
@@ -2353,7 +2361,8 @@ mod tests {
             assert_eq!(rule.clobbers, *EVERY);
             assert!(rule.reads == Memory::Any && rule.writes == Memory::Any);
             assert!(rule.control == Control::Unknown && rule.raises_error);
-            // QB 4.5's is read from its source: rt/stringfp.asm pops the argument.
+            // QB 4.5's is read from its source: rt/stringfp.asm pops the
+            // argument.
             assert_eq!(one(symbol, "qb45").cleanup, Some(cleanup));
         }
     }

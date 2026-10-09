@@ -382,7 +382,8 @@ b5:
     assert_eq!(results(&module, &[&[]]), before);
 }
 
-/// A pointer to an object compared with null: never equal. A parameter may be null.
+/// A pointer to an object compared with null: never equal. A parameter may be
+/// null.
 #[test]
 fn a_pointer_to_an_object_is_never_null() {
     for (pointer, predicate, decided) in [
@@ -558,7 +559,8 @@ fn test_an_index_that_follows_the_counter_is_below_the_length_the_loop_was_check
     assert_eq!(results(&module, INPUTS), before);
 }
 
-/// Where the counter may be negative the check stays: `lo` is not known below `len`.
+/// Where the counter may be negative the check stays: `lo` is not known below
+/// `len`.
 #[test]
 fn test_an_index_from_an_unchecked_start_keeps_its_check() {
     let mut module = parsed(&format!(
@@ -590,8 +592,9 @@ crash:
     assert!(!printed(&module).contains("br i1 %fits"), "{}", printed(&module));
 }
 
-/// Every guard query found the body's `llvm.assume`s again, a walk of the whole body naming each call's callee by
-/// string (`Intrinsic::named`): decide was 5.9% of QCport, a fifth of it that. The body's assumptions are found once,
+/// Every guard query found the body's `llvm.assume`s again, a walk of the whole
+/// body naming each call's callee by string (`Intrinsic::named`): decide was
+/// 5.9% of QCport, a fifth of it that. The body's assumptions are found once,
 /// as LLVM's AssumptionCache.
 #[test]
 fn test_a_body_is_searched_for_its_assumptions_once_however_many_guards_are_asked() {
@@ -602,8 +605,9 @@ fn test_a_body_is_searched_for_its_assumptions_once_however_many_guards_are_aske
     assert_eq!(searched, 1, "the body was searched {searched} times");
 }
 
-/// `decide` solved what the counted loops bound twice: once for the points-to it holds (the manager's `Bounded`) and
-/// again for its own branches (a hand solve): 26 Minstr of fpbench's -O1 compile. It reads the manager's.
+/// `decide` solved what the counted loops bound twice: once for the points-to
+/// it holds (the manager's `Bounded`) and again for its own branches (a hand
+/// solve): 26 Minstr of fpbench's -O1 compile. It reads the manager's.
 #[test]
 fn test_decide_works_a_loops_bounds_out_once() {
     let mut module = parsed(

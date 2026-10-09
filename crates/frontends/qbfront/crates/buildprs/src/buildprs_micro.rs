@@ -2,7 +2,8 @@
 //!
 //! Each fixture under `fixtures/buildprs/micro/<name>/` stores a tiny `.prs`
 //! grammar, minimal `peropcod.txt`, and captured DOS `prsstate.asm` outputs for
-//! O0-O2. Tests compare generated and golden tables with a semantic interpreter.
+//! O0-O2. Tests compare generated and golden tables with a semantic
+//! interpreter.
 
 use std::path::{Path, PathBuf};
 
@@ -16,7 +17,8 @@ use crate::buildprs_graph::OptLevel;
 
 pub const MICRO_FIXTURE_ROOT: &str = "../../fixtures/buildprs/micro";
 
-/// Maximum abstract input length when exhaustively probing microfixture semantics.
+/// Maximum abstract input length when exhaustively probing microfixture
+/// semantics.
 pub const MICRO_SEMANTIC_MAX_INPUT_LEN: usize = 4;
 
 /// Plain grammar constructs exercised before `<Cg...>` hint families.
@@ -27,7 +29,8 @@ pub const PLAIN_MICRO_FIXTURES: &[&str] =
 pub const CG_HINT_MICRO_FIXTURES: &[&str] = &["cg_1or2_args", "cg_0or1_args", "cg_stmt_cnt", "cg_call"];
 
 /// Focused reproductions of full `qbasbnf` parity gaps. These are DOS-captured
-/// but not part of the always-green parity set until the related algorithm is fixed.
+/// but not part of the always-green parity set until the related algorithm is
+/// fixed.
 pub const FULL_GAP_MICRO_FIXTURES: &[&str] = &[
     "shared_optcomma_exp",
     "case_repeat_alt",

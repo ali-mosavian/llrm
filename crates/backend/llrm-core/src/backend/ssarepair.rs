@@ -84,7 +84,8 @@ pub fn repaired(
         while let Some(at) = work.pop() {
             for next in frontier.get(&at).into_iter().flatten() {
                 if has.insert(*next) {
-                    // A block that does not take the value into a register reloads it before every use: no phi.
+                    // A block that does not take the value into a register
+                    // reloads it before every use: no phi.
                     let registered = held.get(next).is_none_or(|set| set.contains(value));
                     if registered
                         && live_in[next].contains(value)
@@ -116,8 +117,9 @@ pub fn repaired(
     let mut phis_of: IndexMap<i64, Vec<Phi>> = body.blocks.iter().map(|block| (block.at, block.phis.clone())).collect();
     // The result of the phi placed for a value in a block.
     let mut made: IndexMap<(i64, u32), u32> = IndexMap::default();
-    // (block, value) whose phi still needs its operand from a predecessor, in rename order.
-    // Each placed phi is named before any block is renamed: a predecessor visited first hands it an operand.
+    // (block, value) whose phi still needs its operand from a predecessor, in
+    // rename order. Each placed phi is named before any block is renamed: a
+    // predecessor visited first hands it an operand.
     for (at, values) in &placed {
         for value in values {
             let name = next;
@@ -223,8 +225,8 @@ pub fn repaired(
 }
 
 /// `body` without the phis that name one value: a phi whose arguments are all
-/// one value `x` (or itself) is `x`, and every use of it reads `x`. Removing one
-/// can make another trivial, so this runs to a fixed point.
+/// one value `x` (or itself) is `x`, and every use of it reads `x`. Removing
+/// one can make another trivial, so this runs to a fixed point.
 pub fn simplified(body: &LirBody) -> Option<LirBody> {
     let mut found = false;
     let mut body = body.clone();

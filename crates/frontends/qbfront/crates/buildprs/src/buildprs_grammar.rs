@@ -1,7 +1,8 @@
 //! Parser for QBasic `qbasbnf.prs` grammar files consumed by `buildprs.exe`.
 //!
-//! This module performs structural parsing: section splitting, token declarations,
-//! and typed grammar bodies for statements, functions, and nonterminals.
+//! This module performs structural parsing: section splitting, token
+//! declarations, and typed grammar bodies for statements, functions, and
+//! nonterminals.
 
 use std::fs;
 use std::path::Path;
@@ -37,7 +38,8 @@ pub struct GrammarRule {
     pub production: GrammarProduction,
 }
 
-/// One semicolon-terminated production, optionally followed by a `<Cg...>` hint.
+/// One semicolon-terminated production, optionally followed by a `<Cg...>`
+/// hint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrammarProduction {
     pub expr: GrammarExpr,
@@ -172,7 +174,8 @@ pub fn parse_grammar_file(path: impl AsRef<Path>) -> Result<GrammarFile, Grammar
     parse_grammar(&source)
 }
 
-/// Parse only the `TOKENS:` section, without validating statement/function bodies.
+/// Parse only the `TOKENS:` section, without validating statement/function
+/// bodies.
 ///
 /// Token-artifact generation uses this entry point so it stays independent of
 /// the grammar-body AST packet.

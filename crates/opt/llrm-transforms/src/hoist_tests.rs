@@ -2,9 +2,10 @@
 //! body now MIR text the interpreter runs before and after.
 //!
 //! Skipped: test_a_run_whose_flag_the_loop_still_reads_is_not_hoistable
-//! (flags), test_a_definition_a_phi_carries_and_the_loop_rewrites_does_not_leave_it
-//! and test_reparenting_a_hoisted_pointer_keeps_its_object_facts (variables
-//! and their renaming; a value here is SSA).
+//! (flags),
+//! test_a_definition_a_phi_carries_and_the_loop_rewrites_does_not_leave_it and
+//! test_reparenting_a_hoisted_pointer_keeps_its_object_facts (variables and
+//! their renaming; a value here is SSA).
 
 use llrm_analysis::manager::Summaries;
 use llrm_mir::module::Module;
@@ -371,8 +372,9 @@ b3:
     );
 }
 
-/// The language says a load reads what is written once and never again: a store the loop
-/// cannot rule out as that cell (any pointer) does not keep it in the loop.
+/// The language says a load reads what is written once and never again: a store
+/// the loop cannot rule out as that cell (any pointer) does not keep it in the
+/// loop.
 #[test]
 fn test_a_load_the_language_says_is_invariant_leaves_past_a_store() {
     let with = |load: &str| {
@@ -392,7 +394,8 @@ fn test_a_load_the_language_says_is_invariant_leaves_past_a_store() {
     assert!(block_of(&printed, "f", "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{printed}");
 }
 
-/// The function of the test below: two loops inside one, each with three invariant loads past six registers.
+/// The function of the test below: two loops inside one, each with three
+/// invariant loads past six registers.
 fn two_inner_loops() -> String {
     let loads = |names: [&str; 3]| {
         names.map(|name| format!("  %{name} = load i16, ptr @{name}\n  %w{name} = shl i16 %{name}, 1\n")).concat()
@@ -439,10 +442,11 @@ b9:
     text
 }
 
-/// Two inner loops each read three globals nothing writes and double them. Hoisted out of
-/// the outer loop too, six values live across both inner loops, more than
-/// the nine registers hold with the loop's own counters (PLASMABLOBS -Os
-/// +73 B, #529). At -Os the ones past the registers stay in their inner preheader.
+/// Two inner loops each read three globals nothing writes and double them.
+/// Hoisted out of the outer loop too, six values live across both inner loops,
+/// more than the nine registers hold with the loop's own counters (PLASMABLOBS
+/// -Os +73 B, #529). At -Os the ones past the registers stay in their inner
+/// preheader.
 #[test]
 fn test_invariants_past_the_registers_stay_in_the_inner_preheader() {
     let text = two_inner_loops();
@@ -460,9 +464,10 @@ fn test_invariants_past_the_registers_stay_in_the_inner_preheader() {
     assert!(hoisted < 6, "{hoisted} of 6 loads left both inner loops\n{printed}");
 }
 
-/// A loop that calls and reads six fields of its argument: each `getelementptr` of a constant is
-/// folded into its load, a displacement from the argument, but counted as a value live across the
-/// calls it was forecast spilled, and left in the loop (QCport part.c +56 B at -Os, #529).
+/// A loop that calls and reads six fields of its argument: each `getelementptr`
+/// of a constant is folded into its load, a displacement from the argument, but
+/// counted as a value live across the calls it was forecast spilled, and left
+/// in the loop (QCport part.c +56 B at -Os, #529).
 #[test]
 fn test_a_displacement_the_loads_fold_is_not_pruned_for_the_registers() {
     let fields = (1..=6).map(|at| format!("  %p{at} = getelementptr i8, ptr %p, i16 {}\n  %v{at} = load i16, ptr %p{at}\n  %s{at} = add i16 %s{}, %v{at}\n", at * 2, at - 1)).collect::<String>();
@@ -502,8 +507,9 @@ b2:
     assert_eq!(hoisted, 6, "{printed}");
 }
 
-/// A loop's invariant `double` load, hoisted: a value on a stack machine is held across the loop and released
-/// after it. x86-m32's -Os grew 4 B per float hoisted (nbody: two `fld` and two `fstp st(0)` out of an inner loop
+/// A loop's invariant `double` load, hoisted: a value on a stack machine is
+/// held across the loop and released after it. x86-m32's -Os grew 4 B per float
+/// hoisted (nbody: two `fld` and two `fstp st(0)` out of an inner loop
 /// of 1.5 trips) because the price counted a move and no release.
 fn float_hoist(
     size: bool,
@@ -543,21 +549,24 @@ b2:
 
 #[test]
 fn test_a_float_load_is_not_hoisted_where_its_release_costs_the_code_more() {
-    // Moved out of the loop its price is the same: only the release after the loop differs.
+    // Moved out of the loop its price is the same: only the release after the
+    // loop differs.
     assert_eq!(float_hoist(true, 0), 1, "unpriced, it is hoisted");
     assert_eq!(float_hoist(true, 2), 0, "released after the loop at 2 bytes, it stays");
 }
 
-/// At speed the loop's trips pay for the release: 10 loads saved against one release of 2.
+/// At speed the loop's trips pay for the release: 10 loads saved against one
+/// release of 2.
 #[test]
 fn test_a_float_load_is_hoisted_where_the_loop_pays_for_its_release() {
     assert_eq!(float_hoist(false, 2), 1);
 }
 
-/// A chain of loads each reading through the one before: one more of them is ready each round of `_invariant_run`, and
-/// a load that was not ready was asked again, round after round, whether any write in the loop reaches it (x_life,
-/// d_alias: hoist's alias queries `memoryssa::spares` -> `regions::overlapping`, 1.3 of its 3.4 points). A load is
-/// asked once.
+/// A chain of loads each reading through the one before: one more of them is
+/// ready each round of `_invariant_run`, and a load that was not ready was
+/// asked again, round after round, whether any write in the loop reaches it
+/// (x_life, d_alias: hoist's alias queries `memoryssa::spares` ->
+/// `regions::overlapping`, 1.3 of its 3.4 points). A load is asked once.
 #[test]
 fn test_a_load_that_waits_for_the_one_before_is_asked_whether_the_loop_writes_it_once() {
     let globals = "@a = global ptr @b\n@b = global ptr @c\n@c = global ptr @d\n@d = global ptr @e\n@e = global i16 7\n@w = global i16 0\n\n";
@@ -576,8 +585,9 @@ fn test_a_load_that_waits_for_the_one_before_is_asked_whether_the_loop_writes_it
     assert!(asks <= 5, "{asks} asks for 5 loads");
 }
 
-/// A motion's price is its work and one spill forecast; hoist found the forecast twice (once for the price, again for
-/// the spilled set), 41% of its time on a 16-deep loop nest.
+/// A motion's price is its work and one spill forecast; hoist found the
+/// forecast twice (once for the price, again for the spilled set), 41% of its
+/// time on a 16-deep loop nest.
 #[test]
 fn test_a_motion_is_priced_by_one_forecast() {
     let text = two_inner_loops();

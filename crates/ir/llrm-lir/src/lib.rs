@@ -1,7 +1,7 @@
 //! The machine operand model: `Reg`, `Held`, `Imm`, `Address`, `Mem`, `Loc`,
 //! `Effects`, `Operation` and `Semantics`. Direct port of Python's
-//! `qbopt.model.ir` machine-semantics vocabulary, in a crate of its own so the BC
-//! lifter and the backend both depend on it and neither owns it.
+//! `qbopt.model.ir` machine-semantics vocabulary, in a crate of its own so the
+//! BC lifter and the backend both depend on it and neither owns it.
 //!
 //! This is deliberately distinct from the existing `MachineInstruction`
 //! representation.  Python LIR carries selected semantics, source-byte
@@ -52,10 +52,11 @@ pub struct Imm {
 
 /// An address used as a value, rather than a memory access.
 ///
-/// Direct port of `qbopt.model.ir:Address`. Equality and hashing take every field: two addresses spelled
-/// through different registers or displacements are different addresses. (Python left the encoding fields out;
-/// that made `==` mean "the same address modulo how it is encoded", which is no answer to the question a caller
-/// asks of two operands that will be emitted.)
+/// Direct port of `qbopt.model.ir:Address`. Equality and hashing take every
+/// field: two addresses spelled through different registers or displacements
+/// are different addresses. (Python left the encoding fields out;
+/// that made `==` mean "the same address modulo how it is encoded", which is no
+/// answer to the question a caller asks of two operands that will be emitted.)
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Address {
     pub addr: Option<Addr>,
@@ -80,8 +81,9 @@ impl Address {
 }
 
 impl Address {
-    /// The same address, not necessarily spelled the same way: `==` less its encoding fields, which are the
-    /// registers it is reached through, its scale, and the displacement of one that has an `addr`.
+    /// The same address, not necessarily spelled the same way: `==` less its
+    /// encoding fields, which are the registers it is reached through, its
+    /// scale, and the displacement of one that has an `addr`.
     pub fn same_place(
         &self,
         other: &Self,
@@ -97,8 +99,9 @@ impl Address {
 
 /// A memory operand.
 ///
-/// Direct port of `qbopt.model.ir:Mem`. Equality and hashing take every field, the encoding details
-/// (`through`, `offset`, `disp_width`, `index_through`) included: see `Address`.
+/// Direct port of `qbopt.model.ir:Mem`. Equality and hashing take every field,
+/// the encoding details (`through`, `offset`, `disp_width`, `index_through`)
+/// included: see `Address`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Mem {
     pub addr: Option<Addr>,
@@ -119,9 +122,11 @@ pub struct Mem {
 }
 
 impl Mem {
-    /// The same cell, not necessarily spelled the same way: `==` less its encoding fields (`through`, `offset` of
-    /// a cell that has an `addr`, `disp_width`, `index_through`, `exact`). What a caller means by "the same
-    /// operand" when it asks of operands not yet emitted, or of one in two spellings.
+    /// The same cell, not necessarily spelled the same way: `==` less its
+    /// encoding fields (`through`, `offset` of a cell that has an `addr`,
+    /// `disp_width`, `index_through`, `exact`). What a caller means by "the
+    /// same operand" when it asks of operands not yet emitted, or of one in
+    /// two spellings.
     pub fn same_place(
         &self,
         other: &Self,
@@ -136,7 +141,8 @@ impl Mem {
             && (self.addr.is_some() || self.offset == other.offset)
     }
 
-    /// `self` is the word above `low`: the cell two bytes on, however either is spelled.
+    /// `self` is the word above `low`: the cell two bytes on, however either is
+    /// spelled.
     pub fn word_above(
         &self,
         low: &Self,
@@ -180,7 +186,8 @@ fn _in_frame(
     through: Register,
     valued: bool,
 ) -> bool {
-    // A base value is the register's: the frame register is a frame only where nothing was given it.
+    // A base value is the register's: the frame register is a frame only where
+    // nothing was given it.
     addr.is_some_and(|addr| {
         addr.space == Space::Frame
             || (addr.space == Space::Literal && !valued && matches!(through, Register::BP | Register::EBP))
@@ -385,7 +392,8 @@ pub struct Semantics {
 }
 
 impl Semantics {
-    /// The same instruction, its operands not necessarily spelled the same way (`Mem::same_place`).
+    /// The same instruction, its operands not necessarily spelled the same way
+    /// (`Mem::same_place`).
     pub fn same_meaning(
         &self,
         other: &Self,
@@ -427,8 +435,9 @@ pub static RESTORE_IDIOM: LazyLock<Semantics> = LazyLock::new(|| Semantics {
 /// Python `TABLE_DATA`.
 pub static TABLE_DATA: LazyLock<Semantics> = LazyLock::new(|| Semantics::new(Operation::Data));
 
-/// The values one operand names: at most three (a cell's base, index and selector), kept in the value itself, so that
-/// asking for them of every operand of every instruction allocates nothing.
+/// The values one operand names: at most three (a cell's base, index and
+/// selector), kept in the value itself, so that asking for them of every
+/// operand of every instruction allocates nothing.
 #[derive(Clone, Copy, Debug)]
 pub struct Values {
     held: [Held; 3],
@@ -533,9 +542,10 @@ mod tests {
     use super::root;
     use super::*;
 
-    /// An indexed access through a register that holds a value (`[ebp+edx-16]`, the frame register freed) is not a
-    /// frame cell: relayout moved its displacement by the frame's hole and nib's dictionary lookups read 16 bytes
-    /// off (tests/run nib/flat_containers at -O2).
+    /// An indexed access through a register that holds a value (`[ebp+edx-16]`,
+    /// the frame register freed) is not a frame cell: relayout moved its
+    /// displacement by the frame's hole and nib's dictionary lookups read 16
+    /// bytes off (tests/run nib/flat_containers at -O2).
     #[test]
     fn a_literal_displacement_through_a_register_holding_a_value_is_not_in_the_frame() {
         let table = |base| Mem {
@@ -551,7 +561,8 @@ mod tests {
 
     #[test]
     fn root_normalises_every_sub_register_of_the_ax_pair() {
-        // Port of tests/test_ir.py::test_root_normalises_every_sub_register_of_the_ax_pair.
+        // Port of tests/test_ir.
+        // py::test_root_normalises_every_sub_register_of_the_ax_pair.
         for register in
             [iced_x86::Register::AL, iced_x86::Register::AH, iced_x86::Register::AX, iced_x86::Register::EAX]
         {
@@ -571,7 +582,8 @@ mod tests {
 
     #[test]
     fn two_cells_reached_by_different_values_are_different_cells() {
-        // Port of tests/test_ir.py::test_two_cells_reached_by_different_values_are_different_cells.
+        // Port of tests/test_ir.
+        // py::test_two_cells_reached_by_different_values_are_different_cells.
         let mut left = Mem::new(None, 2);
         left.base = Some(Held { value: 1, width: 2 });
         left.through = iced_x86::Register::BX;
@@ -582,9 +594,11 @@ mod tests {
         assert_ne!(left, right);
     }
 
-    /// `==` left out how an operand is spelled (`through`, `offset` of a cell with an address, `disp_width`,
-    /// `index_through`), so every caller that asked whether two operands are the same asked whether they are the
-    /// same modulo their encoding: a cache of decoded instructions gave `mov es,[bx+2]` for `mov es,[si+2]`.
+    /// `==` left out how an operand is spelled (`through`, `offset` of a cell
+    /// with an address, `disp_width`, `index_through`), so every caller
+    /// that asked whether two operands are the same asked whether they are the
+    /// same modulo their encoding: a cache of decoded instructions gave `mov
+    /// es,[bx+2]` for `mov es,[si+2]`.
     #[test]
     fn how_a_memory_operand_is_spelled_is_part_of_its_identity() {
         let mut left = Mem::new(Some(Addr::new(Space::Segment, 4)), 2);
@@ -626,7 +640,8 @@ mod tests {
 
     #[test]
     fn mapped_replaces_a_nested_base_and_leaves_the_rest() {
-        // Port of tests/test_ir.py::test_mapped_replaces_a_nested_base_and_leaves_the_rest.
+        // Port of tests/test_ir.
+        // py::test_mapped_replaces_a_nested_base_and_leaves_the_rest.
         let mut memory = Mem::new(Some(Addr::new(Space::Far, 8)), 4);
         memory.base = Some(Held { value: 1, width: 2 });
         memory.selector = Some(Held { value: 2, width: 2 });
@@ -662,7 +677,8 @@ mod tests {
 
     #[test]
     fn restore_and_table_carry_their_own_operations() {
-        // Port of tests/test_ir.py::test_a_restore_and_a_table_carry_their_own_operations.
+        // Port of tests/test_ir.
+        // py::test_a_restore_and_a_table_carry_their_own_operations.
         assert_eq!(RESTORE_IDIOM.op, Operation::Restore);
         assert_eq!(TABLE_DATA.op, Operation::Data);
         for operation in Operation::ALL {

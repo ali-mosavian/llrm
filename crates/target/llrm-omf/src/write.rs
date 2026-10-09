@@ -1,5 +1,6 @@
-//! An [`Object`] as OMF records: LNAMES, SEGDEF, GRPDEF, EXTDEF, PUBDEF, LEDATA and FIXUPP, and
-//! LINNUM and a CodeView marker where it carries debug information.
+//! An [`Object`] as OMF records: LNAMES, SEGDEF, GRPDEF, EXTDEF, PUBDEF, LEDATA
+//! and FIXUPP, and LINNUM and a CodeView marker where it carries debug
+//! information.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -33,7 +34,8 @@ const TARGET_FRAME: u8 = 5;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Error {
-    /// The object says something OMF cannot, or something that does not fit a record.
+    /// The object says something OMF cannot, or something that does not fit a
+    /// record.
     Unencodable(String),
     Value(omf::ValueError),
 }
@@ -62,7 +64,8 @@ fn unencodable(text: impl Into<String>) -> Error {
     Error::Unencodable(text.into())
 }
 
-/// The segment alignment code a segment whose widest item asks for `to` bytes needs.
+/// The segment alignment code a segment whose widest item asks for `to` bytes
+/// needs.
 fn alignment_for(to: usize) -> u8 {
     match to {
         0..=2 => ACBP,
@@ -123,7 +126,8 @@ fn pack_field(
     }
 }
 
-/// Everything of a fixup after its location: fix data, frame datum, target datum.
+/// Everything of a fixup after its location: fix data, frame datum, target
+/// datum.
 struct Resolved {
     subrecord: Vec<u8>,
     /// What the field holds once the target's own offset is added in.
@@ -268,8 +272,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         Some(info) if info.format == llrm_object::debug::Format::TurboDebugger
     );
     let debug = object.debug.is_some() && !turbo;
-    // Turbo Debugger's records go among the object's own; CodeView's two segments are this writer's,
-    // made from the object's debug information.
+    // Turbo Debugger's records go among the object's own; CodeView's two
+    // segments are this writer's, made from the object's debug information.
     let td = match &object.debug {
         Some(info) if turbo => Some(crate::td::records(object, info)?),
         _ => None,
@@ -461,8 +465,8 @@ mod tests {
         Object { name: "t.c".into(), arch, sections, symbols, omf_groups: Vec::new(), debug: None }
     }
 
-    /// NDMAX's 60-dimensional HARY expansion exceeded one LEDATA and was refused: a record may
-    /// not end inside a fixup's field.
+    /// NDMAX's 60-dimensional HARY expansion exceeded one LEDATA and was
+    /// refused: a record may not end inside a fixup's field.
     #[test]
     fn a_fixup_is_never_split_between_ledata_records() {
         let size = CHUNK * 3;
@@ -487,7 +491,8 @@ mod tests {
         assert!(!cuts.iter().any(|cut| starts.iter().any(|low| low < cut && *cut < low + 4)), "{cuts:?}");
     }
 
-    /// A call to an undefined symbol is a self-relative fixup, whose field holds the addend.
+    /// A call to an undefined symbol is a self-relative fixup, whose field
+    /// holds the addend.
     #[test]
     fn a_call_is_a_self_relative_fixup_against_an_extern() {
         let call = Reloc { at: 1, kind: Kind::PcRel { width: 4, from: 4 }, target: Target::Symbol(0), addend: -2 };
@@ -512,7 +517,8 @@ mod tests {
         assert!(matches!(write(&made), Err(Error::Unencodable(text)) if text.contains("64-bit")));
     }
 
-    /// A pc-relative field OMF has no fixup for was written near-ish; it is refused.
+    /// A pc-relative field OMF has no fixup for was written near-ish; it is
+    /// refused.
     #[test]
     fn a_pc_relative_field_omf_cannot_say_is_refused() {
         let jump = Reloc { at: 1, kind: Kind::PcRel { width: 4, from: 8 }, target: Target::Symbol(0), addend: 0 };

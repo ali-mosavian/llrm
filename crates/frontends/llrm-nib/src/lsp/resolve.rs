@@ -18,7 +18,8 @@ pub enum Target {
         module: String,
         declaration: Declaration,
     },
-    /// A local or parameter, where it is bound, and its type when the checker knows it.
+    /// A local or parameter, where it is bound, and its type when the checker
+    /// knows it.
     Local {
         name: String,
         bound: Span,
@@ -119,7 +120,8 @@ fn locals(function: &Function) -> (Vec<(Span, (String, Span))>, Vec<(String, Spa
     (uses, bound)
 }
 
-/// The field or method at the cursor, of the type the checker found its value has.
+/// The field or method at the cursor, of the type the checker found its value
+/// has.
 fn member(
     loaded: &Loaded,
     text: &str,

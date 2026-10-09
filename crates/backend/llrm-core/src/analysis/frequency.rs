@@ -19,8 +19,9 @@ use crate::model::lir::{BlockFrequencies, BlockOdds};
 use crate::model::lir::{LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
-/// The body's blocks as a frequency reads them: the flow between them, the odds on its edges and the proven trips. No
-/// instruction is read, so a spill or a reload leaves a frequency as it was.
+/// The body's blocks as a frequency reads them: the flow between them, the odds
+/// on its edges and the proven trips. No instruction is read, so a spill or a
+/// reload leaves a frequency as it was.
 pub struct Cfg {
     entry: i64,
     shape: Vec<(i64, Vec<i64>)>,
@@ -71,7 +72,8 @@ impl Fact for Worked {
     }
 }
 
-/// The table kept on the body, filled in for the blocks made since; none where it cannot be.
+/// The table kept on the body, filled in for the blocks made since; none where
+/// it cannot be.
 pub struct Carried;
 
 impl Fact for Carried {
@@ -99,9 +101,10 @@ pub struct Frequency {
 }
 
 impl Frequency {
-    /// `body`'s blocks' frequencies. They depend on the blocks' shape, the odds and the trip counts
-    /// and on no instruction, so the last answer stands for every body of that shape: a rewrite that
-    /// only inserts instructions (a spill, a reload) asks the same question again and again.
+    /// `body`'s blocks' frequencies. They depend on the blocks' shape, the odds
+    /// and the trip counts and on no instruction, so the last answer stands
+    /// for every body of that shape: a rewrite that only inserts
+    /// instructions (a spill, a reload) asks the same question again and again.
     pub fn of(body: &LirBody) -> Arc<Self> {
         if body.frequencies.is_some() {
             if let Some(kept) = body.facts.0.get::<Carried>(body).as_ref() {
@@ -111,9 +114,10 @@ impl Frequency {
         body.facts.0.get::<Worked>(body)
     }
 
-    /// The table kept on the body, with the blocks made since filled in from their predecessors' (a block put on an
-    /// edge runs as often as the edge is taken). `None` where one cannot be: a block made since that only a cycle
-    /// reaches, or the entry.
+    /// The table kept on the body, with the blocks made since filled in from
+    /// their predecessors' (a block put on an edge runs as often as the
+    /// edge is taken). `None` where one cannot be: a block made since that only
+    /// a cycle reaches, or the entry.
     fn carried(
         body: &LirBody,
         table: &IndexMap<i64, f64>,
@@ -141,7 +145,8 @@ impl Frequency {
                 false
             });
             if missing.len() == before {
-                // A loop made since: its shape is worked out alone and scaled to the flow the table sends into it.
+                // A loop made since: its shape is worked out alone and scaled
+                // to the flow the table sends into it.
                 let whole = Self::over(body, &body.blocks);
                 let region: std::collections::BTreeSet<i64> = missing.iter().copied().collect();
                 let (mut sent, mut guessed) = (0.0, 0.0);
@@ -159,10 +164,11 @@ impl Frequency {
         Some(Self { block, taken })
     }
 
-    /// What no honest table breaks, whatever shape the blocks have: an entry for every block and none for others, no
-    /// block running more often than the flow into it (each predecessor sends at most its own runs), and a block
-    /// behind a predecessor that goes nowhere else running as often as it. A table left stale by an edge that moved
-    /// breaks one.
+    /// What no honest table breaks, whatever shape the blocks have: an entry
+    /// for every block and none for others, no block running more often
+    /// than the flow into it (each predecessor sends at most its own runs), and
+    /// a block behind a predecessor that goes nowhere else running as often
+    /// as it. A table left stale by an edge that moved breaks one.
     pub fn violations(body: &LirBody) -> Vec<String> {
         let Some(kept) = body.frequencies.as_deref() else { return Vec::new() };
         let mut out = Vec::new();
@@ -184,9 +190,10 @@ impl Frequency {
         for one in body.blocks.iter().filter(|one| one.at != body.entry) {
             let Some((sum, count, only)) = inflow.get(&one.at).copied() else { continue };
             let runs = now.block(one.at);
-            // The estimate is not conservative where proven trips are nested: they fix a header's runs and the odds fix
-            // the blocks around it (isel's own table reads 1.5x at most in gcc's memcpy-2, 1.05x in
-            // QCport). A stale entry is off by factors.
+            // The estimate is not conservative where proven trips are nested:
+            // they fix a header's runs and the odds fix the blocks
+            // around it (isel's own table reads 1.5x at most in gcc's memcpy-2,
+            // 1.05x in QCport). A stale entry is off by factors.
             let slack = sum + 1e-9;
             if runs > sum + slack {
                 out.push(format!("block {:#x} runs {runs:.3} times, its predecessors {sum:.3}", one.at));
@@ -216,9 +223,11 @@ impl Frequency {
                 taken.insert((block.at, to), body.odds.chance(block.at, &block.succ, to));
             }
         }
-        // A block that only jumps on says nothing about the loops, and a loop is not another loop for one put on an
-        // edge: the estimate is made without it (`_part_frame` read 268 without its bridges and 2786 with them, and 5
-        // trips read 6 with one on a back edge). A block with work in it stays: a body is not a bridge.
+        // A block that only jumps on says nothing about the loops, and a loop
+        // is not another loop for one put on an edge: the estimate is
+        // made without it (`_part_frame` read 268 without its bridges and 2786
+        // with them, and 5 trips read 6 with one on a back edge). A
+        // block with work in it stays: a body is not a bridge.
         let entry = body.entry;
         let by_at: IndexMap<i64, &LirBlock> = blocks.iter().map(|block| (block.at, block)).collect();
         let bridge = |at: i64| -> Option<i64> {
@@ -287,7 +296,8 @@ impl Frequency {
             &cycles,
             &|from, to| shared.get(&(from, to)).copied().unwrap_or(0.0),
         );
-        // A bridge runs as often as the edges into it are taken; a chain of them is settled from its first.
+        // A bridge runs as often as the edges into it are taken; a chain of
+        // them is settled from its first.
         let mut pending: Vec<i64> = blocks.iter().map(|one| one.at).filter(|at| bridge(*at).is_some()).collect();
         while !pending.is_empty() {
             let before = pending.len();
@@ -359,9 +369,11 @@ mod tests {
     }
 
     /// entry 1 -> loop 2 (back to 2, out to 3) -> 3.
-    /// A spill or a reload inserts instructions and leaves the blocks as they were: asked again, the
-    /// frequencies are not worked out again (3 builds per rebuild of the allocator's facts, 8% of
-    /// compiling `d_faces`, #559). A block's successors or odds changing is a new question.
+    /// A spill or a reload inserts instructions and leaves the blocks as they
+    /// were: asked again, the frequencies are not worked out again (3
+    /// builds per rebuild of the allocator's facts, 8% of
+    /// compiling `d_faces`, #559). A block's successors or odds changing is a
+    /// new question.
     #[test]
     fn test_the_same_blocks_are_not_worked_out_twice() {
         let body = counted(Some(5), 124.0 / 128.0);
@@ -383,9 +395,10 @@ mod tests {
         assert_eq!(runs(&moved) - before, 2, "other odds were answered from the old frequencies");
     }
 
-    /// A body that carries its frequencies is asked for them by every fact of the allocator, with the same table and
-    /// blocks after each spill: the carried answer is worked out once for them (1.5% of compiling d_faces, 1.2 G,
-    /// was working it out again).
+    /// A body that carries its frequencies is asked for them by every fact of
+    /// the allocator, with the same table and blocks after each spill: the
+    /// carried answer is worked out once for them (1.5% of compiling d_faces,
+    /// 1.2 G, was working it out again).
     #[test]
     fn test_a_carried_table_is_not_carried_again_for_the_same_blocks() {
         let plain = counted(Some(5), 124.0 / 128.0);
@@ -427,7 +440,8 @@ mod tests {
     }
 
     /// Spill weights and the instrument read 10 per loop level, whatever the
-    /// branch said; the loop's heuristic odds make it 32, and a proven count its own.
+    /// branch said; the loop's heuristic odds make it 32, and a proven count
+    /// its own.
     #[test]
     fn test_a_loop_runs_as_its_odds_and_proven_trips_say_not_ten() {
         let guessed = Frequency::of(&counted(None, 124.0 / 128.0));
@@ -446,8 +460,9 @@ mod tests {
         );
     }
 
-    /// A block almost never reached weighs almost nothing: a branch to it at 1 in a
-    /// million is the cold path 10^depth gave the weight of the code before it.
+    /// A block almost never reached weighs almost nothing: a branch to it at 1
+    /// in a million is the cold path 10^depth gave the weight of the code
+    /// before it.
     #[test]
     fn test_a_block_that_is_all_but_never_taken_weighs_nothing() {
         let blocks = vec![
@@ -463,9 +478,11 @@ mod tests {
         assert!(busy.block(2) < 1e-5 && busy.block(3) > 0.99, "{} {}", busy.block(2), busy.block(3));
     }
 
-    /// A block put on an edge (phielim's and the spiller's edge code) must leave the frequencies as they were:
-    /// `d_faces`-sized `_part_frame` was estimated 268 on the blocks isel made, 2786 with the bridges, and 268
-    /// again once `jumps` removed them, and the route choice compared two bodies at different points of that.
+    /// A block put on an edge (phielim's and the spiller's edge code) must
+    /// leave the frequencies as they were: `d_faces`-sized `_part_frame`
+    /// was estimated 268 on the blocks isel made, 2786 with the bridges, and
+    /// 268 again once `jumps` removed them, and the route choice compared
+    /// two bodies at different points of that.
     #[test]
     fn test_a_block_on_an_edge_leaves_the_frequencies_as_they_were() {
         for trips in [None, Some(5)] {
@@ -495,9 +512,11 @@ mod tests {
         }
     }
 
-    /// Copies put on a loop's back edge make a block with work in it, which the shape alone reads as the loop's body: a
-    /// loop tested after its trip then reads as tested before it, and 5 trips as 6 (`_part_frame`, 8x). The frequencies
-    /// worked out before stay, and the copy block runs as often as its edge.
+    /// Copies put on a loop's back edge make a block with work in it, which the
+    /// shape alone reads as the loop's body: a loop tested after its trip
+    /// then reads as tested before it, and 5 trips as 6 (`_part_frame`, 8x).
+    /// The frequencies worked out before stay, and the copy block runs as
+    /// often as its edge.
     #[test]
     fn test_copies_on_the_back_edge_do_not_change_what_the_loop_runs() {
         let mut body = counted(Some(5), 124.0 / 128.0);
@@ -521,14 +540,16 @@ mod tests {
         assert!((after.block(9) - 5.0 * 124.0 / 128.0).abs() < 1e-9, "the copies run {}", after.block(9));
     }
 
-    /// A table left as it was after an edge moved (block 3 reached only through a rare edge now) ran the block as often
-    /// as before: nothing said so. The invariant every honest table keeps catches it under LLRM_VERIFY.
+    /// A table left as it was after an edge moved (block 3 reached only through
+    /// a rare edge now) ran the block as often as before: nothing said so.
+    /// The invariant every honest table keeps catches it under LLRM_VERIFY.
     #[test]
     fn test_a_table_left_stale_by_a_moved_edge_is_caught() {
         let mut body = counted(Some(5), 124.0 / 128.0);
         body.frequencies = Some(Frequency::of(&body).table());
         assert!(Frequency::violations(&body).is_empty(), "{:?}", Frequency::violations(&body));
-        // 2 -> 3 is replaced by 2 -> 9 -> 3, 9 taking 1 in 32 from 2: block 3 now runs a thirty-second as often.
+        // 2 -> 3 is replaced by 2 -> 9 -> 3, 9 taking 1 in 32 from 2: block 3
+        // now runs a thirty-second as often.
         let mut moved = body.clone();
         moved.blocks.push(LirBlock { succ: vec![3], ..LirBlock::new(9, vec![insn(9, Operation::Jump, "jmp")]) });
         moved.blocks[1].succ = vec![2, 9];
@@ -545,8 +566,9 @@ mod tests {
         assert!(Frequency::violations(&gone.with_blocks(gone.blocks.clone())).is_empty());
     }
 
-    /// A loop made after the table, with no entries and only a cycle reaching it, was worked out with the whole body's
-    /// shape again. Its region alone is: scaled to what the table sends in.
+    /// A loop made after the table, with no entries and only a cycle reaching
+    /// it, was worked out with the whole body's shape again. Its region
+    /// alone is: scaled to what the table sends in.
     #[test]
     fn test_a_loop_made_since_is_worked_out_alone_and_scaled_to_its_entering_flow() {
         let mut body = counted(Some(5), 124.0 / 128.0);

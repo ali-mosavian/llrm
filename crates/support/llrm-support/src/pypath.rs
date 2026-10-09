@@ -18,7 +18,8 @@ pub fn resolve(path: &Path) -> PathBuf {
     out
 }
 
-/// Walk `rest` onto `out` the way `realpath` does; `depth` bounds a symlink loop.
+/// Walk `rest` onto `out` the way `realpath` does; `depth` bounds a symlink
+/// loop.
 fn _join(
     out: &mut PathBuf,
     rest: &Path,
@@ -53,7 +54,8 @@ mod tests {
     /// link-unit fingerprint and every label disagreed with Python's.
     #[test]
     fn test_resolve_keeps_the_spelling_it_was_given() {
-        // Python: Path(concat!(env!("LLRM_ROOT"), "/tests/inputs/omf/arith-q-O.obj")).resolve() ends with the name as
+        // Python: Path(concat!(env!("LLRM_ROOT"),
+        // "/tests/inputs/omf/arith-q-O.obj")).resolve() ends with the name as
         // typed.
         let root = Path::new(env!("LLRM_ROOT"));
         let found = resolve(&root.join("tests/inputs/omf/./../omf/arith-q-O.obj"));

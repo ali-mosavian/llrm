@@ -1,12 +1,14 @@
 //! Derive nonterminal dispatch ordering from a typed grammar AST.
 //!
 //! `buildprs` splits `NonTerminals:` entries into two tables:
-//! - Internal NTs (no `EXTERNAL` production) get `tIntNtDisp[id]` byte offsets into `tState`.
-//! - External NTs get `tExtNtDisp[id]` function-pointer symbols (`Nt{Name}`) and parallel `tExtNtHelp[id]` message ids
-//!   (`MSG_*` or `0`).
+//! - Internal NTs (no `EXTERNAL` production) get `tIntNtDisp[id]` byte offsets
+//!   into `tState`.
+//! - External NTs get `tExtNtDisp[id]` function-pointer symbols (`Nt{Name}`)
+//!   and parallel `tExtNtHelp[id]` message ids (`MSG_*` or `0`).
 //!
-//! Ordering follows grammar declaration order within each partition. Numeric internal offsets
-//! are produced later by state lowering; this module only derives names, help hints, and counts.
+//! Ordering follows grammar declaration order within each partition. Numeric
+//! internal offsets are produced later by state lowering; this module only
+//! derives names, help hints, and counts.
 
 use crate::buildprs_grammar::{GrammarFile, NonTerminalDef};
 
@@ -14,10 +16,12 @@ use crate::buildprs_grammar::{GrammarFile, NonTerminalDef};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InternalNonterminalEntry {
     pub name: String,
-    /// Byte offset into `tState` where this NT's recursive-descent state begins.
+    /// Byte offset into `tState` where this NT's recursive-descent state
+    /// begins.
     ///
-    /// `NtParse` loads `child_pc = t_state[t_int_nt_disp[id] as usize]` before recursing.
-    /// Populated by state lowering; `None` when only declaration order is known.
+    /// `NtParse` loads `child_pc = t_state[t_int_nt_disp[id] as usize]` before
+    /// recursing. Populated by state lowering; `None` when only declaration
+    /// order is known.
     pub state_offset: Option<u16>,
 }
 
@@ -32,7 +36,8 @@ pub struct ExternalNonterminalEntry {
     pub help_symbol: String,
 }
 
-/// Grammar-derived dispatch metadata before state lowering fills internal offsets.
+/// Grammar-derived dispatch metadata before state lowering fills internal
+/// offsets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NonterminalDispatchOrder {
     pub internal: Vec<InternalNonterminalEntry>,
@@ -82,7 +87,8 @@ pub fn external_help_symbol(msg_hint: Option<&str>) -> String {
     msg_hint.unwrap_or("0").to_string()
 }
 
-/// Parse golden `tIntNtDisp`, `tExtNtDisp`, and `tExtNtHelp` sections from `prsstate.asm`.
+/// Parse golden `tIntNtDisp`, `tExtNtDisp`, and `tExtNtHelp` sections from
+/// `prsstate.asm`.
 pub fn parse_golden_dispatch_tables(prsstate: &str) -> GoldenDispatchTables {
     GoldenDispatchTables {
         internal_names: parse_commented_dw_names(prsstate, "tIntNtDisp"),

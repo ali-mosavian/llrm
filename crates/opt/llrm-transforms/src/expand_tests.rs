@@ -1,4 +1,5 @@
-//! `Expander` against the interpreter, on the loops `llrm_analysis::generated` makes.
+//! `Expander` against the interpreter, on the loops `llrm_analysis::generated`
+//! makes.
 
 use llrm_analysis::generated::{Inputs, Rng, case, observed, seeds};
 use llrm_analysis::induction::{self, Scev};

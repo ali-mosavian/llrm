@@ -38,7 +38,8 @@ use crate::support::hash::IndexMap;
 pub struct LoopSlots {
     pub frame: Option<Rc<RefCell<Frame>>>,
     pub cpu: Profile,
-    /// The bytes of a slot and of the register that stands for it: the target's stack slot.
+    /// The bytes of a slot and of the register that stands for it: the target's
+    /// stack slot.
     pub word: u32,
     pub classes: Rc<RegisterClasses>,
 }
@@ -135,7 +136,8 @@ struct Reach {
 }
 
 impl Touch {
-    /// Whether an access that is not exactly word slot `at` reads it, or writes it.
+    /// Whether an access that is not exactly word slot `at` reads it, or writes
+    /// it.
     fn reaches(
         &self,
         at: i64,
@@ -307,7 +309,8 @@ fn reload_of(
     }
 }
 
-/// Whether `one` reads `root` only as a plain word source and writes none of it.
+/// Whether `one` reads `root` only as a plain word source and writes none of
+/// it.
 fn reads_plainly(
     m: u32,
     one: &Insn,
@@ -474,8 +477,10 @@ fn rewritten(
     Arc::new(Insn { what: Some(what), spill_reload: false, spill_store: false, ..(**one).clone() })
 }
 
-/// For each of `slots`, the instructions of `seen` (by position in it) that read or write it, in whole or in part. An
-/// instruction that reaches no slot of the loop is in none of the lists, and is what every question of a slot skips.
+/// For each of `slots`, the instructions of `seen` (by position in it) that
+/// read or write it, in whole or in part. An instruction that reaches no slot
+/// of the loop is in none of the lists, and is what every question of a slot
+/// skips.
 fn reaching_slots(
     m: u32,
     slots: &BTreeSet<i64>,
@@ -487,7 +492,8 @@ fn reaching_slots(
             by_slot.entry(*at).or_default().push(i);
         }
         for reach in &touched.wide {
-            // `Touch::reaches`: the word at `at` overlaps the bytes `[from, to)`.
+            // `Touch::reaches`: the word at `at` overlaps the bytes `[from,
+            // to)`.
             for at in slots.range(reach.from - i64::from(m) + 1..reach.to) {
                 by_slot.entry(*at).or_default().push(i);
             }
@@ -597,8 +603,9 @@ fn invariant(
     kept.then_some(from?)
 }
 
-/// Each instruction of loop `one`, with the lanes it may write, or none where an instruction's effect is not known (and
-/// no register is invariant): worked out once for the loop, where `invariant` asked it again for every register.
+/// Each instruction of loop `one`, with the lanes it may write, or none where
+/// an instruction's effect is not known (and no register is invariant): worked
+/// out once for the loop, where `invariant` asked it again for every register.
 fn writes_of<'a>(
     body: &'a LirBody,
     one: &Loop,
@@ -608,8 +615,9 @@ fn writes_of<'a>(
     for at in &one.body {
         for insn in &body.blocks[index[at]].insns {
             let effect = liveness::effect(body.bits, insn)?;
-            // A `rep movs` steps si and di only if it runs: a conditional write, but one
-            // that makes the register unfit to hold its value from one trip to the next.
+            // A `rep movs` steps si and di only if it runs: a conditional
+            // write, but one that makes the register unfit to hold
+            // its value from one trip to the next.
             let may_write = peephole::_register_effects(body.bits, insn, true, false)
                 .map_or(effect.writes, |(_, writes)| effect.writes.or(&writes));
             out.push((insn, may_write));
@@ -769,9 +777,10 @@ pub fn promoted(
             continue;
         }
         let insns = || one.body.iter().flat_map(|at| body.blocks[index[at]].insns.iter());
-        // How each instruction of the loop reaches the frame, worked out once: each slot asks of the instructions that
-        // reach it, not of all of them (a loop of d nested levels asked d slots of d levels' instructions, d
-        // times over).
+        // How each instruction of the loop reaches the frame, worked out once:
+        // each slot asks of the instructions that reach it, not of all
+        // of them (a loop of d nested levels asked d slots of d levels'
+        // instructions, d times over).
         let mut seen: Vec<(usize, usize, &Arc<Insn>, Touch)> = Vec::new();
         for block in &one.body {
             for (position, insn) in body.blocks[index[block]].insns.iter().enumerate() {
@@ -910,7 +919,8 @@ pub fn promoted(
         for at in &one.body {
             let block = &blocks[index[at]];
             let mut insns = Vec::new();
-            // What the dropped reloads defined, which their readers no longer read.
+            // What the dropped reloads defined, which their readers no longer
+            // read.
             let mut gone = BTreeSet::new();
             for (position, insn) in block.insns.iter().enumerate() {
                 let fold = folds.iter().find(|(inside, place, ..)| *inside == index[at] && *place == position);
@@ -1144,9 +1154,10 @@ mod tests {
         assert!(said.is_empty(), "{said:?}");
     }
 
-    /// `for (...) copy(a, b)` with `mov di, a` in the loop: `rep movsd` leaves di past the
-    /// cells it moved, so a hoisted `mov di, a` ran once and every later trip copied to
-    /// the wrong place (tests/run/c/es_across_copy printed 15054 for 186450).
+    /// `for (...) copy(a, b)` with `mov di, a` in the loop: `rep movsd` leaves
+    /// di past the cells it moved, so a hoisted `mov di, a` ran once and
+    /// every later trip copied to the wrong place
+    /// (tests/run/c/es_across_copy printed 15054 for 186450).
     #[test]
     fn test_a_register_a_string_move_advances_is_not_loop_invariant() {
         let word = |value: i64| Loc::Imm(Imm { value, width: 2, address: None });
@@ -1224,9 +1235,10 @@ mod tests {
         assert!(sets(Register::DI) && sets(Register::SI), "the loop sets si and di");
     }
 
-    /// m32's slots are dwords: LoopSlots was dropped there. Its BP parking once found no BP
-    /// to pop, because EBP is not the register BP: the loop left its exit with EBP holding a slot's
-    /// value and a program ran quicksort into a general protection fault.
+    /// m32's slots are dwords: LoopSlots was dropped there. Its BP parking once
+    /// found no BP to pop, because EBP is not the register BP: the loop
+    /// left its exit with EBP holding a slot's value and a program ran
+    /// quicksort into a general protection fault.
     #[test]
     fn test_a_dword_slot_parked_in_the_frame_register_is_pushed_and_popped() {
         let wide = |register: Register| Loc::Reg(Reg { register, width: 4 });
@@ -1291,10 +1303,12 @@ mod tests {
         assert_eq!((pushes, pops), (1, 1), "the slot lives in EBP between a push and a pop");
     }
 
-    /// Ranking a loop's slots asked every instruction of the loop how it reaches the frame, once for each slot, and
-    /// each ask allocated its sets: a nest of d levels (d loops of d levels' slots and instructions) cost d cubed,
-    /// 215 M for a 16-deep nest of which 169 M was this. Each instruction is asked once and each slot is asked of
-    /// those that reach it.
+    /// Ranking a loop's slots asked every instruction of the loop how it
+    /// reaches the frame, once for each slot, and each ask allocated its
+    /// sets: a nest of d levels (d loops of d levels' slots and instructions)
+    /// cost d cubed, 215 M for a 16-deep nest of which 169 M was this. Each
+    /// instruction is asked once and each slot is asked of those that reach
+    /// it.
     #[test]
     fn test_a_loops_slots_are_ranked_without_asking_every_instruction_for_each_slot() {
         let slot = |at: i64| Loc::Mem(cell(2, at));
@@ -1345,9 +1359,11 @@ mod tests {
         );
     }
 
-    /// A loop that reads a far pointer's low word and also loads the pointer with `les` from the same
-    /// slot: LoopSlots held the word's slot in a register and rewrote the `les` to read it ("les si, dx":
-    /// no encoding, llrm-nib stopped, #107). The `les` must keep reading memory.
+    /// A loop that reads a far pointer's low word and also loads the pointer
+    /// with `les` from the same slot: LoopSlots held the word's slot in a
+    /// register and rewrote the `les` to read it ("les si, dx":
+    /// no encoding, llrm-nib stopped, #107). The `les` must keep reading
+    /// memory.
     #[test]
     fn test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_the_low_word() {
         let one = Imm { value: 1, width: 2, address: None };

@@ -100,12 +100,14 @@ impl Timings {
         self.cpus.iter().map(String::as_str).collect()
     }
 
-    /// The CPU a compile is priced for when none is asked: the target's `default_cpu` line.
+    /// The CPU a compile is priced for when none is asked: the target's
+    /// `default_cpu` line.
     pub fn default_cpu(&self) -> Option<&str> {
         self.default.as_deref()
     }
 
-    /// The names gcc's `-march` and `-mtune` take for this target's CPUs, in column order.
+    /// The names gcc's `-march` and `-mtune` take for this target's CPUs, in
+    /// column order.
     pub fn marches(&self) -> Vec<&str> {
         self.marches.iter().map(String::as_str).collect()
     }
@@ -130,8 +132,8 @@ impl Timings {
 mod tests {
     use super::*;
 
-    /// gcc's `-march` names were a table in the flag parser, three of eight CPUs: the target
-    /// states them beside its `cpus`, one a column.
+    /// gcc's `-march` names were a table in the flag parser, three of eight
+    /// CPUs: the target states them beside its `cpus`, one a column.
     #[test]
     fn a_cpu_has_the_name_gccs_march_gives_it() {
         let timings = Timings::parse("cpus a b\nmarch x86a pent\nissue 1 2\n").unwrap();

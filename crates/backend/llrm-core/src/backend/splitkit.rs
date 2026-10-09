@@ -71,8 +71,8 @@ pub fn loop_bases(
     (result, kept)
 }
 
-/// `_references` of each of `values`, found in one pass over the body: the scan for each of d values over a body of d
-/// levels was d squared a loop.
+/// `_references` of each of `values`, found in one pass over the body: the scan
+/// for each of d values over a body of d levels was d squared a loop.
 fn _references_of(
     body: &LirBody,
     values: &BTreeSet<u32>,
@@ -99,7 +99,8 @@ fn _references_of(
     out
 }
 
-/// Per block, the positions in it that name this value: what `_references_of` is held to.
+/// Per block, the positions in it that name this value: what `_references_of`
+/// is held to.
 #[cfg(test)]
 fn _references(
     body: &LirBody,
@@ -320,8 +321,9 @@ pub fn crossings(
             }),
         );
     let mut out = Vec::new();
-    // The phis a block's successor arrives with, found by the successor's address: a scan of every block for each edge
-    // was the square of the blocks.
+    // The phis a block's successor arrives with, found by the successor's
+    // address: a scan of every block for each edge was the square of the
+    // blocks.
     let graph = crate::analysis::graph::Graph::of(body);
     for block in &body.blocks {
         if let Some(ranges) = region.spans.get(&block.at) {
@@ -356,7 +358,8 @@ pub fn crossings(
     out
 }
 
-/// Whether `value` is live just before each position of `block`, and at its end.
+/// Whether `value` is live just before each position of `block`, and at its
+/// end.
 fn _live_before(
     block: &LirBlock,
     value: u32,
@@ -408,7 +411,8 @@ pub fn carved_moving(
     width: u32,
     region: &Region,
 ) -> Option<(LirBody, Moved)> {
-    // Trimming to the references can end a range inside a parallel group; snap last.
+    // Trimming to the references can end a range inside a parallel group; snap
+    // last.
     let region = region.trimmed(body, value).snapped(body);
     let referenced = body
         .blocks
@@ -428,7 +432,8 @@ pub fn carved_moving(
     let found = crossings(body, value, &region, &*live);
     let graph = crate::analysis::graph::Graph::of(body);
     let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    // (block, position) -> copies before it; usize::MAX is before the terminator.
+    // (block, position) -> copies before it; usize::MAX is before the
+    // terminator.
     let mut inserted: BTreeMap<(i64, usize), Vec<bool>> = BTreeMap::new();
     let mut bridges: Vec<(i64, i64, bool)> = Vec::new();
     let edges: Vec<(i64, i64, bool)> = found
@@ -482,7 +487,8 @@ pub fn carved_moving(
     let mut moved: Moved = IndexMap::default();
     let reached: crate::support::hash::HashSet<i64> = inserted.keys().map(|(block, _)| *block).collect();
     for block in &body.blocks {
-        // A block nothing is put in and the region does not cover is as it was, and its positions stay.
+        // A block nothing is put in and the region does not cover is as it was,
+        // and its positions stay.
         if !reached.contains(&block.at) && !region.spans.contains_key(&block.at) {
             moved.insert(block.at, (0..=block.insns.len()).collect());
             blocks.push(block.clone());
@@ -507,8 +513,8 @@ pub fn carved_moving(
             }
         }
         moved.insert(block.at, shift);
-        // A block nothing was put in and no instruction of which changed is the block it was: the facts held of it
-        // stand.
+        // A block nothing was put in and no instruction of which changed is the
+        // block it was: the facts held of it stand.
         let same = insns.len() == block.insns.len()
             && insns.iter().zip(block.insns.iter()).all(|(made, was)| Arc::ptr_eq(made, was));
         blocks.push(if same { block.clone() } else { block.with_insns(insns) });
@@ -636,7 +642,8 @@ fn _renamed(
 }
 
 pub fn _next_value(body: &LirBody) -> u32 {
-    // One more than the largest value the body names, or one: no set of them is built to find it.
+    // One more than the largest value the body names, or one: no set of them is
+    // built to find it.
     let mut largest = 0;
     for block in &body.blocks {
         largest = block.phis.iter().map(|phi| phi.result).fold(largest, u32::max);
@@ -704,7 +711,8 @@ fn analysed(
     Analysis { uses, through }
 }
 
-/// What holds a register where: the occupants' segments and the points that destroy it.
+/// What holds a register where: the occupants' segments and the points that
+/// destroy it.
 pub struct Occupied<'a> {
     pub segments: IndexMap<Register, Vec<Segment>>,
     pub masks: &'a allocate::Masks,
@@ -1286,10 +1294,12 @@ mod tests {
         )
     }
 
-    /// Carving a value out of a loop rebuilt every block of the body, so no fact held of a block outside the loop
-    /// survived the carve (a 16-deep nest's `regalloc candidates` 88 M, 21% of it this), and the references of the
-    /// spilled values were each found by a pass over the body. The blocks it did not touch are the blocks they
-    /// were, and the references of all are found in one pass.
+    /// Carving a value out of a loop rebuilt every block of the body, so no
+    /// fact held of a block outside the loop survived the carve (a 16-deep
+    /// nest's `regalloc candidates` 88 M, 21% of it this), and the references
+    /// of the spilled values were each found by a pass over the body. The
+    /// blocks it did not touch are the blocks they were, and the references
+    /// of all are found in one pass.
     #[test]
     fn test_a_carve_leaves_the_blocks_it_did_not_touch_as_they_were_and_references_are_found_in_one_pass() {
         let body = _pointer_across_a_loop();
@@ -1303,9 +1313,10 @@ mod tests {
         }
     }
 
-    /// Carving a value out of a region walked every instruction of the body for liveness rows of that one value (and so
-    /// did the pieces a split made, to count their blocks): from where the value occurs it is the same rows, and
-    /// the body is not walked.
+    /// Carving a value out of a region walked every instruction of the body for
+    /// liveness rows of that one value (and so did the pieces a split made,
+    /// to count their blocks): from where the value occurs it is the same rows,
+    /// and the body is not walked.
     #[test]
     fn test_a_carve_finds_the_liveness_of_its_value_without_walking_the_body() {
         let body = _pointer_across_a_loop();
@@ -1322,9 +1333,11 @@ mod tests {
         );
     }
 
-    /// An edge into a block whose phi takes the value from the edge's source carries the value across it, whether or
-    /// not the value is live into the block: `crossings` finds the successor's phis by its address. (It found them
-    /// by a scan of every block, per edge: the square of the blocks, 0.7 G of compiling d_faces.)
+    /// An edge into a block whose phi takes the value from the edge's source
+    /// carries the value across it, whether or not the value is live into
+    /// the block: `crossings` finds the successor's phis by its address. (It
+    /// found them by a scan of every block, per edge: the square of the
+    /// blocks, 0.7 G of compiling d_faces.)
     #[test]
     fn test_an_edge_into_a_phi_that_takes_the_value_is_a_crossing() {
         use crate::model::lir::Phi;
@@ -1339,8 +1352,8 @@ mod tests {
                 join,
             ],
         );
-        // The region of block 0x10 writes the value and leaves for 0x20, whose phi reads it on that edge and nowhere
-        // else.
+        // The region of block 0x10 writes the value and leaves for 0x20, whose
+        // phi reads it on that edge and nowhere else.
         let found = super::crossings(
             &body,
             3,
@@ -1583,7 +1596,8 @@ mod tests {
         assert!(!loop_cells.is_empty() && bases == BTreeSet::from([fresh]));
     }
 
-    /// Only bases were carved: FRACTALEFFECT reloaded a spilled selector every trip.
+    /// Only bases were carved: FRACTALEFFECT reloaded a spilled selector every
+    /// trip.
     #[test]
     fn test_a_spilled_index_or_selector_is_carved_into_the_loop_like_a_base() {
         for role in ["index", "selector"] {
@@ -1631,11 +1645,13 @@ mod tests {
         assert_eq!(index.position(&body.blocks[0], third + 1), 2);
     }
 
-    /// What the allocator reads of the numbering besides the order of slots: where an instruction's window ends is
-    /// where the next one's begins, a block's end is where the next block's begins, a region's end is where the
-    /// next region's start is, and a join treats segments that touch as one. A segment ending where the next
-    /// instruction begins touches one that starts there; a numbering that left a gap between windows would split
-    /// them.
+    /// What the allocator reads of the numbering besides the order of slots:
+    /// where an instruction's window ends is where the next one's begins, a
+    /// block's end is where the next block's begins, a region's end is where
+    /// the next region's start is, and a join treats segments that touch as
+    /// one. A segment ending where the next instruction begins touches one
+    /// that starts there; a numbering that left a gap between windows would
+    /// split them.
     #[test]
     fn test_what_ends_where_the_next_begins_touches_it() {
         let marker = Arc::new(Insn::new(2, Some((2, 3)), Some(crate::model::lir::inert()), Vec::new(), Vec::new()));
@@ -1643,7 +1659,8 @@ mod tests {
         let second = vec![push(10, 3), push(12, 4)];
         let body = body("touching", vec![block(0, first, &[1]), block(1, second, &[])]);
         let index = intervals::indexed(&body);
-        // A window ends at the slot of the instruction after it, and the last one's at the block's end.
+        // A window ends at the slot of the instruction after it, and the last
+        // one's at the block's end.
         for one in &body.blocks {
             for position in 0..one.insns.len() {
                 if !one.insns[position].is_meta() {
@@ -1664,7 +1681,8 @@ mod tests {
         after.add(0, 3, 5);
         let (ends, begins) = (before.segments(&body, &index), after.segments(&body, &index));
         assert_eq!(ends.last().map(|one| one.end), begins.first().map(|one| one.start));
-        // And a value live across the block boundary has two runs that touch, which a join makes one.
+        // And a value live across the block boundary has two runs that touch,
+        // which a join makes one.
         let live = intervals::intervals(&body, None);
         let runs = &live[&3].segments;
         assert_eq!(runs.len(), 2, "{runs:?}");
@@ -1685,7 +1703,8 @@ mod tests {
         let live = crate::backend::allocate::live(&body);
         let bundles = crate::backend::spillplacement::bundles(&body);
         let slot = |block: i64, position: i64| index.span[&block].0 + intervals::PER_INSN * (position + 1);
-        // Taken between the two definitions before the loop, and after the read behind it.
+        // Taken between the two definitions before the loop, and after the read
+        // behind it.
         let taken = vec![
             intervals::Segment { start: slot(0, 0) + 1, end: slot(0, 2) },
             intervals::Segment { start: slot(0x20, 1), end: index.span[&0x20].1 },
@@ -1742,7 +1761,8 @@ mod tests {
         assert!(exit.insns[0].defines == [3] && exit.insns[0].uses == [9]);
     }
 
-    /// v4 counts to 10: set before the loop, tested in its header, bumped in its latch, read after.
+    /// v4 counts to 10: set before the loop, tested in its header, bumped in
+    /// its latch, read after.
     fn _counting_loop() -> LirBody {
         let compare = sem(Operation::Compare, "cmp", vec![], vec![held(4, 2), imm(10)], None);
         body(
@@ -1820,8 +1840,8 @@ mod tests {
         assert_eq!(_run(&body)[&5], 10);
     }
 
-    /// A block whose two edges both got a bridge read the even odds of edges isel
-    /// never estimated, and its loop's frequencies moved with them.
+    /// A block whose two edges both got a bridge read the even odds of edges
+    /// isel never estimated, and its loop's frequencies moved with them.
     #[test]
     fn test_bridging_both_edges_of_a_block_keeps_their_odds() {
         let ret = |at| _insn(at, sem(Operation::Return, "ret", vec![], vec![], None), &[], &[4]);

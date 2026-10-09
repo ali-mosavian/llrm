@@ -42,8 +42,10 @@ pub fn magic(
     Ok((multiplier, exponent - bits))
 }
 
-/// `quotient` times the divisor, by the shifts, adds and `lea`s of `chain` (`arithmetic::scale`): the product of the
-/// step before it is shifted, or added to the quotient, or the quotient plus it scaled, as the address unit makes it.
+/// `quotient` times the divisor, by the shifts, adds and `lea`s of `chain`
+/// (`arithmetic::scale`): the product of the step before it is shifted, or
+/// added to the quotient, or the quotient plus it scaled, as the address unit
+/// makes it.
 fn chain_product(
     parts: &mut Vec<ir::Semantics>,
     chain: &[(&'static str, i64)],
@@ -116,9 +118,11 @@ fn bit_length(value: i64) -> i64 {
     i64::from(64 - value.leading_zeros())
 }
 
-/// A reciprocal is not taken for size: its magic number is a 32-bit immediate (5 bytes, a `mov`) before the multiply
-/// and the shifts and corrections after it, where `cdq; idiv r` is 3 bytes. Tuned for size the division stays, as GCC's
-/// `-Os` leaves it (LLVM's, which multiplies, differs: it does not weigh the bytes here).
+/// A reciprocal is not taken for size: its magic number is a 32-bit immediate
+/// (5 bytes, a `mov`) before the multiply and the shifts and corrections after
+/// it, where `cdq; idiv r` is 3 bytes. Tuned for size the division stays, as
+/// GCC's `-Os` leaves it (LLVM's, which multiplies, differs: it does not weigh
+/// the bytes here).
 pub fn reciprocal<'a>(
     dividend: ir::Held,
     divisor: i64,
@@ -128,9 +132,11 @@ pub fn reciprocal<'a>(
     remainder: bool,
     bits: Option<i64>,
 ) -> Result<Option<Vec<ir::Semantics>>, String> {
-    // By a negative divisor the quotient is the negation of the one by its magnitude (truncation is symmetric) and the
-    // remainder is the same (it takes the dividend's sign): LLVM's BuildSDIV negates the quotient the same way. The
-    // divisor INT_MIN, whose magnitude is not an `i32`, and -1 stay divisions.
+    // By a negative divisor the quotient is the negation of the one by its
+    // magnitude (truncation is symmetric) and the remainder is the same (it
+    // takes the dividend's sign): LLVM's BuildSDIV negates the quotient the
+    // same way. The divisor INT_MIN, whose magnitude is not an `i32`, and
+    // -1 stay divisions.
     if !(i64::from(i32::MIN) < divisor && divisor < -1) {
         return positive_reciprocal(dividend, divisor, results, fresh, cpu, remainder, bits);
     }
@@ -164,7 +170,8 @@ fn positive_reciprocal<'a>(
     if width != 4 || !(1 < divisor && divisor < 1 << 31) || cpu.size {
         return Ok(None);
     }
-    // The magic is in the accumulator and the dividend where the early-out reads: its bits set the price.
+    // The magic is in the accumulator and the dividend where the early-out
+    // reads: its bits set the price.
     let multiply_cost = timing::multiply_clocks(cpu, i64::from(width), bits)?;
     let divide_cost = timing::signed_divide(cpu, i64::from(width))?;
     let (Some(multiply_cost), Some(divide_cost)) = (multiply_cost, divide_cost) else {
@@ -205,8 +212,9 @@ fn positive_reciprocal<'a>(
         + reconstruction
         + (1 + i64::from(shift != 0)) * cost("shift_ri")?
         + (1 + i64::from(remainder) + i64::from(multiplier < 0)) * cost("alu_rr")?;
-    // One clock per operand-size prefix (Intel 241430-004 section 24.3) on each dword instruction where the code's own
-    // size is not a dword: every one in real mode, none when flat. Charge the reserved copies too.
+    // One clock per operand-size prefix (Intel 241430-004 section 24.3) on each
+    // dword instruction where the code's own size is not a dword: every one
+    // in real mode, none when flat. Charge the reserved copies too.
     if cpu.operand_bytes != 4 {
         let extra = copies + 4 + i64::from(remainder) + i64::from(multiplier < 0) + i64::from(shift != 0);
         estimate += cpu.operations.prefix * extra;
@@ -248,8 +256,10 @@ fn positive_reciprocal<'a>(
     parts.push(ir::Semantics {
         name: Some("imul".to_owned()),
         dests: vec![ir::Loc::Held(low), ir::Loc::Held(high)],
-        // The accumulator is the first source and the r/m operand the last: the dividend, the one whose length the
-        // early-out reads, goes where it is read (GCC's order; the magic there takes 31 bits whatever the dividend).
+        // The accumulator is the first source and the r/m operand the last: the
+        // dividend, the one whose length the early-out reads, goes where it is
+        // read (GCC's order; the magic there takes 31 bits whatever the
+        // dividend).
         sources: vec![ir::Loc::Held(constant), ir::Loc::Held(dividend)],
         ..ir::Semantics::new(ir::Operation::Multiply)
     });
@@ -302,8 +312,9 @@ fn positive_reciprocal<'a>(
     Ok(Some(parts))
 }
 
-/// Hacker's Delight `magicu` for 32 bits: the multiplier, whether the product needs the dividend added back
-/// (a 33-bit multiplier), and the shift after it. `divisor` is 3 or more and not a power of two.
+/// Hacker's Delight `magicu` for 32 bits: the multiplier, whether the product
+/// needs the dividend added back (a 33-bit multiplier), and the shift after it.
+/// `divisor` is 3 or more and not a power of two.
 pub fn unsigned_magic(divisor: u64) -> (u64, bool, i64) {
     let two32: u64 = 1 << 32;
     let top: u64 = 1 << 31;
@@ -342,9 +353,11 @@ pub fn unsigned_magic(divisor: u64) -> (u64, bool, i64) {
     ((q2 + 1) & (two32 - 1), add, p - 32)
 }
 
-/// An unsigned division of a dword by a constant as a multiply by its reciprocal, where the target's own prices
-/// (the audited multiply bounds, its divide, the prefix its code size carries) make that cheaper: `mul`'s high
-/// half shifted, with the dividend added back where the multiplier is 33 bits. None keeps `div`.
+/// An unsigned division of a dword by a constant as a multiply by its
+/// reciprocal, where the target's own prices (the audited multiply bounds, its
+/// divide, the prefix its code size carries) make that cheaper: `mul`'s high
+/// half shifted, with the dividend added back where the multiplier is 33 bits.
+/// None keeps `div`.
 pub fn unsigned_reciprocal<'a>(
     dividend: ir::Held,
     divisor: i64,
@@ -387,7 +400,8 @@ pub fn unsigned_reciprocal<'a>(
                 .ok_or_else(|| "no multiply bound".to_owned())?,
         }
     };
-    // The multiplier, the multiply's seed, the dividend kept for the correction and for the remainder.
+    // The multiplier, the multiply's seed, the dividend kept for the correction
+    // and for the remainder.
     let copies = if remainder { 4 } else { 3 };
     let shifts = if add { 2 } else { 1 };
     let alu = if add { 3 } else { 0 } + i64::from(remainder);
@@ -509,9 +523,11 @@ mod tests {
         }
     }
 
-    /// #789 gave the multiply chains a `lea` step; the remainder's quotient-times-divisor took it for a binary operation
-    /// and named it `lea r, r2`, which no instruction is: a flat target's `x % 10` failed to assemble
-    /// ("Semantics(op=BINARY, name='lea' ...)") at -O2 on a Pentium.
+    /// #789 gave the multiply chains a `lea` step; the remainder's
+    /// quotient-times-divisor took it for a binary operation and named it `lea
+    /// r, r2`, which no instruction is: a flat target's `x % 10` failed to
+    /// assemble ("Semantics(op=BINARY, name='lea' ...)") at
+    /// -O2 on a Pentium.
     #[test]
     fn test_a_remainders_product_makes_its_lea_step_as_an_address() {
         let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "P5", false).unwrap();
@@ -537,9 +553,10 @@ mod tests {
         }
     }
 
-    /// The 486's multiply ends early on its r/m operand, the last source of the one-operand form: the magic number
-    /// (31 bits whatever the divisor) is in the accumulator and the dividend where its length is read. The other way
-    /// round every division took 42 clocks, as long as `idiv`'s 43.
+    /// The 486's multiply ends early on its r/m operand, the last source of the
+    /// one-operand form: the magic number (31 bits whatever the divisor) is
+    /// in the accumulator and the dividend where its length is read. The other
+    /// way round every division took 42 clocks, as long as `idiv`'s 43.
     #[test]
     fn test_the_dividend_is_the_operand_the_early_out_reads() {
         let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
@@ -563,8 +580,10 @@ mod tests {
         }
     }
 
-    /// A signed dividend known to need all 32 bits keeps the division on the 486 (42 + the fixups against 43); one of
-    /// unknown length is priced at the middle of 13 to 42; a short one is cheaper still. The middle is an assumption.
+    /// A signed dividend known to need all 32 bits keeps the division on the
+    /// 486 (42 + the fixups against 43); one of unknown length is priced at
+    /// the middle of 13 to 42; a short one is cheaper still. The middle is an
+    /// assumption.
     #[test]
     fn test_a_signed_reciprocal_is_priced_by_the_dividends_length() {
         let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
@@ -585,8 +604,10 @@ mod tests {
         }
     }
 
-    /// recsum -Os grew from 64 to 78 bytes and recmany -Os from 167 to 200 when every `x % n` took the reciprocal for
-    /// its clocks: the magic number alone is 5 bytes against `cdq; idiv`'s 3. Tuned for size the division stays.
+    /// recsum -Os grew from 64 to 78 bytes and recmany -Os from 167 to 200 when
+    /// every `x % n` took the reciprocal for its clocks: the magic number
+    /// alone is 5 bytes against `cdq; idiv`'s 3. Tuned for size the division
+    /// stays.
     #[test]
     fn test_tuned_for_size_a_division_by_a_constant_stays_a_division() {
         let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).unwrap();
@@ -600,8 +621,9 @@ mod tests {
         );
     }
 
-    /// LNGMXX's q+r needs both answers, including negative truncation and INT_MIN; here also by negative divisors,
-    /// whose quotient is the one by the magnitude, negated, and whose remainder is the same.
+    /// LNGMXX's q+r needs both answers, including negative truncation and
+    /// INT_MIN; here also by negative divisors, whose quotient is the one
+    /// by the magnitude, negated, and whose remainder is the same.
     #[test]
     fn test_reciprocal_preserves_signed_quotient_and_remainder() {
         for divisor in [3, 7, 10, 31, 1000, 2147483647, -3, -7, -10, -31, -1000, -2147483647] {
@@ -657,7 +679,8 @@ mod tests {
         assert_eq!(unsigned_magic(7), (0x2492_4925, true, 3));
     }
 
-    /// Run `parts` on `number` as the machine would, unsigned, and give each value by its number.
+    /// Run `parts` on `number` as the machine would, unsigned, and give each
+    /// value by its number.
     fn run_unsigned(
         parts: &[ir::Semantics],
         number: u64,
@@ -694,8 +717,9 @@ mod tests {
         values
     }
 
-    /// A multiply by the reciprocal gives the quotient and the remainder of every dividend, the multiplier of 33 bits
-    /// (7, 19) with its add-back and the others without.
+    /// A multiply by the reciprocal gives the quotient and the remainder of
+    /// every dividend, the multiplier of 33 bits (7, 19) with its add-back
+    /// and the others without.
     #[test]
     fn test_unsigned_reciprocal_preserves_quotient_and_remainder() {
         for divisor in [3_i64, 5, 6, 7, 10, 19, 100, 641, 1000, 65537, 2147483647] {
@@ -726,11 +750,13 @@ mod tests {
         }
     }
 
-    /// The 486's multiply ends early on a short r/m operand: 10 + max(bits, 3), 13 to 42 clocks, against `div`'s 40.
-    /// The dividend is that operand, so a reciprocal is priced by its bits: a dividend known to need all 32 keeps
-    /// the division (the old price, the maximum, for every dividend: LNGMXX lost to it), one of unknown length is
-    /// priced at the middle of the range, a short one wins by more. A Pentium's multiply is 10 whatever the
-    /// operand.
+    /// The 486's multiply ends early on a short r/m operand: 10 + max(bits, 3),
+    /// 13 to 42 clocks, against `div`'s 40. The dividend is that operand,
+    /// so a reciprocal is priced by its bits: a dividend known to need all 32
+    /// keeps the division (the old price, the maximum, for every dividend:
+    /// LNGMXX lost to it), one of unknown length is priced at the middle of
+    /// the range, a short one wins by more. A Pentium's multiply is 10 whatever
+    /// the operand.
     #[test]
     fn test_unsigned_reciprocal_follows_the_cpu_and_the_dividends_length() {
         let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];

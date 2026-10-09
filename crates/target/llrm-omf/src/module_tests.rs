@@ -106,8 +106,9 @@ fn test_the_compiler_that_made_an_object_is_read_off_it() {
     }
 }
 
-/// A frame cell is the same place whichever slot tags it, and a literal address with a symbol's `index` is not a frame
-/// cell: ignoring the index of those made two globals one place (nbody_fixed read `_pos_y` for `_pos_x`).
+/// A frame cell is the same place whichever slot tags it, and a literal address
+/// with a symbol's `index` is not a frame cell: ignoring the index of those
+/// made two globals one place (nbody_fixed read `_pos_y` for `_pos_x`).
 #[test]
 fn test_a_slot_tag_decides_nothing_for_a_frame_cell_and_everything_for_another_address() {
     use llrm_support::hash::HashSet;

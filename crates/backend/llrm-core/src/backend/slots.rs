@@ -8,7 +8,8 @@ use crate::analysis::intervals::Interval;
 /// A slot: its home, its capacity in bytes, and what each holder occupies.
 pub type Color = (i64, u32, Vec<Interval>);
 
-/// Whether `color` can also hold something of `capacity` bytes live over `interval`.
+/// Whether `color` can also hold something of `capacity` bytes live over
+/// `interval`.
 pub fn fits(
     color: &Color,
     interval: &Interval,

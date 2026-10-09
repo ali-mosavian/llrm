@@ -1,12 +1,15 @@
-//! std's `HashMap`/`HashSet` are seeded per run: a pass's work and any order that reaches output change from one
-//! compile to the next (#992: `callees` moved a pass's count 1% and flaked the scaling gate). Every use names
-//! `llrm_support::hash`'s. The same rule is `clippy.toml`'s `disallowed-types`; this one needs no clippy run.
+//! std's `HashMap`/`HashSet` are seeded per run: a pass's work and any order
+//! that reaches output change from one compile to the next (#992: `callees`
+//! moved a pass's count 1% and flaked the scaling gate). Every use names
+//! `llrm_support::hash`'s. The same rule is `clippy.toml`'s `disallowed-types`;
+//! this one needs no clippy run.
 
 use std::fs;
 use std::path::Path;
 
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
-/// Where the aliases are defined: llrm-mir depends on nothing, so it has its own.
+/// Where the aliases are defined: llrm-mir depends on nothing, so it has its
+/// own.
 const ALIASES: [&str; 2] = ["crates/support/llrm-support/src/hash.rs", "crates/ir/llrm-mir/src/hash.rs"];
 
 fn sources(

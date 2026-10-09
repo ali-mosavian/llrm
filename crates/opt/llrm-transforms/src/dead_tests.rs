@@ -192,10 +192,11 @@ b0:
     assert_eq!(calls(&bare), 1);
 }
 
-/// priced_unroll's `main` called `value(3)` for nothing: `value` touches only its own
-/// stack and counts to its bound, so the stamp says `memory(none) willreturn` and the
-/// call goes. One that calls what may not return stays. (llrm-mir's function-attrs
-/// stated the loop's end; the stamp read only loop-free bodies.)
+/// priced_unroll's `main` called `value(3)` for nothing: `value` touches only
+/// its own stack and counts to its bound, so the stamp says `memory(none)
+/// willreturn` and the call goes. One that calls what may not return stays.
+/// (llrm-mir's function-attrs stated the loop's end; the stamp read only
+/// loop-free bodies.)
 #[test]
 fn an_unused_call_to_a_counted_body_goes_and_one_to_what_may_not_return_stays() {
     let mut module = parsed(
@@ -244,8 +245,8 @@ b1:
     assert!(out.contains("call i16 @loud"), "{out}");
 }
 
-/// A local only its lifetime markers name is not a local: with its markers it goes. They
-/// kept it, and its markers, in the body.
+/// A local only its lifetime markers name is not a local: with its markers it
+/// goes. They kept it, and its markers, in the body.
 #[test]
 fn test_a_local_only_its_lifetime_markers_name_goes_with_them() {
     let mut module = parsed(

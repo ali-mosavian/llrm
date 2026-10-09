@@ -157,7 +157,8 @@ str_enum!(FloatReturn {
 str_enum!(CallDistance {
     Near("NEAR") = "near",
     Far("FAR") = "far",
-    // No caller outside its module and no runtime enters it: near where every call of it is direct.
+    // No caller outside its module and no runtime enters it: near where every
+    // call of it is direct.
     Any("ANY") = "any",
     // Entered by INT or an IRQ, left by `iret`.
     Interrupt("INTERRUPT") = "interrupt",
@@ -299,8 +300,9 @@ pub struct ArrayElement {
 }
 
 /// Which member of an aggregate type an access is: the aggregate's type and the
-/// byte offset of the member in it. A fact stated of the member (`Subject::Field`)
-/// reaches every access that names it, however the aggregate is reached.
+/// byte offset of the member in it. A fact stated of the member
+/// (`Subject::Field`) reaches every access that names it, however the aggregate
+/// is reached.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Member {
     pub owner: i64,
@@ -348,14 +350,16 @@ pub struct DescriptorPlace {
 }
 
 impl DescriptorPlace {
-    /// The bytes of a heap buffer's header before its data, each of its three fields (the flags,
-    /// the length, the capacity) a word of `width` bytes.
+    /// The bytes of a heap buffer's header before its data, each of its three
+    /// fields (the flags, the length, the capacity) a word of `width`
+    /// bytes.
     pub fn header_bytes(width: i64) -> i64 {
         3 * width
     }
 
-    /// `field`'s offset in a heap buffer whose words are `width` bytes: the one place the layout
-    /// is stated, for the code generator and the interpreter alike.
+    /// `field`'s offset in a heap buffer whose words are `width` bytes: the one
+    /// place the layout is stated, for the code generator and the
+    /// interpreter alike.
     pub fn heap_offset(
         field: DescriptorField,
         width: i64,
@@ -364,9 +368,9 @@ impl DescriptorPlace {
     }
 
     /// The field's offset from the base pointer, whose pointee is
-    /// `pointee`, the fields `width` bytes wide each (the type of the place): a scoped view
-    /// (`$slice[..]`) holds its length then its capacity, and a heap string's header, the same
-    /// two, precedes its data.
+    /// `pointee`, the fields `width` bytes wide each (the type of the place): a
+    /// scoped view (`$slice[..]`) holds its length then its capacity, and a
+    /// heap string's header, the same two, precedes its data.
     pub fn offset(
         &self,
         pointee: Option<&Type>,
@@ -418,7 +422,8 @@ str_enum!(Op {
     Copy("COPY") = "copy",
     Load("LOAD") = "load",
     Store("STORE") = "store",
-    // A place's address; with no operand, the address of the function `callee` names.
+    // A place's address; with no operand, the address of the function `callee`
+    // names.
     Address("ADDRESS") = "address",
     PtrOffset("PTR_OFFSET") = "ptr_offset",
     // The bytes between two huge pointers into one object.
@@ -427,7 +432,8 @@ str_enum!(Op {
     PointerOffset("POINTER_OFFSET") = "pointer_offset",
     Concat("CONCAT") = "concat",
     Convert("CONVERT") = "convert",
-    // A float to an integer, rounded toward zero; CONVERT rounds as the environment does.
+    // A float to an integer, rounded toward zero; CONVERT rounds as the
+    // environment does.
     Truncate("TRUNCATE") = "truncate",
     SignExtend("SIGN_EXTEND") = "sign_extend",
     ZeroExtend("ZERO_EXTEND") = "zero_extend",
@@ -481,7 +487,8 @@ str_enum!(Op {
     Fatan("FATAN") = "fatan",
     Flog2("FLOG2") = "flog2",
     Fexp2("FEXP2") = "fexp2",
-    // A float rounded to an integral float as the environment rounds: x87 FRNDINT.
+    // A float rounded to an integral float as the environment rounds: x87
+    // FRNDINT.
     Fround("FROUND") = "fround",
     // An I/O port: port_in reads a byte from operands[0]; port_out writes
     // operands[1], a byte, to operands[0]. Both are observable and ordered.
@@ -496,8 +503,9 @@ str_enum!(Op {
     CopyBytes("COPY_BYTES") = "copy_bytes",
     // Calls `callee`; with none, the function operands[0] points to.
     Call("CALL") = "call",
-    // From here the local operands[0] names holds a value (start), or no longer (end): the
-    // scope of a block local. Not code; what a frame layout reads. No result.
+    // From here the local operands[0] names holds a value (start), or no longer
+    // (end): the scope of a block local. Not code; what a frame layout reads.
+    // No result.
     LifetimeStart("LIFETIME_START") = "lifetime_start",
     LifetimeEnd("LIFETIME_END") = "lifetime_end",
     // Inline machine code: operands go into its input registers, results
@@ -505,7 +513,8 @@ str_enum!(Op {
     Asm("ASM") = "asm",
 });
 
-/// An inline block's code and constraints, registers named by their 16-bit whole.
+/// An inline block's code and constraints, registers named by their 16-bit
+/// whole.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Asm {
     pub code: Vec<i64>,
@@ -598,11 +607,14 @@ pub struct CallAbi {
     pub distance: CallDistance,
     pub callee: Option<i64>,
     pub float_return: FloatReturn,
-    /// The `cc` of the target's convention it follows (its `calling.toml`), where `cleanup` does not say.
+    /// The `cc` of the target's convention it follows (its `calling.toml`),
+    /// where `cleanup` does not say.
     pub convention: Option<String>,
-    /// The arguments, by position, that travel in memory whatever the convention has free: a struct's words.
+    /// The arguments, by position, that travel in memory whatever the
+    /// convention has free: a struct's words.
     pub memory: Vec<i64>,
-    /// The arguments, by position, that are a large aggregate passed by value (`byval`): a pointer to the aggregate.
+    /// The arguments, by position, that are a large aggregate passed by value
+    /// (`byval`): a pointer to the aggregate.
     pub byval: Vec<i64>,
     /// The bytes of each of `byval`'s aggregates, in the same order.
     pub byval_bytes: Vec<i64>,
@@ -636,12 +648,15 @@ pub struct ProcedureAbi {
     pub float_return: FloatReturn,
     /// It takes arguments past its parameters, as C's `...` does.
     pub variadic: bool,
-    /// The `cc` of the target's convention it follows (its `calling.toml`), where `cleanup` does not say.
+    /// The `cc` of the target's convention it follows (its `calling.toml`),
+    /// where `cleanup` does not say.
     pub convention: Option<String>,
-    /// The parameters, by position, that travel in memory whatever the convention has free: a struct's words.
+    /// The parameters, by position, that travel in memory whatever the
+    /// convention has free: a struct's words.
     pub memory: Vec<i64>,
-    /// The parameters, by position, that are a large aggregate passed by value (`byval`): a pointer to the aggregate,
-    /// whose bytes the caller copies onto the stack where the same number of words would lie.
+    /// The parameters, by position, that are a large aggregate passed by value
+    /// (`byval`): a pointer to the aggregate, whose bytes the caller copies
+    /// onto the stack where the same number of words would lie.
     pub byval: Vec<i64>,
     /// The bytes of each of `byval`'s aggregates, in the same order.
     pub byval_bytes: Vec<i64>,
@@ -684,7 +699,8 @@ impl CallAbi {
 }
 
 impl FloatReturn {
-    /// Whether a `result` of this ABI leaves as `how` says: only a float's does.
+    /// Whether a `result` of this ABI leaves as `how` says: only a float's
+    /// does.
     fn leaves(
         self,
         how: FloatReturn,
@@ -758,9 +774,11 @@ pub struct DebugVariable {
     pub place: i64,
     pub name: String,
     pub r#type: i64,
-    /// The place is where a parameter's value is kept, not a variable the body declares.
+    /// The place is where a parameter's value is kept, not a variable the body
+    /// declares.
     pub parameter: bool,
-    /// Of a parameter's home: the argument it was passed as, where the convention says how it arrives.
+    /// Of a parameter's home: the argument it was passed as, where the
+    /// convention says how it arrives.
     pub argument: Option<i64>,
 }
 
@@ -792,7 +810,8 @@ pub struct DebugGlobal {
 pub struct Debug {
     /// The source language, where the frontend says.
     pub language: Option<DebugLanguage>,
-    /// The CodeView 4 it is written as, where the frontend says; BASIC's compilers' otherwise.
+    /// The CodeView 4 it is written as, where the frontend says; BASIC's
+    /// compilers' otherwise.
     pub dialect: Option<DebugDialect>,
     pub types: Vec<DebugType>,
     pub functions: Vec<DebugFunction>,
@@ -984,8 +1003,8 @@ impl Module {
     /// handler or RESUME target through its frame chain), and no local
     /// STRING asks B$ENRA for a handle. The runtime frame zeroes its locals;
     /// a frame of its own does not.
-    // Event handlers (ON TIMER/KEY, not parsed today) will need the runtime frame:
-    // B$EXSA polls events on exit.
+    // Event handlers (ON TIMER/KEY, not parsed today) will need the runtime
+    // frame: B$EXSA polls events on exit.
     pub fn frames_itself(
         &self,
         frames: Frames,
@@ -1104,7 +1123,8 @@ pub struct StackCheck {
     pub limit: String,
     /// The routine entered on overflow; it does not return.
     pub handler: String,
-    /// Whether it is entered by a far call: a real-mode runtime's is, a flat one's is near.
+    /// Whether it is entered by a far call: a real-mode runtime's is, a flat
+    /// one's is near.
     pub far: bool,
     /// Bytes below `limit` that the handler, interrupts and an unchecked
     /// leaf's frame share.
@@ -1115,8 +1135,9 @@ pub struct StackCheck {
 }
 
 impl StackCheck {
-    /// The check a runtime's description row states: `limit`, `handler`, `red_zone`, whether the
-    /// handler is `far` (it is unless the row says not) and, where its frame entry checks, `entry`.
+    /// The check a runtime's description row states: `limit`, `handler`,
+    /// `red_zone`, whether the handler is `far` (it is unless the row says
+    /// not) and, where its frame entry checks, `entry`.
     pub fn from_toml(row: &toml::Value) -> Result<Self, String> {
         let text = |key: &str| row.get(key).and_then(toml::Value::as_str).map(str::to_owned);
         let need = |key: &str| text(key).ok_or_else(|| format!("stack {key} is not a string"));
@@ -1145,9 +1166,10 @@ pub struct Program {
     /// A frame's locals start zeroed; false where the language leaves them
     /// indeterminate.
     pub zeroed_locals: bool,
-    /// The bytes of each word of a buffer's or view's descriptor (its flags, length and capacity): the
-    /// language's promise, which the descriptor places' field type states too. 2 for every language
-    /// but Nib on a target whose near pointer is wider.
+    /// The bytes of each word of a buffer's or view's descriptor (its flags,
+    /// length and capacity): the language's promise, which the descriptor
+    /// places' field type states too. 2 for every language but Nib on a
+    /// target whose near pointer is wider.
     pub descriptor_word: i64,
     pub frames: Frames,
     pub promises: RuntimePromises,

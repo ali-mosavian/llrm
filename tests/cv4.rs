@@ -1,8 +1,10 @@
-//! `-g` on C for OMF is CodeView 4 as C7 writes it, and Microsoft's own tools read it: LINK /CO and CVPACK take an
-//! llrm object and write a packed table (the `NB08` trailer), and CodeView, driven, stops at a function by its
-//! name and shows its parameters and locals with their types and values. Needs VB/DOS's tools
-//! (`VBDOS_DIR`, default `~/work/other/d32x/toolchains/vbdos`: LINK, CVPACK, CV), Turbo C++'s start-up and
-//! library (`TCPP30_DIR`, default `~/scratch/toolchains/tcpp30`) and the DOSBox-X this crate builds.
+//! `-g` on C for OMF is CodeView 4 as C7 writes it, and Microsoft's own tools
+//! read it: LINK /CO and CVPACK take an llrm object and write a packed table
+//! (the `NB08` trailer), and CodeView, driven, stops at a function by its
+//! name and shows its parameters and locals with their types and values. Needs
+//! VB/DOS's tools (`VBDOS_DIR`, default `~/work/other/d32x/toolchains/vbdos`:
+//! LINK, CVPACK, CV), Turbo C++'s start-up and library (`TCPP30_DIR`, default
+//! `~/scratch/toolchains/tcpp30`) and the DOSBox-X this crate builds.
 //! `LLRM_REQUIRE_CODEVIEW` makes a missing tool a failure.
 
 mod common;
@@ -27,7 +29,8 @@ fn directory(
     found.join(marker).exists().then_some(found)
 }
 
-/// A program of structs, a pointer to itself and two functions to stop in, linked by LINK /CO.
+/// A program of structs, a pointer to itself and two functions to stop in,
+/// linked by LINK /CO.
 fn linked(
     microsoft: &Path,
     borland: &Path,
@@ -53,7 +56,8 @@ fn linked(
     })
 }
 
-/// What CodeView's locals window says after `commands`, each typed at its prompt.
+/// What CodeView's locals window says after `commands`, each typed at its
+/// prompt.
 fn locals(
     session: &Session,
     commands: &[&str],
@@ -65,10 +69,11 @@ fn locals(
     session.video_text()
 }
 
-/// LINK /CO hands the object to CVPACK, which rewrites the table it can read as `NB08`; a table it could not
-/// read stays `NB00` or LINK stops. CodeView then breaks at `sum` and `f` by name, on the lines the source
-/// window shows, and the locals window has the types the object gave and the values the program has: `short`,
-/// a `struct node near *`.
+/// LINK /CO hands the object to CVPACK, which rewrites the table it can read as
+/// `NB08`; a table it could not read stays `NB00` or LINK stops. CodeView then
+/// breaks at `sum` and `f` by name, on the lines the source window shows, and
+/// the locals window has the types the object gave and the values the program
+/// has: `short`, a `struct node near *`.
 #[test]
 fn microsoft_link_and_cvpack_take_the_object_and_codeview_reads_its_variables() {
     let (Some(microsoft), Some(borland)) = (
@@ -103,8 +108,9 @@ fn microsoft_link_and_cvpack_take_the_object_and_codeview_reads_its_variables() 
     }
 }
 
-/// A small-model program the model describes and no frontend does: an enum, a `const`, a variable in a register, a
-/// block with a variable of its own. `main` is 28 bytes: `e = GREEN; si = 42; { k = 7 }; return 0`.
+/// A small-model program the model describes and no frontend does: an enum, a
+/// `const`, a variable in a register, a block with a variable of its own.
+/// `main` is 28 bytes: `e = GREEN; si = 42; { k = 7 }; return 0`.
 fn synthetic() -> (llrm_object::Object, String) {
     use llrm_object::debug::{
         Block, Enumerator, File, Function, Info, Kind, Language, Line, Location, Range, Register, Scalar, Type,
@@ -195,10 +201,12 @@ fn synthetic() -> (llrm_object::Object, String) {
     (object, "int main(void)\n{\n    enum color e = GREEN;\n    register int r = 42;\n    { const int k = 7;\n      r = k; }\n    return 0;\n}\n".to_owned())
 }
 
-/// CodeView, driven, on the program above: LINK /CO and CVPACK take it, and the locals window at the first line of the
-/// block shows each record as CodeView 4 means it: `e` an enum by its name, `r` in register SI, and `k`, a
-/// `const short` that is listed only inside its block. `LF_ENUM`, `LF_MODIFIER`, `S_REGISTER` and `S_BLOCK16` were
-/// written from Open Watcom's headers alone before this ran.
+/// CodeView, driven, on the program above: LINK /CO and CVPACK take it, and the
+/// locals window at the first line of the block shows each record as CodeView 4
+/// means it: `e` an enum by its name, `r` in register SI, and `k`, a
+/// `const short` that is listed only inside its block. `LF_ENUM`,
+/// `LF_MODIFIER`, `S_REGISTER` and `S_BLOCK16` were written from Open Watcom's
+/// headers alone before this ran.
 #[test]
 fn codeview_reads_an_enum_a_const_a_register_variable_and_a_block_scope() {
     let (Some(microsoft), Some(borland)) = (
@@ -252,15 +260,19 @@ fn os_layer(field: &str) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
-/// A Nib program is CodeView 4 as C is: `bp add` finds the function by name, and the locals window at its second line
-/// shows the parameters and a local with their values. Written in the BASIC compilers' dialect it could not be debugged
-/// (#892): CodeView took the module's addresses for the start-up's segment and found no `add`. Built as
-/// `tools/nib-build.sh` builds it but linked by MS LINK /CO, which links the whole runtime in one segment.
+/// A Nib program is CodeView 4 as C is: `bp add` finds the function by name,
+/// and the locals window at its second line shows the parameters and a local
+/// with their values. Written in the BASIC compilers' dialect it could not be
+/// debugged (#892): CodeView took the module's addresses for the start-up's
+/// segment and found no `add`. Built as `tools/nib-build.sh` builds it but
+/// linked by MS LINK /CO, which links the whole runtime in one segment.
 #[test]
 fn codeview_debugs_a_nib_program_as_it_does_a_c_one() {
     let Some(screen) = nib_in_codeview("p", &["-O0"], &["bp add", "g", "p"]) else { return };
-    // `add`'s parameters arrive in registers (regparm3), which a CodeView 4 record cannot say for a scope, and `-g`
-    // stores them to no cell (it changes no code): they are left out, and the local, which is in a cell, is read.
+    // `add`'s parameters arrive in registers (regparm3), which a CodeView 4
+    // record cannot say for a scope, and `-g` stores them to no cell (it
+    // changes no code): they are left out, and the local, which is in a cell,
+    // is read.
     for expected in ["long s = 2"] {
         assert!(screen.contains(expected), "no {expected:?} in CodeView's screen:\n{screen}");
     }
@@ -270,9 +282,10 @@ fn codeview_debugs_a_nib_program_as_it_does_a_c_one() {
     );
 }
 
-/// A variable the allocator keeps in one register from its first value to the last statement is a register variable to
-/// CodeView (`S_REGISTER`), and its value is read there: `k` of `regvar.nib`, built optimised, lives in `bx` across the
-/// call that clobbers `ax`.
+/// A variable the allocator keeps in one register from its first value to the
+/// last statement is a register variable to CodeView (`S_REGISTER`), and its
+/// value is read there: `k` of `regvar.nib`, built optimised, lives in `bx`
+/// across the call that clobbers `ax`.
 #[test]
 fn codeview_reads_a_nib_variable_the_allocator_keeps_in_a_register() {
     let Some(screen) = nib_in_codeview(
@@ -285,8 +298,9 @@ fn codeview_reads_a_nib_variable_the_allocator_keeps_in_a_register() {
     assert!(screen.contains("reg short k = 12"), "no register `k = 12` in CodeView's screen:\n{screen}");
 }
 
-/// `fixture` (a Nib program of tests/fixtures/codeview) built with `flags` as `tools/nib-build.sh` builds it, linked by
-/// MS LINK /CO, and CodeView's screen after `commands`; none where the tools are not there.
+/// `fixture` (a Nib program of tests/fixtures/codeview) built with `flags` as
+/// `tools/nib-build.sh` builds it, linked by MS LINK /CO, and CodeView's screen
+/// after `commands`; none where the tools are not there.
 fn nib_in_codeview(
     fixture: &str,
     flags: &[&str],
@@ -335,7 +349,8 @@ fn nib_in_codeview(
             scratch.path().join("rt.obj").display().to_string(),
         ],
     );
-    // The OS layer's start-up, its language hook and its implementation, assembled as the OS layer says.
+    // The OS layer's start-up, its language hook and its implementation,
+    // assembled as the OS layer says.
     let layer = PathBuf::from(os_layer("directory"));
     let defines: Vec<String> = os_layer("defines").split_whitespace().map(|one| format!("-D{one}")).collect();
     for (output, source) in [

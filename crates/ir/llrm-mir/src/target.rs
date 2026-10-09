@@ -19,7 +19,8 @@ pub trait Machine {
         width: i64,
     ) -> Option<(i64, i64)>;
 
-    /// The address spaces by role: the numbers the target's description gives them.
+    /// The address spaces by role: the numbers the target's description gives
+    /// them.
     fn spaces(&self) -> Spaces;
 
     /// What each operation costs on this target, for profitability.
@@ -71,13 +72,15 @@ pub trait Machine {
         self.call_registers()
     }
 
-    /// The convention a function nothing outside the program reaches takes, where the target states one.
+    /// The convention a function nothing outside the program reaches takes,
+    /// where the target states one.
     fn private_convention(&self) -> Option<PrivateConvention> {
         None
     }
 
-    /// The convention a function in `convention` takes when its callers' cleanup of the stack arguments moves to the
-    /// function: C's own, `fastcc`, by default; a target whose description states more says which.
+    /// The convention a function in `convention` takes when its callers'
+    /// cleanup of the stack arguments moves to the function: C's own,
+    /// `fastcc`, by default; a target whose description states more says which.
     fn callee_pop(
         &self,
         convention: u32,
@@ -85,8 +88,8 @@ pub trait Machine {
         (convention == 0).then_some(crate::opcode::FAST)
     }
 
-    /// The bytes of stack the `arguments` take under `convention`, where the target knows; else every argument is on
-    /// it.
+    /// The bytes of stack the `arguments` take under `convention`, where the
+    /// target knows; else every argument is on it.
     fn stack_argument_bytes(
         &self,
         _convention: u32,
@@ -177,32 +180,38 @@ pub struct OperationCosts {
     pub r#move: i64,
     pub call: i64,
     pub return_: i64,
-    /// What one argument word costs around a call: pushed by the caller, read by the callee.
+    /// What one argument word costs around a call: pushed by the caller, read
+    /// by the callee.
     pub argument: i64,
-    /// What a caller pays to take `n` words of arguments off the stack: the cheaper of `n` pops
-    /// (`pop` each) and one `adjust` of the stack pointer.
+    /// What a caller pays to take `n` words of arguments off the stack: the
+    /// cheaper of `n` pops (`pop` each) and one `adjust` of the stack
+    /// pointer.
     pub pop: i64,
     pub adjust: i64,
-    /// What a return popping its callee's arguments costs more than a plain one.
+    /// What a return popping its callee's arguments costs more than a plain
+    /// one.
     pub return_pops: i64,
     pub float_add: i64,
     pub float_multiply: i64,
     pub float_divide: i64,
     pub float_load: i64,
     pub float_store: i64,
-    /// What dropping a floating value from the register stack costs once its last reader is past (x87 `fstp st(0)`):
-    /// one held across a loop is released after it.
+    /// What dropping a floating value from the register stack costs once its
+    /// last reader is past (x87 `fstp st(0)`): one held across a loop is
+    /// released after it.
     pub float_release: i64,
     pub extend: i64,
     pub fill: i64,
     pub fill_cell: i64,
     /// `rep movs` as a copy sets it up (ES, the two addresses, the count) and
-    /// what each cell costs it; `direction` is `std` and `cld` around a backward one.
+    /// what each cell costs it; `direction` is `std` and `cld` around a
+    /// backward one.
     pub copy: i64,
     pub copy_cell: i64,
     pub direction: i64,
-    /// How many operations a completely unrolled loop may total before the work it saves is boosted
-    /// (`peelsize::Limits`); 0: the target states none and the pass's own is used.
+    /// How many operations a completely unrolled loop may total before the work
+    /// it saves is boosted (`peelsize::Limits`); 0: the target states none
+    /// and the pass's own is used.
     pub unroll_budget: i64,
 }
 
@@ -215,9 +224,10 @@ impl OperationCosts {
         (words * self.pop).min(self.adjust)
     }
 
-    /// `price` for an operation on `width`-byte values where the code's own operand size is `operand` bytes:
-    /// a word or dword that is not that size runs under the operand-size prefix (a dword in real mode, a word in flat
-    /// code).
+    /// `price` for an operation on `width`-byte values where the code's own
+    /// operand size is `operand` bytes: a word or dword that is not that
+    /// size runs under the operand-size prefix (a dword in real mode, a word in
+    /// flat code).
     pub fn sized(
         &self,
         price: i64,
@@ -302,7 +312,8 @@ pub struct AddressForm {
     // How many distinct bases one index can pair with at once; None is any.
     pub partners: Option<i64>,
     // The registers an address takes as its base and as its index, where an
-    // address is one of each: a register is of one class or the other. None is any.
+    // address is one of each: a register is of one class or the other. None is
+    // any.
     pub bases: Option<i64>,
     pub indices: Option<i64>,
     // Compatibility name for `secondary`; both views stay identical.
@@ -372,8 +383,9 @@ pub struct Argument {
     pub memory: bool,
 }
 
-/// The convention the target gives a private function, and those a function must have for it to take it: a marked
-/// function (Pascal's, an interrupt's) keeps the protocol its marker names.
+/// The convention the target gives a private function, and those a function
+/// must have for it to take it: a marked function (Pascal's, an interrupt's)
+/// keeps the protocol its marker names.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct PrivateConvention {
     pub to: u32,
@@ -428,7 +440,8 @@ mod operand_size_tests {
         AddressForm::new(index_width, BTreeSet::from([1, 2, 4, 8]), 0, use_cost, 0, secondary, None).expect("a form")
     }
 
-    /// The operand-size prefix is for the size that is not the code's own: a dword in real mode, a word when flat.
+    /// The operand-size prefix is for the size that is not the code's own: a
+    /// dword in real mode, a word when flat.
     #[test]
     fn the_prefix_is_for_the_size_that_is_not_the_codes_own() {
         let costs = OperationCosts { prefix: 1, ..OperationCosts::default() };
@@ -444,8 +457,9 @@ mod operand_size_tests {
         );
     }
 
-    /// A flat target's dword address has no prefix and its price is the `lea`'s; it had none, because only the
-    /// prefixed (secondary) form was looked for. A word address needs a form of index width 2.
+    /// A flat target's dword address has no prefix and its price is the
+    /// `lea`'s; it had none, because only the prefixed (secondary) form was
+    /// looked for. A word address needs a form of index width 2.
     #[test]
     fn a_native_dword_address_is_priced_and_a_word_one_needs_a_word_form() {
         let costs = OperationCosts { address: 2, prefix: 1, ..OperationCosts::default() };

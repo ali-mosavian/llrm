@@ -195,8 +195,9 @@ fn _ordered(moves: &[Arc<Insn>]) -> Result<Vec<Arc<Insn>>, Malformed> {
     Ok(out)
 }
 
-/// Of the copies `left` (indices into `reads` and `writes`, the places each reads and writes),
-/// those that may go: nothing else still to come reads a place they write.
+/// Of the copies `left` (indices into `reads` and `writes`, the places each
+/// reads and writes), those that may go: nothing else still to come reads a
+/// place they write.
 pub(crate) fn ready<K: Eq + std::hash::Hash>(
     reads: &[Vec<K>],
     writes: &[Vec<K>],
@@ -212,8 +213,9 @@ pub(crate) fn ready<K: Eq + std::hash::Hash>(
         .collect()
 }
 
-/// One copy of a cycle `ready` is stuck on, when none of `left` may go: following who is waited for
-/// until a copy comes round again. Taking that copy's sources first breaks the cycle.
+/// One copy of a cycle `ready` is stuck on, when none of `left` may go:
+/// following who is waited for until a copy comes round again. Taking that
+/// copy's sources first breaks the cycle.
 pub(crate) fn in_cycle<K: Eq + std::hash::Hash>(
     reads: &[Vec<K>],
     writes: &[Vec<K>],
@@ -484,7 +486,8 @@ mod tests {
 
     #[test]
     fn test_memory_copy_expands_after_dependency_ordering() {
-        // NESTED needs a spilled phi copied before another move overwrites its source.
+        // NESTED needs a spilled phi copied before another move overwrites its
+        // source.
         let (source, destination) = (_slot(4), _slot(8));
         let result = scheduled(&_body(vec![
             grouped(source.clone(), _reg(Register::AX), 1),
@@ -544,7 +547,8 @@ mod tests {
 
     #[test]
     fn test_two_groups_are_scheduled_apart() {
-        // One group's move may write what another's reads; they are not simultaneous.
+        // One group's move may write what another's reads; they are not
+        // simultaneous.
         let got = _order(&_body(vec![
             grouped(_reg(Register::DI), _slot(8), 1),
             grouped(_reg(Register::BP), _reg(Register::DI), 2),
@@ -555,7 +559,8 @@ mod tests {
 
     #[test]
     fn test_register_and_spilled_cycles_are_preserved() {
-        // A register cycle uses xchg; a slot cycle uses the balanced machine stack.
+        // A register cycle uses xchg; a slot cycle uses the balanced machine
+        // stack.
         let swapped = scheduled(&_body(vec![
             grouped(_reg(Register::AX), _reg(Register::CX), 1),
             grouped(_reg(Register::CX), _reg(Register::AX), 1),
@@ -608,7 +613,8 @@ mod tests {
 
     #[test]
     fn test_register_cycle_retains_covered_bytes_as_an_anchor() {
-        // sieve's shared array base made a three-register phi cycle whose final move owned original bytes.
+        // sieve's shared array base made a three-register phi cycle whose final
+        // move owned original bytes.
         let mut closing = grouped(_reg(Register::CX), _reg(Register::DX), 1);
         closing.covers = Some((0x100, 0x102));
         let body = _body(vec![
@@ -657,7 +663,8 @@ mod tests {
 
     #[test]
     fn test_mixed_width_register_cycle_uses_a_balanced_temporary() {
-        // sieve rotates EDX->CX->SI->EDX without exchanging incompatible register widths.
+        // sieve rotates EDX->CX->SI->EDX without exchanging incompatible
+        // register widths.
         let body = _body(vec![
             grouped(reg(Register::EDX, 4), reg(Register::ESI, 4), 1),
             grouped(reg(Register::CX, 2), reg(Register::DX, 2), 1),

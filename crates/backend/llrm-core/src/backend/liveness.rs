@@ -3,9 +3,9 @@
 //!
 //! A backward walk inside one block starts by assuming everything is live, so a
 //! copy written as the last instruction of a block always survives it -- and a
-//! parallel copy for a phi is written exactly there. deedlines' plasmablobs ends
-//! its inner loop with `mov di,bx` whose destination no path reads before writing
-//! it again.
+//! parallel copy for a phi is written exactly there. deedlines' plasmablobs
+//! ends its inner loop with `mov di,bx` whose destination no path reads before
+//! writing it again.
 
 use std::sync::Arc;
 
@@ -92,8 +92,8 @@ thread_local! {
     static EFFECT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many effects this thread has worked out by `effect`, for a test that a pass does not ask of an instruction it
-/// has seen.
+/// How many effects this thread has worked out by `effect`, for a test that a
+/// pass does not ask of an instruction it has seen.
 pub fn effects_worked_out() -> usize {
     EFFECT_CALLS.with(std::cell::Cell::get)
 }
@@ -108,8 +108,8 @@ pub fn with_effect<R>(
     if *was == bits { with(answer.as_ref()) } else { with(worked_out(bits, one).as_ref()) }
 }
 
-/// `one`'s effect as it decodes, else as its contract declares; None when unknown. Worked out once for the instruction,
-/// whoever asks.
+/// `one`'s effect as it decodes, else as its contract declares; None when
+/// unknown. Worked out once for the instruction, whoever asks.
 pub fn effect(
     bits: u32,
     one: &Insn,
@@ -144,7 +144,8 @@ fn worked_out(
     })
 }
 
-/// Each instruction's effect in `block`, decoded once for a fixed point to reuse.
+/// Each instruction's effect in `block`, decoded once for a fixed point to
+/// reuse.
 pub fn _effects(
     bits: u32,
     block: &LirBlock,
@@ -169,8 +170,8 @@ pub fn _backwards(
     live: Lanes,
     universe: &Lanes,
 ) -> Lanes {
-    // Each effect is read where it is kept: a copy of every instruction's, for each round of a fixed point, was a tenth
-    // of peephole.
+    // Each effect is read where it is kept: a copy of every instruction's, for
+    // each round of a fixed point, was a tenth of peephole.
     block.insns.iter().rev().fold(live, |live, one| {
         with_effect(bits, one, |effect| effect.map_or_else(|| *universe, |effect| effect.live_before(&live)))
     })
@@ -238,8 +239,8 @@ thread_local! {
     static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has worked out a block's lanes, for a test that a chain of blocks does not
-/// take a round of the body for each.
+/// How many times this thread has worked out a block's lanes, for a test that a
+/// chain of blocks does not take a round of the body for each.
 pub fn visits() -> usize {
     VISITS.with(std::cell::Cell::get)
 }
@@ -257,9 +258,11 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
     let mut into: IndexMap<i64, Lanes> = blocks.keys().map(|at| (*at, Lanes::new())).collect();
     let effects: IndexMap<i64, Vec<Option<Effect>>> =
         blocks.iter().map(|(at, block)| (*at, _effects(body.bits, block))).collect();
-    // The least fixed point of a backward problem, found by a worklist that starts from the last block: a
-    // block is recomputed when a successor's lanes changed. Taken round the layout from the first block, each
-    // round carried a change one block back, and a chain of n blocks took n rounds.
+    // The least fixed point of a backward problem, found by a worklist that
+    // starts from the last block: a block is recomputed when a successor's
+    // lanes changed. Taken round the layout from the first block, each
+    // round carried a change one block back, and a chain of n blocks took n
+    // rounds.
     let mut predecessors: IndexMap<i64, Vec<i64>> = blocks.keys().map(|at| (*at, Vec::new())).collect();
     for (at, to) in &successors {
         for next in to {
@@ -295,13 +298,14 @@ thread_local! {
     static EXITS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has worked out a body's dead lanes at its blocks' exits, for a test that asking again of
-/// a body no pass changed does not.
+/// How many times this thread has worked out a body's dead lanes at its blocks'
+/// exits, for a test that asking again of a body no pass changed does not.
 pub fn exits_computed() -> usize {
     EXITS_COMPUTED.with(std::cell::Cell::get)
 }
 
-/// Whether `body` is `kept` over again: the same blocks of the same instructions, which are immutable.
+/// Whether `body` is `kept` over again: the same blocks of the same
+/// instructions, which are immutable.
 fn unchanged(
     kept: &LirBody,
     body: &LirBody,
@@ -316,9 +320,10 @@ fn unchanged(
         })
 }
 
-/// Per block, the lanes nothing reads again after it. Ten passes of the peephole ask in turn, most leaving the body as
-/// it was (the same instructions, shared): the last answer stands for a body that is the same (#924: 500,000 decodes of
-/// 16,000 instructions in one module).
+/// Per block, the lanes nothing reads again after it. Ten passes of the
+/// peephole ask in turn, most leaving the body as it was (the same
+/// instructions, shared): the last answer stands for a body that is the same
+/// (#924: 500,000 decodes of 16,000 instructions in one module).
 pub fn dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
     if let Some(answer) = EXITS
         .with(|held| held.borrow().as_ref().filter(|(kept, _)| unchanged(kept, body)).map(|(_, answer)| answer.clone()))
@@ -393,8 +398,8 @@ mod tests {
         assert!(_lanes(Register::AX).is_subset(&into[&1]));
     }
 
-    /// A chain of blocks, the last reading AX and each before it writing a register: the lanes live into the
-    /// first.
+    /// A chain of blocks, the last reading AX and each before it writing a
+    /// register: the lanes live into the first.
     fn chain(blocks: i64) -> LirBody {
         let bx = Reg { register: Register::BX, width: 2 };
         let blocks: Vec<LirBlock> = (1..=blocks)
@@ -410,9 +415,11 @@ mod tests {
         LirBody::new("f", 1, blocks, IndexMap::default(), IndexMap::default())
     }
 
-    /// Taken in layout order from the first block, each round of the fixed point carried a change one block
-    /// back: a chain of n blocks was n rounds of n blocks, and peephole's `dead_at_exit` was 18% of compiling
-    /// 800 blocks (#560). Starting from the last, each block is worked out about once.
+    /// Taken in layout order from the first block, each round of the fixed
+    /// point carried a change one block back: a chain of n blocks was n
+    /// rounds of n blocks, and peephole's `dead_at_exit` was 18% of compiling
+    /// 800 blocks (#560). Starting from the last, each block is worked out
+    /// about once.
     #[test]
     fn test_a_chain_of_blocks_is_not_a_round_of_the_body_for_each_block() {
         let body = chain(200);

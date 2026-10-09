@@ -67,7 +67,8 @@ pub fn compiled(
     Ok(written.remove(0))
 }
 
-/// BASIC's machine (real mode's, its stack in the data group) with its code priced for `cpu`.
+/// BASIC's machine (real mode's, its stack in the data group) with its code
+/// priced for `cpu`.
 fn on(cpu: &str) -> Machine {
     Machine { cpu: cpu.to_owned(), ..llrm_driver::m16_machine() }
 }

@@ -1,6 +1,7 @@
-//! `.debug$S`: the string table, the file checksums, the module's symbols and each code range's
-//! line table, each a subsection. Where a record names code or data, a `SECREL` and a `SECTION`
-//! relocation against the object's symbol fill its offset and its section.
+//! `.debug$S`: the string table, the file checksums, the module's symbols and
+//! each code range's line table, each a subsection. Where a record names code
+//! or data, a `SECREL` and a `SECTION` relocation against the object's symbol
+//! fill its offset and its section.
 
 use llrm_object::debug::{ChecksumKind, Function, Info, Kind, Location, Range, Type, Variable};
 use llrm_object::{Binding, Definition, Kind as Fixup, Object, Reloc, Target, Unsupported};
@@ -75,7 +76,8 @@ impl Data {
         kind: u16,
         build: impl FnOnce(&mut Data) -> Result<(), Unsupported>,
     ) -> Result<(), Unsupported> {
-        // The record is written whole, then moved: its relocations are rebased to where it lands.
+        // The record is written whole, then moved: its relocations are rebased
+        // to where it lands.
         let mut inner = Data::default();
         build(&mut inner)?;
         let at = self.bytes.len() + 4;
@@ -109,8 +111,8 @@ fn pad4(bytes: &mut Vec<u8>) {
     }
 }
 
-/// The offset of `symbol` from the first byte of `range`, as the addend that makes a relocation
-/// against the symbol reach it.
+/// The offset of `symbol` from the first byte of `range`, as the addend that
+/// makes a relocation against the symbol reach it.
 fn anchor(
     object: &Object,
     symbol: usize,
@@ -132,7 +134,8 @@ struct Writer<'a> {
     object: &'a Object,
     registers: &'a Registers<'a>,
     types: &'a Types,
-    /// The symbol the function being written is, which its code is reached through.
+    /// The symbol the function being written is, which its code is reached
+    /// through.
     function: usize,
 }
 
@@ -313,7 +316,8 @@ impl Writer<'_> {
     }
 }
 
-/// One subsection, its data padded to four bytes, appended to `section` with its relocations.
+/// One subsection, its data padded to four bytes, appended to `section` with
+/// its relocations.
 fn subsection(
     section: &mut Section,
     kind: u32,
@@ -327,7 +331,8 @@ fn subsection(
     section.image.extend(data.bytes);
 }
 
-/// The line table of `range`: its header, then a block for each run of lines in one file.
+/// The line table of `range`: its header, then a block for each run of lines in
+/// one file.
 fn lines(
     object: &Object,
     info: &Info,

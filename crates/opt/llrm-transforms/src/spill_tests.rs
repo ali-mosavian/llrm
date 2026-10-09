@@ -429,10 +429,10 @@ b4:
 ";
 
 /// A result made in its first operand's register copies an operand that stays
-/// live: `x / 2` is `mov cx, dx; sub cx, di` with `dx` (the index) live after, so
-/// base, bound, index, sum, a second counter and the sign held six values and the
-/// copy made a seventh. No point held it: lsr then added the counter, the bound
-/// went to `[bp+8]`, and the loop reloaded it each trip (#242).
+/// live: `x / 2` is `mov cx, dx; sub cx, di` with `dx` (the index) live after,
+/// so base, bound, index, sum, a second counter and the sign held six values
+/// and the copy made a seventh. No point held it: lsr then added the counter,
+/// the bound went to `[bp+8]`, and the loop reloaded it each trip (#242).
 #[test]
 fn test_an_arithmetic_result_copies_the_first_operand_that_stays_live() {
     let room = |two_address| Room { registers: 6, across_call: 2, two_address, ..Room::default() };
@@ -440,11 +440,12 @@ fn test_an_arithmetic_result_copies_the_first_operand_that_stays_live() {
     assert_eq!(_peak(HALVED, room(true)), 1, "the copy is a seventh");
 }
 
-/// A frame object's address and a constant offset into it, made before a loop and
-/// read in its blocks, are displacements in each access (`[bp+si-188]`), not a value in a
-/// register. Counted as one, nbody's four arrays' sixteen element addresses
-/// forecast 23 residents on six registers, charged lsr 3000 for a counter
-/// the listing kept in a register, and sent its stride-8 counter away (#386).
+/// A frame object's address and a constant offset into it, made before a loop
+/// and read in its blocks, are displacements in each access (`[bp+si-188]`),
+/// not a value in a register. Counted as one, nbody's four arrays' sixteen
+/// element addresses forecast 23 residents on six registers, charged lsr 3000
+/// for a counter the listing kept in a register, and sent its stride-8 counter
+/// away (#386).
 #[test]
 fn test_a_constant_offset_into_a_frame_object_takes_no_register() {
     let text = "define i16 @f(i16 %n) {
@@ -502,9 +503,9 @@ exit:
     assert_eq!(_peak(text, Room { registers: 2, across_call: 2, ..Room::default() }), 0);
 }
 
-/// Every access asked whether its pointer is folded, which looks at every user of the pointer, and a frame
-/// slot has a user for each access to it: 34% of compiling a function of 1600 statements (#560). Each
-/// pointer is asked once.
+/// Every access asked whether its pointer is folded, which looks at every user
+/// of the pointer, and a frame slot has a user for each access to it: 34% of
+/// compiling a function of 1600 statements (#560). Each pointer is asked once.
 #[test]
 fn test_each_pointer_is_asked_whether_it_is_folded_once_however_many_accesses_use_it() {
     let accesses: String =
@@ -519,10 +520,12 @@ fn test_each_pointer_is_asked_whether_it_is_folded_once_however_many_accesses_us
     assert!(super::folded_runs() - before <= 2, "{} asks for 80 accesses of one slot", super::folded_runs() - before);
 }
 
-/// nbody's `x[i]`, made in the outer loop and read in the inner one: on a target whose address takes a scale
-/// of 8 beside any registers it is `[ebp+esi*8+disp]` at each read, and holds no register of its own; the
-/// model counted four of them live across the inner loop, and hoisted the floats those pointers read so as
-/// to free them (#698: -Os m32 +4 B and two `fstp st(0)`). Where the address takes no such scale it is a value.
+/// nbody's `x[i]`, made in the outer loop and read in the inner one: on a
+/// target whose address takes a scale of 8 beside any registers it is
+/// `[ebp+esi*8+disp]` at each read, and holds no register of its own; the model
+/// counted four of them live across the inner loop, and hoisted the floats
+/// those pointers read so as to free them (#698: -Os m32 +4 B and two `fstp
+/// st(0)`). Where the address takes no such scale it is a value.
 #[test]
 fn test_a_frame_object_indexed_by_a_scaled_integer_is_folded_wherever_it_is_read() {
     let module = module(
@@ -561,9 +564,11 @@ done:
     assert!(!folded_in(&module.context, function, q, 0b0011));
 }
 
-/// nbody_single's `&pos_x[k]`, made once and read in a loop: a symbol plus a constant is a displacement at each
-/// read, as a frame object plus a constant is, but only the latter was: the model held 21 such addresses as
-/// registers across the nest, forecast 5389056 clocks of spills and the allocator spilled nothing.
+/// nbody_single's `&pos_x[k]`, made once and read in a loop: a symbol plus a
+/// constant is a displacement at each read, as a frame object plus a constant
+/// is, but only the latter was: the model held 21 such addresses as
+/// registers across the nest, forecast 5389056 clocks of spills and the
+/// allocator spilled nothing.
 #[test]
 fn test_a_symbol_plus_a_constant_is_no_register_wherever_it_is_read() {
     let module = module(
@@ -587,8 +592,9 @@ done:
     assert!(!integer(&module.context, function, named(function, "p")));
 }
 
-/// Lsr took its sites from a `Pressure` the manager made, the hoist from one made for the candidate: the same
-/// function gets the same forecast either way, and `hide` removes a value from what is live.
+/// Lsr took its sites from a `Pressure` the manager made, the hoist from one
+/// made for the candidate: the same function gets the same forecast either way,
+/// and `hide` removes a value from what is live.
 #[test]
 fn test_a_forecast_is_the_same_from_the_managers_pressure_as_from_one_made_for_the_candidate() {
     let module = module(COUNTED);
@@ -616,8 +622,9 @@ fn test_a_forecast_is_the_same_from_the_managers_pressure_as_from_one_made_for_t
     assert!(residents(&kept, &hidden) < residents(&kept, &|_| false));
 }
 
-/// `forecast` as it was written, a set and a full sort per point: the one that picks the cheapest by a partial sort
-/// over a sorted vector must give the same cost, spills and peak, ties included.
+/// `forecast` as it was written, a set and a full sort per point: the one that
+/// picks the cheapest by a partial sort over a sorted vector must give the same
+/// cost, spills and peak, ties included.
 #[test]
 fn test_the_forecast_is_what_a_set_and_a_full_sort_give() {
     let mut seed = 12345_u64;
@@ -661,8 +668,9 @@ fn test_the_forecast_is_what_a_set_and_a_full_sort_give() {
     }
 }
 
-/// `spilled` keeps what it has spilled in a hash set (lsr asks it of every resident of every point of every candidate
-/// set, on cells that are not ids); it must price the same as `forecast`, which keeps an id set.
+/// `spilled` keeps what it has spilled in a hash set (lsr asks it of every
+/// resident of every point of every candidate set, on cells that are not ids);
+/// it must price the same as `forecast`, which keeps an id set.
 #[test]
 fn test_spilled_prices_what_forecast_does_whichever_set_remembers_the_spilled() {
     let mut seed = 777_u64;

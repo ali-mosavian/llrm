@@ -42,7 +42,8 @@ pub fn declarations(
     )
 }
 
-/// `declarations`, for a target whose pointers, slot and far code are `sizes`, and whose own convention is `native`.
+/// `declarations`, for a target whose pointers, slot and far code are `sizes`,
+/// and whose own convention is `native`.
 pub fn declarations_on(
     module: &Module,
     name: &str,
@@ -214,7 +215,8 @@ fn declaration(
                 return Err(unsupported(name, "BASIC", span));
             }
             let convention = if matches!(abi, Abi::C | Abi::Cdecl16 | Abi::Cdecl32) { " CDECL" } else { "" };
-            // BASIC names hold letters, digits and periods; any other takes its symbol as an alias.
+            // BASIC names hold letters, digits and periods; any other takes its
+            // symbol as an alias.
             let (name, alias) = if name.chars().all(|one| one.is_ascii_alphanumeric() || one == '.') {
                 (name.to_owned(), String::new())
             } else {
@@ -253,7 +255,8 @@ fn declaration(
     }
 }
 
-/// The bytes an argument of `spec` is pushed as: a BASIC adapter is a near pointer.
+/// The bytes an argument of `spec` is pushed as: a BASIC adapter is a near
+/// pointer.
 fn argument_width(spec: &TypeSpec) -> u32 {
     if Adapter::of(spec).is_some() {
         return 2;
@@ -286,7 +289,8 @@ fn pointer(spec: &TypeSpec) -> Option<(bool, bool, &TypeSpec)> {
     (far || name.starts_with("*near")).then_some((far, name.ends_with(" mut"), target))
 }
 
-/// The bytes a field of `spec` takes in a struct on the target: a pointer is its pointers' width.
+/// The bytes a field of `spec` takes in a struct on the target: a pointer is
+/// its pointers' width.
 fn field_width(
     spec: &TypeSpec,
     sizes: crate::Sizes,

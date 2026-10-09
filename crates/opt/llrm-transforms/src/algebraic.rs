@@ -7,14 +7,18 @@
 //! reassociated sum may overflow where the original did not.
 //!
 //! Gone with the old MIR:
-//! - `wholephis`, `wholestores`, `_halved`, `_halves`, `_takes_halves`, `_extracted`, `_recombined` and a `Concat` of
-//!   constants: a long split into word halves. Every value is whole here.
-//! - `_forwarded_zero_tests`: `or x, x` for its x86 flags; `icmp` reads the value.
+//! - `wholephis`, `wholestores`, `_halved`, `_halves`, `_takes_halves`,
+//!   `_extracted`, `_recombined` and a `Concat` of constants: a long split into
+//!   word halves. Every value is whole here.
+//! - `_forwarded_zero_tests`: `or x, x` for its x86 flags; `icmp` reads the
+//!   value.
 //! - `_product`: a widening multiply's unused high half; `mul` has one result.
-//! - `_zero_difference` and `_copied_zero`: `sub 0, x` is the negation here, and nothing is a copy.
+//! - `_zero_difference` and `_copied_zero`: `sub 0, x` is the negation here,
+//!   and nothing is a copy.
 //! - `wanted` and `wide`: which flags and which halves were read.
-//! - `_distributing`'s and `_mask_scaled`'s pairing: the old rules read a snapshot and rewrote one op each, so both ops
-//!   of a pair had to agree to change. Here a rewrite replaces both at once, on the current function.
+//! - `_distributing`'s and `_mask_scaled`'s pairing: the old rules read a
+//!   snapshot and rewrote one op each, so both ops of a pair had to agree to
+//!   change. Here a rewrite replaces both at once, on the current function.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,7 +38,8 @@ use num_bigint::BigInt;
 
 use crate::counting;
 
-/// `size`: code size outranks speed, and a division by a constant that is not a power of two stays signed.
+/// `size`: code size outranks speed, and a division by a constant that is not a
+/// power of two stays signed.
 #[derive(Default)]
 pub struct Algebraic {
     pub size: bool,
@@ -59,8 +64,9 @@ impl FunctionPass for Algebraic {
     }
 }
 
-/// What a counter rebased by a use leaves behind: `x - (x + y)` is `-y`. LLVM's LSR cleans with InstSimplify, not
-/// InstCombine's whole set, which would fold the scales LSR just chose back into one another.
+/// What a counter rebased by a use leaves behind: `x - (x + y)` is `-y`. LLVM's
+/// LSR cleans with InstSimplify, not InstCombine's whole set, which would fold
+/// the scales LSR just chose back into one another.
 pub struct Differences;
 
 impl FunctionPass for Differences {
@@ -505,7 +511,8 @@ fn _replace(
     _forward(function, inst, value);
 }
 
-/// Every use of `inst` now reads `with`, and `inst` and what it alone read, gone.
+/// Every use of `inst` now reads `with`, and `inst` and what it alone read,
+/// gone.
 fn _forward(
     function: &mut Function,
     inst: InstId,
@@ -632,7 +639,8 @@ fn _recurrences(
     }
     let shape = cfg::Shape::of(function);
     let analysed = Unit::within(context, layout, function, outer).with_shape(&shape);
-    // Found once, for the body as the rounds before left it, not for each loop's recurrences.
+    // Found once, for the body as the rounds before left it, not for each
+    // loop's recurrences.
     let registers = consts::known(&analysed, None, None, None);
     let analysed = analysed.with_registers(&registers);
     shape.loops.iter().flat_map(|one| induction::advances(&analysed, one).into_keys()).collect()
@@ -992,7 +1000,8 @@ fn _duplicate_phi(
     let block = function.parent(inst).expect("a placed phi");
     let mine = &function.instruction(inst).operands;
     let ty = function.instruction(inst).ty;
-    // One arm per predecessor: the same count, and each arm of this one among the other's.
+    // One arm per predecessor: the same count, and each arm of this one among
+    // the other's.
     let earlier = function
         .block(block)
         .instructions()
@@ -1030,8 +1039,9 @@ fn _negated_difference(
     true
 }
 
-/// `x - (x + y)` and `(x - y) - x` are `-y`, modulo the width: InstCombine's `visitSub`. A counter rebased by what a
-/// use subtracts it from (`row - (c + row)` where `c = r - row`) leaves the sum behind it.
+/// `x - (x + y)` and `(x - y) - x` are `-y`, modulo the width: InstCombine's
+/// `visitSub`. A counter rebased by what a use subtracts it from (`row - (c +
+/// row)` where `c = r - row`) leaves the sum behind it.
 fn _difference_from_sum(
     context: &mut Context,
     function: &mut Function,
@@ -1163,8 +1173,8 @@ fn _identity(
 }
 
 /// The operand `inst` equals by an identity: `x + 0`, `x - 0`, `x | 0`,
-/// `x ^ 0`, a shift by 0, `x * 1`, `x / 1` and `x & -1` are `x`; `x * 0` and `x & 0`
-/// are 0, and `x | -1` is -1.
+/// `x ^ 0`, a shift by 0, `x * 1`, `x / 1` and `x & -1` are `x`; `x * 0` and `x
+/// & 0` are 0, and `x | -1` is -1.
 pub fn identity(
     context: &Context,
     function: &Function,
@@ -1204,8 +1214,8 @@ pub fn identity(
         )
 }
 
-/// `x % 1` is 0, a comparison of a value with itself is decided by its predicate,
-/// and `x >= 0` or `x < 0` unsigned is true or false.
+/// `x % 1` is 0, a comparison of a value with itself is decided by its
+/// predicate, and `x >= 0` or `x < 0` unsigned is true or false.
 fn _decided(
     context: &mut Context,
     function: &mut Function,
@@ -1383,7 +1393,8 @@ fn _whole_fixed(
     !whole.is_empty()
 }
 
-/// `udiv` and `urem` by a power of two: a logical shift and a mask, which the division unit has no part in.
+/// `udiv` and `urem` by a power of two: a logical shift and a mask, which the
+/// division unit has no part in.
 fn _unsigned_power_of_two(
     context: &mut Context,
     function: &mut Function,
@@ -1407,9 +1418,10 @@ fn _unsigned_power_of_two(
     true
 }
 
-/// `and x, C` where every bit `x` may have set is in `C` is `x`: LLVM's CorrelatedValuePropagation
-/// `processAnd`, over `computeKnownBits`. The bits `x` may set are those a non-negative range's top
-/// reaches, less the ones structure clears (`valuetracking::known_zero`: a scale's low bits). A loop
+/// `and x, C` where every bit `x` may have set is in `C` is `x`: LLVM's
+/// CorrelatedValuePropagation `processAnd`, over `computeKnownBits`. The bits
+/// `x` may set are those a non-negative range's top reaches, less the ones
+/// structure clears (`valuetracking::known_zero`: a scale's low bits). A loop
 /// counter's range makes tile's `(x + 7) & 63` of `x < 40` a plain `x + 7`.
 fn _redundant_masks(
     context: &mut Context,
@@ -1430,7 +1442,8 @@ fn _redundant_masks(
     }
     let shape = cfg::Shape::of(function);
     let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
-    // The body is as the rounds before left it: found once, for its ranges and for the proofs beside them.
+    // The body is as the rounds before left it: found once, for its ranges and
+    // for the proofs beside them.
     let registers = consts::known(&unit, None, None, None);
     let unit = unit.with_registers(&registers);
     let scoped = ranges::scoped(&unit).unwrap_or_default();
@@ -1455,11 +1468,13 @@ fn _redundant_masks(
     !made.is_empty()
 }
 
-/// `sdiv` and `srem` of a dividend proved non-negative, by a power of two, are `udiv` and `urem` (a shift and a
-/// mask): the same value without the bias a negative dividend needs. Another divisor stays signed: its unsigned
-/// division is a `div` for an `idiv` (three clocks on a 486) and a byte more (`xor edx,edx` for `cdq`), which is
-/// selection's to weigh, not a rewrite's. The proof is `ranges`' (a loop's `rest > 0`, a sum of squares) or the
-/// dividend's clear sign bit.
+/// `sdiv` and `srem` of a dividend proved non-negative, by a power of two, are
+/// `udiv` and `urem` (a shift and a mask): the same value without the bias a
+/// negative dividend needs. Another divisor stays signed: its unsigned division
+/// is a `div` for an `idiv` (three clocks on a 486) and a byte more (`xor
+/// edx,edx` for `cdq`), which is selection's to weigh, not a rewrite's. The
+/// proof is `ranges`' (a loop's `rest > 0`, a sum of squares) or the dividend's
+/// clear sign bit.
 fn _unsigned_divisions(
     context: &mut Context,
     layout: &DataLayout,
@@ -1485,7 +1500,8 @@ fn _unsigned_divisions(
     }
     let shape = cfg::Shape::of(function);
     let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
-    // The body is as the rounds before left it: found once, for its ranges and for the proofs beside them.
+    // The body is as the rounds before left it: found once, for its ranges and
+    // for the proofs beside them.
     let registers = consts::known(&unit, None, None, None);
     let unit = unit.with_registers(&registers);
     let scoped = ranges::scoped(&unit).unwrap_or_default();
@@ -1495,10 +1511,13 @@ fn _unsigned_divisions(
             let operands = &function.instruction(inst).operands;
             let fact = consts::_operand(&unit, operands[1], facts, None)?;
             let divisor = BigInt::from(consts::masked(&fact.n, width));
-            // A power of two is shifts either way. Any other constant is a multiply by its reciprocal, which has no
-            // sign to correct where the dividend is never negative; selection prices it (a dword's, in a
-            // 32-bit segment: a 16-bit one runs the dword through prefixes and a longer multiply), and where it
-            // declines `div` and `idiv` are alike but a byte (`xor edx, edx` for `cdq`), which size does
+            // A power of two is shifts either way. Any other constant is a
+            // multiply by its reciprocal, which has no
+            // sign to correct where the dividend is never negative; selection
+            // prices it (a dword's, in a 32-bit segment: a 16-bit
+            // one runs the dword through prefixes and a longer multiply), and
+            // where it declines `div` and `idiv` are alike but a
+            // byte (`xor edx, edx` for `cdq`), which size does
             // not pay.
             let power = (&divisor & (&divisor - 1u8)) == BigInt::from(0u8);
             let positive = fact.width >= width
@@ -1562,7 +1581,8 @@ fn _divisions(
         let top = _constant(context, function, inst, u128::from(width - 1));
         let sign = _before(function, inst, binary(BinaryOp::AShr), vec![dividend, top]);
         let adjusted = if shift == 1 {
-            // The bias is the sign's low bit, 0 or 1: subtracting the sign word adds it.
+            // The bias is the sign's low bit, 0 or 1: subtracting the sign word
+            // adds it.
             _before(function, inst, binary(BinaryOp::Sub), vec![dividend, sign])
         } else {
             let low = _constant(context, function, inst, (1 << shift) - 1);

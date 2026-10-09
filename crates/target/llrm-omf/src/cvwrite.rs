@@ -198,8 +198,9 @@ struct Table<'m> {
     bytes: Vec<u8>,
     indices: IndexMap<Vec<u8>, u16>,
     of: IndexMap<TypeId, u16>,
-    /// The structures whose records are being made: one reached again from its own members (a pointer
-    /// to itself) is named, with no fields, since CodeView 4's records name only earlier ones.
+    /// The structures whose records are being made: one reached again from its
+    /// own members (a pointer to itself) is named, with no fields, since
+    /// CodeView 4's records name only earlier ones.
     building: Vec<TypeId>,
 }
 
@@ -328,7 +329,8 @@ impl Table<'_> {
                 self.sized(element, Self::bits(bytes)?)?
             }
             Type::Struct { name, bytes, .. } if self.building.contains(&id) => {
-                // The structure named by one of its own members: its name and size, no fields.
+                // The structure named by one of its own members: its name and
+                // size, no fields.
                 self.structure(name, *bytes, &[])?
             }
             Type::Struct { name, bytes, fields } => {

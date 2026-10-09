@@ -12,9 +12,11 @@ int f(int a)
 }
 ";
 
-/// Every call counted its callee's kept registers as keeping only their 16-bit half (`clobbers_high`, from the
-/// contract's `i386` flag, meant for 16-bit code), so on a 32-bit target no 32-bit value crossed a call in a
-/// register: `x` was stored to the frame and read back, and fib, queens and frames paid for it in every call.
+/// Every call counted its callee's kept registers as keeping only their 16-bit
+/// half (`clobbers_high`, from the contract's `i386` flag, meant for 16-bit
+/// code), so on a 32-bit target no 32-bit value crossed a call in a
+/// register: `x` was stored to the frame and read back, and fib, queens and
+/// frames paid for it in every call.
 #[test]
 fn test_a_32_bit_value_crosses_a_call_in_a_register_the_callee_keeps() {
     let scratch = tempfile::tempdir().unwrap();

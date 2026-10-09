@@ -17,7 +17,8 @@ use crate::support::hash::IndexMap;
 pub const WORD: i64 = 2;
 pub const ENTER: &str = "B$ENRA";
 pub const LEAVE: &str = "B$EXSA";
-pub const RUNTIME_SIZE: i64 = 10; // runtime/inc/stack.inc: FR_SIZE, below BP and above locals.
+// runtime/inc/stack.inc: FR_SIZE, below BP and above locals.
+pub const RUNTIME_SIZE: i64 = 10;
 
 /// Python `SlotKey = int | tuple[str, int]`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -80,7 +81,8 @@ pub struct Frame {
     pub capacities: IndexMap<i64, i64>,
     /// Bytes just below BP, above the allocas, that spill slots fill first.
     pub hole: i64,
-    /// The slots the selector laid out (first byte, size); see `isel::Selected::extents`.
+    /// The slots the selector laid out (first byte, size); see
+    /// `isel::Selected::extents`.
     pub extents: Vec<(i64, i64)>,
 }
 
@@ -98,27 +100,31 @@ impl Frame {
         }
     }
 
-    /// The first byte of the slot that holds `disp`, as the layout the cells were selected under put it: the lowest of
-    /// the selector's extents nearest it, the incoming arguments (from BP up) as one slot at 0; none when it laid
-    /// out no slot.
+    /// The first byte of the slot that holds `disp`, as the layout the cells
+    /// were selected under put it: the lowest of the selector's extents
+    /// nearest it, the incoming arguments (from BP up) as one slot at 0; none
+    /// when it laid out no slot.
     pub(crate) fn home_of(
         &self,
         disp: i64,
     ) -> Option<i64> {
-        // [bp+0] holds the caller's BP, never data: an address there is one past the end of the slot that ends at BP.
+        // [bp+0] holds the caller's BP, never data: an address there is one
+        // past the end of the slot that ends at BP.
         if disp > 0 || (disp == 0 && !self.extents.iter().any(|(start, size)| start + size == 0)) {
             return Some(0);
         }
-        // The slot nearest the displacement, the lowest on a tie: a pointer into a slot, one past its end (a
-        // strength-reduced loop's limit) or before its start (a pre-incremented one) belongs to the slot it was
-        // made from.
+        // The slot nearest the displacement, the lowest on a tie: a pointer
+        // into a slot, one past its end (a strength-reduced loop's
+        // limit) or before its start (a pre-incremented one) belongs to the
+        // slot it was made from.
         let gap =
             |(start, size): &(i64, i64)| if disp < *start { start - disp } else { (disp - (start + size - 1)).max(0) };
         self.extents.iter().min_by_key(|extent| (gap(extent), extent.0)).map(|(start, _)| *start)
     }
 
-    /// `body` with every frame cell tagged with its slot (`Addr::in_slot`) and the body marked `slotted`: the verifier
-    /// then fails any cell a later phase makes without one. A cell in no slot is refused.
+    /// `body` with every frame cell tagged with its slot (`Addr::in_slot`) and
+    /// the body marked `slotted`: the verifier then fails any cell a later
+    /// phase makes without one. A cell in no slot is refused.
     pub fn tagged(
         &self,
         body: &LirBody,
@@ -222,12 +228,14 @@ impl Frame {
 
     /// This value's displacement, creating one where it has none.
     ///
-    /// A slot belongs to its value: `Frame::slot` shares none. The sharing is the
-    /// colourers', `spiller::_color_slots` and isel's `alloca_groups` (the rule is
-    /// `slots`), and both stand down in a function that calls a `returns_twice` routine
-    /// (`LirBody::returns_twice`, `memory::calls_returns_twice`): after `longjmp` a value
-    /// spilled before `setjmp` is read from its slot, so a slot recycled for another
-    /// value (LLVM's stack colouring) would hand back the wrong one.
+    /// A slot belongs to its value: `Frame::slot` shares none. The sharing is
+    /// the colourers', `spiller::_color_slots` and isel's `alloca_groups`
+    /// (the rule is `slots`), and both stand down in a function that calls
+    /// a `returns_twice` routine (`LirBody::returns_twice`,
+    /// `memory::calls_returns_twice`): after `longjmp` a value
+    /// spilled before `setjmp` is read from its slot, so a slot recycled for
+    /// another value (LLVM's stack colouring) would hand back the wrong
+    /// one.
     pub fn slot(
         &mut self,
         value: impl Into<SlotKey>,
@@ -279,8 +287,9 @@ impl Frame {
     }
 }
 
-/// Whether `addr` is a frame cell proper: the indexed form of an array (a literal displacement through BP) is not
-/// tagged, since a literal address's `index` may be a symbol's.
+/// Whether `addr` is a frame cell proper: the indexed form of an array (a
+/// literal displacement through BP) is not tagged, since a literal address's
+/// `index` may be a symbol's.
 fn framed(addr: Option<Addr>) -> bool {
     addr.is_some_and(|addr| addr.space == Space::Frame)
 }
@@ -440,8 +449,9 @@ mod tests {
         }
     }
 
-    /// matmul's end pointer is one past its array and quicksort's one before: an address made from a slot is tagged
-    /// with that slot, not refused (bench matmul -O2: "a frame cell at -32 is in no slot").
+    /// matmul's end pointer is one past its array and quicksort's one before:
+    /// an address made from a slot is tagged with that slot, not refused
+    /// (bench matmul -O2: "a frame cell at -32 is in no slot").
     #[test]
     fn test_a_pointer_one_past_a_slot_or_before_it_is_tagged_with_the_slot() {
         let mut frame = super::Frame::new(0);

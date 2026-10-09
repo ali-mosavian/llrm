@@ -21,9 +21,10 @@ fn listing(
 
 const MACHINE: &str = "int f(int n)\n{\n    int s = 0, i, acc = 0;\n    for (i = 0; i < n; ++i) {\n        switch (s) {\n        case 0: s = (i & 1) ? 1 : 2; break;\n        case 1: s = 2; acc += 3; break;\n        case 2: s = 0; acc += 5; break;\n        default: s = 0; break;\n        }\n    }\n    return acc;\n}\n";
 
-/// `switch (state)` in a loop whose cases each set the next state was a compare of the state on every trip (x_switch:
-/// gcc -O2 alone threads it, 2.3x of the clocks of everyone else's): each case now jumps to the next one's code, and no
-/// compare of the state is left.
+/// `switch (state)` in a loop whose cases each set the next state was a compare
+/// of the state on every trip (x_switch: gcc -O2 alone threads it, 2.3x of the
+/// clocks of everyone else's): each case now jumps to the next one's code, and
+/// no compare of the state is left.
 #[test]
 fn a_state_machine_loop_has_no_dispatch_left() {
     let text = listing(MACHINE, &["-m32", "-mabi=sysv", "-O2", "-march=i486"]);

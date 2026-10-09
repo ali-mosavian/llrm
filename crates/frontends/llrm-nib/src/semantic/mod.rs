@@ -173,8 +173,9 @@ impl LiteralPool {
         let length = (value.len() as u64).to_le_bytes();
         assert!(value.len() >> (8 * word) == 0, "string length checked by semantic analysis");
         let mut bytes = Vec::with_capacity(value.len() + 3 * word + 1);
-        // A literal is static and read-only: the first write copies it to the heap.
-        // The header is three words: the flags, then the length and the capacity.
+        // A literal is static and read-only: the first write copies it to the
+        // heap. The header is three words: the flags, then the length
+        // and the capacity.
         bytes.push(STRING_READONLY);
         bytes.resize(word, 0);
         bytes.extend(&length[..word]);
@@ -219,17 +220,20 @@ impl LiteralPool {
 struct TypeRegistry {
     /// The bytes of a near and of a far pointer on the target.
     sizes: crate::Sizes,
-    /// Where `far` or `huge` was written and meant near, once each place; `None` where not warned.
+    /// Where `far` or `huge` was written and meant near, once each place;
+    /// `None` where not warned.
     warnings: Option<std::rc::Rc<std::cell::RefCell<Vec<crate::Diagnostic>>>>,
     /// The bits of the target's code.
     code_bits: u32,
     /// The target's register file: which registers an inline block may name.
     registers: Vec<llrm_target::registers::Register>,
-    /// The convention the language's own functions have here: the target's first.
+    /// The convention the language's own functions have here: the target's
+    /// first.
     native: Abi,
     /// The names of the conventions the target defines: any other is refused.
     conventions: Vec<String>,
-    /// How a convention spells a symbol in the object format asked for: the description's, where it gives one.
+    /// How a convention spells a symbol in the object format asked for: the
+    /// description's, where it gives one.
     symbols: BTreeMap<String, String>,
     types: Vec<hir::Type>,
     arrays: BTreeMap<(u32, Shape), u32>,
@@ -238,7 +242,8 @@ struct TypeRegistry {
     structs: BTreeMap<String, StructLayout>,
     enums: BTreeMap<String, enums::EnumLayout>,
     templates: BTreeMap<String, generics::Template>,
-    /// Each instance of a generic type, by its spelling: the applied type it is.
+    /// Each instance of a generic type, by its spelling: the applied type it
+    /// is.
     applied: BTreeMap<String, TypeSpec>,
     /// Each reference type, by its pointer type: what it refers to.
     referents: BTreeMap<u32, ElementType>,
@@ -327,7 +332,8 @@ impl TypeRegistry {
         u8::try_from(if far { self.sizes.far } else { self.sizes.near }).expect("a pointer is under 256 bytes")
     }
 
-    /// The field alignment a struct packs to: `@repr("c")` without `pack=` is the target's, its stack slot.
+    /// The field alignment a struct packs to: `@repr("c")` without `pack=` is
+    /// the target's, its stack slot.
     fn effective_pack(
         &self,
         pack: Option<u32>,
@@ -339,8 +345,9 @@ impl TypeRegistry {
         }
     }
 
-    /// The language's types, its pointers `sizes` bytes wide, its own functions in the
-    /// convention `native` and the conventions the target defines `conventions`.
+    /// The language's types, its pointers `sizes` bytes wide, its own functions
+    /// in the convention `native` and the conventions the target defines
+    /// `conventions`.
     fn new(
         sizes: crate::Sizes,
         native: Abi,
@@ -662,7 +669,8 @@ impl TypeRegistry {
                 _ => Err(Diagnostic::new(span, "a foreign function pointer is 'extern \"abi\" fn(A) -> R'")),
             },
             TypeSpec::Applied { name, args } if name.starts_with('&') => match args.as_slice() {
-                // A view, `&string` or `&[T]`, kept as the descriptor it is (section 9.1).
+                // A view, `&string` or `&[T]`, kept as the descriptor it is
+                // (section 9.1).
                 [TypeAnnotation::Value(TypeSpec::Primitive(TypeName::String))] if name == "&" => {
                     let id = self.kept_view(ElementType::Scalar(TypeName::Char), 1, false, span)?;
                     Ok(ElementType::Struct(id))
@@ -676,7 +684,8 @@ impl TypeRegistry {
                     let target = self.resolve_element(target, span)?;
                     Ok(ElementType::Scalar(self.reference(target, name == "&mut")))
                 }
-                // `&T[N]`: its referent is the array, an aggregate as a struct is.
+                // `&T[N]`: its referent is the array, an aggregate as a struct
+                // is.
                 [TypeAnnotation::Array { element, dims }] => {
                     let element = self.resolve_element(element, span)?;
                     let array = self.array(element, Shape::new(dims));
@@ -765,7 +774,8 @@ impl TypeRegistry {
         format!("[{}; {}]", self.types[(element.id() - 1) as usize].name, dims.join(", "))
     }
 
-    /// The word of a length, capacity or index: usize, the target's near pointer wide.
+    /// The word of a length, capacity or index: usize, the target's near
+    /// pointer wide.
     pub(super) fn word(&self) -> TypeName {
         TypeName::usize(self.sizes.near)
     }
@@ -1294,7 +1304,8 @@ impl Shape {
 /// pointer: the dimensions, then the capacity, each a usize word. Storage is
 /// row-major and contiguous, so the strides follow from the dimensions.
 mod descriptor {
-    /// The descriptor of a program's own arrays and views: each word `word` bytes, the target's usize.
+    /// The descriptor of a program's own arrays and views: each word `word`
+    /// bytes, the target's usize.
     pub fn dim(
         axis: u8,
         word: u32,
@@ -1561,7 +1572,8 @@ fn program(
         .map(|(name, parameters)| (name, parameters, TypeName::Void))
         .chain(runtime::routines(&mut types))
         .collect();
-    // The runtime defines the routines it exports, and its own code calls those.
+    // The runtime defines the routines it exports, and its own code calls
+    // those.
     let defined: BTreeMap<String, u32> = signatures.values().map(|one| (one.name.clone(), one.id)).collect();
     for (name, parameters, result) in routines {
         if let Some(&id) = defined.get(name) {
@@ -1794,9 +1806,11 @@ struct FunctionCompiler<'a> {
     /// bindings still hold their borrows while the lambda runs.
     enclosing: Vec<Vec<BTreeMap<String, Binding>>>,
     loops: Vec<Loop>,
-    /// The generators being inlined, innermost last, whose `yield`s run a loop body.
+    /// The generators being inlined, innermost last, whose `yield`s run a loop
+    /// body.
     consumers: Vec<generators::Consumer>,
-    /// Scopes a name cannot be found in: a generator's, from the loop body it runs.
+    /// Scopes a name cannot be found in: a generator's, from the loop body it
+    /// runs.
     hidden: Vec<std::ops::Range<usize>>,
     /// How many `unsafe:` blocks enclose the statement compiled.
     unsafe_depth: u32,
@@ -1812,7 +1826,8 @@ struct FunctionCompiler<'a> {
     next_unbound: u32,
     /// Numbers the hidden names the compiler binds.
     next_hidden: u32,
-    /// The generator calls in the statement being compiled that a loop consumes.
+    /// The generator calls in the statement being compiled that a loop
+    /// consumes.
     consumed: Vec<Span>,
     next_instruction: u32,
     next_frame_offset: i32,
@@ -1856,7 +1871,8 @@ struct FunctionCompiler<'a> {
     statement_span: Span,
     /// Whether the statement takes an address in a huge module variable.
     huge_address: bool,
-    /// The values loaded from a length or capacity word: usize, which an implicit conversion may narrow.
+    /// The values loaded from a length or capacity word: usize, which an
+    /// implicit conversion may narrow.
     lengths: std::collections::BTreeSet<u32>,
     /// Changes to borrowed owners, refused if a holder is used after one.
     conflicts: Vec<liveness::Conflict>,
@@ -1991,7 +2007,8 @@ impl<'a> FunctionCompiler<'a> {
             };
             compiler.scopes.last_mut().expect("scope").insert(RESULT.into(), binding);
         } else if signature.string_result.is_some() {
-            // The view is returned here, in this frame, and copied before the return.
+            // The view is returned here, in this frame, and copied before the
+            // return.
             let view = compiler.view_slot(ElementType::Scalar(TypeName::Char), 1);
             let binding = Binding {
                 type_: BindingType::Slice { element: ElementType::Scalar(TypeName::Char), rank: 1 },
@@ -2020,8 +2037,8 @@ impl<'a> FunctionCompiler<'a> {
                 compiler.borrowed.push((ordinal, subject));
             }
             match *resolved {
-                // A borrowed view's descriptor is the caller's, and only reseating
-                // a binding writes one: no parameter is reseated.
+                // A borrowed view's descriptor is the caller's, and only
+                // reseating a binding writes one: no parameter is reseated.
                 SignatureParameter::Borrowed { target: BindingType::Slice { rank, .. }, .. } => {
                     let view_bytes = descriptor::size(rank, compiler.word_bytes()) + 4;
                     compiler
@@ -2030,12 +2047,13 @@ impl<'a> FunctionCompiler<'a> {
                         .state(subject, llrm_mir::facts::Fact::ReadOnly)
                         .state(subject, llrm_mir::facts::Fact::Dereferenceable(u64::from(view_bytes)));
                 }
-                // A reference is made from a place, so it is not null and points at
-                // the whole of what it borrows; a shared one cannot write it. Whether
-                // nothing else reaches it depends on its callers (`unaliased`).
-                // An owned aggregate is the caller's private copy, made for this call:
-                // nothing else reaches it, so it is as unaliased as a borrow proven
-                // so, and by construction.
+                // A reference is made from a place, so it is not null and
+                // points at the whole of what it borrows; a shared one cannot
+                // write it. Whether nothing else reaches it depends on its
+                // callers (`unaliased`). An owned aggregate is the caller's
+                // private copy, made for this call: nothing else reaches it, so
+                // it is as unaliased as a borrow proven so, and by
+                // construction.
                 SignatureParameter::Owned { .. } => compiler.references.push(subject),
                 SignatureParameter::Borrowed { mutable, target, .. } => {
                     if let Some(bytes) = compiler.types.referent_bytes(target) {
@@ -2066,8 +2084,9 @@ impl<'a> FunctionCompiler<'a> {
                 if matches!(resolved, SignatureParameter::Borrowed { .. }) {
                     compiler.note_borrowed_parameter(owner, ordinal);
                 }
-                // A value passed in, or one a borrow reaches, holds only what the
-                // caller lent: an owner of its own, below none of this parameter's.
+                // A value passed in, or one a borrow reaches, holds only what
+                // the caller lent: an owner of its own, below
+                // none of this parameter's.
                 let passed = match binding.type_ {
                     BindingType::Scalar(type_name) => Some(ElementType::Scalar(type_name)),
                     BindingType::Struct(id) => Some(ElementType::Struct(id)),
@@ -2121,7 +2140,8 @@ impl<'a> FunctionCompiler<'a> {
                 },
             ),
         };
-        // An owned string parameter is the callee's to drop: it gets a place to null on a move.
+        // An owned string parameter is the callee's to drop: it gets a place to
+        // null on a move.
         let storage = match (type_, storage) {
             (BindingType::Scalar(type_name), Storage::Parameter(value)) if ownership::needs_drop(type_name) => {
                 let place = self.place(name, type_name, false);
@@ -2146,7 +2166,8 @@ impl<'a> FunctionCompiler<'a> {
         function: &Function,
     ) -> Result<Compiled, Diagnostic> {
         self.statements(&function.body)?;
-        // After a loop only `break` leaves, the end is reached only if one does.
+        // After a loop only `break` leaves, the end is reached only if one
+        // does.
         if self.open() && self.current != 1 && !self.reached(self.current) {
             self.terminate(hir::Terminator { kind: "unreachable", operands: Vec::new(), targets: Vec::new() });
         }
@@ -2361,7 +2382,8 @@ fn repeat_counts(counts: &[Expr]) -> Result<Vec<u32>, Diagnostic> {
         .collect()
 }
 
-/// A nested array literal's elements with their indices, checked against `dims`.
+/// A nested array literal's elements with their indices, checked against
+/// `dims`.
 fn literal_elements<'e>(
     literal: &'e Expr,
     dims: &[u32],
@@ -2389,7 +2411,8 @@ fn literal_elements<'e>(
     Ok(out)
 }
 
-/// `[v, v, ...]` of one scalar literal as the `[v; dims]` it means, so it fills rather than storing each element.
+/// `[v, v, ...]` of one scalar literal as the `[v; dims]` it means, so it fills
+/// rather than storing each element.
 fn repeated_literal(
     literal: &Expr,
     dims: &[u32],
@@ -2408,7 +2431,8 @@ fn repeated_literal(
     })
 }
 
-/// A number, character or boolean literal's value, whatever its spelling's position.
+/// A number, character or boolean literal's value, whatever its spelling's
+/// position.
 fn scalar_literal(expression: &Expr) -> Option<String> {
     match expression {
         Expr::Integer(value, _) => Some(format!("i{value}")),
@@ -2583,8 +2607,8 @@ pub(crate) fn width(
     }
 }
 
-/// The width of a type that is no pointer: an integer, a float, a fixed-point, an enum, a
-/// bits struct.
+/// The width of a type that is no pointer: an integer, a float, a fixed-point,
+/// an enum, a bits struct.
 pub(crate) fn scalar_width(type_name: TypeName) -> u32 {
     match type_name.plain() {
         TypeName::Word { .. } => unreachable!("plain() is never a word"),
