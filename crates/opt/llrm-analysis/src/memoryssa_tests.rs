@@ -708,3 +708,21 @@ fn test_a_walk_that_jumps_finds_what_a_walk_step_by_step_finds() {
         }
     }
 }
+
+/// `built` copied every instruction's written references out of `Accesses`
+/// (MemRef clones with their provenance sets and their drop): 20% of gvn's
+/// `forwarded` on QCport's host.c. The graph shares them.
+#[test]
+fn the_graph_shares_the_written_references_with_the_accesses_it_is_built_from() {
+    let parsed = Parsed::new(&format!(
+        "define void @f(i16 %p) {{\nb0:\n  store i16 %p, ptr {CELL}\n  store i16 %p, ptr {OTHER}\n  ret void\n}}\n"
+    ));
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &Calls::default());
+    let graph = built(&unit, &accesses);
+    let store = site(&unit, "b0", 0);
+    let kept = accesses.writes(store).expect("a store writes");
+    assert_eq!(kept.len(), 1);
+    let shared = graph.written[&store].as_deref().expect("the graph has the write");
+    assert!(std::ptr::eq(shared.as_ptr(), kept.as_ptr()), "the graph copied the store's references");
+}
